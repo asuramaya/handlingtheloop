@@ -1,103 +1,136 @@
-# xxit
+# htl — Handling The Loop
 
-Browser-based, serverless DJ software that mixes public YouTube playlists,
-rekordbox-style. No controller/MIDI yet — core mixing and audio routing.
+A browser-based, **serverless** DJ application that mixes public YouTube tracks,
+rekordbox / DDJ-FLX style. Two decks, a real Web Audio mixer, hot cues, beat
+loops, beat-sync, key-lock, and audible scrubbing — all running from **one
+Cloudflare Worker** plus the browser. No app to install, no backend to manage.
 
-## How the audio works
+**Live:** https://handlingtheloop.com
 
-Real DJ manipulation (waveforms, EQ, tempo, cue) needs sample-level access to
-the audio, i.e. PCM flowing through the Web Audio API. A plain web page can't
-fetch YouTube's audio bytes — `googlevideo.com` refuses cross-origin reads. The
-whole backend is **one Cloudflare Worker** (pure JS, no binaries, no extra
-services); the browser does all the heavy compute.
+> Intended for non-copyrighted / cleared material. YouTube audio extraction is
+> subject to YouTube's Terms of Service — see [Caveats](#caveats).
 
-```
-                  Cloudflare Worker (pure JS)
-browser  ──────▶  /api/audio?v=  ──▶  ANDROID_VR player API ──▶ direct url
-  │  decode/DSP        │                                    └─▶ 1MB range chunks
-  ◀── audio/mp4 ───────┘ (streams bytes back)
-```
+---
 
-The trick is avoiding YouTube's arms-race layers entirely (`server/youtube.ts`):
-
-- **Client:** the **ANDROID_VR** Innertube client (yt-dlp's `REQUIRE_JS_PLAYER:
-  false` client). Its formats carry **direct URLs** — no `signatureCipher`, no
-  PoToken — so there's nothing to decipher. It just needs a `visitorData` token
-  (fetched once, cached) to avoid `LOGIN_REQUIRED`.
-- **Throttle:** a naive single GET is capped to ~32 KB/s unless the `n` param is
-  solved. We never solve it — we download in **1 MB range chunks**, which serve
-  at full speed (~15 MB/s).
-
-So no yt-dlp, no PoToken, no `nsig`/signature deciphering — all of which were
-tried and are either impossible in a Worker (yt-dlp is a binary) or broken in
-pure JS (youtubei.js's player parser). Search/playlist use `youtubei.js`
-(`cf-worker` build) for its stable browse endpoints; metadata comes from the
-ANDROID_VR `videoDetails`. The same `server/*` logic runs in the Vite dev
-middleware and the Worker (`worker/index.ts`).
-
-Per deck the signal path is:
-
-```
-source -> [time-stretch*] -> EQ3 (low/mid/high) -> trim -> crossfader -> master
-```
-
-\* time-stretch (key-lock tempo) is the next engine stage to add; today tempo
-uses `playbackRate` (pitch tracks tempo, like vinyl).
-
-## Run it
+## Quick start
 
 ```bash
 pnpm install
-pnpm dev          # Vite dev server, no external binaries needed
-pnpm worker       # build + run the real Cloudflare Worker locally (workerd)
-pnpm deploy       # build + wrangler deploy
+pnpm dev        # Vite dev server at http://localhost:5173 (no binaries needed)
+pnpm worker     # build + run the real Cloudflare Worker locally (workerd)
+pnpm deploy     # build + wrangler deploy
+pnpm typecheck  # tsc
 ```
 
-Paste a YouTube URL/id into a deck and hit Load, or drag an audio file (works
-offline). No external binaries — the dev server and the Worker share the same
-pure-JS resolver.
+Search a track in the bottom bar, hit **A** or **B** to load it to a deck (or
+drag an audio file onto a lane). Everything else — decode, waveform, BPM, all
+DSP — happens in the browser.
 
-## Status (MVP)
+## How it works
 
-- [x] Web Audio engine: 2 decks, EQ3, equal-power crossfader, master
-- [x] Transport: play/pause, cue, click-to-seek, tempo (vinyl mode)
-- [x] Offline analysis: waveform peaks + coarse BPM estimate
-- [x] Local-file input
-- [x] **YouTube loading** — pure-JS ANDROID_VR resolver + chunked range stream
-- [x] Session track cache (videoId → decoded buffer + analysis), instant reloads
-- [x] **YouTube data API** — `/api/search`, `/api/playlist`, `/api/meta`
-- [x] **Runs entirely in one Cloudflare Worker** (`worker/index.ts`) + browser
-- [x] **Library** — Collection + Playlists, persisted to localStorage
-- [x] **Explorer** — native YouTube search, load to deck A/B, add to collection
-- [x] Playlist import (paste a playlist URL → saved playlist)
-- [ ] Key-lock tempo (time-stretch stage)
-- [ ] Musical key detection (the library's Key column)
-- [ ] Phase-aligned beatgrid + sync
-- [ ] Hot cues / loops
-- [ ] Consent gate for non-copyrighted material
+Real DJ manipulation needs sample-level PCM through the Web Audio API, but a web
+page can't fetch YouTube audio (CORS), and YouTube hides stream URLs behind
+PoToken/cipher for most clients. The whole backend is **one Cloudflare Worker**;
+the browser does the heavy compute.
 
-## Library / Explorer
+```
+                Cloudflare Worker (pure JS, no binaries)
+browser ──────▶ /api/audio?v=  ──▶ R2 cache hit? serve it
+  │ decode/DSP        │            miss ─▶ ANDROID_VR player API ─▶ direct url
+  ◀── audio/mp4 ──────┘                 └─▶ 1 MB range chunks ─▶ stream + cache
+```
 
-The bottom half is a rekordbox-style browser: a sidebar (Explorer / Collection /
-Playlists) over a track table (#, artwork, Title, Artist, BPM, Key, Time).
-Tracks on a deck are tinted green. Double-click a row (or the A/B buttons) loads
-it; the Explorer searches YouTube live and loads results straight into the
-decks. BPM is filled in once a track is analyzed on load. Library *metadata*
-persists in localStorage; decoded audio lives in an in-memory session cache.
+- **Extraction** (`server/youtube.ts`): the **ANDROID_VR** Innertube client
+  (yt-dlp's `REQUIRE_JS_PLAYER:false` client) returns **direct stream URLs** — no
+  PoToken, no signature cipher, nothing to decipher. It only needs a cached
+  `visitorData` token. Pure `fetch`, so it runs in a Worker.
+- **Throttle**: a naive GET of a googlevideo URL is capped to ~32 KB/s. We never
+  solve the `n` param — we download in **1 MB range chunks**, which serve at full
+  speed (~15 MB/s) and stay under the Worker subrequest limit.
+- **R2 cache**: each track is fetched from YouTube once, stored in R2 by videoId,
+  then served from the edge (no YouTube call, no egress cost) — keeps it on the
+  free tier.
+- **Search / playlists**: `youtubei.js` (its `cf-worker` build) for the stable
+  browse endpoints; metadata comes from the ANDROID_VR `videoDetails`.
+
+Per deck the audio graph is:
+
+```
+source → [key-lock pitch-shift worklet] → EQ3 → trim → level → crossfader → master
+```
+
+Tempo is `playbackRate` (vinyl mode); **key-lock** inserts a pitch-shift
+AudioWorklet set to `1/rate` so the key holds when you pitch.
+
+## Features
+
+**Decks** — load from YouTube search or local file; play/cue; **audible
+scrubbing** (drag the waveform, hear it like a jog wheel, forward + reverse).
+
+**Waveform viewport** — one continuously-zoomable view per deck (whole track ↔
+per-sample) via an LOD peak pyramid. Drawn on a **real-time x-axis** and with
+**shared zoom**, so the two stacked grids line up for beatmatching. Colored by
+frequency (low/mid/high), adaptive beat→bar→phrase grid with bar numbers, and
+contextual markers (cue, hot cues, loop in/out).
+
+**Performance** — 8 hot cues per deck (lit in cue color), beat loops
+(`1/2/4/8` + FLX4-style `IN`/`OUT`/`EXIT`/`RELOOP`), **beat sync** (tempo + phase),
+**key-lock**, **quantize/snap** to grid, **beat jump** (±beat / ±bar).
+
+**Mixer** — per-channel TRIM + 3-band EQ + LEVEL fader, crossfader.
+
+**Library** — Collection + Playlists persisted to localStorage; native YouTube
+search/Explorer, playlist import, rekordbox-style track table.
+
+## Controls
+
+| Control | Action |
+|---|---|
+| Drag waveform | Scrub (audible) |
+| Wheel / pinch / `+ −` | Zoom (shared by both decks) |
+| `CUE` | Set cue (paused) / jump to cue (playing) |
+| Hot-cue pad | Set if empty, jump if set; ✕ or shift-click to clear |
+| `IN`/`OUT`/`EXIT` | Manual loop in/out, exit/reloop |
+| `1/2/4/8` | Beat loop of that length |
+| `SYNC` | Match the other deck's BPM + phase |
+| `KEY` | Key-lock (master tempo) |
+| `⌗` | Quantize — snap cues/loops/jumps to grid |
+| `◀◀ ◀ ▶ ▶▶` | Beat jump ±bar / ±beat |
+
+## Project structure
+
+```
+src/audio/        AudioEngine, Deck, Eq3, analyze (pyramid + beatgrid),
+                  decode, trackCache, pitchWorklet
+src/components/   DeckLane, DeckControls, ChannelStrip, WaveformViewport,
+                  LibraryPanel, Explorer, TrackTable, Knob, Fader
+src/library/      useLibrary (Collection + Playlists), types
+src/youtube/      client API (search/meta/playlist), source (audio fetch)
+server/           youtube.ts (resolver), innertube.ts (search), api.ts (dev)
+worker/index.ts   Cloudflare Worker: static SPA + /api/*
+wrangler.jsonc    Worker + R2 + assets config
+```
+
+`server/*` is pure JS and runs identically in the Vite dev middleware and the
+Worker, so dev and prod share one resolver.
 
 ## Deployment
 
 `pnpm deploy` builds the SPA and pushes everything to Cloudflare with `wrangler`.
-One Worker (`worker/index.ts`) serves the static app **and** the `/api/*` routes;
-no other compute exists. `nodejs_compat` is on for `youtubei.js`. The browser is
-the only other machine involved — it does decode, analysis, and all DSP. This is
-the whole point: deploy a public page, users mix instantly, nothing else to run.
-
-The YouTube extraction rides an arms race — if YouTube changes the ANDROID_VR
-client requirements, bump the `clientVersion` in `server/youtube.ts` (mirror
-yt-dlp's current value).
+One Worker serves the static app **and** the `/api/*` routes; an R2 bucket
+(`htl-audio`) caches resolved audio. `nodejs_compat` is on for `youtubei.js`.
 
 ## Caveats
 
-YouTube audio extraction is subject to YouTube's Terms of Service. This project
-is intended for non-copyrighted / cleared material; keep the consent gate on.
+- **YouTube ToS** — this extracts YouTube audio. Intended for non-copyrighted /
+  cleared material; keep a consent gate in front of any public deployment.
+- **Extraction is an arms race** — if YouTube tightens the ANDROID_VR client,
+  bump `clientVersion` in `server/youtube.ts` to match yt-dlp's current value.
+  That's the only moving part.
+- **Cloud-IP rate limits** — YouTube occasionally 403s Cloudflare's IPs; the
+  resolver retries with backoff, and the R2 cache means popular tracks rarely hit
+  YouTube at all.
+
+## License
+
+No license yet — all rights reserved by the author until one is added.

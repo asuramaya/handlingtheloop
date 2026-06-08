@@ -1004,3 +1004,329 @@ body {
     font-size: 13px;
   }
 }
+
+/* ============================ DDJ-FLX board ================================ */
+.stage {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: #0a0b0f;
+}
+
+/* Stacked full-width waveform lanes — grids line up vertically */
+.lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--line);
+}
+.lane {
+  position: relative;
+  background: #08090d;
+}
+.lane .waveform {
+  height: 116px;
+  border-radius: 0;
+  border: none;
+}
+.lane-info {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(6, 7, 11, 0.9), rgba(6, 7, 11, 0));
+}
+.lane-id {
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--accent);
+}
+.lane-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-artist {
+  color: var(--muted);
+}
+.lane-time {
+  font-variant-numeric: tabular-nums;
+}
+.lane-bpm {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+.lane-status {
+  color: #ffd250;
+}
+
+/* Board */
+.board {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+}
+.bank {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: linear-gradient(180deg, #15171e, #0e1015);
+  min-width: 0;
+}
+.bank.mirror {
+  flex-direction: row-reverse;
+}
+.bank-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mixer-center {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #1c1f29, #13151c);
+}
+.channels {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  flex: 1;
+}
+.chan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.chan-id {
+  font-weight: 800;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* Hardware buttons */
+.hw-btn {
+  background: linear-gradient(180deg, #2a2e3a, #15181f);
+  border: 1px solid #000;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 2px 3px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+}
+.hw-btn:hover {
+  border-color: var(--accent);
+}
+.hw-btn:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) inset;
+}
+.hw-btn.play {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
+  color: #06080c;
+  font-size: 16px;
+}
+.hw-btn.cue {
+  color: var(--accent);
+}
+.hw-btn.sync,
+.hw-btn.key {
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.hw-btn.key {
+  color: var(--muted);
+}
+.hw-btn.key.on {
+  background: rgba(255, 210, 80, 0.18);
+  border-color: #ffd250;
+  color: #ffd250;
+}
+.hw-btn.small {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.transport {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.bank-load {
+  margin-top: auto;
+}
+.bank-load .hw-btn {
+  width: 100%;
+}
+
+/* Knobs — DDJ look */
+.knob-dial {
+  width: 34px;
+  height: 34px;
+  background: radial-gradient(circle at 50% 32%, #3c4150, #0e1015 72%);
+  box-shadow:
+    0 2px 5px rgba(0, 0, 0, 0.6),
+    0 0 0 1px #000;
+  border: none;
+}
+.chan .knob-dial {
+  width: 32px;
+  height: 32px;
+}
+.chan {
+  gap: 6px;
+}
+.knob-pointer {
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+}
+.chan .knob {
+  flex-direction: column;
+  gap: 3px;
+}
+.chan .knob-label {
+  width: auto;
+  text-align: center;
+}
+.chan .knob-value {
+  display: none;
+}
+
+/* Faders */
+.fader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.fader-input {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 28px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.fader-input::-webkit-slider-runnable-track {
+  width: 6px;
+  background: linear-gradient(#070809, #1b1e27);
+  border: 1px solid #000;
+  border-radius: 3px;
+  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.9);
+}
+.fader-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 30px;
+  height: 15px;
+  margin-left: -12px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #565c6c, #20242e);
+  border: 1px solid #000;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.6),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  cursor: grab;
+}
+.fader-input::-moz-range-thumb {
+  width: 30px;
+  height: 15px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #565c6c, #20242e);
+  border: 1px solid #000;
+  cursor: grab;
+}
+.fader.level .fader-input {
+  height: 104px;
+}
+.fader.pitch {
+  flex: 0 0 auto;
+}
+.fader.pitch .fader-input {
+  height: 168px;
+}
+.fader-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+.fader-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Pads — rubbery, light up in their cue color */
+.hotcues {
+  grid-template-columns: repeat(8, 1fr);
+}
+.pad {
+  background: linear-gradient(180deg, #20242e, #0d0f14);
+  border: 1px solid #000;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
+  color: var(--muted);
+}
+.hotcues .pad:nth-child(1).set { background: #ff5d73; color: #06080c; box-shadow: 0 0 10px #ff5d73; }
+.hotcues .pad:nth-child(2).set { background: #ffb13c; color: #06080c; box-shadow: 0 0 10px #ffb13c; }
+.hotcues .pad:nth-child(3).set { background: #ffe24a; color: #06080c; box-shadow: 0 0 10px #ffe24a; }
+.hotcues .pad:nth-child(4).set { background: #6ee7a8; color: #06080c; box-shadow: 0 0 10px #6ee7a8; }
+.hotcues .pad:nth-child(5).set { background: #36c2ff; color: #06080c; box-shadow: 0 0 10px #36c2ff; }
+.hotcues .pad:nth-child(6).set { background: #7b9cff; color: #06080c; box-shadow: 0 0 10px #7b9cff; }
+.hotcues .pad:nth-child(7).set { background: #c77bff; color: #06080c; box-shadow: 0 0 10px #c77bff; }
+.hotcues .pad:nth-child(8).set { background: #ff7bd0; color: #06080c; box-shadow: 0 0 10px #ff7bd0; }
+
+.crossfader {
+  width: 100%;
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* Mobile: board stacks */
+@media (max-width: 768px) {
+  .board {
+    flex-direction: column;
+  }
+  .bank,
+  .bank.mirror {
+    flex-direction: row;
+  }
+  .fader.pitch .fader-input {
+    min-height: 150px;
+  }
+  .lane .waveform {
+    height: 104px;
+  }
+}
+
+/* Board pads: fixed compact height (not aspect-ratio) since banks are wide */
+.bank .pad {
+  aspect-ratio: auto;
+  height: 40px;
+}
+.bank-main {
+  justify-content: flex-start;
+}

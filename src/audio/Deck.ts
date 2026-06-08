@@ -19,9 +19,12 @@ export interface Loop {
 }
 
 export class Deck {
-  readonly output: GainNode;
+  readonly output: GainNode; // channel level fader (feeds the crossfader)
+  private readonly trimNode: GainNode;
   private readonly eq: Eq3;
   private readonly ctx: AudioContext;
+  private _trim = 1;
+  private _level = 1;
 
   buffer: AudioBuffer | null = null;
   beatgrid: Beatgrid | null = null;
@@ -45,8 +48,11 @@ export class Deck {
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
     this.eq = new Eq3(ctx);
+    // eq -> trim -> level(output) -> crossfader
+    this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
-    this.eq.output.connect(this.output);
+    this.eq.output.connect(this.trimNode);
+    this.trimNode.connect(this.output);
   }
 
   get playing() {
@@ -260,7 +266,18 @@ export class Deck {
   }
 
   // --- EQ / trim ---
+  get trim() {
+    return this._trim;
+  }
   setTrim(gain: number) {
+    this._trim = gain;
+    this.trimNode.gain.value = gain;
+  }
+  get level() {
+    return this._level;
+  }
+  setLevel(gain: number) {
+    this._level = gain;
     this.output.gain.value = gain;
   }
   setEqLow(db: number) {

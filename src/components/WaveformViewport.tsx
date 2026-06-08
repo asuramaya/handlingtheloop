@@ -8,9 +8,14 @@ interface WaveformViewportProps {
   duration: number;
   beatgrid: Beatgrid | null;
   loop: { start: number; end: number } | null;
+  cuePoint: number | null;
+  hotCues: (number | null)[];
+  loopInPoint: number | null;
   accent: string;
   onScrub: (deltaSeconds: number) => void; // drag to nudge/align
 }
+
+const CUE_COLORS = ["#ff5d73", "#ffb13c", "#ffe24a", "#6ee7a8", "#36c2ff", "#7b9cff", "#c77bff", "#ff7bd0"];
 
 // Single continuously-zoomable waveform. The playhead is pinned at center and
 // the track scrolls past it. Zoom (wheel / pinch / ± buttons) ranges from the
@@ -24,6 +29,9 @@ export function WaveformViewport({
   duration,
   beatgrid,
   loop,
+  cuePoint,
+  hotCues,
+  loopInPoint,
   accent,
   onScrub,
 }: WaveformViewportProps) {
@@ -163,10 +171,33 @@ export function WaveformViewport({
       }
     }
 
+    // Contextual markers: cue, hot cues, loop in/out, pending loop-in.
+    const flag = (t: number, color: string, label?: string) => {
+      if (t < left || t > left + windowSec) return;
+      const x = ((t - left) / windowSec) * w;
+      ctx.fillStyle = color;
+      ctx.fillRect(x - dpr * 0.5, 0, dpr, h);
+      ctx.fillRect(x, 0, 11 * dpr, 11 * dpr);
+      if (label) {
+        ctx.fillStyle = "#06080c";
+        ctx.font = `bold ${8 * dpr}px ui-monospace, monospace`;
+        ctx.fillText(label, x + 2 * dpr, 8.5 * dpr);
+      }
+    };
+    if (loop && loop.end > loop.start) {
+      flag(loop.start, "#6ee7a8", "▶");
+      flag(loop.end, "#6ee7a8", "◀");
+    }
+    if (loopInPoint != null) flag(loopInPoint, "#6ee7a8");
+    if (cuePoint != null) flag(cuePoint, "#ff8a3c", "C");
+    hotCues.forEach((t, i) => {
+      if (t != null) flag(t, CUE_COLORS[i % CUE_COLORS.length], String(i + 1));
+    });
+
     // Center playhead.
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
-  }, [pyramid, buffer, position, beatgrid, loop, windowSec, accent, duration, sr]);
+  }, [pyramid, buffer, position, beatgrid, loop, cuePoint, hotCues, loopInPoint, windowSec, accent, duration, sr]);
 
   return (
     <div className="wv-wrap">

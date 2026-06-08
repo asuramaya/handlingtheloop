@@ -3,7 +3,9 @@ import { AudioEngine } from "./audio/AudioEngine";
 import { analyzeTrack } from "./audio/analyze";
 import { decodeAudio } from "./audio/decode";
 import { getCachedTrack, setCachedTrack } from "./audio/trackCache";
-import { DeckView, type DeckMeta } from "./components/DeckView";
+import { DeckLane, type DeckMeta } from "./components/DeckLane";
+import { DeckControls } from "./components/DeckControls";
+import { ChannelStrip } from "./components/ChannelStrip";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { useLibrary } from "./library/useLibrary";
 import type { TrackMeta } from "./library/types";
@@ -27,6 +29,7 @@ export function App() {
   const [crossfade, setCrossfade] = useState(0);
   const [loaded, setLoaded] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   const loadedIds = new Set([loaded.A, loaded.B].filter((v): v is string => v !== null));
 
@@ -124,41 +127,70 @@ export function App() {
         <span className="tagline">handling the loop · serverless youtube dj</span>
       </header>
 
-      <section className="decks">
-        {(["A", "B"] as DeckId[]).map((id) => (
-          <DeckView
-            key={id}
-            id={id}
-            deck={engine.deck(id)}
-            accent={ACCENT[id]}
-            meta={meta[id]}
-            position={engine.deck(id).position()}
-            loading={loading[id]}
-            status={status[id]}
-            onLoadFile={(f) => onLoadFile(id, f)}
-            onSync={() => engine.sync(id)}
-          />
-        ))}
-      </section>
-
-      <div className="mixer">
-        <div className="crossfader">
-          <span className="xf-end">A</span>
-          <input
-            type="range"
-            min={-1}
-            max={1}
-            step={0.01}
-            value={crossfade}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              setCrossfade(v);
-              engine.setCrossfade(v);
-            }}
-          />
-          <span className="xf-end">B</span>
+      <main className="stage">
+        <div className="lanes">
+          {(["A", "B"] as DeckId[]).map((id) => (
+            <DeckLane
+              key={id}
+              id={id}
+              deck={engine.deck(id)}
+              accent={ACCENT[id]}
+              meta={meta[id]}
+              position={engine.deck(id).position()}
+              status={status[id]}
+              refresh={refresh}
+              onLoadFile={(f) => onLoadFile(id, f)}
+            />
+          ))}
         </div>
-      </div>
+
+        <div className="board">
+          <DeckControls
+            id="A"
+            deck={engine.deckA}
+            accent={ACCENT.A}
+            loading={loading.A}
+            mirror={false}
+            onSync={() => { engine.sync("A"); refresh(); }}
+            onLoadFile={(f) => onLoadFile("A", f)}
+            refresh={refresh}
+          />
+
+          <div className="mixer-center">
+            <div className="channels">
+              <ChannelStrip id="A" deck={engine.deckA} accent={ACCENT.A} refresh={refresh} />
+              <ChannelStrip id="B" deck={engine.deckB} accent={ACCENT.B} refresh={refresh} />
+            </div>
+            <div className="crossfader">
+              <span className="xf-end">A</span>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={crossfade}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setCrossfade(v);
+                  engine.setCrossfade(v);
+                }}
+              />
+              <span className="xf-end">B</span>
+            </div>
+          </div>
+
+          <DeckControls
+            id="B"
+            deck={engine.deckB}
+            accent={ACCENT.B}
+            loading={loading.B}
+            mirror={true}
+            onSync={() => { engine.sync("B"); refresh(); }}
+            onLoadFile={(f) => onLoadFile("B", f)}
+            refresh={refresh}
+          />
+        </div>
+      </main>
 
       <LibraryPanel library={library} onLoad={loadTrackToDeck} loadedIds={loadedIds} />
     </div>

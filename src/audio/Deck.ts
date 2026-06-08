@@ -38,6 +38,9 @@ export class Deck {
   private _keylock = false;
   private pitchNode: AudioWorkletNode | null = null;
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
+  private _scrubbing = false;
+  private _wasPlaying = false;
+  private _reversed: AudioBuffer | null = null;
   cuePoint = 0;
   hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
   loop: Loop | null = null;
@@ -63,6 +66,9 @@ export class Deck {
   }
   get tempo() {
     return this._tempo;
+  }
+  get rate() {
+    return this._rate;
   }
   get keylock() {
     return this._keylock;
@@ -112,6 +118,8 @@ export class Deck {
     this.hotCues = new Array(HOT_CUE_COUNT).fill(null);
     this.loop = null;
     this.loopInPoint = null;
+    this._reversed = null;
+    this._scrubbing = false;
     this.buffer = buffer;
     this.beatgrid = beatgrid;
   }
@@ -151,6 +159,81 @@ export class Deck {
       this.spawnSource(target);
     } else {
       this.startOffset = target;
+    }
+  }
+
+  // --- scrubbing (jog-wheel / vinyl feel) ---
+  get scrubbing() {
+    return this._scrubbing;
+  }
+  scrubBegin() {
+    if (this._scrubbing) return;
+    this._wasPlaying = this._playing;
+    if (this._playing) this.pause();
+    this._scrubbing = true;
+  }
+  /** Move by deltaSec of track time; plays the swept audio at drag velocity. */
+  scrubMove(deltaSec: number) {
+    if (!this._scrubbing || !this.buffer) return;
+    const from = this.startOffset;
+    const to = Math.max(0, Math.min(this.buffer.duration, from + deltaSec));
+    this.playScrubGrain(from, to);
+    this.startOffset = to;
+  }
+  scrubEnd() {
+    if (!this._scrubbing) return;
+    this._scrubbing = false;
+    if (this._wasPlaying) this.play();
+  }
+
+  private reversed(): AudioBuffer {
+    if (this._reversed) return this._reversed;
+    const b = this.buffer!;
+    const rev = this.ctx.createBuffer(b.numberOfChannels, b.length, b.sampleRate);
+    for (let c = 0; c < b.numberOfChannels; c++) {
+      const src = b.getChannelData(c);
+      const dst = rev.getChannelData(c);
+      for (let i = 0, n = b.length; i < n; i++) dst[i] = src[n - 1 - i];
+    }
+    this._reversed = rev;
+    return rev;
+  }
+
+  // Play the [from,to] slice over ~one event interval, so faster drags pitch up
+  // (forward = normal buffer, backward = reversed buffer) — the vinyl scrub sound.
+  private playScrubGrain(from: number, to: number) {
+    if (!this.buffer) return;
+    const len = to - from;
+    const aLen = Math.abs(len);
+    if (aLen < 1e-4) return;
+    const GRAIN = 0.022;
+    const rate = Math.max(0.06, Math.min(8, aLen / GRAIN));
+    const realDur = aLen / rate;
+    const t = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    const env = this.ctx.createGain();
+    src.connect(env);
+    env.connect(this.eq.input);
+    src.playbackRate.value = rate;
+    let offset: number;
+    if (len >= 0) {
+      src.buffer = this.buffer;
+      offset = from;
+    } else {
+      src.buffer = this.reversed();
+      offset = this.buffer.duration - from;
+    }
+    offset = Math.max(0, Math.min(this.buffer.duration - 0.001, offset));
+    const a = Math.min(0.004, realDur * 0.3);
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(1, t + a);
+    env.gain.setValueAtTime(1, Math.max(t + a, t + realDur - a));
+    env.gain.linearRampToValueAtTime(0, t + realDur);
+    try {
+      src.start(t, offset, aLen);
+      src.stop(t + realDur + 0.03);
+    } catch {
+      /* offset out of range */
     }
   }
 

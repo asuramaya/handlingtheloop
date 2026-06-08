@@ -18,13 +18,15 @@ interface DeckLaneProps {
   meta: DeckMeta;
   position: number;
   status: string | null;
+  windowSec: number;
+  onZoom: (next: number) => void;
   refresh: () => void;
   onLoadFile: (file: File) => void;
 }
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, meta, position, status, refresh, onLoadFile }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, meta, position, status, windowSec, onZoom, refresh, onLoadFile }: DeckLaneProps) {
   return (
     <section
       className="lane"
@@ -53,14 +55,25 @@ export function DeckLane({ id, deck, accent, meta, position, status, refresh, on
         buffer={deck.buffer}
         position={position}
         duration={meta.duration}
+        rate={deck.rate}
         beatgrid={deck.beatgrid}
         loop={deck.loop ? { start: deck.loop.start, end: deck.loop.end } : null}
         cuePoint={deck.cuePoint}
         hotCues={deck.hotCues}
         loopInPoint={deck.loopInPoint}
         accent={accent}
+        windowSec={windowSec}
+        onZoom={onZoom}
+        onScrubStart={() => {
+          deck.scrubBegin();
+          refresh();
+        }}
         onScrub={(d) => {
-          deck.seek(deck.position() + d);
+          deck.scrubMove(d);
+          refresh();
+        }}
+        onScrubEnd={() => {
+          deck.scrubEnd();
           refresh();
         }}
       />

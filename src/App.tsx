@@ -27,6 +27,7 @@ export function App() {
   const [loading, setLoading] = useState<Record<DeckId, boolean>>({ A: false, B: false });
   const [status, setStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [crossfade, setCrossfade] = useState(0);
+  const [zoom, setZoom] = useState(8); // shared waveform zoom (real seconds)
   const [loaded, setLoaded] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [, setTick] = useState(0);
   const refresh = useCallback(() => setTick((n) => n + 1), []);
@@ -138,6 +139,8 @@ export function App() {
               meta={meta[id]}
               position={engine.deck(id).position()}
               status={status[id]}
+              windowSec={zoom}
+              onZoom={setZoom}
               refresh={refresh}
               onLoadFile={(f) => onLoadFile(id, f)}
             />

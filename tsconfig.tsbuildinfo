@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/audio/AudioEngine.ts","./src/audio/Deck.ts","./src/audio/Eq3.ts","./src/audio/analyze.ts","./src/components/DeckView.tsx","./src/components/Knob.tsx","./src/components/Waveform.tsx","./src/youtube/source.ts","./api/audio.ts"],"version":"5.9.3"}

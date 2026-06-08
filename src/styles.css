@@ -23,6 +23,15 @@ body {
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%; /* stop iOS Safari inflating text */
+}
+
+/* Avoid the 300ms tap delay / double-tap-zoom on controls (iOS Safari). */
+.btn,
+.mini,
+.lib-nav,
+.lib-add {
+  touch-action: manipulation;
 }
 
 .app {
@@ -54,12 +63,11 @@ body {
 }
 
 .decks {
-  flex: 1;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1px;
   background: var(--line);
-  min-height: 0;
 }
 
 .deck {
@@ -269,9 +277,11 @@ body {
 }
 
 .mixer {
+  flex: 0 0 auto;
   border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
-  padding: 18px 20px;
+  padding: 14px 20px;
   display: flex;
   justify-content: center;
 }
@@ -291,4 +301,654 @@ body {
 .xf-end {
   font-weight: 800;
   color: var(--muted);
+}
+
+/* ============================ Library / Explorer ============================ */
+
+.deck-artist {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.library {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  background: var(--bg);
+}
+
+.lib-sidebar {
+  width: 220px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.lib-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.lib-nav:hover {
+  background: var(--panel-2);
+}
+.lib-nav.active {
+  background: color-mix(in srgb, var(--accent, #36c2ff) 22%, transparent);
+  color: #cfeaff;
+}
+.lib-nav.small {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.lib-nav-ico {
+  font-size: 13px;
+  flex: none;
+}
+.lib-pl-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.lib-del {
+  margin-left: 6px;
+  color: var(--muted);
+  opacity: 0;
+  font-size: 11px;
+}
+.lib-nav:hover .lib-del {
+  opacity: 0.7;
+}
+.lib-del:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.lib-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 6px 2px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+.lib-add {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.lib-add:hover {
+  color: var(--text);
+}
+.lib-playlists {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lib-import {
+  margin-top: auto;
+  padding-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lib-import .yt-input {
+  flex: 1 1 100%;
+}
+.lib-import-msg {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.lib-main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.lib-empty {
+  padding: 28px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lib-empty.error {
+  color: #ff8a99;
+}
+
+/* Explorer search */
+.explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.search-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.search-input {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent, #36c2ff);
+}
+
+.result-list {
+  display: flex;
+  flex-direction: column;
+}
+.result-row {
+  display: grid;
+  grid-template-columns: 124px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1a1c24;
+  cursor: default;
+}
+.result-row:hover {
+  background: var(--panel);
+}
+.thumb {
+  position: relative;
+  width: 124px;
+  height: 70px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #0c0d12;
+  flex: none;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumb-time {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.result-meta {
+  min-width: 0;
+}
+.result-title {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-sub .dot {
+  margin: 0 6px;
+}
+.result-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Mini action buttons (A / B / + / x) */
+.mini {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mini:hover {
+  border-color: var(--text);
+}
+.mini:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mini.a {
+  color: #36c2ff;
+}
+.mini.b {
+  color: #ff5d73;
+}
+.mini.add {
+  color: #6ee7a8;
+}
+.mini.x:hover {
+  color: #ff8a99;
+  border-color: #ff8a99;
+}
+
+/* rekordbox-style track table */
+.track-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.track-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+.track-table tbody tr {
+  border-bottom: 1px solid #16181f;
+  cursor: default;
+}
+.track-table tbody tr:hover {
+  background: var(--panel);
+}
+.track-table tbody tr.loaded {
+  color: #6ee7a8;
+}
+.track-table td {
+  padding: 7px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-num {
+  width: 36px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.col-thumb {
+  width: 48px;
+}
+.col-thumb img {
+  width: 44px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 3px;
+  display: block;
+}
+.col-title {
+  max-width: 0;
+  width: 42%;
+}
+.col-artist {
+  max-width: 0;
+  width: 24%;
+  color: var(--muted);
+}
+.col-bpm,
+.col-key,
+.col-time {
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.col-act {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+.col-act .mini {
+  margin-left: 4px;
+}
+.track-table tbody tr:not(:hover) .col-act .mini {
+  opacity: 0;
+}
+
+/* ============================ Mobile-first (≤768px) ========================= */
+/* Phone layout: the page scrolls naturally (no fixed-height inner panels),
+   decks stack, the library sidebar becomes a horizontal tab strip, and row
+   actions are always visible (no hover on touch). Scales back up to the
+   two-column desktop layout above this breakpoint. */
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    height: auto;
+  }
+  .app {
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .topbar {
+    padding: 12px 14px;
+  }
+  .tagline {
+    display: none; /* keep the header clean on small screens */
+  }
+
+  /* Decks stack vertically */
+  .decks {
+    grid-template-columns: 1fr;
+  }
+  .deck {
+    padding: 14px;
+    gap: 10px;
+  }
+  .waveform {
+    height: 88px;
+  }
+
+  /* Roomier touch targets */
+  .btn.play,
+  .btn.cue {
+    padding: 14px 18px;
+    font-size: 17px;
+  }
+  .mini {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+  .knob-dial {
+    width: 40px;
+    height: 40px;
+  }
+  .pitch-fader {
+    height: 140px;
+    width: 30px;
+  }
+
+  .crossfader {
+    width: 100%;
+  }
+
+  /* Library: stack, sidebar -> horizontal tab strip */
+  .library {
+    flex-direction: column;
+  }
+  .lib-sidebar {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding: 6px 8px;
+  }
+  .lib-nav {
+    width: auto;
+    flex: none;
+    white-space: nowrap;
+    padding: 8px 12px;
+  }
+  .lib-count {
+    margin-left: 4px;
+  }
+  .lib-playlists {
+    flex-direction: row;
+    gap: 4px;
+  }
+  /* Playlist creation / import / delete live on desktop — keep mobile simple. */
+  .lib-section,
+  .lib-import,
+  .lib-del {
+    display: none;
+  }
+  .lib-main {
+    overflow: visible;
+  }
+
+  /* Sticky search bar follows the scroll on mobile */
+  .search-bar {
+    position: static;
+  }
+  .search-input {
+    font-size: 16px; /* ≥16px stops iOS zooming in on focus */
+  }
+  .yt-input {
+    font-size: 16px;
+  }
+
+  /* Explorer rows: smaller artwork, actions wrap under */
+  .result-row {
+    grid-template-columns: 92px 1fr;
+    grid-template-areas:
+      "thumb meta"
+      "thumb actions";
+    gap: 8px 10px;
+  }
+  .thumb {
+    width: 92px;
+    height: 52px;
+    grid-area: thumb;
+  }
+  .result-meta {
+    grid-area: meta;
+  }
+  .result-actions {
+    grid-area: actions;
+  }
+
+  /* Track table: drop Artist/Key, always show actions (no hover on touch) */
+  .track-table .col-artist,
+  .track-table .col-key,
+  .track-table thead .col-num {
+    display: none;
+  }
+  .track-table tbody tr:not(:hover) .col-act .mini {
+    opacity: 1;
+  }
+  .track-table .col-num {
+    display: none;
+  }
+}
+
+/* ============================ Cues / Loops / Sync =========================== */
+
+.btn.sync {
+  background: var(--panel-2);
+  color: var(--accent);
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.btn.sync:hover {
+  border-color: var(--accent);
+}
+
+.pads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hotcues {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 5px;
+}
+.pad {
+  position: relative;
+  aspect-ratio: 1.5 / 1;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+.pad.set {
+  background: color-mix(in srgb, var(--accent) 30%, #0c0d12);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.pad-clear {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1;
+}
+.pad-clear:hover {
+  color: #fff;
+}
+
+.loops {
+  display: flex;
+  gap: 5px;
+}
+.loop-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.loop-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.loop-btn.on {
+  background: rgba(110, 231, 168, 0.18);
+  border-color: #6ee7a8;
+  color: #6ee7a8;
+}
+.loop-btn.toggle {
+  flex: 1.4;
+  letter-spacing: 1px;
+}
+.loop-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  .hotcues {
+    grid-template-columns: repeat(4, 1fr); /* 2 rows of 4 — bigger touch pads */
+  }
+  .pad {
+    aspect-ratio: 2 / 1;
+    font-size: 15px;
+  }
+  .loop-btn {
+    padding: 11px 0;
+    font-size: 13px;
+  }
+}
+
+/* ===================== Zoomable waveform viewport ========================== */
+.wv-wrap {
+  position: relative;
+}
+.waveform {
+  cursor: grab;
+}
+.waveform:active {
+  cursor: grabbing;
+}
+.wv-zoom {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+}
+.wv-zoom button {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: rgba(12, 13, 18, 0.78);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wv-zoom button:hover {
+  border-color: var(--accent);
+}
+
+.loops {
+  flex-wrap: wrap;
+}
+.loop-btn {
+  flex: 1 1 auto;
+  min-width: 38px;
+}
+.loop-btn.armed {
+  border-color: #ffd250;
+  color: #ffd250;
+}
+.loop-sep {
+  width: 1px;
+  background: var(--line);
+  margin: 2px 2px;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+
+.deck-hint {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

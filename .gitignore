@@ -1,5 +1,7 @@
 node_modules
 dist
 .vercel
+.wrangler
 *.local
+*.tsbuildinfo
 .DS_Store

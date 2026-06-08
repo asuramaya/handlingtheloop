@@ -1,12 +1,30 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { handleApi } from "./server/api";
 
-// xxit dev server. The /api/* routes are serverless edge functions in
-// production (Vercel/Cloudflare). In dev we proxy them to a local handler
-// once the edge function is wired; until then the app runs fully on
-// local-file input so the audio engine is testable offline.
+// Dev-time /api/*: YouTube search / playlist / metadata / audio, all via yt-dlp.
+// In production the same server/api dispatcher runs behind the serverless
+// handlers in api/*.ts.
+function xxitApi() {
+  return {
+    name: "xxit-api",
+    configureServer(server: import("vite").ViteDevServer) {
+      server.middlewares.use((req, res, next) => {
+        handleApi(req, res)
+          .then((handled) => {
+            if (!handled) next();
+          })
+          .catch((e) => {
+            res.statusCode = 500;
+            res.end(String((e as Error)?.message ?? e));
+          });
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), xxitApi()],
   server: {
     port: 5173,
   },

@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "htl",
+  "main": "worker/index.ts",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "htl-audio" }],
+  "routes": [
+    { "pattern": "handlingtheloop.com", "custom_domain": true },
+    { "pattern": "www.handlingtheloop.com", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
+}

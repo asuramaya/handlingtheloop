@@ -1,15 +1,18 @@
 import { useRef, useState } from "react";
 import type { Deck } from "../audio/Deck";
-import type { Peak } from "../audio/analyze";
+import { HOT_CUE_COUNT } from "../audio/Deck";
+import type { Pyramid } from "../audio/analyze";
 import { EQ_MAX_DB, EQ_MIN_DB } from "../audio/Eq3";
 import { Knob } from "./Knob";
-import { Waveform } from "./Waveform";
+import { WaveformViewport } from "./WaveformViewport";
+import { fmtTime } from "../util/format";
 
 export interface DeckMeta {
   name: string;
+  artist: string;
   bpm: number | null;
   duration: number;
-  peaks: Peak[] | null;
+  pyramid: Pyramid | null;
 }
 
 interface DeckViewProps {
@@ -17,33 +20,21 @@ interface DeckViewProps {
   deck: Deck;
   accent: string;
   meta: DeckMeta;
-  position: number; // seconds, driven by parent rAF tick
+  position: number;
   loading: boolean;
   status: string | null;
   onLoadFile: (file: File) => void;
-  onLoadYouTube: (url: string) => void;
+  onSync: () => void;
 }
 
-export function DeckView({
-  id,
-  deck,
-  accent,
-  meta,
-  position,
-  loading,
-  status,
-  onLoadFile,
-  onLoadYouTube,
-}: DeckViewProps) {
+const LOOP_SIZES = [1, 2, 4, 8];
+
+export function DeckView({ id, deck, accent, meta, position, loading, status, onLoadFile, onSync }: DeckViewProps) {
   const [, force] = useState(0);
   const rerender = () => force((n) => n + 1);
-  const [tempo, setTempo] = useState(0);
-  const [url, setUrl] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const progress = meta.duration > 0 ? position / meta.duration : 0;
-  const effectiveBpm =
-    meta.bpm != null ? meta.bpm * (1 + tempo / 100) : null;
+  const loopRegion = deck.loop ? { start: deck.loop.start, end: deck.loop.end } : null;
 
   return (
     <section
@@ -58,25 +49,32 @@ export function DeckView({
     >
       <header className="deck-header">
         <span className="deck-id">DECK {id}</span>
-        <span className="deck-title">{meta.name || "—"}</span>
+        <span className="deck-title" title={meta.name}>
+          {meta.name || "—"}
+          {meta.artist && <span className="deck-artist"> — {meta.artist}</span>}
+        </span>
         <span className="deck-bpm">
-          {effectiveBpm != null ? `${effectiveBpm.toFixed(1)} BPM` : "-- BPM"}
+          {deck.effectiveBpm != null ? `${deck.effectiveBpm.toFixed(1)} BPM` : "-- BPM"}
         </span>
       </header>
 
-      <Waveform
-        peaks={meta.peaks}
-        progress={progress}
+      <WaveformViewport
+        pyramid={meta.pyramid}
+        buffer={deck.buffer}
+        position={position}
+        duration={meta.duration}
+        beatgrid={deck.beatgrid}
+        loop={loopRegion}
         accent={accent}
-        onSeek={(f) => {
-          deck.seek(f * meta.duration);
+        onScrub={(d) => {
+          deck.seek(deck.position() + d);
           rerender();
         }}
       />
 
       <div className="deck-time">
-        <span>{fmt(position)}</span>
-        <span className="muted">/ {fmt(meta.duration)}</span>
+        <span>{fmtTime(position)}</span>
+        <span className="muted">/ {fmtTime(meta.duration)}</span>
       </div>
 
       <div className="deck-body">
@@ -100,36 +98,15 @@ export function DeckView({
           >
             {deck.playing ? "❚❚" : "▶"}
           </button>
+          <button className="btn sync" onClick={() => { onSync(); rerender(); }}>
+            SYNC
+          </button>
         </div>
 
         <div className="eq-stack">
-          <Knob
-            label="HI"
-            value={0}
-            min={EQ_MIN_DB}
-            max={EQ_MAX_DB}
-            defaultValue={0}
-            onChange={(v) => deck.setEqHigh(v)}
-            format={(v) => `${v.toFixed(0)}`}
-          />
-          <Knob
-            label="MID"
-            value={0}
-            min={EQ_MIN_DB}
-            max={EQ_MAX_DB}
-            defaultValue={0}
-            onChange={(v) => deck.setEqMid(v)}
-            format={(v) => `${v.toFixed(0)}`}
-          />
-          <Knob
-            label="LOW"
-            value={0}
-            min={EQ_MIN_DB}
-            max={EQ_MAX_DB}
-            defaultValue={0}
-            onChange={(v) => deck.setEqLow(v)}
-            format={(v) => `${v.toFixed(0)}`}
-          />
+          <Knob label="HI" value={0} min={EQ_MIN_DB} max={EQ_MAX_DB} defaultValue={0} onChange={(v) => deck.setEqHigh(v)} />
+          <Knob label="MID" value={0} min={EQ_MIN_DB} max={EQ_MAX_DB} defaultValue={0} onChange={(v) => deck.setEqMid(v)} />
+          <Knob label="LOW" value={0} min={EQ_MIN_DB} max={EQ_MAX_DB} defaultValue={0} onChange={(v) => deck.setEqLow(v)} />
         </div>
 
         <div className="pitch">
@@ -138,18 +115,75 @@ export function DeckView({
             type="range"
             min={-8}
             max={8}
-            step={0.1}
-            value={tempo}
+            step={0.05}
+            value={deck.tempo}
             onChange={(e) => {
-              const t = Number(e.target.value);
-              setTempo(t);
-              deck.setTempo(t);
+              deck.setTempo(Number(e.target.value));
+              rerender();
             }}
           />
           <span className="pitch-label">
-            {tempo > 0 ? "+" : ""}
-            {tempo.toFixed(1)}%
+            {deck.tempo > 0 ? "+" : ""}
+            {deck.tempo.toFixed(1)}%
           </span>
+        </div>
+      </div>
+
+      <div className="pads">
+        <div className="hotcues">
+          {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
+            const set = deck.hotCues[i] != null;
+            return (
+              <button
+                key={i}
+                className={`pad ${set ? "set" : ""}`}
+                onClick={(e) => {
+                  if (e.shiftKey && set) deck.clearHotCue(i);
+                  else deck.hotCue(i);
+                  rerender();
+                }}
+              >
+                {i + 1}
+                {set && (
+                  <span
+                    className="pad-clear"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deck.clearHotCue(i);
+                      rerender();
+                    }}
+                  >
+                    ✕
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div className="loops">
+          <button className={`loop-btn ${deck.loopInPoint != null ? "armed" : ""}`} onClick={() => { deck.loopIn(); rerender(); }}>
+            IN
+          </button>
+          <button className="loop-btn" onClick={() => { deck.loopOut(); rerender(); }}>
+            OUT
+          </button>
+          <button
+            className={`loop-btn ${deck.loop?.active ? "on" : ""}`}
+            disabled={!deck.loop}
+            onClick={() => { deck.loop?.active ? deck.exitLoop() : deck.reloop(); rerender(); }}
+          >
+            {deck.loop && !deck.loop.active ? "RELOOP" : "EXIT"}
+          </button>
+          <span className="loop-sep" />
+          {LOOP_SIZES.map((n) => (
+            <button
+              key={n}
+              className={`loop-btn ${deck.loop?.active && deck.loop.beats === n ? "on" : ""}`}
+              onClick={() => { deck.setBeatLoop(n); rerender(); }}
+            >
+              {n}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -167,31 +201,9 @@ export function DeckView({
         <button className="btn small" onClick={() => fileInput.current?.click()}>
           Load file
         </button>
-        <input
-          className="yt-input"
-          placeholder="YouTube URL or id"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && url.trim()) onLoadYouTube(url);
-          }}
-        />
-        <button
-          className="btn small"
-          disabled={!url.trim() || loading}
-          onClick={() => onLoadYouTube(url)}
-        >
-          {loading ? "…" : "Load"}
-        </button>
+        <span className="deck-hint">{loading ? "loading…" : "drag a file, or load from the library below"}</span>
       </footer>
       {status && <div className="deck-status">{status}</div>}
     </section>
   );
-}
-
-function fmt(seconds: number): string {
-  if (!Number.isFinite(seconds)) return "0:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }

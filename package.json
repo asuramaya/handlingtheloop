@@ -1,5 +1,5 @@
 {
-  "name": "xxit",
+  "name": "htl",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "worker": "vite build && wrangler dev",
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -19,6 +21,8 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.6.3",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "wrangler": "^4.98.0",
+    "youtubei.js": "^17.0.1"
   }
 }

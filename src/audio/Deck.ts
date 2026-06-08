@@ -1,30 +1,41 @@
+import type { Beatgrid } from "./analyze";
+import { decodeAudio } from "./decode";
 import { Eq3 } from "./Eq3";
 
-// A single deck: source -> EQ3 -> trim gain -> output.
-// The engine connects `output` into the crossfader.
+// A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
-// AudioBufferSourceNode is one-shot, so every play/seek/tempo change rebuilds
-// the source. Position is reconstructed from context time so the playhead stays
-// continuous across those rebuilds.
-//
-// Tempo note (MVP): tempo is applied via playbackRate, so pitch tracks tempo
-// like vinyl ("vinyl mode"). True key-lock needs a time-stretch stage
-// (SoundTouch / Rubber Band WASM) slotted between source and EQ — the graph is
-// shaped to accept it without touching the rest of the deck.
+// AudioBufferSourceNode is one-shot, so play/seek/tempo rebuild it; position is
+// reconstructed from context time so the playhead stays continuous. The deck
+// owns tempo (so Sync can drive it and the UI reflects it), 8 hot cues, and a
+// beat-based loop implemented with the source node's native loopStart/loopEnd.
+
+export const HOT_CUE_COUNT = 8;
+
+export interface Loop {
+  active: boolean;
+  start: number;
+  end: number;
+  beats: number;
+}
 
 export class Deck {
-  readonly output: GainNode; // trim/channel gain, fed into the crossfader
+  readonly output: GainNode;
   private readonly eq: Eq3;
   private readonly ctx: AudioContext;
 
   buffer: AudioBuffer | null = null;
+  beatgrid: Beatgrid | null = null;
   private source: AudioBufferSourceNode | null = null;
 
   private _playing = false;
-  private startOffset = 0; // seconds into the track at the current segment start
-  private startedAt = 0; // ctx.currentTime when the current segment started
-  private _rate = 1; // playbackRate = 1 + tempo%
+  private startOffset = 0;
+  private startedAt = 0;
+  private _rate = 1;
+  private _tempo = 0; // percent
   cuePoint = 0;
+  hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
+  loop: Loop | null = null;
+  loopInPoint: number | null = null; // pending manual loop-in (FLX4 style)
 
   onEnded?: () => void;
 
@@ -38,26 +49,43 @@ export class Deck {
   get playing() {
     return this._playing;
   }
-
   get duration() {
     return this.buffer?.duration ?? 0;
   }
+  get tempo() {
+    return this._tempo;
+  }
+  /** BPM after the tempo fader is applied. */
+  get effectiveBpm(): number | null {
+    return this.beatgrid ? this.beatgrid.bpm * this._rate : null;
+  }
 
   async loadArrayBuffer(data: ArrayBuffer) {
+    this.setBuffer(await decodeAudio(this.ctx, data));
+  }
+
+  setBuffer(buffer: AudioBuffer, beatgrid: Beatgrid | null = null) {
     this.stopSource();
     this._playing = false;
     this.startOffset = 0;
     this.cuePoint = 0;
-    // decodeAudioData detaches the buffer, so hand it a copy.
-    this.buffer = await this.ctx.decodeAudioData(data.slice(0));
+    this.hotCues = new Array(HOT_CUE_COUNT).fill(null);
+    this.loop = null;
+    this.loopInPoint = null;
+    this.buffer = buffer;
+    this.beatgrid = beatgrid;
   }
 
-  /** Current playhead position in seconds. */
+  /** Current playhead position in seconds (wraps inside an active loop). */
   position(): number {
     if (!this.buffer) return 0;
-    const pos = this._playing
+    let pos = this._playing
       ? this.startOffset + (this.ctx.currentTime - this.startedAt) * this._rate
       : this.startOffset;
+    if (this._playing && this.loop?.active) {
+      const len = this.loop.end - this.loop.start;
+      if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
+    }
     return Math.max(0, Math.min(this.buffer.duration, pos));
   }
 
@@ -66,14 +94,12 @@ export class Deck {
     this.spawnSource(this.startOffset);
     this._playing = true;
   }
-
   pause() {
     if (!this._playing) return;
     this.startOffset = this.position();
     this.stopSource();
     this._playing = false;
   }
-
   togglePlay() {
     this._playing ? this.pause() : this.play();
   }
@@ -88,31 +114,104 @@ export class Deck {
     }
   }
 
-  /** tempoPercent in e.g. [-8, +8] -> playbackRate around 1. */
   setTempo(tempoPercent: number) {
     const rate = 1 + tempoPercent / 100;
     if (this._playing) {
-      // Rebase so the playhead stays continuous through the rate change.
       this.startOffset = this.position();
       this.startedAt = this.ctx.currentTime;
     }
+    this._tempo = tempoPercent;
     this._rate = rate;
     if (this.source) this.source.playbackRate.value = rate;
   }
 
-  /** rekordbox-style cue: store the cue point at the current position. */
+  // --- cue ---
   setCue() {
     this.cuePoint = this.position();
   }
-
   jumpToCue() {
     this.seek(this.cuePoint);
   }
 
+  // --- hot cues: tap empty pad to set, tap set pad to jump ---
+  hotCue(i: number) {
+    const cur = this.hotCues[i];
+    if (cur == null) this.hotCues[i] = this.position();
+    else this.seek(cur);
+  }
+  clearHotCue(i: number) {
+    this.hotCues[i] = null;
+  }
+
+  // --- loops ---
+  private quantize(t: number): number {
+    const g = this.beatgrid;
+    if (!g) return t;
+    return g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
+  }
+
+  /** Set + enable a loop of `beats` length, snapped to the beatgrid. */
+  setBeatLoop(beats: number) {
+    if (!this.buffer) return;
+    const interval = this.beatgrid?.interval ?? 60 / 120;
+    const start = this.beatgrid ? this.quantize(this.position()) : this.position();
+    const end = Math.min(this.duration, start + beats * interval);
+    this.loop = { active: true, start, end, beats };
+    this.applyLoop();
+    if (this._playing) {
+      const pos = this.position();
+      if (pos < start || pos > end) this.seek(start);
+    }
+  }
+
+  // FLX4-style manual loop: tap IN to drop the entry point, tap OUT to set the
+  // exit and start looping, EXIT to leave, RELOOP to jump back in.
+  loopIn() {
+    this.loopInPoint = this.position();
+  }
+  loopOut() {
+    if (this.loopInPoint == null) return;
+    const start = this.loopInPoint;
+    const end = this.position();
+    this.loopInPoint = null;
+    if (end <= start) return;
+    const interval = this.beatgrid?.interval ?? 60 / 120;
+    this.loop = { active: true, start, end, beats: Math.max(1, Math.round((end - start) / interval)) };
+    this.applyLoop();
+  }
+  reloop() {
+    if (!this.loop) return;
+    this.loop.active = true;
+    this.applyLoop();
+    this.seek(this.loop.start);
+  }
+
+  toggleLoop() {
+    if (!this.loop) return;
+    this.loop.active = !this.loop.active;
+    this.applyLoop();
+  }
+  exitLoop() {
+    if (!this.loop) return;
+    this.loop.active = false;
+    this.applyLoop();
+  }
+
+  private applyLoop() {
+    if (!this.source) return;
+    if (this.loop?.active) {
+      this.source.loopStart = this.loop.start;
+      this.source.loopEnd = this.loop.end;
+      this.source.loop = true;
+    } else {
+      this.source.loop = false;
+    }
+  }
+
+  // --- EQ / trim ---
   setTrim(gain: number) {
     this.output.gain.value = gain;
   }
-
   setEqLow(db: number) {
     this.eq.setLow(db);
   }
@@ -130,15 +229,19 @@ export class Deck {
     src.playbackRate.value = this._rate;
     src.connect(this.eq.input);
     src.onended = () => {
-      // Fired on both natural end and manual stop; ignore manual stops.
       if (src === this.source) {
         this._playing = false;
         this.startOffset = this.buffer?.duration ?? 0;
         this.onEnded?.();
       }
     };
-    src.start(0, offset);
     this.source = src;
+    if (this.loop?.active) {
+      src.loopStart = this.loop.start;
+      src.loopEnd = this.loop.end;
+      src.loop = true;
+    }
+    src.start(0, offset);
     this.startOffset = offset;
     this.startedAt = this.ctx.currentTime;
   }
@@ -146,7 +249,7 @@ export class Deck {
   private stopSource() {
     if (!this.source) return;
     const src = this.source;
-    this.source = null; // detach first so onended ignores this stop
+    this.source = null;
     try {
       src.onended = null;
       src.stop();

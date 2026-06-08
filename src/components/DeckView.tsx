@@ -101,6 +101,13 @@ export function DeckView({ id, deck, accent, meta, position, loading, status, on
           <button className="btn sync" onClick={() => { onSync(); rerender(); }}>
             SYNC
           </button>
+          <button
+            className={`btn keylock ${deck.keylock ? "on" : ""}`}
+            title="Key lock (master tempo)"
+            onClick={() => { deck.setKeylock(!deck.keylock); rerender(); }}
+          >
+            KEY
+          </button>
         </div>
 
         <div className="eq-stack">
@@ -127,6 +134,28 @@ export function DeckView({ id, deck, accent, meta, position, loading, status, on
             {deck.tempo.toFixed(1)}%
           </span>
         </div>
+      </div>
+
+      <div className="jog">
+        <button className="jog-btn" title="Jump back a bar" onClick={() => { deck.beatJump(-4); rerender(); }}>
+          ◀◀
+        </button>
+        <button className="jog-btn" title="Jump back a beat" onClick={() => { deck.beatJump(-1); rerender(); }}>
+          ◀
+        </button>
+        <button
+          className={`jog-btn mag ${deck.quantizing ? "on" : ""}`}
+          title="Quantize — snap cues/loops/jumps to the grid"
+          onClick={() => { deck.setQuantize(!deck.quantizing); rerender(); }}
+        >
+          ⌗ SNAP
+        </button>
+        <button className="jog-btn" title="Jump forward a beat" onClick={() => { deck.beatJump(1); rerender(); }}>
+          ▶
+        </button>
+        <button className="jog-btn" title="Jump forward a bar" onClick={() => { deck.beatJump(4); rerender(); }}>
+          ▶▶
+        </button>
       </div>
 
       <div className="pads">

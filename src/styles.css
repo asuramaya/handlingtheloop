@@ -952,3 +952,55 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ===================== Key lock / jog / quantize ========================== */
+.btn.keylock {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.btn.keylock.on {
+  background: rgba(255, 210, 80, 0.16);
+  border-color: #ffd250;
+  color: #ffd250;
+}
+
+.jog {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+.jog-btn {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.jog-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.jog-btn.mag {
+  flex: 1.6;
+  letter-spacing: 1px;
+}
+.jog-btn.mag.on {
+  background: rgba(255, 210, 80, 0.16);
+  border-color: #ffd250;
+  color: #ffd250;
+}
+
+@media (max-width: 768px) {
+  .jog-btn {
+    padding: 10px 0;
+    font-size: 13px;
+  }
+}

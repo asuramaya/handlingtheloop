@@ -32,6 +32,9 @@ export class Deck {
   private startedAt = 0;
   private _rate = 1;
   private _tempo = 0; // percent
+  private _keylock = false;
+  private pitchNode: AudioWorkletNode | null = null;
+  quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   cuePoint = 0;
   hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
   loop: Loop | null = null;
@@ -54,6 +57,37 @@ export class Deck {
   }
   get tempo() {
     return this._tempo;
+  }
+  get keylock() {
+    return this._keylock;
+  }
+
+  /** Insert the key-lock pitch-shifter between the source and EQ. */
+  attachPitchNode(node: AudioWorkletNode) {
+    node.connect(this.eq.input);
+    this.pitchNode = node;
+    this.updatePitch();
+    // Re-route a currently-playing source through the new node.
+    if (this.source) {
+      try {
+        this.source.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.source.connect(node);
+    }
+  }
+
+  setKeylock(on: boolean) {
+    this._keylock = on;
+    this.updatePitch();
+  }
+
+  // ratio = 1/rate cancels the source's pitch shift; ratio = 1 is transparent.
+  private updatePitch() {
+    if (!this.pitchNode) return;
+    const ratio = this._keylock ? 1 / this._rate : 1;
+    this.pitchNode.parameters.get("ratio")!.value = ratio;
   }
   /** BPM after the tempo fader is applied. */
   get effectiveBpm(): number | null {
@@ -123,11 +157,34 @@ export class Deck {
     this._tempo = tempoPercent;
     this._rate = rate;
     if (this.source) this.source.playbackRate.value = rate;
+    this.updatePitch(); // keep key-lock tracking the tempo
+  }
+
+  get quantizing() {
+    return this.quantizeOn;
+  }
+  setQuantize(on: boolean) {
+    this.quantizeOn = on;
+  }
+  private snap(t: number): number {
+    const g = this.beatgrid;
+    if (!g) return t;
+    return g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
+  }
+  private maybeSnap(t: number): number {
+    return this.quantizeOn ? this.snap(t) : t;
+  }
+
+  /** Jump by N beats from the current (grid-snapped) position. */
+  beatJump(beats: number) {
+    const interval = this.beatgrid?.interval ?? 60 / 120;
+    const base = this.beatgrid ? this.snap(this.position()) : this.position();
+    this.seek(base + beats * interval);
   }
 
   // --- cue ---
   setCue() {
-    this.cuePoint = this.position();
+    this.cuePoint = this.maybeSnap(this.position());
   }
   jumpToCue() {
     this.seek(this.cuePoint);
@@ -136,7 +193,7 @@ export class Deck {
   // --- hot cues: tap empty pad to set, tap set pad to jump ---
   hotCue(i: number) {
     const cur = this.hotCues[i];
-    if (cur == null) this.hotCues[i] = this.position();
+    if (cur == null) this.hotCues[i] = this.maybeSnap(this.position());
     else this.seek(cur);
   }
   clearHotCue(i: number) {
@@ -144,17 +201,11 @@ export class Deck {
   }
 
   // --- loops ---
-  private quantize(t: number): number {
-    const g = this.beatgrid;
-    if (!g) return t;
-    return g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
-  }
-
   /** Set + enable a loop of `beats` length, snapped to the beatgrid. */
   setBeatLoop(beats: number) {
     if (!this.buffer) return;
     const interval = this.beatgrid?.interval ?? 60 / 120;
-    const start = this.beatgrid ? this.quantize(this.position()) : this.position();
+    const start = this.beatgrid ? this.snap(this.position()) : this.position();
     const end = Math.min(this.duration, start + beats * interval);
     this.loop = { active: true, start, end, beats };
     this.applyLoop();
@@ -167,12 +218,12 @@ export class Deck {
   // FLX4-style manual loop: tap IN to drop the entry point, tap OUT to set the
   // exit and start looping, EXIT to leave, RELOOP to jump back in.
   loopIn() {
-    this.loopInPoint = this.position();
+    this.loopInPoint = this.maybeSnap(this.position());
   }
   loopOut() {
     if (this.loopInPoint == null) return;
     const start = this.loopInPoint;
-    const end = this.position();
+    const end = this.maybeSnap(this.position());
     this.loopInPoint = null;
     if (end <= start) return;
     const interval = this.beatgrid?.interval ?? 60 / 120;
@@ -227,7 +278,7 @@ export class Deck {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.playbackRate.value = this._rate;
-    src.connect(this.eq.input);
+    src.connect(this.pitchNode ?? this.eq.input);
     src.onended = () => {
       if (src === this.source) {
         this._playing = false;

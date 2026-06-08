@@ -69,20 +69,36 @@ export function WaveformViewport({
       ctx.fillRect(lx, 0, lw, h);
     }
 
-    // Beat grid.
+    // Beat grid — adaptive LOD: draw beats when there's room, otherwise step up
+    // to bars (4) then phrases (16) then 64, so it never becomes a picket fence.
+    // Phrase lines are brightest, bars next, beats faint.
     if (beatgrid) {
       const { firstBeat, interval } = beatgrid;
-      let k = Math.ceil((left - firstBeat) / interval);
+      const pxPerBeat = (interval / windowSec) * w;
+      let step = 64;
+      for (const s of [1, 4, 16, 64]) {
+        if (pxPerBeat * s >= 12) {
+          step = s;
+          break;
+        }
+      }
+      let k = Math.ceil((left - firstBeat) / interval / step) * step;
       for (;;) {
         const t = firstBeat + k * interval;
         if (t > left + windowSec) break;
         if (t >= 0 && t <= duration) {
           const x = ((t - left) / windowSec) * w;
-          const downbeat = ((k % 4) + 4) % 4 === 0;
-          ctx.fillStyle = downbeat ? "rgba(255,210,80,0.5)" : "rgba(255,255,255,0.12)";
-          ctx.fillRect(x, 0, (downbeat ? 2 : 1) * dpr, h);
+          const km = ((k % 16) + 16) % 16;
+          const phrase = km === 0;
+          const bar = km % 4 === 0;
+          ctx.fillStyle = phrase
+            ? "rgba(255,210,80,0.75)"
+            : bar
+              ? "rgba(255,210,80,0.4)"
+              : "rgba(255,255,255,0.14)";
+          ctx.fillRect(x, 0, (phrase ? 2.5 : bar ? 2 : 1) * dpr, h);
         }
-        k++;
+        k += step;
       }
     }
 

@@ -1,5 +1,6 @@
 import type { Beatgrid } from "./analyze";
 import { Deck } from "./Deck";
+import { PITCH_WORKLET_SRC } from "./pitchWorklet";
 
 /** Fractional position within the current beat, 0..1. */
 function phaseFraction(pos: number, g: Beatgrid): number {
@@ -42,6 +43,23 @@ export class AudioEngine {
     this.deckB.output.connect(this.xfadeB);
 
     this.setCrossfade(0);
+    void this.initKeylock();
+  }
+
+  // Load the pitch-shift worklet (Blob URL → bundler-agnostic) and give each
+  // deck a key-lock node. If it fails, the decks just run vinyl-mode.
+  private async initKeylock() {
+    try {
+      const url = URL.createObjectURL(
+        new Blob([PITCH_WORKLET_SRC], { type: "application/javascript" }),
+      );
+      await this.ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      this.deckA.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
+      this.deckB.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
+    } catch (e) {
+      console.warn("[htl] key-lock unavailable:", e);
+    }
   }
 
   /** Browsers start the context suspended until a user gesture. */

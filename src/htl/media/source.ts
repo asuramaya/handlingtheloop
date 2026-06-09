@@ -2,8 +2,10 @@
 //
 //   1. Local file  — drag/drop or picker. Works fully offline, today.
 //   2. YouTube URL — calls the /api/audio edge function, which resolves the
-//      audio stream server-side and re-serves the bytes WITH CORS headers
-//      (the browser can't fetch googlevideo.com directly). See api/audio.ts.
+//      audio stream server-side and re-serves the bytes (the browser can't
+//      fetch googlevideo.com directly). Any user-supplied YouTube credentials
+//      ride along as headers so the resolver can pass the bot challenge.
+import { ytAuthHeaders } from "./auth";
 
 export function parseYouTubeId(input: string): string | null {
   const trimmed = input.trim();
@@ -48,6 +50,7 @@ export async function fetchYouTubeAudio(
 ): Promise<ArrayBuffer> {
   const res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
     signal,
+    headers: ytAuthHeaders(),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

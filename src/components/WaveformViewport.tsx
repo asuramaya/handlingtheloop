@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import type { Beatgrid, Pyramid } from "../audio/analyze";
+import { useEffect, useRef, useState } from "react";
+import type { Beatgrid, Pyramid } from "@htl/analysis";
 
 interface WaveformViewportProps {
   pyramid: Pyramid | null;
@@ -43,9 +43,20 @@ export function WaveformViewport({
 }: WaveformViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ x: number } | null>(null);
+  const tap = useRef<{ startX: number; relX: number; w: number; moved: boolean } | null>(null);
   const scrubbing = useRef(false);
   const pinch = useRef<Map<number, number>>(new Map());
   const pinchDist = useRef(0);
+  const [resizeTick, setResizeTick] = useState(0);
+
+  // Redraw when the canvas box changes size (it fills a flexible layout third).
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const endScrub = () => {
     if (scrubbing.current) {
       scrubbing.current = false;
@@ -205,7 +216,7 @@ export function WaveformViewport({
     // Center playhead.
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
-  }, [pyramid, buffer, position, rate, beatgrid, loop, cuePoint, hotCues, loopInPoint, trackWindow, accent, duration, sr]);
+  }, [pyramid, buffer, position, rate, beatgrid, loop, cuePoint, hotCues, loopInPoint, trackWindow, accent, duration, sr, resizeTick]);
 
   return (
     <div className="wv-wrap">
@@ -218,11 +229,14 @@ export function WaveformViewport({
           e.currentTarget.setPointerCapture(e.pointerId);
           pinch.current.set(e.pointerId, e.clientX);
           if (pinch.current.size === 1) {
+            const rect = e.currentTarget.getBoundingClientRect();
             drag.current = { x: e.clientX };
+            tap.current = { startX: e.clientX, relX: e.clientX - rect.left, w: rect.width, moved: false };
             scrubbing.current = true;
             onScrubStart();
           } else if (pinch.current.size === 2) {
             endScrub(); // a second finger = pinch-zoom, not scrub
+            tap.current = null;
             const xs = [...pinch.current.values()];
             pinchDist.current = Math.abs(xs[0] - xs[1]);
             drag.current = null;
@@ -238,6 +252,7 @@ export function WaveformViewport({
             return;
           }
           if (!drag.current) return;
+          if (tap.current && Math.abs(e.clientX - tap.current.startX) > 5) tap.current.moved = true;
           const rect = e.currentTarget.getBoundingClientRect();
           const dxPx = e.clientX - drag.current.x;
           drag.current.x = e.clientX;
@@ -247,6 +262,10 @@ export function WaveformViewport({
           pinch.current.delete(e.pointerId);
           if (pinch.current.size < 2) pinchDist.current = 0;
           if (pinch.current.size === 0) {
+            // A tap (no drag) is a needle-drop: jump to the tapped position.
+            const t = tap.current;
+            if (t && !t.moved) onScrub((t.relX / t.w - 0.5) * trackWindow);
+            tap.current = null;
             drag.current = null;
             endScrub();
           }

@@ -1,29 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
+import { Store, migrateLegacyKey } from "../persistence";
 import type { Playlist, TrackMeta } from "./types";
 
 // Persistent library: the collection (every track you've saved) plus playlists
 // (ordered lists of videoIds). Only metadata is persisted (localStorage) —
-// audio lives in the in-memory session cache. Mirrors rekordbox's Collection +
+// audio lives in the IndexedDB cache. Mirrors rekordbox's Collection +
 // Playlists model.
-
-const STORAGE_KEY = "xxit.library.v1";
 
 interface LibraryData {
   collection: TrackMeta[];
   playlists: Playlist[];
 }
 
+const store = new Store<LibraryData>("library", { collection: [], playlists: [] }, 1);
+migrateLegacyKey("xxit.library.v1", store);
+
 function load(): LibraryData {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const d = JSON.parse(raw) as LibraryData;
-      if (Array.isArray(d.collection) && Array.isArray(d.playlists)) return d;
-    }
-  } catch {
-    /* corrupt / unavailable — start fresh */
-  }
-  return { collection: [], playlists: [] };
+  const d = store.get();
+  return Array.isArray(d.collection) && Array.isArray(d.playlists) ? d : { collection: [], playlists: [] };
 }
 
 let idCounter = 0;
@@ -49,11 +43,7 @@ export function useLibrary(): Library {
   const [data, setData] = useState<LibraryData>(load);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      /* quota / private mode — keep working in-memory */
-    }
+    store.set(data);
   }, [data]);
 
   const addTrack = useCallback((track: TrackMeta) => {

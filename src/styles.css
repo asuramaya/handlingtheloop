@@ -1,10 +1,19 @@
 :root {
-  --bg: #0a0b0f;
-  --panel: #14161d;
-  --panel-2: #1b1e27;
-  --line: #262a36;
-  --text: #e6e8ef;
-  --muted: #7b8094;
+  /* Inky near-black base — flat, no muddy gradients (hector-vector style) */
+  --bg: #050507;
+  --panel: #0b0b11;
+  --panel-2: #101019;
+  --line: #1a1a28;
+  --text: #ecedfb;
+  --muted: #6b7082;
+
+  /* Neon party palette — color lives in the accents, not the panels */
+  --neon-cyan: #00e5ff;
+  --neon-pink: #ff2d9c;
+  --neon-lime: #5dff9e;
+  --neon-yellow: #ffe24a;
+  --neon-purple: #b06bff;
+  --accent: var(--neon-cyan); /* global default; decks/banks override per-side */
 }
 
 * {
@@ -19,7 +28,12 @@ body,
 }
 
 body {
-  background: var(--bg);
+  /* Flat inky black with a faint twin-neon club glow bleeding from the edges */
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(0, 229, 255, 0.06), transparent 55%),
+    radial-gradient(120% 80% at 100% 0%, rgba(255, 45, 156, 0.06), transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -34,10 +48,21 @@ body {
   touch-action: manipulation;
 }
 
+/* Three-section DJ-table layout, identical on mobile and desktop:
+   topbar, then equal thirds — tracks (waveforms) / decks + mixer / explorer.
+   `.stage` holds the first two thirds, so flex 2 : 1 against the library makes
+   three equal sections. */
 .app {
-  height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+/* `.stage` is transparent so its children (lanes, board) become flex rows of
+   the app directly. The board takes its natural height (never clips the
+   transport); the waveforms and the explorer flex to fill what's left. */
+.stage {
+  display: contents;
 }
 
 .topbar {
@@ -46,6 +71,7 @@ body {
   gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.4);
 }
 
 .logo {
@@ -53,6 +79,10 @@ body {
   font-weight: 800;
   letter-spacing: 2px;
   margin: 0;
+  color: var(--neon-cyan);
+  text-shadow:
+    0 0 8px rgba(0, 229, 255, 0.7),
+    0 0 20px rgba(0, 229, 255, 0.4);
 }
 
 .tagline {
@@ -192,7 +222,7 @@ body {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 40%, #2a2e3a, #15171f);
+  background: #0b0b12;
   border: 1px solid var(--line);
   position: relative;
   cursor: ns-resize;
@@ -293,14 +323,65 @@ body {
   width: min(560px, 80%);
 }
 
+/* Crossfader — glowing cap over a cyan→magenta (A↔B) track */
 .crossfader input {
   flex: 1;
-  accent-color: #c9cdd9;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+  background: transparent;
+  cursor: ew-resize;
+}
+.crossfader input::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid #000;
+  background: linear-gradient(90deg, var(--neon-cyan), #2a2a38 45%, #2a2a38 55%, var(--neon-pink));
+  box-shadow:
+    inset 0 0 6px rgba(0, 0, 0, 0.8),
+    0 0 10px rgba(0, 229, 255, 0.18),
+    0 0 10px rgba(255, 45, 156, 0.18);
+}
+.crossfader input::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid #000;
+  background: linear-gradient(90deg, var(--neon-cyan), #2a2a38 45%, #2a2a38 55%, var(--neon-pink));
+}
+.crossfader input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 30px;
+  margin-top: -12px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #d7dbe6, #8c92a6);
+  border: 1px solid #000;
+  box-shadow:
+    0 0 10px rgba(255, 255, 255, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.7);
+  cursor: ew-resize;
+}
+.crossfader input::-moz-range-thumb {
+  width: 18px;
+  height: 30px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #d7dbe6, #8c92a6);
+  border: 1px solid #000;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+  cursor: ew-resize;
 }
 
 .xf-end {
   font-weight: 800;
-  color: var(--muted);
+  color: var(--accent, var(--muted));
+}
+.crossfader .xf-end:first-child {
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--neon-cyan) 60%, transparent);
+}
+.crossfader .xf-end:last-child {
+  color: var(--neon-pink);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--neon-pink) 60%, transparent);
 }
 
 /* ============================ Library / Explorer ============================ */
@@ -310,11 +391,14 @@ body {
   font-weight: 400;
 }
 
+/* Section 3 (bottom): the explorer / library. */
 .library {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 110px;
+  overflow: hidden;
   display: flex;
   background: var(--bg);
+  border-top: 1px solid var(--line);
 }
 
 .lib-sidebar {
@@ -560,13 +644,13 @@ body {
   cursor: default;
 }
 .mini.a {
-  color: #36c2ff;
+  color: var(--neon-cyan);
 }
 .mini.b {
-  color: #ff5d73;
+  color: var(--neon-pink);
 }
 .mini.add {
-  color: #6ee7a8;
+  color: var(--neon-lime);
 }
 .mini.x:hover {
   color: #ff8a99;
@@ -743,8 +827,17 @@ body {
   .lib-del {
     display: none;
   }
+  /* The page itself is locked (no rubber-band / pinch), so the explorer results
+     scroll INSIDE here instead. */
+  .library {
+    min-height: 150px;
+  }
   .lib-main {
-    overflow: visible;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   /* Sticky search bar follows the scroll on mobile */
@@ -904,45 +997,57 @@ body {
 .waveform:active {
   cursor: grabbing;
 }
+/* Bottom-right so they never collide with the lane-info (time / BPM) up top */
 .wv-zoom {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  bottom: 5px;
+  right: 5px;
   display: flex;
   gap: 4px;
+  z-index: 3;
 }
 .wv-zoom button {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 22px;
   border-radius: 5px;
   border: 1px solid var(--line);
-  background: rgba(12, 13, 18, 0.78);
-  color: var(--text);
-  font-size: 16px;
+  background: rgba(8, 9, 13, 0.55);
+  color: var(--muted);
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
 }
 .wv-zoom button:hover {
   border-color: var(--accent);
+  color: var(--text);
+}
+/* On phones the lanes are short and the buttons crowd the boundary — pinch to
+   zoom instead. */
+@media (max-width: 768px) {
+  .wv-zoom {
+    display: none;
+  }
 }
 
 .loops {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .loop-btn {
   flex: 1 1 auto;
-  min-width: 38px;
+  min-width: 0;
 }
 .loop-btn.armed {
   border-color: #ffd250;
   color: #ffd250;
 }
-.loop-sep {
-  width: 1px;
-  background: var(--line);
-  margin: 2px 2px;
-  align-self: stretch;
-  flex: 0 0 auto;
+/* Beat-loop sizes in a clean 4-up row (1/2/4/8, or 16/32/48/64 in SHIFT) */
+.loop-sizes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+.loop-sizes .loop-btn {
+  min-width: 0;
 }
 
 .deck-hint {
@@ -1006,15 +1111,12 @@ body {
 }
 
 /* ============================ DDJ-FLX board ================================ */
-.stage {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  background: #0a0b0f;
-}
-
-/* Stacked full-width waveform lanes — grids line up vertically */
+/* Section 1 (top third): stacked waveform lanes — grids line up vertically and
+   the canvases fill the available height (redrawn via ResizeObserver). */
 .lanes {
+  flex: 1 1 0;
+  min-height: 96px;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1023,25 +1125,42 @@ body {
 .lane {
   position: relative;
   background: #08090d;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The wrapper takes the lane's spare height via flex; the canvas is absolutely
+   pinned to fill it exactly. Absolute inset (not height:100%) avoids the iOS
+   Safari quirk where the canvas renders taller than its box and the bottom of
+   the waveform gets clipped by the lane. */
+.lane .wv-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
 }
 .lane .waveform {
-  height: 150px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
   border-radius: 0;
   border: none;
 }
+/* The header is its OWN row above the waveform (not an overlay), so the audio
+   form below it stays fully visible. */
 .lane-info {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  flex: 0 0 auto;
   z-index: 2;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   font-size: 12px;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(6, 7, 11, 0.9), rgba(6, 7, 11, 0));
+  background: #0a0b11;
+  border-bottom: 1px solid var(--line);
 }
 .lane-id {
   font-weight: 800;
@@ -1069,8 +1188,11 @@ body {
   color: #ffd250;
 }
 
-/* Board */
+/* Section 2 (middle third): the DJ board — deck A | mixer | deck B, mirrored
+   around the center like a real controller. */
 .board {
+  flex: 0 0 auto;
+  overflow: visible;
   display: flex;
   align-items: stretch;
   gap: 1px;
@@ -1083,7 +1205,8 @@ body {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  background: linear-gradient(180deg, #15171e, #0e1015);
+  background: var(--panel);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   min-width: 0;
 }
 .bank.mirror {
@@ -1097,38 +1220,117 @@ body {
   min-width: 0;
 }
 
+/* Center mixer: two full channel strips (TEMPO fader + knobs + LEVEL fader) over
+   a foot with the tempo-range button and the crossfader. */
 .mixer-center {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px;
-  background: linear-gradient(180deg, #1c1f29, #13151c);
+  gap: 8px;
+  padding: 6px 14px 8px;
+  background: var(--panel-2);
+  border-top: 2px solid var(--neon-purple);
 }
 .channels {
   display: flex;
-  gap: 18px;
+  gap: 28px;
   justify-content: center;
 }
 .chan {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 3px;
 }
 .chan-id {
   font-weight: 800;
   color: var(--accent);
   font-size: 12px;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+/* TEMPO fader | knobs | LEVEL fader, mirrored on deck B (tempo to the outside) */
+.chan-row {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+.chan.mirror .chan-row {
+  flex-direction: row-reverse;
+}
+.chan-knobs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+/* Slim faders that match the 5-knob column height */
+.chan-row .fader.pitch .fader-track,
+.chan-row .fader.level .fader-track {
+  height: 150px;
+  width: 18px;
+}
+.chan-row .fader-thumb {
+  width: 22px;
+}
+.chan-row .fader-label,
+.chan-row .fader-value {
+  font-size: 8px;
+}
+/* TEMPO-range + SKIP-size buttons (moved out of Settings into the center) */
+.mixer-btns {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+/* The tempo-range button lives under each TEMPO fader */
+.chan-pitch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.tempo-width.mini {
+  width: 32px;
+  padding: 2px 1px;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+.tempo-width {
+  background: #0c0c13;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  /* Fixed width so changing the value (±8 → ±50, 1 bar → 4 bars) doesn't resize
+     the pill and shove the surrounding panels. */
+  width: 96px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 4px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tempo-width:hover {
+  border-color: var(--neon-cyan);
+  color: var(--text);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon-cyan) 35%, transparent);
+}
+.mixer-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Hardware buttons */
 .hw-btn {
-  background: linear-gradient(180deg, #2a2e3a, #15181f);
-  border: 1px solid #000;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset,
-    0 2px 3px rgba(0, 0, 0, 0.5);
+  background: #0c0c13;
+  border: 1px solid var(--line);
   color: var(--text);
   border-radius: 6px;
   padding: 9px 8px;
@@ -1138,18 +1340,26 @@ body {
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;
+  transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
 }
 .hw-btn:hover {
   border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .hw-btn:active {
   transform: translateY(1px);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6) inset;
 }
 .hw-btn.play {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
+  background: var(--accent);
+  border-color: var(--accent);
   color: #06080c;
   font-size: 16px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.hw-btn.play:hover {
+  color: #06080c;
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 .hw-btn.cue {
   color: var(--accent);
@@ -1165,6 +1375,24 @@ body {
 .hw-btn.key.on {
   background: rgba(255, 210, 80, 0.18);
   border-color: #ffd250;
+  color: #ffd250;
+}
+/* SHIFT modifier button (replaces Load file). Latches the shift remap. */
+.hw-btn.shift {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  font-weight: 800;
+}
+.hw-btn.shift.on {
+  background: rgba(255, 210, 80, 0.18);
+  border-color: #ffd250;
+  color: #ffd250;
+  box-shadow: 0 0 10px rgba(255, 210, 80, 0.3);
+}
+/* While shifted, the jog row signals it's in loop-move mode */
+.bank.shifted .jog-btn {
+  border-color: color-mix(in srgb, #ffd250 45%, var(--line));
   color: #ffd250;
 }
 .hw-btn.small {
@@ -1183,40 +1411,73 @@ body {
   width: 100%;
 }
 
-/* Knobs — DDJ look */
+/* Knobs — flat inky disc with an SVG value-arc + glowing pointer */
 .knob-dial {
-  width: 34px;
-  height: 34px;
-  background: radial-gradient(circle at 50% 32%, #3c4150, #0e1015 72%);
-  box-shadow:
-    0 2px 5px rgba(0, 0, 0, 0.6),
-    0 0 0 1px #000;
+  width: 38px;
+  height: 38px;
+  position: relative;
+  background: #0b0b12;
+  box-shadow: 0 0 0 1px var(--line);
   border: none;
 }
 .chan .knob-dial {
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
 }
 .chan {
-  gap: 6px;
+  gap: 3px;
+}
+.knob-ring {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  fill: none;
+}
+.knob-ring-track {
+  stroke: #1d1d2b;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.knob-ring-fill {
+  stroke-width: 3;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px var(--accent));
 }
 .knob-pointer {
+  position: absolute;
+  left: 50%;
+  top: 5px;
+  width: 2px;
+  height: 11px;
+  margin-left: -1px;
+  border-radius: 1px;
   background: var(--accent);
-  box-shadow: 0 0 4px var(--accent);
+  transform-origin: 50% 14px;
+  box-shadow: 0 0 5px var(--accent);
 }
 .chan .knob {
   flex-direction: column;
-  gap: 3px;
+  gap: 0;
 }
 .chan .knob-label {
   width: auto;
   text-align: center;
+  font-size: 8px;
+  line-height: 1.1;
 }
+/* Show the dB / value readout under each knob (mixer detail) */
 .chan .knob-value {
-  display: none;
+  display: block;
+  width: auto;
+  text-align: center;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
-/* Faders */
+/* Faders — custom track with accent fill (level indicator) + glowing cap */
 .fader {
   display: flex;
   flex: 0 0 auto; /* never let flex squash the fader to a stub */
@@ -1224,50 +1485,69 @@ body {
   align-items: center;
   gap: 6px;
 }
-.fader-input {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 28px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
+.fader-track {
+  position: relative;
+  width: 26px;
+  border-radius: 6px;
+  background: #050507;
+  border: 1px solid var(--line);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.8);
+  cursor: ns-resize;
+  touch-action: none;
 }
-.fader-input::-webkit-slider-runnable-track {
+.fader-fill {
+  position: absolute;
+  left: 50%;
   width: 6px;
-  background: linear-gradient(#070809, #1b1e27);
-  border: 1px solid #000;
+  transform: translateX(-50%);
   border-radius: 3px;
-  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+  pointer-events: none;
 }
-.fader-input::-webkit-slider-thumb {
-  -webkit-appearance: none;
+.fader-detent {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+.fader-thumb {
+  position: absolute;
+  left: 50%;
   width: 30px;
-  height: 15px;
-  margin-left: -12px;
+  height: 14px;
+  margin-bottom: -7px;
+  transform: translateX(-50%);
   border-radius: 3px;
-  background: linear-gradient(180deg, #565c6c, #20242e);
+  background: linear-gradient(180deg, #2b2b38, #131319);
   border: 1px solid #000;
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.6),
-    0 1px 0 rgba(255, 255, 255, 0.08) inset;
-  cursor: grab;
+    0 1px 2px rgba(0, 0, 0, 0.7),
+    0 0 7px color-mix(in srgb, var(--accent) 55%, transparent);
+  pointer-events: none;
 }
-.fader-input::-moz-range-thumb {
-  width: 30px;
-  height: 15px;
-  border-radius: 3px;
-  background: linear-gradient(180deg, #565c6c, #20242e);
-  border: 1px solid #000;
-  cursor: grab;
+.fader-thumb::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
 }
-.fader.level .fader-input {
-  height: 104px;
+.fader.level .fader-track {
+  height: 64px;
 }
 .fader.pitch {
   flex: 0 0 auto;
 }
-.fader.pitch .fader-input {
-  height: 168px;
+.fader.pitch .fader-track {
+  height: 188px;
 }
 .fader-label {
   font-size: 10px;
@@ -1277,7 +1557,12 @@ body {
 .fader-value {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  color: var(--accent);
+  /* Fixed box so a wide value (e.g. -12.5) doesn't widen the channel strip. */
+  display: inline-block;
+  min-width: 34px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 /* Pads — rubbery, light up in their cue color */
@@ -1285,10 +1570,14 @@ body {
   grid-template-columns: repeat(8, 1fr);
 }
 .pad {
-  background: linear-gradient(180deg, #20242e, #0d0f14);
-  border: 1px solid #000;
-  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
+  background: #0c0c13;
+  border: 1px solid var(--line);
   color: var(--muted);
+  transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
+}
+.bank .pad:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 .hotcues .pad:nth-child(1).set { background: #ff5d73; color: #06080c; box-shadow: 0 0 10px #ff5d73; }
 .hotcues .pad:nth-child(2).set { background: #ffb13c; color: #06080c; box-shadow: 0 0 10px #ffb13c; }
@@ -1305,20 +1594,146 @@ body {
   margin: 0 auto;
 }
 
-/* Mobile: board stacks */
+/* Mobile: keep the SAME deck A | mixer | deck B board, simplified to fit a phone
+   width. The two mixer channels stack (A over B) and each channel's knobs sit in
+   a row so the center column stays narrow; jog + file-load are dropped. */
 @media (max-width: 768px) {
+  .tagline {
+    display: none;
+  }
   .board {
-    flex-direction: column;
+    gap: 1px;
   }
   .bank,
   .bank.mirror {
-    flex-direction: row;
+    padding: 6px 5px;
+    gap: 5px;
   }
-  .fader.pitch .fader-input {
-    min-height: 150px;
+  .bank-main {
+    gap: 4px;
   }
-  .lane .waveform {
-    height: 104px;
+  .hw-btn {
+    padding: 6px 1px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+  .transport {
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+  }
+  .jog {
+    gap: 2px;
+  }
+  .jog-btn {
+    padding: 6px 0;
+    font-size: 10px;
+  }
+  .hotcues {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3px;
+  }
+  .bank .pad {
+    height: 24px;
+    font-size: 10px;
+  }
+  .loops {
+    gap: 3px;
+  }
+  .loop-sep {
+    display: none;
+  }
+  .loop-btn {
+    min-width: 20px;
+    padding: 5px 0;
+    font-size: 10px;
+  }
+  .fader-label,
+  .fader-value {
+    font-size: 8px;
+  }
+
+  /* Mixer center: full channel strips (tempo + knobs + level) scaled down. The
+     deck banks lost their tempo faders, so the center has room. */
+  /* Scaled up to fill the center column — the banks lost their tempo faders so
+     there's room. */
+  .mixer-center {
+    padding: 8px 8px 10px;
+    gap: 8px;
+    justify-content: center;
+  }
+  .channels {
+    gap: 10px;
+  }
+  .chan {
+    gap: 5px;
+  }
+  .chan-id {
+    font-size: 12px;
+  }
+  /* Clear gap so the two faders read as separate from the knob column */
+  .chan-row {
+    gap: 7px;
+    align-items: center;
+  }
+  .chan-knobs {
+    gap: 6px;
+  }
+  .chan .knob-dial,
+  .knob-dial {
+    width: 24px;
+    height: 24px;
+  }
+  /* Keep the knob labels (TRIM/HI/MID/LOW/FILTER); drop the fader name but keep
+     its value (% / tempo) for detail. */
+  .chan-row .fader-label {
+    display: none;
+  }
+  .chan-row .fader-value {
+    font-size: 7.5px;
+    min-width: 26px;
+  }
+  .chan .knob-label {
+    font-size: 7.5px;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .chan .knob-value {
+    font-size: 7px;
+  }
+  .chan-row .fader.pitch .fader-track,
+  .chan-row .fader.level .fader-track {
+    height: 132px;
+    width: 14px;
+  }
+  /* Thumb matches the track width so it doesn't bleed into the knobs */
+  .chan-row .fader-thumb {
+    width: 18px;
+  }
+  /* Kill the neon halos inside the cramped mixer — the glow bleed between
+     adjacent controls is what reads as "cluttered". Colors stay; halos go. */
+  .mixer-center .knob-ring-fill {
+    filter: none;
+  }
+  .mixer-center .knob-pointer,
+  .mixer-center .fader-fill,
+  .mixer-center .fader-thumb,
+  .mixer-center .fader-thumb::after {
+    box-shadow: none;
+  }
+  .mixer-center .chan-id {
+    text-shadow: none;
+  }
+  .crossfader {
+    max-width: none;
+    gap: 8px;
+  }
+  .xf-end {
+    font-size: 11px;
+  }
+  .tempo-width {
+    padding: 3px 8px;
+    font-size: 11px;
   }
 }
 
@@ -1330,3 +1745,262 @@ body {
 .bank-main {
   justify-content: center;
 }
+
+/* ============================ Top bar actions ============================= */
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.top-btn {
+  background: #0c0c13;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.top-btn:hover {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+}
+.browse-toggle {
+  display: none; /* desktop: the library is always visible inline */
+}
+
+/* ============================ Settings modal ============================= */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 16px;
+}
+.settings-panel {
+  width: min(420px, 94vw);
+  max-height: 90dvh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--neon-purple);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.settings-head h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.settings-label {
+  font-size: 13px;
+  color: var(--text);
+}
+.swatches {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.swatch.on {
+  border-color: #fff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+}
+.swatch.custom {
+  position: relative;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+.swatch.custom input {
+  position: absolute;
+  inset: -6px;
+  opacity: 0;
+  cursor: pointer;
+}
+.toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #0c0c13;
+  position: relative;
+  cursor: pointer;
+  flex: none;
+}
+.toggle.on {
+  background: color-mix(in srgb, var(--neon-cyan) 35%, #0c0c13);
+  border-color: var(--neon-cyan);
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #d7dbe6;
+  transition: left 0.12s;
+}
+.toggle.on .toggle-knob {
+  left: 22px;
+}
+.seg {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.seg-btn {
+  background: #0c0c13;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 5px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.seg-btn.on {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+/* YouTube access + privacy */
+.settings-section {
+  padding: 12px 0 2px;
+  border-top: 1px solid var(--line);
+}
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.yt-status {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.yt-status.on {
+  color: var(--neon-lime);
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--neon-cyan);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.settings-hint {
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.settings-hint strong {
+  color: var(--text);
+}
+.yt-cookie {
+  width: 100%;
+  resize: vertical;
+  background: #050507;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  padding: 8px 10px;
+}
+.yt-cookie:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+.yt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.privacy {
+  margin-top: 12px;
+  padding: 12px;
+  background: #07070c;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.privacy h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.privacy p {
+  margin: 0 0 8px;
+}
+.privacy ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.privacy li {
+  margin-bottom: 6px;
+}
+.privacy strong {
+  color: var(--text);
+}
+
+/* ===================== Glow off ===================== */
+body.no-glow .logo,
+body.no-glow .chan-id,
+body.no-glow .xf-end,
+body.no-glow .lane-id,
+body.no-glow .lane-bpm {
+  text-shadow: none;
+}
+body.no-glow .hw-btn.play,
+body.no-glow .hw-btn:hover,
+body.no-glow .fader-thumb,
+body.no-glow .fader-thumb::after,
+body.no-glow .fader-fill,
+body.no-glow .knob-pointer,
+body.no-glow .pad.set,
+body.no-glow .hotcues .pad.set,
+body.no-glow .top-btn:hover {
+  box-shadow: none;
+}
+body.no-glow .knob-ring-fill {
+  filter: none;
+}
+

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { audioChunks, resolveAudio } from "./youtube";
+import { audioChunks, resolveAudio, type YtAuth } from "./youtube";
 
 // Node (dev-server) audio handler. Resolves the stream with the pure-JS
 // ANDROID_VR resolver and relays it to the browser in chunked ranges. The exact
@@ -10,10 +10,11 @@ export async function streamAudio(
   req: IncomingMessage,
   res: ServerResponse,
   videoId: string,
+  auth?: YtAuth,
 ): Promise<void> {
   let resolved;
   try {
-    resolved = await resolveAudio(videoId);
+    resolved = await resolveAudio(videoId, auth);
   } catch (e) {
     res.statusCode = 502;
     res.end(`resolve failed: ${(e as Error).message}`);

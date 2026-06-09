@@ -1,4 +1,4 @@
-import type { TrackMeta } from "../library/types";
+import type { TrackMeta } from "@htl/library";
 import { fmtTime } from "../util/format";
 
 interface TrackTableProps {

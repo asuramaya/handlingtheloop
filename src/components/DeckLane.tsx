@@ -1,5 +1,5 @@
-import type { Deck } from "../audio/Deck";
-import type { Pyramid } from "../audio/analyze";
+import type { Deck } from "@htl/audio";
+import type { Pyramid } from "@htl/analysis";
 import { WaveformViewport } from "./WaveformViewport";
 import { fmtTime } from "../util/format";
 

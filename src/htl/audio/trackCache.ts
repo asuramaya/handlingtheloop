@@ -1,4 +1,4 @@
-import type { TrackAnalysis } from "./analyze";
+import type { TrackAnalysis } from "../analysis/analyze";
 
 // Session cache of decoded audio + analysis, keyed by videoId. Loading the same
 // track to a deck again (e.g. the other deck, or a re-cue) is then instant — no

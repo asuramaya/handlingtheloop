@@ -1,4 +1,4 @@
-import type { Beatgrid } from "./analyze";
+import type { Beatgrid } from "../analysis/analyze";
 import { Deck } from "./Deck";
 import { PITCH_WORKLET_SRC } from "./pitchWorklet";
 
@@ -25,12 +25,23 @@ export class AudioEngine {
   private readonly xfadeA: GainNode;
   private readonly xfadeB: GainNode;
   private readonly master: GainNode;
+  private readonly limiter: DynamicsCompressorNode;
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
 
+    // master -> brick-wall-ish limiter -> destination. Two decks at full level
+    // plus EQ boost can exceed 0 dBFS; the limiter catches the peaks so the mix
+    // never hard-clips into crackle.
     this.master = this.ctx.createGain();
-    this.master.connect(this.ctx.destination);
+    this.limiter = this.ctx.createDynamicsCompressor();
+    this.limiter.threshold.value = -3;
+    this.limiter.knee.value = 0;
+    this.limiter.ratio.value = 20;
+    this.limiter.attack.value = 0.003;
+    this.limiter.release.value = 0.25;
+    this.master.connect(this.limiter);
+    this.limiter.connect(this.ctx.destination);
 
     this.xfadeA = this.ctx.createGain();
     this.xfadeB = this.ctx.createGain();

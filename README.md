@@ -73,42 +73,67 @@ per-sample) via an LOD peak pyramid. Drawn on a **real-time x-axis** and with
 frequency (low/mid/high), adaptive beat→bar→phrase grid with bar numbers, and
 contextual markers (cue, hot cues, loop in/out).
 
-**Performance** — 8 hot cues per deck (lit in cue color), beat loops
-(`1/2/4/8` + FLX4-style `IN`/`OUT`/`EXIT`/`RELOOP`), **beat sync** (tempo + phase),
-**key-lock**, **quantize/snap** to grid, **beat jump** (±beat / ±bar).
+**Performance** — 8 hot cues per deck, beat loops (`1/2/4/8`, **SHIFT →
+`16/32/48/64`**), FLX4-style manual loop (`IN`/`OUT`/`EXIT`/`RELOOP`), **loop
+move** (grid-locked) and **save-loop-to-pad** via SHIFT, **beat sync** (tempo +
+phase), **key-lock**, **quantize/snap**, **beat jump / skip**, **tap-to-seek**
+(needle drop). A **SHIFT** modifier (on-screen button + the keyboard Shift key)
+remaps the jog, pads, and transport.
 
-**Mixer** — per-channel TRIM + 3-band EQ + LEVEL fader, crossfader.
+**Mixer** — per-channel TRIM + 3-band EQ + **HP/LP filter** + LEVEL fader, with
+center-detent knobs and dB/% readouts; a **master limiter** and anti-click
+envelopes keep it clean; equal-power crossfader.
+
+**Stays put** — full session (tracks, mixer, cues, loops, play state) **restores
+on refresh** via an IndexedDB audio cache; everything persists locally.
+
+**Stems** *(in progress)* — separate a track into vocals/drums/bass/other once on
+a capable device, cache to R2, and let phones just download them. See
+[ROADMAP](./ROADMAP.md).
 
 **Library** — Collection + Playlists persisted to localStorage; native YouTube
 search/Explorer, playlist import, rekordbox-style track table.
 
 ## Controls
 
-| Control | Action |
-|---|---|
-| Drag waveform | Scrub (audible) |
-| Wheel / pinch / `+ −` | Zoom (shared by both decks) |
-| `CUE` | Set cue (paused) / jump to cue (playing) |
-| Hot-cue pad | Set if empty, jump if set; ✕ or shift-click to clear |
-| `IN`/`OUT`/`EXIT` | Manual loop in/out, exit/reloop |
-| `1/2/4/8` | Beat loop of that length |
-| `SYNC` | Match the other deck's BPM + phase |
-| `KEY` | Key-lock (master tempo) |
-| `⌗` | Quantize — snap cues/loops/jumps to grid |
-| `◀◀ ◀ ▶ ▶▶` | Beat jump ±bar / ±beat |
+| Control | Action | + SHIFT |
+|---|---|---|
+| Tap waveform | Needle-drop seek | — |
+| Drag waveform | Scrub (audible) | — |
+| Wheel / pinch | Zoom (shared by both decks) | — |
+| Knob / fader | Drag to set · **double-tap / right-click to reset** | — |
+| `CUE` | Set cue (paused) / jump to cue (playing) | Jump to **start** |
+| `▶` | Play / pause | Play **from cue** |
+| `SYNC` | Match the other deck's BPM + phase | Reset **pitch** to 0% |
+| `KEY` | Key-lock (master tempo) | **Reset** channel (EQ/filter/trim/tempo) |
+| Hot-cue pad | Set / jump | **Clear**, or **save the active loop** to it |
+| `IN`/`OUT`/`EXIT` | Manual loop in/out, exit/reloop | — |
+| `1/2/4/8` | Beat loop of that length | Big loops **16/32/48/64** |
+| `◀◀ ◀ ▶ ▶▶` | Beat jump / skip | **Move the loop** (grid-locked) |
+| `⌗` | Quantize — snap to grid | — |
+| FILTER knob | Center = off · left = LP · right = HP | — |
+
+The **SKIP** and **TEMPO ±** pills (center mixer) set the beat-jump size and the
+pitch-fader range.
 
 ## Project structure
 
 ```
-src/audio/        AudioEngine, Deck, Eq3, analyze (pyramid + beatgrid),
-                  decode, trackCache, pitchWorklet
+src/htl/          the @htl internal library (path alias "@htl"):
+  audio/          AudioEngine, Deck, Eq3, decode, trackCache, pitchWorklet
+  analysis/       LOD pyramid + beatgrid
+  media/          youtube source/api + user-auth (cookie) headers
+  library/        Collection + Playlists store
+  persistence/    Store (versioned localStorage) + IndexedDB audio cache
+  state/          settings + session snapshot
+  stems/          stem R2 cache + (pending) on-device separation
 src/components/   DeckLane, DeckControls, ChannelStrip, WaveformViewport,
-                  LibraryPanel, Explorer, TrackTable, Knob, Fader
-src/library/      useLibrary (Collection + Playlists), types
-src/youtube/      client API (search/meta/playlist), source (audio fetch)
+                  Knob, Fader, Explorer, TrackTable, LibraryPanel, SettingsPanel
 server/           youtube.ts (resolver), innertube.ts (search), api.ts (dev)
 worker/index.ts   Cloudflare Worker: static SPA + /api/*
 wrangler.jsonc    Worker + R2 + assets config
+
+See **[ROADMAP.md](./ROADMAP.md)** for status, known issues, and what's next.
 ```
 
 `server/*` is pure JS and runs identically in the Vite dev middleware and the
@@ -127,9 +152,14 @@ One Worker serves the static app **and** the `/api/*` routes; an R2 bucket
 - **Extraction is an arms race** — if YouTube tightens the ANDROID_VR client,
   bump `clientVersion` in `server/youtube.ts` to match yt-dlp's current value.
   That's the only moving part.
-- **Cloud-IP rate limits** — YouTube occasionally 403s Cloudflare's IPs; the
-  resolver retries with backoff, and the R2 cache means popular tracks rarely hit
-  YouTube at all.
+- **Cloud-IP rate limits** — YouTube increasingly blocks Cloudflare's IPs with a
+  "confirm you're not a bot" wall. The R2 cache means popular tracks rarely hit
+  YouTube; for fresh tracks, **Settings → YouTube access** lets a user paste
+  their own cookie so the Worker can authenticate with *their* session. That
+  cookie is stored only in the browser, sent only to this app's Worker, forwarded
+  to YouTube, and **never stored server-side** (see the in-app privacy notice).
+- **No secrets in this repo** — the ANDROID_VR client is public config; there are
+  no API keys or tokens. Add a license before treating this as reusable.
 
 ## License
 

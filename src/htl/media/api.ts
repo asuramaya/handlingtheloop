@@ -1,9 +1,10 @@
 import type { TrackMeta } from "../library/types";
+import { ytAuthHeaders } from "./auth";
 
-// Client wrappers over the /api/* yt-dlp endpoints.
+// Client wrappers over the /api/* endpoints.
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
+async function getJson<T>(url: string, signal?: AbortSignal, headers?: Record<string, string>): Promise<T> {
+  const res = await fetch(url, { signal, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
   return body as T;
@@ -29,7 +30,7 @@ export async function fetchPlaylist(
 }
 
 export async function fetchMeta(videoId: string, signal?: AbortSignal): Promise<TrackMeta> {
-  return getJson(`/api/meta?v=${encodeURIComponent(videoId)}`, signal);
+  return getJson(`/api/meta?v=${encodeURIComponent(videoId)}`, signal, ytAuthHeaders());
 }
 
 /** Pull a YouTube playlist id out of a URL (or accept a bare list id). */

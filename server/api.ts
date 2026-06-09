@@ -2,9 +2,20 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Innertube } from "youtubei.js";
 import { streamAudio } from "./audioProxy";
 import { createInnertubeApi } from "./innertube";
-import { fetchMeta } from "./youtube";
+import { fetchMeta, type YtAuth } from "./youtube";
 
 const { searchYouTube, fetchPlaylist } = createInnertubeApi(Innertube as never);
+
+function readAuth(req: IncomingMessage): YtAuth | undefined {
+  const h = (n: string) => {
+    const v = req.headers[n];
+    return (Array.isArray(v) ? v[0] : v) || undefined;
+  };
+  const cookie = h("x-htl-yt-cookie");
+  const visitorData = h("x-htl-yt-visitor");
+  const poToken = h("x-htl-yt-potoken");
+  return cookie || visitorData || poToken ? { cookie, visitorData, poToken } : undefined;
+}
 
 // Single entry point for every /api/* route, shared by the Vite dev middleware
 // and the production serverless handlers. Returns true if it handled the
@@ -41,7 +52,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           sendJson(res, 400, { error: "missing or invalid ?v=" });
           return true;
         }
-        await streamAudio(req, res, v);
+        await streamAudio(req, res, v, readAuth(req));
         return true;
       }
       case "/api/search": {
@@ -78,7 +89,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           sendJson(res, 400, { error: "missing or invalid ?v=" });
           return true;
         }
-        sendJson(res, 200, await fetchMeta(v));
+        sendJson(res, 200, await fetchMeta(v, readAuth(req)));
         return true;
       }
       default:

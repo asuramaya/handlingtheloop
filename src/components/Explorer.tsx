@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import type { TrackMeta } from "../library/types";
-import { searchYouTube } from "../youtube/api";
+import type { TrackMeta } from "@htl/library";
+import { searchYouTube } from "@htl/media";
 import { fmtTime, fmtViews } from "../util/format";
 
 interface ExplorerProps {

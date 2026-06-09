@@ -1,4 +1,4 @@
-import type { Beatgrid } from "./analyze";
+import type { Beatgrid } from "../analysis/analyze";
 import { decodeAudio } from "./decode";
 import { Eq3 } from "./Eq3";
 
@@ -22,13 +22,19 @@ export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   private readonly trimNode: GainNode;
   private readonly eq: Eq3;
+  private readonly filter: BiquadFilterNode; // single-knob HP/LP color filter
   private readonly ctx: AudioContext;
   private _trim = 1;
   private _level = 1;
+  private _eqLow = 0;
+  private _eqMid = 0;
+  private _eqHigh = 0;
+  private _filter = 0; // -1 full low-pass … 0 off … +1 full high-pass
 
   buffer: AudioBuffer | null = null;
   beatgrid: Beatgrid | null = null;
   private source: AudioBufferSourceNode | null = null;
+  private srcGain: GainNode | null = null; // per-source declick envelope
 
   private _playing = false;
   private startOffset = 0;
@@ -43,6 +49,7 @@ export class Deck {
   private _reversed: AudioBuffer | null = null;
   cuePoint = 0;
   hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
+  hotLoops: (Loop | null)[] = new Array(HOT_CUE_COUNT).fill(null); // saved loops per pad
   loop: Loop | null = null;
   loopInPoint: number | null = null; // pending manual loop-in (FLX4 style)
 
@@ -51,10 +58,15 @@ export class Deck {
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
     this.eq = new Eq3(ctx);
-    // eq -> trim -> level(output) -> crossfader
+    // eq -> filter -> trim -> level(output) -> crossfader
+    this.filter = ctx.createBiquadFilter();
+    this.filter.type = "lowpass";
+    this.filter.frequency.value = 22050; // transparent at rest
+    this.filter.Q.value = 0.9;
     this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
-    this.eq.output.connect(this.trimNode);
+    this.eq.output.connect(this.filter);
+    this.filter.connect(this.trimNode);
     this.trimNode.connect(this.output);
   }
 
@@ -79,14 +91,14 @@ export class Deck {
     node.connect(this.eq.input);
     this.pitchNode = node;
     this.updatePitch();
-    // Re-route a currently-playing source through the new node.
-    if (this.source) {
+    // Re-route a currently-playing source (via its declick gain) through the node.
+    if (this.srcGain) {
       try {
-        this.source.disconnect();
+        this.srcGain.disconnect();
       } catch {
         /* ignore */
       }
-      this.source.connect(node);
+      this.srcGain.connect(node);
     }
   }
 
@@ -116,6 +128,7 @@ export class Deck {
     this.startOffset = 0;
     this.cuePoint = 0;
     this.hotCues = new Array(HOT_CUE_COUNT).fill(null);
+    this.hotLoops = new Array(HOT_CUE_COUNT).fill(null);
     this.loop = null;
     this.loopInPoint = null;
     this._reversed = null;
@@ -245,7 +258,18 @@ export class Deck {
     }
     this._tempo = tempoPercent;
     this._rate = rate;
-    if (this.source) this.source.playbackRate.value = rate;
+    if (this.source) {
+      // Glide the rate so fader moves bend the pitch smoothly instead of stepping.
+      const t = this.ctx.currentTime;
+      const p = this.source.playbackRate;
+      try {
+        p.cancelScheduledValues(t);
+        p.setValueAtTime(p.value, t);
+        p.linearRampToValueAtTime(rate, t + 0.02);
+      } catch {
+        p.value = rate;
+      }
+    }
     this.updatePitch(); // keep key-lock tracking the tempo
   }
 
@@ -281,43 +305,113 @@ export class Deck {
 
   // --- hot cues: tap empty pad to set, tap set pad to jump ---
   hotCue(i: number) {
+    // A saved loop on this pad takes priority: recall + activate it.
+    if (this.hotLoops[i]) {
+      this.recallLoop(i);
+      return;
+    }
     const cur = this.hotCues[i];
     if (cur == null) this.hotCues[i] = this.maybeSnap(this.position());
     else this.seek(cur);
   }
   clearHotCue(i: number) {
     this.hotCues[i] = null;
+    this.hotLoops[i] = null;
+  }
+  slotIsSet(i: number): boolean {
+    return this.hotCues[i] != null || this.hotLoops[i] != null;
+  }
+
+  /** Save the current loop to pad `i` (so it can be recalled later). */
+  saveLoop(i: number): boolean {
+    if (!this.loop) return false;
+    this.hotLoops[i] = { ...this.loop, active: false };
+    this.hotCues[i] = null;
+    return true;
+  }
+  /** Recall + activate the loop saved on pad `i`. */
+  recallLoop(i: number) {
+    const l = this.hotLoops[i];
+    if (!l) return;
+    this.loop = { ...l, active: true };
+    this.applyLoop();
+    this.seek(l.start);
   }
 
   // --- loops ---
-  /** Set + enable a loop of `beats` length, snapped to the beatgrid. */
+  /** Set + enable a loop of `beats` length, snapped to the beatgrid.
+   *  Resizing an ACTIVE loop keeps its in-point anchored (rekordbox behaviour),
+   *  so 1/2/4/8 changes the length in place instead of jumping the loop to the
+   *  playhead. With no active loop, drop a fresh loop at the current position. */
   setBeatLoop(beats: number) {
     if (!this.buffer) return;
     const interval = this.beatgrid?.interval ?? 60 / 120;
-    const start = this.beatgrid ? this.snap(this.position()) : this.position();
+    const start = this.loop?.active ? this.loop.start : this.beatgrid ? this.snap(this.position()) : this.position();
     const end = Math.min(this.duration, start + beats * interval);
     this.loop = { active: true, start, end, beats };
     this.applyLoop();
+    // Keep the playhead inside the (possibly shrunk) region so a live source
+    // doesn't run past the new loopEnd before wrapping.
     if (this._playing) {
       const pos = this.position();
       if (pos < start || pos > end) this.seek(start);
     }
   }
 
-  // FLX4-style manual loop: tap IN to drop the entry point, tap OUT to set the
-  // exit and start looping, EXIT to leave, RELOOP to jump back in.
+  // FLX4-style manual loop. With no active loop: tap IN to drop the entry point,
+  // tap OUT to set the exit and start looping. With a loop already running, IN
+  // and OUT nudge that loop's in/out boundaries so it can be fine-tuned.
   loopIn() {
-    this.loopInPoint = this.maybeSnap(this.position());
+    const t = this.maybeSnap(this.position());
+    if (this.loop?.active) {
+      this.loop.start = Math.min(t, this.loop.end - 1e-3);
+      this.loop.beats = this.loopBeats(this.loop);
+      this.applyLoop();
+      if (this._playing && this.position() < this.loop.start) this.seek(this.loop.start);
+    } else {
+      this.loopInPoint = t;
+    }
   }
   loopOut() {
+    const t = this.maybeSnap(this.position());
+    if (this.loop?.active) {
+      if (t > this.loop.start) {
+        this.loop.end = t;
+        this.loop.beats = this.loopBeats(this.loop);
+        this.applyLoop();
+      }
+      return;
+    }
     if (this.loopInPoint == null) return;
     const start = this.loopInPoint;
-    const end = this.maybeSnap(this.position());
+    const end = t;
     this.loopInPoint = null;
     if (end <= start) return;
-    const interval = this.beatgrid?.interval ?? 60 / 120;
-    this.loop = { active: true, start, end, beats: Math.max(1, Math.round((end - start) / interval)) };
+    this.loop = { active: true, start, end, beats: 0 };
+    this.loop.beats = this.loopBeats(this.loop);
     this.applyLoop();
+  }
+
+  private loopBeats(loop: Loop): number {
+    const interval = this.beatgrid?.interval ?? 60 / 120;
+    return Math.max(1, Math.round((loop.end - loop.start) / interval));
+  }
+
+  /** Shift the whole loop by `beats` (keeping its length), grid-locked. Positive
+   *  = forward. Used to move a loop a bar/beat at a time without resizing it. */
+  moveLoop(beats: number) {
+    if (!this.loop) return;
+    const interval = this.beatgrid?.interval ?? 60 / 120;
+    const len = this.loop.end - this.loop.start;
+    let start = this.loop.start + beats * interval;
+    if (start < 0) start = 0;
+    if (start + len > this.duration) start = Math.max(0, this.duration - len);
+    this.loop = { ...this.loop, start, end: start + len };
+    this.applyLoop();
+    if (this._playing && this.loop.active) {
+      const pos = this.position();
+      if (pos < start || pos > start + len) this.seek(start);
+    }
   }
   reloop() {
     if (!this.loop) return;
@@ -363,22 +457,65 @@ export class Deck {
     this._level = gain;
     this.output.gain.value = gain;
   }
+  get eqLow() {
+    return this._eqLow;
+  }
+  get eqMid() {
+    return this._eqMid;
+  }
+  get eqHigh() {
+    return this._eqHigh;
+  }
   setEqLow(db: number) {
+    this._eqLow = db;
     this.eq.setLow(db);
   }
   setEqMid(db: number) {
+    this._eqMid = db;
     this.eq.setMid(db);
   }
   setEqHigh(db: number) {
+    this._eqHigh = db;
     this.eq.setHigh(db);
   }
+
+  get filterValue() {
+    return this._filter;
+  }
+  // One-knob DJ color filter: left = low-pass (cutoff sweeps down), right =
+  // high-pass (cutoff sweeps up), centre = bypassed. Cutoffs map logarithmically.
+  setFilter(v: number) {
+    const x = Math.max(-1, Math.min(1, v));
+    this._filter = x;
+    const f = this.filter;
+    if (Math.abs(x) < 0.02) {
+      f.type = "lowpass";
+      f.frequency.value = 22050;
+    } else if (x < 0) {
+      f.type = "lowpass";
+      f.frequency.value = 22050 * Math.pow(180 / 22050, -x); // 22k → 180 Hz
+    } else {
+      f.type = "highpass";
+      f.frequency.value = 20 * Math.pow(7000 / 20, x); // 20 → 7000 Hz
+    }
+  }
+
+  // ~5 ms fade in/out around every source start/stop kills the clicks you'd
+  // otherwise hear on cue, seek, loop and play/pause — this is most of what makes
+  // playback feel "tight" like hardware.
+  private static readonly FADE = 0.005;
 
   private spawnSource(offset: number) {
     if (!this.buffer) return;
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.playbackRate.value = this._rate;
-    src.connect(this.pitchNode ?? this.eq.input);
+    const g = this.ctx.createGain();
+    src.connect(g);
+    g.connect(this.pitchNode ?? this.eq.input);
+    const t = this.ctx.currentTime;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(1, t + Deck.FADE);
     src.onended = () => {
       if (src === this.source) {
         this._playing = false;
@@ -387,6 +524,7 @@ export class Deck {
       }
     };
     this.source = src;
+    this.srcGain = g;
     if (this.loop?.active) {
       src.loopStart = this.loop.start;
       src.loopEnd = this.loop.end;
@@ -394,19 +532,54 @@ export class Deck {
     }
     src.start(0, offset);
     this.startOffset = offset;
-    this.startedAt = this.ctx.currentTime;
+    this.startedAt = t;
   }
 
   private stopSource() {
     if (!this.source) return;
     const src = this.source;
+    const g = this.srcGain;
     this.source = null;
-    try {
-      src.onended = null;
-      src.stop();
-    } catch {
-      /* already stopped */
+    this.srcGain = null;
+    src.onended = null;
+    if (g) {
+      // Fade out, then stop just after — the old source overlaps the new one for
+      // a few ms, so seeks/loops crossfade instead of clicking.
+      const t = this.ctx.currentTime;
+      const stopAt = t + Deck.FADE + 0.002;
+      try {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.linearRampToValueAtTime(0, t + Deck.FADE);
+      } catch {
+        /* ignore */
+      }
+      try {
+        src.stop(stopAt);
+        src.onended = () => {
+          try {
+            src.disconnect();
+            g.disconnect();
+          } catch {
+            /* ignore */
+          }
+        };
+      } catch {
+        try {
+          src.stop();
+        } catch {
+          /* already stopped */
+        }
+        src.disconnect();
+        g.disconnect();
+      }
+    } else {
+      try {
+        src.stop();
+      } catch {
+        /* already stopped */
+      }
+      src.disconnect();
     }
-    src.disconnect();
   }
 }

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import type { Library } from "../library/useLibrary";
-import type { TrackMeta } from "../library/types";
-import { getCachedTrack } from "../audio/trackCache";
-import { fetchPlaylist } from "../youtube/api";
+import type { Library } from "@htl/library";
+import type { TrackMeta } from "@htl/library";
+import { getCachedTrack } from "@htl/audio";
+import { fetchPlaylist } from "@htl/media";
 import { Explorer } from "./Explorer";
 import { TrackTable } from "./TrackTable";
 
@@ -18,11 +18,12 @@ interface LibraryPanelProps {
   library: Library;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   loadedIds: Set<string>;
+  onOpenSettings: () => void;
 }
 
 type View = "explorer" | "collection" | { playlistId: string };
 
-export function LibraryPanel({ library, onLoad, loadedIds }: LibraryPanelProps) {
+export function LibraryPanel({ library, onLoad, loadedIds, onOpenSettings }: LibraryPanelProps) {
   const [view, setView] = useState<View>("explorer");
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
@@ -79,6 +80,9 @@ export function LibraryPanel({ library, onLoad, loadedIds }: LibraryPanelProps) 
         >
           <span className="lib-nav-ico">💿</span> Collection
           <span className="lib-count">{library.collection.length}</span>
+        </button>
+        <button className="lib-nav lib-settings-nav" onClick={onOpenSettings} title="Settings">
+          <span className="lib-nav-ico">⚙</span> Settings
         </button>
 
         <div className="lib-section">

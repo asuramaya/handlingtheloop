@@ -19,6 +19,57 @@ const ANDROID_VR_UA =
 
 const PLAYER_ENDPOINT = "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false";
 
+// Hard timeouts on every upstream call so a hung googlevideo / youtubei request
+// can never pin the Worker until its wall-clock limit. AbortSignal.timeout is
+// supported in workerd and Node 18+.
+const PLAYER_TIMEOUT_MS = 8000;
+const VISITOR_TIMEOUT_MS = 6000;
+const CHUNK_TIMEOUT_MS = 25000;
+
+function withTimeout(ms: number, init?: RequestInit): RequestInit {
+  return { ...init, signal: AbortSignal.timeout(ms) };
+}
+
+// Optional per-request YouTube credentials, supplied BY THE USER from their own
+// browser session (see the privacy notice in the app). YouTube blocks the
+// player API from datacenter IPs with LOGIN_REQUIRED ("confirm you're not a
+// bot"); a real signed-in session (cookies) or a browser-minted visitorData /
+// PO token passes that challenge. We thread these straight through to YouTube
+// per request and never persist them server-side.
+export interface YtAuth {
+  cookie?: string; // the user's youtube.com Cookie header
+  visitorData?: string; // a browser-minted visitorData (overrides our fetched one)
+  poToken?: string; // a BotGuard PO token bound to that visitorData
+}
+
+function cookieValue(cookie: string, name: string): string | null {
+  const m = cookie.match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
+  return m ? m[1] : null;
+}
+
+async function sha1Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Authenticated Innertube calls need `Authorization: SAPISIDHASH <ts>_<sha1(ts
+// SAPISID origin)>` alongside the cookie. Compute it from the user's cookie.
+async function authHeaders(cookie: string): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    cookie,
+    origin: "https://www.youtube.com",
+    "x-origin": "https://www.youtube.com",
+    "x-goog-authuser": "0",
+  };
+  const sapisid =
+    cookieValue(cookie, "SAPISID") ?? cookieValue(cookie, "__Secure-3PAPISID") ?? cookieValue(cookie, "__Secure-1PAPISID");
+  if (sapisid) {
+    const ts = Math.floor(Date.now() / 1000);
+    headers.authorization = `SAPISIDHASH ${ts}_${await sha1Hex(`${ts} ${sapisid} https://www.youtube.com`)}`;
+  }
+  return headers;
+}
+
 export interface ResolvedAudio {
   url: string;
   contentLength: number;
@@ -50,18 +101,20 @@ const VISITOR_TTL_MS = 6 * 60 * 60 * 1000;
 async function getVisitorData(force = false): Promise<string> {
   if (!force && visitorCache && visitorCache.expires > Date.now()) return visitorCache.value;
   // Lightweight source: the service-worker data blob carries VISITOR_DATA.
-  const res = await fetch("https://www.youtube.com/sw.js_data", {
-    headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US,en;q=0.9" },
-  });
+  const res = await fetch(
+    "https://www.youtube.com/sw.js_data",
+    withTimeout(VISITOR_TIMEOUT_MS, { headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US,en;q=0.9" } }),
+  );
   const text = await res.text();
   const m = text.match(/"(C[\w%-]+?)"/); // visitorData starts with "Cg..."
   let value = m ? m[1] : "";
   if (!value) {
     // Fallback: the watch page always has it.
     const html = await (
-      await fetch("https://www.youtube.com/watch?v=jNQXAC9IVRw&hl=en", {
-        headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US" },
-      })
+      await fetch(
+        "https://www.youtube.com/watch?v=jNQXAC9IVRw&hl=en",
+        withTimeout(VISITOR_TIMEOUT_MS, { headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US" } }),
+      )
     ).text();
     const wm = html.match(/"visitorData":"([^"]+)"/);
     value = wm ? JSON.parse('"' + wm[1] + '"') : "";
@@ -84,8 +137,8 @@ interface PlayerResponse {
   };
 }
 
-async function playerRequest(videoId: string, visitorData: string): Promise<PlayerResponse> {
-  const body = {
+async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth): Promise<PlayerResponse> {
+  const body: Record<string, unknown> = {
     videoId,
     context: {
       client: {
@@ -106,17 +159,23 @@ async function playerRequest(videoId: string, visitorData: string): Promise<Play
     contentCheckOk: true,
     racyCheckOk: true,
   };
-  const res = await fetch(PLAYER_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "X-Youtube-Client-Name": "28",
-      "X-Youtube-Client-Version": ANDROID_VR_VERSION,
-      "user-agent": ANDROID_VR_UA,
-      "X-Goog-Visitor-Id": visitorData,
-    },
-    body: JSON.stringify(body),
-  });
+  // A user-supplied PO token (bound to their visitorData) satisfies the bot check.
+  if (auth?.poToken) body.serviceIntegrityDimensions = { poToken: auth.poToken };
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "X-Youtube-Client-Name": "28",
+    "X-Youtube-Client-Version": ANDROID_VR_VERSION,
+    "user-agent": ANDROID_VR_UA,
+    "X-Goog-Visitor-Id": visitorData,
+  };
+  // A signed-in cookie is the other way past the challenge.
+  if (auth?.cookie) Object.assign(headers, await authHeaders(auth.cookie));
+
+  const res = await fetch(
+    PLAYER_ENDPOINT,
+    withTimeout(PLAYER_TIMEOUT_MS, { method: "POST", headers, body: JSON.stringify(body) }),
+  );
   if (!res.ok) throw new Error(`player ${res.status}`);
   return res.json();
 }
@@ -126,11 +185,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // YouTube intermittently 403s / LOGIN_REQUIREDs requests from datacenter IPs
 // (Cloudflare's edge). Retry with backoff and a fresh visitorData — in practice
 // the next attempt almost always succeeds.
-async function playerWithRetry(videoId: string, attempts = 4): Promise<PlayerResponse> {
+async function playerWithRetry(videoId: string, attempts = 4, auth?: YtAuth): Promise<PlayerResponse> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      const pr = await playerRequest(videoId, await getVisitorData(i > 0));
+      // Prefer the user's browser-minted visitorData (it pairs with their PO
+      // token / cookie); otherwise fetch our own.
+      const visitor = auth?.visitorData || (await getVisitorData(i > 0));
+      const pr = await playerRequest(videoId, visitor, auth);
       if (pr.playabilityStatus?.status === "OK") return pr;
       lastErr = new Error(
         `not playable: ${pr.playabilityStatus?.status ?? "unknown"}${pr.playabilityStatus?.reason ? ` (${pr.playabilityStatus.reason})` : ""}`,
@@ -157,8 +219,8 @@ function pickAudio(formats: RawFormat[]): RawFormat | null {
   return audio[0];
 }
 
-export async function resolveAudio(videoId: string): Promise<ResolvedAudio> {
-  const pr = await playerWithRetry(videoId);
+export async function resolveAudio(videoId: string, auth?: YtAuth): Promise<ResolvedAudio> {
+  const pr = await playerWithRetry(videoId, 4, auth);
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
   if (!fmt || !fmt.url) throw new Error("no playable audio format");
   return {
@@ -170,8 +232,8 @@ export async function resolveAudio(videoId: string): Promise<ResolvedAudio> {
 }
 
 /** Single-video metadata from the ANDROID_VR player response's videoDetails. */
-export async function fetchMeta(videoId: string): Promise<TrackMeta> {
-  const pr = await playerWithRetry(videoId);
+export async function fetchMeta(videoId: string, auth?: YtAuth): Promise<TrackMeta> {
+  const pr = await playerWithRetry(videoId, 4, auth);
   const d = pr.videoDetails;
   if (!d?.videoId) throw new Error("no metadata");
   const thumbs = d.thumbnail?.thumbnails;
@@ -196,10 +258,29 @@ export async function fetchMeta(videoId: string): Promise<TrackMeta> {
 const MIN_CHUNK = 8 * 1024 * 1024; // 8 MB floor
 const MAX_CHUNKS = 24;
 
+// Fetch one byte range, retrying transient failures (intermittent 403/429/5xx
+// from datacenter IPs, or a timeout) so a single flaky chunk doesn't fail the
+// whole track.
+async function fetchRange(url: string, start: number, end: number, attempts = 3): Promise<Uint8Array> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS, { headers: { range: `bytes=${start}-${end}` } }));
+      if (r.ok || r.status === 206) return new Uint8Array(await r.arrayBuffer());
+      lastErr = new Error(`chunk ${r.status}`);
+      if (r.status !== 403 && r.status !== 429 && r.status < 500) throw lastErr; // non-transient
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < attempts - 1) await sleep(200 * (i + 1));
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export async function* audioChunks(url: string, contentLength: number): AsyncGenerator<Uint8Array> {
   // If contentLength is unknown, fall back to a single streamed GET.
   if (!contentLength) {
-    const r = await fetch(url);
+    const r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS));
     if (!r.ok || !r.body) throw new Error(`audio ${r.status}`);
     const reader = r.body.getReader();
     for (;;) {
@@ -212,8 +293,6 @@ export async function* audioChunks(url: string, contentLength: number): AsyncGen
   const chunkSize = Math.max(MIN_CHUNK, Math.ceil(contentLength / MAX_CHUNKS));
   for (let start = 0; start < contentLength; start += chunkSize) {
     const end = Math.min(contentLength - 1, start + chunkSize - 1);
-    const r = await fetch(url, { headers: { range: `bytes=${start}-${end}` } });
-    if (!r.ok && r.status !== 206) throw new Error(`chunk ${r.status}`);
-    yield new Uint8Array(await r.arrayBuffer());
+    yield await fetchRange(url, start, end);
   }
 }

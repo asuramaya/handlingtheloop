@@ -1,6 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { handleApi } from "./server/api";
+
+const htlDir = fileURLToPath(new URL("./src/htl", import.meta.url));
 
 // Dev-time /api/*: YouTube search / playlist / metadata / audio, all via yt-dlp.
 // In production the same server/api dispatcher runs behind the serverless
@@ -25,6 +28,9 @@ function xxitApi() {
 
 export default defineConfig({
   plugins: [react(), xxitApi()],
+  resolve: {
+    alias: { "@htl": htlDir },
+  },
   server: {
     port: 5173,
   },

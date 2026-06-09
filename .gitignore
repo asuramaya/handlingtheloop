@@ -5,3 +5,8 @@ dist
 *.local
 *.tsbuildinfo
 .DS_Store
+# Local tooling / editor config — never publish
+.claude/
+.idea/
+.vscode/
+*.log

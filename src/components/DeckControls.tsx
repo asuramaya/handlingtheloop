@@ -1,98 +1,119 @@
-import { useRef } from "react";
-import type { Deck } from "../audio/Deck";
-import { HOT_CUE_COUNT } from "../audio/Deck";
-import { Fader } from "./Fader";
+import type { Deck } from "@htl/audio";
+import { HOT_CUE_COUNT } from "@htl/audio";
 
 interface DeckControlsProps {
   id: "A" | "B";
   deck: Deck;
   accent: string;
-  loading: boolean;
   mirror: boolean;
+  shift: boolean;
+  jumpBeats: number;
+  onToggleShift: () => void;
   onSync: () => void;
-  onLoadFile: (file: File) => void;
   refresh: () => void;
 }
 
 const LOOP_SIZES = [1, 2, 4, 8];
+const BIG_LOOP_SIZES = [16, 32, 48, 64];
 
-// One deck's performance controls: tempo fader on the outer edge, then transport
-// / beat-jump / hot-cue pads / loop section. `mirror` flips deck B so the two
-// banks are symmetric around the center mixer (DDJ layout).
-export function DeckControls({ id, deck, accent, loading, mirror, onSync, onLoadFile, refresh }: DeckControlsProps) {
-  const fileInput = useRef<HTMLInputElement>(null);
+// One deck's performance controls: transport / beat-jump / hot-cue pads / loop
+// section, plus a SHIFT modifier (also the keyboard Shift key). Shift remaps:
+//   • jog ◀◀ ◀ ▶ ▶▶ → MOVE the active loop (grid-locked) instead of jumping
+//   • a pad → save the active loop to that pad (empty) / clear it (set)
+// `mirror` flips deck B so the two banks are symmetric around the center mixer.
+export function DeckControls({ id, deck, accent, mirror, shift, jumpBeats, onToggleShift, onSync, refresh }: DeckControlsProps) {
   const act = (fn: () => void) => () => {
     fn();
     refresh();
   };
+  // Shift: move the loop; otherwise jump the playhead.
+  const jog = (beats: number) => act(() => (shift ? deck.moveLoop(beats) : deck.beatJump(beats)));
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }}>
-      <Fader
-        className="pitch"
-        label="TEMPO"
-        value={deck.tempo}
-        min={-8}
-        max={8}
-        step={0.05}
-        onChange={(v) => {
-          deck.setTempo(v);
-          refresh();
-        }}
-        format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`}
-      />
-
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }}>
       <div className="bank-main">
+        {/* SHIFT remaps the transport: CUE→start, PLAY→play from cue,
+            SYNC→reset pitch, KEY→reset the channel (EQ/filter/trim/tempo). */}
         <div className="transport">
-          <button className="hw-btn cue" onPointerDown={act(() => (deck.playing ? deck.jumpToCue() : deck.setCue()))}>
-            CUE
+          <button
+            className="hw-btn cue"
+            title={shift ? "Jump to start" : "Cue"}
+            onPointerDown={act(() => (shift ? deck.seek(0) : deck.playing ? deck.jumpToCue() : deck.setCue()))}
+          >
+            {shift ? "START" : "CUE"}
           </button>
-          <button className="hw-btn play" onClick={act(() => deck.togglePlay())}>
+          <button
+            className="hw-btn play"
+            title={shift ? "Play from cue" : "Play / pause"}
+            onClick={act(() => {
+              if (shift) {
+                deck.seek(deck.cuePoint);
+                if (!deck.playing) deck.play();
+              } else deck.togglePlay();
+            })}
+          >
             {deck.playing ? "❚❚" : "▶"}
           </button>
-          <button className="hw-btn sync" onClick={act(onSync)}>
-            SYNC
+          <button className="hw-btn sync" title={shift ? "Reset pitch to 0%" : "Beat sync"} onClick={act(() => (shift ? deck.setTempo(0) : onSync()))}>
+            {shift ? "PITCH" : "SYNC"}
           </button>
-          <button className={`hw-btn key ${deck.keylock ? "on" : ""}`} onClick={act(() => deck.setKeylock(!deck.keylock))}>
-            KEY
+          <button
+            className={`hw-btn key ${deck.keylock ? "on" : ""}`}
+            title={shift ? "Reset channel (EQ / filter / trim / tempo)" : "Key lock"}
+            onClick={act(() => {
+              if (shift) {
+                deck.setTempo(0);
+                deck.setFilter(0);
+                deck.setTrim(1);
+                deck.setEqLow(0);
+                deck.setEqMid(0);
+                deck.setEqHigh(0);
+              } else deck.setKeylock(!deck.keylock);
+            })}
+          >
+            {shift ? "RESET" : "KEY"}
           </button>
         </div>
 
         <div className="jog">
-          <button className="jog-btn" title="Back a bar" onClick={act(() => deck.beatJump(-4))}>◀◀</button>
-          <button className="jog-btn" title="Back a beat" onClick={act(() => deck.beatJump(-1))}>◀</button>
+          <button className="jog-btn" title={shift ? "Move loop back" : "Jump back"} onClick={jog(-jumpBeats)}>◀◀</button>
+          <button className="jog-btn" title={shift ? "Move loop back a beat" : "Back a beat"} onClick={jog(-1)}>◀</button>
           <button className={`jog-btn mag ${deck.quantizing ? "on" : ""}`} title="Snap to grid" onClick={act(() => deck.setQuantize(!deck.quantizing))}>
             ⌗
           </button>
-          <button className="jog-btn" title="Forward a beat" onClick={act(() => deck.beatJump(1))}>▶</button>
-          <button className="jog-btn" title="Forward a bar" onClick={act(() => deck.beatJump(4))}>▶▶</button>
+          <button className="jog-btn" title={shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶</button>
+          <button className="jog-btn" title={shift ? "Move loop forward" : "Jump forward"} onClick={jog(jumpBeats)}>▶▶</button>
         </div>
 
         <div className="hotcues">
           {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
-            const set = deck.hotCues[i] != null;
+            const set = deck.slotIsSet(i);
+            const isLoop = deck.hotLoops[i] != null;
             return (
               <button
                 key={i}
-                className={`pad ${set ? "set" : ""}`}
+                className={`pad ${set ? "set" : ""} ${isLoop ? "loop" : ""}`}
                 data-cue={i + 1}
+                title={shift ? (deck.loop && !set ? "Save loop here" : "Clear") : isLoop ? "Recall loop" : "Hot cue"}
                 onClick={(e) => {
-                  if (e.shiftKey && set) deck.clearHotCue(i);
-                  else deck.hotCue(i);
+                  const shiftNow = shift || e.shiftKey;
+                  if (shiftNow) {
+                    if (deck.loop && !set) deck.saveLoop(i);
+                    else deck.clearHotCue(i);
+                  } else {
+                    deck.hotCue(i);
+                  }
                   refresh();
                 }}
               >
-                {i + 1}
-                {set && (
-                  <span className="pad-clear" onClick={(e) => { e.stopPropagation(); deck.clearHotCue(i); refresh(); }}>
-                    ✕
-                  </span>
-                )}
+                {isLoop ? "↻" : i + 1}
               </button>
             );
           })}
         </div>
 
+        {/* Manual loop on its own row, beat-loop sizes on the next so they don't
+            wrap awkwardly. SHIFT swaps the sizes to the big ones (16–64). */}
         <div className="loops">
           <button className={`loop-btn ${deck.loopInPoint != null ? "armed" : ""}`} onClick={act(() => deck.loopIn())}>IN</button>
           <button className="loop-btn" onClick={act(() => deck.loopOut())}>OUT</button>
@@ -103,8 +124,9 @@ export function DeckControls({ id, deck, accent, loading, mirror, onSync, onLoad
           >
             {deck.loop && !deck.loop.active ? "RELOOP" : "EXIT"}
           </button>
-          <span className="loop-sep" />
-          {LOOP_SIZES.map((n) => (
+        </div>
+        <div className="loop-sizes">
+          {(shift ? BIG_LOOP_SIZES : LOOP_SIZES).map((n) => (
             <button
               key={n}
               className={`loop-btn ${deck.loop?.active && deck.loop.beats === n ? "on" : ""}`}
@@ -116,18 +138,12 @@ export function DeckControls({ id, deck, accent, loading, mirror, onSync, onLoad
         </div>
 
         <div className="bank-load">
-          <input
-            ref={fileInput}
-            type="file"
-            accept="audio/*"
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onLoadFile(f);
-            }}
-          />
-          <button className="hw-btn small" onClick={() => fileInput.current?.click()}>
-            {loading ? "loading…" : "Load file"}
+          <button
+            className={`hw-btn shift ${shift ? "on" : ""}`}
+            onClick={onToggleShift}
+            title="SHIFT — hold the Shift key or latch this to remap the jog (move loop) and pads (save loop)"
+          >
+            SHIFT
           </button>
         </div>
       </div>

@@ -343,6 +343,55 @@ export function barPhase(g: Beatgrid, t: number): number {
   return p < 0 ? 0 : p >= 1 ? p - Math.floor(p) : p;
 }
 
+// ----------------------------- harmonic mixing ----------------------------
+// Camelot-wheel distance + the smart key-match target. The wheel is two rings of
+// 12 (B = major outer, A = minor inner); a mix sounds harmonic when the two keys
+// are the SAME, RELATIVE (same number, swap ring), or ADJACENT on the same ring
+// (±1 = a perfect fifth) — i.e. distance ≤ 1 here.
+
+function camelotParts(c: string): { num: number; major: boolean } {
+  return { num: parseInt(c, 10) || 0, major: c.endsWith("B") };
+}
+
+/** Harmonic distance between two keys via the Camelot wheel. 0 = same key,
+ *  1 = compatible (relative or ±1 on the same ring), ≥2 = increasingly dissonant. */
+export function harmonicDistance(a: KeyInfo, b: KeyInfo): number {
+  const pa = camelotParts(a.camelot);
+  const pb = camelotParts(b.camelot);
+  let dn = Math.abs(pa.num - pb.num);
+  dn = Math.min(dn, 12 - dn); // circular on the 12-position ring
+  if (pa.major === pb.major) return dn; // same ring: 0 same, 1 adjacent (fifth)
+  return dn === 0 ? 1 : 1 + dn; // cross-ring: 0 = relative (compatible), else worse
+}
+
+/** The SMALLEST pitch shift (semitones, |s| ≤ range) that makes `me` harmonically
+ *  compatible (distance ≤ 1) with `master` — pitch shift preserves mode, so this is
+ *  mode-aware. Prefers the least move that reaches compatibility (often 0 when the
+ *  decks already sit a fifth/relative apart), and only stretches further if no
+ *  compatible key is in range; then it picks the least-dissonant. Far gentler than
+ *  forcing an exact tonic match, which can mean a destructive ±6-semitone shift. */
+export function smartKeyShift(me: KeyInfo, master: KeyInfo, range = 12): number {
+  let compat: number | null = null;
+  let compatAbs = Infinity;
+  let best = 0;
+  let bestDist = Infinity;
+  let bestAbs = Infinity;
+  for (let s = -range; s <= range; s++) {
+    const d = harmonicDistance(shiftKey(me, s), master);
+    const a = Math.abs(s);
+    if (d <= 1 && a < compatAbs) {
+      compat = s;
+      compatAbs = a;
+    }
+    if (d < bestDist || (d === bestDist && a < bestAbs)) {
+      best = s;
+      bestDist = d;
+      bestAbs = a;
+    }
+  }
+  return compat ?? best;
+}
+
 /** Legacy single-tempo detector: onset-strength envelope → autocorrelation over
  *  60–180 BPM → best phase offset. Kept only as a fallback for clips too short for
  *  the DP tracker. Produces a uniform grid (no dynamic `beats[]`). */

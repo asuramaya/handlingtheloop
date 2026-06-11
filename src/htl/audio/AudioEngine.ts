@@ -1,7 +1,10 @@
-import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat } from "../analysis/analyze";
-import { Deck } from "./Deck";
+import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
+import { Deck, type SyncRole } from "./Deck";
 import { PITCH_WORKLET_SRC } from "./pitchWorklet";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
+
+type DeckId = "A" | "B";
+const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
 
 // Master audio graph:
 //
@@ -47,6 +50,12 @@ export class AudioEngine {
     this.deckB = new Deck(this.ctx);
     this.deckA.output.connect(this.xfadeA);
     this.deckB.output.connect(this.xfadeB);
+    // Sync follow/release: any tempo change routes through the state machine.
+    this.deckA.onTempoChange = () => this.onDeckTempo("A");
+    this.deckB.onTempoChange = () => this.onDeckTempo("B");
+    // Key-lock follow/release: any pitch change routes through the KEY machine.
+    this.deckA.onPitchChange = () => this.onDeckPitch("A");
+    this.deckB.onPitchChange = () => this.onDeckPitch("B");
 
     this.setCrossfade(0);
     void this.initWorklets();
@@ -86,58 +95,206 @@ export class AudioEngine {
     return id === "A" ? this.deckA : this.deckB;
   }
 
-  /**
-   * Beat-sync: match `id` to the other deck — set its tempo so the BPMs match,
-   * then nudge its playhead so its beats line up with the other deck's.
-   */
-  sync(id: "A" | "B") {
-    const me = this.deck(id);
-    const other = this.deck(id === "A" ? "B" : "A"); // the other deck is the master
-    const mg = me.beatgrid;
-    const og = other.beatgrid;
-    if (!mg || !og || !me.buffer) return;
+  // ---- beat-sync state machine -------------------------------------------------
+  // SYNC is a persistent TOGGLE, not a one-shot. The relationship is DIRECTIONAL:
+  // one SLAVE follows one MASTER (the other deck). `slaveId` is the single source of
+  // truth — master = the other deck, null = no sync — so the configuration is always
+  // valid by construction (the "gate": at most one master + one slave, or neither).
+  // While engaged the slave's tempo tracks the master's continuously; nudging the
+  // slave's own tempo releases the lock.
+  private slaveId: DeckId | null = null;
+  private propagating = false; // guards the master→slave tempo echo from recursing
 
-    // Tempo match to the master's *effective* BPM, folded to the nearest
-    // half/double so a 70↔140 pair locks with little stretch (beats stay aligned).
-    let target = other.effectiveBpm ?? og.bpm;
-    while (target / mg.bpm > Math.SQRT2) target /= 2;
-    while (target / mg.bpm < 1 / Math.SQRT2) target *= 2;
-    me.setTempo((target / mg.bpm - 1) * 100);
+  private get masterId(): DeckId | null {
+    return this.slaveId == null ? null : other(this.slaveId);
+  }
 
-    // Phase align. When BOTH grids know their downbeat, align at the BAR level so
-    // the two tracks' "1"s land together (a phrase-tight mix, not just on-beat);
-    // otherwise fall back to per-beat alignment. Either way pick the minimal move
-    // — land in the bar/beat I'm already in, wrapping if the far edge is closer.
-    if (mg.downbeat != null && og.downbeat != null) {
-      const oFrac = barPhase(og, other.position()); // 0..1 within the master's bar
-      const bar = barAnchor(mg, me.position());
-      let target = bar.start + oFrac * bar.length;
-      const pos = me.position();
-      if (target - pos > bar.length / 2) target -= bar.length;
-      else if (pos - target > bar.length / 2) target += bar.length;
-      me.seek(target);
-    } else {
-      const oFrac = beatPhase(og, other.position());
-      const mBeat = nearestBeat(mg, me.position());
-      const myInterval = beatTimeOffset(mg, mBeat, 1) - mBeat || mg.interval;
-      me.seek(mBeat + oFrac * myInterval);
-    }
+  /** "off" | "master" | "slave" for a deck — what the UI lights the SYNC button on. */
+  syncRole(id: DeckId): SyncRole {
+    if (this.slaveId == null) return "off";
+    return id === this.slaveId ? "slave" : "master";
+  }
+  get synced(): boolean {
+    return this.slaveId != null;
+  }
+
+  private writeRoles() {
+    this.deckA.syncRole = this.syncRole("A");
+    this.deckB.syncRole = this.syncRole("B");
   }
 
   /**
-   * Key-sync: pitch-shift `id` so its key matches the other deck (the master),
-   * by the smallest move (±6 semitones). No-op until both tracks are analysed.
+   * SYNC toggle. The gate, by current role of `id`:
+   *   off    → `id` becomes SLAVE following the other (which becomes MASTER); align.
+   *   slave  → release the pair (both off).
+   *   master → flip direction: `id` becomes SLAVE following the other; align.
+   * Engaging needs both decks analysed + a buffer, else it's a no-op (nothing to
+   * lock to) so the button never lights on an un-syncable pair.
    */
-  matchKey(id: "A" | "B") {
-    const me = this.deck(id);
-    const other = this.deck(id === "A" ? "B" : "A");
-    if (!me.key || !other.key) return;
-    // Target tonic = master's CURRENT (pitch-shifted) tonic.
-    const target = other.effectiveKey?.tonic ?? other.key.tonic;
-    let shift = target - me.key.tonic; // align my native tonic to the master's
-    while (shift > 6) shift -= 12;
-    while (shift < -6) shift += 12;
-    me.setPitch(shift);
+  toggleSync(id: DeckId) {
+    if (this.syncRole(id) === "slave") {
+      this.slaveId = null; // toggle off
+    } else {
+      const me = this.deck(id);
+      const them = this.deck(other(id));
+      if (!me.beatgrid || !them.beatgrid || !me.buffer) return;
+      this.slaveId = id; // engage / flip: `id` follows the other
+      this.alignSlave();
+    }
+    this.writeRoles();
+  }
+
+  /** Match only the slave's TEMPO to the master's effective BPM (half/double folded).
+   *  Used both on engage and on every master tempo change (continuous follow). */
+  private matchSlaveTempo() {
+    const sid = this.slaveId;
+    if (sid == null) return;
+    const slave = this.deck(sid);
+    const master = this.deck(other(sid));
+    const sg = slave.beatgrid;
+    const mg = master.beatgrid;
+    if (!sg || !mg) return;
+    let target = master.effectiveBpm ?? mg.bpm;
+    while (target / sg.bpm > Math.SQRT2) target /= 2;
+    while (target / sg.bpm < 1 / Math.SQRT2) target *= 2;
+    this.propagating = true; // this setTempo is the echo — don't let it release sync
+    slave.setTempo((target / sg.bpm - 1) * 100);
+    this.propagating = false;
+  }
+
+  /** Tempo-match + phase-align the slave to its master (on engage / re-sync). */
+  private alignSlave() {
+    const sid = this.slaveId;
+    if (sid == null) return;
+    const slave = this.deck(sid);
+    const master = this.deck(other(sid));
+    const sg = slave.beatgrid;
+    const mg = master.beatgrid;
+    if (!sg || !mg || !slave.buffer) return;
+    this.matchSlaveTempo();
+
+    // Phase align: bar-level when both downbeats are known (the two "1"s land
+    // together — a phrase-tight mix), else per-beat. Minimal move (wrap to nearest).
+    if (sg.downbeat != null && mg.downbeat != null) {
+      const oFrac = barPhase(mg, master.position());
+      const bar = barAnchor(sg, slave.position());
+      let target = bar.start + oFrac * bar.length;
+      const pos = slave.position();
+      if (target - pos > bar.length / 2) target -= bar.length;
+      else if (pos - target > bar.length / 2) target += bar.length;
+      slave.seek(target);
+    } else {
+      const oFrac = beatPhase(mg, master.position());
+      const sBeat = nearestBeat(sg, slave.position());
+      const interval = beatTimeOffset(sg, sBeat, 1) - sBeat || sg.interval;
+      slave.seek(sBeat + oFrac * interval);
+    }
+  }
+
+  // Deck tempo hook: master moves → slave follows; the user moving the SLAVE's own
+  // tempo means they're taking it off the leash, so release the lock.
+  private onDeckTempo(id: DeckId) {
+    if (this.propagating || this.slaveId == null) return;
+    if (id === this.slaveId) {
+      this.slaveId = null;
+      this.writeRoles();
+    } else {
+      this.matchSlaveTempo();
+    }
+  }
+
+  /** Re-assert the lock after a deck in the pair loads a new track (grid changed). */
+  reassertSync(id: DeckId) {
+    if (this.slaveId == null || (id !== this.slaveId && id !== this.masterId)) return;
+    if (!this.deck(this.slaveId).beatgrid) {
+      this.slaveId = null; // slave lost its grid → can't follow
+    } else {
+      this.alignSlave();
+    }
+    this.writeRoles();
+  }
+
+  // ---- key-lock state machine --------------------------------------------------
+  // KEY is the harmonic twin of SYNC: a persistent directional master/slave TOGGLE
+  // (same gate, separate from tempo sync — you can lock key without locking tempo).
+  // The slave is pitch-shifted by the SMALLEST move that makes it harmonically
+  // COMPATIBLE with the master (Camelot-aware, mode-aware), not forced onto an exact
+  // tonic; while locked the slave follows the master's key, and moving the slave's
+  // own key (or releasing) un-shifts it back to the track's own pitch.
+  private keySlaveId: DeckId | null = null;
+  private keyPropagating = false;
+
+  private get keyMasterId(): DeckId | null {
+    return this.keySlaveId == null ? null : other(this.keySlaveId);
+  }
+
+  keyRole(id: DeckId): SyncRole {
+    if (this.keySlaveId == null) return "off";
+    return id === this.keySlaveId ? "slave" : "master";
+  }
+  get keyLocked(): boolean {
+    return this.keySlaveId != null;
+  }
+
+  private writeKeyRoles() {
+    this.deckA.keyRole = this.keyRole("A");
+    this.deckB.keyRole = this.keyRole("B");
+  }
+
+  /** KEY toggle. off → become key-SLAVE, smart-shifted to a key compatible with the
+   *  other (= MASTER); slave → release (un-shift to the track's own key); master →
+   *  flip direction. No-op to engage until both decks have a detected key. */
+  toggleKey(id: DeckId) {
+    if (this.keyRole(id) === "slave") {
+      this.keySlaveId = null;
+      this.keyPropagating = true;
+      this.deck(id).setPitch(0); // release → back to the original key
+      this.keyPropagating = false;
+    } else {
+      const me = this.deck(id);
+      const them = this.deck(other(id));
+      if (!me.key || !them.key) return;
+      this.keySlaveId = id;
+      this.matchKeyToMaster();
+    }
+    this.writeKeyRoles();
+  }
+
+  /** Smart-shift the slave to a key harmonically compatible with the master's
+   *  CURRENT (pitch-shifted) key. Runs on engage and on every master key change. */
+  private matchKeyToMaster() {
+    const sid = this.keySlaveId;
+    if (sid == null) return;
+    const slave = this.deck(sid);
+    const masterKey = this.deck(other(sid)).effectiveKey;
+    if (!slave.key || !masterKey) return;
+    const shift = smartKeyShift(slave.key, masterKey, 12);
+    this.keyPropagating = true;
+    slave.setPitch(shift);
+    this.keyPropagating = false;
+  }
+
+  // Deck pitch hook: master key moves → slave re-matches; the user moving the
+  // SLAVE's own key takes it off the leash → release the lock.
+  private onDeckPitch(id: DeckId) {
+    if (this.keyPropagating || this.keySlaveId == null) return;
+    if (id === this.keySlaveId) {
+      this.keySlaveId = null;
+      this.writeKeyRoles();
+    } else {
+      this.matchKeyToMaster();
+    }
+  }
+
+  /** Re-assert the key lock after a deck in the pair loads a new track. */
+  reassertKey(id: DeckId) {
+    if (this.keySlaveId == null || (id !== this.keySlaveId && id !== this.keyMasterId)) return;
+    if (!this.deck(this.keySlaveId).key) {
+      this.keySlaveId = null;
+    } else {
+      this.matchKeyToMaster();
+    }
+    this.writeKeyRoles();
   }
 
   /** position in [-1, 1]: -1 = full A, 0 = both, +1 = full B. */

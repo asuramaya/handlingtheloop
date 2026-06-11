@@ -167,18 +167,22 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         windowSec={windowSec}
         onZoom={onZoom}
         onScrubStart={() => {
+          if (deck.adjusting) return; // boundary-adjust mode: no platter scrub
           deck.scrubBegin();
           onJogStart?.();
         }}
         onScrub={(d) => {
+          if (deck.adjusting) return void deck.adjustBy(d); // move the loop edge; rAF redraws (deck.adjusting)
           deck.scrubMove(d); // deck.jogging drives the viewport's own rAF — no React churn
           onJog?.(d); // stream the finger delta so the receiver scrubs its own platter
         }}
         onScrubEnd={() => {
+          if (deck.adjusting) return;
           deck.scrubEnd();
           onJogEnd?.();
         }}
         onNeedleDrop={(d) => {
+          if (deck.adjusting) return void deck.adjustBy(d); // scroll nudges the loop edge; rAF redraws
           deck.needleDrop(d);
           refresh(); // a paused tap-seek isn't "jogging" — nudge one redraw
           onSeek?.(deck.position());

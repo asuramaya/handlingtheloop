@@ -225,15 +225,17 @@ export function App() {
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
   }, []);
-  // SYNC: tempo-match + phase-align `id` to the other deck, THEN match its zoom to
-  // the master's. Once tempos are locked and both playheads are phase-aligned and
-  // centered, a shared pixel-scale makes the two beat grids overlay exactly — the
-  // markers line up on screen, not just in the audio.
+  // SYNC toggle: engage/flip/release the master-slave lock. On ENGAGE (this deck
+  // became the slave) also match its zoom to the master's — with tempos locked and
+  // both centered playheads phase-aligned, a shared pixel-scale overlays the two
+  // grids on screen, not just in the audio.
   const doSync = useCallback(
     (id: DeckId) => {
-      engine.sync(id);
-      const other: DeckId = id === "A" ? "B" : "A";
-      setZoom((z) => ({ ...z, [id]: z[other] }));
+      engine.toggleSync(id);
+      if (engine.syncRole(id) === "slave") {
+        const other: DeckId = id === "A" ? "B" : "A";
+        setZoom((z) => ({ ...z, [id]: z[other] }));
+      }
     },
     [engine],
   );
@@ -407,6 +409,12 @@ export function App() {
       emitRef.current({ kind: "loop", deck: id, action: "beat", beats });
     };
     const jogBy = (deck: DeckRef, id: DeckId, s: boolean, beats: number) => {
+      if (deck.adjusting) {
+        // Boundary-adjust mode: arrows nudge the loop edge by `beats` on the grid.
+        const interval = deck.beatgrid?.interval ?? 60 / 120;
+        deck.adjustBy(beats * interval);
+        return;
+      }
       if (s) deck.moveLoop(beats);
       else {
         deck.beatJump(beats);
@@ -470,7 +478,7 @@ export function App() {
           resetChannel(deck);
           emitDeckRef.current(id);
         } else {
-          engine.matchKey(id);
+          engine.toggleKey(id);
           emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
         }
       },
@@ -501,16 +509,21 @@ export function App() {
         else deck.setPitch(deck.pitch + 1);
         emitRef.current({ kind: "control", deck: id, param: s ? "tempo" : "pitch", value: s ? deck.tempo : deck.pitch });
       },
-      loopIn: (deck, id) => {
+      loopIn: (deck, id, s) => {
+        if (s) return void deck.toggleAdjust("in"); // Shift: arm loop-in fine-adjust
         deck.loopIn();
         emitRef.current({ kind: "loop", deck: id, action: "in" });
       },
-      loopOut: (deck, id) => {
+      loopOut: (deck, id, s) => {
+        if (s) return void deck.toggleAdjust("out"); // Shift: arm loop-out fine-adjust
         deck.loopOut();
         emitRef.current({ kind: "loop", deck: id, action: "out" });
       },
-      loopExit: (deck, id) => {
-        if (deck.loop?.active) {
+      loopExit: (deck, id, s) => {
+        if (s) {
+          deck.clearLoop(); // Shift: wipe the loop outright
+          emitRef.current({ kind: "loop", deck: id, action: "exit" });
+        } else if (deck.loop?.active) {
           deck.exitLoop();
           emitRef.current({ kind: "loop", deck: id, action: "exit" });
         } else {
@@ -622,7 +635,7 @@ export function App() {
         const local = await loadStemsLocal(engine.ctx, videoId, mid);
         if (stale?.()) return false;
         if (local) {
-          engine.deck(id).setStems(local);
+          engine.deck(id).setStems(local, true); // neural → per-stem lanes
           refresh();
           setStatusFor(id, {
             phase: "promoted",
@@ -656,7 +669,7 @@ export function App() {
           }
           const neural = await job;
           if (stale?.()) return false;
-          engine.deck(id).setStems(neural);
+          engine.deck(id).setStems(neural, true); // neural → per-stem lanes
           refresh();
           setStatusFor(id, {
             phase: "promoted",
@@ -723,7 +736,7 @@ export function App() {
         const local = await loadStemsLocal(engine.ctx, videoId, model.id);
         if (local) {
           if (stale?.()) return;
-          engine.deck(id).setStems(local);
+          engine.deck(id).setStems(local, true); // neural → per-stem lanes
           refresh();
           // Make a cache hit OBVIOUS (green), so it reads differently from a fresh
           // separation — these stems came straight off disk, no work was done. The
@@ -809,7 +822,7 @@ export function App() {
         }
         const neural = await job;
         if (stale?.()) return;
-        engine.deck(id).setStems(neural);
+        engine.deck(id).setStems(neural, true); // neural → per-stem lanes
         refresh();
         // Persistent active-stems chip (clears on next track load).
         setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready.` });
@@ -960,6 +973,8 @@ export function App() {
         engine.deck(id).setBuffer(cached.buffer, cached.analysis.beatgrid);
         engine.deck(id).key = cached.analysis.key;
         if (restore) applyDeckControls(engine.deck(id), restore);
+        engine.reassertSync(id); // re-lock if this deck is in a sync pair
+        engine.reassertKey(id);
         setLoaded((l) => ({ ...l, [id]: vid }));
         setMeta((m) => ({
           ...m,
@@ -1012,6 +1027,8 @@ export function App() {
         const analysis = await analyzeTrackAsync(buffer);
         engine.deck(id).setBuffer(buffer, analysis.beatgrid);
         engine.deck(id).key = analysis.key;
+        engine.reassertSync(id);
+        engine.reassertKey(id);
         setMeta((m) => ({
           ...m,
           [id]: {
@@ -1718,7 +1735,7 @@ export function App() {
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
             onSync={() => { doSync("A"); refresh(); }}
-            onKey={() => { engine.matchKey("A"); refresh(); }}
+            onKey={() => { engine.toggleKey("A"); refresh(); }}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -1738,7 +1755,7 @@ export function App() {
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
             onSync={() => { doSync("B"); refresh(); }}
-            onKey={() => { engine.matchKey("B"); refresh(); }}
+            onKey={() => { engine.toggleKey("B"); refresh(); }}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}

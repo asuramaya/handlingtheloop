@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Deck } from "@htl/audio";
 import { HOT_CUE_COUNT, EQ_MAX_DB, EQ_MIN_DB } from "@htl/audio";
 import type { StemName } from "@htl/stems";
@@ -44,10 +44,19 @@ interface DeckControlsProps {
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
 }
 
-// Beat-loop sizes: fractions of a beat normally, whole beats under SHIFT.
-const LOOP_SIZES = [0.5, 0.25, 0.125, 0.0625];
-const LOOP_LABELS = ["1/2", "1/4", "1/8", "1/16"];
-const BIG_LOOP_SIZES = [1, 2, 4, 8];
+// Every beat-loop size, shown at once (half-width). Each pairs with a keyboard
+// U/I/O/P key: the fraction on a bare press, the whole beat under Shift — so the
+// four whole-beat pads carry a ⇧ prefix in their kbd hint.
+const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
+  { n: 0.5, label: "1/2", kbd: "U" },
+  { n: 0.25, label: "1/4", kbd: "I" },
+  { n: 0.125, label: "1/8", kbd: "O" },
+  { n: 0.0625, label: "1/16", kbd: "P" },
+  { n: 1, label: "1", kbd: "⇧U" },
+  { n: 2, label: "2", kbd: "⇧I" },
+  { n: 4, label: "4", kbd: "⇧O" },
+  { n: 8, label: "8", kbd: "⇧P" },
+];
 
 // Tempo nudge step (percent) for SHIFT-clicking the ∓ pitch steppers.
 const TEMPO_NUDGE = 0.5;
@@ -62,6 +71,16 @@ const TEMPO_NUDGE = 0.5;
 export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
   const [effect, setEffect] = useState(EFFECTS[0].id);
   const [fxMenu, setFxMenu] = useState(false);
+  // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
+  // beat-loop on press and snaps back on-beat on release (deck.rollOut).
+  const rolling = useRef<number | null>(null);
+  const endRoll = () => {
+    if (rolling.current == null) return;
+    rolling.current = null;
+    deck.rollOut();
+    emit({ kind: "loop", deck: id, action: "exit" });
+    refresh();
+  };
   const effectLabel = EFFECTS.find((e) => e.id === effect)?.label ?? "FX";
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
@@ -127,36 +146,87 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
         {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes
             (fractions of a beat, or whole beats 1–8 under SHIFT). */}
         <div className="loops">
-          <button className={`loop-btn ${deck.loopInPoint != null ? "armed" : ""}`} onClick={act(() => { deck.loopIn(); emit({ kind: "loop", deck: id, action: "in" }); })}>IN<span className="kbd">Q</span></button>
-          <button className="loop-btn" onClick={act(() => { deck.loopOut(); emit({ kind: "loop", deck: id, action: "out" }); })}>OUT<span className="kbd">W</span></button>
+          {/* IN / OUT drop the loop boundaries; SHIFT-IN / SHIFT-OUT instead arm a
+              fine-adjust mode where the waveform (drag / scroll) and arrow keys nudge
+              that boundary. RELOOP/EXIT toggles the loop; SHIFT clears it outright. */}
+          <button
+            className={`loop-btn ${deck.loopInPoint != null ? "armed" : ""} ${deck.adjusting === "in" ? "adjust" : ""}`}
+            title={shift ? "Adjust loop-in — drag / scroll the wave or arrow-key it" : "Loop in"}
+            onClick={(e) => {
+              if (shift || e.shiftKey) deck.toggleAdjust("in");
+              else { deck.loopIn(); emit({ kind: "loop", deck: id, action: "in" }); }
+              refresh();
+            }}
+          >
+            IN<span className="kbd">Q</span>
+          </button>
+          <button
+            className={`loop-btn ${deck.adjusting === "out" ? "adjust" : ""}`}
+            title={shift ? "Adjust loop-out — drag / scroll the wave or arrow-key it" : "Loop out"}
+            onClick={(e) => {
+              if (shift || e.shiftKey) deck.toggleAdjust("out");
+              else { deck.loopOut(); emit({ kind: "loop", deck: id, action: "out" }); }
+              refresh();
+            }}
+          >
+            OUT<span className="kbd">W</span>
+          </button>
           <button
             className={`loop-btn ${deck.loop?.active ? "on" : ""}`}
             disabled={!deck.loop}
-            onClick={act(() => {
-              if (deck.loop?.active) {
+            title={shift ? "Clear the loop" : deck.loop && !deck.loop.active ? "Reloop" : "Exit loop"}
+            onClick={(e) => {
+              if (shift || e.shiftKey) {
+                deck.clearLoop();
+                emit({ kind: "loop", deck: id, action: "exit" });
+              } else if (deck.loop?.active) {
                 deck.exitLoop();
                 emit({ kind: "loop", deck: id, action: "exit" });
               } else {
                 deck.reloop();
                 emit({ kind: "loop", deck: id, action: "reloop" });
               }
-            })}
+              refresh();
+            }}
           >
-            {deck.loop && !deck.loop.active ? "RELOOP" : "EXIT"}
+            {shift ? "CLEAR" : deck.loop && !deck.loop.active ? "RELOOP" : "EXIT"}
             <span className="kbd">E</span>
           </button>
         </div>
         <div className="loop-sizes">
-          {(shift ? BIG_LOOP_SIZES : LOOP_SIZES).map((n, i) => (
-            <button
-              key={n}
-              className={`loop-btn ${deck.loop?.active && deck.loop.beats === n ? "on" : ""}`}
-              onClick={act(() => { deck.setBeatLoop(n); emit({ kind: "loop", deck: id, action: "beat", beats: n }); })}
-            >
-              {shift ? n : LOOP_LABELS[i]}
-              <span className="kbd">{["U", "I", "O", "P"][i]}</span>
-            </button>
-          ))}
+          {LOOP_SIZES.map((s) => {
+            const active = deck.loop?.active && deck.loop.beats === s.n;
+            return (
+              <button
+                key={s.n}
+                className={`loop-btn ${active || rolling.current === s.n ? "on" : ""}`}
+                title={shift ? `Loop roll ${s.label} — hold` : `Beat loop ${s.label}`}
+                onPointerDown={(e) => {
+                  // All sizes show at once now, so SHIFT no longer swaps the bank —
+                  // instead Shift-HOLD rolls: engage the loop on press, snap back
+                  // on-beat on release. Plain press latches the loop (via onClick).
+                  if (!(shift || e.shiftKey)) return;
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  rolling.current = s.n;
+                  deck.setBeatLoop(s.n);
+                  emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
+                  refresh();
+                }}
+                onPointerUp={endRoll}
+                onPointerCancel={endRoll}
+                onClick={(e) => {
+                  if (shift || e.shiftKey) return; // handled as a roll by the pointer events
+                  deck.setBeatLoop(s.n);
+                  emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
+                  refresh();
+                }}
+              >
+                {s.label}
+                <span className="kbd">{s.kbd}</span>
+              </button>
+            );
+          })}
         </div>
 
         <div className="hotcues">
@@ -192,46 +262,42 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
           })}
         </div>
 
-        {/* SYNC·KEY·FX·dB rack. SHIFT remaps SYNC→reset pitch, KEY→reset channel.
-            FX toggles the color filter; dB matches this deck's gain to the other. */}
+        {/* SYNC·KEY·FX·range rack. SYNC beat-matches and KEY matches key — both
+            stay static under SHIFT (the channel RESET moved to PLAY's shift). FX
+            toggles the color filter; the range button sets the TEMPO/KEY knob span. */}
         <div className="transport">
           <button
-            className="hw-btn sync"
-            title={shift ? "Reset pitch to 0%" : "Beat sync"}
+            className={`hw-btn sync ${deck.syncRole !== "off" ? "on" : ""} ${deck.syncRole === "master" ? "master" : ""}`}
+            title={
+              deck.syncRole === "master"
+                ? "MASTER — the other deck follows this one (tap to follow it instead)"
+                : deck.syncRole === "slave"
+                  ? "Synced — following the other deck (tap to release)"
+                  : "Beat sync — lock tempo + phase to the other deck"
+            }
             onClick={act(() => {
-              if (shift) {
-                deck.setTempo(0);
-                emit({ kind: "control", deck: id, param: "tempo", value: 0 });
-              } else {
-                onSync();
-                emitControls(id);
-              }
+              onSync();
+              emitControls(id);
             })}
           >
-            {shift ? "PITCH" : "SYNC"}
+            {deck.syncRole === "master" ? "MASTER" : "SYNC"}
             <span className="kbd">A</span>
           </button>
           <button
-            className={`hw-btn key ${deck.pitch !== 0 ? "on" : ""}`}
-            title={shift ? "Reset channel (EQ / filter / trim / tempo / key / stems)" : "Match key to the other deck"}
+            className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}
+            title={
+              deck.keyRole === "master"
+                ? "KEY MASTER — the other deck matches this one's key (tap to follow it instead)"
+                : deck.keyRole === "slave"
+                  ? "Key-locked — harmonically matched to the other deck (tap to release)"
+                  : "Key match — harmonically shift to be compatible with the other deck"
+            }
             onClick={act(() => {
-              if (shift) {
-                deck.setTempo(0);
-                deck.setFilter(0);
-                deck.setTrim(1);
-                deck.setEqLow(0);
-                deck.setEqMid(0);
-                deck.setEqHigh(0);
-                deck.setPitch(0);
-                deck.resetStems(); // also reset stem faders → unity and un-mute all stems
-                emitControls(id);
-              } else {
-                onKey();
-                emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-              }
+              onKey();
+              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
             })}
           >
-            {shift ? "RESET" : "KEY"}
+            {deck.keyRole === "master" ? "KMST" : "KEY"}
             <span className="kbd">S</span>
           </button>
           <div className="fx-wrap">
@@ -304,20 +370,27 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
           </button>
           <button
             className="hw-btn play"
-            title={shift ? "Play from cue" : "Play / pause"}
+            title={shift ? "Reset channel (EQ / filter / trim / tempo / key / stems)" : "Play / pause"}
             onClick={act(() => {
               if (shift) {
-                deck.seek(deck.cuePoint);
-                if (!deck.playing) deck.play();
-                emitSeek();
-                emit({ kind: "transport", deck: id, action: "play" });
+                deck.setTempo(0);
+                deck.setFilter(0);
+                deck.setTrim(1);
+                deck.setEqLow(0);
+                deck.setEqMid(0);
+                deck.setEqHigh(0);
+                deck.setPitch(0);
+                deck.setLevel(1); // volume back to centre (unity)
+                deck.resetStems(); // also reset stem faders → unity and un-mute all stems
+                emit({ kind: "control", deck: id, param: "level", value: 1 });
+                emitControls(id);
               } else {
                 deck.togglePlay();
                 emit({ kind: "transport", deck: id, action: deck.playing ? "play" : "pause" });
               }
             })}
           >
-            {deck.playing ? "❚❚" : "▶"}
+            {shift ? "RESET" : deck.playing ? "❚❚" : "▶"}
             <span className="kbd">⎵</span>
           </button>
           <button

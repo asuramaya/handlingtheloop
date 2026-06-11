@@ -55,6 +55,10 @@ export interface Loop {
   beats: number;
 }
 
+// Beat-sync role of a deck. "master" is the tempo reference; "slave" follows it.
+// Directional: at most one master + one slave at a time (resolved by AudioEngine).
+export type SyncRole = "off" | "master" | "slave";
+
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   private readonly trimNode: GainNode;
@@ -92,6 +96,10 @@ export class Deck {
   // path). `stemPyramidJob` supersedes an in-flight lazy build when stems change.
   stemPyramids: Record<StemName, Pyramid> | null = null;
   private stemPyramidJob = 0;
+  // True only when the CURRENT stems are a NEURAL split (Demucs/Open-Unmix). The viewport
+  // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform for DSP
+  // stems (or none / mid-separation) — the DSP split is too rough to be worth 4 lanes.
+  stemsNeural = false;
 
   private _playing = false;
   private startOffset = 0;
@@ -104,6 +112,12 @@ export class Deck {
   private pitchNode: AudioWorkletNode | null = null;
   private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
+  // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
+  // mirrored here so the UI can light the SYNC button. "slave" follows the master.
+  syncRole: SyncRole = "off";
+  onTempoChange?: () => void; // AudioEngine hook, fired at the end of setTempo
+  keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
+  onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
 
   // --- jog/platter physics (see scrubBegin / jogTick) ---
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
@@ -123,6 +137,10 @@ export class Deck {
   hotLoops: (Loop | null)[] = new Array(HOT_CUE_COUNT).fill(null); // saved loops per pad
   loop: Loop | null = null;
   loopInPoint: number | null = null; // pending manual loop-in (FLX4 style)
+  // Loop-boundary fine-adjust: when set, waveform drag / scroll / arrow keys move
+  // this boundary (the loop's start or end) instead of the playhead. Toggled by
+  // Shift-IN / Shift-OUT. null = normal (playhead) interaction.
+  adjusting: "in" | "out" | null = null;
 
   onEnded?: () => void;
 
@@ -249,6 +267,7 @@ export class Deck {
     this._pitchSemis = Math.max(-12, Math.min(12, Math.round(semis)));
     if (this._pitchSemis !== 0) this._keylock = true;
     this.updatePitch();
+    this.onPitchChange?.(); // AudioEngine KEY hook: master→slave follow / release
   }
   /** The track's key after the current pitch shift (null if un-analysed). */
   get effectiveKey(): KeyInfo | null {
@@ -297,6 +316,12 @@ export class Deck {
   stemActive(name: StemName): boolean {
     return !this.stemMuted[name];
   }
+  /** Raw PCM (channel 0) of a stem — for the deep-zoom oscilloscope, which reads the
+   *  real signal instead of the 256-sample LOD. The buffers are already resident (the
+   *  deck plays them), so this is zero-copy. null when the track has no stems. */
+  stemChannel(name: StemName): Float32Array | null {
+    return this.stems ? this.stems[name].getChannelData(0) : null;
+  }
   /** The knob level for a stem (0..1.5; 1 = unity). */
   stemLevel(name: StemName): number {
     return this.stemGain[name];
@@ -326,8 +351,9 @@ export class Deck {
   /** Attach (or clear with null) the stem buffers. Swaps a live source group over
    *  seamlessly — all-on sums to the same mix, so there's no audible jump. Also
    *  builds the per-stem waveform envelopes so the viewport can render them. */
-  setStems(stems: Stems | null) {
+  setStems(stems: Stems | null, neural = false) {
     this.stems = stems;
+    this.stemsNeural = !!stems && neural;
     // Audio swaps in instantly (all-on === the mix, so it's seamless). The
     // per-stem waveform envelopes are SECOND-CLASS: built lazily off the hot path
     // so they never hang the main / UI / audio threads. Viewport shows the mix
@@ -658,6 +684,7 @@ export class Deck {
       }
     }
     this.updatePitch(); // keep key-lock tracking the tempo
+    this.onTempoChange?.(); // AudioEngine sync hook: master→slave follow / release
   }
 
   get quantizing() {
@@ -765,8 +792,14 @@ export class Deck {
     const start = this.loop?.active ? this.loop.start : g ? this.snap(this.position()) : this.position();
     // End on the beat `beats` away on the actual grid (exact even if tempo drifts),
     // not start + beats·interval which only holds for a perfectly constant tempo.
+    // `beats` can be sub-1 (1/2 … 1/16); beatTimeOffset interpolates the fraction.
     const rawEnd = g ? beatTimeOffset(g, start, beats) : start + beats * interval;
-    const end = Math.min(this.duration, rawEnd);
+    // Never let the loop collapse to a degenerate/NaN window — a sub-quantum or NaN
+    // loopEnd hangs/crackles the source node. Floor it at ~5 ms (well below any
+    // musical 1/16-beat loop, which is ≥~20 ms) and fall back to the interval math.
+    const MIN_LOOP = 0.005;
+    let end = Math.min(this.duration, rawEnd);
+    if (!(end > start + MIN_LOOP)) end = Math.min(this.duration, start + Math.max(MIN_LOOP, beats * interval));
     this.loop = { active: true, start, end, beats };
     this.applyLoop();
     // Keep the playhead inside the (possibly shrunk) region so a live source
@@ -852,6 +885,74 @@ export class Deck {
     this.applyLoop();
   }
 
+  /** Exit an active loop as a "loop roll": instead of staying put (exitLoop), jump
+   *  to where the track WOULD be had it never looped — the un-wrapped clock — so the
+   *  music snaps back on-beat after the momentary stutter. Pair with setBeatLoop()
+   *  on press / rollOut() on release for a hold-to-roll pad. */
+  rollOut() {
+    if (!this.loop?.active) return;
+    this.loop.active = false;
+    if (this._playing) {
+      // Raw (un-wrapped) offset = where playback would have reached with no loop.
+      const raw = this.startOffset + (this.ctx.currentTime - this.startedAt) * this._rate;
+      this.applyLoop();
+      this.seek(Math.max(0, Math.min(this.duration, raw)));
+    } else {
+      this.applyLoop();
+    }
+  }
+
+  /** Wipe the loop entirely (region + any pending in-point), so the deck plays
+   *  straight through. Shift-RELOOP / Shift-EXIT. */
+  clearLoop() {
+    if (this.loop?.active) this.rebaseClock(); // anchor before the region disappears
+    this.loop = null;
+    this.loopInPoint = null;
+    this.adjusting = null;
+    this.applyLoop();
+  }
+
+  // --- loop-boundary fine-adjust (Shift-IN / Shift-OUT) ---
+  /** Toggle fine-adjust of a loop boundary. "in" targets the active loop's start
+   *  (or a pending manual loop-in point); "out" targets the loop's end. Re-toggling
+   *  the same side, or a side with nothing to move, turns it off. Returns the mode. */
+  toggleAdjust(which: "in" | "out"): "in" | "out" | null {
+    if (this.adjusting === which) return (this.adjusting = null);
+    const target = which === "in" ? this.loop != null || this.loopInPoint != null : this.loop != null;
+    this.adjusting = target ? which : null;
+    return this.adjusting;
+  }
+  endAdjust() {
+    this.adjusting = null;
+  }
+  /** Position of the boundary currently under adjustment, or null. */
+  private adjustAnchor(): number | null {
+    if (this.adjusting === "in") return this.loop ? this.loop.start : this.loopInPoint;
+    if (this.adjusting === "out") return this.loop ? this.loop.end : null;
+    return null;
+  }
+  /** Nudge the boundary under adjustment by `deltaSec` (drag / scroll / arrow keys),
+   *  clamped to the track and so in stays before out. Keeps the loop live + audible. */
+  adjustBy(deltaSec: number) {
+    const cur = this.adjustAnchor();
+    if (cur == null) return;
+    const pos = Math.max(0, Math.min(this.duration, cur + deltaSec));
+    if (this.adjusting === "in") {
+      if (this.loop) {
+        this.loop.start = Math.min(pos, this.loop.end - 1e-3);
+        this.loop.beats = this.loopBeats(this.loop);
+        this.applyLoop();
+        if (this._playing && this.position() < this.loop.start) this.seek(this.loop.start);
+      } else {
+        this.loopInPoint = pos;
+      }
+    } else if (this.adjusting === "out" && this.loop) {
+      this.loop.end = Math.max(pos, this.loop.start + 1e-3);
+      this.loop.beats = this.loopBeats(this.loop);
+      this.applyLoop();
+    }
+  }
+
   // Re-anchor the playback clock to the CURRENT (wrapped) position. While a loop
   // is active, position() folds the ever-growing raw offset back into the loop
   // with a modulo; the moment the loop stops wrapping, that raw offset would snap
@@ -863,10 +964,14 @@ export class Deck {
   }
 
   private applyLoop() {
+    const l = this.loop;
+    // Only loop on a finite, non-degenerate window — a NaN/inverted loopEnd hangs
+    // or crackles the source node, so any bad value just falls back to no loop.
+    const valid = !!l && l.active && Number.isFinite(l.start) && Number.isFinite(l.end) && l.end > l.start;
     for (const src of this.sources) {
-      if (this.loop?.active) {
-        src.loopStart = this.loop.start;
-        src.loopEnd = this.loop.end;
+      if (valid && l) {
+        src.loopStart = l.start;
+        src.loopEnd = l.end;
         src.loop = true;
       } else {
         src.loop = false;

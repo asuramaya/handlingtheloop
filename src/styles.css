@@ -960,7 +960,7 @@ body {
   text-overflow: ellipsis;
 }
 .ctx-menu button:hover {
-  background: #14151d;
+  background: var(--panel-2);
 }
 .ctx-count {
   font-size: 11px;
@@ -1294,6 +1294,14 @@ body {
   border-color: #6ee7a8;
   color: #6ee7a8;
 }
+/* IN/OUT pad armed for boundary fine-adjust (Shift-IN / Shift-OUT): a live amber
+   glow says "the wave + arrow keys now move this edge". */
+.loop-btn.adjust {
+  background: color-mix(in srgb, #ffd250 22%, transparent);
+  border-color: #ffd250;
+  color: #ffd250;
+  box-shadow: inset 0 0 9px color-mix(in srgb, #ffd250 28%, transparent), 0 0 8px color-mix(in srgb, #ffd250 35%, transparent);
+}
 .loop-btn.toggle {
   flex: 1.4;
   letter-spacing: 1px;
@@ -1427,10 +1435,10 @@ body.no-glow .caption-cue.on {
   border-color: #ffd250;
   color: #ffd250;
 }
-/* Beat-loop sizes in a clean 4-up row (1/2/4/8, or 16/32/48/64 in SHIFT) */
+/* Every beat-loop size at once, half-width: fractions 1/2…1/16 then whole 1…8 */
 .loop-sizes {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 5px;
 }
 .loop-sizes .loop-btn {
@@ -1869,14 +1877,6 @@ body.no-glow .caption-cue.on {
    the middle deck-controls third. Only the flex-GROW changes (still `1 1 0` base),
    so the ratio shifts ~ lanes 42% / controls 26% / mixer 32%. The controls third
    scrolls internally, so the tighter height just means a little scroll if needed. */
-@media (max-width: 768px) {
-  .lanes {
-    flex-grow: 1.6;
-  }
-  .decks-row {
-    flex-grow: 0.66;
-  }
-}
 /* The mixer (both strips + crossfader) is bounded to its own natural width, so
    the crossfader matches the channels instead of sprawling across the third. */
 .mixer-box {
@@ -1914,14 +1914,21 @@ body.no-glow .caption-cue.on {
     min-height: 0;
     overflow: hidden; /* fit to screen — no page scroll */
   }
+  /* Waveforms at ~half height so the (now single) control bank fits. */
   .lanes {
-    flex: 1 1 auto; /* waveforms absorb the leftover height */
+    flex: 0 0 40dvh;
     min-height: 72px;
     overflow: hidden;
   }
+  /* The control section takes the rest; the bank scrolls if it overflows. */
+  .decks-third {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
   .decks-row {
-    flex: 0 0 auto; /* natural height — show every bank row incl. stem pads */
-    overflow: visible;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
   }
   .decks-row .bank {
     overflow: visible;
@@ -1929,13 +1936,7 @@ body.no-glow .caption-cue.on {
     gap: 8px;
   }
   .decks-row .bank-main {
-    gap: 5px; /* tighten the row stack so 9 rows fit without a scroll */
-  }
-  .mix-row {
-    flex: 0 0 auto;
-    overflow: visible;
-    padding: 6px 12px;
-    --fader-h: clamp(92px, 13vh, 150px); /* shorter faders → compact mixer */
+    gap: 5px; /* tighten the row stack */
   }
 }
 
@@ -1960,7 +1961,7 @@ body.no-glow .caption-cue.on {
   position: relative;
   flex: 1;
   height: 30px;
-  background: color-mix(in srgb, var(--text) 6%, #000);
+  background: color-mix(in srgb, var(--text) 6%, var(--bg));
   border-top: 1px solid var(--line);
   overflow: hidden;
 }
@@ -2043,7 +2044,7 @@ body.no-glow .caption-cue.on {
   position: relative;
   flex: 1;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--accent) 11%, #000);
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg));
   overflow: hidden;
 }
 .smeter-fill {
@@ -2077,7 +2078,7 @@ body.no-glow .caption-cue.on {
   flex: 1;
   height: 26px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 6%, #000);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
   border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .lfader-input {
@@ -2621,6 +2622,23 @@ body.no-glow .caption-cue.on {
   border-color: color-mix(in srgb, #ffd250 45%, var(--line));
   color: #ffd250;
 }
+/* …and the two remapped pad rows light up so their alt mode is obvious: loop-size
+   pads → loop ROLL (cyan), hot-cue pads → SAVE-LOOP (green). A pad mid-roll (.on)
+   or already-set (.set) keeps its own lit colour, so the tint only marks the
+   "available" pads in that mode. */
+.bank.shifted .loop-sizes .loop-btn:not(.on) {
+  border-color: color-mix(in srgb, #36c2ff 65%, var(--line));
+  color: #36c2ff;
+  box-shadow: inset 0 0 9px color-mix(in srgb, #36c2ff 20%, transparent);
+}
+.bank.shifted .loop-sizes .loop-btn:not(.on):hover {
+  background: color-mix(in srgb, #36c2ff 16%, transparent);
+}
+.bank.shifted .hotcues .pad:not(.set) {
+  border-color: color-mix(in srgb, #6ee7a8 65%, var(--line));
+  color: #6ee7a8;
+  box-shadow: inset 0 0 9px color-mix(in srgb, #6ee7a8 20%, transparent);
+}
 .hw-btn.small {
   padding: 8px 12px;
   font-size: 12px;
@@ -2721,7 +2739,7 @@ body.no-glow .caption-cue.on {
   min-width: 44px;
   height: 38px;
   padding: 3px 5px;
-  background: color-mix(in srgb, var(--accent) 6%, #000);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
   border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
   border-radius: 6px;
   cursor: ns-resize;
@@ -4339,9 +4357,9 @@ body.no-glow .lane.focused::after {
 .pitch-step {
   display: grid;
   place-items: center;
-  /* Solid dark fill (not transparent) so the steppers read as real buttons flush
-     next to the cells — a faint transparent fill looked like a gap. */
-  background: color-mix(in srgb, var(--accent) 16%, #161a22);
+  /* Solid fill (not transparent) so the steppers read as real buttons flush next
+     to the cells; mixes off the theme surface so it follows light/dark themes. */
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
   border-radius: 6px;
   color: var(--accent);

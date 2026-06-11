@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck } from "@htl/audio";
-import type { Pyramid } from "@htl/analysis";
+import type { Pyramid, PyramidLevel } from "@htl/analysis";
 
 interface WaveformViewportProps {
   // The deck is read LIVE inside an imperative rAF (position, beatgrid, loop,
@@ -42,6 +42,123 @@ function rgba(hex: string, a: number): string {
   const n = parseInt(h, 16);
   if (h.length !== 6 || Number.isNaN(n)) return hex;
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+// Below this many samples-per-pixel we abandon the 256-sample LOD and read the REAL PCM,
+// so deep zoom resolves the true signal instead of staircased LOD plateaus. The LOD
+// bucket is 256 samples, so at/above 256 spp the LOD never upsamples. The SAME signed
+// envelope is drawn either way — LOD vs raw is purely a performance source swap.
+const RAW_SPP = 256;
+
+// The coarsest LOD level whose bucket still fits within `spp` samples-per-pixel (so each
+// pixel averages ≥1 bucket → no upsampling). Levels are ordered finest→coarsest.
+function pickLevel(py: Pyramid, spp: number): PyramidLevel {
+  let lvl = py.levels[0];
+  for (const l of py.levels) {
+    if (l.bucket <= spp) lvl = l;
+    else break;
+  }
+  return lvl;
+}
+
+// Fill loOut/hiOut[0..ow) with the per-pixel signed envelope of ONE mono signal — the
+// SAME representation at every zoom, so there is no style switch across LOD levels:
+//   • each pixel reports [lo, hi] = the min/max of the signal it covers, CLAMPED to
+//     include the centre (lo ≤ 0 ≤ hi). Filling centre→lo and centre→hi therefore always
+//     straddles the axis: zoomed out it reads as the usual amplitude envelope; zoomed in
+//     it resolves into the actual signed waveform (the wave fills up for +, down for −).
+//   • below one sample/pixel it linearly interpolates between the pixel's two edges, so
+//     the trace keeps resolving smoothly all the way down to individual samples (Ableton).
+// Source: a precomputed LOD level when zoomed out (cheap), else raw PCM.
+function envelope(
+  ch0: Float32Array | null,
+  ch1: Float32Array | null,
+  chSr: number,
+  rLeft: number,
+  secPerPx: number,
+  ow: number,
+  loOut: Float32Array,
+  hiOut: Float32Array,
+  lod: PyramidLevel | null,
+): void {
+  const spp = secPerPx * chSr;
+  if (lod) {
+    const B = lod.bucket;
+    const n = lod.min.length;
+    for (let x = 0; x < ow; x++) {
+      const s0 = (rLeft + x * secPerPx) * chSr;
+      let b0 = Math.floor(s0 / B);
+      let b1 = Math.floor((s0 + spp) / B);
+      if (b1 < 0 || b0 >= n) {
+        loOut[x] = 0;
+        hiOut[x] = 0;
+        continue;
+      }
+      if (b0 < 0) b0 = 0;
+      if (b1 >= n) b1 = n - 1;
+      let lo = 0; // clamp to centre so the fill always straddles the axis
+      let hi = 0;
+      for (let b = b0; b <= b1; b++) {
+        if (lod.min[b] < lo) lo = lod.min[b];
+        if (lod.max[b] > hi) hi = lod.max[b];
+      }
+      loOut[x] = lo;
+      hiOut[x] = hi;
+    }
+    return;
+  }
+  if (!ch0) return;
+  const N = ch0.length;
+  const at = (i: number) => (ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i]);
+  const interp = (c: number) => {
+    if (c < 0) c = 0;
+    else if (c > N - 1) c = N - 1;
+    const i = Math.floor(c);
+    return at(i) + (at(Math.min(N - 1, i + 1)) - at(i)) * (c - i);
+  };
+  for (let x = 0; x < ow; x++) {
+    const a = (rLeft + x * secPerPx) * chSr;
+    if (spp < 1) {
+      // Sub-sample: the pixel spans <1 sample → take the segment between its two edges,
+      // so consecutive pixels chain into a continuous line down to the sample level.
+      const s0 = interp(a);
+      const s1 = interp(a + spp);
+      loOut[x] = Math.min(0, s0, s1);
+      hiOut[x] = Math.max(0, s0, s1);
+    } else {
+      let i0 = Math.floor(a);
+      let i1 = Math.floor(a + spp);
+      if (i1 <= i0) i1 = i0 + 1;
+      if (i0 < 0) i0 = 0;
+      if (i1 > N) i1 = N;
+      if (i1 <= i0) {
+        loOut[x] = 0;
+        hiOut[x] = 0;
+        continue;
+      }
+      let lo = 0;
+      let hi = 0;
+      for (let i = i0; i < i1; i++) {
+        const s = at(i);
+        if (s < lo) lo = s;
+        if (s > hi) hi = s;
+      }
+      loOut[x] = lo;
+      hiOut[x] = hi;
+    }
+  }
+}
+
+// Perceptual amplitude curve: music peaks well below full scale, so a linear map leaves
+// every waveform a thin sliver in a sea of black. A gentle gain + soft knee lifts quiet
+// passages so they have body, while loud peaks ease into the lane edge instead of clipping
+// flat. Sign-preserving so the signed waveform shape is kept.
+function shape(v: number): number {
+  const g = v * 1.7;
+  const a = Math.abs(g);
+  // soft-clip above 0.8 so peaks compress smoothly toward ±1 rather than slamming flat
+  const y = a <= 0.8 ? a : 0.8 + (1 - 0.8) * (1 - Math.exp(-(a - 0.8) / (1 - 0.8)));
+  return v < 0 ? -y : y;
 }
 
 // What the offscreen waveform layer currently holds — rebuilt only when one of
@@ -159,111 +276,58 @@ export function WaveformViewport(props: WaveformViewportProps) {
     h: number,
   ) => {
     const p = view.current;
-    const sr = p.pyramid?.sampleRate ?? 44100;
-    const samplesPerPx = secPerPx * sr;
     const mid = h / 2;
     const stems = deck.stemPyramids;
+    const lo = new Float32Array(ow);
+    const hi = new Float32Array(ow);
 
-    if (stems) {
-      const names = STEM_ORDER.filter((n) => stems[n] && deck.stemActive(n));
-      if (!names.length) return;
-      const ssr = stems[names[0]]?.sampleRate ?? sr;
-      const sPerPx = secPerPx * ssr;
-      const pickLevel = (py: Pyramid) => {
-        let lvl = py.levels[0];
-        for (const l of py.levels) {
-          if (l.bucket <= sPerPx) lvl = l;
-          else break;
-        }
-        return lvl;
-      };
-      const layers = names.map((n) => ({ n, lvl: pickLevel(stems[n]) }));
-      const SCALE = 0.55;
-      const paths = layers.map(() => new Path2D());
-      for (let x = 0; x < ow; x++) {
-        const s0 = (rLeft + x * secPerPx) * ssr;
-        let up = 0;
-        let dn = 0;
-        for (let li = 0; li < layers.length; li++) {
-          const lvl = layers[li].lvl;
-          const B = lvl.bucket;
-          let b0 = Math.floor(s0 / B);
-          let b1 = Math.floor((s0 + sPerPx) / B);
-          if (b1 < 0 || b0 >= lvl.min.length) continue;
-          b0 = Math.max(0, b0);
-          b1 = Math.min(lvl.min.length - 1, b1);
-          let lo = 1;
-          let hi = -1;
-          for (let b = b0; b <= b1; b++) {
-            if (lvl.min[b] < lo) lo = lvl.min[b];
-            if (lvl.max[b] > hi) hi = lvl.max[b];
-          }
-          if (hi < lo) continue;
-          const hpx = Math.max(hi, -lo) * mid * 0.95 * SCALE;
-          if (hpx < 0.3) continue;
-          paths[li].rect(x, mid - up - hpx, 1, hpx);
-          paths[li].rect(x, mid + dn, 1, hpx);
-          up += hpx;
-          dn += hpx;
-        }
+    // ONE signed-envelope renderer, used identically for the mix and every stem lane. The
+    // shape is the same at all zooms — it just compresses sideways as you zoom out and
+    // resolves down to individual samples as you zoom in. `srcSr`/`raw`/`lodPy` pick the
+    // cheapest source for the zoom (LOD when out, raw PCM when in); the visual is identical.
+    const paintWave = (
+      srcSr: number,
+      raw: Float32Array | null,
+      raw1: Float32Array | null,
+      lodPy: Pyramid | null,
+      yc: number,
+      amp: number,
+      color: string,
+    ) => {
+      if (raw) envelope(raw, raw1, srcSr, rLeft, secPerPx, ow, lo, hi, null);
+      else if (lodPy) envelope(null, null, srcSr, rLeft, secPerPx, ow, lo, hi, pickLevel(lodPy, secPerPx * srcSr));
+      else return;
+      const path = new Path2D();
+      path.moveTo(0, yc - shape(hi[0]) * amp);
+      for (let x = 1; x < ow; x++) path.lineTo(x, yc - shape(hi[x]) * amp); // top edge (max) →
+      for (let x = ow - 1; x >= 0; x--) path.lineTo(x, yc - shape(lo[x]) * amp); // bottom edge (min) ←
+      path.closePath();
+      ctx.fillStyle = color;
+      ctx.fill(path);
+    };
+
+    if (stems && deck.stemsNeural) {
+      // NEURAL stems → one lane PER stem: the SAME waveform style as the collapsed view,
+      // just drawn 4× into stacked sub-regions (so there's only ever one renderer). A
+      // muted stem keeps its lane, drawn faint, so muting live never reflows the layout.
+      const laneH = h / STEM_ORDER.length;
+      const half = (laneH / 2) * 0.88; // small gap between lanes
+      for (let li = 0; li < STEM_ORDER.length; li++) {
+        const name = STEM_ORDER[li];
+        const py = stems[name];
+        if (!py) continue;
+        const ssr = py.sampleRate;
+        const raw = secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
+        const color = STEM_COLORS[name] ?? p.accent;
+        paintWave(ssr, raw, null, py, (li + 0.5) * laneH, half, deck.stemActive(name) ? color : rgba(color, 0.16));
       }
-      for (let li = 0; li < layers.length; li++) {
-        ctx.fillStyle = STEM_COLORS[layers[li].n] ?? p.accent;
-        ctx.fill(paths[li]);
-      }
-    } else if (samplesPerPx >= 256 && p.pyramid) {
-      let lvl = p.pyramid.levels[0];
-      for (const l of p.pyramid.levels) {
-        if (l.bucket <= samplesPerPx) lvl = l;
-        else break;
-      }
-      const B = lvl.bucket;
-      for (let x = 0; x < ow; x++) {
-        const s0 = (rLeft + x * secPerPx) * sr;
-        let b0 = Math.floor(s0 / B);
-        let b1 = Math.floor((s0 + samplesPerPx) / B);
-        if (b1 < 0 || b0 >= lvl.min.length) continue;
-        b0 = Math.max(0, b0);
-        b1 = Math.min(lvl.min.length - 1, b1);
-        let lo = 1;
-        let hi = -1;
-        let ls = 0;
-        let ms = 0;
-        let hs = 0;
-        let c = 0;
-        for (let b = b0; b <= b1; b++) {
-          if (lvl.min[b] < lo) lo = lvl.min[b];
-          if (lvl.max[b] > hi) hi = lvl.max[b];
-          ls += lvl.low[b];
-          ms += lvl.mid[b];
-          hs += lvl.high[b];
-          c++;
-        }
-        if (c === 0) continue;
-        const L = ls / c;
-        const M = ms / c;
-        const H = hs / c;
-        const sum = L + M + H + 1e-6;
-        ctx.fillStyle = `rgb(${(L * 40 + M * 245 + H * 220) / sum},${(L * 105 + M * 155 + H * 238) / sum},${(L * 235 + M * 45 + H * 255) / sum})`;
-        ctx.fillRect(x, mid - hi * mid * 0.95, 1, Math.max(1, (hi - lo) * mid * 0.95));
-      }
-    } else if (deck.buffer) {
-      const ch0 = deck.buffer.getChannelData(0);
-      const ch1 = deck.buffer.numberOfChannels > 1 ? deck.buffer.getChannelData(1) : null;
-      ctx.fillStyle = p.stripColor || p.accent;
-      for (let x = 0; x < ow; x++) {
-        const i0 = Math.max(0, Math.floor((rLeft + x * secPerPx) * sr));
-        const i1 = Math.min(ch0.length, Math.ceil((rLeft + (x + 1) * secPerPx) * sr));
-        if (i1 <= i0) continue;
-        let lo = 1;
-        let hi = -1;
-        for (let i = i0; i < i1; i++) {
-          const s = ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i];
-          if (s < lo) lo = s;
-          if (s > hi) hi = s;
-        }
-        ctx.fillRect(x, mid - hi * mid * 0.95, 1, Math.max(1, (hi - lo) * mid * 0.95));
-      }
+    } else if (deck.buffer && p.pyramid) {
+      // ONE collapsed waveform — for DSP stems, no stems, or while a neural split is still
+      // processing. Same renderer, full height, single colour.
+      const bsr = deck.buffer.sampleRate;
+      const raw = secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
+      const raw1 = raw && deck.buffer.numberOfChannels > 1 ? deck.buffer.getChannelData(1) : null;
+      paintWave(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, p.stripColor || p.accent);
     }
   };
 
@@ -371,33 +435,61 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const beatgrid = deck.beatgrid;
     if (beatgrid) {
       const { firstBeat, interval, beats } = beatgrid;
-      const pxPerBeat = (interval / trackWindow) * w; // LOD gate (representative)
-      const pxPerCell = pxPerBeat * p.gridSize;
       const dur = deck.buffer.duration;
       const right = left + trackWindow;
-      const showBeats = p.gridSize > 1 && pxPerBeat >= 6;
-      const showCells = pxPerCell >= 5;
-      const showLabels = pxPerCell >= 30;
-      const beatColor = rgba(p.markerColor, 0.22);
-      const barColor = rgba(p.markerColor, 0.9);
+      const pxPerBeat = (interval / trackWindow) * w;
+      const beatsPerBar = beatgrid.beatsPerBar ?? 4;
+      const downbeat = beatgrid.downbeat ?? 0;
+      // gridSize is the snap resolution in BEATS (8 = 2 bars, 1 = a beat, 0.0625 = 1/16
+      // beat). Three independent tiers, each LOD-gated by its own pixel spacing:
+      //   • BAR  — bold + bar number, every beatsPerBar beats from the downbeat.
+      //   • BEAT — medium, every beat.
+      //   • SUB  — faint, the sub-beat snap divisions (only when gridSize < 1). These were
+      //            missing before: the loop only walked whole beats, so anything finer
+      //            than a beat never drew at all.
+      const gs = p.gridSize;
+      const subs = gs < 1 ? Math.max(2, Math.round(1 / gs)) : 1; // divisions per beat
+      const showSub = subs > 1 && pxPerBeat / subs >= 4;
+      const showBeat = pxPerBeat >= 9;
+      const showBar = pxPerBeat * beatsPerBar >= 18;
+      const showLabels = pxPerBeat * beatsPerBar >= 30;
+      const subCol = rgba(p.markerColor, 0.16);
+      const beatCol = rgba(p.markerColor, 0.42);
+      const barCol = rgba(p.markerColor, 0.95);
 
-      const drawLine = (t: number, bar: boolean, label?: string) => {
-        if (t < 0 || t > dur) return;
-        const x = toX(t);
-        if (bar) {
-          ctx.fillStyle = barColor;
-          ctx.fillRect(x, 0, 2 * dpr, h);
-          if (label != null && showLabels) {
-            ctx.font = `${9 * dpr}px ui-monospace, monospace`;
-            ctx.fillText(label, x + 3 * dpr, h - 4 * dpr);
+      const vline = (t: number, wpx: number, color: string) => {
+        if (t < 0 || t > dur || t < left || t > right) return;
+        ctx.fillStyle = color;
+        ctx.fillRect(toX(t) - (wpx * dpr) / 2, 0, Math.max(1, wpx * dpr), h);
+      };
+      // Time of a (possibly fractional) beat index — interpolated between tracked beats so
+      // sub-beat divisions ride the real groove; extrapolated past the ends.
+      const beatTimeAt = (f: number) => {
+        if (!beats || beats.length < 2) return firstBeat + f * interval;
+        const i = Math.floor(f);
+        if (i < 0) return beats[0] + f * (beats[1] - beats[0]);
+        if (i >= beats.length - 1) {
+          const li = beats.length - 1;
+          return beats[li] + (f - li) * (beats[li] - beats[li - 1] || interval);
+        }
+        return beats[i] + (f - i) * (beats[i + 1] - beats[i]);
+      };
+      const drawTiers = (i: number, t: number) => {
+        if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1, subCol);
+        const isBar = (((i - downbeat) % beatsPerBar) + beatsPerBar) % beatsPerBar === 0;
+        if (isBar && showBar) {
+          vline(t, 2.2, barCol);
+          if (showLabels && t >= left && t <= right) {
+            ctx.fillStyle = barCol;
+            ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`;
+            ctx.fillText(String(Math.floor((i - downbeat) / beatsPerBar) + 1), toX(t) + 3 * dpr, h - 4 * dpr);
           }
-        } else {
-          ctx.fillStyle = beatColor;
-          ctx.fillRect(x, 0, 1 * dpr, h);
+        } else if (showBeat) {
+          vline(t, 1.3, beatCol);
         }
       };
 
-      if (beats && beats.length >= 2 && (showBeats || showCells)) {
+      if (beats && beats.length >= 2 && (showSub || showBeat || showBar)) {
         // First visible beat index (binary search), then walk forward.
         let lo = 0;
         let hi = beats.length - 1;
@@ -406,40 +498,19 @@ export function WaveformViewport(props: WaveformViewportProps) {
           if (beats[mid] < left) lo = mid + 1;
           else hi = mid;
         }
-        // Bold cells start on the detected downbeat (the musical "1"), so bar lines
-        // and bar numbers are musically correct, not anchored to beats[0].
-        const gs = p.gridSize;
-        const phase = (((beatgrid.downbeat ?? 0) % gs) + gs) % gs;
-        for (let i = lo; i < beats.length && beats[i] <= right; i++) {
-          const isBar = (((i - phase) % gs) + gs) % gs === 0;
-          if (isBar) {
-            if (showCells) drawLine(beats[i], true, String(Math.floor((i - phase) / gs)));
-          } else if (showBeats) {
-            drawLine(beats[i], false);
-          }
-        }
-      } else {
-        // Uniform fallback (no tracked beats).
-        const cell = interval * p.gridSize;
-        if (showBeats) {
-          let kb = Math.ceil((left - firstBeat) / interval);
-          for (let t = firstBeat + kb * interval; t <= right; kb++, t = firstBeat + kb * interval) {
-            if (kb % p.gridSize !== 0) drawLine(t, false);
-          }
-        }
-        if (showCells) {
-          let kc = Math.ceil((left - firstBeat) / cell);
-          for (let t = firstBeat + kc * cell; t <= right; kc++, t = firstBeat + kc * cell) {
-            drawLine(t, true, String(kc));
-          }
-        }
+        for (let i = Math.max(0, lo - 1); i < beats.length && beats[i] <= right; i++) drawTiers(i, beats[i]);
+      } else if (showSub || showBeat || showBar) {
+        // Uniform fallback (no tracked beats) — same tiers off the constant grid.
+        const k0 = Math.floor((left - firstBeat) / interval) - 1;
+        const k1 = Math.ceil((right - firstBeat) / interval) + 1;
+        for (let k = k0; k <= k1; k++) drawTiers(k, firstBeat + k * interval);
       }
 
       // Phrase boundaries — the 8/16/32-bar section starts. Drawn over the bar grid
       // as a bright accent line + a phrase number, so the build/drop/breakdown
       // structure is visible at a glance and you can line a mix up to a phrase.
       const phrases = beatgrid.phrases;
-      if (phrases && phrases.length && showCells) {
+      if (phrases && phrases.length && showBar) {
         ctx.font = `bold ${10 * dpr}px ui-monospace, monospace`;
         for (let i = 0; i < phrases.length; i++) {
           const t = phrases[i];
@@ -486,7 +557,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   useEffect(() => {
     let raf = 0;
     const loop = () => {
-      if (deck.playing || deck.jogging || dirty.current) {
+      if (deck.playing || deck.jogging || deck.adjusting || dirty.current) {
         dirty.current = false;
         draw();
       }

@@ -24,10 +24,19 @@ class PitchShift extends AudioWorkletProcessor {
   read(buf, r) {
     const L = this.L;
     r = ((r % L) + L) % L;
-    const i0 = Math.floor(r);
-    const i1 = i0 + 1 >= L ? 0 : i0 + 1;
-    const f = r - i0;
-    return buf[i0] * (1 - f) + buf[i1] * f;
+    // 4-point Catmull-Rom cubic — smoother than linear, so the resampled (key-
+    // shifted) signal keeps more high end and aliases less, especially on big
+    // shifts. Wrap all four taps around the ring.
+    const i1 = Math.floor(r);
+    const f = r - i1;
+    const i0 = i1 - 1 < 0 ? L - 1 : i1 - 1;
+    const i2 = i1 + 1 >= L ? 0 : i1 + 1;
+    const i3 = i1 + 2 >= L ? i1 + 2 - L : i1 + 2;
+    const y0 = buf[i0], y1 = buf[i1], y2 = buf[i2], y3 = buf[i3];
+    const a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+    const b = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
+    const c = -0.5 * y0 + 0.5 * y2;
+    return ((a * f + b) * f + c) * f + y1;
   }
   process(inputs, outputs, params) {
     const input = inputs[0];

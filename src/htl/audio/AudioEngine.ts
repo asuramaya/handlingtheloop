@@ -1,13 +1,7 @@
-import type { Beatgrid } from "../analysis/analyze";
+import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat } from "../analysis/analyze";
 import { Deck } from "./Deck";
 import { PITCH_WORKLET_SRC } from "./pitchWorklet";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
-
-/** Fractional position within the current beat, 0..1. */
-function phaseFraction(pos: number, g: Beatgrid): number {
-  const p = ((pos - g.firstBeat) / g.interval) % 1;
-  return p < 0 ? p + 1 : p;
-}
 
 // Master audio graph:
 //
@@ -110,11 +104,24 @@ export class AudioEngine {
     while (target / mg.bpm < 1 / Math.SQRT2) target *= 2;
     me.setTempo((target / mg.bpm - 1) * 100);
 
-    // Phase align: put me at the same fractional beat position as the master.
-    const oFrac = phaseFraction(other.position(), og);
-    const mPos = me.position();
-    const mBeatStart = mg.firstBeat + Math.floor((mPos - mg.firstBeat) / mg.interval) * mg.interval;
-    me.seek(mBeatStart + oFrac * mg.interval);
+    // Phase align. When BOTH grids know their downbeat, align at the BAR level so
+    // the two tracks' "1"s land together (a phrase-tight mix, not just on-beat);
+    // otherwise fall back to per-beat alignment. Either way pick the minimal move
+    // — land in the bar/beat I'm already in, wrapping if the far edge is closer.
+    if (mg.downbeat != null && og.downbeat != null) {
+      const oFrac = barPhase(og, other.position()); // 0..1 within the master's bar
+      const bar = barAnchor(mg, me.position());
+      let target = bar.start + oFrac * bar.length;
+      const pos = me.position();
+      if (target - pos > bar.length / 2) target -= bar.length;
+      else if (pos - target > bar.length / 2) target += bar.length;
+      me.seek(target);
+    } else {
+      const oFrac = beatPhase(og, other.position());
+      const mBeat = nearestBeat(mg, me.position());
+      const myInterval = beatTimeOffset(mg, mBeat, 1) - mBeat || mg.interval;
+      me.seek(mBeat + oFrac * myInterval);
+    }
   }
 
   /**

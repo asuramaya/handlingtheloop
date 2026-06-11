@@ -1,12 +1,20 @@
 export {
+  analyzeChannels,
   analyzeTrack,
+  barAnchor,
+  barPhase,
+  beatPhase,
+  beatTimeOffset,
   computePyramid,
   detectBeatgrid,
   detectKey,
+  nearestBeat,
   shiftKey,
+  type AudioLike,
   type Beatgrid,
   type KeyInfo,
   type Pyramid,
   type PyramidLevel,
   type TrackAnalysis,
 } from "./analyze";
+export { analyzeTrackAsync } from "./analyzeWorker";

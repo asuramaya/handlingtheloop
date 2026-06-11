@@ -1,5 +1,5 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
-import { shiftKey } from "../analysis/analyze";
+import { beatTimeOffset, nearestBeat, shiftKey } from "../analysis/analyze";
 
 // LOD pyramid from a precomputed level-0 min/max envelope (bands zeroed — stems
 // colour per-stem, not by band). Cheap O(count) downsample; the O(n) min/max pass
@@ -669,17 +669,20 @@ export class Deck {
   private snap(t: number): number {
     const g = this.beatgrid;
     if (!g) return t;
-    return g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
+    return nearestBeat(g, t); // dynamic grid aware (falls back to the uniform comb)
   }
   private maybeSnap(t: number): number {
     return this.quantizeOn ? this.snap(t) : t;
   }
 
-  /** Jump by N beats from the current (grid-snapped) position. */
+  /** Jump by N beats from the current position, landing on the real grid beat. */
   beatJump(beats: number) {
-    const interval = this.beatgrid?.interval ?? 60 / 120;
-    const base = this.beatgrid ? this.snap(this.position()) : this.position();
-    this.seek(base + beats * interval);
+    const g = this.beatgrid;
+    if (!g) {
+      this.seek(this.position() + beats * (60 / 120));
+      return;
+    }
+    this.seek(beatTimeOffset(g, this.position(), beats));
   }
 
   // --- cue ---
@@ -732,9 +735,13 @@ export class Deck {
    *  playhead. With no active loop, drop a fresh loop at the current position. */
   setBeatLoop(beats: number) {
     if (!this.buffer) return;
-    const interval = this.beatgrid?.interval ?? 60 / 120;
-    const start = this.loop?.active ? this.loop.start : this.beatgrid ? this.snap(this.position()) : this.position();
-    const end = Math.min(this.duration, start + beats * interval);
+    const g = this.beatgrid;
+    const interval = g?.interval ?? 60 / 120;
+    const start = this.loop?.active ? this.loop.start : g ? this.snap(this.position()) : this.position();
+    // End on the beat `beats` away on the actual grid (exact even if tempo drifts),
+    // not start + beats·interval which only holds for a perfectly constant tempo.
+    const rawEnd = g ? beatTimeOffset(g, start, beats) : start + beats * interval;
+    const end = Math.min(this.duration, rawEnd);
     this.loop = { active: true, start, end, beats };
     this.applyLoop();
     // Keep the playhead inside the (possibly shrunk) region so a live source

@@ -11,7 +11,7 @@ import {
   type Deck,
   EQ_MIN_DB,
   EQ_MAX_DB,
-  analyzeTrack,
+  analyzeTrackAsync,
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
@@ -225,6 +225,18 @@ export function App() {
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
   }, []);
+  // SYNC: tempo-match + phase-align `id` to the other deck, THEN match its zoom to
+  // the master's. Once tempos are locked and both playheads are phase-aligned and
+  // centered, a shared pixel-scale makes the two beat grids overlay exactly — the
+  // markers line up on screen, not just in the audio.
+  const doSync = useCallback(
+    (id: DeckId) => {
+      engine.sync(id);
+      const other: DeckId = id === "A" ? "B" : "A";
+      setZoom((z) => ({ ...z, [id]: z[other] }));
+    },
+    [engine],
+  );
   const [loaded, setLoaded] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [captions, setCaptions] = useState<Record<DeckId, CaptionCue[]>>({ A: [], B: [] });
   const [, setTick] = useState(0);
@@ -290,6 +302,13 @@ export function App() {
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
   // flow (followRef), but snapshots are catch-up only, for followers. See bug #1.
   const snapFollowRef = useRef(false);
+  // deferDecodeRef: a MUTED passenger (joined, not listening, not driving, not the clock)
+  // renders no audio — so it must NOT decode the session's tracks. Decoding two tracks
+  // into AudioBuffers is what OOM-crashed iOS Safari when a desktop started a session
+  // (bug #2). We stash the target tracks instead and decode them only once the user turns
+  // 🔊 on (or otherwise needs audio: gains control / becomes the anchor).
+  const deferDecodeRef = useRef(false);
+  const pendingRoomLoad = useRef<Record<DeckId, { videoId: string; track: TrackMeta; restore?: DeckSnapshot } | null>>({ A: null, B: null });
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
@@ -442,7 +461,7 @@ export function App() {
           deck.setTempo(0);
           emitRef.current({ kind: "control", deck: id, param: "tempo", value: 0 });
         } else {
-          engine.sync(id);
+          doSync(id);
           emitDeckRef.current(id);
         }
       },
@@ -545,7 +564,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [engine, shift, focused, matchGain, cycleTempoRange, refresh, settingsOpen, searchOpen, libOpen, settings.keyBindings]);
+  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, refresh, settingsOpen, searchOpen, libOpen, settings.keyBindings]);
 
   useEffect(() => {
     applySettings(settings);
@@ -924,7 +943,9 @@ export function App() {
           setStatusFor(id, { phase: "downloading", detail: "Decoding…" });
           const buffer = await decodeAudio(engine.ctx, data);
           if (stale()) return;
-          cached = { buffer, analysis: analyzeTrack(buffer) };
+          const analysis = await analyzeTrackAsync(buffer);
+          if (stale()) return;
+          cached = { buffer, analysis };
           setCachedTrack(vid, cached);
         }
         if (stale()) return;
@@ -980,7 +1001,7 @@ export function App() {
       try {
         const data = await fileToArrayBuffer(file);
         const buffer = await decodeAudio(engine.ctx, data);
-        const analysis = analyzeTrack(buffer);
+        const analysis = await analyzeTrackAsync(buffer);
         engine.deck(id).setBuffer(buffer, analysis.beatgrid);
         engine.deck(id).key = analysis.key;
         setMeta((m) => ({
@@ -1145,6 +1166,13 @@ export function App() {
     (id: DeckId, videoId: string, track: TrackMeta, restore?: DeckSnapshot) => {
       roomLoadTarget.current[id] = videoId;
       reconciledTarget.current[id] = null; // re-arm the post-decode discrete-state reconcile
+      // Muted passenger → don't build an audio graph (iOS OOM, bug #2). Stash the target;
+      // the flush effect decodes it when this device starts rendering audio.
+      if (deferDecodeRef.current) {
+        pendingRoomLoad.current[id] = { videoId, track, restore };
+        return;
+      }
+      pendingRoomLoad.current[id] = null;
       void loadTrackToDeck(id, track, restore)
         .catch(() => {})
         .finally(() => {
@@ -1390,6 +1418,10 @@ export function App() {
   snapFollowRef.current = room.enabled && !room.controlling;
   // Locked out of driving (a watch-only listener) → block the keys + show the overlay.
   lockedRef.current = room.enabled && !room.controlling;
+  // Defer decode while we're a pure muted passenger — enabled but rendering no audio and
+  // holding no authority. The moment any of those change (🔊 on, granted control, became
+  // the clock) we render audio, so we decode the stashed session tracks (flush effect).
+  deferDecodeRef.current = room.enabled && !room.listening && !room.controlling && !room.isAnchor;
 
   // Scrub streamed over WS as START / MOVE(delta) / END jog events. The receiver
   // drives its OWN platter physics (deck.scrubBegin/scrubMove/scrubEnd) — smooth
@@ -1483,6 +1515,20 @@ export function App() {
     return () => clearInterval(iv);
   }, [engine, room.isAnchor, room.status, room.sendTick]);
 
+  // Flush deferred decodes: a muted passenger doesn't decode (bug #2), so when it starts
+  // rendering audio — 🔊 on, granted control, or promoted to the clock — decode the stashed
+  // session tracks now (deferDecodeRef is already false this render, so runRoomLoad decodes).
+  useEffect(() => {
+    if (deferDecodeRef.current) return; // still a muted passenger → keep deferring
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      const p = pendingRoomLoad.current[id];
+      if (!p) return;
+      pendingRoomLoad.current[id] = null;
+      roomLoadTarget.current[id] = null; // let runRoomLoad re-arm the guard + actually load
+      runRoomLoad(id, p.videoId, p.track, p.restore);
+    });
+  }, [room.enabled, room.listening, room.controlling, room.isAnchor, runRoomLoad]);
+
   // INVERTED audio: every joined participant renders its OWN stream (decode + sync run
   // on all of them), so a session is a listening party — not one speaker. We mute ONLY
   // when this device turned its own audio off. Solo (not in a session) → full output.
@@ -1510,6 +1556,12 @@ export function App() {
     if (was && !room.enabled && room.status === "online") {
       engine.deckA.pause();
       engine.deckB.pause();
+      // Clear all the session load guards so a later re-join can't mis-dedupe its first
+      // snapshot against a stale target/reconcile/pending entry from the previous session.
+      roomLoadTarget.current = { A: null, B: null };
+      reconciledTarget.current = { A: null, B: null };
+      pendingRoomLoad.current = { A: null, B: null };
+      lastSnapshotRef.current = null;
       refresh();
     }
   }, [room.enabled, room.status, engine, refresh]);
@@ -1657,7 +1709,7 @@ export function App() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { engine.sync("A"); refresh(); }}
+            onSync={() => { doSync("A"); refresh(); }}
             onKey={() => { engine.matchKey("A"); refresh(); }}
             refresh={refresh}
             emit={emit}
@@ -1677,7 +1729,7 @@ export function App() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { engine.sync("B"); refresh(); }}
+            onSync={() => { doSync("B"); refresh(); }}
             onKey={() => { engine.matchKey("B"); refresh(); }}
             refresh={refresh}
             emit={emit}

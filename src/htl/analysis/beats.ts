@@ -21,18 +21,42 @@
 //      derived too, so every legacy consumer (loops, snap, sync fallback) keeps a
 //      sensible bpm/firstBeat/interval.
 import { FFT, hannPeriodic } from "../stems/fft";
-import type { Beatgrid } from "./analyze";
+import type { AudioLike, Beatgrid } from "./analyze";
 
 const FFT_SIZE = 1024;
 const HOP = 512;
+// Beat tracking only needs onset timing, not fidelity — onsets (kicks, snares,
+// hats) all live below ~11 kHz. Decimating to ~22 kHz before the STFT halves the
+// frame count (and the FFT cost) with no loss of beat accuracy, keeping the whole
+// analysis well under a noticeable main-thread stall. (librosa defaults to 22050.)
+const DECIM = 2;
 
-/** Spectral-flux onset strength. Returns the (high-passed, unit-std) envelope and
- *  its frame rate (frames per second). */
-function onsetEnvelope(buffer: AudioBuffer): { env: Float32Array; envRate: number } | null {
-  const sr = buffer.sampleRate;
+/** Mono, box-filtered down by DECIM. Box averaging is a cheap anti-alias — enough
+ *  since we only keep the magnitude envelope below Nyquist/2 for onsets. */
+function decimateMono(buffer: AudioLike): { sig: Float32Array; sr: number } {
   const ch0 = buffer.getChannelData(0);
   const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
   const n = ch0.length;
+  const m = Math.floor(n / DECIM);
+  const sig = new Float32Array(m);
+  for (let i = 0; i < m; i++) {
+    let acc = 0;
+    const base = i * DECIM;
+    for (let k = 0; k < DECIM; k++) {
+      const j = base + k;
+      acc += ch1 ? (ch0[j] + ch1[j]) * 0.5 : ch0[j];
+    }
+    sig[i] = acc / DECIM;
+  }
+  return { sig, sr: buffer.sampleRate / DECIM };
+}
+
+/** Spectral-flux onset strength. Returns the full-band (high-passed, unit-std)
+ *  onset envelope used for tempo + beats, plus a LOW-BAND flux envelope (sub-~150
+ *  Hz, raw) used for downbeat detection — kicks land on the "1". */
+function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32Array; envRate: number } | null {
+  const { sig, sr } = decimateMono(buffer);
+  const n = sig.length;
   if (n < FFT_SIZE * 4) return null;
 
   const fft = new FFT(FFT_SIZE);
@@ -41,29 +65,36 @@ function onsetEnvelope(buffer: AudioBuffer): { env: Float32Array; envRate: numbe
   const re = new Float32Array(FFT_SIZE);
   const im = new Float32Array(FFT_SIZE);
   const prevMag = new Float32Array(bins);
+  // Bins up to ~150 Hz carry the kick — their flux marks downbeats.
+  const lowCut = Math.max(2, Math.min(bins - 1, Math.round((150 * FFT_SIZE) / sr)));
 
   const frames = Math.floor((n - FFT_SIZE) / HOP) + 1;
   if (frames < 8) return null;
   const flux = new Float32Array(frames);
+  const lowEnv = new Float32Array(frames);
 
   for (let f = 0; f < frames; f++) {
     const start = f * HOP;
     for (let i = 0; i < FFT_SIZE; i++) {
-      const s = ch1 ? (ch0[start + i] + ch1[start + i]) * 0.5 : ch0[start + i];
-      re[i] = s * win[i];
+      re[i] = sig[start + i] * win[i];
       im[i] = 0;
     }
     fft.transform(re, im);
     let sum = 0;
+    let lowSum = 0;
     for (let k = 1; k < bins; k++) {
       // log-magnitude tames the loud-vs-quiet dynamic range so onsets in soft
       // passages still register against onsets in loud drops.
       const mag = Math.log1p(Math.sqrt(re[k] * re[k] + im[k] * im[k]));
       const d = mag - prevMag[k];
-      if (d > 0) sum += d; // half-wave rectify: only energy INCREASES are onsets
+      if (d > 0) {
+        sum += d; // half-wave rectify: only energy INCREASES are onsets
+        if (k <= lowCut) lowSum += d;
+      }
       prevMag[k] = mag;
     }
     flux[f] = sum;
+    lowEnv[f] = lowSum;
   }
 
   const envRate = sr / HOP;
@@ -91,7 +122,43 @@ function onsetEnvelope(buffer: AudioBuffer): { env: Float32Array; envRate: numbe
   const std = Math.sqrt(varSum / frames) || 1;
   for (let f = 0; f < frames; f++) env[f] /= std;
 
-  return { env, envRate };
+  return { env, lowEnv, envRate };
+}
+
+/** Estimate the 4/4 downbeat phase: the beat offset (0..beatsPerBar-1) whose beats
+ *  carry the most low-band onset energy on average. Returns the index in `beats[]`
+ *  of the first downbeat. Assumes 4/4 (overwhelmingly common in DJ material). */
+function detectDownbeat(lowEnv: Float32Array, beatFrames: number[], beatsPerBar: number): number {
+  const m = beatFrames.length;
+  if (m < beatsPerBar * 2) return 0;
+  // Per-beat low-band strength: sum a small window around each beat frame.
+  const strength = new Float32Array(m);
+  const w = 2;
+  for (let i = 0; i < m; i++) {
+    const c = beatFrames[i];
+    let s = 0;
+    for (let d = -w; d <= w; d++) {
+      const f = c + d;
+      if (f >= 0 && f < lowEnv.length) s += lowEnv[f];
+    }
+    strength[i] = s;
+  }
+  let bestPhase = 0;
+  let best = -Infinity;
+  for (let p = 0; p < beatsPerBar; p++) {
+    let sum = 0;
+    let cnt = 0;
+    for (let i = p; i < m; i += beatsPerBar) {
+      sum += strength[i];
+      cnt++;
+    }
+    const avg = cnt ? sum / cnt : 0;
+    if (avg > best) {
+      best = avg;
+      bestPhase = p;
+    }
+  }
+  return bestPhase;
 }
 
 /** Tempo (BPM) from the onset envelope via prior-weighted autocorrelation. */
@@ -257,7 +324,7 @@ function fitConstantGrid(beatTimes: Float32Array): { firstBeat: number; interval
 
 /** Full dynamic beat analysis → a Beatgrid carrying both the tracked `beats[]`
  *  (the dynamic grid) and a best-fit constant bpm/firstBeat/interval. */
-export function detectBeats(buffer: AudioBuffer): Beatgrid | null {
+export function detectBeats(buffer: AudioLike): Beatgrid | null {
   const onset = onsetEnvelope(buffer);
   if (!onset) return null;
   const bpm0 = estimateTempo(onset.env, onset.envRate);
@@ -276,7 +343,9 @@ export function detectBeats(buffer: AudioBuffer): Beatgrid | null {
   const { firstBeat, interval } = fitConstantGrid(beats);
   const safeInterval = interval > 0.05 && interval < 2 ? interval : 60 / bpm0;
   const bpm = Math.round((60 / safeInterval) * 100) / 100;
-  return { bpm, firstBeat, interval: safeInterval, beats };
+  const beatsPerBar = 4;
+  const downbeat = detectDownbeat(onset.lowEnv, frameBeats, beatsPerBar);
+  return { bpm, firstBeat, interval: safeInterval, beats, downbeat, beatsPerBar };
 }
 
 /** Uniform-grid fallback (matches the old detector's phase search) when DP can't

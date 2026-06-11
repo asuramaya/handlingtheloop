@@ -4,6 +4,7 @@
 //   - a beatgrid (bpm + first-beat phase + interval) for sync / loops / grid
 // All single-pass / O(n) so it stays snappy even for long mixes.
 import { FFT, hannPeriodic } from "../stems/fft";
+import { detectBeats } from "./beats";
 
 export interface PyramidLevel {
   bucket: number; // samples per bucket at this level
@@ -29,6 +30,11 @@ export interface Beatgrid {
   // consumers then fall back to the uniform firstBeat + k·interval comb. Use the
   // beat-query helpers below rather than reading this directly.
   beats?: Float32Array;
+  // Downbeat (musical "1") detection: index in `beats[]` of the first downbeat —
+  // beats at downbeat, downbeat+beatsPerBar, … start a bar. Lets the grid bold
+  // real bar lines and lets sync align bars, not just beats. Assumes 4/4.
+  downbeat?: number;
+  beatsPerBar?: number;
 }
 
 export interface KeyInfo {
@@ -45,6 +51,17 @@ export interface TrackAnalysis {
   pyramid: Pyramid;
 }
 
+// The minimal slice of AudioBuffer the analysers actually touch. Accepting this
+// (rather than AudioBuffer) lets the whole analysis run in a Web Worker, which has
+// no AudioBuffer — we hand it plain channel arrays wrapped in this shape. A real
+// AudioBuffer satisfies it structurally, so main-thread callers are unchanged.
+export interface AudioLike {
+  sampleRate: number;
+  length: number;
+  numberOfChannels: number;
+  getChannelData(channel: number): Float32Array;
+}
+
 const BASE_BUCKET = 256; // finest pyramid resolution (samples per bucket)
 
 function lpAlpha(fc: number, sr: number): number {
@@ -52,7 +69,7 @@ function lpAlpha(fc: number, sr: number): number {
 }
 
 /** Build the LOD pyramid: level 0 from the buffer, coarser levels by halving. */
-export function computePyramid(buffer: AudioBuffer): Pyramid {
+export function computePyramid(buffer: AudioLike): Pyramid {
   const ch0 = buffer.getChannelData(0);
   const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
   return computePyramidFromChannels(ch0, ch1, buffer.sampleRate);
@@ -196,17 +213,125 @@ export function computeStemPyramid(ch0: Float32Array, ch1: Float32Array | null, 
 }
 
 /**
- * BPM + first-beat phase. Onset-strength envelope → autocorrelation over
- * 60–180 BPM → phase offset that best aligns a beat comb to the onsets.
- *
- * The tempo is refined to a FRACTIONAL lag (parabolic interpolation of the
- * autocorrelation peak): an integer-lag BPM is quantised in ~1.6-BPM steps at
- * 128 BPM, and even a ~1-BPM error drifts a uniform grid half a beat within ~30 s
- * — which is what throws the grid off across long intros/interludes. The score is
- * length-normalised and weighted by a gentle tempo prior so half/double-tempo
- * peaks don't win.
+ * Beatgrid = a tracked beat sequence (dynamic grid) + a best-fit constant grid.
+ * Delegates to the DP beat tracker (analysis/beats.ts), which is far more robust
+ * than a single global tempo+phase: it follows real tempo drift so the grid
+ * doesn't walk off the beats over a long track or when the deck's rate changes.
+ * `detectBeatgridUniform` (below) is the legacy single-tempo detector, kept as a
+ * last-ditch fallback for clips too short for the tracker.
  */
-export function detectBeatgrid(buffer: AudioBuffer): Beatgrid | null {
+export function detectBeatgrid(buffer: AudioLike): Beatgrid | null {
+  return detectBeats(buffer) ?? detectBeatgridUniform(buffer);
+}
+
+// ----------------------------- beat queries -------------------------------
+// Helpers over a Beatgrid that prefer the dynamic `beats[]` when present and
+// fall back to the uniform comb otherwise. Sync, snapping, and the grid renderer
+// all go through these so dynamic + constant grids behave identically.
+
+/** Index of the beat at-or-before time `t` in the dynamic array (binary search).
+ *  Returns -1 if `t` precedes the first tracked beat. */
+function beatIndexBefore(beats: Float32Array, t: number): number {
+  let lo = 0;
+  let hi = beats.length - 1;
+  if (t < beats[0]) return -1;
+  if (t >= beats[hi]) return hi;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (beats[mid] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/** Fractional beat phase at time `t`, 0..1 (0 = on a beat). Interpolates within
+ *  the surrounding tracked interval, so it's accurate even where tempo drifts. */
+export function beatPhase(g: Beatgrid, t: number): number {
+  const beats = g.beats;
+  if (beats && beats.length >= 2) {
+    const i = beatIndexBefore(beats, t);
+    if (i < 0) {
+      // Before the first beat — extrapolate backwards at the local interval.
+      const step = beats[1] - beats[0];
+      const p = ((t - beats[0]) / step) % 1;
+      return p < 0 ? p + 1 : p;
+    }
+    const next = i + 1 < beats.length ? beats[i + 1] : beats[i] + g.interval;
+    const span = next - beats[i] || g.interval;
+    const p = (t - beats[i]) / span;
+    return p < 0 ? 0 : p >= 1 ? p - Math.floor(p) : p;
+  }
+  const p = ((t - g.firstBeat) / g.interval) % 1;
+  return p < 0 ? p + 1 : p;
+}
+
+/** Nearest tracked beat time to `t` (snaps cues/loops/seeks to the real grid). */
+export function nearestBeat(g: Beatgrid, t: number): number {
+  const beats = g.beats;
+  if (beats && beats.length >= 2) {
+    const i = beatIndexBefore(beats, t);
+    if (i < 0) return beats[0];
+    if (i + 1 >= beats.length) return beats[i];
+    return t - beats[i] <= beats[i + 1] - t ? beats[i] : beats[i + 1];
+  }
+  return g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
+}
+
+/** Beat time `n` beats away from the beat at-or-before `t` (for beat jumps/loops).
+ *  Uses the tracked sequence where available so a 4-beat jump lands on beat 4. */
+export function beatTimeOffset(g: Beatgrid, t: number, n: number): number {
+  const beats = g.beats;
+  if (beats && beats.length >= 2) {
+    const i = beatIndexBefore(beats, t);
+    const base = i < 0 ? 0 : i;
+    const target = base + n;
+    if (target >= 0 && target < beats.length) return beats[target];
+    // Past the tracked range — extrapolate at the edge interval.
+    if (target < 0) return beats[0] + target * (beats[1] - beats[0]);
+    const last = beats.length - 1;
+    return beats[last] + (target - last) * (beats[last] - beats[last - 1]);
+  }
+  const base = g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
+  return base + n * g.interval;
+}
+
+/** The bar (downbeat-to-downbeat span) containing time `t`: its start time and
+ *  length in seconds. Uses the detected downbeat phase on the dynamic grid; falls
+ *  back to a beatsPerBar-long span anchored at firstBeat when no downbeat exists. */
+export function barAnchor(g: Beatgrid, t: number): { start: number; length: number } {
+  const bpb = g.beatsPerBar ?? 4;
+  const beats = g.beats;
+  if (beats && beats.length >= 2) {
+    const phase = ((g.downbeat ?? 0) % bpb + bpb) % bpb;
+    let i = beatIndexBefore(beats, t);
+    if (i < 0) i = 0;
+    // Step back to this bar's downbeat (largest s ≤ i with s ≡ phase mod bpb).
+    let s = i - (((i - phase) % bpb) + bpb) % bpb;
+    if (s < 0) s += bpb;
+    if (s > i) s -= bpb;
+    if (s < 0) s = 0;
+    const startT = s < beats.length ? beats[s] : g.firstBeat + s * g.interval;
+    const nextIdx = s + bpb;
+    const endT = nextIdx < beats.length ? beats[nextIdx] : startT + bpb * g.interval;
+    return { start: startT, length: endT - startT || bpb * g.interval };
+  }
+  const barLen = bpb * g.interval;
+  const k = Math.floor((t - g.firstBeat) / barLen);
+  return { start: g.firstBeat + k * barLen, length: barLen };
+}
+
+/** Fractional position within the current bar, 0..1 (0 = on the downbeat). Lets
+ *  sync align bars, not just beats — so the two tracks' "1"s land together. */
+export function barPhase(g: Beatgrid, t: number): number {
+  const { start, length } = barAnchor(g, t);
+  const p = (t - start) / length;
+  return p < 0 ? 0 : p >= 1 ? p - Math.floor(p) : p;
+}
+
+/** Legacy single-tempo detector: onset-strength envelope → autocorrelation over
+ *  60–180 BPM → best phase offset. Kept only as a fallback for clips too short for
+ *  the DP tracker. Produces a uniform grid (no dynamic `beats[]`). */
+function detectBeatgridUniform(buffer: AudioLike): Beatgrid | null {
   const sr = buffer.sampleRate;
   const ch = buffer.getChannelData(0);
   const hop = 256;
@@ -284,9 +409,21 @@ export function detectBeatgrid(buffer: AudioBuffer): Beatgrid | null {
   return { bpm: Math.round(bpm * 100) / 100, firstBeat: bestPhase / envRate, interval: 60 / bpm };
 }
 
-export function analyzeTrack(buffer: AudioBuffer): TrackAnalysis {
+export function analyzeTrack(buffer: AudioLike): TrackAnalysis {
   const beatgrid = detectBeatgrid(buffer);
   return { bpm: beatgrid?.bpm ?? null, beatgrid, key: detectKey(buffer), pyramid: computePyramid(buffer) };
+}
+
+/** Analyse from raw planar channels (what a Web Worker receives — no AudioBuffer).
+ *  Wraps the channels in an AudioLike and runs the full pipeline. */
+export function analyzeChannels(ch0: Float32Array, ch1: Float32Array | null, sampleRate: number): TrackAnalysis {
+  const like: AudioLike = {
+    sampleRate,
+    length: ch0.length,
+    numberOfChannels: ch1 ? 2 : 1,
+    getChannelData: (c) => (c === 0 ? ch0 : (ch1 ?? ch0)),
+  };
+  return analyzeTrack(like);
 }
 
 // ----------------------------- musical key --------------------------------
@@ -316,7 +453,7 @@ export function shiftKey(key: KeyInfo, semis: number): KeyInfo {
   };
 }
 
-export function detectKey(buffer: AudioBuffer): KeyInfo | null {
+export function detectKey(buffer: AudioLike): KeyInfo | null {
   const sr = buffer.sampleRate;
   const N = 8192;
   if (buffer.length < N) return null;

@@ -365,39 +365,73 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.drawImage(wc, srcX, 0, srcW, h, 0, 0, w, h);
     }
 
-    // Beat grid sized by gridSize (drawn fresh — only the few visible lines).
+    // Beat grid sized by gridSize. Prefer the DYNAMIC grid (tracked beats that
+    // flex with the music) so the lines stay glued to the transients; only fall
+    // back to the uniform firstBeat + k·interval comb when no beats were tracked.
     const beatgrid = deck.beatgrid;
     if (beatgrid) {
-      const { firstBeat, interval } = beatgrid;
-      const pxPerBeat = (interval / trackWindow) * w;
-      const cell = interval * p.gridSize;
-      const pxPerCell = (cell / trackWindow) * w;
+      const { firstBeat, interval, beats } = beatgrid;
+      const pxPerBeat = (interval / trackWindow) * w; // LOD gate (representative)
+      const pxPerCell = pxPerBeat * p.gridSize;
       const dur = deck.buffer.duration;
-      if (p.gridSize > 1 && pxPerBeat >= 6) {
-        ctx.fillStyle = rgba(p.markerColor, 0.22);
-        let kb = Math.ceil((left - firstBeat) / interval);
-        for (;;) {
-          const t = firstBeat + kb * interval;
-          if (t > left + trackWindow) break;
-          if (t >= 0 && t <= dur) ctx.fillRect(toX(t), 0, 1 * dpr, h);
-          kb++;
-        }
-      }
-      if (pxPerCell >= 5) {
-        let kc = Math.ceil((left - firstBeat) / cell);
-        for (;;) {
-          const t = firstBeat + kc * cell;
-          if (t > left + trackWindow) break;
-          if (t >= 0 && t <= dur) {
-            const x = toX(t);
-            ctx.fillStyle = rgba(p.markerColor, 0.9);
-            ctx.fillRect(x, 0, 2 * dpr, h);
-            if (pxPerCell >= 30) {
-              ctx.font = `${9 * dpr}px ui-monospace, monospace`;
-              ctx.fillText(String(kc), x + 3 * dpr, h - 4 * dpr);
-            }
+      const right = left + trackWindow;
+      const showBeats = p.gridSize > 1 && pxPerBeat >= 6;
+      const showCells = pxPerCell >= 5;
+      const showLabels = pxPerCell >= 30;
+      const beatColor = rgba(p.markerColor, 0.22);
+      const barColor = rgba(p.markerColor, 0.9);
+
+      const drawLine = (t: number, bar: boolean, label?: string) => {
+        if (t < 0 || t > dur) return;
+        const x = toX(t);
+        if (bar) {
+          ctx.fillStyle = barColor;
+          ctx.fillRect(x, 0, 2 * dpr, h);
+          if (label != null && showLabels) {
+            ctx.font = `${9 * dpr}px ui-monospace, monospace`;
+            ctx.fillText(label, x + 3 * dpr, h - 4 * dpr);
           }
-          kc++;
+        } else {
+          ctx.fillStyle = beatColor;
+          ctx.fillRect(x, 0, 1 * dpr, h);
+        }
+      };
+
+      if (beats && beats.length >= 2 && (showBeats || showCells)) {
+        // First visible beat index (binary search), then walk forward.
+        let lo = 0;
+        let hi = beats.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (beats[mid] < left) lo = mid + 1;
+          else hi = mid;
+        }
+        // Bold cells start on the detected downbeat (the musical "1"), so bar lines
+        // and bar numbers are musically correct, not anchored to beats[0].
+        const gs = p.gridSize;
+        const phase = (((beatgrid.downbeat ?? 0) % gs) + gs) % gs;
+        for (let i = lo; i < beats.length && beats[i] <= right; i++) {
+          const isBar = (((i - phase) % gs) + gs) % gs === 0;
+          if (isBar) {
+            if (showCells) drawLine(beats[i], true, String(Math.floor((i - phase) / gs)));
+          } else if (showBeats) {
+            drawLine(beats[i], false);
+          }
+        }
+      } else {
+        // Uniform fallback (no tracked beats).
+        const cell = interval * p.gridSize;
+        if (showBeats) {
+          let kb = Math.ceil((left - firstBeat) / interval);
+          for (let t = firstBeat + kb * interval; t <= right; kb++, t = firstBeat + kb * interval) {
+            if (kb % p.gridSize !== 0) drawLine(t, false);
+          }
+        }
+        if (showCells) {
+          let kc = Math.ceil((left - firstBeat) / cell);
+          for (let t = firstBeat + kc * cell; t <= right; kc++, t = firstBeat + kc * cell) {
+            drawLine(t, true, String(kc));
+          }
         }
       }
     }

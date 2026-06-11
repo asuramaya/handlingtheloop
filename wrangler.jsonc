@@ -8,9 +8,24 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // Run the Worker before serving static assets so it can stamp the
+    // cross-origin-isolation headers (COOP/COEP) on the SPA document — otherwise
+    // assets are served directly, the Worker never runs, and
+    // `crossOriginIsolated` stays false (no threaded WASM for stem separation).
+    "run_worker_first": true
   },
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "htl-audio" }],
+  // SaaS layer: accounts + playlist sync. Create with `wrangler d1 create htl-db`
+  // and paste the returned database_id below.
+  "d1_databases": [{ "binding": "DB", "database_name": "htl-db", "database_id": "51b1e56c-fd95-42ef-b7b4-ddbebcf0e311" }],
+  // Shared DJ session ("rooms"): one DjRoom Durable Object per account coordinates
+  // a live set across the account's devices. SQLite-backed (runs locally under
+  // `wrangler dev`). See server/room.ts and docs/shared-session.md.
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "DjRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DjRoom"] }],
   "routes": [
     { "pattern": "handlingtheloop.com", "custom_domain": true },
     { "pattern": "www.handlingtheloop.com", "custom_domain": true }

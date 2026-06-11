@@ -33,5 +33,26 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Cross-origin isolation → multi-threaded wasm (fast on-device stem separation).
+    // `credentialless` keeps cross-origin <img> thumbnails (i.ytimg.com) working
+    // without CORP headers, and the jsdelivr ORT import/wasm still load (CORS).
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
+    watch: {
+      // Don't crawl heavy non-source trees — the stems Python venv alone holds
+      // thousands of onnx test files and blows the OS file-watcher limit (ENOSPC).
+      ignored: [
+        "**/.venv-stems/**",
+        "**/.venv/**",
+        "**/__pycache__/**",
+        "**/dist/**",
+        "**/.wrangler/**",
+        "**/stem-eval/**",
+        "**/engine/target/**",
+        "**/public/models/**",
+      ],
+    },
   },
 });

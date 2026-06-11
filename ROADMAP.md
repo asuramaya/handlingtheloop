@@ -32,8 +32,12 @@ is going. Companion to the [README](./README.md).
   Playlists (localStorage), rekordbox-style track table.
 - **Audio extraction**: ANDROID_VR Innertube client (direct URLs, no PoToken/
   cipher) + 1 MB range chunking, **R2 cache** by videoId.
-- **User YouTube auth**: paste your own cookie to pass the "confirm you're not a
-  bot" wall from the Worker's IP (SAPISIDHASH); never stored server-side.
+- **User YouTube auth**: **Sign in with Google** (OAuth 2.0 device-code flow —
+  type a short code at google.com/device) to pass the "confirm you're not a bot"
+  wall from the Worker's IP. Tokens live in the browser, auto-refresh, and are
+  revocable from the user's Google account; never stored server-side. Pasting a
+  raw cookie remains an Advanced fallback. Uses the public YouTube-on-TV client
+  creds (no deployment secret); overridable via `wrangler secret`.
 - **Persistence**: full session restores on refresh (loaded tracks via IndexedDB
   audio cache, mixer, zoom, per-deck controls, cues, loops, **play state**).
 - **Theme + UX**: inky neon theme, settings (accent colors, glow), responsive
@@ -93,7 +97,10 @@ fetch a ~40 MB model in CI).
 - Finish **stems** (inference + stem-aware deck + StemMixer + layered waveform).
 - **MediaSession** integration (lock-screen controls + better background audio).
 - **Consent / access gate** before promoting publicly (ToS-honest flow).
-- A guided "**how to copy your YouTube cookie**" helper in Settings.
+- ✅ ~~cookie-copy helper~~ → replaced by **Google sign-in** (device-code OAuth).
+  Next on this thread: authenticated InnerTube for **YouTube Music browse** +
+  **native playlist sync** (read/write the user's account — stateless, no server
+  storage) as the first "free SaaS" layer.
 
 **Engine / sound**
 - **WSOLA / phase-vocoder** or WASM (SoundTouch / RubberBand) time-stretch for

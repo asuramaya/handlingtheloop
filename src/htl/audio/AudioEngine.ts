@@ -1,6 +1,7 @@
 import type { Beatgrid } from "../analysis/analyze";
 import { Deck } from "./Deck";
 import { PITCH_WORKLET_SRC } from "./pitchWorklet";
+import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 
 /** Fractional position within the current beat, 0..1. */
 function phaseFraction(pos: number, g: Beatgrid): number {
@@ -54,22 +55,31 @@ export class AudioEngine {
     this.deckB.output.connect(this.xfadeB);
 
     this.setCrossfade(0);
-    void this.initKeylock();
+    void this.initWorklets();
   }
 
-  // Load the pitch-shift worklet (Blob URL → bundler-agnostic) and give each
-  // deck a key-lock node. If it fails, the decks just run vinyl-mode.
-  private async initKeylock() {
-    try {
-      const url = URL.createObjectURL(
-        new Blob([PITCH_WORKLET_SRC], { type: "application/javascript" }),
-      );
+  // Load both worklets (Blob URLs → bundler-agnostic): the per-deck key-lock
+  // pitch-shifter and the per-deck scratch resampler. If a module fails to load
+  // the decks degrade gracefully (key-lock off / no scrub sound).
+  private async initWorklets() {
+    const add = async (src: string) => {
+      const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
       await this.ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
+    };
+    try {
+      await add(PITCH_WORKLET_SRC);
       this.deckA.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
       this.deckB.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
     } catch (e) {
       console.warn("[htl] key-lock unavailable:", e);
+    }
+    try {
+      await add(SCRATCH_WORKLET_SRC);
+      this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+      this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+    } catch (e) {
+      console.warn("[htl] scratch resampler unavailable:", e);
     }
   }
 
@@ -88,20 +98,39 @@ export class AudioEngine {
    */
   sync(id: "A" | "B") {
     const me = this.deck(id);
-    const other = this.deck(id === "A" ? "B" : "A");
+    const other = this.deck(id === "A" ? "B" : "A"); // the other deck is the master
     const mg = me.beatgrid;
     const og = other.beatgrid;
     if (!mg || !og || !me.buffer) return;
 
-    // Tempo match to the other deck's *effective* BPM.
-    const targetBpm = other.effectiveBpm ?? og.bpm;
-    me.setTempo((targetBpm / mg.bpm - 1) * 100);
+    // Tempo match to the master's *effective* BPM, folded to the nearest
+    // half/double so a 70↔140 pair locks with little stretch (beats stay aligned).
+    let target = other.effectiveBpm ?? og.bpm;
+    while (target / mg.bpm > Math.SQRT2) target /= 2;
+    while (target / mg.bpm < 1 / Math.SQRT2) target *= 2;
+    me.setTempo((target / mg.bpm - 1) * 100);
 
-    // Phase align: put me at the same fractional beat position as the other.
+    // Phase align: put me at the same fractional beat position as the master.
     const oFrac = phaseFraction(other.position(), og);
     const mPos = me.position();
     const mBeatStart = mg.firstBeat + Math.floor((mPos - mg.firstBeat) / mg.interval) * mg.interval;
     me.seek(mBeatStart + oFrac * mg.interval);
+  }
+
+  /**
+   * Key-sync: pitch-shift `id` so its key matches the other deck (the master),
+   * by the smallest move (±6 semitones). No-op until both tracks are analysed.
+   */
+  matchKey(id: "A" | "B") {
+    const me = this.deck(id);
+    const other = this.deck(id === "A" ? "B" : "A");
+    if (!me.key || !other.key) return;
+    // Target tonic = master's CURRENT (pitch-shifted) tonic.
+    const target = other.effectiveKey?.tonic ?? other.key.tonic;
+    let shift = target - me.key.tonic; // align my native tonic to the master's
+    while (shift > 6) shift -= 12;
+    while (shift < -6) shift += 12;
+    me.setPitch(shift);
   }
 
   /** position in [-1, 1]: -1 = full A, 0 = both, +1 = full B. */

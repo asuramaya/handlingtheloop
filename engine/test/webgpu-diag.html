@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>webgpu diag</title>
+<pre id="out">start</pre>
+<script type="module">
+  // Overwrites #out at each step, so if a step hangs the CDP driver's timeout
+  // print shows exactly how far we got (adapter? session create? run?).
+  const out = document.getElementById("out");
+  const log = (m) => { out.textContent = m; document.title = m; };
+  try {
+    log("step:gpu-present " + !!navigator.gpu);
+    let adapterInfo = "n/a";
+    if (navigator.gpu) {
+      const ad = await navigator.gpu.requestAdapter();
+      log("step:adapter " + (ad ? "ok" : "null"));
+      if (ad) {
+        const i = ad.info || {};
+        adapterInfo = `${i.vendor || "?"}/${i.architecture || "?"}`;
+        const dev = await ad.requestDevice();
+        log("step:device " + (dev ? "ok" : "null"));
+      }
+    }
+    log("step:import-ort");
+    const ort = await import("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.mjs");
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+    ort.env.wasm.numThreads = 1;
+    log("step:session-create-webgpu");
+    let ep = "webgpu";
+    let sess;
+    try {
+      sess = await ort.InferenceSession.create("/public/models/openunmix/vocals.int8.onnx", { executionProviders: ["webgpu"] });
+    } catch (e) {
+      log("webgpu-create-failed:" + e + " — trying wasm");
+      ep = "wasm";
+      sess = await ort.InferenceSession.create("/public/models/openunmix/vocals.int8.onnx", { executionProviders: ["wasm"] });
+    }
+    log("step:run on " + ep);
+    const BINS = 2049, nf = 40;
+    const mag = new Float32Array(2 * BINS * nf);
+    for (let i = 0; i < mag.length; i++) mag[i] = Math.random();
+    const t0 = performance.now();
+    const r = await sess.run({ mag: new ort.Tensor("float32", mag, [1, 2, BINS, nf]) });
+    const ms = +(performance.now() - t0).toFixed(0);
+    out.textContent = "RESULT " + JSON.stringify({ pass: true, ep, adapter: adapterInfo, runMs: ms, outLen: r.est.data.length });
+    document.title = "DONE";
+  } catch (e) {
+    out.textContent = "RESULT " + JSON.stringify({ pass: false, error: String(e && e.stack ? e.stack : e).slice(0, 400) });
+    document.title = "DONE";
+  }
+</script>

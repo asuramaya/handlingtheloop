@@ -12,7 +12,7 @@
 export const PITCH_WORKLET_SRC = `
 class PitchShift extends AudioWorkletProcessor {
   static get parameterDescriptors() {
-    return [{ name: 'ratio', defaultValue: 1, minValue: 0.5, maxValue: 2, automationRate: 'k-rate' }];
+    return [{ name: 'ratio', defaultValue: 1, minValue: 0.4, maxValue: 2.5, automationRate: 'k-rate' }];
   }
   constructor() {
     super();

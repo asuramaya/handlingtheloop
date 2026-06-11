@@ -1,0 +1,27 @@
+<!doctype html><meta charset=utf-8><title>demucs-rs</title><pre id=out>running…</pre>
+<script type=module>
+const out=document.getElementById('out'); const set=m=>{out.textContent=m;document.title=m;};
+try{
+  set("step:gpu "+!!navigator.gpu);
+  const m=await import("/public/demucs-wasm/demucs_wasm.js");
+  set("step:init-wasm");
+  await m.default();
+  set("step:fetch-weights");
+  const modelBytes=new Uint8Array(await (await fetch("/public/models/demucs/htdemucs.safetensors")).arrayBuffer());
+  set("step:decode");
+  const ctx=new (window.AudioContext||window.OfflineAudioContext)({sampleRate:44100,length:1,numberOfChannels:2});
+  const mix=await ctx.decodeAudioData(await (await fetch("/stem-eval/sample44.wav")).arrayBuffer());
+  const left=mix.getChannelData(0), right=mix.numberOfChannels>1?mix.getChannelData(1):mix.getChannelData(0);
+  set("step:warmup-webgpu");
+  await m.warmup_model(modelBytes,"htdemucs");
+  set("step:separate");
+  const t0=performance.now();
+  const res=await m.separate(modelBytes,"htdemucs",["drums","bass","other","vocals"],left,right,44100,e=>set("sep:"+(e&&e.type)+" "+(e&&e.index)+"/"+(e&&e.total)));
+  const ms=performance.now()-t0;
+  const n=res.n_samples, k=res.num_stems, names=res.stem_names(), audio=res.take_audio();
+  const rms={}; let fin=true;
+  for(let i=0;i<k;i++){const off=i*2*n; let s=0; for(let j=0;j<n;j+=7){const v=audio[off+j]; if(!Number.isFinite(v))fin=false; s+=v*v;} rms[names[i]]=+Math.sqrt(s/(n/7)).toFixed(3);}
+  out.textContent="RESULT "+JSON.stringify({pass:fin&&k>=4,sepSec:+(ms/1000).toFixed(1),nSamples:n,numStems:k,names,rms});
+  document.title="DONE";
+}catch(e){console.error("DEMUCS-RS ERR",e); out.textContent="RESULT "+JSON.stringify({pass:false,error:String(e&&e.stack?e.stack:e).slice(0,250)}); document.title="DONE";}
+</script>

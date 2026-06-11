@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>htl-engine stems smoke</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // Prove the realtime stem mix: load 4 distinct stems (one sine each) sharing ONE
+  // playhead, set per-stem gains, render through the worklet, and compare the
+  // rendered audio SAMPLE-BY-SAMPLE against a JS reference mix for the same gains.
+  // The gain vector is taken from ?gains=g0,g1,g2,g3 so one page self-checks any
+  // mix (full / isolate / mute). Result JSON -> #out for the CDP driver.
+
+  const SR = 48000;
+  const FRAMES = SR; // 1s
+  // vocals, drums, bass, other — distinct tones so the mix is unambiguous.
+  const STEMS = [
+    { freq: 440, amp: 0.2 },
+    { freq: 220, amp: 0.2 },
+    { freq: 110, amp: 0.2 },
+    { freq: 330, amp: 0.2 },
+  ];
+  const gains = (new URLSearchParams(location.search).get("gains") ?? "1,1,1,1")
+    .split(",")
+    .map(Number);
+
+  const WORKLET_SRC = `
+  class EngineProcessor extends AudioWorkletProcessor {
+    constructor(options) {
+      super();
+      const o = options.processorOptions;
+      this.x = new WebAssembly.Instance(o.module, {}).exports;
+      this.e = this.x.engine_new(sampleRate);
+      const f = o.frames, k = o.stems.length;
+      this.x.engine_stems_begin(this.e, k, f);
+      for (let s = 0; s < k; s++) {
+        const ptr = this.x.engine_alloc(f);
+        new Float32Array(this.x.memory.buffer, ptr, f).set(o.stems[s]);
+        this.x.engine_load_stem(this.e, s, ptr, 0, f, 1); // mono stem -> dup R
+        this.x.engine_free_buf(ptr, f);
+        this.x.engine_set_stem_gain(this.e, s, o.gains[s]);
+      }
+      this.x.engine_set(this.e, 0, 1); // play
+    }
+    process(_inputs, outputs) {
+      const output = outputs[0];
+      const n = output[0].length;
+      const ptr = this.x.engine_process(this.e, n);
+      const buf = new Float32Array(this.x.memory.buffer, ptr, n * 2);
+      output[0].set(buf.subarray(0, n));
+      if (output[1]) output[1].set(buf.subarray(n, n * 2));
+      return true;
+    }
+  }
+  registerProcessor('engine', EngineProcessor);
+  `;
+
+  const out = document.getElementById("out");
+  try {
+    const module = await WebAssembly.compile(
+      await (await fetch("../target/wasm32-unknown-unknown/release/htl_engine.wasm")).arrayBuffer(),
+    );
+
+    // Stem PCM + the JS reference mix (Σ amp·sin·gain) we expect the core to match.
+    const stems = STEMS.map((s) => {
+      const b = new Float32Array(FRAMES);
+      for (let i = 0; i < FRAMES; i++) b[i] = s.amp * Math.sin((2 * Math.PI * s.freq * i) / SR);
+      return b;
+    });
+    const ref = new Float32Array(FRAMES);
+    for (let i = 0; i < FRAMES; i++) {
+      let v = 0;
+      for (let s = 0; s < stems.length; s++) v += stems[s][i] * gains[s];
+      ref[i] = v;
+    }
+
+    const off = new OfflineAudioContext({ numberOfChannels: 2, length: FRAMES, sampleRate: SR });
+    const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+    await off.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const node = new AudioWorkletNode(off, "engine", {
+      numberOfInputs: 0,
+      outputChannelCount: [2],
+      processorOptions: { module, stems, gains, frames: FRAMES },
+    });
+    node.connect(off.destination);
+    const rendered = await off.startRendering();
+
+    // Sample-by-sample comparison vs the reference mix.
+    const ch = rendered.getChannelData(0);
+    let maxErr = 0;
+    let sumSq = 0;
+    for (let i = 0; i < ch.length; i++) {
+      maxErr = Math.max(maxErr, Math.abs(ch[i] - ref[i]));
+      sumSq += ch[i] * ch[i];
+    }
+    const rms = Math.sqrt(sumSq / ch.length);
+    const pass = maxErr < 1e-4;
+    out.textContent =
+      "RESULT " +
+      JSON.stringify({
+        pass,
+        gains,
+        maxErrVsReference: +maxErr.toExponential(2),
+        renderedRms: +rms.toFixed(4),
+        stems: STEMS.length,
+        frames: ch.length,
+      });
+    document.title = "DONE";
+  } catch (err) {
+    out.textContent = "RESULT " + JSON.stringify({ pass: false, error: String(err && err.stack ? err.stack : err) });
+    document.title = "DONE";
+  }
+</script>

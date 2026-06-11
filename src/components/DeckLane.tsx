@@ -1,7 +1,12 @@
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Deck } from "@htl/audio";
 import type { Pyramid } from "@htl/analysis";
+import type { CaptionCue } from "@htl/media";
+import { gridLabel, stepSkip } from "@htl/state";
 import { WaveformViewport } from "./WaveformViewport";
+import { CaptionBar } from "./CaptionBar";
 import { fmtTime } from "../util/format";
+import type { StemBadge } from "../App";
 
 export interface DeckMeta {
   name: string;
@@ -15,22 +20,89 @@ interface DeckLaneProps {
   id: "A" | "B";
   deck: Deck;
   accent: string;
+  focused: boolean;
+  onFocus: () => void;
+  background: string;
+  selectorColor: string;
+  loopColor: string;
+  markerColor: string;
+  stripColor: string;
   meta: DeckMeta;
-  position: number;
-  status: string | null;
+  status: StemBadge | null;
+  captions: CaptionCue[];
   windowSec: number;
   onZoom: (next: number) => void;
   refresh: () => void;
   onLoadFile: (file: File) => void;
+  // Shared session: stream the scrub as start / move(delta) / end so a co-DJ drives
+  // the master's platter physics; onSeek is the one-shot tap (needle drop).
+  onJogStart?: () => void;
+  onJog?: (deltaSeconds: number) => void;
+  onJogEnd?: () => void;
+  onSeek?: (position: number) => void;
+}
+
+// Just the time readout, self-animating via its own rAF. Isolating it here means
+// playback updates ONE tiny text node per frame instead of re-rendering the whole
+// lane (and its waveform) through React — the waveform animates itself imperatively.
+function LaneTime({ deck, duration }: { deck: Deck; duration: number }) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      if (deck.playing || deck.jogging) bump((n) => n + 1);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [deck]);
+  return (
+    <>
+      {fmtTime(deck.position())} <span className="muted">/ {fmtTime(duration)}</span>
+    </>
+  );
+}
+
+// Song title that auto-scrolls (a ticker) when it's wider than the space available
+// — otherwise it sits static (truncated with an ellipsis if it only just overflows).
+// Re-measures on container resize and whenever the title/artist change. This is what
+// makes a long title readable in the cramped iPhone lane header.
+function LaneTitle({ name, artist }: { name: string; artist: string }) {
+  const boxRef = useRef<HTMLSpanElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
+  const [scroll, setScroll] = useState(0); // px the text overflows the box (0 = fits)
+  useEffect(() => {
+    const measure = () => {
+      const box = boxRef.current;
+      const inner = innerRef.current;
+      if (!box || !inner) return;
+      const over = inner.scrollWidth - box.clientWidth;
+      setScroll(over > 6 ? over : 0);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (boxRef.current) ro.observe(boxRef.current);
+    return () => ro.disconnect();
+  }, [name, artist]);
+  const style = scroll > 0 ? ({ "--scroll": `${scroll}px`, "--ticker-dur": `${Math.max(5, scroll / 45 + 2).toFixed(1)}s` } as CSSProperties) : undefined;
+  return (
+    <span ref={boxRef} className={`lane-title ${scroll > 0 ? "ticker" : ""}`} title={name}>
+      <span ref={innerRef} className="lane-title-inner" style={style}>
+        {name || "—"}
+        {artist && <span className="lane-artist"> — {artist}</span>}
+      </span>
+    </span>
+  );
 }
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, meta, position, status, windowSec, onZoom, refresh, onLoadFile }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, meta, status, captions, windowSec, onZoom, refresh, onLoadFile, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
   return (
     <section
-      className="lane"
+      className={`lane ${focused ? "focused" : ""}`}
       style={{ ["--accent" as string]: accent }}
+      onPointerDownCapture={onFocus}
       onDrop={(e) => {
         e.preventDefault();
         const f = e.dataTransfer.files[0];
@@ -39,44 +111,80 @@ export function DeckLane({ id, deck, accent, meta, position, status, windowSec, 
       onDragOver={(e) => e.preventDefault()}
     >
       <div className="lane-info">
-        <span className="lane-id">DECK {id}</span>
-        <span className="lane-title" title={meta.name}>
-          {meta.name || "—"}
-          {meta.artist && <span className="lane-artist"> — {meta.artist}</span>}
-        </span>
+        {/* DECK id + scrolling title — its own full-width row on mobile. */}
+        <div className="lane-head">
+          <span className="lane-id">DECK {id}</span>
+          <LaneTitle name={meta.name} artist={meta.artist} />
+        </div>
         <span className="lane-time">
-          {fmtTime(position)} <span className="muted">/ {fmtTime(meta.duration)}</span>
+          <LaneTime deck={deck} duration={meta.duration} />
         </span>
         <span className="lane-bpm">{deck.effectiveBpm != null ? `${deck.effectiveBpm.toFixed(1)}` : "--"} BPM</span>
-        {status && <span className="lane-status">{status}</span>}
+        {deck.effectiveKey && (
+          <span
+            className="lane-key"
+            title={`Key ${deck.effectiveKey.name}${deck.pitch ? ` · pitch ${deck.pitch > 0 ? "+" : ""}${deck.pitch}` : ""}`}
+          >
+            {deck.effectiveKey.camelot} {deck.effectiveKey.name}
+          </span>
+        )}
+        {/* Beat-grid size — also the beat-jump / loop-move resolution. */}
+        <span className="lane-grid" title="Beat-grid size (− / +)">
+          <button
+            className="grid-btn"
+            onClick={() => {
+              deck.skipBeats = stepSkip(deck.skipBeats, -1);
+              refresh();
+            }}
+            aria-label="Smaller grid"
+          >
+            −
+          </button>
+          <span className="grid-val">⊞ {gridLabel(deck.skipBeats)}</span>
+          <button
+            className="grid-btn"
+            onClick={() => {
+              deck.skipBeats = stepSkip(deck.skipBeats, 1);
+              refresh();
+            }}
+            aria-label="Larger grid"
+          >
+            +
+          </button>
+        </span>
+        {status && <span className={`lane-status tone-${status.tone}`}>{status.text}</span>}
       </div>
       <WaveformViewport
+        deck={deck}
         pyramid={meta.pyramid}
-        buffer={deck.buffer}
-        position={position}
-        duration={meta.duration}
-        rate={deck.rate}
-        beatgrid={deck.beatgrid}
-        loop={deck.loop ? { start: deck.loop.start, end: deck.loop.end } : null}
-        cuePoint={deck.cuePoint}
-        hotCues={deck.hotCues}
-        loopInPoint={deck.loopInPoint}
         accent={accent}
+        background={background}
+        selectorColor={selectorColor}
+        loopColor={loopColor}
+        markerColor={markerColor}
+        stripColor={stripColor}
+        gridSize={deck.skipBeats}
         windowSec={windowSec}
         onZoom={onZoom}
         onScrubStart={() => {
           deck.scrubBegin();
-          refresh();
+          onJogStart?.();
         }}
         onScrub={(d) => {
-          deck.scrubMove(d);
-          refresh();
+          deck.scrubMove(d); // deck.jogging drives the viewport's own rAF — no React churn
+          onJog?.(d); // stream the finger delta so the receiver scrubs its own platter
         }}
         onScrubEnd={() => {
           deck.scrubEnd();
-          refresh();
+          onJogEnd?.();
+        }}
+        onNeedleDrop={(d) => {
+          deck.needleDrop(d);
+          refresh(); // a paused tap-seek isn't "jogging" — nudge one redraw
+          onSeek?.(deck.position());
         }}
       />
+      <CaptionBar deck={deck} accent={accent} cues={captions} />
     </section>
   );
 }

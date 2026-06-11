@@ -5,7 +5,7 @@
 //      audio stream server-side and re-serves the bytes (the browser can't
 //      fetch googlevideo.com directly). Any user-supplied YouTube credentials
 //      ride along as headers so the resolver can pass the bot challenge.
-import { ytAuthHeaders } from "./auth";
+import { ytStreamHeaders } from "./auth";
 
 export function parseYouTubeId(input: string): string | null {
   const trimmed = input.trim();
@@ -50,7 +50,7 @@ export async function fetchYouTubeAudio(
 ): Promise<ArrayBuffer> {
   const res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
     signal,
-    headers: ytAuthHeaders(),
+    headers: await ytStreamHeaders(),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

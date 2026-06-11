@@ -25,8 +25,11 @@ export interface DeckSnapshot {
   eqMid: number;
   eqHigh: number;
   filter: number; // -1..1 color filter
+  fxOn?: boolean; // FX master (filter) enabled
   keylock: boolean;
+  pitchSemis?: number; // musical key shift in semitones
   quantize: boolean;
+  skipBeats?: number; // per-deck jog skip resolution (beats)
   cuePoint: number;
   hotCues: (number | null)[];
   hotLoops: (LoopSnapshot | null)[];
@@ -34,18 +37,30 @@ export interface DeckSnapshot {
   loopInPoint: number | null;
   position: number;
   playing: boolean;
+  // Per-stem mixer state (keyed by stem name). Part of the session so a reload /
+  // a co-DJ joining restores which stems are muted and at what level.
+  stemGains?: Record<string, number>; // 0–1.5, 1 = unity
+  stemMutes?: Record<string, boolean>;
 }
 
 export interface SessionSnapshot {
   decks: { A: DeckSnapshot; B: DeckSnapshot };
   crossfade: number;
-  zoom: number;
+  zoom: { A: number; B: number }; // per-deck waveform zoom (real seconds shown)
+  tempoRange?: number; // global tempo-fader range (±%) — scales the fader, so it's session state
 }
 
 const store = new Store<SessionSnapshot | null>("session", null, 1);
 
 export function loadSession(): SessionSnapshot | null {
-  return store.get();
+  const s = store.get();
+  if (!s) return null;
+  // Migrate the old shared single zoom (a number) to the per-deck shape.
+  if (typeof (s.zoom as unknown) === "number") {
+    const z = s.zoom as unknown as number;
+    s.zoom = { A: z, B: z };
+  }
+  return s;
 }
 
 export function saveSession(s: SessionSnapshot): void {

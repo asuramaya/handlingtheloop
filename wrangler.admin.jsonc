@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "htl-admin",
+  "main": "worker/admin.ts",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  // No workers.dev URL: the admin worker is reachable ONLY via the Access-gated
+  // custom domain below, so there's no unprotected back door.
+  "workers_dev": false,
+  // SAME bindings as the public worker — shared D1 catalog + R2 cache.
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "htl-audio" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "htl-db", "database_id": "51b1e56c-fd95-42ef-b7b4-ddbebcf0e311" }],
+  "routes": [{ "pattern": "admin.handlingtheloop.com", "custom_domain": true }],
+  // Cloudflare Access config (set as secrets, never committed):
+  //   wrangler secret put CF_ACCESS_TEAM_DOMAIN -c wrangler.admin.jsonc   # yourteam.cloudflareaccess.com
+  //   wrangler secret put CF_ACCESS_AUD         -c wrangler.admin.jsonc   # the Access app's Audience tag
+  //   wrangler secret put ADMIN_EMAILS          -c wrangler.admin.jsonc   # comma-separated allowlist
+  "observability": { "enabled": true }
+}

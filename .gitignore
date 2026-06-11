@@ -10,3 +10,18 @@ dist
 .idea/
 .vscode/
 *.log
+# Cloudflare local dev secrets (OAuth client overrides, etc.) — never publish
+.dev.vars
+.dev.vars.*
+# Rust engine build output (the .wasm is rebuilt from engine/src)
+engine/target/
+
+# Local neural-stem eval (torch venv) — never publish
+.venv-stems/
+stem-eval/
+
+# Neural stem model weights (served from public/ in dev, R2 in prod) — too big to commit
+public/models/
+
+# Dev stem cache (stands in for R2 locally)
+.stem-cache/

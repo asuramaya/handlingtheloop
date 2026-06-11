@@ -1,0 +1,119 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>htl-engine worklet smoke</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // Browser smoke test: load the wasm core into an AudioWorklet, render a known
+  // sine through it in an OfflineAudioContext, and verify the rendered audio
+  // matches. Result JSON is written to #out (and document.title) so a headless
+  // Chromium --dump-dom can read it back. Mirrors the app's Blob-URL worklet pattern.
+
+  const SR = 48000;
+  const FREQ = 220;
+  const AMP = 0.5;
+  const FRAMES = SR; // 1 second
+
+  // The AudioWorklet processor: instantiate the wasm (handed in via
+  // processorOptions), load the PCM, play, and copy the engine's planar output
+  // into the host output each quantum.
+  const WORKLET_SRC = `
+  class EngineProcessor extends AudioWorkletProcessor {
+    constructor(options) {
+      super();
+      const o = options.processorOptions;
+      this.x = new WebAssembly.Instance(o.module, {}).exports;
+      this.e = this.x.engine_new(sampleRate);
+      const f = o.frames;
+      const lPtr = this.x.engine_alloc(f);
+      const rPtr = this.x.engine_alloc(f);
+      new Float32Array(this.x.memory.buffer, lPtr, f).set(o.pcmL);
+      new Float32Array(this.x.memory.buffer, rPtr, f).set(o.pcmR);
+      this.x.engine_load(this.e, lPtr, rPtr, f, 2);
+      this.x.engine_free_buf(lPtr, f);
+      this.x.engine_free_buf(rPtr, f);
+      this.x.engine_set(this.e, 0, 1); // play
+    }
+    process(_inputs, outputs) {
+      const output = outputs[0];
+      const n = output[0].length;
+      const ptr = this.x.engine_process(this.e, n);
+      const buf = new Float32Array(this.x.memory.buffer, ptr, n * 2);
+      output[0].set(buf.subarray(0, n));
+      if (output[1]) output[1].set(buf.subarray(n, n * 2));
+      return true;
+    }
+  }
+  registerProcessor('engine', EngineProcessor);
+  `;
+
+  const out = document.getElementById("out");
+  const fail = (msg) => {
+    out.textContent = "RESULT " + JSON.stringify({ pass: false, error: String(msg) });
+    document.title = "DONE";
+  };
+
+  try {
+    // 1. wasm bytes -> compiled module (plain fetch+compile, so MIME is irrelevant).
+    const module = await WebAssembly.compile(
+      await (await fetch("../target/wasm32-unknown-unknown/release/htl_engine.wasm")).arrayBuffer(),
+    );
+
+    // 2. the reference sine.
+    const pcmL = new Float32Array(FRAMES);
+    const pcmR = new Float32Array(FRAMES);
+    for (let i = 0; i < FRAMES; i++) {
+      pcmL[i] = pcmR[i] = AMP * Math.sin((2 * Math.PI * FREQ * i) / SR);
+    }
+
+    // 3. render it through the worklet, offline + deterministic.
+    const off = new OfflineAudioContext({ numberOfChannels: 2, length: FRAMES, sampleRate: SR });
+    const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+    await off.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const node = new AudioWorkletNode(off, "engine", {
+      numberOfInputs: 0,
+      outputChannelCount: [2],
+      processorOptions: { module, pcmL, pcmR, frames: FRAMES },
+    });
+    node.connect(off.destination);
+    const rendered = await off.startRendering();
+
+    // 4. measure the rendered audio.
+    const ch = rendered.getChannelData(0);
+    let sumSq = 0;
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) {
+      sumSq += ch[i] * ch[i];
+      if (Math.abs(ch[i]) > peak) peak = Math.abs(ch[i]);
+    }
+    const rms = Math.sqrt(sumSq / ch.length);
+    const expectedRms = AMP / Math.SQRT2;
+
+    // 5. realtime context just to report achievable latency on this machine.
+    let baseLatency = null;
+    let outputLatency = null;
+    try {
+      const rt = new AudioContext({ latencyHint: "interactive", sampleRate: SR });
+      baseLatency = rt.baseLatency;
+      outputLatency = rt.outputLatency;
+      await rt.close();
+    } catch {}
+
+    const pass = Math.abs(rms - expectedRms) < 0.01 && peak > 0.45;
+    out.textContent =
+      "RESULT " +
+      JSON.stringify({
+        pass,
+        rms: +rms.toFixed(4),
+        expectedRms: +expectedRms.toFixed(4),
+        peak: +peak.toFixed(4),
+        renderedFrames: ch.length,
+        baseLatencyMs: baseLatency != null ? +(baseLatency * 1000).toFixed(3) : null,
+        outputLatencyMs: outputLatency != null ? +(outputLatency * 1000).toFixed(3) : null,
+        sampleRate: SR,
+      });
+    document.title = "DONE";
+  } catch (err) {
+    fail(err && err.stack ? err.stack : err);
+  }
+</script>

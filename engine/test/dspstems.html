@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>dsp stems sanity</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // Faithful port of src/htl/stems/index.ts dspStems(), run in this exact Chromium
+  // to confirm the browser APIs it relies on (new AudioBuffer, OfflineAudioContext
+  // filter render, channel handling) behave — and that the 4 stems sum back to the
+  // original bit-for-bit (the "all stems on === mix" guarantee).
+  const SR = 48000;
+  const FRAMES = SR; // 1s
+
+  function renderFiltered(ref, srcBuffer, build) {
+    const ctx = new OfflineAudioContext(srcBuffer.numberOfChannels, ref.length, ref.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = srcBuffer;
+    build(ctx, src).connect(ctx.destination);
+    src.start();
+    return ctx.startRendering();
+  }
+  function midBuffer(buffer) {
+    const { length, sampleRate, numberOfChannels } = buffer;
+    const L = buffer.getChannelData(0);
+    const R = numberOfChannels > 1 ? buffer.getChannelData(1) : L;
+    const mid = new AudioBuffer({ length, sampleRate, numberOfChannels: 1 });
+    const m = mid.getChannelData(0);
+    for (let i = 0; i < length; i++) m[i] = (L[i] + R[i]) * 0.5;
+    return mid;
+  }
+  function upmix(mono, channels, sampleRate) {
+    if (channels <= 1) return mono;
+    const out = new AudioBuffer({ length: mono.length, sampleRate, numberOfChannels: channels });
+    const m = mono.getChannelData(0);
+    for (let c = 0; c < channels; c++) out.getChannelData(c).set(m);
+    return out;
+  }
+  function residual(orig, parts) {
+    const { length, sampleRate, numberOfChannels } = orig;
+    const out = new AudioBuffer({ length, sampleRate, numberOfChannels });
+    for (let c = 0; c < numberOfChannels; c++) {
+      const o = out.getChannelData(c);
+      o.set(orig.getChannelData(c));
+      for (const p of parts) {
+        const pc = c < p.numberOfChannels ? p.getChannelData(c) : p.getChannelData(0);
+        for (let i = 0; i < length; i++) o[i] -= pc[i];
+      }
+    }
+    return out;
+  }
+  async function dspStems(buffer) {
+    const bass = await renderFiltered(buffer, buffer, (ctx, src) => {
+      const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 200; f.Q.value = 0.7; src.connect(f); return f;
+    });
+    const drums = await renderFiltered(buffer, buffer, (ctx, src) => {
+      const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 5000; src.connect(f); return f;
+    });
+    const voiceMono = await renderFiltered(buffer, midBuffer(buffer), (ctx, src) => {
+      const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 300;
+      const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 3500;
+      src.connect(hp); hp.connect(lp); return lp;
+    });
+    const vocals = upmix(voiceMono, buffer.numberOfChannels, buffer.sampleRate);
+    const other = residual(buffer, [bass, drums, vocals]);
+    return { vocals, drums, bass, other };
+  }
+
+  const rms = (buf) => {
+    let s = 0, n = 0;
+    for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) { s += d[i] * d[i]; n++; } }
+    return Math.sqrt(s / n);
+  };
+
+  const out = document.getElementById("out");
+  try {
+    // Test mix: 60 Hz (bass) + 1 kHz (vocal band, centre) + 8 kHz (drums/highs).
+    const mix = new AudioBuffer({ length: FRAMES, sampleRate: SR, numberOfChannels: 2 });
+    for (let c = 0; c < 2; c++) {
+      const d = mix.getChannelData(c);
+      for (let i = 0; i < FRAMES; i++) {
+        d[i] = 0.3 * Math.sin((2 * Math.PI * 60 * i) / SR)
+             + 0.3 * Math.sin((2 * Math.PI * 1000 * i) / SR)
+             + 0.3 * Math.sin((2 * Math.PI * 8000 * i) / SR);
+      }
+    }
+
+    const { vocals, drums, bass, other } = await dspStems(mix);
+
+    // 1. sum of all four stems must equal the original mix, sample for sample.
+    let maxErr = 0;
+    const o0 = mix.getChannelData(0);
+    for (let i = 0; i < FRAMES; i++) {
+      const sum = bass.getChannelData(0)[i] + drums.getChannelData(0)[i] + vocals.getChannelData(0)[i] + other.getChannelData(0)[i];
+      maxErr = Math.max(maxErr, Math.abs(sum - o0[i]));
+    }
+
+    const result = {
+      sumExact: maxErr < 1e-5,
+      maxErrVsMix: +maxErr.toExponential(2),
+      rms: { bass: +rms(bass).toFixed(3), drums: +rms(drums).toFixed(3), vocals: +rms(vocals).toFixed(3), other: +rms(other).toFixed(3) },
+      // bass should carry the 60 Hz, drums the 8 kHz, vocals the 1 kHz centre.
+      routesOk: rms(bass) > 0.05 && rms(drums) > 0.05 && rms(vocals) > 0.05,
+    };
+    result.pass = result.sumExact && result.routesOk;
+    out.textContent = "RESULT " + JSON.stringify(result);
+    document.title = "DONE";
+  } catch (err) {
+    out.textContent = "RESULT " + JSON.stringify({ pass: false, error: String(err && err.stack ? err.stack : err) });
+    document.title = "DONE";
+  }
+</script>

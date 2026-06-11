@@ -1,0 +1,16 @@
+[package]
+name = "htl-engine"
+version = "0.0.1"
+edition = "2021"
+description = "htl DJ engine core — single DSP spine compiled to wasm32 (desktop AudioWorklet) and aarch64 (mobile native audio callback)"
+
+[lib]
+# cdylib -> the .wasm for the worklet; rlib -> native host links the same crate.
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true

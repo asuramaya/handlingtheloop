@@ -32,9 +32,11 @@ export interface Library {
   addTrack: (track: TrackMeta) => void;
   removeTrack: (videoId: string) => void;
   setBpm: (videoId: string, bpm: number) => void;
-  createPlaylist: (name: string) => string;
+  setKey: (videoId: string, key: string) => void;
+  createPlaylist: (name: string, sourceListId?: string, sourceService?: string) => string;
   renamePlaylist: (id: string, name: string) => void;
   deletePlaylist: (id: string) => void;
+  linkSource: (id: string, sourceListId: string, sourceService?: string) => void;
   addToPlaylist: (playlistId: string, track: TrackMeta) => void;
   removeFromPlaylist: (playlistId: string, videoId: string) => void;
 }
@@ -78,11 +80,23 @@ export function useLibrary(): Library {
     });
   }, []);
 
-  const createPlaylist = useCallback((name: string) => {
+  const setKey = useCallback((videoId: string, key: string) => {
+    setData((d) => {
+      if (!d.collection.some((t) => t.videoId === videoId && t.key == null)) return d;
+      return {
+        ...d,
+        collection: d.collection.map((t) =>
+          t.videoId === videoId ? { ...t, key } : t,
+        ),
+      };
+    });
+  }, []);
+
+  const createPlaylist = useCallback((name: string, sourceListId?: string, sourceService?: string) => {
     const id = newId();
     setData((d) => ({
       ...d,
-      playlists: [...d.playlists, { id, name: name.trim() || "New playlist", trackIds: [] }],
+      playlists: [...d.playlists, { id, name: name.trim() || "New playlist", trackIds: [], sourceListId, sourceService }],
     }));
     return id;
   }, []);
@@ -96,6 +110,17 @@ export function useLibrary(): Library {
 
   const deletePlaylist = useCallback((id: string) => {
     setData((d) => ({ ...d, playlists: d.playlists.filter((p) => p.id !== id) }));
+  }, []);
+
+  // Link a local playlist to its source list (YouTube/Spotify) so future imports of
+  // that list merge into it instead of creating a duplicate. Only sets it if unset.
+  const linkSource = useCallback((id: string, sourceListId: string, sourceService?: string) => {
+    setData((d) => ({
+      ...d,
+      playlists: d.playlists.map((p) =>
+        p.id === id && !p.sourceListId ? { ...p, sourceListId, sourceService: sourceService ?? p.sourceService } : p,
+      ),
+    }));
   }, []);
 
   // Adding to a playlist also ensures the track exists in the collection.
@@ -128,9 +153,11 @@ export function useLibrary(): Library {
     addTrack,
     removeTrack,
     setBpm,
+    setKey,
     createPlaylist,
     renamePlaylist,
     deletePlaylist,
+    linkSource,
     addToPlaylist,
     removeFromPlaylist,
   };

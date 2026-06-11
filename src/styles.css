@@ -1,6 +1,7 @@
 :root {
   /* Inky near-black base — flat, no muddy gradients (hector-vector style) */
   --bg: #050507;
+  --surface: #08080d;
   --panel: #0b0b11;
   --panel-2: #101019;
   --line: #1a1a28;
@@ -28,12 +29,8 @@ body,
 }
 
 body {
-  /* Flat inky black with a faint twin-neon club glow bleeding from the edges */
-  background:
-    radial-gradient(120% 80% at 0% 0%, rgba(0, 229, 255, 0.06), transparent 55%),
-    radial-gradient(120% 80% at 100% 0%, rgba(255, 45, 156, 0.06), transparent 55%),
-    var(--bg);
-  background-attachment: fixed;
+  /* Flat solid base — no gradients; the chosen colour carries the whole look */
+  background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -56,13 +53,77 @@ body {
   height: 100dvh;
   display: flex;
   flex-direction: column;
+  /* Drag-select is noise on a control surface — knocking a fader shouldn't
+     highlight its label. Disable selection app-wide; real text fields opt back
+     in via the input/textarea rule below. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Fixed three-thirds board: the chin + equal lanes / controls / mixer fill the
+     viewport. Each third scrolls internally if its content is taller. */
   overflow: hidden;
+  /* Keep content clear of the notch / home indicator on iPhone (border-box, so
+     these insets shrink the content area rather than overflowing the viewport). */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
-/* `.stage` is transparent so its children (lanes, board) become flex rows of
-   the app directly. The board takes its natural height (never clips the
-   transport); the waveforms and the explorer flex to fill what's left. */
+/* …but keep text fields (search box, cookie paste, any input) selectable. */
+.app input,
+.app textarea,
+.app [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+/* `.workspace` is the area below the chin. On mobile it's a column holding the
+   board (`.stage`); the Library/Search docks float over it as centered modals. On
+   desktop it becomes a flex ROW so the docks SHARE the width with the board. */
+.workspace {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* `.stage` is the board column (lanes / decks / mixer thirds). It fills whatever
+   the workspace gives it and shrinks when a dock takes a slice of the row. */
 .stage {
-  display: contents;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbars: the native ones looked unstyled (chunky light grey with arrow caps).
+   Theme them thin + subtle everywhere, and remove them outright on the board thirds
+   (lanes / deck controls / mixer) where a scrollbar should never be visible. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent, #36c2ff) 60%, var(--line));
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.lanes,
+.decks-row,
+.mix-row {
+  scrollbar-width: none;
+}
+.lanes::-webkit-scrollbar,
+.decks-row::-webkit-scrollbar,
+.mix-row::-webkit-scrollbar {
+  display: none;
 }
 
 .topbar {
@@ -138,7 +199,7 @@ body {
   width: 100%;
   height: 110px;
   border-radius: 6px;
-  background: #0c0d12;
+  background: var(--panel);
   border: 1px solid var(--line);
   cursor: pointer;
   display: block;
@@ -222,7 +283,7 @@ body {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: #0b0b12;
+  background: var(--panel);
   border: 1px solid var(--line);
   position: relative;
   cursor: ns-resize;
@@ -333,41 +394,42 @@ body {
   cursor: ew-resize;
 }
 .crossfader input::-webkit-slider-runnable-track {
-  height: 8px;
-  border-radius: 4px;
-  border: 1px solid #000;
-  background: linear-gradient(90deg, var(--neon-cyan), #2a2a38 45%, #2a2a38 55%, var(--neon-pink));
+  height: 5px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(90deg, var(--neon-cyan), var(--neon-pink));
   box-shadow:
-    inset 0 0 6px rgba(0, 0, 0, 0.8),
-    0 0 10px rgba(0, 229, 255, 0.18),
-    0 0 10px rgba(255, 45, 156, 0.18);
+    0 0 8px color-mix(in srgb, var(--neon-cyan) 35%, transparent),
+    0 0 8px color-mix(in srgb, var(--neon-pink) 35%, transparent);
 }
 .crossfader input::-moz-range-track {
-  height: 8px;
-  border-radius: 4px;
-  border: 1px solid #000;
-  background: linear-gradient(90deg, var(--neon-cyan), #2a2a38 45%, #2a2a38 55%, var(--neon-pink));
+  height: 5px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(90deg, var(--neon-cyan), var(--neon-pink));
 }
 .crossfader input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 18px;
-  height: 30px;
-  margin-top: -12px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, #d7dbe6, #8c92a6);
-  border: 1px solid #000;
+  width: 13px;
+  height: 26px;
+  margin-top: -10.5px;
+  border-radius: 3px;
+  background: #fff;
+  border: none;
   box-shadow:
-    0 0 10px rgba(255, 255, 255, 0.5),
-    0 1px 3px rgba(0, 0, 0, 0.7);
+    0 0 7px rgba(255, 255, 255, 0.85),
+    0 0 15px rgba(255, 255, 255, 0.4);
   cursor: ew-resize;
 }
 .crossfader input::-moz-range-thumb {
-  width: 18px;
-  height: 30px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, #d7dbe6, #8c92a6);
-  border: 1px solid #000;
-  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+  width: 13px;
+  height: 26px;
+  border-radius: 3px;
+  background: #fff;
+  border: none;
+  box-shadow:
+    0 0 7px rgba(255, 255, 255, 0.85),
+    0 0 15px rgba(255, 255, 255, 0.4);
   cursor: ew-resize;
 }
 
@@ -393,6 +455,7 @@ body {
 
 /* Section 3 (bottom): the explorer / library. */
 .library {
+  position: relative;
   flex: 1 1 0;
   min-height: 110px;
   overflow: hidden;
@@ -402,7 +465,7 @@ body {
 }
 
 .lib-sidebar {
-  width: 220px;
+  width: var(--lib-side-w, 200px);
   flex: none;
   border-right: 1px solid var(--line);
   background: var(--panel);
@@ -434,6 +497,15 @@ body {
   background: color-mix(in srgb, var(--accent, #36c2ff) 22%, transparent);
   color: #cfeaff;
 }
+/* Don't leave a chunky browser focus ring after a mouse click; keep a subtle one
+   for keyboard navigation only. */
+.lib-nav:focus {
+  outline: none;
+}
+.lib-nav:focus-visible {
+  outline: 2px solid var(--accent, #36c2ff);
+  outline-offset: -2px;
+}
 .lib-nav.small {
   font-size: 12px;
   padding: 6px 10px;
@@ -453,6 +525,13 @@ body {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
+}
+/* "Synced with a service" marker on a linked local playlist. */
+.lib-pl-src {
+  margin-left: 6px;
+  color: var(--accent, #36c2ff);
+  font-size: 11px;
+  opacity: 0.8;
 }
 .lib-del {
   margin-left: 6px;
@@ -494,20 +573,20 @@ body {
   gap: 1px;
 }
 
-.lib-import {
-  margin-top: auto;
-  padding-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.lib-import .yt-input {
-  flex: 1 1 100%;
-}
 .lib-import-msg {
-  flex: 1 1 100%;
+  margin-top: auto; /* pin the import toast to the bottom of the sidebar */
+  padding-top: 10px;
   font-size: 11px;
   color: var(--muted);
+}
+.lib-mine-msg {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lib-mine-err {
+  color: var(--neon-pink, #ff5c8a);
+  word-break: break-word;
 }
 
 .lib-main {
@@ -516,6 +595,10 @@ body {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  /* Drop table columns based on the TABLE area's real width (not the sidebar-
+     inclusive library width) — so a wide dock with a wide sidebar still trims the
+     table when it's actually cramped. See the @container query below. */
+  container-type: inline-size;
 }
 
 .lib-empty {
@@ -563,12 +646,12 @@ body {
 }
 .result-row {
   display: grid;
-  grid-template-columns: 124px 1fr auto;
+  grid-template-columns: 124px 1fr;
   gap: 12px;
   align-items: center;
   padding: 8px 12px;
   border-bottom: 1px solid #1a1c24;
-  cursor: default;
+  cursor: pointer; /* click opens the actions menu */
 }
 .result-row:hover {
   background: var(--panel);
@@ -579,7 +662,7 @@ body {
   height: 70px;
   border-radius: 5px;
   overflow: hidden;
-  background: #0c0d12;
+  background: var(--panel);
   flex: none;
 }
 .thumb img {
@@ -657,15 +740,18 @@ body {
   border-color: #ff8a99;
 }
 
-/* rekordbox-style track table */
+/* rekordbox-style track table. table-layout:fixed so column widths are honoured
+   (resizable via the header borders) and Title — the only auto-width column —
+   absorbs the leftover, keeping the table flush with its container (no dead space). */
 .track-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
 .track-table thead th {
   position: sticky;
-  top: 0;
+  top: 29px; /* sits just below the sticky .tt-toolbar */
   background: var(--panel);
   color: var(--muted);
   font-weight: 600;
@@ -675,6 +761,76 @@ body {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   z-index: 1;
+}
+
+/* Row-size stepper bar, pinned above the (also-sticky) header. */
+.tt-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.tt-rows-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.tt-step {
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.tt-step:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.tt-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Sortable header: click to sort (caret shows direction); a drag handle on the
+   right border resizes the column. */
+.tt-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.tt-sortable.sorted {
+  color: var(--text);
+}
+.tt-th-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tt-caret {
+  font-size: 8px;
+}
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resize:hover {
+  background: color-mix(in srgb, var(--accent, #36c2ff) 45%, transparent);
 }
 .track-table tbody tr {
   border-bottom: 1px solid #16181f;
@@ -687,7 +843,7 @@ body {
   color: #6ee7a8;
 }
 .track-table td {
-  padding: 7px 10px;
+  padding: var(--tt-row-pad, 7px) 10px; /* row height scales with the −/＋ stepper */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -698,41 +854,179 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .col-thumb {
-  width: 48px;
+  width: 3.8em; /* scales with the row-size stepper so the artwork column fits */
 }
 .col-thumb img {
-  width: 44px;
-  height: 26px;
+  /* em units so the artwork scales with the row-size stepper (font-size). */
+  width: 3.4em;
+  height: 2em;
   object-fit: cover;
   border-radius: 3px;
   display: block;
 }
 .col-title {
-  max-width: 0;
-  width: 42%;
+  width: auto; /* the flex column — absorbs all leftover width */
 }
 .col-artist {
-  max-width: 0;
-  width: 24%;
   color: var(--muted);
 }
 .col-bpm,
 .col-key,
 .col-time {
-  width: 64px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
-.col-act {
-  width: 1%;
+/* Row actions now live in the click/right-click menu (no inline buttons), so the
+   table ends flush at the Time column — no reserved action width, no dead space. */
+.track-table tbody tr {
+  cursor: pointer;
+}
+.mini.plus {
+  color: var(--neon-lime);
+}
+
+/* Multi-selected rows */
+.track-table tbody tr.selected {
+  background: rgba(0, 229, 255, 0.12);
+}
+.track-table tbody tr.selected.loaded {
+  background: rgba(93, 255, 158, 0.14);
+}
+.track-table tbody tr {
+  user-select: none;
+}
+
+/* NARROW docked Library (desktop side panel, ≤520px): the full 8-column table is
+   too wide, crushing Title/Artist to nothing ("can't read it"). So shrink the
+   sidebar and DROP the secondary columns (#, thumb, BPM, Key), giving the text the
+   room. The complete table still renders in the wide mobile/centered modal. */
+/* When the TABLE AREA is narrow, drop the secondary columns (#, thumb, BPM, Key) and
+   give the text the room. Keyed to .lib-main's real width via a container query, so
+   resizing the dock (or its sidebar) wider brings the full table back. */
+@container (max-width: 440px) {
+  .track-table .col-num,
+  .track-table .col-thumb,
+  .track-table .col-bpm,
+  .track-table .col-key {
+    display: none;
+  }
+  .track-table .col-title {
+    width: 58%;
+  }
+  .track-table .col-artist {
+    width: 30%;
+  }
+}
+
+/* Sidebar playlist as a drag drop-target */
+.lib-nav.drag-over {
+  border-color: var(--neon-lime);
+  background: rgba(93, 255, 158, 0.14);
+  box-shadow: inset 0 0 0 1px var(--neon-lime);
+}
+
+/* Right-click / long-press context menu */
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.ctx-menu {
+  position: fixed;
+  z-index: 61;
+  min-width: 190px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+}
+.ctx-menu button {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
   white-space: nowrap;
-  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.col-act .mini {
-  margin-left: 4px;
+.ctx-menu button:hover {
+  background: #14151d;
 }
-.track-table tbody tr:not(:hover) .col-act .mini {
-  opacity: 0;
+.ctx-count {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 10px 6px;
+}
+.ctx-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 10px 2px;
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 3px 0;
+}
+.ctx-new {
+  color: var(--neon-lime) !important;
+}
+.ctx-danger {
+  color: var(--neon-pink) !important;
+}
+
+/* Styled prompt/confirm dialogs (replace browser confirm/prompt) */
+.dialog {
+  width: min(400px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.7);
+}
+.dialog-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.dialog-msg {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.dialog-input {
+  width: 100%;
+  font-size: 14px;
+  padding: 9px 11px;
+  margin-bottom: 16px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dialog-ok {
+  background: var(--accent) !important;
+  color: #06080c !important;
+  border-color: var(--accent) !important;
+  font-weight: 700;
+}
+.dialog-danger {
+  background: var(--neon-pink) !important;
+  color: #11030a !important;
+  border-color: var(--neon-pink) !important;
+  font-weight: 700;
 }
 
 /* ============================ Mobile-first (≤768px) ========================= */
@@ -801,29 +1095,43 @@ body {
   .lib-sidebar {
     width: 100%;
     flex-direction: row;
+    flex-wrap: wrap; /* wrap so every control stays visible (no clipped buttons) */
     align-items: center;
-    gap: 4px;
-    overflow-x: auto;
+    gap: 6px;
     border-right: none;
     border-bottom: 1px solid var(--line);
-    padding: 6px 8px;
+    padding: 8px;
   }
   .lib-nav {
     width: auto;
     flex: none;
     white-space: nowrap;
-    padding: 8px 12px;
+    padding: 8px 11px;
+    font-size: 13px;
   }
   .lib-count {
     margin-left: 4px;
   }
-  .lib-playlists {
-    flex-direction: row;
-    gap: 4px;
+  /* Playlist sections stack full-width below the wrapped nav strip so MY YOUTUBE
+     and PLAYLISTS are reachable on phone (each takes its own row). */
+  .lib-section {
+    width: 100%;
+    margin-top: 6px;
   }
-  /* Playlist creation / import / delete live on desktop — keep mobile simple. */
-  .lib-section,
-  .lib-import,
+  .lib-playlists {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .lib-playlists .lib-nav {
+    flex: 1 1 auto;
+  }
+  .lib-import {
+    width: 100%;
+    margin-top: 6px;
+  }
+  /* Delete is a small target in the wrapped chip layout — keep it desktop-only. */
   .lib-del {
     display: none;
   }
@@ -840,6 +1148,47 @@ body {
     overscroll-behavior: contain;
   }
 
+  /* Fullscreen sync modal: fill the screen, stack each review row */
+  .sync-full {
+    width: 100vw;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+    padding: 14px;
+  }
+  .sync-row {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "check src badge"
+      "check dst change";
+    gap: 4px 8px;
+    row-gap: 2px;
+  }
+  .sync-row > input[type="checkbox"] {
+    grid-area: check;
+  }
+  .sync-src {
+    grid-area: src;
+  }
+  .sync-dst {
+    grid-area: dst;
+  }
+  .sync-badge {
+    grid-area: badge;
+    justify-self: end;
+  }
+  .sync-change {
+    grid-area: change;
+    justify-self: end;
+  }
+  .sync-arrow2 {
+    display: none; /* the stacked src-over-dst layout makes the arrow redundant */
+  }
+  .sync-review-head {
+    flex-wrap: wrap;
+  }
+
   /* Sticky search bar follows the scroll on mobile */
   .search-bar {
     position: static;
@@ -851,38 +1200,19 @@ body {
     font-size: 16px;
   }
 
-  /* Explorer rows: smaller artwork, actions wrap under */
+  /* Explorer rows: smaller artwork */
   .result-row {
     grid-template-columns: 92px 1fr;
-    grid-template-areas:
-      "thumb meta"
-      "thumb actions";
     gap: 8px 10px;
   }
   .thumb {
     width: 92px;
     height: 52px;
-    grid-area: thumb;
-  }
-  .result-meta {
-    grid-area: meta;
-  }
-  .result-actions {
-    grid-area: actions;
   }
 
-  /* Track table: drop Artist/Key, always show actions (no hover on touch) */
-  .track-table .col-artist,
-  .track-table .col-key,
-  .track-table thead .col-num {
-    display: none;
-  }
-  .track-table tbody tr:not(:hover) .col-act .mini {
-    opacity: 1;
-  }
-  .track-table .col-num {
-    display: none;
-  }
+  /* Track table responsive column-dropping is handled by the container query on
+     .library (keyed to its real width), so no mobile-specific overrides needed —
+     a phone-width library trims to Title / Artist / Time automatically. */
 }
 
 /* ============================ Cues / Loops / Sync =========================== */
@@ -923,7 +1253,7 @@ body {
   user-select: none;
 }
 .pad.set {
-  background: color-mix(in srgb, var(--accent) 30%, #0c0d12);
+  background: color-mix(in srgb, var(--accent) 30%, var(--panel));
   border-color: var(--accent);
   color: #fff;
   box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
@@ -975,16 +1305,73 @@ body {
 
 @media (max-width: 768px) {
   .hotcues {
-    grid-template-columns: repeat(4, 1fr); /* 2 rows of 4 — bigger touch pads */
+    grid-template-columns: repeat(4, 1fr); /* 2 rows of 4 */
   }
+  /* Half-HEIGHT cue pads (was 2/1): a flatter ratio shrinks the cue block so the
+     deck-controls third needs less height, freeing it for the taller waveforms up
+     top (the lanes get a bigger flex-grow below). */
   .pad {
-    aspect-ratio: 2 / 1;
-    font-size: 15px;
+    aspect-ratio: 3.4 / 1;
+    font-size: 13px;
   }
   .loop-btn {
     padding: 11px 0;
     font-size: 13px;
   }
+}
+
+/* ===================== Per-deck caption ribbon ============================= */
+/* A thin strip under each waveform: caption cues laid on a time axis, scrolled so
+   the line playing NOW sits under the centered playhead; the active line lights up
+   in the deck accent. Hidden entirely when the track has no captions. */
+.caption-bar {
+  position: relative;
+  flex: 0 0 auto;
+  height: 19px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000);
+  border-top: 1px solid var(--line);
+}
+.caption-bar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+.caption-track {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  height: 100%;
+  will-change: transform;
+  /* Slide one slot when the current line changes (no continuous time-drift). */
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.caption-cue {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  opacity: 0.32;
+  transition: color 0.2s, opacity 0.2s;
+}
+.caption-cue.on {
+  z-index: 1; /* current line sits above its flanking neighbours */
+  color: var(--accent);
+  opacity: 1;
+  font-weight: 600;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+body.no-glow .caption-cue.on {
+  text-shadow: none;
 }
 
 /* ===================== Zoomable waveform viewport ========================== */
@@ -1075,32 +1462,46 @@ body {
 
 .jog {
   display: flex;
-  gap: 5px;
-  align-items: stretch;
+  gap: 6px;
 }
 .jog-btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 34px;
+  display: grid;
+  place-items: center;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--muted);
-  border-radius: 5px;
-  padding: 7px 0;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s, transform 0.04s;
+}
+.jog-btn:active {
+  transform: translateY(1px);
+  background: var(--panel);
 }
 .jog-btn:hover {
   border-color: var(--accent);
   color: var(--text);
 }
 .jog-btn.mag {
-  flex: 1.6;
   letter-spacing: 1px;
 }
 .jog-btn.mag.on {
   background: rgba(255, 210, 80, 0.16);
   border-color: #ffd250;
   color: #ffd250;
+}
+/* In SHIFT the ⌗ becomes the skip-size selector — keep its label inside the
+   same flex:1 cell (no widening, no wrap) so the jog row stays even at any size. */
+.jog-btn.mag.skip {
+  font-size: 11px;
+  letter-spacing: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 @media (max-width: 768px) {
@@ -1124,11 +1525,22 @@ body {
 }
 .lane {
   position: relative;
-  background: #08090d;
+  background: var(--surface);
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* Keyboard-focused deck: an accent ring overlaying the whole lane (a pseudo so it
+   paints above the absolutely-pinned canvas). Toggled with Tab. */
+.lane.focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 26%, transparent);
+  pointer-events: none;
+  z-index: 6;
 }
 /* The wrapper takes the lane's spare height via flex; the canvas is absolutely
    pinned to fill it exactly. Absolute inset (not height:100%) avoids the iOS
@@ -1159,7 +1571,7 @@ body {
   padding: 5px 12px;
   font-size: 12px;
   pointer-events: none;
-  background: #0a0b11;
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 .lane-id {
@@ -1167,14 +1579,66 @@ body {
   letter-spacing: 1px;
   color: var(--accent);
 }
+/* DECK id + title group (so the title gets its own full-width row on mobile). */
+.lane-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* Title = a clipping box; the inner text truncates with an ellipsis when it fits,
+   or auto-scrolls (ticker) when it's longer than the box (`.ticker`, set by JS). */
 .lane-title {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.lane-title-inner {
+  display: inline-block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.lane-title.ticker .lane-title-inner {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  animation: lane-ticker var(--ticker-dur, 8s) linear infinite alternate;
+}
+@keyframes lane-ticker {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(calc(-1 * var(--scroll, 0px)));
+  }
+}
+.lane-id {
   white-space: nowrap;
 }
 .lane-artist {
   color: var(--muted);
+}
+/* On phones the header is too narrow for the title to share the row with the
+   time/BPM/key/grid — so the DECK id + title get their OWN full-width row, and the
+   rest wrap beneath. (Desktop keeps everything on one line.) */
+@media (max-width: 768px) {
+  .lane-info {
+    flex-wrap: wrap;
+    row-gap: 1px;
+    column-gap: 10px;
+  }
+  .lane-head {
+    flex-basis: 100%;
+  }
+  .lane-bpm {
+    white-space: nowrap;
+  }
 }
 .lane-time {
   font-variant-numeric: tabular-nums;
@@ -1184,8 +1648,66 @@ body {
   font-weight: 700;
   color: var(--accent);
 }
+.lane-key {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .lane-status {
   color: #ffd250;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Cache FETCH (instant disk hit or R2 download) reads green; on-device PROCESSING
+   reads yellow — so an already-done song is obvious vs one still being crunched. */
+.lane-status.tone-fetch {
+  color: #46e08a;
+}
+.lane-status.tone-process {
+  color: #ffd250;
+}
+.lane-status.tone-ok {
+  color: #46e08a;
+}
+.lane-status.tone-fail {
+  color: #ff6b6b;
+}
+.lane-status.tone-idle {
+  color: var(--muted);
+}
+/* Beat-grid size control in the header (− value +). lane-info is click-through,
+   so this re-enables pointer events for the buttons. */
+.lane-grid {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.grid-btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.grid-btn:hover {
+  border-color: var(--accent);
+}
+.grid-val {
+  min-width: 50px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Section 2 (middle third): the DJ board — deck A | mixer | deck B, mirrored
@@ -1212,6 +1734,42 @@ body {
 .bank.mirror {
   flex-direction: row-reverse;
 }
+/* Keyboard-focused deck's control bank: brighter accent top rail + an accent ring
+   and faint inner glow so it's obvious which deck the keys are driving. */
+.bank.focused {
+  border-top-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.decks-row .bank:not(.focused) {
+  opacity: 0.86; /* recede the unfocused deck a touch */
+}
+
+/* Per-button keyboard-shortcut letter, bottom-right. Hidden by default; shown only
+   on desktop when Settings ▸ Keyboard hints is on (body.show-keys). The buttons
+   are position:relative so the badge anchors to each. */
+.jog-btn,
+.loop-btn,
+.hw-btn,
+.stem-btn {
+  position: relative;
+}
+.kbd {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font: 700 8px/1 ui-monospace, monospace;
+  color: var(--muted);
+  opacity: 0.55;
+  pointer-events: none;
+  display: none;
+}
+@media (min-width: 769px) {
+  body.show-keys .kbd {
+    display: block;
+  }
+}
 .bank-main {
   flex: 1;
   display: flex;
@@ -1231,12 +1789,544 @@ body {
   background: var(--panel-2);
   border-top: 2px solid var(--neon-purple);
 }
+
+/* ===== Floating redesign: three equal thirds + floating library/search ===== */
+
+/* Middle third — the two decks' button banks side by side. */
+/* Middle third — equal 1/3 with the others; scrolls internally if its content
+   (jog … stems) is taller than the third, so it never overlaps the mixer. */
+.decks-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  gap: 1px;
+  background: var(--line);
+  overflow-y: auto;
+}
+.decks-row .bank {
+  align-items: stretch;
+  overflow: hidden;
+}
+.decks-row .bank-main {
+  /* Spread the rows to fill the third evenly instead of bunching in the centre
+     with dead space above and below. */
+  justify-content: space-between;
+}
+/* DESKTOP: instead of spreading fixed-height rows with airy gaps, let every row
+   grow to share the bank height equally — the buttons auto-size to fill whatever
+   the third gives them, so it scales nicely on tall screens. (Mobile keeps the
+   packed natural-height layout: `.decks-row` is `flex:0 0 auto` there, where a
+   `basis:0` row would collapse.) */
+@media (min-width: 769px) {
+  .decks-row .bank-main {
+    justify-content: stretch;
+  }
+  .decks-row .bank-main > * {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  /* Let the pixel-locked buttons stretch with their (taller) row. Higher
+     specificity than the global `.bank .pad`/`.jog-btn` height so order is moot. */
+  .decks-row .bank .pad,
+  .decks-row .bank .jog-btn {
+    height: auto;
+  }
+}
+
+/* Bottom third — the two channel mixers side by side, crossfader beneath. */
+.mix-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  overflow-y: auto;
+  /* Fader length scales with the viewport so the mixer fills its third. The tall
+     faders (TEMPO/KEY/LEVEL) use --fader-h; the short bank faders use --fader-sm. */
+  --fader-h: clamp(140px, 21vh, 250px);
+  --fader-sm: clamp(78px, 12vh, 138px);
+  /* Stacked EQ-over-stems faders: ~half a tall fader so the pair matches its height. */
+  --fader-half: clamp(58px, 8.5vh, 100px);
+}
+/* MOBILE: give the waveform lanes more height (taller tracks) by taking a slice off
+   the middle deck-controls third. Only the flex-GROW changes (still `1 1 0` base),
+   so the ratio shifts ~ lanes 42% / controls 26% / mixer 32%. The controls third
+   scrolls internally, so the tighter height just means a little scroll if needed. */
+@media (max-width: 768px) {
+  .lanes {
+    flex-grow: 1.6;
+  }
+  .decks-row {
+    flex-grow: 0.66;
+  }
+}
+/* The mixer (both strips + crossfader) is bounded to its own natural width, so
+   the crossfader matches the channels instead of sprawling across the third. */
+.mixer-box {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+}
+.mix-row .channels {
+  flex: 0 0 auto;
+  width: 100%;
+}
+.mixer-box .crossfader {
+  width: 100%;
+}
+
+/* Phone board layout. MUST live here — AFTER the desktop base rules above —
+   because @media doesn't add specificity: a same-specificity rule later in the
+   file wins regardless of the query, so the earlier mobile block (near .waveform)
+   was dead.
+   Goal: a SINGLE-SCREEN DJ board that fits the viewport with NO page scroll (a
+   phone Safari toolbar would otherwise clip the mixer). The control bank takes
+   its natural height so the stem-pad foot is never clipped; the mixer is compact
+   (shorter faders); the waveforms flex to absorb whatever vertical space is left. */
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .app {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden; /* fit to screen — no page scroll */
+  }
+  .lanes {
+    flex: 1 1 auto; /* waveforms absorb the leftover height */
+    min-height: 72px;
+    overflow: hidden;
+  }
+  .decks-row {
+    flex: 0 0 auto; /* natural height — show every bank row incl. stem pads */
+    overflow: visible;
+  }
+  .decks-row .bank {
+    overflow: visible;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .decks-row .bank-main {
+    gap: 5px; /* tighten the row stack so 9 rows fit without a scroll */
+  }
+  .mix-row {
+    flex: 0 0 auto;
+    overflow: visible;
+    padding: 6px 12px;
+    --fader-h: clamp(92px, 13vh, 150px); /* shorter faders → compact mixer */
+  }
+}
+
+/* Mixer centre: three vertical faders — deck A volume · A↔B crossfade · deck B
+   volume — each riding over that deck's live stereo (L/R) dB meter. A (top) and
+   B (bottom) label the cluster. */
+.mixcenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  margin: 0 8px;
+}
+.mc-cols {
+  display: flex;
+  gap: 10px;
+  height: var(--fader-h, 150px);
+}
+.mc-col {
+  position: relative;
+  width: 26px;
+  height: 100%;
+}
+/* A rotated range input forms each vertical fader: handle rides above (z-index),
+   value increasing UPWARD. Level faders put max at top (rotate −90°); the
+   crossfade puts A(−1) at top to match the A-over-B labels (rotate +90°). */
+.mc-fader {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--fader-h, 150px); /* vertical travel after rotation */
+  height: 22px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  z-index: 2;
+  cursor: ns-resize;
+}
+.mc-col.cross .mc-fader {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.mc-fader::-webkit-slider-runnable-track { height: 5px; background: transparent; border: none; }
+.mc-fader::-moz-range-track { height: 5px; background: transparent; border: none; }
+.mc-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 24px;
+  margin-top: -9.5px;
+  border-radius: 3px;
+  background: #fff;
+  border: none;
+  box-shadow: 0 0 7px rgba(255, 255, 255, 0.85), 0 0 14px rgba(255, 255, 255, 0.4);
+  cursor: ns-resize;
+}
+.mc-fader::-moz-range-thumb {
+  width: 12px;
+  height: 24px;
+  border-radius: 3px;
+  background: #fff;
+  border: none;
+  box-shadow: 0 0 7px rgba(255, 255, 255, 0.85), 0 0 14px rgba(255, 255, 255, 0.4);
+  cursor: ns-resize;
+}
+
+/* Stereo meter: two L/R sub-bars filling the column behind the fader handle. */
+.smeter {
+  position: absolute;
+  inset: 4px 3px;
+  display: flex;
+  gap: 2px;
+  z-index: 0;
+}
+.smeter-bar {
+  position: relative;
+  flex: 1;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 11%, #000);
+  overflow: hidden;
+}
+.smeter-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0%;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.smeter.up .smeter-fill { bottom: 0; }
+.smeter.down .smeter-fill { top: 0; }
+/* Near full-scale — warn red so clipping is obvious at a glance. */
+.smeter-fill.hot { background: #ff5d5d; box-shadow: 0 0 6px #ff5d5d; }
+
+/* Crossfade column: a bipolar meter box where deck A grows UP from the centre
+   datum and deck B grows DOWN, each its own stereo pair. */
+.mc-bip {
+  position: absolute;
+  inset: 4px 3px;
+  z-index: 0;
+}
+.mc-bip .smeter {
+  position: absolute;
+  inset: 0;
+  left: 0;
+  right: 0;
+}
+.mc-bip .smeter.bip-a { top: 0; bottom: auto; height: 50%; }
+.mc-bip .smeter.bip-b { top: 50%; bottom: auto; height: 50%; }
+.mc-bip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--text) 32%, transparent);
+  pointer-events: none;
+}
+
+.mixcenter .xf-end {
+  font-size: 13px;
+  font-weight: 700;
+}
+.mixcenter .xf-end.top { color: var(--neon-cyan, #36c2ff); }
+.mixcenter .xf-end.bottom { color: var(--neon-pink, #ff6ec7); }
+
+/* Top chin: a thin full-width bar with the three panel launchers. It's the first
+   flex child of .app (not floating), so it reserves its row and never overlaps
+   the board. The app's top safe-area inset keeps it clear of the notch. */
+.chin {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 1px;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+  z-index: 45;
+}
+.chin-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--panel);
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 11px 4px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 0.12s, background 0.12s;
+}
+.chin-btn:hover {
+  color: var(--text);
+}
+.chin-btn.active {
+  color: var(--text);
+  background: var(--panel-2);
+}
+.chin-ico {
+  font-size: 17px;
+  line-height: 1;
+}
+/* The ⓘ keyboard-help launcher — a fixed-width square at the right end of the
+   chin (doesn't flex like the three main launchers). */
+.chin-btn.chin-info {
+  flex: 0 0 auto;
+  width: 42px;
+}
+.chin-info-i {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+}
+
+/* Settings launcher: a text chin button on mobile, a compact gear SQUARE pinned to
+   the top-left corner on desktop (CSS `order:-1` moves it ahead of Library/Search). */
+/* Settings is a compact gear SQUARE (icon only) on ALL platforms — mobile included. */
+.chin-gear {
+  display: block;
+  font-size: 17px;
+  line-height: 1;
+}
+.chin-btn.chin-settings {
+  flex: 0 0 auto;
+  width: 42px;
+}
+.chin-btn.chin-settings .chin-label {
+  display: none;
+}
+
+/* Dock width: a bit NARROWER than a third so the middle board keeps more width
+   (stays closer to a desktop layout), and CAPPED so a 4K/ultrawide screen doesn't
+   give the list panels an absurd width. Floored so they stay usable on small laptops. */
+:root {
+  --dock-w: clamp(280px, 28vw, 520px);
+}
+
+/* DESKTOP: the Library/Search docks SHARE the row with the board — they're in-flow
+   flex children of `.workspace` that take `--dock-w` and SQUEEZE `.stage`, rather
+   than overlaying it. `order` puts Library left + Search right (flipped by the swap
+   button). Below 769px these rules don't apply: the docks stay centered modals. */
+@media (min-width: 769px) {
+  .workspace {
+    flex-direction: row;
+    position: relative; /* anchors the centered swap button */
+  }
+  .modal-backdrop.dock-left,
+  .modal-backdrop.dock-right {
+    position: relative; /* in the flow, not a fixed overlay; also anchors the resizer */
+    inset: auto;
+    z-index: auto;
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    animation: none;
+  }
+  /* Per-side resizable width (drag handle writes these on <html>); falls back to the
+     shared default until the user resizes that side. */
+  .modal-backdrop.dock-left {
+    flex-basis: var(--dock-w-left, var(--dock-w));
+  }
+  .modal-backdrop.dock-right {
+    flex-basis: var(--dock-w-right, var(--dock-w));
+  }
+  .modal-backdrop.dock-left {
+    order: -1;
+  } /* Library on the left… */
+  .modal-backdrop.dock-right {
+    order: 1;
+  } /* …Search on the right */
+  .app.dock-swapped .modal-backdrop.dock-left {
+    order: 1;
+  } /* swap flips both panels… */
+  .app.dock-swapped .modal-backdrop.dock-right {
+    order: -1;
+  }
+  .modal-backdrop.dock-left > .panel,
+  .modal-backdrop.dock-right > .panel {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    border-top: none;
+    border-bottom: none;
+  }
+  .modal-backdrop.dock-left > .panel {
+    animation: dock-in-left 0.16s ease-out;
+  }
+  .modal-backdrop.dock-right > .panel {
+    animation: dock-in-right 0.16s ease-out;
+  }
+  /* No dedicated close button on desktop — pressing the chin button again closes. */
+  .lib-panel .settings-head .mini.x,
+  .search-panel .settings-head .mini.x {
+    display: none;
+  }
+
+  /* Drag-to-resize handles (desktop only). Edge handles sit on the inner border of a
+     dock; the inline handle is an in-flow bar between the library sidebar and list. */
+  .dock-resizer {
+    z-index: 6;
+    touch-action: none;
+  }
+  .dock-resizer-edge {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: col-resize;
+  }
+  .modal-backdrop.dock-left .dock-resizer-edge {
+    right: -3px;
+  }
+  .modal-backdrop.dock-right .dock-resizer-edge {
+    left: -3px;
+  }
+  /* A subtle line that lights up on hover/drag so the grab target is discoverable. */
+  .dock-resizer-edge::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .dock-resizer-edge:hover::after {
+    background: var(--accent, #36c2ff);
+  }
+  .dock-resizer-inline {
+    flex: 0 0 5px;
+    align-self: stretch;
+    cursor: col-resize;
+    background: var(--line);
+    transition: background 0.12s;
+  }
+  .dock-resizer-inline:hover {
+    background: var(--accent, #36c2ff);
+  }
+}
+/* Mobile: docks are centered modals, not resizable — hide every handle. (A
+   non-overlapping max-width query so it never fights the desktop rules above.) */
+@media (max-width: 768px) {
+  .dock-resizer {
+    display: none;
+  }
+}
+/* Swap-sides launcher: a persistent square in the chin (like the gear + info). It
+   flips which side the Library/Search docks sit on AND swaps the two launcher
+   buttons themselves. Desktop only — on mobile the docks are centered modals. */
+.chin-btn.chin-swap {
+  display: none; /* swap shown on DESKTOP only (mobile docks are centered modals) */
+  order: 3; /* dead CENTER — between the Library + Search launchers */
+}
+.chin-swap-i {
+  font-size: 16px;
+  line-height: 1;
+}
+/* Chin order applies at ALL widths so Settings is a left gear square on mobile too:
+   [⚙ settings][Library][⇄ swap (desktop)][Search][i info]. Library + Search flex
+   equally; swapping flips the two launchers around the centered ⇄ (and the panels). */
+.chin-btn.chin-settings {
+  order: 0;
+}
+.chin-btn.chin-library {
+  order: 2;
+}
+.chin-btn.chin-search {
+  order: 4;
+}
+.chin-btn.chin-info {
+  order: 10;
+}
+.app.dock-swapped .chin-btn.chin-library {
+  order: 4;
+}
+.app.dock-swapped .chin-btn.chin-search {
+  order: 2;
+}
+@media (min-width: 769px) {
+  .chin-btn.chin-swap {
+    display: flex;
+    flex: 0 0 auto;
+    width: 42px;
+  }
+}
+@keyframes dock-in-left {
+  from {
+    opacity: 0.4;
+    transform: translateX(-12px);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes dock-in-right {
+  from {
+    opacity: 0.4;
+    transform: translateX(12px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* Library window — the collection/table fills the shared centered panel. */
+.lib-panel .library {
+  flex: 1;
+  min-height: 0;
+  border-top: none;
+  margin: 0 -16px -14px; /* let the table reach the panel edges */
+}
 .channels {
   display: flex;
-  gap: 28px;
+  gap: 18px;
   justify-content: center;
+  align-items: center;
 }
+/* The two strips grow to fill the third (like the centre deck-controls bank); the
+   centre fader cluster keeps its natural width between them. */
 .chan {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 460px; /* but don't let cells sprawl on an ultra-wide screen */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1248,33 +2338,26 @@ body {
   font-size: 12px;
   text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
 }
-/* TEMPO fader | knobs | LEVEL fader, mirrored on deck B (tempo to the outside) */
-.chan-row {
-  display: flex;
-  align-items: stretch;
-  gap: 14px;
-}
-.chan.mirror .chan-row {
-  flex-direction: row-reverse;
-}
-.chan-knobs {
+/* Each channel is a vertical stack of unlabelled cell BANKS (EQ · STEMS · FX ·
+   PITCH) packed tight, so the strip reads as one dense grid like the centre
+   deck-controls bank. Deck B mirrors (edge cues flip to the inner side). */
+.chan-grid {
+  width: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
+  align-items: stretch;
+  gap: 5px;
 }
-/* Slim faders that match the 5-knob column height */
-.chan-row .fader.pitch .fader-track,
-.chan-row .fader.level .fader-track {
-  height: 150px;
-  width: 18px;
-}
-.chan-row .fader-thumb {
-  width: 22px;
-}
-.chan-row .fader-label,
-.chan-row .fader-value {
-  font-size: 8px;
+/* A bank is a 1fr grid: 4-cell banks (EQ/STEMS) split into four equal tiles;
+   1-cell banks (FX) let their single tile span the whole strip width, so the
+   columns line up across every bank. */
+.cbank {
+  position: relative;
+  width: 100%; /* fill the strip so the 1fr columns line up across every bank */
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 5px;
 }
 /* TEMPO-range + SKIP-size buttons (moved out of Settings into the center) */
 .mixer-btns {
@@ -1296,8 +2379,15 @@ body {
   font-size: 9px;
   letter-spacing: 0;
 }
+/* Blank placeholder foot under FILTER — matches the ±range button's footprint so
+   the FILTER column lines up with TEMPO, but is empty + inert for now. */
+.tempo-width.mini.ph {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
 .tempo-width {
-  background: #0c0c13;
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--muted);
   border-radius: 6px;
@@ -1329,7 +2419,7 @@ body {
 
 /* Hardware buttons */
 .hw-btn {
-  background: #0c0c13;
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 6px;
@@ -1365,17 +2455,89 @@ body {
   color: var(--accent);
 }
 .hw-btn.sync,
-.hw-btn.key {
+.hw-btn.key,
+.hw-btn.fx,
+.hw-btn.range {
   font-size: 12px;
   letter-spacing: 1px;
 }
-.hw-btn.key {
+.hw-btn.key,
+.hw-btn.fx {
   color: var(--muted);
 }
 .hw-btn.key.on {
   background: rgba(255, 210, 80, 0.18);
   border-color: #ffd250;
   color: #ffd250;
+}
+/* FX master — lit when the color filter is engaged, dim when bypassed. */
+.hw-btn.fx.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+/* The merged FX button doubles as the filter-sweep knob: it carries the same
+   knob-border indicator as the cells (`.vcell-knob`), so the dot rides on the
+   border (overflow visible) and the label/kbd sit above the trace. */
+.hw-btn.fx {
+  overflow: visible;
+}
+.hw-btn.fx .fx-label,
+.hw-btn.fx .kbd {
+  position: relative;
+  z-index: 1;
+}
+/* Tempo-range cycle (Shift = dB gain-match). */
+.hw-btn.range {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* FX button wrapper holds the pop-up effect menu (Shift-click). */
+.fx-wrap {
+  position: relative;
+  display: flex;
+}
+.fx-wrap .hw-btn {
+  flex: 1;
+}
+.fx-menu-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.fx-menu {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.fx-menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 7px 8px;
+  cursor: pointer;
+  text-align: center;
+}
+.fx-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.fx-menu-item.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 /* SHIFT modifier button (replaces Load file). Latches the shift remap. */
 .hw-btn.shift {
@@ -1405,10 +2567,13 @@ body {
   gap: 6px;
 }
 .bank-load {
-  margin-top: auto;
+  display: flex;
+  gap: 6px;
 }
-.bank-load .hw-btn {
-  width: 100%;
+.bank-load .hw-btn,
+.bank-load .skip-btn {
+  flex: 1;
+  width: auto; /* override the tempo-width fixed 96px so they share the row */
 }
 
 /* Knobs — flat inky disc with an SVG value-arc + glowing pointer */
@@ -1416,7 +2581,7 @@ body {
   width: 38px;
   height: 38px;
   position: relative;
-  background: #0b0b12;
+  background: var(--panel);
   box-shadow: 0 0 0 1px var(--line);
   border: none;
 }
@@ -1477,91 +2642,98 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Faders — custom track with accent fill (level indicator) + glowing cap */
-.fader {
+/* Faders — flat neon: a thin pill RAIL that charges up with a glowing accent
+   FILL, capped by a single bright thumb line. No bevels, no rubber caps. */
+/* A number cell — the digital control tile. Tap selects (focus ring), the number
+   is the hero, a thin accent cue on the inner edge shows the value's place in
+   range. Flat, accent-tinted, no skeuomorphic rail. */
+.vcell {
+  position: relative;
   display: flex;
-  flex: 0 0 auto; /* never let flex squash the fader to a stub */
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-}
-.fader-track {
-  position: relative;
-  width: 26px;
+  justify-content: center;
+  gap: 1px;
+  min-width: 44px;
+  height: 38px;
+  padding: 3px 5px;
+  background: color-mix(in srgb, var(--accent) 6%, #000);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
   border-radius: 6px;
-  background: #050507;
-  border: 1px solid var(--line);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.8);
   cursor: ns-resize;
+  outline: none;
+  user-select: none;
   touch-action: none;
+  transition: border-color 0.1s, box-shadow 0.1s;
 }
-.fader-fill {
-  position: absolute;
-  left: 50%;
-  width: 6px;
-  transform: translateX(-50%);
-  border-radius: 3px;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
-  pointer-events: none;
+.vcell:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
 }
-.fader-detent {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 50%;
-  height: 1px;
-  background: var(--line);
-  pointer-events: none;
-}
-.fader-thumb {
-  position: absolute;
-  left: 50%;
-  width: 30px;
-  height: 14px;
-  margin-bottom: -7px;
-  transform: translateX(-50%);
-  border-radius: 3px;
-  background: linear-gradient(180deg, #2b2b38, #131319);
-  border: 1px solid #000;
+/* Selected (tapped/clicked) — a ring. */
+.vcell:focus {
+  border-color: var(--accent);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.7),
-    0 0 7px color-mix(in srgb, var(--accent) 55%, transparent);
+    inset 0 0 0 1px var(--accent),
+    0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.vcell.off {
+  opacity: 0.4;
+}
+.vcell.disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+/* Muted stem cell (tapped off) — dim and grey the accent so OFF reads at a glance. */
+.vcell.muted {
+  opacity: 0.5;
+}
+.vcell.muted .vcell-value,
+.vcell.muted .vcell-knob {
+  filter: grayscale(1) brightness(0.8);
+}
+/* Knob-style level indicator: an accent trace around the cell border (up the left,
+   across the top, down the right — the bottom is the open gap) charging from min to
+   the current value, capped by a circle marker. Drawn in real px (viewBox = cell
+   size) so it never distorts. */
+.vcell-knob {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
   pointer-events: none;
 }
-.fader-thumb::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 50%;
-  height: 2px;
-  margin-top: -1px;
-  border-radius: 1px;
-  background: var(--accent);
-  box-shadow: 0 0 5px var(--accent);
+.vcell-knob-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 16%, transparent);
+  stroke-width: 2;
 }
-.fader.level .fader-track {
-  height: 64px;
+.vcell-knob-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 70%, transparent));
 }
-.fader.pitch {
-  flex: 0 0 auto;
+.vcell-knob-dot {
+  fill: var(--accent);
+  stroke: #06080c;
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px var(--accent));
 }
-.fader.pitch .fader-track {
-  height: 188px;
-}
-.fader-label {
-  font-size: 10px;
-  letter-spacing: 1px;
+.vcell-label {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
   color: var(--muted);
+  line-height: 1;
 }
-.fader-value {
-  font-size: 11px;
+.vcell-value {
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
+  font-weight: 700;
   color: var(--accent);
-  /* Fixed box so a wide value (e.g. -12.5) doesn't widen the channel strip. */
-  display: inline-block;
-  min-width: 34px;
-  text-align: center;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
@@ -1570,7 +2742,7 @@ body {
   grid-template-columns: repeat(8, 1fr);
 }
 .pad {
-  background: #0c0c13;
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--muted);
   transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
@@ -1672,16 +2844,29 @@ body {
   }
   /* Clear gap so the two faders read as separate from the knob column */
   .chan-row {
-    gap: 7px;
+    gap: 4px;
     align-items: center;
   }
   .chan-knobs {
-    gap: 6px;
+    gap: 5px;
   }
   .chan .knob-dial,
   .knob-dial {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
+  }
+  /* Stem level knobs are secondary — a touch smaller than the EQ knobs, and the
+     widest column at the screen edge, so trim its label too (it was clipping the
+     INST/VOICE knobs side-to-side). */
+  .chan-stems .knob-dial {
+    width: 18px;
+    height: 18px;
+  }
+  .chan-stems {
+    gap: 3px;
+  }
+  .chan-stems .knob-label {
+    font-size: 6.5px;
   }
   /* Keep the knob labels (TRIM/HI/MID/LOW/FILTER); drop the fader name but keep
      its value (% / tempo) for detail. */
@@ -1689,8 +2874,23 @@ body {
     display: none;
   }
   .chan-row .fader-value {
-    font-size: 7.5px;
-    min-width: 26px;
+    font-size: 7px;
+    min-width: 16px; /* don't let the value label widen the fader column */
+  }
+  /* Per-deck key-shift column: keep it narrow so it doesn't push the strip wide.
+     The "KEY ±n" label is the widest piece — shrink it and the ± step buttons. */
+  .chan-keyshift {
+    gap: 1px;
+  }
+  .chan-keyshift .key-name {
+    font-size: 6.5px;
+    white-space: nowrap;
+  }
+  .chan-keyshift .key-step {
+    width: 18px;
+    height: 16px;
+    font-size: 11px;
+    padding: 0;
   }
   .chan .knob-label {
     font-size: 7.5px;
@@ -1702,13 +2902,25 @@ body {
     font-size: 7px;
   }
   .chan-row .fader.pitch .fader-track,
-  .chan-row .fader.level .fader-track {
+  .chan-row .fader.level .fader-track,
+  .chan-row .fader.filter .fader-track,
+  .chan-row .fader.keyfader .fader-track {
     height: 132px;
-    width: 14px;
+    width: 12px;
   }
   /* Thumb matches the track width so it doesn't bleed into the knobs */
   .chan-row .fader-thumb {
-    width: 18px;
+    width: 15px;
+  }
+  /* Vertical crossfader matches the shorter mobile faders. */
+  .crossfader.vertical .xf-rot {
+    height: 132px;
+  }
+  .crossfader.vertical .xf-rot input {
+    width: 132px;
+  }
+  .channels {
+    gap: 6px;
   }
   /* Kill the neon halos inside the cramped mixer — the glow bleed between
      adjacent controls is what reads as "cluttered". Colors stay; halos go. */
@@ -1735,12 +2947,38 @@ body {
     padding: 3px 8px;
     font-size: 11px;
   }
+  .chin-btn {
+    padding: 9px 2px;
+    font-size: 12px;
+    gap: 5px;
+  }
+  .chin-ico {
+    font-size: 16px;
+  }
 }
 
-/* Board pads: fixed compact height (not aspect-ratio) since banks are wide */
+/* Very narrow phones: drop the chin text, keep the icons. */
+@media (max-width: 380px) {
+  .chin-label {
+    display: none;
+  }
+}
+
+/* Board pads: fixed compact height (not aspect-ratio) since banks are wide.
+   Desktop value here; mobile halves it just below. NOTE this `.bank .pad` rule
+   outranks the earlier `.pad { aspect-ratio }` (higher specificity + later), so
+   any height change MUST live on `.bank .pad` to actually take effect. */
 .bank .pad {
   aspect-ratio: auto;
-  height: 40px;
+  height: 34px;
+}
+@media (max-width: 768px) {
+  /* Half-height cue pads → the deck-controls third needs less height, which the
+     lanes (flex:1 1 auto on mobile) absorb as taller waveforms up top. */
+  .bank .pad {
+    height: 22px;
+    font-size: 11px;
+  }
 }
 .bank-main {
   justify-content: center;
@@ -1754,7 +2992,7 @@ body {
   gap: 8px;
 }
 .top-btn {
-  background: #0c0c13;
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 6px;
@@ -1772,33 +3010,431 @@ body {
 }
 
 /* ============================ Settings modal ============================= */
+/* All three floating windows (Settings, Search, Library) share one backdrop,
+   one panel chrome and one open animation — same shape, same centered position,
+   same open/close — differing only in width/height by content. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
   padding: 16px;
+  animation: backdrop-in 0.16s ease-out;
 }
-.settings-panel {
-  width: min(420px, 94vw);
-  max-height: 90dvh;
-  overflow-y: auto;
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.panel {
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-top: 2px solid var(--neon-purple);
   border-radius: 12px;
-  padding: 16px 18px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  animation: panel-in 0.16s ease-out;
 }
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.settings-panel {
+  width: min(460px, 94vw);
+  max-height: 50dvh; /* half-height modal; the body scrolls when a tab is taller */
+  padding: 16px 18px;
+}
+/* Keyboard cheat-sheet overlay. */
+.help-panel {
+  width: min(540px, 94vw);
+  max-height: 88dvh;
+  padding: 16px 18px;
+}
+.help-intro {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.help-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.help-row {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.help-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.help-desc {
+  font-size: 12px;
+  color: var(--text);
+}
+.help-shift {
+  color: var(--muted);
+  font-size: 11px;
+}
+/* A keycap chip used in the help overlay + intro text. */
+.kbd-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: 700 11px/1 ui-monospace, monospace;
+}
+/* Editable keybinding map (Settings ▸ Keys). */
+.keybinds {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.keybinds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 4px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.keybinds-col-label {
+  font-size: 10px;
+}
+.keybinds-reset {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.keybinds-reset:hover {
+  border-color: var(--accent);
+}
+.bind-group-title {
+  margin: 10px 2px 2px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.bind-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+.bind-desc {
+  font-size: 12px;
+  color: var(--text);
+  min-width: 0;
+}
+.bind-shift {
+  color: var(--muted);
+  font-size: 11px;
+}
+.bind-chips {
+  display: flex;
+  gap: 5px;
+}
+/* A keycap-style binding button: click to arm, then press a key to set it. */
+.bind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 48px;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: 700 11px/1 ui-monospace, monospace;
+  cursor: pointer;
+  justify-content: center;
+}
+.bind-chip:hover {
+  border-color: var(--accent);
+}
+.bind-chip.empty {
+  color: var(--muted);
+  border-style: dashed;
+  background: transparent;
+  font-weight: 500;
+}
+.bind-chip.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 10px -2px var(--accent);
+  font-weight: 600;
+}
+.bind-clear {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+}
+.bind-clear:hover {
+  color: var(--neon-pink, #ff5c8a);
+}
+
+/* Tabs: head + tabs stay put, only the body scrolls. */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 8px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.settings-tab:hover {
+  color: var(--text);
+}
+.settings-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--neon-purple);
+}
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 -18px;
+  padding: 0 18px;
+}
+.settings-info h3 {
+  margin: 4px 0 8px;
+  font-size: 15px;
+}
+.info-list {
+  margin: 8px 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Collapsible Privacy / Community / Terms blocks in the About tab. */
+.policy {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 12px;
+}
+.policy > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 11px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy > summary::-webkit-details-marker {
+  display: none;
+}
+.policy > summary::before {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.policy[open] > summary::before {
+  transform: rotate(90deg);
+}
+.policy[open] > summary {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 8px;
+}
+.policy .settings-hint {
+  margin: 8px 0;
+}
+.about-faq-head {
+  margin-top: 18px !important;
+}
+.info-links {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+.info-links a {
+  color: var(--neon-cyan);
+  font-size: 13px;
+}
+.faq-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.faq-item:first-child {
+  border-top: none;
+}
+.faq-q {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.faq-a {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+/* Search + Library windows — same footprint, bigger than Settings since they
+   hold scrolling lists. */
+.search-panel,
+.lib-panel {
+  width: min(900px, 96vw);
+  height: min(86dvh, 820px);
+}
+.search-panel {
+  padding: 14px 16px 0;
+}
+.lib-panel {
+  padding: 14px 16px;
+}
+.search-panel .explorer {
+  flex: 1;
+  min-height: 0;
+}
+.search-panel .search-bar {
+  position: static;
+  padding: 0 0 12px;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+}
+.search-panel .result-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 -16px; /* let rows reach the panel edges */
+}
+
+/* Filter + sort toolbar above the results (stays put while results scroll). */
+.result-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.result-filter {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.result-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.result-sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.result-sort select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.result-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .settings-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+}
+/* Search panel dropped its title — keep just the close button, pinned right, and
+   reclaim the header gap (the ✕ is hidden on desktop anyway). */
+.search-panel .settings-head {
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+/* Library header shows the current view's name + source, with the close button right. */
+.lib-panel .settings-head {
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.lib-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.lib-head-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-head-from {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .settings-head h2 {
   margin: 0;
@@ -1817,6 +3453,17 @@ body {
   font-size: 13px;
   color: var(--text);
 }
+.slider-row .settings-slider {
+  flex: 1;
+  max-width: 160px;
+  accent-color: var(--neon-cyan);
+  cursor: pointer;
+}
+.slider-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+}
 .swatches {
   display: flex;
   gap: 7px;
@@ -1828,12 +3475,91 @@ body {
   height: 22px;
   border-radius: 50%;
   border: 2px solid transparent;
+  /* faint ring so near-black swatches are still visible against dark panels */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
   cursor: pointer;
   padding: 0;
 }
 .swatch.on {
   border-color: #fff;
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+}
+
+/* ---- Color tab: each pill opens the OS picker; plus a Random roll + warns --- */
+.color-targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.color-target {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 11px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.05s;
+}
+.color-target:hover {
+  border-color: var(--text);
+}
+.color-target:active {
+  transform: translateY(1px);
+}
+/* The hidden native picker fills the pill, so a tap anywhere opens the wheel. */
+.color-target input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.color-target-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+.color-random {
+  font-size: 13px;
+}
+.color-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.color-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ffd76a;
+  background: rgba(255, 210, 80, 0.08);
+  border-left: 2px solid #ffd250;
+  border-radius: 4px;
+  padding: 7px 10px;
+}
+.color-warning-ico {
+  flex: 0 0 auto;
+}
+.color-ok {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 14px;
 }
 .swatch.custom {
   position: relative;
@@ -1853,13 +3579,13 @@ body {
   height: 24px;
   border-radius: 12px;
   border: 1px solid var(--line);
-  background: #0c0c13;
+  background: var(--panel);
   position: relative;
   cursor: pointer;
   flex: none;
 }
 .toggle.on {
-  background: color-mix(in srgb, var(--neon-cyan) 35%, #0c0c13);
+  background: color-mix(in srgb, var(--neon-cyan) 35%, var(--panel));
   border-color: var(--neon-cyan);
 }
 .toggle-knob {
@@ -1882,7 +3608,7 @@ body {
   justify-content: flex-end;
 }
 .seg-btn {
-  background: #0c0c13;
+  background: var(--panel);
   border: 1px solid var(--line);
   color: var(--muted);
   border-radius: 5px;
@@ -1935,7 +3661,7 @@ body {
 .yt-cookie {
   width: 100%;
   resize: vertical;
-  background: #050507;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
   color: var(--text);
@@ -1955,7 +3681,7 @@ body {
 .privacy {
   margin-top: 12px;
   padding: 12px;
-  background: #07070c;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
   font-size: 12px;
@@ -1981,6 +3707,498 @@ body {
   color: var(--text);
 }
 
+/* ---- Google sign-in ---- */
+.hw-btn.signin {
+  width: 100%;
+  height: 38px;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  background: var(--panel-2);
+  border-color: var(--neon-cyan);
+  color: var(--text);
+}
+.hw-btn.signin:hover {
+  border-color: var(--neon-lime);
+}
+.yt-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+.yt-account-badge {
+  font-size: 13px;
+  color: var(--neon-lime);
+  font-weight: 600;
+}
+
+/* htl account profile + connected-service rows */
+.acct-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.acct-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+.acct-id {
+  flex: 1;
+  min-width: 0;
+}
+.acct-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.acct-email {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conn-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #444;
+  flex: 0 0 auto;
+}
+.conn-dot.on {
+  background: var(--neon-lime);
+  box-shadow: 0 0 6px var(--neon-lime);
+}
+.conn-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.conn-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+.conn-action {
+  margin-left: auto;
+}
+
+/* Sync playlists — fullscreen review modal */
+.sync-full {
+  position: relative;
+  width: min(900px, 94vw);
+  height: min(86vh, 900px);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+}
+.sync-dir-chip {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 8px;
+  font-weight: 500;
+}
+.sync-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.sync-center {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+.sync-progress {
+  width: min(420px, 80%);
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.sync-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.sync-done-check {
+  font-size: 48px;
+  color: var(--neon-lime);
+  text-shadow: 0 0 16px var(--neon-lime);
+}
+
+/* review list */
+.sync-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.sync-review {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.sync-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #14151d;
+}
+.sync-row.skipped {
+  opacity: 0.4;
+}
+.sync-src,
+.sync-dst {
+  min-width: 0;
+}
+.sync-tt {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync-ar {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync-arrow2 {
+  color: var(--accent);
+}
+.sync-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.sync-badge.c-high {
+  color: #06140a;
+  background: var(--neon-lime);
+}
+.sync-badge.c-medium {
+  color: #161204;
+  background: var(--neon-yellow);
+}
+.sync-badge.c-low {
+  color: #1a0c04;
+  background: #ff9d4a;
+}
+.sync-badge.c-none {
+  color: #fff;
+  background: #c0334e;
+}
+.sync-change {
+  font-size: 11px;
+}
+.sync-alts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0 4px 34px;
+}
+.sync-alt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sync-alt.active {
+  border-color: var(--accent);
+}
+.sync-alt img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.sync-alt em {
+  color: var(--muted);
+  font-style: normal;
+}
+.sync-research {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.sync-research .yt-input {
+  flex: 1;
+}
+.sync-pl-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.sync-dir {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 12px;
+}
+.sync-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.sync-from select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.sync-arrow {
+  color: var(--accent);
+  font-weight: 700;
+}
+.sync-to {
+  font-size: 13px;
+  color: var(--muted);
+}
+.sync-picker {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--surface);
+}
+.sync-pl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.sync-pl:hover {
+  background: var(--panel-2);
+}
+.sync-pl.active {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+.sync-pl-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync-run {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.sync-run .yt-input {
+  flex: 1;
+}
+.sync-report {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.sync-report-head {
+  font-size: 13px;
+}
+.sync-report-head a {
+  color: var(--neon-cyan);
+}
+.sync-trunc {
+  color: var(--muted);
+}
+.sync-unmatched {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sync-unmatched summary {
+  cursor: pointer;
+}
+.sync-unmatched ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.signin-box {
+  margin-top: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: center;
+}
+.signin-step {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+}
+.signin-step a {
+  color: var(--neon-cyan);
+}
+.device-code {
+  margin: 8px auto 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--neon-cyan);
+  border-radius: 8px;
+  padding: 10px 14px;
+  user-select: all;
+}
+.signin-wait {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--neon-amber, var(--muted));
+}
+.signin-err {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--neon-pink, #ff5c8a);
+}
+.yt-sub {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.yt-sub:first-of-type {
+  border-top: none;
+  padding-top: 4px;
+}
+.yt-sub-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.yt-sub-note {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+}
+/* Stream-source picker (Settings → Accounts): gated radio-style list. */
+.src-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.src-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.src-opt:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.src-opt.on {
+  border-color: var(--accent-a, var(--text));
+  background: var(--panel-2);
+}
+.src-opt:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.src-ico {
+  font-size: 18px;
+  line-height: 1;
+}
+.src-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+.src-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.src-reason {
+  font-size: 11px;
+  color: var(--muted);
+}
+.src-mark {
+  font-size: 12px;
+  color: var(--accent-a, var(--text));
+}
+.yt-steps {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.yt-steps strong {
+  color: var(--text);
+}
+.cookie-msg {
+  margin-top: 8px;
+  color: var(--neon-lime);
+}
+
 /* ===================== Glow off ===================== */
 body.no-glow .logo,
 body.no-glow .chan-id,
@@ -2002,5 +4220,1081 @@ body.no-glow .top-btn:hover {
 }
 body.no-glow .knob-ring-fill {
   filter: none;
+}
+/* Flat mode: keep the focus ring, drop its soft glow. */
+body.no-glow .bank.focused {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+body.no-glow .lane.focused::after {
+  box-shadow: none;
+}
+
+/* Graceful narrow desktop: between the phone breakpoint and a comfortable width, two
+   button banks share the row and get cramped. Tighten spacing (and the short labels
+   above) so buttons shrink to fit instead of clipping into the neighbouring deck. */
+@media (min-width: 769px) and (max-width: 1099px) {
+  .bank {
+    gap: 6px;
+    padding: 10px 8px;
+  }
+  .bank-main {
+    gap: 5px;
+  }
+  .pitch-step {
+    padding: 5px 2px;
+    font-size: 12px;
+  }
+}
+/* PITCH (− TEMPO KEY +) and STEMS (DRUM BASS VOICE INST) feet in the deck-controls
+   bank — equal columns across the bank width. */
+.pitch-row,
+.stems-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+  align-items: stretch;
+}
+.pitch-step {
+  display: grid;
+  place-items: center;
+  /* Solid dark fill (not transparent) so the steppers read as real buttons flush
+     next to the cells — a faint transparent fill looked like a gap. */
+  background: color-mix(in srgb, var(--accent) 16%, #161a22);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.pitch-step:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pitch-step:active {
+  transform: translateY(1px);
+}
+.stem-btn {
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8a94a6;
+  background: #161a22;
+  border: 1px solid #2a3140;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, box-shadow 0.12s, border-color 0.12s;
+}
+.stem-btn:hover:not(:disabled) {
+  border-color: var(--accent, #36d1ff);
+}
+.stem-btn.on {
+  color: #0a0d12;
+  background: var(--accent, #36d1ff);
+  border-color: var(--accent, #36d1ff);
+  box-shadow: 0 0 10px -2px var(--accent, #36d1ff);
+}
+.stem-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+body.no-glow .stem-btn.on {
+  box-shadow: none;
+}
+
+/* Settings stem-model picker: a stacked list of selectable backends. */
+.stem-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stem-model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface, #12141c);
+  border: 1px solid var(--line, #2a3140);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.stem-model:hover {
+  border-color: var(--neon-cyan, #36d1ff);
+}
+.stem-model.on {
+  border-color: var(--neon-cyan, #36d1ff);
+  box-shadow: inset 0 0 0 1px var(--neon-cyan, #36d1ff);
+}
+.stem-model-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text, #ecedfb);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stem-model-note {
+  font-size: 11px;
+  color: var(--muted, #8a94a6);
+}
+/* Per-model status pills: device capability + whether the loaded track is cached. */
+.stem-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.stem-badge.ok {
+  color: #6ee7a8;
+}
+.stem-badge.warn {
+  color: #ffcf6e;
+}
+.stem-badge.cached {
+  color: #06080c;
+  background: #6ee7a8;
+  border-color: #6ee7a8;
+}
+
+/* Per-deck stem status / error lines (Settings ▸ Stems). The full sentence lives
+   here; the deck lane shows only the terse percentage. */
+.stem-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.stem-status-row + .stem-status-row {
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+.stem-status-deck {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-color, #e8edf4);
+}
+.stem-status-detail {
+  flex: 1 1 auto;
+}
+.stem-reanalyze {
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.stem-reanalyze:hover:not(:disabled) {
+  border-color: var(--neon-cyan, #00e5ff);
+}
+.stem-reanalyze:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Active-device indicator for the selected stem model (GPU vs CPU). */
+.stem-trace {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  color: var(--muted);
+  -webkit-overflow-scrolling: touch;
+}
+.stem-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.stem-device-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.stem-device-text {
+  flex: 1 1 auto;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stem-device.gpu .stem-device-tag {
+  color: #7cc7ff;
+}
+.stem-device.cpu .stem-device-tag {
+  color: #6ee7a8;
+}
+.stem-device.none .stem-device-tag {
+  color: #ffcf6e;
+}
+
+/* Crash-guard banner: GPU separation auto-disabled after a tab crash. */
+.stem-blocked-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #ffcf6e;
+  background: rgba(255, 207, 110, 0.1);
+  border: 1px solid rgba(255, 207, 110, 0.35);
+}
+.stem-blocked-banner .link-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* A GPU model disabled after a crash — not selectable. */
+.stem-model.blocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.stem-model.blocked:hover {
+  background: inherit;
+}
+/* A GPU model untested on this browser — dimmed, but still clickable. */
+.stem-model.untested:not(.on) {
+  opacity: 0.72;
+}
+.stem-status-row.separating .stem-status-detail {
+  color: #ffd250; /* on-device processing — yellow */
+}
+.stem-status-row.cached .stem-status-detail,
+.stem-status-row.downloading .stem-status-detail,
+.stem-status-row.ready .stem-status-detail,
+.stem-status-row.promoted .stem-status-detail {
+  color: #6ee7a8; /* cache fetch / done / auto-enhanced — green */
+}
+.stem-status-row.failed .stem-status-detail {
+  color: #ff7a7a;
+}
+.stem-status-row.unavailable .stem-status-detail {
+  color: #ffcf6e;
+}
+
+/* ── Narrow / mobile mixer: pin the crossfader, scroll each side outward ──────────
+   The all-fader console is wider than a narrow viewport. Instead of clipping, keep
+   the A↔B crossfader as a fixed centre spine and let each channel scroll
+   horizontally OUTWARD from it. Each deck's OUT (LEVEL) fader stays anchored beside
+   the crossfader (the default view = OUT │ A/B │ OUT, exactly the live-mix spine);
+   scroll a side to reach its PITCH · FX · EQ · STEMS banks.
+   Anchoring uses the RTL-scroll trick: a horizontal scroll container shows its
+   right edge first when `direction: rtl`. Deck A (banks EQ…OUT, OUT on the right)
+   gets rtl so OUT sits against the crossfader; its inner row is reset to ltr so the
+   banks keep their order. Deck B is mirrored (OUT already on the left), so plain
+   ltr already anchors OUT against the crossfader. Appended at EOF so these win the
+   source-order tie over the desktop base rules. */
+@media (max-width: 1080px) {
+  .mixer-box {
+    width: 100%;
+    max-width: 100%;
+  }
+  .mix-row .channels {
+    flex: 1 1 auto;
+    width: 100%;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .channels .chan {
+    flex: 1 1 0;
+    min-width: 0;
+    align-items: flex-start; /* hug the cross-start edge (right in rtl, left in ltr) */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none; /* hide the scrollbar — still swipe-scrollable */
+    -ms-overflow-style: none;
+  }
+  .channels .chan:not(.mirror) {
+    direction: rtl; /* anchor scroll + content to the RIGHT (inner) edge */
+  }
+  .channels .chan:not(.mirror) .chan-row {
+    direction: ltr; /* keep the banks EQ … OUT left-to-right */
+  }
+  .channels .crossfader.vertical {
+    flex: 0 0 auto; /* the pinned centre spine — never shrinks or scrolls */
+    align-self: center;
+  }
+  .channels .chan::-webkit-scrollbar {
+    display: none; /* hide the scrollbar (WebKit/Blink) */
+  }
+}
+
+/* --- Shared DJ session ("Sync") chin control + device popover -------------- */
+.room {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  order: 10; /* far right of the chin, where the ⓘ help square used to sit */
+}
+/* Square icon button, matching the Settings gear square (icon only, no label). */
+.chin-room {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+}
+/* The ⇅ sync glyph carries the connection status via its colour:
+   idle (muted), connecting (amber pulse), online (green glow), error (red). */
+.chin-room-i {
+  font-size: 17px;
+  line-height: 1;
+  transition: color 0.12s, text-shadow 0.12s;
+}
+.chin-room-i.online {
+  color: #38e08a;
+  text-shadow: 0 0 7px #38e08a;
+}
+.chin-room-i.connecting {
+  color: #f5c451;
+  animation: room-pulse 1s ease-in-out infinite;
+}
+.chin-room-i.error {
+  color: #ff5a6a;
+}
+@keyframes room-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+/* Peer-count badge (how many devices are in the room), top-right corner. */
+.room-count {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #08111a;
+  font-size: 9px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.room-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.room-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 41;
+  width: 280px;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, #000);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.room-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.room-title {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.room-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.room-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.room-tap-hint {
+  margin: 0 0 2px;
+}
+/* Device pills — the whole control surface: tap one to make it the audio output. */
+.room-pills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.room-pill {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+.room-pill:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.room-pill.out {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+/* A pill row = the tappable device pill + (for your own tied device) a ✕ to leave. */
+.room-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-pill-row .room-pill {
+  flex: 1 1 auto;
+}
+/* In-session (tied, following the output) devices get a small accent edge. */
+.room-pill.tied:not(.out) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.room-leave {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.room-leave:hover {
+  color: #ff8a96;
+  border-color: #ff8a96;
+}
+.room-pill-ico {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+.room-pill-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.room-pill-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+.room-pill.out .room-pill-tag {
+  color: var(--accent);
+}
+.room-status {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.room-status.ok {
+  color: #38e08a;
+}
+.room-status.wait {
+  color: #f5c451;
+}
+.room-err {
+  font-size: 12px;
+  color: #ff8a96;
+}
+.room-warn {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #ffcf6b;
+  background: color-mix(in srgb, #ffcf6b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #ffcf6b 30%, transparent);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+.room-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+  padding: 2px 4px;
+}
+.room-note strong {
+  color: var(--text);
+}
+.room-peer-ico {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+}
+.room-peers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.room-peer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.room-peer.master {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.room-peer.empty {
+  color: var(--muted);
+  justify-content: center;
+}
+.room-peer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-you {
+  color: var(--muted);
+  font-size: 11px;
+}
+.room-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+}
+.room-act {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+}
+.room-act:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-actions {
+  display: flex;
+}
+.room-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.room-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+}
+.room-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Session lobby header (phase narration: Solo / Connecting / Live / No output) --- */
+.room-sesh {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.room-sesh-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.room-sesh-title {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.room-sesh-sub {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.room-status.idle {
+  color: var(--muted);
+}
+.room-status.warn {
+  color: #ffcf6b;
+}
+/* Header tools cluster: the 👁 streaming-privacy reveal + the status chip. */
+.room-sesh-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.room-eye {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+.room-eye:hover,
+.room-eye.on {
+  opacity: 1;
+}
+/* A masked avatar is blurred until revealed (faces are PII on stream). */
+.acct-avatar.private {
+  filter: blur(7px);
+}
+/* --- Device bridge: two device-sessions linked by a shared control plane --- */
+.room-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* Each device = its own session card. */
+.room-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+}
+/* The one device currently making sound. */
+.room-dev.output {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.room-dev-ico {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+.room-dev-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.room-dev-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-dev-you {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.room-dev-role {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+.room-dev.output .room-dev-role {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+.room-dev-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+}
+.room-dev-act {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.room-dev-act:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+/* The bridge between the cards — shows whether controls are shared. */
+.room-link-bridge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.room-link-bridge::before,
+.room-link-bridge::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.room-link-bridge.linked {
+  color: var(--accent);
+}
+.room-link-bridge.linked::before,
+.room-link-bridge.linked::after {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.bridge-glyph {
+  font-size: 12px;
+  line-height: 1;
+}
+/* Placeholder when there's no second device yet. */
+.room-ghost {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* Drop this device out of the shared control plane. */
+.room-unlink {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.room-unlink:hover {
+  color: #ff8a96;
+  border-color: #ff8a96;
+}
+
+/* --- Session lobby: participant roster (scales to N) --- */
+.room-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* A taller card per device: prominent device glyph on the left, identity + role on top,
+   switches / status underneath. NO accent chrome on your own card — role is conveyed by
+   the host/guest tag, not a colored border. */
+.room-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  min-height: 58px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+/* A present-but-not-joined OTHER device is faded; your own card stays full so its
+   switches read as tappable. */
+.room-card:not(.in):not(.self) {
+  opacity: 0.55;
+}
+.room-card.in {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.room-card-ico {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  line-height: 1;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.room-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.room-card-id {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.room-card-foot {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+}
+.room-card .room-dev-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* Discovery / waiting status on a row when switches aren't shown yet. */
+.room-row-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+/* The two per-device switches: 🎛️ drive + 🔊 sound. Dim/grey when off, lit when on. */
+.room-row-tog {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-tog {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  filter: grayscale(1) opacity(0.4);
+  transition: filter 0.12s, border-color 0.12s, background 0.12s;
+}
+button.room-tog:hover {
+  border-color: var(--accent);
+  filter: grayscale(0.3) opacity(0.85);
+}
+.room-tog.on {
+  filter: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.room-tog.static {
+  cursor: default;
+  width: 28px;
+  height: 26px;
+  font-size: 13px;
+}
+/* A guest's own drive switch is locked until the host grants control. */
+.room-tog.locked {
+  cursor: not-allowed;
+  border-style: dashed;
+  filter: grayscale(1) opacity(0.28);
+}
+/* Guests are called out clearly + never name-masked. */
+.room-guest-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9fd0ff;
+  background: color-mix(in srgb, #7fb6ff 16%, transparent);
+  border: 1px solid color-mix(in srgb, #7fb6ff 38%, transparent);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.room-card.guest {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, #7fb6ff 55%, transparent);
+}
+/* Host = every device on the session-owner's account (an account-wide property, not the
+   anchor). Green, to read clearly distinct from the guest blue. */
+.room-host-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9be9c0;
+  background: color-mix(in srgb, #6bdc9e 15%, transparent);
+  border: 1px solid color-mix(in srgb, #6bdc9e 36%, transparent);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.room-row-acts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-act {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.room-act:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-act.primary {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--accent);
+}
+.room-act.primary:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+/* Footer: join/leave + invite. */
+.room-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.room-cta {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.room-cta:hover {
+  filter: brightness(1.08);
+}
+.room-invite {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.room-invite:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-invite:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.room-invite-link {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- "Take control" lock over the stage for a listening guest --- */
+.stage {
+  position: relative;
+}
+/* Invisible input shield: the deck stays fully visible, taps just don't reach it. */
+.stage-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: transparent;
+  cursor: not-allowed;
 }
 

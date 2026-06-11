@@ -2,12 +2,29 @@ export {
   type Settings,
   DEFAULT_SETTINGS,
   TEMPO_RANGES,
+  PITCH_RANGES,
   JUMP_RESOLUTIONS,
   jumpLabel,
+  SKIP_SIZES,
+  DEFAULT_SKIP,
+  nextSkip,
+  stepSkip,
+  gridLabel,
+  skipLabel,
+  skipTitle,
   ACCENT_PRESETS,
+  BG_PRESETS,
+  TEXT_PRESETS,
+  BORDER_PRESETS,
+  DEFAULT_BG,
+  DEFAULT_TEXT,
+  DEFAULT_BORDER,
+  contrastRatio,
+  contrastWarnings,
   loadSettings,
   saveSettings,
   applySettings,
+  surfaceColor,
 } from "./settings";
 export {
   type DeckSnapshot,
@@ -17,3 +34,15 @@ export {
   saveSession,
   clearSession,
 } from "./session";
+export { type SearchState, type SortKey, loadSearchState, saveSearchState } from "./searchState";
+export { useSettingsSync } from "./settingsSync";
+export {
+  type KeyAction,
+  type KeyBinding,
+  type KeyBindings,
+  KEY_ACTIONS,
+  DEFAULT_BINDINGS,
+  mergeBindings,
+  bindingIndex,
+  codeLabel,
+} from "./keybinds";

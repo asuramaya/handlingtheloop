@@ -1825,6 +1825,16 @@ body.no-glow .caption-cue.on {
     flex: 1 1 0;
     min-height: 0;
   }
+  /* The foot rows (PITCH/STEMS/EQ cells + the level fader) keep their natural cell
+     height — the button ROWS above absorb the growth. Otherwise these rows stretch
+     while the fixed-height ValueCells don't, leaving the ∓ steppers taller than the
+     TEMPO/KEY cells beside them. */
+  .decks-row .bank-main > .lfader,
+  .decks-row .bank-main > .pitch-row,
+  .decks-row .bank-main > .stems-row,
+  .decks-row .bank-main > .eq-row {
+    flex: 0 0 auto;
+  }
   /* Let the pixel-locked buttons stretch with their (taller) row. Higher
      specificity than the global `.bank .pad`/`.jog-btn` height so order is moot. */
   .decks-row .bank .pad,
@@ -1835,7 +1845,9 @@ body.no-glow .caption-cue.on {
 
 /* Bottom third — the two channel mixers side by side, crossfader beneath. */
 .mix-row {
-  flex: 1 1 0;
+  /* Only the EQ strips live here now, so hug their height and hand the freed space
+     back to the waveform lanes + deck banks (which then aren't cramped). */
+  flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1927,77 +1939,105 @@ body.no-glow .caption-cue.on {
   }
 }
 
-/* Mixer centre: three vertical faders — deck A volume · A↔B crossfade · deck B
-   volume — each riding over that deck's live stereo (L/R) dB meter. A (top) and
-   B (bottom) label the cluster. */
-.mixcenter {
+/* Middle third = the crossfader bar across the top, then the deck banks below. */
+.decks-third {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  align-self: center;
-  margin: 0 8px;
 }
-.mc-cols {
+/* The A↔B crossfader as a HORIZONTAL bar at the top of the middle section — the
+   track spans the full width (no side gaps) and sits flush at the bottom. */
+.xfader-bar {
+  flex: 0 0 auto;
   display: flex;
-  gap: 10px;
-  height: var(--fader-h, 150px);
+  align-items: center;
+  padding: 5px 0 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
 }
-.mc-col {
+.xbar-track {
   position: relative;
-  width: 26px;
-  height: 100%;
+  flex: 1;
+  height: 30px;
+  background: color-mix(in srgb, var(--text) 6%, #000);
+  border-top: 1px solid var(--line);
+  overflow: hidden;
 }
-/* A rotated range input forms each vertical fader: handle rides above (z-index),
-   value increasing UPWARD. Level faders put max at top (rotate −90°); the
-   crossfade puts A(−1) at top to match the A-over-B labels (rotate +90°). */
-.mc-fader {
+/* Bipolar meter: deck A fills the left half growing OUT from the centre datum, deck
+   B fills the right half growing out to the right. */
+.xbip {
   position: absolute;
-  top: 50%;
+  inset: 3px;
+  pointer-events: none;
+}
+.xbip .smeter {
+  position: absolute;
+  inset: auto;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+}
+.xbip .smeter.xb-a { left: 0; }
+.xbip .smeter.xb-b { right: 0; }
+.xbip .smeter.xb-a .smeter-fill { right: 0; left: auto; }
+.xbip .smeter.xb-b .smeter-fill { left: 0; right: auto; }
+.xbar-track::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
   left: 50%;
-  width: var(--fader-h, 150px); /* vertical travel after rotation */
-  height: 22px;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--text) 32%, transparent);
+  pointer-events: none;
+}
+.xbar-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   margin: 0;
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
-  transform: translate(-50%, -50%) rotate(-90deg);
   z-index: 2;
-  cursor: ns-resize;
+  cursor: ew-resize;
 }
-.mc-col.cross .mc-fader {
-  transform: translate(-50%, -50%) rotate(90deg);
-}
-.mc-fader::-webkit-slider-runnable-track { height: 5px; background: transparent; border: none; }
-.mc-fader::-moz-range-track { height: 5px; background: transparent; border: none; }
-.mc-fader::-webkit-slider-thumb {
+.xbar-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.xbar-input::-moz-range-track { background: transparent; }
+.xbar-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 12px;
+  width: 14px;
   height: 24px;
-  margin-top: -9.5px;
-  border-radius: 3px;
+  border-radius: 4px;
   background: #fff;
   border: none;
-  box-shadow: 0 0 7px rgba(255, 255, 255, 0.85), 0 0 14px rgba(255, 255, 255, 0.4);
-  cursor: ns-resize;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.6);
+  cursor: ew-resize;
 }
-.mc-fader::-moz-range-thumb {
-  width: 12px;
+.xbar-input::-moz-range-thumb {
+  width: 14px;
   height: 24px;
-  border-radius: 3px;
+  border-radius: 4px;
   background: #fff;
   border: none;
-  box-shadow: 0 0 7px rgba(255, 255, 255, 0.85), 0 0 14px rgba(255, 255, 255, 0.4);
-  cursor: ns-resize;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.6);
+  cursor: ew-resize;
 }
 
-/* Stereo meter: two L/R sub-bars filling the column behind the fader handle. */
+/* Stereo meter — vertical (v) bars by default, horizontal (h) for the level
+   faders. Two L/R sub-bars; fills driven by the component each frame. */
 .smeter {
   position: absolute;
   inset: 4px 3px;
   display: flex;
   gap: 2px;
   z-index: 0;
+}
+.smeter.h {
+  flex-direction: column;
 }
 .smeter-bar {
   position: relative;
@@ -2008,50 +2048,72 @@ body.no-glow .caption-cue.on {
 }
 .smeter-fill {
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 0%;
   background: var(--accent);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.smeter.up .smeter-fill { bottom: 0; }
-.smeter.down .smeter-fill { top: 0; }
+.smeter.v .smeter-fill { left: 0; right: 0; height: 0%; }
+.smeter.v.up .smeter-fill { bottom: 0; }
+.smeter.v.down .smeter-fill { top: 0; }
+.smeter.h .smeter-fill { top: 0; bottom: 0; left: 0; width: 0%; }
 /* Near full-scale — warn red so clipping is obvious at a glance. */
 .smeter-fill.hot { background: #ff5d5d; box-shadow: 0 0 6px #ff5d5d; }
 
-/* Crossfade column: a bipolar meter box where deck A grows UP from the centre
-   datum and deck B grows DOWN, each its own stereo pair. */
-.mc-bip {
-  position: absolute;
-  inset: 4px 3px;
-  z-index: 0;
+
+/* Channel volume — a HORIZONTAL fader across the foot of each deck bank, riding
+   over its deck's live L/R meter. Full bank width (so it matches that half of the
+   middle section); colour + side say which deck, no label needed. */
+.lfader {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
-.mc-bip .smeter {
+/* Deck A: flip the fader so its 0 origin sits at the centre (both decks' faders
+   then grow OUTWARD from the middle). Flips the track, meter and handle together. */
+.lfader.mirror {
+  transform: scaleX(-1);
+}
+.lfader-track {
+  position: relative;
+  flex: 1;
+  height: 26px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 6%, #000);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.lfader-input {
   position: absolute;
   inset: 0;
-  left: 0;
-  right: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  z-index: 2;
+  cursor: ew-resize;
 }
-.mc-bip .smeter.bip-a { top: 0; bottom: auto; height: 50%; }
-.mc-bip .smeter.bip-b { top: 50%; bottom: auto; height: 50%; }
-.mc-bip::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  transform: translateY(-50%);
-  background: color-mix(in srgb, var(--text) 32%, transparent);
-  pointer-events: none;
+.lfader-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.lfader-input::-moz-range-track { background: transparent; }
+.lfader-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 18px; /* fits inside the 26px track */
+  border-radius: 4px;
+  background: #fff;
+  border: none;
+  /* Tight glow only — a big halo bled vertically and made the handle read as too tall. */
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.6);
+  cursor: ew-resize;
 }
-
-.mixcenter .xf-end {
-  font-size: 13px;
-  font-weight: 700;
+.lfader-input::-moz-range-thumb {
+  width: 13px;
+  height: 18px;
+  border-radius: 4px;
+  background: #fff;
+  border: none;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.6);
+  cursor: ew-resize;
 }
-.mixcenter .xf-end.top { color: var(--neon-cyan, #36c2ff); }
-.mixcenter .xf-end.bottom { color: var(--neon-pink, #ff6ec7); }
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first
    flex child of .app (not floating), so it reserves its row and never overlaps
@@ -2445,7 +2507,9 @@ body.no-glow .caption-cue.on {
   border-color: var(--accent);
   color: #06080c;
   font-size: 16px;
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 60%, transparent);
+  /* No glow halo — it bled above/below the box and made PLAY read as taller than
+     the un-glowed CUE/SHIFT. The accent fill already marks it as primary. */
+  box-shadow: none;
 }
 .hw-btn.play:hover {
   color: #06080c;
@@ -4245,15 +4309,32 @@ body.no-glow .lane.focused::after {
     font-size: 12px;
   }
 }
-/* PITCH (− TEMPO KEY +) and STEMS (DRUM BASS VOICE INST) feet in the deck-controls
-   bank — equal columns across the bank width. */
+/* PITCH (− TEMPO KEY +), STEMS (DRUM/BASS/VOICE/INST) and EQ (TRIM/HI/MID/LOW)
+   feet in the deck-controls bank — four equal columns across the bank width. */
 .pitch-row,
-.stems-row {
+.stems-row,
+.eq-row {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   gap: 6px;
   align-items: stretch;
+}
+/* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
+@media (min-width: 769px) {
+  .pitch-row .vcell,
+  .stems-row .vcell,
+  .eq-row .vcell {
+    height: 50px;
+  }
+}
+/* Re-order the bank: volume slider on top, then CUE/PLAY/SHIFT as the first button
+   row; the rest keep their DOM order beneath. */
+.bank-main > .lfader {
+  order: -2;
+}
+.bank-main > .bank-load {
+  order: -1;
 }
 .pitch-step {
   display: grid;

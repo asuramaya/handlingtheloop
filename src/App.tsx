@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
-import { ChannelStrip } from "./components/ChannelStrip";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
-import { LevelFader } from "./components/LevelFader";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -1432,13 +1430,19 @@ export function App() {
   // own waveform. Remote-driven loads go through applyIntent and DON'T re-emit.
   const loadAndShare = useCallback(
     (id: DeckId, track: TrackMeta) => {
+      // A watch-only passenger (joined but not driving) MIRRORS the session — it must
+      // not load locally. Doing so both diverges its deck from the session AND poisons
+      // roomLoadTarget so the snapshot can never restore the correct track (the "Deck B
+      // stuck on a different track" desync). The library lives outside the stage-lock
+      // overlay, so this is the one place that input still reaches us — gate it here.
+      if (room.enabled && !room.controlling) return;
       if (track.videoId) {
         roomLoadTarget.current[id] = track.videoId; // so the master's echo snapshot doesn't reload it
         emit({ kind: "load", deck: id, videoId: track.videoId, name: track.title, artist: track.artist });
       }
       void loadTrackToDeck(id, track);
     },
-    [emit, loadTrackToDeck],
+    [emit, loadTrackToDeck, room.enabled, room.controlling],
   );
 
   // The audio master publishes the authoritative set so a joiner (or a device that
@@ -1627,8 +1631,18 @@ export function App() {
           ))}
         </div>
 
-        {/* Middle third: the two decks' button banks side by side. */}
-        <div className="decks-row">
+        {/* Middle third: the A↔B crossfader across the top, then the two decks'
+            button banks side by side beneath it. */}
+        <div className="decks-third">
+          <Crossfader
+            deckA={engine.deckA}
+            deckB={engine.deckB}
+            accentA={ACCENT.A}
+            accentB={ACCENT.B}
+            crossfade={crossfade}
+            onCrossfade={(v) => { setCrossfade(v); engine.setCrossfade(v); if (room.controlling) room.sendIntent({ kind: "crossfade", value: v }); }}
+          />
+          <div className="decks-row">
           <DeckControls
             id="A"
             deck={engine.deckA}
@@ -1639,6 +1653,7 @@ export function App() {
             shift={shift}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
+            levelGainDb={levelGainsDb.a}
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
@@ -1647,15 +1662,6 @@ export function App() {
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
-          />
-          {/* The A↔B crossfader stands vertically in the gap between the decks. */}
-          <Crossfader
-            deckA={engine.deckA}
-            deckB={engine.deckB}
-            accentA={ACCENT.A}
-            accentB={ACCENT.B}
-            crossfade={crossfade}
-            onCrossfade={(v) => { setCrossfade(v); engine.setCrossfade(v); if (room.controlling) room.sendIntent({ kind: "crossfade", value: v }); }}
           />
           <DeckControls
             id="B"
@@ -1667,6 +1673,7 @@ export function App() {
             shift={shift}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
+            levelGainDb={levelGainsDb.b}
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
@@ -1676,37 +1683,10 @@ export function App() {
             emit={emit}
             emitControls={emitDeckControls}
           />
-        </div>
-
-        {/* Bottom third: the two EQ strips, then the horizontal channel-volume
-            faders beneath. (Crossfader lives up in the deck row now.) */}
-        <div className="mix-row">
-          <div className="mixer-box">
-            <div className="channels">
-              <ChannelStrip
-                id="A"
-                deck={engine.deckA}
-                accent={ACCENT.A}
-                onFocus={() => setFocused("A")}
-                refresh={refresh}
-                emit={emit}
-              />
-              <ChannelStrip
-                id="B"
-                deck={engine.deckB}
-                accent={ACCENT.B}
-                mirror
-                onFocus={() => setFocused("B")}
-                refresh={refresh}
-                emit={emit}
-              />
-            </div>
-            <div className="level-bar">
-              <LevelFader deck={engine.deckA} accent={ACCENT.A} level={engine.deckA.level} gainDb={levelGainsDb.a} label="A" onLevel={(v) => { engine.deckA.setLevel(v); refresh(); emit({ kind: "control", deck: "A", param: "level", value: v }); }} />
-              <LevelFader deck={engine.deckB} accent={ACCENT.B} level={engine.deckB.level} gainDb={levelGainsDb.b} label="B" onLevel={(v) => { engine.deckB.setLevel(v); refresh(); emit({ kind: "control", deck: "B", param: "level", value: v }); }} />
-            </div>
           </div>
         </div>
+
+        {/* Bottom third dissolved — EQ moved into each deck bank's foot. */}
       </main>
 
       <LibraryPanel

@@ -21,9 +21,14 @@ export interface Pyramid {
 }
 
 export interface Beatgrid {
-  bpm: number;
-  firstBeat: number; // seconds to first downbeat
-  interval: number; // seconds per beat
+  bpm: number; // representative tempo (best-fit slope over the tracked beats)
+  firstBeat: number; // seconds to first beat (constant-grid intercept)
+  interval: number; // seconds per beat (constant-grid slope)
+  // Dynamic grid: the actual tracked beat times (seconds), which flex with the
+  // music's tempo. Absent when DP beat tracking couldn't run (very short clips);
+  // consumers then fall back to the uniform firstBeat + k·interval comb. Use the
+  // beat-query helpers below rather than reading this directly.
+  beats?: Float32Array;
 }
 
 export interface KeyInfo {

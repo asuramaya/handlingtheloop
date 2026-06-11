@@ -156,7 +156,7 @@ export function useRoom(cb: RoomCallbacks = {}): RoomState {
 
   const me = peers.find((p) => p.id === you);
   const joined = me?.joined ?? false;
-  const listening = me?.listening ?? true;
+  const listening = me?.listening ?? false; // muted-by-default model: no audio until 🔊
   const controlling = me?.controlling ?? false;
   const host = me?.host ?? false;
   const isAnchor = anchorId !== null && anchorId === you;

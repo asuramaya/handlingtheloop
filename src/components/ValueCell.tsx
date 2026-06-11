@@ -73,6 +73,9 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
       style={{ touchAction: "none" }}
       onPointerDown={(e) => {
         if (disabled) return;
+        // Right / middle button: let onContextMenu reset the value — don't start a
+        // tap/drag (which would fire onTap, e.g. toggle a stem mute).
+        if (e.button !== 0) return;
         el.current?.focus();
         e.currentTarget.setPointerCapture(e.pointerId);
         // Double-tap / double-click resets.

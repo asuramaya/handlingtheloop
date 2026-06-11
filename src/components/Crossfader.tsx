@@ -18,27 +18,25 @@ interface CrossfaderProps {
   onCrossfade: (v: number) => void;
 }
 
-// The A↔B crossfader, standing vertically in the gap between the two deck-control
-// banks. The handle rides over a bipolar live meter — deck A grows UP from the
-// centre datum, deck B DOWN — both post-crossfade so they fade as you sweep.
+// The A↔B crossfader as a HORIZONTAL bar across the top of the middle section.
+// A on the left, B on the right; the bipolar meter grows OUT from the centre datum
+// (deck A leftward, deck B rightward), both post-crossfade so they fade as you sweep.
 export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade }: CrossfaderProps) {
   const { a: gainDbA, b: gainDbB } = crossfadeGainsDb(crossfade);
   return (
-    <div className="xfader">
-      <span className="xf-end top">A</span>
-      <div className="xf-rot">
-        <span className="mc-bip">
-          <StereoMeter deck={deckA} dir="up" accent={accentA} className="bip-a" gainDb={gainDbA} />
-          <StereoMeter deck={deckB} dir="down" accent={accentB} className="bip-b" gainDb={gainDbB} />
+    <div className="xfader-bar">
+      <div className="xbar-track">
+        <span className="xbip">
+          <StereoMeter deck={deckA} axis="h" accent={accentA} className="xb-a" gainDb={gainDbA} />
+          <StereoMeter deck={deckB} axis="h" accent={accentB} className="xb-b" gainDb={gainDbB} />
         </span>
         <input
-          type="range" className="mc-fader" min={-1} max={1} step={0.01} value={crossfade}
+          type="range" className="xbar-input" min={-1} max={1} step={0.01} value={crossfade}
           title="A ↔ B crossfade"
           onChange={(e) => onCrossfade(Number(e.target.value))}
           onContextMenu={(e) => { e.preventDefault(); onCrossfade(0); }}
         />
       </div>
-      <span className="xf-end bottom">B</span>
     </div>
   );
 }

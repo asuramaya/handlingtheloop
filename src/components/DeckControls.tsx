@@ -1,11 +1,12 @@
 import { useState } from "react";
 import type { Deck } from "@htl/audio";
-import { HOT_CUE_COUNT } from "@htl/audio";
+import { HOT_CUE_COUNT, EQ_MAX_DB, EQ_MIN_DB } from "@htl/audio";
 import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
 import { ValueCell } from "./ValueCell";
 import { KnobBorder } from "./KnobBorder";
+import { LevelFader } from "./LevelFader";
 import { useValueDrag } from "./useValueDrag";
 
 // Per-stem cells (under the PITCH foot). Each is a level knob AND the mute toggle:
@@ -32,6 +33,7 @@ interface DeckControlsProps {
   shift: boolean;
   tempoRange: number;
   pitchRange: number;
+  levelGainDb: number; // post-crossfade attenuation for this deck's level meter
   onCycleTempoRange: () => void;
   onCyclePitchRange: () => void;
   onToggleShift: () => void;
@@ -57,7 +59,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift, tempoRange, pitchRange, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
   const [effect, setEffect] = useState(EFFECTS[0].id);
   const [fxMenu, setFxMenu] = useState(false);
   const effectLabel = EFFECTS.find((e) => e.id === effect)?.label ?? "FX";
@@ -375,9 +377,40 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
             />
           ))}
         </div>
+
+        {/* EQ foot — bipolar (detent 0 dB): TRIM/HI/MID/LOW, same size as STEMS. */}
+        <div className="eq-row">
+          <ValueCell label="TRIM" value={gainToDb(deck.trim)} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { const g = dbToGain(v); deck.setTrim(g); refresh(); emit({ kind: "control", deck: id, param: "trim", value: g }); }} format={db} />
+          <ValueCell label="HI" value={deck.eqHigh} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqHigh(v); refresh(); emit({ kind: "control", deck: id, param: "eqHigh", value: v }); }} format={db} />
+          <ValueCell label="MID" value={deck.eqMid} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqMid(v); refresh(); emit({ kind: "control", deck: id, param: "eqMid", value: v }); }} format={db} />
+          <ValueCell label="LOW" value={deck.eqLow} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqLow(v); refresh(); emit({ kind: "control", deck: id, param: "eqLow", value: v }); }} format={db} />
+        </div>
+
+        {/* Channel volume — a horizontal level fader (rendered at the bank TOP via
+            CSS order). Deck A mirrors so both decks grow outward from the centre. */}
+        <LevelFader
+          deck={deck}
+          accent={accent}
+          level={deck.level}
+          gainDb={levelGainDb}
+          label={id}
+          mirror={id === "A"}
+          onLevel={(v) => { deck.setLevel(v); refresh(); emit({ kind: "control", deck: id, param: "level", value: v }); }}
+        />
       </div>
     </div>
   );
+}
+
+// Compact dB readout for the EQ / trim cells (signed, no decimals).
+function db(v: number): string {
+  return `${v > 0 ? "+" : ""}${Math.round(v)}`;
+}
+function dbToGain(d: number): number {
+  return Math.pow(10, d / 20);
+}
+function gainToDb(gain: number): number {
+  return gain > 0 ? Math.max(EQ_MIN_DB, 20 * Math.log10(gain)) : EQ_MIN_DB;
 }
 
 // The merged effect control: tap toggles the effect on/off, scroll or vertical drag

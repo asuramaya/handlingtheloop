@@ -7,16 +7,17 @@ interface LevelFaderProps {
   level: number;
   gainDb: number;
   label: string;
+  mirror?: boolean; // flip horizontally so the deck's origin (0) sits at the centre
   onLevel: (v: number) => void;
 }
 
-// A horizontal channel-volume fader for the bottom strip, riding over the deck's
-// live stereo (L/R) meter. The meter is post-crossfade (gainDb), so it fades as
-// the crossfader moves away from this deck.
-export function LevelFader({ deck, accent, level, gainDb, label, onLevel }: LevelFaderProps) {
+// A horizontal channel-volume fader at the top of the deck's bank, riding over the
+// deck's live stereo (L/R) meter. The meter is post-crossfade (gainDb), so it fades
+// as the crossfader moves away from this deck. `mirror` flips it (deck A) so both
+// decks' faders grow OUTWARD from the shared centre.
+export function LevelFader({ deck, accent, level, gainDb, label, mirror, onLevel }: LevelFaderProps) {
   return (
-    <div className="lfader" style={{ ["--accent" as string]: accent }}>
-      <span className="lfader-label">{label}</span>
+    <div className={`lfader ${mirror ? "mirror" : ""}`} style={{ ["--accent" as string]: accent }}>
       <div className="lfader-track">
         <StereoMeter deck={deck} axis="h" accent={accent} gainDb={gainDb} />
         <input

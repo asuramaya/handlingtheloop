@@ -283,18 +283,28 @@ export function nearestBeat(g: Beatgrid, t: number): number {
 }
 
 /** Beat time `n` beats away from the beat at-or-before `t` (for beat jumps/loops).
- *  Uses the tracked sequence where available so a 4-beat jump lands on beat 4. */
+ *  Uses the tracked sequence where available so a 4-beat jump lands on beat 4.
+ *  `n` may be FRACTIONAL (sub-beat loops: 1/2, 1/4 … 1/16) — the fractional part is
+ *  interpolated WITHIN the destination interval, so a 0.0625-beat loop is a real
+ *  short slice, not an out-of-bounds (undefined → NaN) index that crashes the loop. */
 export function beatTimeOffset(g: Beatgrid, t: number, n: number): number {
   const beats = g.beats;
   if (beats && beats.length >= 2) {
     const i = beatIndexBefore(beats, t);
     const base = i < 0 ? 0 : i;
+    // beat-time for any (possibly out-of-range) integer index, extrapolating at the
+    // edge interval beyond the tracked range.
+    const beatAt = (idx: number): number => {
+      if (idx >= 0 && idx < beats.length) return beats[idx];
+      if (idx < 0) return beats[0] + idx * (beats[1] - beats[0]);
+      const last = beats.length - 1;
+      return beats[last] + (idx - last) * (beats[last] - beats[last - 1]);
+    };
     const target = base + n;
-    if (target >= 0 && target < beats.length) return beats[target];
-    // Past the tracked range — extrapolate at the edge interval.
-    if (target < 0) return beats[0] + target * (beats[1] - beats[0]);
-    const last = beats.length - 1;
-    return beats[last] + (target - last) * (beats[last] - beats[last - 1]);
+    const lo = Math.floor(target);
+    const frac = target - lo;
+    const a = beatAt(lo);
+    return frac === 0 ? a : a + frac * (beatAt(lo + 1) - a);
   }
   const base = g.firstBeat + Math.round((t - g.firstBeat) / g.interval) * g.interval;
   return base + n * g.interval;

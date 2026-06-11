@@ -685,6 +685,31 @@ export class Deck {
     this.seek(beatTimeOffset(g, this.position(), beats));
   }
 
+  /** Jump to the next (dir>0) / previous (dir<0) phrase boundary — an 8/16/32-bar
+   *  section start. Past the detected range (or with no phrase data) it falls back
+   *  to a phrase-length jump in bars so the control always does something useful. */
+  phraseJump(dir: number) {
+    const g = this.beatgrid;
+    if (!g) return;
+    const pos = this.position();
+    const eps = 0.08; // don't re-land on the boundary we're sitting on
+    const phrases = g.phrases;
+    if (phrases && phrases.length) {
+      if (dir > 0) {
+        for (let i = 0; i < phrases.length; i++) {
+          if (phrases[i] > pos + eps) return this.seek(phrases[i]);
+        }
+      } else {
+        for (let i = phrases.length - 1; i >= 0; i--) {
+          if (phrases[i] < pos - eps) return this.seek(phrases[i]);
+        }
+      }
+    }
+    const bars = g.phraseBars ?? 16;
+    const bpb = g.beatsPerBar ?? 4;
+    this.seek(beatTimeOffset(g, pos, dir * bars * bpb));
+  }
+
   // --- cue ---
   setCue() {
     this.cuePoint = this.maybeSnap(this.position());

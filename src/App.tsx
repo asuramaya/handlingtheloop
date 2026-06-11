@@ -530,6 +530,14 @@ export function App() {
       jogFwdBeat: (deck, id, s) => jogBy(deck, id, s, 1),
       jogBack: (deck, id, s) => jogBy(deck, id, s, -deck.skipBeats),
       jogFwd: (deck, id, s) => jogBy(deck, id, s, deck.skipBeats),
+      phraseBack: (deck, id) => {
+        deck.phraseJump(-1);
+        emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
+      },
+      phraseFwd: (deck, id) => {
+        deck.phraseJump(1);
+        emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
+      },
     };
     for (let i = 0; i < 8; i++) HANDLERS[`hotcue${i + 1}`] = (deck, id, s) => hotcue(deck, id, s, i);
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));

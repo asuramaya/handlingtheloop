@@ -49,6 +49,8 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "jogFwdBeat", label: "Nudge forward a beat", group: "Jog", defaultKey: "ArrowRight", shiftLabel: "Move loop forward" },
   { id: "jogBack", label: "Jump back (skip size)", group: "Jog", defaultKey: "ArrowDown", shiftLabel: "Move loop back" },
   { id: "jogFwd", label: "Jump forward (skip size)", group: "Jog", defaultKey: "ArrowUp", shiftLabel: "Move loop forward" },
+  { id: "phraseBack", label: "Jump back a phrase", group: "Jog", defaultKey: "BracketLeft" },
+  { id: "phraseFwd", label: "Jump forward a phrase", group: "Jog", defaultKey: "BracketRight" },
 
   ...Array.from({ length: 8 }, (_, i) => ({
     id: `hotcue${i + 1}`,

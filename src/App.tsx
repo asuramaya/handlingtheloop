@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { ChannelStrip } from "./components/ChannelStrip";
-import { MixCenter } from "./components/MixCenter";
+import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
+import { LevelFader } from "./components/LevelFader";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -273,6 +274,8 @@ export function App() {
   // Which deck the keyboard drives (Tab toggles it; the focused deck is ringed).
   const [focused, setFocused] = useState<DeckId>("A");
   const ACCENT: Record<DeckId, string> = { A: settings.accentA, B: settings.accentB };
+  // Post-crossfade attenuation per deck, so the bottom level-fader meters fade with the crossfader.
+  const levelGainsDb = crossfadeGainsDb(crossfade);
 
   // Shared-session intent emitters, reached through refs so the keyboard handler
   // (set up before the room wiring below) can broadcast its actions too. Assigned
@@ -1645,6 +1648,15 @@ export function App() {
             emit={emit}
             emitControls={emitDeckControls}
           />
+          {/* The A↔B crossfader stands vertically in the gap between the decks. */}
+          <Crossfader
+            deckA={engine.deckA}
+            deckB={engine.deckB}
+            accentA={ACCENT.A}
+            accentB={ACCENT.B}
+            crossfade={crossfade}
+            onCrossfade={(v) => { setCrossfade(v); engine.setCrossfade(v); if (room.controlling) room.sendIntent({ kind: "crossfade", value: v }); }}
+          />
           <DeckControls
             id="B"
             deck={engine.deckB}
@@ -1666,8 +1678,8 @@ export function App() {
           />
         </div>
 
-        {/* Bottom third: the two channel mixers with the A↔B crossfader standing
-            vertically between them. */}
+        {/* Bottom third: the two EQ strips, then the horizontal channel-volume
+            faders beneath. (Crossfader lives up in the deck row now.) */}
         <div className="mix-row">
           <div className="mixer-box">
             <div className="channels">
@@ -1679,18 +1691,6 @@ export function App() {
                 refresh={refresh}
                 emit={emit}
               />
-              <MixCenter
-                deckA={engine.deckA}
-                deckB={engine.deckB}
-                accentA={ACCENT.A}
-                accentB={ACCENT.B}
-                levelA={engine.deckA.level}
-                levelB={engine.deckB.level}
-                crossfade={crossfade}
-                onLevelA={(v) => { engine.deckA.setLevel(v); refresh(); emit({ kind: "control", deck: "A", param: "level", value: v }); }}
-                onLevelB={(v) => { engine.deckB.setLevel(v); refresh(); emit({ kind: "control", deck: "B", param: "level", value: v }); }}
-                onCrossfade={(v) => { setCrossfade(v); engine.setCrossfade(v); if (room.controlling) room.sendIntent({ kind: "crossfade", value: v }); }}
-              />
               <ChannelStrip
                 id="B"
                 deck={engine.deckB}
@@ -1700,6 +1700,10 @@ export function App() {
                 refresh={refresh}
                 emit={emit}
               />
+            </div>
+            <div className="level-bar">
+              <LevelFader deck={engine.deckA} accent={ACCENT.A} level={engine.deckA.level} gainDb={levelGainsDb.a} label="A" onLevel={(v) => { engine.deckA.setLevel(v); refresh(); emit({ kind: "control", deck: "A", param: "level", value: v }); }} />
+              <LevelFader deck={engine.deckB} accent={ACCENT.B} level={engine.deckB.level} gainDb={levelGainsDb.b} label="B" onLevel={(v) => { engine.deckB.setLevel(v); refresh(); emit({ kind: "control", deck: "B", param: "level", value: v }); }} />
             </div>
           </div>
         </div>

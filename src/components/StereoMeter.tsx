@@ -3,7 +3,8 @@ import type { Deck } from "@htl/audio";
 
 interface StereoMeterProps {
   deck: Deck;
-  dir?: "up" | "down"; // fills grow from the bottom (up) or the top (down)
+  dir?: "up" | "down"; // (vertical) fills grow from the bottom (up) or the top (down)
+  axis?: "v" | "h"; // v = vertical bars (height), h = horizontal bars (width)
   accent?: string;
   className?: string;
   gainDb?: number; // added to the raw level — e.g. the crossfade attenuation, so the
@@ -18,12 +19,13 @@ const DECAY_DB = 1.1; // per-frame fall when the signal drops (instant attack)
 // post-fader analysers. Ballistics (fast attack / slow decay) live here, per
 // instance, so several meters can read the same deck a frame without fighting
 // over shared smoothed state. Writes straight to the DOM (no React state).
-export function StereoMeter({ deck, dir = "up", accent, className, gainDb = 0 }: StereoMeterProps) {
+export function StereoMeter({ deck, dir = "up", axis = "v", accent, className, gainDb = 0 }: StereoMeterProps) {
   const lf = useRef<HTMLSpanElement>(null);
   const rf = useRef<HTMLSpanElement>(null);
   // Read the (live) attenuation each frame without re-running the rAF effect.
   const gain = useRef(gainDb);
   gain.current = gainDb;
+  const horizontal = axis === "h";
 
   useEffect(() => {
     let raf = 0;
@@ -32,7 +34,8 @@ export function StereoMeter({ deck, dir = "up", accent, className, gainDb = 0 }:
     const apply = (el: HTMLSpanElement | null, db: number) => {
       if (!el) return;
       const norm = Math.max(0, Math.min(1, (db - FLOOR_DB) / -FLOOR_DB));
-      el.style.height = `${norm * 100}%`;
+      if (horizontal) el.style.width = `${norm * 100}%`;
+      else el.style.height = `${norm * 100}%`;
       el.classList.toggle("hot", db > -3);
     };
     const tick = () => {
@@ -48,10 +51,10 @@ export function StereoMeter({ deck, dir = "up", accent, className, gainDb = 0 }:
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [deck]);
+  }, [deck, horizontal]);
 
   return (
-    <span className={`smeter ${dir} ${className ?? ""}`} style={accent ? { ["--accent" as string]: accent } : undefined}>
+    <span className={`smeter ${axis} ${dir} ${className ?? ""}`} style={accent ? { ["--accent" as string]: accent } : undefined}>
       <span className="smeter-bar"><span ref={lf} className="smeter-fill" /></span>
       <span className="smeter-bar"><span ref={rf} className="smeter-fill" /></span>
     </span>

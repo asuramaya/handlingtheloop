@@ -35,6 +35,11 @@ export interface Beatgrid {
   // real bar lines and lets sync align bars, not just beats. Assumes 4/4.
   downbeat?: number;
   beatsPerBar?: number;
+  // Phrase (section) boundaries: times (s) of the downbeats that start an 8/16/32-
+  // bar phrase, with the detected phrase length in bars. Drives phrase markers on
+  // the grid and phrase-jump. Absent on short/structureless tracks.
+  phrases?: Float32Array;
+  phraseBars?: number;
 }
 
 export interface KeyInfo {

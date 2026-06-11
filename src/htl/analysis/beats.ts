@@ -54,7 +54,7 @@ function decimateMono(buffer: AudioLike): { sig: Float32Array; sr: number } {
 /** Spectral-flux onset strength. Returns the full-band (high-passed, unit-std)
  *  onset envelope used for tempo + beats, plus a LOW-BAND flux envelope (sub-~150
  *  Hz, raw) used for downbeat detection — kicks land on the "1". */
-function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32Array; envRate: number } | null {
+function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32Array; loudEnv: Float32Array; envRate: number } | null {
   const { sig, sr } = decimateMono(buffer);
   const n = sig.length;
   if (n < FFT_SIZE * 4) return null;
@@ -72,6 +72,7 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
   if (frames < 8) return null;
   const flux = new Float32Array(frames);
   const lowEnv = new Float32Array(frames);
+  const loudEnv = new Float32Array(frames); // broadband loudness → phrase structure
 
   for (let f = 0; f < frames; f++) {
     const start = f * HOP;
@@ -82,10 +83,13 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
     fft.transform(re, im);
     let sum = 0;
     let lowSum = 0;
+    let loud = 0;
     for (let k = 1; k < bins; k++) {
+      const raw = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+      loud += raw; // sustained spectral magnitude ≈ loudness (drops/breakdowns)
       // log-magnitude tames the loud-vs-quiet dynamic range so onsets in soft
       // passages still register against onsets in loud drops.
-      const mag = Math.log1p(Math.sqrt(re[k] * re[k] + im[k] * im[k]));
+      const mag = Math.log1p(raw);
       const d = mag - prevMag[k];
       if (d > 0) {
         sum += d; // half-wave rectify: only energy INCREASES are onsets
@@ -95,6 +99,7 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
     }
     flux[f] = sum;
     lowEnv[f] = lowSum;
+    loudEnv[f] = loud;
   }
 
   const envRate = sr / HOP;
@@ -122,7 +127,7 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
   const std = Math.sqrt(varSum / frames) || 1;
   for (let f = 0; f < frames; f++) env[f] /= std;
 
-  return { env, lowEnv, envRate };
+  return { env, lowEnv, loudEnv, envRate };
 }
 
 /** Estimate the 4/4 downbeat phase: the beat offset (0..beatsPerBar-1) whose beats
@@ -159,6 +164,76 @@ function detectDownbeat(lowEnv: Float32Array, beatFrames: number[], beatsPerBar:
     }
   }
   return bestPhase;
+}
+
+/** Phrase (section) detection. DJ tracks are built from 8/16/32-bar phrases —
+ *  intro, build, drop, breakdown — whose boundaries land on bar lines where the
+ *  energy changes. Build a per-bar broadband-loudness curve, take its bar-to-bar
+ *  novelty (rises = builds/drops, falls = breakdowns both count), then find the
+ *  phrase period P∈{8,16,32} and phase that best lines boundaries up with the big
+ *  novelty spikes. Returns the boundary times (s) + detected phrase length. */
+function detectPhrases(
+  loudEnv: Float32Array,
+  beatFrames: number[],
+  beats: Float32Array,
+  downbeat: number,
+  beatsPerBar: number,
+): { phrases: Float32Array; phraseBars: number } | null {
+  const m = beats.length;
+  const bpb = beatsPerBar;
+  // Bar start beat indices (downbeats).
+  const barStart: number[] = [];
+  for (let i = downbeat; i < m; i += bpb) barStart.push(i);
+  const numBars = barStart.length;
+  if (numBars < 16) return null; // too short to assert phrase structure
+
+  // Per-bar mean loudness over the bar's frame span.
+  const barEnergy = new Float64Array(numBars);
+  for (let b = 0; b < numBars; b++) {
+    const startFrame = beatFrames[barStart[b]];
+    const endBeat = b + 1 < numBars ? barStart[b + 1] : Math.min(m - 1, barStart[b] + bpb);
+    const endFrame = beatFrames[endBeat];
+    let s = 0;
+    let c = 0;
+    for (let f = startFrame; f < endFrame && f < loudEnv.length; f++) {
+      s += loudEnv[f];
+      c++;
+    }
+    barEnergy[b] = c ? s / c : 0;
+  }
+
+  // Bar-to-bar novelty (absolute change), normalised to its peak.
+  const novelty = new Float64Array(numBars);
+  let mx = 1e-9;
+  for (let b = 1; b < numBars; b++) {
+    novelty[b] = Math.abs(barEnergy[b] - barEnergy[b - 1]);
+    if (novelty[b] > mx) mx = novelty[b];
+  }
+  for (let b = 0; b < numBars; b++) novelty[b] /= mx;
+
+  // Search phrase period + phase. Average boundary novelty (counts differ across
+  // P), nudged by a prior favouring 16-bar phrases (the dance-music default).
+  const priors: Record<number, number> = { 8: 0.9, 16: 1, 32: 0.8 };
+  let best = { score: -Infinity, P: 16, phi: 0 };
+  for (const P of [8, 16, 32]) {
+    if (numBars < P * 1.5) continue; // need a couple of phrases to trust period P
+    for (let phi = 0; phi < P; phi++) {
+      let sum = 0;
+      let cnt = 0;
+      for (let b = phi; b < numBars; b += P) {
+        sum += novelty[b];
+        cnt++;
+      }
+      if (cnt < 2) continue;
+      const score = (sum / cnt) * priors[P];
+      if (score > best.score) best = { score, P, phi };
+    }
+  }
+  if (best.score <= 0) return null;
+
+  const out: number[] = [];
+  for (let b = best.phi; b < numBars; b += best.P) out.push(beats[barStart[b]]);
+  return { phrases: Float32Array.from(out), phraseBars: best.P };
 }
 
 /** Tempo (BPM) from the onset envelope via prior-weighted autocorrelation. */
@@ -345,7 +420,17 @@ export function detectBeats(buffer: AudioLike): Beatgrid | null {
   const bpm = Math.round((60 / safeInterval) * 100) / 100;
   const beatsPerBar = 4;
   const downbeat = detectDownbeat(onset.lowEnv, frameBeats, beatsPerBar);
-  return { bpm, firstBeat, interval: safeInterval, beats, downbeat, beatsPerBar };
+  const phrase = detectPhrases(onset.loudEnv, frameBeats, beats, downbeat, beatsPerBar);
+  return {
+    bpm,
+    firstBeat,
+    interval: safeInterval,
+    beats,
+    downbeat,
+    beatsPerBar,
+    phrases: phrase?.phrases,
+    phraseBars: phrase?.phraseBars,
+  };
 }
 
 /** Uniform-grid fallback (matches the old detector's phase search) when DP can't

@@ -434,6 +434,22 @@ export function WaveformViewport(props: WaveformViewportProps) {
           }
         }
       }
+
+      // Phrase boundaries — the 8/16/32-bar section starts. Drawn over the bar grid
+      // as a bright accent line + a phrase number, so the build/drop/breakdown
+      // structure is visible at a glance and you can line a mix up to a phrase.
+      const phrases = beatgrid.phrases;
+      if (phrases && phrases.length && showCells) {
+        ctx.font = `bold ${10 * dpr}px ui-monospace, monospace`;
+        for (let i = 0; i < phrases.length; i++) {
+          const t = phrases[i];
+          if (t < left || t > right || t < 0 || t > dur) continue;
+          const x = toX(t);
+          ctx.fillStyle = rgba(p.accent, 0.85);
+          ctx.fillRect(x - dpr, 0, 3 * dpr, h);
+          ctx.fillText(`P${i + 1}`, x + 4 * dpr, 11 * dpr);
+        }
+      }
     }
 
     // Markers.

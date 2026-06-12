@@ -5,13 +5,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
-import type { Peer, Intent, TickDecks } from "./protocol";
+import type { Peer, Intent, TickDecks, DeckId } from "./protocol";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
   onIntent?: (intent: Intent, from: string) => void;
   onState?: (snapshot: unknown) => void;
   onTick?: (decks: TickDecks) => void;
+  onStemView?: (deck: DeckId, view: unknown) => void;
 }
 
 export interface Invite {
@@ -44,6 +45,7 @@ export interface RoomState {
   sendIntent: (intent: Intent) => void;
   sendTick: (decks: TickDecks) => void;
   publishState: (snapshot: unknown) => void;
+  sendStemView: (deck: DeckId, view: unknown) => void;
   requestState: () => void;
 }
 
@@ -110,6 +112,7 @@ export function useRoom(cb: RoomCallbacks = {}): RoomState {
       intent: (i, from) => cbRef.current.onIntent?.(i, from),
       state: (s) => cbRef.current.onState?.(s),
       tick: (d) => cbRef.current.onTick?.(d),
+      stemview: (deck, view) => cbRef.current.onStemView?.(deck, view),
     });
     c.connect();
     return () => {
@@ -143,6 +146,7 @@ export function useRoom(cb: RoomCallbacks = {}): RoomState {
   const sendIntent = useCallback((intent: Intent) => clientRef.current?.sendIntent(intent), []);
   const sendTick = useCallback((decks: TickDecks) => clientRef.current?.sendTick(decks), []);
   const publishState = useCallback((snapshot: unknown) => clientRef.current?.publishState(snapshot), []);
+  const sendStemView = useCallback((deck: DeckId, view: unknown) => clientRef.current?.sendStemView(deck, view), []);
   const requestState = useCallback(() => clientRef.current?.requestState(), []);
   const createInvite = useCallback(async (): Promise<Invite | null> => {
     try {
@@ -186,6 +190,7 @@ export function useRoom(cb: RoomCallbacks = {}): RoomState {
     sendIntent,
     sendTick,
     publishState,
+    sendStemView,
     requestState,
   };
 }

@@ -36,6 +36,43 @@ import { Eq3 } from "./Eq3";
 
 export const HOT_CUE_COUNT = 8;
 
+// Serializable per-deck stem waveform envelopes — the host ships these over the
+// session so a stem-less remote (a phone) can render the 4-lane display. A COARSE
+// LOD level (≈2048-sample buckets), min/max quantized to int8 + base64, keeps it
+// ~70 KB/track. The remote rebuilds a full pyramid from it (deep zoom goes coarse —
+// fine, it has no local PCM anyway).
+export interface StemView {
+  length: number; // total samples (pyramid length)
+  sampleRate: number;
+  bucket: number; // sample bucket of the shipped level
+  stems: Record<StemName, { min: string; max: string }>; // base64(Int8Array)
+}
+
+function quantizeI8(f: Float32Array): Int8Array {
+  const out = new Int8Array(f.length);
+  for (let i = 0; i < f.length; i++) {
+    let v = Math.round(f[i] * 127);
+    out[i] = v > 127 ? 127 : v < -127 ? -127 : v;
+  }
+  return out;
+}
+function i8ToB64(a: Int8Array): string {
+  const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+  let s = "";
+  const CH = 0x8000;
+  for (let i = 0; i < u.length; i += CH) s += String.fromCharCode(...u.subarray(i, i + CH));
+  return btoa(s);
+}
+function b64ToF32(b: string): Float32Array {
+  const bin = atob(b);
+  const out = new Float32Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    const v = bin.charCodeAt(i); // 0..255
+    out[i] = (v < 128 ? v : v - 256) / 127; // int8 → −1..1
+  }
+  return out;
+}
+
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 // Unlocked (grid magnet off) loop-boundary nudge granularity, as a fraction of a
 // beat — one arrow press / scroll tick moves a 1/16-beat for surgical trimming.
@@ -110,6 +147,7 @@ export class Deck {
   stemPyramids: Record<StemName, Pyramid> | null = null;
   private stemPyramidJob = 0;
   onStemPyramids?: () => void; // viewport hook: async envelopes are ready → redraw
+  onStemsReady?: () => void; // App hook: local neural pyramids built → publish to a session
   // True only when the CURRENT stems are a NEURAL split (Demucs/Open-Unmix). The viewport
   // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform for DSP
   // stems (or none / mid-separation) — the DSP split is too rough to be worth 4 lanes.
@@ -124,6 +162,8 @@ export class Deck {
   private _pitchSemis = 0; // musical key shift, −12 … +12 semitones
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
+  lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
+  get stretchAttached() { return this.stretchNode != null; } // TEMP diag: did the module load?
   private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
@@ -156,6 +196,21 @@ export class Deck {
   // this boundary (the loop's start or end) instead of the playhead. Toggled by
   // Shift-IN / Shift-OUT. null = normal (playhead) interaction.
   adjusting: "in" | "out" | null = null;
+
+  // --- follower visual clock (shared session) ---
+  // A co-DJ mirrors the anchor's ~12 Hz playhead tick. Reading the LOCAL audio clock
+  // for the WAVEFORM stutters: a muted passenger never starts a source and a backgrounded
+  // / un-gestured mobile tab keeps the AudioContext SUSPENDED, so ctx.currentTime is
+  // frozen and the head only jumps on each 80 ms tick ("sippy" / "the rate collapses").
+  // So a follower draws from a CONTINUOUS wall-clock extrapolation of the anchor tick
+  // instead — phase-locked to the master like the scrub stream. Visual ONLY: position()
+  // stays the audio truth. The phase error is absorbed as a small velocity bias (never a
+  // position jump), so re-anchoring on each tick is seamless — no per-tick step.
+  private followOn = false;
+  private followPos = 0; // extrapolation anchor (track sec) — set for continuity each tick
+  private followAt = 0; // performance.now() (sec) when the anchor was set
+  private followPlaying = false;
+  private followBias = 0; // extra velocity (track-sec/sec) that eases the head onto the tick
 
   onEnded?: () => void;
 
@@ -228,7 +283,9 @@ export class Deck {
     node.connect(this.eq.input);
     this.stretchNode = node;
     node.port.onmessage = (e: MessageEvent) => {
-      if ((e.data as { type?: string })?.type === "ended" && this.running) {
+      const m = e.data as { type?: string };
+      if (m?.type === "diag") { this.lastDiag = e.data as Record<string, number>; return; }
+      if (m?.type === "ended" && this.running) {
         this._playing = false;
         this.running = false;
         this.startOffset = this.buffer?.duration ?? 0;
@@ -382,6 +439,58 @@ export class Deck {
   get hasStems(): boolean {
     return this.stemsLoaded;
   }
+  // True when stems are present only as REMOTE display/control (no local buffers) —
+  // this device is a controller for a host that has stems. Lets the UI/deep-zoom know
+  // there's no local PCM to read (stemChannel returns null → LOD/envelope only).
+  remoteStems = false;
+  /** Mark that stems EXIST for this deck WITHOUT holding their buffers — for a device
+   *  acting as a remote controller of a host that has stems. The mixer cells light up
+   *  and reflect/drive the host's per-stem state over the session; local audio stays
+   *  the plain mix (engineStems stays false, so rampStem no-ops). The 4-lane waveform
+   *  fills in when the host's stem envelopes arrive (setRemoteStemView, phase 2). */
+  markRemoteStems(present: boolean, neural = true) {
+    this.remoteStems = present;
+    this.stemsLoaded = present;
+    this.stemsNeural = present && neural;
+    if (!present) this.stemPyramids = null;
+  }
+  /** HOST: snapshot this deck's stem waveform envelopes for transmission to remotes.
+   *  null until the neural pyramids are built. Coarse level → small payload. */
+  extractStemView(): StemView | null {
+    const py = this.stemPyramids;
+    if (!py || !this.stemsNeural) return null;
+    const stems = {} as Record<StemName, { min: string; max: string }>;
+    let bucket = 256;
+    let length = 0;
+    let sampleRate = this.ctx.sampleRate;
+    for (const name of STEM_NAMES) {
+      const p = py[name];
+      if (!p || !p.levels.length) return null;
+      length = p.length;
+      sampleRate = p.sampleRate;
+      // Coarsest level still ≥ ~2048-sample buckets — plenty for a remote display.
+      const lvl = p.levels.find((l) => l.bucket >= 2048) ?? p.levels[p.levels.length - 1];
+      bucket = lvl.bucket;
+      stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };
+    }
+    return { length, sampleRate, bucket, stems };
+  }
+  /** REMOTE: rebuild the 4-lane stem display from a host's transmitted envelopes.
+   *  No local PCM — marks remote stems present so the mixer cells light up too. */
+  setRemoteStemView(view: StemView): void {
+    if (!view?.stems) return;
+    const out = {} as Record<StemName, Pyramid>;
+    for (const name of STEM_NAMES) {
+      const s = view.stems[name];
+      if (!s) return;
+      const min = b64ToF32(s.min);
+      const max = b64ToF32(s.max);
+      out[name] = buildLodPyramid(min, max, view.length, view.sampleRate, view.bucket);
+    }
+    this.markRemoteStems(true, true);
+    this.stemPyramids = out; // markRemoteStems cleared it; set the real envelopes
+    this.onStemPyramids?.();
+  }
   stemActive(name: StemName): boolean {
     return !this.stemMuted[name];
   }
@@ -483,6 +592,8 @@ export class Deck {
     if (job === this.stemPyramidJob) {
       this.stemPyramids = out;
       this.onStemPyramids?.(); // nudge the viewport to re-rasterise the quad lanes
+      this.onStemsReady?.(); // host: publish the envelopes to any shared session
+
       // iPhone OOM FIX. The stretch engine already holds its OWN copy of the 4 stem
       // PCM channels (transferred in loadEnginePcm) and the pyramids now own the
       // visuals — so the deck's raw `stems` AudioBuffers (~424 MB for a 5-min track)
@@ -530,6 +641,62 @@ export class Deck {
       if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
     }
     return Math.max(0, Math.min(this.buffer.duration, pos));
+  }
+
+  // --- follower visual clock ---
+  private static nowSec(): number {
+    return (typeof performance !== "undefined" ? performance.now() : 0) / 1000;
+  }
+  // Track-sec the follow clock has reached right now (anchor + elapsed·velocity).
+  private followExtrapolate(now: number): number {
+    const dt = Math.min(Math.max(0, now - this.followAt), 0.5); // cap a stalled tick
+    return this.followPos + dt * ((this._rate > 0 ? this._rate : 1) + this.followBias);
+  }
+  /** Feed the anchor's playhead tick (a co-DJ following the session). Re-anchors the
+   *  clock to where it ALREADY is (continuity — no step) and folds the phase error into
+   *  a gentle velocity bias that eases onto the tick over ~0.4 s; a real jump (seek /
+   *  loop / big desync) or a play-state change snaps hard. */
+  followTick(pos: number, playing: boolean): void {
+    const now = Deck.nowSec();
+    if (this.followOn && this.followPlaying && playing) {
+      const predicted = this.followExtrapolate(now);
+      const err = pos - predicted;
+      if (Math.abs(err) > 0.35) {
+        this.followPos = pos; // real jump → snap
+        this.followBias = 0;
+      } else {
+        this.followPos = predicted; // continuity: start the next segment where we are
+        this.followBias = Math.max(-0.5, Math.min(0.5, err / 0.4)); // absorb phase via velocity
+      }
+    } else {
+      this.followPos = pos; // first tick / play-state flip → hard anchor
+      this.followBias = 0;
+    }
+    this.followPlaying = playing;
+    this.followAt = now;
+    this.followOn = true;
+  }
+  /** Stop following — the local clock drives the drawn playhead again. */
+  endFollow(): void {
+    this.followOn = false;
+    this.followBias = 0;
+  }
+  /** Playhead for DRAWING. A follower draws the smooth, phase-locked extrapolation of
+   *  the anchor tick (so the head glides at the display rate even when the local audio
+   *  clock is frozen/suspended); everyone else draws their real local clock. */
+  visualPosition(): number {
+    if (!this.followOn || this.jogging || !this.buffer) return this.position();
+    let pos = this.followPlaying ? this.followExtrapolate(Deck.nowSec()) : this.followPos;
+    if (this.followPlaying && this.loop?.active) {
+      const len = this.loop.end - this.loop.start;
+      if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
+    }
+    return Math.max(0, Math.min(this.buffer.duration, pos));
+  }
+  /** Is the DRAWN playhead advancing? (drives the viewport's rAF.) */
+  get visualPlaying(): boolean {
+    if (!this.followOn || this.jogging) return this._playing;
+    return this.followPlaying;
   }
 
   play() {
@@ -944,6 +1111,21 @@ export class Deck {
     return Math.max(1, Math.round((loop.end - loop.start) / interval));
   }
 
+  // Fired after a loop BOUNDARY edit (fine-adjust / move) so the App can broadcast the
+  // absolute region to a session (in/out/exit emit their own intents; this covers the
+  // nudge/drag/move paths those don't). Not fired for plain in/out/exit/beat loops.
+  onLoopEdit?: () => void;
+  /** Current loop region (absolute), or null — the setpoint sent over a session. */
+  loopRegion(): { start: number; end: number; active: boolean } | null {
+    return this.loop ? { start: this.loop.start, end: this.loop.end, active: this.loop.active } : null;
+  }
+  /** Apply an absolute loop region from a session peer (fine-adjust / move sync). */
+  applyLoopRegion(start: number, end: number, active: boolean) {
+    if (end <= start) return;
+    this.loop = { active, start, end, beats: this.loopBeats({ active, start, end, beats: 0 }) };
+    this.applyLoop();
+  }
+
   /** Shift the whole loop by `beats` (keeping its length), grid-locked. Positive
    *  = forward. Used to move a loop a bar/beat at a time without resizing it. */
   moveLoop(beats: number) {
@@ -959,6 +1141,7 @@ export class Deck {
       const pos = this.position();
       if (pos < start || pos > start + len) this.seek(start);
     }
+    this.onLoopEdit?.();
   }
   reloop() {
     if (!this.loop) return;
@@ -1060,6 +1243,7 @@ export class Deck {
       this.loop.beats = this.loopBeats(this.loop);
       this.applyLoop();
     }
+    if (this.loop) this.onLoopEdit?.(); // broadcast the new region to a session
   }
   /** Continuous nudge of the adjusted boundary by `deltaSec` (waveform drag). The
    *  lock follows the grid magnet: quantize on → the boundary snaps to the nearest

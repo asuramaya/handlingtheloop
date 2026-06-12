@@ -119,7 +119,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             <button
               className="jog-btn mag skip"
               title={skipTitle(deck.skipBeats)}
-              onClick={act(() => (deck.skipBeats = nextSkip(deck.skipBeats)))}
+              onClick={act(() => {
+                deck.skipBeats = nextSkip(deck.skipBeats);
+                emit({ kind: "skip", deck: id, beats: deck.skipBeats });
+              })}
             >
               {skipLabel(deck.skipBeats)}
               <span className="kbd">G</span>
@@ -266,10 +269,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         <div className="transport">
           <button className="pitch-step" title={shift ? "Nudge tempo down 0.5%" : "Key down a semitone"} onClick={() => nudge(-1)}>−</button>
           <button className="hw-btn range" title="TEMPO knob range (±%)" onClick={act(onCycleTempoRange)}>
-            ±{tempoRange}%<span className="kbd">F</span>
+            ±{tempoRange}%<span className="kbd">D</span>
           </button>
           <button className="hw-btn range" title="PITCH (KEY) knob range (± semitones)" onClick={act(onCyclePitchRange)}>
-            ±{pitchRange}st
+            ±{pitchRange}st<span className="kbd">F</span>
           </button>
           <button className="pitch-step" title={shift ? "Nudge tempo up 0.5%" : "Key up a semitone"} onClick={() => nudge(1)}>+</button>
         </div>

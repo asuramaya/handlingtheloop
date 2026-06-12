@@ -19,7 +19,7 @@ export function CaptionBar({ deck, accent, cues }: { deck: Deck; accent: string;
     let last = -2;
     let raf = 0;
     const loop = () => {
-      const pos = deck.position();
+      const pos = deck.visualPosition();
       // The line currently or most recently started (it holds until the next begins).
       let cur = -1;
       for (let i = 0; i < cues.length; i++) {

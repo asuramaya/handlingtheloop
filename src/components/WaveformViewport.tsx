@@ -392,7 +392,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     ctx.fillRect(0, 0, w, h);
     if (!p.pyramid || !deck.buffer) return;
 
-    const pos = deck.position();
+    const pos = deck.visualPosition();
     const r = Math.max(deck.rate, 0.01);
     const trackWindow = (localWin.current ?? p.windowSec) * r;
     const left = pos - trackWindow / 2;
@@ -595,7 +595,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       dirty.current = true;
     };
     const loop = () => {
-      if (deck.playing || deck.jogging || deck.adjusting || dirty.current) {
+      if (deck.visualPlaying || deck.jogging || deck.adjusting || dirty.current) {
         dirty.current = false;
         draw();
       }

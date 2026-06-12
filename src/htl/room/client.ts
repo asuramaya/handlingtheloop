@@ -3,7 +3,7 @@
 // authenticate the upgrade + resolve which session to join), tracks the participant
 // list + the control baton, and reconnects with backoff. Pure transport: it exposes
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
-import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks } from "./protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId } from "./protocol";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -14,6 +14,7 @@ export interface RoomHandlers {
   intent?: (intent: Intent, from: string, seq: number) => void;
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
+  stemview?: (deck: DeckId, view: unknown) => void;
   error?: (message: string) => void;
 }
 
@@ -171,6 +172,9 @@ export class RoomClient {
   publishState(snapshot: unknown): void {
     this.send({ t: "state", snapshot });
   }
+  sendStemView(deck: DeckId, view: unknown): void {
+    this.send({ t: "stemview", deck, view });
+  }
   requestState(): void {
     this.send({ t: "request-state" });
   }
@@ -267,6 +271,9 @@ export class RoomClient {
         break;
       case "state":
         this.h.state?.(msg.snapshot);
+        break;
+      case "stemview":
+        this.h.stemview?.(msg.deck, msg.view);
         break;
       case "error":
         this.h.error?.(msg.message);

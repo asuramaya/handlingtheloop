@@ -26,6 +26,9 @@ export class AudioEngine {
   private readonly limiter: DynamicsCompressorNode;
   // Desired WSOLA engine config; re-applied whenever the stretch nodes (re)attach.
   private stretchCfg = { frame: 1024, search: 200, stride: 2 };
+  // TEMP iPhone diagnostics: surface worklet-module load failures (console is
+  // invisible on an iPhone) so the on-screen overlay can show WHY playback is dead.
+  workletError = "";
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
@@ -78,6 +81,7 @@ export class AudioEngine {
       this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
     } catch (e) {
       console.warn("[htl] scratch resampler unavailable:", e);
+      this.workletError += "scratch:" + (e instanceof Error ? e.message : String(e)) + " ";
     }
     try {
       await add(STRETCH_WORKLET_SRC);
@@ -87,12 +91,35 @@ export class AudioEngine {
       this.deckB.configureStretch(this.stretchCfg);
     } catch (e) {
       console.warn("[htl] stretch engine unavailable:", e);
+      this.workletError += "stretch:" + (e instanceof Error ? e.message : String(e)) + " ";
     }
   }
 
   /** Browsers start the context suspended until a user gesture. */
   resume() {
     if (this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
+  // iOS Safari only UNLOCKS audio output when an actual node is started inside a user
+  // gesture. In a session a LISTENER's first sound starts later, from a network tick
+  // (deck.play()), never from the tap — so a bare resume() leaves the route muted and
+  // the listener is silent. Call this FROM A GESTURE (the Listen tap): it resumes AND
+  // starts a 1-sample silent buffer, fully priming the output so later tick-driven
+  // playback is audible. Runs the primer once (idempotent after the first unlock).
+  private unlocked = false;
+  unlock() {
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    if (this.unlocked) return;
+    this.unlocked = true;
+    try {
+      const buf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.ctx.destination);
+      src.start(0);
+    } catch {
+      /* primer is best-effort */
+    }
   }
 
   /** Set the time-stretch engine quality on both decks (from the Audio Engine
@@ -133,6 +160,19 @@ export class AudioEngine {
   private writeRoles() {
     this.deckA.syncRole = this.syncRole("A");
     this.deckB.syncRole = this.syncRole("B");
+  }
+
+  /** Which deck is the SYNC slave (null = off) — the absolute setpoint to send over a
+   *  session so a peer can mirror the button without a non-idempotent toggle. */
+  get syncSlave(): DeckId | null {
+    return this.slaveId;
+  }
+  /** Mirror a peer's SYNC role for the BUTTON only. We do NOT engage the tempo engine
+   *  here: the master's tempo already crosses as control intents, so a follower that
+   *  also matched would fight those values. Display state only. */
+  mirrorSyncDisplay(slave: DeckId | null) {
+    this.deckA.syncRole = slave == null ? "off" : slave === "A" ? "slave" : "master";
+    this.deckB.syncRole = slave == null ? "off" : slave === "B" ? "slave" : "master";
   }
 
   /**
@@ -251,6 +291,17 @@ export class AudioEngine {
   private writeKeyRoles() {
     this.deckA.keyRole = this.keyRole("A");
     this.deckB.keyRole = this.keyRole("B");
+  }
+
+  /** Which deck is the KEY slave (null = off) — absolute setpoint for the session. */
+  get keySlave(): DeckId | null {
+    return this.keySlaveId;
+  }
+  /** Mirror a peer's KEY role for the button only (the master's pitch crosses as a
+   *  control intent, so the follower must not also re-shift). Display state only. */
+  mirrorKeyDisplay(slave: DeckId | null) {
+    this.deckA.keyRole = slave == null ? "off" : slave === "A" ? "slave" : "master";
+    this.deckB.keyRole = slave == null ? "off" : slave === "B" ? "slave" : "master";
   }
 
   /** KEY toggle. off → become key-SLAVE, smart-shifted to a key compatible with the

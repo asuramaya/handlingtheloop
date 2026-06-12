@@ -4657,8 +4657,8 @@ body.no-glow .lane.focused::after {
 /* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
 .eq-node {
   position: absolute;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   margin: 0;
   padding: 0;
   transform: translate(-50%, -50%);
@@ -4678,9 +4678,9 @@ body.no-glow .lane.focused::after {
 }
 /* Cut nodes (HP / LP) read as squares to distinguish from the round band nodes. */
 .eq-node.cut {
-  border-radius: 4px;
-  width: 14px;
-  height: 14px;
+  border-radius: 6px;
+  width: 22px;
+  height: 22px;
 }
 /* Auditioning a band (held): pulsing ring so it's obvious you're soloing. */
 .eq-node.audition {
@@ -4692,18 +4692,6 @@ body.no-glow .lane.focused::after {
   50% {
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--node) 25%, transparent), 0 0 18px var(--node);
   }
-}
-.eq-node-label {
-  position: absolute;
-  left: 50%;
-  top: -15px;
-  transform: translateX(-50%);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--node);
-  pointer-events: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 /* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
 @media (min-width: 769px) {
@@ -4898,6 +4886,46 @@ body.no-glow .stem-btn.on {
   white-space: pre;
   color: var(--muted);
   -webkit-overflow-scrolling: touch;
+}
+
+/* Live diagnostics (Debug tab): a responsive grid of labelled key/value blocks. */
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+.debug-block {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+.debug-block-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.debug-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.debug-key {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.debug-val {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 .stem-device {
   display: flex;

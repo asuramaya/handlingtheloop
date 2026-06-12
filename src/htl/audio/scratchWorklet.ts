@@ -36,6 +36,21 @@ class Scratch extends AudioWorkletProcessor {
     this.nominal = Math.round(sampleRate / 60); // expected samples per UI frame
     this.kStep = 1 - Math.exp(-1 / (0.005 * sampleRate)); // ~5 ms pitch smoothing
     this.kGain = 1 - Math.exp(-1 / (0.004 * sampleRate)); // ~4 ms declick
+    // GRANULAR fast-scrub: a continuous resampler can only walk through every sample,
+    // so a fast/zoomed-out drag (the finger covering minutes of audio) rate-limits to
+    // a multi-second 32× "spin" that LAGS the finger. The fix every pro scrubber uses:
+    // once the finger outruns continuous playback, the playhead TRACKS THE FINGER with
+    // no lag (uncapped) and we voice short ~1×-pitch Hann grains at the live position —
+    // overlap-added two at a time — so you hear the song's sections fly past locked to
+    // your hand (Pro Tools scrub / Serato needle-search / granular synthesis, grains
+    // ~10–50 ms). Slow/medium scrubbing stays the crisp continuous resampler below.
+    this.granular = false;
+    this.glen = Math.round(sampleRate * 0.045); this.glen -= this.glen % 2; // ~45 ms grain
+    this.gh = this.glen >> 1; // 50% hop/overlap
+    this.gwin = new Float32Array(this.glen);
+    for (let i = 0; i < this.glen; i++) this.gwin[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / this.glen);
+    this.phaseA = 0; this.startA = 0; this.startB = 0; // two staggered grain heads
+    this.stepRaw = 0; this.curRaw = 0; // uncapped finger-tracking velocity
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'load') {
@@ -44,6 +59,7 @@ class Scratch extends AudioWorkletProcessor {
       } else if (d.type === 'start') {
         this.pos = this.target = d.pos;
         this.step = this.curStep = 0;
+        this.granular = false; this.curRaw = 0; // a fresh grab always starts continuous
         this.since = 0;
         this.interval = this.nominal;
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
@@ -58,9 +74,20 @@ class Scratch extends AudioWorkletProcessor {
         this.interval = this.since > 0 ? this.since : this.nominal;
         this.since = 0;
         this.target = d.pos;
-        let s = (this.target - this.pos) / this.interval;
-        if (s > 32) s = 32; else if (s < -32) s = -32; // guard against a bad frame
+        this.stepRaw = (this.target - this.pos) / this.interval; // uncapped (granular tracks the finger)
+        let s = this.stepRaw;
+        if (s > 32) s = 32; else if (s < -32) s = -32; // continuous resampler clamp
         this.step = s;
+        // Switch to granular when the finger outruns continuous playback (hysteresis
+        // so it doesn't flutter at the boundary). Below ~8× a hand move still sounds
+        // like vinyl; above it the continuous pointer would lag into a multi-second spin.
+        const reqSpeed = this.stepRaw < 0 ? -this.stepRaw : this.stepRaw;
+        if (!this.granular && reqSpeed > 8) {
+          this.granular = true;
+          this.phaseA = 0; this.startA = this.pos; this.startB = this.pos; this.curRaw = this.stepRaw;
+        } else if (this.granular && reqSpeed < 5) {
+          this.granular = false; this.curStep = 0;
+        }
         // Adapt the pitch-smoothing time constant to the ACTUAL update interval:
         // dense (high-rate, per-input) updates need almost no smoothing → snappy;
         // sparse ~60 Hz updates need more to bridge the gap without a stair-step.
@@ -76,10 +103,13 @@ class Scratch extends AudioWorkletProcessor {
     const i = Math.floor(pos);
     const x = pos - i;
     const n = this.len;
-    const i0 = i - 1 < 0 ? 0 : i - 1;
-    const i1 = i < 0 ? 0 : i > n - 1 ? n - 1 : i;
-    const i2 = i + 1 > n - 1 ? n - 1 : i + 1;
-    const i3 = i + 2 > n - 1 ? n - 1 : i + 2;
+    // Fully clamp ALL four taps to [0, n-1] — granular grains can read past the
+    // buffer end (anchor + phase > len), and an unclamped i-1 tap reads undefined → NaN.
+    let i0 = i - 1, i1 = i, i2 = i + 1, i3 = i + 2;
+    if (i0 < 0) i0 = 0; else if (i0 > n - 1) i0 = n - 1;
+    if (i1 < 0) i1 = 0; else if (i1 > n - 1) i1 = n - 1;
+    if (i2 < 0) i2 = 0; else if (i2 > n - 1) i2 = n - 1;
+    if (i3 < 0) i3 = 0; else if (i3 > n - 1) i3 = n - 1;
     const s1 = buf[i0], s2 = buf[i1], s3 = buf[i2], s4 = buf[i3];
     const c1 = x * (-0.5 + x * (1 - 0.5 * x));
     const c2 = 1 + x * x * (1.5 * x - 2.5);
@@ -130,18 +160,35 @@ class Scratch extends AudioWorkletProcessor {
     const targetA = speed > 1 ? 1 - Math.exp(-Math.PI / speed) : 1;
     this.lpA += (targetA - this.lpA) * 0.25; // smooth the cutoff to avoid zipper
     const a = this.lpA;
+    const glen = this.glen, gh = this.gh, gwin = this.gwin;
     for (let i = 0; i < frames; i++) {
       this.since++;
-      // Smooth the segment velocity (kills the 60 Hz pitch stair-step) and walk the
-      // pointer. Position stays accurate because each 'move' recomputes step from
-      // the real pos, so a lagging curStep is corrected on the next segment.
+      this.gain += (this.gainTarget - this.gain) * this.kGain;
+      if (this.granular) {
+        // Follow the finger UNCAPPED (no multi-second catch-up) …
+        this.curRaw += (this.stepRaw - this.curRaw) * this.kStep;
+        this.pos += this.curRaw;
+        if (this.pos < 0) this.pos = 0; else if (this.pos > last) this.pos = last;
+        // … and voice two overlapping ~1×-pitch grains anchored to the live position.
+        let pa = this.phaseA;
+        if (pa >= glen) { pa = 0; this.startA = this.pos; }
+        if (pa === gh) this.startB = this.pos; // B re-anchors when its window restarts
+        let pb = pa + gh; if (pb >= glen) pb -= glen;
+        const wA = gwin[pa], wB = gwin[pb];
+        for (let c = 0; c < nCh; c++) {
+          const buf = this.ch[c] || this.ch[this.ch.length - 1];
+          output[c][i] = buf ? (wA * this.cubic(buf, this.startA + pa) + wB * this.cubic(buf, this.startB + pb)) * this.gain : 0;
+        }
+        this.phaseA = pa + 1;
+        continue;
+      }
+      // Continuous resampler (vinyl): walk the pointer, area-aware read + anti-alias.
       const p0 = this.pos;
       this.curStep += (this.step - this.curStep) * this.kStep;
       this.pos += this.curStep;
       if (this.pos < 0) { this.pos = 0; this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; this.curStep = 0; }
       const sp = this.curStep < 0 ? -this.curStep : this.curStep;
-      this.gain += (this.gainTarget - this.gain) * this.kGain;
       for (let c = 0; c < nCh; c++) {
         const buf = this.ch[c] || this.ch[this.ch.length - 1];
         const s = buf ? this.readScrub(buf, p0, this.pos, sp) : 0;

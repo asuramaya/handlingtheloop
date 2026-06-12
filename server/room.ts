@@ -47,6 +47,10 @@ export class DjRoom {
   private loaded = false;
   private seq = 0;
   private lastSnapshot: unknown;
+  // Per-deck stem waveform envelopes (opaque), from whoever has the stems — so a
+  // stem-less remote (a phone) can render the 4-lane display. Stored so a late joiner
+  // gets them on request-state, like the snapshot.
+  private lastStemView: Record<string, unknown> = {};
   // Device ids the host has granted control. Persisted so a granted guest survives a
   // page refresh with its control intact instead of silently dropping to a listener (#10).
   private grants = new Set<string>();
@@ -60,6 +64,7 @@ export class DjRoom {
     if (this.loaded) return;
     this.anchorId = (await this.state.storage.get<string>("anchor")) ?? null;
     this.lastSnapshot = await this.state.storage.get("snapshot");
+    this.lastStemView = (await this.state.storage.get<Record<string, unknown>>("stemviews")) ?? {};
     this.grants = new Set((await this.state.storage.get<string[]>("grants")) ?? []);
     this.loaded = true;
   }
@@ -183,9 +188,25 @@ export class DjRoom {
         }
         break;
       }
+      case "stemview": {
+        // Whoever drives + has the stems streams its per-deck waveform envelopes;
+        // store (last wins) so late joiners get them on request-state, and relay.
+        if (this.isControlling(self) && (msg.deck === "A" || msg.deck === "B")) {
+          this.lastStemView[msg.deck] = msg.view;
+          await this.state.storage.put("stemviews", this.lastStemView);
+          this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
+        }
+        break;
+      }
       case "request-state": {
         if (this.lastSnapshot !== undefined) {
           ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
+        }
+        // Catch the joiner up on any stem envelopes too, so its 4-lane display fills in.
+        for (const d of ["A", "B"] as const) {
+          if (this.lastStemView[d] !== undefined) {
+            ws.send(JSON.stringify({ t: "stemview", deck: d, view: this.lastStemView[d] } satisfies ServerMsg));
+          }
         }
         break;
       }

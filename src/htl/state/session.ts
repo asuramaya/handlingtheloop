@@ -52,6 +52,12 @@ export interface DeckSnapshot {
   // a co-DJ joining restores which stems are muted and at what level.
   stemGains?: Record<string, number>; // 0–1.5, 1 = unity
   stemMutes?: Record<string, boolean>;
+  // Whether THIS deck has 4 stems on the source device — so a stem-less remote (a
+  // phone driving a desktop host) lights up its mixer cells and reflects/drives the
+  // host's stems even though it holds no stem buffers of its own. The actual 4-lane
+  // waveforms ride a separate envelope channel (the host streams them).
+  hasStems?: boolean;
+  stemsNeural?: boolean; // neural split (4 real lanes) vs DSP/none
 }
 
 export interface SessionSnapshot {
@@ -59,6 +65,10 @@ export interface SessionSnapshot {
   crossfade: number;
   zoom: { A: number; B: number }; // per-deck waveform zoom (real seconds shown)
   tempoRange?: number; // global tempo-fader range (±%) — scales the fader, so it's session state
+  // Beat-sync / key-match relationship (which deck follows; null = off) so a device
+  // joining mid-session sees the SYNC/KEY buttons already lit, not just on next toggle.
+  syncSlave?: "A" | "B" | null;
+  keySlave?: "A" | "B" | null;
 }
 
 const store = new Store<SessionSnapshot | null>("session", null, 1);

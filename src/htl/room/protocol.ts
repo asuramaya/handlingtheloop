@@ -65,6 +65,10 @@ export type Intent =
   | { kind: "toggle"; deck: DeckId; param: ToggleParam; value: boolean }
   | { kind: "stemGain"; deck: DeckId; stem: StemName; value: number }
   | { kind: "stem"; deck: DeckId; stem: StemName; on: boolean }
+  | { kind: "sync"; slave: DeckId | null } // beat-sync: which deck follows (null = off); for the button
+  | { kind: "key"; slave: DeckId | null } // key-match: which deck is shifted (null = off); for the button
+  | { kind: "skip"; deck: DeckId; beats: number } // jog / beat-jump resolution (absolute)
+  | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
@@ -81,6 +85,7 @@ export type ClientMsg =
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
+  | { t: "stemview"; deck: DeckId; view: unknown } // per-deck stem waveform envelopes (opaque; for remote display)
   | { t: "request-state" };
 
 export type ServerMsg =
@@ -90,4 +95,5 @@ export type ServerMsg =
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
+  | { t: "stemview"; deck: DeckId; view: unknown } // host's per-deck stem envelopes, relayed to remotes
   | { t: "error"; message: string };

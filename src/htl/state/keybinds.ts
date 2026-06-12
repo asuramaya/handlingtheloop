@@ -25,8 +25,9 @@ export const KEY_ACTIONS: KeyAction[] = [
 
   { id: "sync", label: "Beat sync", group: "Mix", defaultKey: "KeyA", shiftLabel: "Reset pitch" },
   { id: "keyMatch", label: "Key match", group: "Mix", defaultKey: "KeyS" },
-  { id: "fx", label: "FX (filter) on / off", group: "Mix", defaultKey: "KeyD" },
-  { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyF", shiftLabel: "Match gain (dB)" },
+  { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyD", shiftLabel: "Match gain (dB)" },
+  { id: "pitchRange", label: "Cycle pitch range", group: "Mix", defaultKey: "KeyF" },
+  { id: "fx", label: "FX (filter) on / off", group: "Mix", defaultKey: "KeyR" },
   { id: "grid", label: "Grid magnet (snap)", group: "Mix", defaultKey: "KeyG", shiftLabel: "Step skip size" },
 
   { id: "pitchDown", label: "Key down a semitone", group: "Pitch", defaultKey: "Minus", shiftLabel: "Nudge tempo down" },

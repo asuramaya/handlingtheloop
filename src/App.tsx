@@ -9,6 +9,7 @@ import { useRoom, type Intent, type TickDecks } from "@htl/room";
 import {
   AudioEngine,
   type Deck,
+  type StemView,
   EQ_MIN_DB,
   EQ_MAX_DB,
   analyzeTrackAsync,
@@ -52,6 +53,7 @@ import {
   initGpuCrashGuard,
   armGpu,
   disarmGpu,
+  initStemCrashGuard,
   stemTrace,
   DEFAULT_STEM_MODEL,
   type Stems,
@@ -81,6 +83,13 @@ export interface StemStatus {
   pct?: number; // 0–100, while downloading/separating
   detail: string;
   src?: string; // short engine label for the persistent chip ("Demucs" / "Open-Unmix")
+}
+
+// One labelled group of live diagnostics for the Settings → Debug tab (audio engine,
+// shared session, device, per-deck). Polled by the panel while that tab is open.
+export interface DebugSection {
+  title: string;
+  rows: [string, string][];
 }
 
 // Visual tone for the deck-lane badge: a cache FETCH reads green, on-device
@@ -176,6 +185,10 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     playing: deck.playing,
     stemGains: { drums: deck.stemLevel("drums"), bass: deck.stemLevel("bass"), vocals: deck.stemLevel("vocals"), other: deck.stemLevel("other") },
     stemMutes: { drums: !deck.stemActive("drums"), bass: !deck.stemActive("bass"), vocals: !deck.stemActive("vocals"), other: !deck.stemActive("other") },
+    // So a stem-less remote (mobile) lights up its mixer cells for this deck. Don't
+    // advertise REMOTE-only stems back out — only this device's OWN stems count.
+    hasStems: deck.hasStems && !deck.remoteStems,
+    stemsNeural: deck.stemsNeural && !deck.remoteStems,
   };
 }
 
@@ -185,6 +198,10 @@ const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
 // Apply per-stem mixer state from a snapshot. The deck stores gain/mute even
 // before its stems exist, so it takes effect the moment separation finishes.
 function applyDeckStems(deck: Deck, s: DeckSnapshot) {
+  // A stem-less remote (mobile) marks the SOURCE device's stems present so its mixer
+  // cells light up and drive them — without holding any local buffers (mix-only
+  // audio). Desktops separate locally, so they never take the remote path.
+  if (isMobileDevice()) deck.markRemoteStems(!!s.hasStems, !!s.stemsNeural);
   for (const name of STEM_KEYS) {
     if (s.stemGains && s.stemGains[name] != null) deck.setStemGain(name, s.stemGains[name]);
     if (s.stemMutes) deck.setStemMute(name, !!s.stemMutes[name]);
@@ -276,6 +293,9 @@ export function App() {
       setGpuCrashed(true);
       setSettings((s) => (getStemModel(s.stemModel).tier === "gpu" ? { ...s, stemModel: DEFAULT_STEM_MODEL } : s));
     }
+    // Mobile best-stems crash guard: if a prior auto-enhance took the tab down, the
+    // next loads stay on the safe DSP split instead of crash-looping (see deriveStems).
+    initStemCrashGuard();
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -426,6 +446,7 @@ export function App() {
       deck.setTrim(1);
       deck.resetEq(); // gains → 0 dB and every band node back to its default frequency
       deck.setPitch(0);
+      deck.setLevel(1); // channel fader back to unity — match the on-screen RESET button
       deck.resetStems(); // also reset the stem faders (→ unity) and un-mute all stems
     };
 
@@ -482,7 +503,7 @@ export function App() {
     const HANDLERS: Record<string, (deck: DeckRef, id: DeckId, s: boolean) => void> = {
       play: (deck, id, s) => {
         if (s) {
-          resetChannel(deck); // Shift+Space = reset the channel (tempo/pitch/EQ/filter/stems)
+          resetChannel(deck); // Shift+Space = reset the channel (tempo/pitch/EQ/filter/level/stems)
           emitDeckRef.current(id);
         } else {
           deck.togglePlay();
@@ -508,12 +529,14 @@ export function App() {
         } else {
           doSync(id);
           emitDeckRef.current(id);
+          emitRef.current({ kind: "sync", slave: engine.syncSlave }); // mirror the button on peers
         }
       },
       keyMatch: (deck, id, s) => {
         if (s) return; // KEY is a toggle — no shift action (channel reset is on Shift+Space)
         engine.toggleKey(id);
         emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
+        emitRef.current({ kind: "key", slave: engine.keySlave }); // mirror the button on peers
       },
       fx: (deck, id) => {
         deck.setFx(!deck.fxOn);
@@ -525,9 +548,14 @@ export function App() {
           emitRef.current({ kind: "control", deck: id, param: "trim", value: deck.trim });
         } else cycleTempoRange();
       },
+      pitchRange: (_deck, _id, s) => {
+        if (!s) cyclePitchRange();
+      },
       grid: (deck, id, s) => {
-        if (s) deck.skipBeats = nextSkip(deck.skipBeats);
-        else {
+        if (s) {
+          deck.skipBeats = nextSkip(deck.skipBeats);
+          emitRef.current({ kind: "skip", deck: id, beats: deck.skipBeats });
+        } else {
           deck.setQuantize(!deck.quantizing);
           emitRef.current({ kind: "toggle", deck: id, param: "quantize", value: deck.quantizing });
         }
@@ -624,7 +652,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, refresh, settingsOpen, searchOpen, libOpen, settings.keyBindings]);
+  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, settingsOpen, searchOpen, libOpen, settings.keyBindings]);
 
   useEffect(() => {
     applySettings(settings);
@@ -662,7 +690,6 @@ export function App() {
   // permanently skipped (the old per-deck guard never cleared on success, which left
   // the deck stuck on the DSP split after any model round-trip).
   const stemJobs = useRef<Map<string, Promise<Stems>>>(new Map());
-
   // Auto-promotion: when the deck is on DSP (the default), look for a neural result
   // that ALREADY exists for this track — first on local disk, then in the shared R2
   // cache — and silently swap it in over the DSP split. It's a pure cache read (no
@@ -771,6 +798,18 @@ export function App() {
           /* DSP is best-effort */
         }
       };
+
+      // MOBILE = PLAIN MIX ONLY. Decoding a ~424 MB stem set (neural OR DSP) for two
+      // decks at once OOM-crash-loops iOS, so phones never build stems locally. Stems
+      // appear only when this device is a REMOTE controller for a host that has them:
+      // the session marks them present (markRemoteStems) and streams the host's stem
+      // envelopes for the display. Local audio is always the plain mix → no OOM.
+      if (mobile) {
+        engine.deck(id).setStems(null);
+        refresh();
+        setStatusFor(id, null);
+        return;
+      }
 
       // Refresh-fast path: for a neural model, if THIS track's stems are already
       // persisted in IndexedDB (from a previous separation/download), decode them
@@ -907,6 +946,8 @@ export function App() {
       crossfade,
       zoom,
       tempoRange,
+      syncSlave: engine.syncSlave,
+      keySlave: engine.keySlave,
     };
   }, [engine]);
 
@@ -1263,6 +1304,9 @@ export function App() {
       setCrossfade(snap.crossfade);
       engine.setCrossfade(snap.crossfade);
       if (snap.tempoRange != null) setSettings((s) => (s.tempoRange === snap.tempoRange ? s : { ...s, tempoRange: snap.tempoRange! }));
+      // Mirror the SYNC/KEY button state (display only — tempo/pitch arrive as intents).
+      if (snap.syncSlave !== undefined) engine.mirrorSyncDisplay(snap.syncSlave);
+      if (snap.keySlave !== undefined) engine.mirrorKeyDisplay(snap.keySlave);
       (["A", "B"] as DeckId[]).forEach((id) => {
         const d = snap.decks[id];
         if (!d) return;
@@ -1309,11 +1353,20 @@ export function App() {
       if (d?.videoId && d.videoId === loaded[id] && reconciledTarget.current[id] !== d.videoId) {
         reconcileDeckState(id, d);
         reconciledTarget.current[id] = d.videoId;
+        // Make a freshly-decoded follower actually SOUND: honor the snapshot transport.
+        // Ticks also do this, but a late joiner can sit decoded-but-paused if no tick
+        // flips it. resume() is enough now that the output was unlocked on first gesture.
+        const deck = engine.deck(id);
+        if (d.playing && !deck.playing) {
+          engine.resume();
+          deck.seek(d.position);
+          deck.play();
+        }
         any = true;
       }
     });
     if (any) refresh();
-  }, [loaded, reconcileDeckState, refresh]);
+  }, [engine, loaded, reconcileDeckState, refresh]);
 
   // Apply ONE control intent to the local engine — used for both inbound remote
   // intents and our own actions. Pure local effect, no network.
@@ -1326,6 +1379,18 @@ export function App() {
       }
       if (intent.kind === "tempoRange") {
         setSettings((s) => (s.tempoRange === intent.value ? s : { ...s, tempoRange: intent.value }));
+        return;
+      }
+      // SYNC / KEY role: mirror the button(s) only — the master's tempo/pitch already
+      // crosses as control intents, so we don't re-run the engine on the follower.
+      if (intent.kind === "sync") {
+        engine.mirrorSyncDisplay(intent.slave);
+        refresh();
+        return;
+      }
+      if (intent.kind === "key") {
+        engine.mirrorKeyDisplay(intent.slave);
+        refresh();
         return;
       }
       const deck = engine.deck(intent.deck);
@@ -1355,10 +1420,12 @@ export function App() {
           else deck.setQuantize(intent.value);
           break;
         case "stemGain":
-          if (deck.hasStems) deck.setStemGain(intent.stem, intent.value);
+          // Apply regardless of local stems — the deck holds gain/mute state buffer-
+          // free, so a mix-only remote stays in sync and reflects it on its cells.
+          deck.setStemGain(intent.stem, intent.value);
           break;
         case "stem":
-          if (deck.hasStems) deck.setStemMute(intent.stem, !intent.on);
+          deck.setStemMute(intent.stem, !intent.on);
           break;
         case "transport":
           if (intent.action === "play") {
@@ -1398,6 +1465,12 @@ export function App() {
           if (intent.action === "press") deck.hotCue(intent.slot);
           else if (intent.action === "save") deck.saveLoop(intent.slot);
           else deck.clearHotCue(intent.slot);
+          break;
+        case "skip":
+          deck.skipBeats = intent.beats; // jog / beat-jump resolution
+          break;
+        case "loopBounds":
+          deck.applyLoopRegion(intent.start, intent.end, intent.active); // fine-adjust / move
           break;
         case "load":
           // A co-DJ handed us a track → WE load/decode/play it (the master is the
@@ -1452,13 +1525,64 @@ export function App() {
         } else {
           if (drift > 0.12) deck.seek(t.pos); // both paused → tight align is silent, no skip
         }
+        // Feed the follower visual clock: the waveform glides at the display rate off a
+        // wall-clock extrapolation of this tick, even when the local audio clock is
+        // frozen (muted passenger / suspended mobile context). See Deck.visualPosition.
+        deck.followTick(t.pos, t.playing);
       });
       if (flipped) refresh();
     },
     [engine, refresh],
   );
 
-  const room = useRoom({ onState: applyRoomSnapshot, onIntent: onRoomIntent, onTick: onRoomTick });
+  // A peer's stem waveform envelopes arrived (the host streams them) → rebuild this
+  // deck's 4-lane display from them, even though we hold no local stem PCM (mobile).
+  const onRoomStemView = useCallback(
+    (deck: DeckId, view: unknown) => {
+      try {
+        engine.deck(deck).setRemoteStemView(view as StemView);
+        refresh();
+      } catch {
+        /* malformed view — ignore */
+      }
+    },
+    [engine, refresh],
+  );
+
+  const room = useRoom({ onState: applyRoomSnapshot, onIntent: onRoomIntent, onTick: onRoomTick, onStemView: onRoomStemView });
+
+  // Publish THIS device's stem envelopes to the session (host side) so stem-less
+  // remotes can render the 4-lane display. Via a ref so the deck callback below reads
+  // live room state without re-binding on every change.
+  const roomRef = useRef(room);
+  roomRef.current = room;
+  const sendHostStemView = useCallback(
+    (id: DeckId) => {
+      const r = roomRef.current;
+      if (!r.controlling || r.status !== "online") return;
+      const v = engine.deck(id).extractStemView();
+      if (v) r.sendStemView(id, v);
+    },
+    [engine],
+  );
+  useEffect(() => {
+    engine.deckA.onStemsReady = () => sendHostStemView("A");
+    engine.deckB.onStemsReady = () => sendHostStemView("B");
+    // Loop fine-adjust / move → broadcast the absolute region (emitRef no-ops unless
+    // controlling). in/out/exit/beat already emit their own loop intents.
+    const loopEdit = (id: DeckId) => () => {
+      const r = engine.deck(id).loopRegion();
+      if (r) emitRef.current({ kind: "loopBounds", deck: id, start: r.start, end: r.end, active: r.active });
+    };
+    engine.deckA.onLoopEdit = loopEdit("A");
+    engine.deckB.onLoopEdit = loopEdit("B");
+    return () => {
+      engine.deckA.onStemsReady = undefined;
+      engine.deckB.onStemsReady = undefined;
+      engine.deckA.onLoopEdit = undefined;
+      engine.deckB.onLoopEdit = undefined;
+    };
+  }, [engine, sendHostStemView]);
 
   // Our own actions broadcast as intents (the controls also apply locally first, so
   // this is purely the network echo). Any CONTROLLING participant drives (shared
@@ -1579,9 +1703,15 @@ export function App() {
     .sort()
     .join(",");
   useEffect(() => {
-    if (room.isAnchor && room.status === "online") room.publishState(buildSnapshot());
+    if (room.isAnchor && room.status === "online") {
+      room.publishState(buildSnapshot());
+      // Re-publish stem envelopes too (covers session start / a track load / a peer
+      // joining) so a remote's 4-lane display fills in alongside the board snapshot.
+      sendHostStemView("A");
+      sendHostStemView("B");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot]);
+  }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView]);
 
   // The MOMENT we join an existing session (and we're not the clock), pull the current
   // set so decks/waveforms/transport snap into place immediately. followRef is already
@@ -1602,6 +1732,15 @@ export function App() {
     }, 80);
     return () => clearInterval(iv);
   }, [engine, room.isAnchor, room.status, room.sendTick]);
+
+  // Only a non-anchor co-DJ mirrors the anchor's clock for drawing. When this device
+  // is solo, or it IS the anchor (its own real playhead is the reference), drop the
+  // follower visual clock so the waveform draws from the local transport again.
+  useEffect(() => {
+    if (room.enabled && room.status === "online" && !room.isAnchor) return;
+    engine.deckA.endFollow();
+    engine.deckB.endFollow();
+  }, [engine, room.enabled, room.status, room.isAnchor]);
 
   // Flush deferred decodes: a muted passenger doesn't decode (bug #2), so when it starts
   // rendering audio — 🔊 on, granted control, or promoted to the clock — decode the stashed
@@ -1675,15 +1814,17 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Browsers start the audio context suspended; resume it on the first gesture so
-  // a deck restored in the "playing" state actually starts sounding on first tap.
+  // Browsers start the audio context suspended; UNLOCK it on the first gesture (a
+  // silent-buffer primer, not just resume) so iOS opens the output route. Critical for
+  // LISTEN mode, where the first real sound starts later from a network tick — never
+  // from a tap — so without an in-gesture primer iOS keeps the listener silent.
   useEffect(() => {
-    const resume = () => engine.resume();
-    window.addEventListener("pointerdown", resume, { once: true });
-    window.addEventListener("keydown", resume, { once: true });
+    const unlock = () => engine.unlock();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
     return () => {
-      window.removeEventListener("pointerdown", resume);
-      window.removeEventListener("keydown", resume);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
     };
   }, [engine]);
 
@@ -1699,6 +1840,74 @@ export function App() {
       document.removeEventListener("visibilitychange", onHide);
     };
   }, [persistSession]);
+
+  // Live diagnostics for Settings → Debug (replaces the old green ctx overlay). Read
+  // fresh each poll from the engine + session + device — the panel calls this on an
+  // interval only while the Debug tab is open, so it costs nothing the rest of the time.
+  const collectDebug = (): DebugSection[] => {
+    const e = engine;
+    const fmt = (n: number | null | undefined, d = 2) => (n == null ? "—" : n.toFixed(d));
+    const deckRows = (id: DeckId): DebugSection => {
+      const dk = e.deck(id);
+      const h = dk.lastDiag;
+      return {
+        title: `Deck ${id}`,
+        rows: [
+          ["loaded", dk.buffer ? `${dk.buffer.duration.toFixed(1)}s` : "—"],
+          ["playing", String(dk.playing)],
+          ["position", `${fmt(dk.position())} (vis ${fmt(dk.visualPosition())})`],
+          ["tempo", `${dk.tempo.toFixed(2)}%  rate ${dk.rate.toFixed(3)}`],
+          ["pitch", `${dk.pitch > 0 ? "+" : ""}${dk.pitch} st`],
+          ["bpm / key", `${fmt(dk.effectiveBpm, 1)} / ${dk.effectiveKey?.camelot ?? "—"} ${dk.effectiveKey?.name ?? ""}`.trim()],
+          ["sync / key role", `${dk.syncRole} / ${dk.keyRole}`],
+          ["loop", dk.loop ? `${dk.loop.active ? "on" : "off"} ${fmt(dk.loop.start)}–${fmt(dk.loop.end)} (${dk.loop.beats}b)` : "—"],
+          ["stems", dk.hasStems ? (dk.stemsNeural ? "neural (4-lane)" : "dsp") : "none"],
+          ["stretch attached", String(dk.stretchAttached)],
+          ["worklet heartbeat", h ? `ld${h.loaded} pl${h.playing} fifo${h.fifo} pk${Number(h.peak ?? 0).toFixed(2)} g${Number(h.gain ?? 0).toFixed(2)} end${h.ended}` : "none"],
+        ],
+      };
+    };
+    const role = room.isAnchor ? "anchor" : room.controlling ? "controller" : room.listening ? "listener" : room.joined ? "watcher" : "—";
+    return [
+      {
+        title: "Audio context",
+        rows: [
+          ["state", e.ctx.state],
+          ["sample rate", `${e.ctx.sampleRate} Hz`],
+          ["base latency", `${((e.ctx.baseLatency ?? 0) * 1000).toFixed(1)} ms`],
+          ["clock", `${e.ctx.currentTime.toFixed(1)} s`],
+          ["worklet error", e.workletError || "none"],
+        ],
+      },
+      {
+        title: "Shared session",
+        rows: [
+          ["enabled", String(room.enabled)],
+          ["status", room.status],
+          ["role", role],
+          ["listening / controlling", `${room.listening} / ${room.controlling}`],
+          ["anchor", `${room.isAnchor}${room.anchorId ? ` (${room.anchorId.slice(0, 6)})` : ""}`],
+          ["guest / host", `${room.isGuest} / ${room.host}`],
+          ["peers", String(room.peers?.length ?? 0)],
+          ["error", room.error || "none"],
+        ],
+      },
+      {
+        title: "Device",
+        rows: [
+          ["mobile", String(isMobileDevice())],
+          ["cores", String(navigator.hardwareConcurrency ?? "?")],
+          ["mem (GB)", String((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? "?")],
+          ["pixel ratio", String(window.devicePixelRatio)],
+          ["viewport", `${window.innerWidth}×${window.innerHeight}`],
+          ["online", String(navigator.onLine)],
+          ["agent", navigator.userAgent],
+        ],
+      },
+      deckRows("A"),
+      deckRows("B"),
+    ];
+  };
 
   return (
     <div className={`app ${dockSwapped ? "dock-swapped" : ""}`}>
@@ -1729,7 +1938,7 @@ export function App() {
           <span className="chin-gear" aria-hidden="true">⚙</span>
           <span className="chin-label">Settings</span>
         </button>
-        <RoomBar room={room} onActivate={() => engine.resume()} />
+        <RoomBar room={room} onActivate={() => engine.unlock()} />
       </nav>
 
       {/* Workspace: on desktop a flex ROW so the Library/Search docks SHARE the
@@ -1806,8 +2015,8 @@ export function App() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { doSync("A"); refresh(); }}
-            onKey={() => { engine.toggleKey("A"); refresh(); }}
+            onSync={() => { doSync("A"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
+            onKey={() => { engine.toggleKey("A"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -1830,8 +2039,8 @@ export function App() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { doSync("B"); refresh(); }}
-            onKey={() => { engine.toggleKey("B"); refresh(); }}
+            onSync={() => { doSync("B"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
+            onKey={() => { engine.toggleKey("B"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -1866,6 +2075,7 @@ export function App() {
             setGpuCrashed(false);
             refresh();
           }}
+          debug={collectDebug}
         />
       )}
 

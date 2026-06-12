@@ -505,9 +505,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
               e.preventDefault();
               resetNode(n);
             }}
-          >
-            <span className="eq-node-label">{n.label}</span>
-          </button>
+          />
         ))}
       </div>
       {/* Controls sit UNDER the curve. */}

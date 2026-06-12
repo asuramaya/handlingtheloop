@@ -55,7 +55,7 @@ function LaneTime({ deck, duration }: { deck: Deck; duration: number }) {
   useEffect(() => {
     let raf = 0;
     const loop = () => {
-      if (deck.playing || deck.jogging) bump((n) => n + 1);
+      if (deck.visualPlaying || deck.jogging) bump((n) => n + 1);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -63,7 +63,7 @@ function LaneTime({ deck, duration }: { deck: Deck; duration: number }) {
   }, [deck]);
   return (
     <>
-      {fmtTime(deck.position())} <span className="muted">/ {fmtTime(duration)}</span>
+      {fmtTime(deck.visualPosition())} <span className="muted">/ {fmtTime(duration)}</span>
     </>
   );
 }

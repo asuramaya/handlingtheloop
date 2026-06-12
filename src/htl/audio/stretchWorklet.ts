@@ -46,6 +46,7 @@ class Stretch extends AudioWorkletProcessor {
     this.speed = 1; this.speedTarget = 1;
     this.pitch = 1; this.pitchTarget = 1;
     this.kParam = 1 - Math.exp(-128 / (0.02 * this.sr));
+    this.diagN = 0; // heartbeat counter (TEMP iPhone playback diagnostics)
     // PCM groups (1 = mix, 4 = stems): per-group L/R channels + live gains.
     this.gL = []; this.gR = []; this.gain_ = new Float32Array(4); this.nG = 0; this.length = 0;
     // transport
@@ -205,6 +206,17 @@ class Stretch extends AudioWorkletProcessor {
       const r = this.cubicRing(this.ringR, this.rHead);
       outL[i] = l * this.gain; outR[i] = r * this.gain;
       this.rHead += gamma;
+    }
+    // TEMP iPhone diagnostics: report live state ~4×/s so the UI can show why a deck
+    // is (not) sounding — loaded? playing? FIFO filling? output actually non-zero?
+    if ((++this.diagN % 12) === 0) {
+      let pk = 0;
+      for (let i = 0; i < frames; i++) { const a = outL[i] < 0 ? -outL[i] : outL[i]; if (a > pk) pk = a; }
+      this.port.postMessage({
+        type: 'diag', loaded: this.loaded, playing: this.playing, ended: this.ended,
+        nG: this.nG, len: this.length, fifo: this.wHead - this.rHead,
+        ideal: Math.round(this.idealPos), peak: pk, gain: this.gain,
+      });
     }
     return true;
   }

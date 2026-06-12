@@ -14,6 +14,8 @@ import {
   webGpuAdapterInfo,
   isGpuBlocked,
   unblockGpu,
+  stemFailLevel,
+  resetStemGuard,
   isUntestedGpuPlatform,
   readStemTrace,
   clearStemTrace,
@@ -28,7 +30,7 @@ import {
   logout as accountLogout,
   disconnectService,
 } from "@htl/account";
-import type { StemStatus } from "../App";
+import type { StemStatus, DebugSection } from "../App";
 import { KeyMap } from "./KeyHelp";
 import { maskName, maskEmail, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 
@@ -40,6 +42,7 @@ interface SettingsPanelProps {
   stemStatus?: Record<"A" | "B", StemStatus | null>; // live per-deck separation status/errors
   onReanalyze?: (modelId: string) => void; // force a fresh separation of the loaded track(s)
   onGpuReenable?: () => void; // user opted to re-enable GPU after a crash auto-disabled it
+  debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)
 }
 
 // What each model can do on THIS device, as a short badge for the picker.
@@ -64,13 +67,11 @@ function supportBadge(m: StemModel): { text: string; cls: string } {
   }
 }
 
-type Tab = "color" | "deck" | "keys" | "audio" | "stems" | "accounts" | "debug" | "about";
+type Tab = "color" | "controls" | "audio" | "accounts" | "debug" | "about";
 const TABS: { key: Tab; label: string }[] = [
   { key: "color", label: "Color" },
-  { key: "deck", label: "Deck" },
-  { key: "keys", label: "Keys" },
-  { key: "audio", label: "Audio Engine" },
-  { key: "stems", label: "Stems" },
+  { key: "controls", label: "Controls" },
+  { key: "audio", label: "Audio" },
   { key: "accounts", label: "Accounts" },
   { key: "debug", label: "Debug" },
   { key: "about", label: "About" },
@@ -182,10 +183,24 @@ export function SettingsPanel({
   stemStatus,
   onReanalyze,
   onGpuReenable,
+  debug,
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [tab, setTab] = useState<Tab>("color");
   const revealed = usePrivacyRevealed();
+
+  // Live diagnostics for the Debug tab — poll the collector (engine/session/device)
+  // a few times a second WHILE that tab is open; idle otherwise. `copied` flashes the
+  // Copy button (sharing the dump is the only practical way to debug a phone).
+  const [diag, setDiag] = useState<DebugSection[]>([]);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (tab !== "debug" || !debug) return;
+    const tick = () => setDiag(debug());
+    tick();
+    const iv = setInterval(tick, 400);
+    return () => clearInterval(iv);
+  }, [tab, debug]);
 
   // Per-model cache state for the tracks currently on the decks: a model is
   // "cached" (usable on ANY device, incl. phones) if every loaded track already
@@ -342,95 +357,72 @@ export function SettingsPanel({
             </>
           )}
 
-          {tab === "deck" && (
-            <div className="settings-section">
-              <div className="settings-section-head">
-                <span className="settings-label">Jog feel</span>
-                <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4 })}>
-                  reset
-                </button>
+          {tab === "controls" && (
+            <>
+              <div className="settings-section">
+                <div className="settings-section-head">
+                  <span className="settings-label">Jog feel</span>
+                  <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4 })}>
+                    reset
+                  </button>
+                </div>
+                <Slider
+                  label="Weight"
+                  hint={settings.jogWeight < 0.2 ? "feather" : settings.jogWeight > 0.7 ? "heavy" : "balanced"}
+                  value={settings.jogWeight}
+                  onChange={(v) => set({ jogWeight: v })}
+                />
+                <Slider
+                  label="Drag"
+                  hint={settings.jogDrag < 0.2 ? "long glide" : settings.jogDrag > 0.7 ? "quick stop" : "balanced"}
+                  value={settings.jogDrag}
+                  onChange={(v) => set({ jogDrag: v })}
+                />
               </div>
-              <Slider
-                label="Weight"
-                hint={settings.jogWeight < 0.2 ? "feather" : settings.jogWeight > 0.7 ? "heavy" : "balanced"}
-                value={settings.jogWeight}
-                onChange={(v) => set({ jogWeight: v })}
-              />
-              <Slider
-                label="Drag"
-                hint={settings.jogDrag < 0.2 ? "long glide" : settings.jogDrag > 0.7 ? "quick stop" : "balanced"}
-                value={settings.jogDrag}
-                onChange={(v) => set({ jogDrag: v })}
-              />
-              <p className="settings-hint">
-                Weight is the platter's inertia (how it spins up and coasts); Drag is how quickly a fling brakes to a
-                stop. Scrub the waveform to feel the difference.
-              </p>
-            </div>
-          )}
 
-          {tab === "keys" && (
-            <div className="settings-section">
-              <p className="settings-hint">
-                The keys drive the <strong>focused</strong> deck — press <kbd className="kbd-chip">Tab</kbd> to switch
-                decks (the focused one is ringed). Hold or latch <kbd className="kbd-chip">Shift</kbd> for the alt action
-                shown after “⇧”.
-              </p>
-              <div className="settings-row">
-                <span className="settings-label">On-button hints</span>
-                <button
-                  className={`toggle ${settings.keyHints ? "on" : ""}`}
-                  onClick={() => set({ keyHints: !settings.keyHints })}
-                  role="switch"
-                  aria-checked={settings.keyHints}
-                >
-                  <span className="toggle-knob" />
-                </button>
+              <div className="settings-section">
+                <div className="settings-row">
+                  <span className="settings-label">On-button key hints</span>
+                  <button
+                    className={`toggle ${settings.keyHints ? "on" : ""}`}
+                    onClick={() => set({ keyHints: !settings.keyHints })}
+                    role="switch"
+                    aria-checked={settings.keyHints}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
               </div>
-              <p className="settings-hint">Show each button's shortcut in its corner (desktop only).</p>
-              <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
-            </div>
+            </>
           )}
 
           {tab === "audio" && (
-            <div className="settings-section">
-              <div className="settings-section-head">
-                <span className="settings-label">Stretch engine quality</span>
-              </div>
-              <div className="seg">
-                {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
-                  <button
-                    key={q}
-                    className={`seg-btn ${settings.stretchQuality === q ? "on" : ""}`}
-                    onClick={() => set({ stretchQuality: q })}
-                  >
-                    {STRETCH_PRESETS[q].label}
-                  </button>
-                ))}
-              </div>
-              <p className="settings-hint">
-                {STRETCH_PRESETS[settings.stretchQuality].blurb} <br />
-                <span className="muted">
+            <>
+              <div className="settings-section">
+                <div className="settings-section-head">
+                  <span className="settings-label">Stretch engine</span>
+                </div>
+                <div className="seg">
+                  {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
+                    <button
+                      key={q}
+                      className={`seg-btn ${settings.stretchQuality === q ? "on" : ""}`}
+                      onClick={() => set({ stretchQuality: q })}
+                    >
+                      {STRETCH_PRESETS[q].label}
+                    </button>
+                  ))}
+                </div>
+                <p className="settings-hint muted">
                   ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms latency · grain{" "}
                   {STRETCH_PRESETS[settings.stretchQuality].frame}
-                </span>
-              </p>
-              <p className="settings-hint">
-                The unified <strong>tempo + key</strong> engine. It time-stretches in the time domain (WSOLA) so beats
-                stay crisp, then resamples for pitch — tempo and key are fully independent, with no “underwater” smear.
-                Affects key-lock, the tempo fader, and the KEY pitch shift on both decks.
-              </p>
-            </div>
-          )}
+                </p>
+              </div>
 
-          {tab === "stems" && (
-            <>
               {isGpuBlocked() && (
                 <div className="stem-blocked-banner">
-                  <span>
-                    GPU stem separation crashed last time and was <strong>disabled</strong> to stop a crash loop. CPU
-                    models and cached results still work.
-                  </span>
+                  <span>GPU stem separation crashed and was disabled. CPU models and cached results still work.</span>
                   <button
                     className="link-btn"
                     onClick={() => {
@@ -446,7 +438,7 @@ export function SettingsPanel({
               {(stemStatus?.A || stemStatus?.B) && (
                 <div className="settings-section">
                   <div className="settings-section-head">
-                    <span className="settings-label">Status</span>
+                    <span className="settings-label">Stem status</span>
                   </div>
                   {(["A", "B"] as const).map((d) => {
                     const st = stemStatus?.[d];
@@ -465,58 +457,63 @@ export function SettingsPanel({
                 <div className="settings-section-head">
                   <span className="settings-label">{isMobileDevice() ? "Stems" : "Stem separation"}</span>
                 </div>
-                {isMobileDevice() && (
+                {isMobileDevice() ? (
                   <div className="stem-mobile-note">
-                    Phones don't separate stems on-device — it OOM-crashes Safari. Pick a neural model to
-                    <strong> download</strong> its stems once a desktop has separated that track; otherwise the
-                    instant DSP split is used. (Upgrade-only.)
+                    Phones load stems automatically at the best available quality (a cached desktop split, else the
+                    instant DSP one).
+                    {stemFailLevel() > 0 && (
+                      <>
+                        {" "}
+                        Downgraded after a crash —{" "}
+                        <button
+                          className="link-btn"
+                          onClick={() => {
+                            resetStemGuard();
+                            location.reload();
+                          }}
+                        >
+                          retry full quality
+                        </button>
+                        .
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="stem-models">
+                    {STEM_MODELS
+                      // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
+                      // rest stay, shown as download-only on mobile.
+                      .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
+                      .map((m) => {
+                        const sup = modelSupport(m);
+                        const badge = supportBadge(m);
+                        const cached = cachedModels[m.id];
+                        const blocked = sup === "blocked" && !cached;
+                        const untested = m.tier === "gpu" && sup === "runs" && isUntestedGpuPlatform();
+                        return (
+                          <button
+                            key={m.id}
+                            className={`stem-model ${settings.stemModel === m.id ? "on" : ""} ${blocked ? "blocked" : ""} ${
+                              untested ? "untested" : ""
+                            }`}
+                            disabled={blocked}
+                            onClick={() => !blocked && set({ stemModel: m.id })}
+                          >
+                            <span className="stem-model-label">
+                              {m.label}
+                              {m.kind !== "dsp" && <span className={`stem-badge ${badge.cls}`}>{badge.text}</span>}
+                              {untested && <span className="stem-badge warn">Untested here — may crash</span>}
+                              {cached && <span className="stem-badge cached">✓ cached for loaded track</span>}
+                            </span>
+                            <span className="stem-model-note">{m.note}</span>
+                          </button>
+                        );
+                      })}
                   </div>
                 )}
-                <div className="stem-models">
-                  {STEM_MODELS
-                    // Hide neural models a phone can never RUN nor benefit from selecting
-                    // for processing — but keep the ones whose results it can DOWNLOAD.
-                    // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
-                    // remaining neural models stay, shown as download-only.
-                    .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
-                    .map((m) => {
-                    const sup = modelSupport(m);
-                    const badge = supportBadge(m);
-                    const cached = cachedModels[m.id];
-                    // Disabled after a crash → not selectable (cached results still load).
-                    // Untested on this browser (e.g. Firefox) → dimmed + warned, but still
-                    // selectable; the crash guard auto-disables it if it does crash.
-                    const blocked = sup === "blocked" && !cached;
-                    const untested = m.tier === "gpu" && sup === "runs" && isUntestedGpuPlatform();
-                    return (
-                      <button
-                        key={m.id}
-                        className={`stem-model ${settings.stemModel === m.id ? "on" : ""} ${blocked ? "blocked" : ""} ${
-                          untested ? "untested" : ""
-                        }`}
-                        disabled={blocked}
-                        onClick={() => !blocked && set({ stemModel: m.id })}
-                      >
-                        <span className="stem-model-label">
-                          {m.label}
-                          {m.kind !== "dsp" && <span className={`stem-badge ${badge.cls}`}>{badge.text}</span>}
-                          {untested && <span className="stem-badge warn">Untested here — may crash</span>}
-                          {cached && <span className="stem-badge cached">✓ cached for loaded track</span>}
-                        </span>
-                        <span className="stem-model-note">{m.note}</span>
-                      </button>
-                    );
-                  })}
-                </div>
 
-                {/* Re-analyze the loaded track(s) with the SELECTED model — force a
-                    fresh on-device separation, overwriting any cached result. Only
-                    enabled when the selected model is neural, this device can run it,
-                    and a track is loaded. */}
                 {(() => {
                   const sel = getStemModel(settings.stemModel);
-                  // No on-device processing on a phone — it's upgrade-only (download a
-                  // desktop-separated result), so hide the re-analyze action entirely.
                   if (sel.kind === "dsp" || isMobileDevice()) return null;
                   const canReanalyze = modelSupport(sel) === "runs" && loadedVideoIds.length > 0 && !!onReanalyze;
                   return (
@@ -536,14 +533,7 @@ export function SettingsPanel({
                     </button>
                   );
                 })()}
-                {(() => {
-                  // What hardware the SELECTED model runs separation on:
-                  //   • gpu tier (demucs WebGPU) → GPU; show the actual adapter name if known.
-                  //   • cpu / light / dsp → CPU (ORT wasm / DSP filter).
-                  // Note both demucs variants share arch "demucs-core" — only the GPU
-                  // one is tier "gpu", so gate on TIER, not arch (the CPU one is wasm).
-                  // GPU availability comes from modelSupport ("runs" = usable here),
-                  // NOT from the adapter name (Firefox often blanks it for privacy).
+                {!isMobileDevice() && (() => {
                   const sel = getStemModel(settings.stemModel);
                   const gpu = sel.tier === "gpu";
                   const sup = modelSupport(sel);
@@ -637,6 +627,44 @@ export function SettingsPanel({
 
           {tab === "debug" && (
             <>
+              {/* Live engine / session / device diagnostics (was the green ctx overlay).
+                  Polled only while this tab is open; Copy dumps it for sharing — the
+                  only practical way to read state off a phone (no visible console). */}
+              {diag.length > 0 && (
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <span className="settings-label">Live diagnostics</span>
+                    <button
+                      className="link-btn"
+                      onClick={() => {
+                        const text = diag
+                          .map((s) => `[${s.title}]\n` + s.rows.map(([k, v]) => `  ${k}: ${v}`).join("\n"))
+                          .join("\n\n");
+                        void navigator.clipboard?.writeText(text).then(
+                          () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
+                          () => {},
+                        );
+                      }}
+                    >
+                      {copied ? "Copied ✓" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="debug-grid">
+                    {diag.map((s) => (
+                      <div className="debug-block" key={s.title}>
+                        <div className="debug-block-title">{s.title}</div>
+                        {s.rows.map(([k, v]) => (
+                          <div className="debug-row" key={k}>
+                            <span className="debug-key">{k}</span>
+                            <span className="debug-val">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* On-device separation crash trace — survives a tab OOM-kill (synchronous
                   localStorage), so after a crash + reload this shows the LAST step it
                   reached. The only way to debug an iPhone Safari crash without a Mac. */}

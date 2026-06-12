@@ -262,6 +262,66 @@ export function unblockGpu(): void {
   }
 }
 
+// ─── Mobile stem-load crash-loop guard (ESCALATING) ─────────────────────────────
+// Loading stems on a phone decodes ~424 MB per set; doing it for BOTH decks on the
+// first-run seed blew the iOS tab budget → OOM → Safari auto-reloads → the seed
+// re-runs → crash again = a REFRESH LOOP. A boolean block can't break it: once
+// neural is blocked, both decks fall to the DSP split, which ALSO decodes ~424 MB
+// and OOMs — and DSP can't be "blocked" or there'd be nothing to show.
+//
+// So the guard ESCALATES, guaranteeing the loop terminates:
+//   level 0 → try best cached neural, else DSP
+//   level 1 → DSP split only (skip neural)            (after 1 crash)
+//   level 2 → NO stems — play the plain mix           (after 2 crashes; can't OOM)
+// Arm in localStorage right before ANY stem work, disarm after (success or caught
+// error). A fresh load that finds it still armed ⇒ the tab crashed → bump the level.
+const STEM_ARM_KEY = "htl:stemArm";
+const STEM_FAILS_KEY = "htl:stemFails";
+let stemFails = 0;
+
+// Call once at startup. Returns the current fail level (0/1/2+).
+export function initStemCrashGuard(): number {
+  try {
+    stemFails = parseInt(localStorage.getItem(STEM_FAILS_KEY) || "0", 10) || 0;
+    if (localStorage.getItem(STEM_ARM_KEY)) {
+      localStorage.removeItem(STEM_ARM_KEY);
+      stemFails += 1; // armed-but-never-disarmed ⇒ a stem load took the tab down
+      localStorage.setItem(STEM_FAILS_KEY, String(stemFails));
+    }
+  } catch {
+    /* no localStorage — just don't guard */
+  }
+  return stemFails;
+}
+export function armStemLoad(): void {
+  try {
+    localStorage.setItem(STEM_ARM_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+export function disarmStemLoad(): void {
+  try {
+    localStorage.removeItem(STEM_ARM_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+// 0 = neural+DSP ok · 1 = DSP only · ≥2 = no stems (plain mix).
+export function stemFailLevel(): number {
+  return stemFails;
+}
+// User opt-in to retry full-quality stems after a crash downgraded them.
+export function resetStemGuard(): void {
+  stemFails = 0;
+  try {
+    localStorage.removeItem(STEM_FAILS_KEY);
+    localStorage.removeItem(STEM_ARM_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 // Browsers where on-device WebGPU separation is UNTESTED / known-flaky and should
 // be dimmed with a warning (still selectable — the crash guard protects the user).
 // Firefox's Linux WebGPU device-losts on heavy compute; Safari desktop is unproven.

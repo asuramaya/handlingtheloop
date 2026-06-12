@@ -298,13 +298,18 @@ export function modelSupport(model: StemModel): ModelSupport {
     return hasWebGPU() ? "runs" : "needs-gpu";
   }
   if (model.tier === "light") {
-    // small int8 nets (CPU wasm) run on desktop and reasonably modern phones.
+    // small int8 nets (CPU wasm). PHONES DO NOT SEPARATE — even the int8 Open-Unmix
+    // OOM-crashes iOS Safari mid-job, and since nothing is persisted until it
+    // finishes, the still-selected model re-separates on reload → crash LOOP (there's
+    // no crash-guard on the CPU/wasm path like there is for GPU). Phones are
+    // cache-first → DSP fallback; a desktop separates once and shares via R2.
+    if (mobile) return "desktop";
     return cores >= 2 ? "runs" : "desktop";
   }
   if (model.tier === "cpu") {
-    // demucs core on the wasm/CPU backend. Runs on desktop AND phones — on mobile it
-    // separates WINDOWED (separateDemucsWindowed) so the worker holds one window's
-    // output, not the whole-track 424 MB that OOM-crashed Safari. Slow, but stable.
+    // demucs core on the wasm/CPU backend. Desktop only, same reason as "light":
+    // on-device neural separation on a phone OOM-crash-loops Safari.
+    if (mobile) return "desktop";
     return cores >= 2 ? "runs" : "desktop";
   }
   // heavy fp32 — desktop only.

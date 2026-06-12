@@ -527,6 +527,10 @@ export class Deck {
   play() {
     this.cancelJog(); // a transport action wins over an in-flight platter coast
     if (!this.buffer || this._playing) return;
+    // iOS boots the AudioContext SUSPENDED (clock frozen) until a gesture resumes
+    // it. Scrub/needle-drop already do this, but tapping Play first does not — so a
+    // fresh load + Play (no prior scrub) rendered silence. Resume on the Play gesture.
+    if (this.ctx.state === "suspended") void this.ctx.resume();
     this.spawnSource(this.startOffset);
     this._playing = true;
   }

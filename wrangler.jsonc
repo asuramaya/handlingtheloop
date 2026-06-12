@@ -30,5 +30,15 @@
     { "pattern": "handlingtheloop.com", "custom_domain": true },
     { "pattern": "www.handlingtheloop.com", "custom_domain": true }
   ],
+  // Per-IP rate limiting on the unauthenticated write/resolve paths (server/security.ts
+  // `allow()` consults these; absent in `vite` dev → no-op). RL_WRITE: catalog/analysis/
+  // stem contributions (60/min); RL_AUDIO: cold-cache YouTube resolves (120/min).
+  // `period` must be 10 or 60; namespace_id is any unique per-account integer.
+  "unsafe": {
+    "bindings": [
+      { "name": "RL_WRITE", "type": "ratelimit", "namespace_id": "2001", "simple": { "limit": 60, "period": 60 } },
+      { "name": "RL_AUDIO", "type": "ratelimit", "namespace_id": "2002", "simple": { "limit": 120, "period": 60 } }
+    ]
+  },
   "observability": { "enabled": true }
 }

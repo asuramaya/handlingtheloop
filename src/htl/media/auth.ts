@@ -25,44 +25,94 @@ export interface YtAuth {
   oauth?: OAuthTokens; // device-code sign-in tokens
 }
 
-// v2: the cookie was removed from this store. Migrate any v1 record forward
-// WITHOUT its cookie, then delete v1 so any previously-persisted cookie is purged
-// from disk on next load.
+// The persistent store now holds ONLY the non-sensitive, browser-minted hints
+// (visitorData / poToken). The OAuth tokens were moved off localStorage — see the
+// session-only holder below.
 const store = new Store<YtAuth>("ytauth", {}, 2);
+
+// ---------------------------------------------------------------------------
+// OAuth tokens — session-only (NOT localStorage)
+// ---------------------------------------------------------------------------
+// The device-code tokens are account-adjacent: an access token (browse the user's
+// library) + a long-lived refresh token. Treat them like the streaming cookie —
+// held in memory + sessionStorage only, so they're gone when the tab closes and
+// never sit on disk where another-origin/extension read or a residual XSS could
+// lift them. (The new main-origin CSP blocks injected script; this is depth.)
+// Trade-off: sign-in no longer survives fully closing the browser — the one-tap
+// device-code flow re-establishes it.
+const OAUTH_KEY = "htl.ytoauth";
+let oauthMem: OAuthTokens | null = null;
+let oauthLoaded = false;
+
+function readOAuth(): OAuthTokens | null {
+  if (!oauthLoaded) {
+    try {
+      const raw = sessionStorage.getItem(OAUTH_KEY);
+      oauthMem = raw ? (JSON.parse(raw) as OAuthTokens) : null;
+    } catch {
+      oauthMem = null;
+    }
+    oauthLoaded = true;
+  }
+  return oauthMem;
+}
+
+function writeOAuth(tok: OAuthTokens | null): void {
+  oauthMem = tok;
+  oauthLoaded = true;
+  try {
+    if (tok) sessionStorage.setItem(OAUTH_KEY, JSON.stringify(tok));
+    else sessionStorage.removeItem(OAUTH_KEY);
+  } catch {
+    /* memory-only if sessionStorage is blocked */
+  }
+}
+
+// One-time migration: pull any OAuth tokens that earlier builds persisted on disk
+// (legacy v1, or the v2 ytauth store) into the session-only holder, and scrub them
+// from localStorage so they never linger there.
 try {
   const legacy = localStorage.getItem("htl.ytauth.v1");
   if (legacy) {
     const p = JSON.parse(legacy) as YtAuth & { cookie?: string };
-    if (p?.oauth || p?.visitorData || p?.poToken) {
-      store.set({ oauth: p.oauth, visitorData: p.visitorData, poToken: p.poToken });
-    }
-    localStorage.removeItem("htl.ytauth.v1"); // drops the old persisted cookie
+    if (p?.visitorData || p?.poToken) store.set({ visitorData: p.visitorData, poToken: p.poToken });
+    if (p?.oauth) writeOAuth(p.oauth);
+    localStorage.removeItem("htl.ytauth.v1"); // drops the old persisted cookie + tokens
+  }
+  const cur = store.get();
+  if (cur.oauth) {
+    writeOAuth(cur.oauth); // promote to the session-only holder…
+    const { oauth: _drop, ...rest } = cur;
+    store.set(rest); // …and scrub the token off disk
   }
 } catch {
   /* storage unavailable — nothing to migrate */
 }
 
 export function getYtAuth(): YtAuth {
-  return store.get();
+  return { ...store.get(), oauth: readOAuth() ?? undefined };
 }
 
 export function setYtAuth(a: YtAuth): void {
-  store.set(a);
+  const { oauth, ...rest } = a;
+  store.set(rest);
+  writeOAuth(oauth ?? null);
 }
 
 export function clearYtAuth(): void {
   store.clear();
+  writeOAuth(null);
 }
 
 /** Any credential connected at all (OAuth or cookie). */
 export function hasYtAuth(): boolean {
   const a = store.get();
-  return !!(a.oauth?.accessToken || hasCookie() || a.visitorData || a.poToken);
+  return !!(readOAuth()?.accessToken || hasCookie() || a.visitorData || a.poToken);
 }
 
 /** Specifically signed in via Google (vs. a pasted cookie). */
 export function isSignedIn(): boolean {
-  return !!store.get().oauth?.accessToken;
+  return !!readOAuth()?.accessToken;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +167,7 @@ export function startGoogleSignIn(): Promise<DeviceStart> {
 export async function pollGoogleSignIn(deviceCode: string): Promise<SignInPoll> {
   const r = await postJson<{ status: string; tokens?: RawTokenSet }>("/api/auth/poll", { device_code: deviceCode });
   if (r.status === "ok" && r.tokens) {
-    store.set({ ...store.get(), oauth: tokensFrom(r.tokens) });
+    writeOAuth(tokensFrom(r.tokens));
     return { status: "ok" };
   }
   return { status: r.status as SignInPoll["status"] };
@@ -125,8 +175,7 @@ export async function pollGoogleSignIn(deviceCode: string): Promise<SignInPoll> 
 
 /** Sign out of Google but leave any pasted cookie/visitor data intact. */
 export function signOutGoogle(): void {
-  const { oauth: _drop, ...rest } = store.get();
-  store.set(rest);
+  writeOAuth(null);
 }
 
 // Single-flight refresh: many requests can fire at once after the token expires;
@@ -143,7 +192,7 @@ async function refreshIfNeeded(a: YtAuth): Promise<OAuthTokens | null> {
       try {
         const t = await postJson<RawTokenSet>("/api/auth/refresh", { refresh_token: tok.refreshToken });
         const next = tokensFrom(t, tok.refreshToken);
-        store.set({ ...store.get(), oauth: next });
+        writeOAuth(next);
         return next;
       } catch {
         return tok; // refresh failed — try the (stale) token, let the request surface the error
@@ -319,7 +368,7 @@ export function cookieExpiresAt(): number | null {
 // BROWSE (playlists / library / meta), so it always sends everything available —
 // private playlists need the account.
 export async function ytAuthHeaders(): Promise<Record<string, string>> {
-  const a = store.get();
+  const a = getYtAuth();
   const h: Record<string, string> = {};
   const tok = await refreshIfNeeded(a);
   if (tok?.accessToken) h["x-htl-yt-token"] = tok.accessToken;

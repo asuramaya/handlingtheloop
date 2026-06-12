@@ -392,29 +392,12 @@ export async function putUserSettings(db: D1Database, userId: string, data: stri
     .run();
 }
 
-/** The signed-in user's encrypted YouTube cookie blob (already AES-encrypted), or null. */
-export async function getUserCookie(db: D1Database, userId: string): Promise<string | null> {
-  const row = await db
-    .prepare("SELECT cookie FROM user_cookies WHERE user_id = ?")
-    .bind(userId)
-    .first<{ cookie: string }>();
-  return row?.cookie ?? null;
-}
-
-/** Upsert the user's encrypted cookie blob (caller encrypts before storing). */
-export async function putUserCookie(db: D1Database, userId: string, cookie: string, updatedAt: number): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO user_cookies (user_id, cookie, updated_at) VALUES (?,?,?)
-       ON CONFLICT(user_id) DO UPDATE SET cookie = excluded.cookie, updated_at = excluded.updated_at`,
-    )
-    .bind(userId, cookie, updatedAt)
-    .run();
-}
-
-export async function deleteUserCookie(db: D1Database, userId: string): Promise<void> {
-  await db.prepare("DELETE FROM user_cookies WHERE user_id = ?").bind(userId).run();
-}
+// NOTE: server-side storage of the user's YouTube *streaming cookie* (the
+// account-grade credential) was intentionally removed. It was wired to no route
+// and storing that cookie at rest is exactly the blast radius we avoid — the
+// cookie stays client-side only (memory + sessionStorage + TTL; see
+// src/htl/media/auth.ts). The `user_cookies` table (migration 0006) is left in
+// place but unused; drop it in a later migration if desired.
 
 /** Accounts overview for the admin panel (with their linked services). */
 export async function listUsers(db: D1Database, limit = 200): Promise<AdminUser[]> {
@@ -443,8 +426,10 @@ async function ensureRoomInvites(db: D1Database): Promise<void> {
 }
 
 const INVITE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no ambiguous chars (0/o/1/l/i)
+// 12 chars over a 31-symbol alphabet ≈ 59 bits — not feasibly enumerable, so an
+// anonymous guest can't brute-force their way into mirroring random sessions.
 function newInviteCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
   let s = "";
   for (const b of bytes) s += INVITE_ALPHABET[b % INVITE_ALPHABET.length];
   return s;

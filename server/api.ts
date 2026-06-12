@@ -6,6 +6,12 @@ import { streamAudio } from "./audioProxy";
 import { createInnertubeApi } from "./innertube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
 import { fetchCaptions, fetchMeta, type YtAuth } from "./youtube";
+import { STEM_DOWNLOAD_CONTENT_TYPE, looksLikeAudioStem } from "./security";
+
+// SECURITY: this Node handler is DEV-ONLY — it is mounted solely as Vite middleware
+// (see vite.config.ts) and intentionally sends `Access-Control-Allow-Origin: *` for
+// local convenience. It must NEVER be exposed publicly; production is the Cloudflare
+// Worker (worker/index.ts), which is same-origin and sends no permissive CORS.
 
 // Dev-only stem cache: stands in for the Worker's R2 so separated stems persist
 // across reloads locally (keyed per model, like prod). Files land in .stem-cache/.
@@ -34,6 +40,8 @@ async function handleStems(req: IncomingMessage, res: ServerResponse, url: URL):
     if (!s || !STEM_NAMES.includes(s)) return sendJson(res, 400, { error: "missing or invalid ?s=" });
     const body = await readRawBody(req);
     if (!body.length || body.length > 60_000_000) return sendJson(res, 413, { error: "bad stem size" });
+    // Parity with the Worker: only store recognized audio containers (no HTML/JS).
+    if (!looksLikeAudioStem(body.subarray(0, 64))) return sendJson(res, 415, { error: "not a recognized audio stem" });
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(keyPath(s), body);
     return sendJson(res, 200, { ok: true });
@@ -44,7 +52,10 @@ async function handleStems(req: IncomingMessage, res: ServerResponse, url: URL):
     try {
       const buf = await fs.readFile(keyPath(s));
       res.statusCode = 200;
-      res.setHeader("Content-Type", "audio/webm");
+      // Fixed opaque type + nosniff + attachment (never render as a document).
+      res.setHeader("Content-Type", STEM_DOWNLOAD_CONTENT_TYPE);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Disposition", "attachment");
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("x-htl-cache", "hit");
       res.end(buf);

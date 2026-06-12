@@ -9,6 +9,10 @@ const TIMEOUT_MS = 8000;
 
 async function sget(urlOrPath: string, token: string): Promise<Record<string, unknown>> {
   const url = urlOrPath.startsWith("http") ? urlOrPath : `${API}${urlOrPath}`;
+  // The only absolute URLs we follow are Spotify's own `next` pagination links.
+  // Pin the host so a malformed/hostile value can never send the user's Bearer
+  // token to another origin (SSRF / token-exfiltration defense-in-depth).
+  if (new URL(url).host !== "api.spotify.com") throw new Error("refusing non-Spotify URL");
   const res = await fetch(url, {
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(TIMEOUT_MS),

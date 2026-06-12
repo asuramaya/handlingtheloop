@@ -176,7 +176,17 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
   const admin = { email: auth.email };
 
   if (req.method === "GET" && p === "/") {
-    return new Response(ADMIN_HTML, { headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-store" } });
+    const nonce = crypto.randomUUID().replace(/-/g, "");
+    return new Response(adminHtml(nonce), {
+      headers: {
+        "content-type": "text/html;charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": adminCsp(nonce),
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "x-frame-options": "DENY",
+      },
+    });
   }
   if (!env.DB) return json(500, { error: "D1 not bound" });
 
@@ -278,7 +288,7 @@ button.danger{border-color:#5a2630;color:var(--danger)}button.act:hover{backgrou
   <section id=takedowns class=hide><table><thead><tr><th>When</th><th>Video id</th><th>Reason</th><th>By</th><th>Purged</th></tr></thead><tbody id=ttbody></tbody></table></section>
   <section id=users class=hide><table><thead><tr><th>Email</th><th>Name</th><th>Services</th><th>Last login</th><th></th></tr></thead><tbody id=utbody></tbody></table></section>
 </main>
-<script>
+<script nonce="${nonce}">
 const $=s=>document.querySelector(s), api=(p,o)=>fetch(p,o).then(r=>r.json());
 const fmt=t=>t?new Date(t).toLocaleString():'—';
 // DOM builders — every value enters via textContent (never innerHTML) and actions
@@ -326,3 +336,19 @@ $('#dmcabtn').onclick=()=>{const id=parseId($('#dmca').value);if(!id){alert('Cou
 $('#dmca').addEventListener('keydown',e=>{if(e.key==='Enter')$('#dmcabtn').click();});
 stats();loadCommunity();
 </script></body></html>`;
+
+// Per-request CSP nonce for the admin page's inline script. With no inline event
+// handlers, script-src needs only the nonce — no 'unsafe-inline'.
+function adminCsp(nonce: string): string {
+  return [
+    "default-src 'self'",
+    `script-src 'nonce-${nonce}'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' https: data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join("; ");
+}

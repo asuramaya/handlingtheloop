@@ -298,6 +298,19 @@ export function App() {
       /* ignore */
     }
   }, [searchOpen]);
+  // Chin launchers. On desktop the two docks share the row so both can be open at
+  // once; on a NARROW screen they're stacked full-screen modals, so opening one must
+  // close the other (else both show "active" and overlap — the mobile bug).
+  const toggleLib = () => {
+    const next = !libOpen;
+    setLibOpen(next);
+    if (next && window.matchMedia("(max-width: 768px)").matches) setSearchOpen(false);
+  };
+  const toggleSearch = () => {
+    const next = !searchOpen;
+    setSearchOpen(next);
+    if (next && window.matchMedia("(max-width: 768px)").matches) setLibOpen(false);
+  };
   const [dockSwapped, setDockSwapped] = useState(false); // desktop: swap which side each dock sits on
   const [shiftLatched, setShiftLatched] = useState(false);
   const [shiftHeld, setShiftHeld] = useState(false);
@@ -1692,10 +1705,10 @@ export function App() {
       {/* Top chin: the three panel launchers, reserving their own row at the top
           so they never overlap the board. */}
       <nav className="chin">
-        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={() => setLibOpen((v) => !v)} aria-label="Library">
+        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
           <span className="chin-label">Library</span>
         </button>
-        <button className={`chin-btn chin-search ${searchOpen ? "active" : ""}`} onClick={() => setSearchOpen((v) => !v)} aria-label="Search">
+        <button className={`chin-btn chin-search ${searchOpen ? "active" : ""}`} onClick={toggleSearch} aria-label="Search">
           <span className="chin-label">Search</span>
         </button>
         {/* Swap which side the docks (and these two launchers) sit on. Desktop only. */}

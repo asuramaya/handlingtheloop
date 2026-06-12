@@ -63,6 +63,14 @@ class Stretch extends AudioWorkletProcessor {
     const FS = Math.max(128, Math.min(RING - 1024, c.frame | 0));
     this.FS = FS; this.HS = FS >> 1; this.OVL = FS - (FS >> 1);
     this.SEARCH = Math.max(0, c.search | 0); this.CSTRIDE = Math.max(1, c.stride | 0);
+    // Bound the cross-correlation work so NO preset can overrun the audio-thread
+    // quantum. Hi-Fi (search 300 · stride 1 · overlap 1024) was ~600k iterations
+    // PER GRAIN — a burst that blew the 2.67 ms deadline → dropout/silence. Cap to
+    // ~MAX_OFF offsets × MAX_TAP taps (CSTRIDE stays the floor); the search RANGE is
+    // unchanged, just scanned more coarsely, which is plenty to seat a grain.
+    const MAX_OFF = 64, MAX_TAP = 96;
+    this.offStep = Math.max(this.CSTRIDE, Math.ceil((2 * this.SEARCH + 1) / MAX_OFF));
+    this.tapStep = Math.max(this.CSTRIDE, Math.ceil(this.OVL / MAX_TAP));
     this.win = new Float32Array(FS);
     for (let i = 0; i < FS; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (FS - 1));
     this.olaL = new Float32Array(FS); this.olaR = new Float32Array(FS);
@@ -118,14 +126,15 @@ class Stretch extends AudioWorkletProcessor {
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
 
-    const FS = this.FS, HS = this.HS, OVL = this.OVL, SEARCH = this.SEARCH, CSTRIDE = this.CSTRIDE, win = this.win;
+    const FS = this.FS, HS = this.HS, OVL = this.OVL, SEARCH = this.SEARCH, win = this.win;
+    const offStep = this.offStep, tapStep = this.tapStep;
     const base = Math.round(this.idealPos);
-    // cross-correlation search for the best-matching grain offset
+    // cross-correlation search for the best-matching grain offset (bounded work)
     let bestD = 0, best = -Infinity;
-    for (let d = -SEARCH; d <= SEARCH; d += CSTRIDE) {
+    for (let d = -SEARCH; d <= SEARCH; d += offStep) {
       const gs = base + d;
       let dot = 0, en = 0;
-      for (let i = 0; i < OVL; i += CSTRIDE) { const c = this.mono(gs + i); dot += c * this.target[i]; en += c * c; }
+      for (let i = 0; i < OVL; i += tapStep) { const c = this.mono(gs + i); dot += c * this.target[i]; en += c * c; }
       const score = dot / Math.sqrt(en + 1e-9);
       if (score > best) { best = score; bestD = d; }
     }

@@ -2021,7 +2021,7 @@ body.no-glow .caption-cue.on {
      regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
      collapsed to just the crossfader, and left the bottom half an empty void. */
   .stage .lanes {
-    flex: 0 0 46dvh;
+    flex: 0 0 40dvh;
     min-height: 110px;
     overflow: hidden;
   }
@@ -2034,12 +2034,22 @@ body.no-glow .caption-cue.on {
     min-height: 0;
     overflow: hidden;
   }
+  /* The full control stack can't fit beside a ~40dvh waveform on a phone, so the
+     bank SCROLLS. align-items:stretch (not the base `center`) makes `.bank-main`
+     fill the bank's height and align to the TOP — without it the overflow is
+     centered, which clips both ends and can't be scrolled to. `.bank-main` is the
+     scroll container (definite height + min-height:0 + overflow-y:auto). */
   .stage .decks-row .bank {
+    align-items: stretch;
+    overflow: hidden;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .stage .decks-row .bank-main {
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    padding: 8px 10px;
-    gap: 8px;
+    min-height: 0;
   }
   /* Every row keeps its NATURAL height — nothing grows to fill, so the transport /
      jog / loop rows can't balloon into giant buttons. The block stacks from the top;
@@ -5747,15 +5757,16 @@ button.room-tog:hover {
     aspect-ratio: auto;
     height: 26px;
   }
-  /* Mobile EQ = a shorter fixed strip (~96px) than desktop's 140, with a low floor
-     so very short phones shrink it rather than clip the tools. */
+  /* Mobile EQ = a compact fixed strip (the tallest single control row, so trimming
+     it claws back the most vertical space against the scroll). Low floor so very
+     short phones shrink it rather than clip the tools. */
   .decks-row .bank-main > .eq-row {
     flex: 0 1 auto;
     min-height: 0;
   }
   .eq-curve {
-    height: 96px;
-    min-height: 48px;
+    height: 64px;
+    min-height: 40px;
   }
 }
 

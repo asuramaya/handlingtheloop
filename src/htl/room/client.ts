@@ -233,12 +233,14 @@ export class RoomClient {
         this.h.presence?.(msg.peers);
         this.h.role?.(msg.anchorId);
         // Auto-engage: restore the EXACT switch state we had (survives reconnect + page
-        // refresh), or, for a fresh invite link, join silent + not driving (the new
-        // default). Capture the wants first since join()/control()/listen() mutate them.
+        // refresh), or, for a fresh invite link, join HEARING the mix but not driving.
+        // Capture the wants first since join()/control()/listen() mutate them.
         {
           const wj = this.wantJoined || !!this.joinCode;
           const wc = this.wantControl;
-          const wl = this.wantListen;
+          // A fresh invite-link guest (joinCode present, nothing persisted) hears the mix
+          // by default; a restored session keeps whatever it had (it may have self-muted).
+          const wl = this.wantListen || (!!this.joinCode && !this.wantJoined);
           if (wj) {
             this.join(); // → joined, but silent + not driving until restored below
             if (wc) this.control(true); // host re-asserts its own drive (guests: server grants)

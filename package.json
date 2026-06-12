@@ -11,7 +11,8 @@
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.node.json",
     "worker": "vite build && wrangler dev",
     "deploy": "vite build && wrangler deploy",
-    "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc"
+    "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
+    "test": "vitest run"
   },
   "dependencies": {
     "react": "^18.3.1",

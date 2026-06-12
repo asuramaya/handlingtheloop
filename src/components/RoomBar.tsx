@@ -74,11 +74,12 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
     room.setControl(true); // the starter drives…
     room.setListening(true); // …and hears, by default
   };
-  // A joiner syncs SILENT + not driving by default — they opt into 🔊 (self) and the host
-  // opts them into 🎛️.
+  // A joiner syncs HEARING the mix by default (they joined to listen) but not driving —
+  // the host opts them into 🎛️. They can still mute themselves (🔇) once in.
   const joinSession = () => {
     onActivate?.();
     room.join();
+    room.setListening(true); // audio on by default for guests
   };
 
   return (

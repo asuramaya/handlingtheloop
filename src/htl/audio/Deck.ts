@@ -98,10 +98,10 @@ export class Deck {
   // the stem mixer stay live off this flag + the worklet, not the (freed) buffers.
   private stemsLoaded = false;
   // Does the STRETCH ENGINE currently hold the 4 separate stems (vs a single mix)?
-  // On mobile we load only the mix into the worklet — 4 full-length stem PCM groups
-  // (~460 MB/deck) starve the iOS audio render thread and playback comes out silent
-  // (desktop has the headroom). Stem WAVEFORMS still render (built from the pyramids);
-  // only the per-stem mixer goes inert on a phone, gated off this flag.
+  // The per-stem gain path (rampStem) is gated on this so it no-ops on a mix-only
+  // track — stem index 0 aliases the mix group, so posting would scale the whole mix.
+  // Mobile DOES load stems (mixer works); the iPhone silent-playback bug was the
+  // worklet's AudioParams, not memory — see stretchWorklet.
   private engineStems = false;
   private stemMuted: Record<StemName, boolean> = { vocals: false, drums: false, bass: false, other: false };
   private stemGain: Record<StemName, number> = { vocals: 1, drums: 1, bass: 1, other: 1 }; // per-stem level (knob)
@@ -260,9 +260,10 @@ export class Deck {
       gR.push(R);
       transfer.push(L.buffer, R.buffer);
     };
-    // MOBILE: feed only the mix to the engine (see `engineStems`) — 4 stem groups
-    // overrun the iOS audio thread and play silent. Desktop loads all 4 for the mixer.
-    const useStems = !!this.stems && !isMobileDevice();
+    // Stems → 4 engine groups (drives the per-stem mixer); else the single mix.
+    // Mobile loads stems too — the iPhone silent-playback bug was the worklet's
+    // AudioParams, not memory, so there's no reason to starve the phone of the mixer.
+    const useStems = !!this.stems;
     if (useStems) for (const name of STEM_NAMES) pushGroup(this.stems![name]);
     else pushGroup(buf);
     this.engineStems = useStems;

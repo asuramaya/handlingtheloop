@@ -2042,6 +2042,15 @@ body.no-glow .caption-cue.on {
     min-height: 0;
     overflow: hidden;
   }
+  /* On a phone the two banks side-by-side are too cramped (and the EQ needs the
+     full width to be usable). Show ONLY the focused deck's bank, full width — tap
+     the OTHER deck's waveform above to switch focus (both lanes stay visible). */
+  .stage .decks-row .bank:not(.focused) {
+    display: none;
+  }
+  .stage .decks-row .bank.focused {
+    flex: 1 1 100%;
+  }
   /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
      (not the base `center`) makes `.bank-main` fill the bank height and align to the
      TOP — without it the overflow is centered, which clips both ends and can't be
@@ -5773,8 +5782,8 @@ button.room-tog:hover {
     min-height: 0;
   }
   .eq-curve {
-    height: 64px;
-    min-height: 40px;
+    height: 120px;
+    min-height: 96px;
   }
 }
 

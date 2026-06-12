@@ -12,7 +12,12 @@ export interface Settings {
   selectorColor: string; // waveform playhead / cursor
   loopColor: string; // waveform loop region + loop markers
   markerColor: string; // waveform beat grid markers
+  shiftColor: string; // SHIFT-mode / alt-action highlight ("Accents"); "" = default amber
   stripColor: string; // waveform strip (body); "" = follow the deck accent
+  stemDrumsColor: string; // per-stem waveform colours; "" each = built-in default
+  stemBassColor: string;
+  stemVocalsColor: string;
+  stemOtherColor: string;
   glow: boolean; // neon glow on/off
   tempoRange: number; // tempo fader half-range (±%)
   pitchRange: number; // KEY knob half-range (± semitones)
@@ -23,6 +28,24 @@ export interface Settings {
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
   keyHints: boolean; // show the per-button keyboard-shortcut letters (desktop only)
   keyBindings: KeyBindings; // user-remapped keyboard shortcuts (id → primary/secondary code); {} = defaults
+  stretchQuality: StretchQuality; // tempo/pitch (WSOLA) engine quality preset
+}
+
+// The unified time-stretch engine's quality/latency trade-off (see stretchWorklet).
+export type StretchQuality = "fast" | "balanced" | "hifi";
+export interface StretchConfig {
+  frame: number; // WSOLA grain length (samples) — also ≈ added latency
+  search: number; // ± cross-correlation search radius (samples)
+  stride: number; // correlation stride (1 = finest/most CPU)
+}
+export const STRETCH_PRESETS: Record<StretchQuality, StretchConfig & { label: string; latencyMs: number; blurb: string }> = {
+  fast: { frame: 512, search: 120, stride: 4, label: "Fast", latencyMs: 11, blurb: "Lightest CPU + lowest latency. Slightly softer on large key shifts." },
+  balanced: { frame: 1024, search: 200, stride: 2, label: "Balanced", latencyMs: 21, blurb: "Recommended. Crisp transients with low latency — ideal for beatmatching." },
+  hifi: { frame: 2048, search: 300, stride: 1, label: "Hi-Fi", latencyMs: 43, blurb: "Cleanest tone on sustained material; more CPU + latency." },
+};
+export function stretchConfig(q: StretchQuality): StretchConfig {
+  const p = STRETCH_PRESETS[q] ?? STRETCH_PRESETS.balanced;
+  return { frame: p.frame, search: p.search, stride: p.stride };
 }
 
 export const DEFAULT_BG = "#050507";
@@ -38,7 +61,12 @@ export const DEFAULT_SETTINGS: Settings = {
   selectorColor: "#ffffff",
   loopColor: "#6ee7a8",
   markerColor: "#ffd64a",
+  shiftColor: "#ffd250", // SHIFT highlight ("Accents")
   stripColor: "", // empty = use the deck's own accent for the waveform
+  stemDrumsColor: "", // empty each = the built-in per-stem colour
+  stemBassColor: "",
+  stemVocalsColor: "",
+  stemOtherColor: "",
   glow: true,
   tempoRange: 8,
   pitchRange: 12,
@@ -49,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free
   keyHints: true, // per-button key letters on by default (CSS hides them on mobile)
   keyBindings: {}, // empty → every action uses its default key (see @htl keybinds)
+  stretchQuality: "balanced", // crisp + low-latency default
 };
 
 // Dark base-colour presets for the background picker (varied dark hues).
@@ -209,6 +238,7 @@ export function applySettings(s: Settings) {
   root.style.setProperty("--wv-selector", s.selectorColor || "#ffffff");
   root.style.setProperty("--wv-loop", s.loopColor || "#6ee7a8");
   root.style.setProperty("--wv-marker", s.markerColor || "#ffd64a");
+  root.style.setProperty("--shift", s.shiftColor || "#ffd250"); // SHIFT / alt-action highlight
   if (s.stripColor) root.style.setProperty("--wv-strip", s.stripColor);
   else root.style.removeProperty("--wv-strip");
   document.body.classList.toggle("no-glow", !s.glow);

@@ -1,7 +1,7 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole } from "./Deck";
-import { PITCH_WORKLET_SRC } from "./pitchWorklet";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
+import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
@@ -24,6 +24,8 @@ export class AudioEngine {
   private readonly xfadeB: GainNode;
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
+  // Desired WSOLA engine config; re-applied whenever the stretch nodes (re)attach.
+  private stretchCfg = { frame: 1024, search: 200, stride: 2 };
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
@@ -61,9 +63,9 @@ export class AudioEngine {
     void this.initWorklets();
   }
 
-  // Load both worklets (Blob URLs → bundler-agnostic): the per-deck key-lock
-  // pitch-shifter and the per-deck scratch resampler. If a module fails to load
-  // the decks degrade gracefully (key-lock off / no scrub sound).
+  // Load the per-deck worklets (Blob URLs → bundler-agnostic): the scratch
+  // resampler and the unified time-stretch engine (tempo + key + playback). If a
+  // module fails to load the decks degrade gracefully (no scrub / no playback).
   private async initWorklets() {
     const add = async (src: string) => {
       const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
@@ -71,24 +73,34 @@ export class AudioEngine {
       URL.revokeObjectURL(url);
     };
     try {
-      await add(PITCH_WORKLET_SRC);
-      this.deckA.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
-      this.deckB.attachPitchNode(new AudioWorkletNode(this.ctx, "pitch-shift", { outputChannelCount: [2] }));
-    } catch (e) {
-      console.warn("[htl] key-lock unavailable:", e);
-    }
-    try {
       await add(SCRATCH_WORKLET_SRC);
       this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
       this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
     } catch (e) {
       console.warn("[htl] scratch resampler unavailable:", e);
     }
+    try {
+      await add(STRETCH_WORKLET_SRC);
+      this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+      this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+      this.deckA.configureStretch(this.stretchCfg); // apply any quality picked before init finished
+      this.deckB.configureStretch(this.stretchCfg);
+    } catch (e) {
+      console.warn("[htl] stretch engine unavailable:", e);
+    }
   }
 
   /** Browsers start the context suspended until a user gesture. */
   resume() {
     if (this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
+  /** Set the time-stretch engine quality on both decks (from the Audio Engine
+   *  settings tab). Stored so it survives node re-attach. */
+  setStretchConfig(cfg: { frame: number; search: number; stride: number }) {
+    this.stretchCfg = cfg;
+    this.deckA.configureStretch(cfg);
+    this.deckB.configureStretch(cfg);
   }
 
   deck(id: "A" | "B"): Deck {

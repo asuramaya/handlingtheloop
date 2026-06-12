@@ -61,6 +61,12 @@ class Scratch extends AudioWorkletProcessor {
         let s = (this.target - this.pos) / this.interval;
         if (s > 32) s = 32; else if (s < -32) s = -32; // guard against a bad frame
         this.step = s;
+        // Adapt the pitch-smoothing time constant to the ACTUAL update interval:
+        // dense (high-rate, per-input) updates need almost no smoothing → snappy;
+        // sparse ~60 Hz updates need more to bridge the gap without a stair-step.
+        // Clamp 1…8 ms. (Updates now arrive at the mouse's full report rate.)
+        const tau = Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
+        this.kStep = 1 - Math.exp(-1 / (tau * sampleRate));
       } else if (d.type === 'stop') {
         this.gainTarget = 0; // fade out; go fully idle once silent
       }
@@ -80,6 +86,32 @@ class Scratch extends AudioWorkletProcessor {
     const c3 = x * (0.5 + x * (2 - 1.5 * x));
     const c4 = 0.5 * x * x * (x - 1);
     return s1 * c1 + s2 * c2 + s3 * c3 + s4 * c4;
+  }
+  // Mean of the input samples swept between two read positions = area sampling.
+  // When the platter rips across the track, each output sample spans many input
+  // samples; averaging them (instead of point-sampling one) is inherently
+  // anti-aliased AND tames the energy dump — a fast drag ROLLS instead of
+  // collapsing into a harsh aliased swirl.
+  boxAvg(buf, a, b) {
+    const n = this.len;
+    let i0 = Math.floor(a < b ? a : b);
+    let i1 = Math.floor(a < b ? b : a);
+    if (i0 < 0) i0 = 0;
+    if (i1 > n - 1) i1 = n - 1;
+    if (i1 < i0) i1 = i0;
+    let sum = 0;
+    for (let i = i0; i <= i1; i++) sum += buf[i];
+    return sum / (i1 - i0 + 1);
+  }
+  // Crisp point-sampling for slow/micro scrubbing (≤1 sample/step), area-averaging
+  // for fast sweeps, smoothly crossfaded across 1…3× so there's no seam as the
+  // platter accelerates. Preserves the sharp micro-scrub feel exactly.
+  readScrub(buf, p0, p1, sp) {
+    if (sp <= 1) return this.cubic(buf, p1);
+    const avg = this.boxAvg(buf, p0, p1);
+    if (sp >= 3) return avg;
+    const t = (sp - 1) * 0.5; // 0 at 1×, 1 at 3×
+    return this.cubic(buf, p1) * (1 - t) + avg * t;
   }
   process(_inputs, outputs) {
     const output = outputs[0];
@@ -103,16 +135,18 @@ class Scratch extends AudioWorkletProcessor {
       // Smooth the segment velocity (kills the 60 Hz pitch stair-step) and walk the
       // pointer. Position stays accurate because each 'move' recomputes step from
       // the real pos, so a lagging curStep is corrected on the next segment.
+      const p0 = this.pos;
       this.curStep += (this.step - this.curStep) * this.kStep;
       this.pos += this.curStep;
       if (this.pos < 0) { this.pos = 0; this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; this.curStep = 0; }
+      const sp = this.curStep < 0 ? -this.curStep : this.curStep;
       this.gain += (this.gainTarget - this.gain) * this.kGain;
       for (let c = 0; c < nCh; c++) {
         const buf = this.ch[c] || this.ch[this.ch.length - 1];
-        const s = buf ? this.cubic(buf, this.pos) : 0;
+        const s = buf ? this.readScrub(buf, p0, this.pos, sp) : 0;
         const st = this.lp[c] || (this.lp[c] = [0, 0]);
-        st[0] += a * (s - st[0]);       // two cascaded one-poles = 12 dB/oct
+        st[0] += a * (s - st[0]);       // two cascaded one-poles clean the residual sidelobes
         st[1] += a * (st[0] - st[1]);
         output[c][i] = st[1] * this.gain;
       }

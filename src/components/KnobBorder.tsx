@@ -10,7 +10,7 @@ const DOT_R = 4; // marker radius
 // `d`, its length, and an analytic point-at-distance helper consistent with it.
 function knobGeom(w: number, h: number) {
   const x0 = PAD, y0 = PAD, x1 = w - PAD, y1 = h - PAD;
-  const r = Math.max(0, Math.min(8, (x1 - x0) / 2, (y1 - y0) / 2));
+  const r = Math.max(0, Math.min(6, (x1 - x0) / 2, (y1 - y0) / 2)); // match the 6px box radius
   const cx = (x0 + x1) / 2;
   const d =
     `M ${cx} ${y1} L ${x0 + r} ${y1} A ${r} ${r} 0 0 1 ${x0} ${y1 - r} ` +

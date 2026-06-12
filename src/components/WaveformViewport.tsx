@@ -14,6 +14,7 @@ interface WaveformViewportProps {
   loopColor: string;
   markerColor: string;
   stripColor: string;
+  stemColors: Record<string, string>; // per-stem overrides; "" / missing = built-in default
   gridSize: number;
   windowSec: number; // REAL seconds across the view (shared by both decks)
   onZoom: (nextWindowSec: number) => void;
@@ -33,6 +34,17 @@ const STEM_COLORS: Record<string, string> = {
   vocals: "#5dff9e",
   other: "#36c2ff",
 };
+// Stable cache key for the per-stem colour overrides (recolour → re-rasterise).
+const stemColsKey = (c: Record<string, string>) => STEM_ORDER.map((n) => c[n] || "").join(",");
+// Cache key for the stem lanes: which stems exist + each one's BRIGHTNESS state
+// (muted, or its knob level quantised to 0.25 steps). Quantising means dragging a
+// stem knob only re-rasterises when it crosses a step, not every sub-pixel.
+function stemMask(deck: Deck, st: Record<string, Pyramid> | null): string {
+  if (!st) return "";
+  return STEM_ORDER.filter((n) => st[n])
+    .map((n) => (deck.stemActive(n) ? Math.round(Math.min(1.5, deck.stemLevel(n)) * 4) : "m"))
+    .join(",");
+}
 
 // hex (#rgb / #rrggbb) → rgba() string at the given alpha; passes other inputs
 // through unchanged so named/rgb colours still work.
@@ -174,6 +186,7 @@ interface WaveMeta {
   mask: string;
   strip: string;
   accent: string;
+  stemCols: string; // per-stem colour overrides, joined — recolour → re-rasterise
 }
 
 export function WaveformViewport(props: WaveformViewportProps) {
@@ -258,7 +271,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   useEffect(() => {
     measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor]);
+  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, stemColsKey(props.stemColors)]);
 
   const clampWin = (wsec: number) => {
     const dur = deck.buffer?.duration ?? 1;
@@ -306,10 +319,11 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fill(path);
     };
 
-    if (stems && deck.stemsNeural) {
-      // NEURAL stems → one lane PER stem: the SAME waveform style as the collapsed view,
-      // just drawn 4× into stacked sub-regions (so there's only ever one renderer). A
-      // muted stem keeps its lane, drawn faint, so muting live never reflows the layout.
+    if (stems) {
+      // Stems present (DSP or neural) → one lane PER stem: the SAME waveform style as the
+      // collapsed view, just drawn 4× into stacked sub-regions (so there's only ever one
+      // renderer). A muted stem keeps its lane, drawn faint, so muting live never reflows
+      // the layout. (DSP gets the quad view too now, to judge whether it's worth it.)
       const laneH = h / STEM_ORDER.length;
       const half = (laneH / 2) * 0.88; // small gap between lanes
       for (let li = 0; li < STEM_ORDER.length; li++) {
@@ -318,12 +332,15 @@ export function WaveformViewport(props: WaveformViewportProps) {
         if (!py) continue;
         const ssr = py.sampleRate;
         const raw = secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
-        const color = STEM_COLORS[name] ?? p.accent;
-        paintWave(ssr, raw, null, py, (li + 0.5) * laneH, half, deck.stemActive(name) ? color : rgba(color, 0.16));
+        const color = p.stemColors[name] || STEM_COLORS[name] || p.accent;
+        // Brightness tracks the stem's KNOB level (muted/0 → dim, unity → full).
+        const amp = deck.stemActive(name) ? deck.stemLevel(name) : 0;
+        const alpha = 0.16 + 0.84 * Math.min(1, amp);
+        paintWave(ssr, raw, null, py, (li + 0.5) * laneH, half, rgba(color, alpha));
       }
     } else if (deck.buffer && p.pyramid) {
-      // ONE collapsed waveform — for DSP stems, no stems, or while a neural split is still
-      // processing. Same renderer, full height, single colour.
+      // ONE collapsed waveform — no stems, or while a split's per-stem envelopes are
+      // still building. Same renderer, full height, single colour.
       const bsr = deck.buffer.sampleRate;
       const raw = secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
       const raw1 = raw && deck.buffer.numberOfChannels > 1 ? deck.buffer.getChannelData(1) : null;
@@ -336,7 +353,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const rebuildWave = (left: number, tw: number, secPerPx: number, w: number, h: number) => {
     const p = view.current;
     const stems = deck.stemPyramids;
-    const mask = stems ? STEM_ORDER.filter((n) => stems[n] && deck.stemActive(n)).join(",") : "";
+    const mask = stemMask(deck, stems);
     const span = tw * 3;
     const waveLeft = left - tw;
     const ow = w * 3;
@@ -353,7 +370,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (!wctx) return;
     wctx.clearRect(0, 0, ow, h);
     rasterize(wctx, waveLeft, secPerPx, ow, h);
-    waveMeta.current = { left: waveLeft, span, secPerPx, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent };
+    waveMeta.current = { left: waveLeft, span, secPerPx, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
@@ -400,7 +417,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // cached layer SCALED for instant feedback and schedule ONE crisp rebuild once
     // zooming settles. That keeps zoom smooth without 3×-wide re-rasterises.
     const stemsNow = deck.stemPyramids;
-    const maskNow = stemsNow ? STEM_ORDER.filter((n) => stemsNow[n] && deck.stemActive(n)).join(",") : "";
+    const maskNow = stemMask(deck, stemsNow);
     const m0 = waveMeta.current;
     const staleStatic =
       !m0 ||
@@ -410,7 +427,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
       m0.stems !== stemsNow ||
       m0.mask !== maskNow ||
       m0.strip !== p.stripColor ||
-      m0.accent !== p.accent;
+      m0.accent !== p.accent ||
+      m0.stemCols !== stemColsKey(p.stemColors);
     const scrolledOff = !!m0 && (left < m0.left + trackWindow * 0.1 || left + trackWindow > m0.left + m0.span - trackWindow * 0.1);
     if (staleStatic || scrolledOff) {
       rebuildWave(left, trackWindow, secPerPx, w, h);
@@ -449,10 +467,17 @@ export function WaveformViewport(props: WaveformViewportProps) {
       //            than a beat never drew at all.
       const gs = p.gridSize;
       const subs = gs < 1 ? Math.max(2, Math.round(1 / gs)) : 1; // divisions per beat
-      const showSub = subs > 1 && pxPerBeat / subs >= 4;
-      const showBeat = pxPerBeat >= 9;
-      const showBar = pxPerBeat * beatsPerBar >= 18;
-      const showLabels = pxPerBeat * beatsPerBar >= 30;
+      const pxPerBar = pxPerBeat * beatsPerBar;
+      // Adaptive bar LOD: coarsen the bold grid 1→2→4→8→16→32… BARS as you zoom out,
+      // so a readable structural (phrase-scale) grid is ALWAYS present — right out to
+      // the whole song — instead of the bar lines vanishing once they get too dense.
+      const MIN_BAR_PX = 22;
+      let barStep = 1;
+      while (pxPerBar * barStep < MIN_BAR_PX) barStep *= 2;
+      const fine = barStep === 1; // tight enough to also show individual beats / subs
+      const showSub = fine && subs > 1 && pxPerBeat / subs >= 4;
+      const showBeat = fine && pxPerBeat >= 9;
+      const showLabels = pxPerBar * barStep >= 26;
       const subCol = rgba(p.markerColor, 0.16);
       const beatCol = rgba(p.markerColor, 0.42);
       const barCol = rgba(p.markerColor, 0.95);
@@ -463,7 +488,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
         ctx.fillRect(toX(t) - (wpx * dpr) / 2, 0, Math.max(1, wpx * dpr), h);
       };
       // Time of a (possibly fractional) beat index — interpolated between tracked beats so
-      // sub-beat divisions ride the real groove; extrapolated past the ends.
+      // sub-beat / coarse lines ride the real groove; extrapolated past the ends.
       const beatTimeAt = (f: number) => {
         if (!beats || beats.length < 2) return firstBeat + f * interval;
         const i = Math.floor(f);
@@ -474,43 +499,51 @@ export function WaveformViewport(props: WaveformViewportProps) {
         }
         return beats[i] + (f - i) * (beats[i + 1] - beats[i]);
       };
-      const drawTiers = (i: number, t: number) => {
-        if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1, subCol);
-        const isBar = (((i - downbeat) % beatsPerBar) + beatsPerBar) % beatsPerBar === 0;
-        if (isBar && showBar) {
-          vline(t, 2.2, barCol);
-          if (showLabels && t >= left && t <= right) {
-            ctx.fillStyle = barCol;
-            ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`;
-            ctx.fillText(String(Math.floor((i - downbeat) / beatsPerBar) + 1), toX(t) + 3 * dpr, h - 4 * dpr);
-          }
-        } else if (showBeat) {
-          vline(t, 1.3, beatCol);
-        }
-      };
 
-      if (beats && beats.length >= 2 && (showSub || showBeat || showBar)) {
-        // First visible beat index (binary search), then walk forward.
-        let lo = 0;
-        let hi = beats.length - 1;
-        while (lo < hi) {
-          const mid = (lo + hi) >> 1;
-          if (beats[mid] < left) lo = mid + 1;
-          else hi = mid;
+      // BAR tier — bold lines every `barStep` bars from the downbeat (+ bar number),
+      // stepping by whole groups so the whole-song view stays cheap. The label shows
+      // the bar number; at coarse steps that reads as 1, 9, 17… (8s) or 1, 17, 33… (16s).
+      const leftBar = Math.floor(((left - firstBeat) / interval - downbeat) / beatsPerBar / barStep) * barStep;
+      for (let b = leftBar - barStep; ; b += barStep) {
+        const t = beatTimeAt(downbeat + b * beatsPerBar);
+        if (t > right) break;
+        vline(t, 2.2, barCol);
+        if (showLabels && t >= left && t <= right && t >= 0 && t <= dur) {
+          ctx.fillStyle = barCol;
+          ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`;
+          ctx.fillText(String(b + 1), toX(t) + 3 * dpr, h - 4 * dpr);
         }
-        for (let i = Math.max(0, lo - 1); i < beats.length && beats[i] <= right; i++) drawTiers(i, beats[i]);
-      } else if (showSub || showBeat || showBar) {
-        // Uniform fallback (no tracked beats) — same tiers off the constant grid.
-        const k0 = Math.floor((left - firstBeat) / interval) - 1;
-        const k1 = Math.ceil((right - firstBeat) / interval) + 1;
-        for (let k = k0; k <= k1; k++) drawTiers(k, firstBeat + k * interval);
+      }
+
+      // BEAT + SUB tiers — only at fine zoom (barStep === 1); the bar beats are already
+      // drawn bold above, so skip them here and just lay the lighter in-between lines.
+      if (showBeat || showSub) {
+        const drawFine = (i: number, t: number) => {
+          if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1, subCol);
+          const isBar = (((i - downbeat) % beatsPerBar) + beatsPerBar) % beatsPerBar === 0;
+          if (!isBar && showBeat) vline(t, 1.3, beatCol);
+        };
+        if (beats && beats.length >= 2) {
+          let lo = 0;
+          let hi = beats.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (beats[mid] < left) lo = mid + 1;
+            else hi = mid;
+          }
+          for (let i = Math.max(0, lo - 1); i < beats.length && beats[i] <= right; i++) drawFine(i, beats[i]);
+        } else {
+          const k0 = Math.floor((left - firstBeat) / interval) - 1;
+          const k1 = Math.ceil((right - firstBeat) / interval) + 1;
+          for (let k = k0; k <= k1; k++) drawFine(k, firstBeat + k * interval);
+        }
       }
 
       // Phrase boundaries — the 8/16/32-bar section starts. Drawn over the bar grid
       // as a bright accent line + a phrase number, so the build/drop/breakdown
-      // structure is visible at a glance and you can line a mix up to a phrase.
+      // structure is visible at a glance — ALWAYS, including zoomed out to the whole song.
       const phrases = beatgrid.phrases;
-      if (phrases && phrases.length && showBar) {
+      if (phrases && phrases.length) {
         ctx.font = `bold ${10 * dpr}px ui-monospace, monospace`;
         for (let i = 0; i < phrases.length; i++) {
           const t = phrases[i];
@@ -556,6 +589,11 @@ export function WaveformViewport(props: WaveformViewportProps) {
   // changed (dirty). Idle frames just reschedule — no React reconciliation.
   useEffect(() => {
     let raf = 0;
+    // Async per-stem envelopes finished building (DSP or neural) → request a redraw,
+    // even while paused; the next frame re-rasterises into the quad lanes.
+    deck.onStemPyramids = () => {
+      dirty.current = true;
+    };
     const loop = () => {
       if (deck.playing || deck.jogging || deck.adjusting || dirty.current) {
         dirty.current = false;
@@ -564,7 +602,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      deck.onStemPyramids = undefined;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck]);
 
@@ -583,12 +624,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
         className="waveform"
         style={{ touchAction: "none" }}
         onWheel={(e) => {
-          // Shift+wheel zooms the view; a plain wheel jogs the playhead (scrubs by a
-          // slice of the visible window per tick). needleDrop is a relative seek.
-          if (e.shiftKey) {
-            applyZoom(clampWin((localWin.current ?? props.windowSec) * (e.deltaY > 0 ? 1.25 : 0.8)));
-          } else {
+          // In loop-boundary adjust mode the wheel steps the edge (routed downstream
+          // via onNeedleDrop → adjustStep) — no Shift needed, that's the mode's point.
+          // Otherwise a plain wheel zooms the view; Shift+wheel jogs the playhead
+          // (scrubs by a slice of the visible window per tick). needleDrop is a relative seek.
+          if (deck.adjusting || e.shiftKey) {
             onNeedleDrop((e.deltaY / 700) * trackWindowNow());
+          } else {
+            applyZoom(clampWin((localWin.current ?? props.windowSec) * (e.deltaY > 0 ? 1.25 : 0.8)));
           }
         }}
         onPointerDown={(e) => {
@@ -625,9 +668,22 @@ export function WaveformViewport(props: WaveformViewportProps) {
             dr.x = e.clientX;
             onScrubStart();
           }
-          const dxPx = e.clientX - dr.x;
-          dr.x = e.clientX;
-          onScrub((-dxPx / rect.width) * trackWindowNow());
+          // Replay every sub-frame pointer sample the browser coalesced into this
+          // event. A mouse reports at 125–1000 Hz but pointermove is batched to the
+          // display refresh (~60 Hz), so without this most of the motion is dropped
+          // on desktop — which is exactly why the jog felt coarser than touch. Each
+          // recovered sample drives the scratch worklet directly (see Deck.scrubMove).
+          const native = e.nativeEvent;
+          const coalesced =
+            typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
+          const samples = coalesced.length ? coalesced : [native];
+          const w = rect.width;
+          const win = trackWindowNow();
+          for (const s of samples) {
+            const dxPx = s.clientX - dr.x;
+            dr.x = s.clientX;
+            onScrub((-dxPx / w) * win);
+          }
         }}
         onPointerUp={(e) => {
           pinch.current.delete(e.pointerId);

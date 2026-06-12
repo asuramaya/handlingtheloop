@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import {
   contrastWarnings,
   type Settings,
+  type StretchQuality,
+  STRETCH_PRESETS,
   STEM_MODELS,
   getStemModel,
   modelSupport,
@@ -60,11 +62,12 @@ function supportBadge(m: StemModel): { text: string; cls: string } {
   }
 }
 
-type Tab = "color" | "deck" | "keys" | "stems" | "accounts" | "debug" | "about";
+type Tab = "color" | "deck" | "keys" | "audio" | "stems" | "accounts" | "debug" | "about";
 const TABS: { key: Tab; label: string }[] = [
   { key: "color", label: "Color" },
   { key: "deck", label: "Deck" },
   { key: "keys", label: "Keys" },
+  { key: "audio", label: "Audio Engine" },
   { key: "stems", label: "Stems" },
   { key: "accounts", label: "Accounts" },
   { key: "debug", label: "Debug" },
@@ -81,7 +84,12 @@ type ColorKey =
   | "selectorColor"
   | "loopColor"
   | "markerColor"
-  | "stripColor";
+  | "shiftColor"
+  | "stripColor"
+  | "stemDrumsColor"
+  | "stemBassColor"
+  | "stemVocalsColor"
+  | "stemOtherColor";
 const COLOR_TARGETS: { key: ColorKey; label: string }[] = [
   { key: "accentA", label: "Deck A" },
   { key: "accentB", label: "Deck B" },
@@ -91,7 +99,12 @@ const COLOR_TARGETS: { key: ColorKey; label: string }[] = [
   { key: "selectorColor", label: "Selector" },
   { key: "loopColor", label: "Loops" },
   { key: "markerColor", label: "Markers" },
+  { key: "shiftColor", label: "Accents" },
   { key: "stripColor", label: "Strip" },
+  { key: "stemDrumsColor", label: "Drums" },
+  { key: "stemBassColor", label: "Bass" },
+  { key: "stemVocalsColor", label: "Vocals" },
+  { key: "stemOtherColor", label: "Inst" },
 ];
 
 // HSL → #rrggbb (h 0–360, s/l 0–100).
@@ -123,7 +136,12 @@ function randomTheme(): Pick<Settings, ColorKey> {
     selectorColor: hslToHex(randHue(), randIn(0, 20), randIn(90, 100)),
     loopColor: vividHex(),
     markerColor: vividHex(),
+    shiftColor: vividHex(),
     stripColor: vividHex(),
+    stemDrumsColor: vividHex(),
+    stemBassColor: vividHex(),
+    stemVocalsColor: vividHex(),
+    stemOtherColor: vividHex(),
   };
 }
 
@@ -142,7 +160,13 @@ function randomMono(): Pick<Settings, ColorKey> {
     selectorColor: text,
     loopColor: vividHex(),
     markerColor: vividHex(),
-    stripColor: "", // follow the deck accent
+    shiftColor: vividHex(),
+    stripColor: vividHex(), // vivid waveform popping over the mono base
+    // Vivid, DISTINCT per-stem colours so the quad lanes stay readable over mono.
+    stemDrumsColor: vividHex(),
+    stemBassColor: vividHex(),
+    stemVocalsColor: vividHex(),
+    stemOtherColor: vividHex(),
   };
 }
 
@@ -363,6 +387,37 @@ export function SettingsPanel({
               </div>
               <p className="settings-hint">Show each button's shortcut in its corner (desktop only).</p>
               <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
+            </div>
+          )}
+
+          {tab === "audio" && (
+            <div className="settings-section">
+              <div className="settings-section-head">
+                <span className="settings-label">Stretch engine quality</span>
+              </div>
+              <div className="seg">
+                {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
+                  <button
+                    key={q}
+                    className={`seg-btn ${settings.stretchQuality === q ? "on" : ""}`}
+                    onClick={() => set({ stretchQuality: q })}
+                  >
+                    {STRETCH_PRESETS[q].label}
+                  </button>
+                ))}
+              </div>
+              <p className="settings-hint">
+                {STRETCH_PRESETS[settings.stretchQuality].blurb} <br />
+                <span className="muted">
+                  ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms latency · grain{" "}
+                  {STRETCH_PRESETS[settings.stretchQuality].frame}
+                </span>
+              </p>
+              <p className="settings-hint">
+                The unified <strong>tempo + key</strong> engine. It time-stretches in the time domain (WSOLA) so beats
+                stay crisp, then resamples for pitch — tempo and key are fully independent, with no “underwater” smear.
+                Affects key-lock, the tempo fader, and the KEY pitch shift on both decks.
+              </p>
             </div>
           )}
 

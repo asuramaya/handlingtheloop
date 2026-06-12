@@ -38,8 +38,24 @@ export type TickDecks = Record<DeckId, DeckTick>;
 // Every intent is an ABSOLUTE setpoint, never a delta or a bare toggle, so the
 // shared state converges even when messages are reordered or dropped (last-write-
 // wins per target). See the intent→engine table in docs/shared-session.md.
-export type ControlParam = "tempo" | "trim" | "level" | "eqLow" | "eqMid" | "eqHigh" | "filter" | "pitch";
-export type ToggleParam = "fx" | "keylock" | "quantize";
+export type ControlParam =
+  | "tempo"
+  | "trim"
+  | "level"
+  | "eqLow"
+  | "eqMid"
+  | "eqHigh"
+  | "eqLowFreq"
+  | "eqMidFreq"
+  | "eqHighFreq"
+  | "eqMidQ"
+  | "eqHpFreq"
+  | "eqHpQ"
+  | "eqLpFreq"
+  | "eqLpQ"
+  | "filter"
+  | "pitch";
+export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";
 export type StemName = "drums" | "bass" | "vocals" | "other";
 
 export type Intent =

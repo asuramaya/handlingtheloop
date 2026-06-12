@@ -6,7 +6,7 @@ import { gridLabel, stepSkip } from "@htl/state";
 import { WaveformViewport } from "./WaveformViewport";
 import { CaptionBar } from "./CaptionBar";
 import { fmtTime } from "../util/format";
-import type { StemBadge } from "../App";
+import type { StemBadge, StemStatus } from "../App";
 
 export interface DeckMeta {
   name: string;
@@ -27,10 +27,15 @@ interface DeckLaneProps {
   loopColor: string;
   markerColor: string;
   stripColor: string;
+  stemColors: Record<string, string>;
   meta: DeckMeta;
   status: StemBadge | null;
+  stemStatus: StemStatus | null; // full status for the on-waveform processing overlay
   captions: CaptionCue[];
   windowSec: number;
+  expanded: boolean; // this lane is maximized to single-deck view
+  collapsed: boolean; // the OTHER lane is maximized → this one is hidden
+  onToggleExpand: () => void;
   onZoom: (next: number) => void;
   refresh: () => void;
   onLoadFile: (file: File) => void;
@@ -97,10 +102,16 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, meta, status, captions, windowSec, onZoom, refresh, onLoadFile, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, stemColors, meta, status, stemStatus, captions, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
+  // The deck is showing the single mix waveform while a NEURAL split is computed or
+  // fetched — surface that transition right on the lane so it's obvious stems are
+  // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
+  const stemBusy =
+    stemStatus != null &&
+    (stemStatus.phase === "separating" || (stemStatus.phase === "downloading" && !!stemStatus.src));
   return (
     <section
-      className={`lane ${focused ? "focused" : ""}`}
+      className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""}`}
       style={{ ["--accent" as string]: accent }}
       onPointerDownCapture={onFocus}
       onDrop={(e) => {
@@ -113,7 +124,14 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
       <div className="lane-info">
         {/* DECK id + scrolling title — its own full-width row on mobile. */}
         <div className="lane-head">
-          <span className="lane-id">DECK {id}</span>
+          <button
+            className={`lane-id ${expanded ? "on" : ""}`}
+            onClick={onToggleExpand}
+            title={expanded ? "Restore both decks" : "Expand to single-deck view"}
+            aria-pressed={expanded}
+          >
+            DECK {id}
+          </button>
           <LaneTitle name={meta.name} artist={meta.artist} />
         </div>
         <span className="lane-time">
@@ -163,6 +181,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         loopColor={loopColor}
         markerColor={markerColor}
         stripColor={stripColor}
+        stemColors={stemColors}
         gridSize={deck.skipBeats}
         windowSec={windowSec}
         onZoom={onZoom}
@@ -182,12 +201,23 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           onJogEnd?.();
         }}
         onNeedleDrop={(d) => {
-          if (deck.adjusting) return void deck.adjustBy(d); // scroll nudges the loop edge; rAF redraws
+          if (deck.adjusting) return void deck.adjustStep(Math.sign(d)); // scroll/tap steps the edge one notch; rAF redraws
           deck.needleDrop(d);
           refresh(); // a paused tap-seek isn't "jogging" — nudge one redraw
           onSeek?.(deck.position());
         }}
       />
+      {stemBusy && stemStatus && (
+        <div className={`stem-busy ${stemStatus.phase === "separating" ? "process" : "fetch"}`} aria-live="polite">
+          <span className="stem-busy-spin" />
+          <span className="stem-busy-text">{stemStatus.detail}</span>
+          {stemStatus.pct != null && (
+            <span className="stem-busy-bar">
+              <span style={{ width: `${stemStatus.pct}%` }} />
+            </span>
+          )}
+        </div>
+      )}
       <CaptionBar deck={deck} accent={accent} cues={captions} />
     </section>
   );

@@ -24,6 +24,17 @@ export interface DeckSnapshot {
   eqLow: number; // dB
   eqMid: number;
   eqHigh: number;
+  // Pro-Q-style movable band frequencies (Hz) + mid bell width. Optional so old
+  // snapshots load fine — the deck falls back to the default fixed positions.
+  eqLowFreq?: number;
+  eqMidFreq?: number;
+  eqHighFreq?: number;
+  eqMidQ?: number;
+  eqHpFreq?: number; // low-cut cutoff (Hz)
+  eqHpQ?: number;
+  eqLpFreq?: number; // high-cut cutoff (Hz)
+  eqLpQ?: number;
+  eqBypass?: boolean; // EQ out of circuit
   filter: number; // -1..1 color filter
   fxOn?: boolean; // FX master (filter) enabled
   keylock: boolean;

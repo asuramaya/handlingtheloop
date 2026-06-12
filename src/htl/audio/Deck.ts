@@ -36,6 +36,9 @@ import { Eq3 } from "./Eq3";
 export const HOT_CUE_COUNT = 8;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+// Unlocked (grid magnet off) loop-boundary nudge granularity, as a fraction of a
+// beat — one arrow press / scroll tick moves a 1/16-beat for surgical trimming.
+const ADJUST_FINE_BEATS = 1 / 16;
 
 // Peak amplitude of an analyser's current time-domain frame, in dBFS.
 function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
@@ -69,6 +72,7 @@ export class Deck {
   // of readers a frame is fine (no shared smoothed state to fight over).
   private readonly meterL: AnalyserNode;
   private readonly meterR: AnalyserNode;
+  private readonly meterPre: AnalyserNode; // pre-EQ spectrum tap (raw track) for the EQ backdrop
   private readonly meterBuf: Float32Array<ArrayBuffer>; // scratch buffer for time-domain reads
   private readonly ctx: AudioContext;
   private _trim = 1;
@@ -83,19 +87,17 @@ export class Deck {
 
   buffer: AudioBuffer | null = null;
   beatgrid: Beatgrid | null = null;
-  private source: AudioBufferSourceNode | null = null; // the primary source (= sources[0])
-  private sources: AudioBufferSourceNode[] = []; // 1 for a plain mix, 4 when playing stems
-  private srcGain: GainNode | null = null; // shared declick envelope for the source group
+  private running = false; // is the stretch engine voicing this deck (vs idle/scrub)
   // Optional 4-stem playback: when set, each stem gets its own live-toggleable gain
   // and the sum (all stems on) is the original mix. null = play the plain buffer.
   private stems: Stems | null = null;
   private stemMuted: Record<StemName, boolean> = { vocals: false, drums: false, bass: false, other: false };
   private stemGain: Record<StemName, number> = { vocals: 1, drums: 1, bass: 1, other: 1 }; // per-stem level (knob)
-  private curStemGains: Partial<Record<StemName, GainNode>> = {}; // gains of the live source group
   // Per-stem waveform envelopes for the viewport (null until built off the hot
   // path). `stemPyramidJob` supersedes an in-flight lazy build when stems change.
   stemPyramids: Record<StemName, Pyramid> | null = null;
   private stemPyramidJob = 0;
+  onStemPyramids?: () => void; // viewport hook: async envelopes are ready → redraw
   // True only when the CURRENT stems are a NEURAL split (Demucs/Open-Unmix). The viewport
   // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform for DSP
   // stems (or none / mid-separation) — the DSP split is too rough to be worth 4 lanes.
@@ -109,7 +111,7 @@ export class Deck {
   private _keylock = true; // keep pitch constant under tempo by default (modern DJ)
   private _pitchSemis = 0; // musical key shift, −12 … +12 semitones
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
-  private pitchNode: AudioWorkletNode | null = null;
+  private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
   private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
@@ -125,8 +127,9 @@ export class Deck {
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
+  private handLast = 0; // handPos at the previous frame tick (for frame-rate fling velocity)
   private handVel = 0; // smoothed finger velocity, drives pitch + release fling
-  private pendingDelta = 0; // finger motion accumulated since the last tick
+  private jogInputAt = 0; // ctx time of the last pointer sample (for per-input motion)
   private jogLast = 0; // ctx time of the last tick
   private jogRaf = 0; // requestAnimationFrame handle (0 = loop idle)
   private jogReturnToPlay = false; // release should spin back up to play, not rest
@@ -169,6 +172,11 @@ export class Deck {
     this.output.connect(split);
     split.connect(this.meterL, 0);
     split.connect(this.meterR, 1);
+    // Pre-EQ spectrum tap (raw track entering the channel) — a silent analyser sink
+    // on the EQ input, for the curve's PRE/POST spectrum toggle.
+    this.meterPre = ctx.createAnalyser();
+    this.meterPre.fftSize = 1024;
+    this.eq.input.connect(this.meterPre);
   }
 
   /** Instantaneous post-fader peak per channel in dBFS (−100 = silence … 0 = full
@@ -194,20 +202,58 @@ export class Deck {
     return this._keylock;
   }
 
-  /** Insert the key-lock pitch-shifter between the source and EQ. */
-  attachPitchNode(node: AudioWorkletNode) {
-    node.connect(this.eq.input);
-    this.pitchNode = node;
-    this.updatePitch();
-    // Re-route a currently-playing source (via its declick gain) through the node.
-    if (this.srcGain) {
+  /** Unified time-stretch engine (Phase 1: attached + wired to EQ but not yet
+   *  driving playback — it outputs silence until Phase 2 routes the transport
+   *  through it). Owns the playhead, looping, stems, and tempo+pitch. */
+  attachStretchNode(node: AudioWorkletNode) {
+    if (this.stretchNode) {
       try {
-        this.srcGain.disconnect();
+        this.stretchNode.disconnect();
       } catch {
         /* ignore */
       }
-      this.srcGain.connect(node);
     }
+    node.connect(this.eq.input);
+    this.stretchNode = node;
+    node.port.onmessage = (e: MessageEvent) => {
+      if ((e.data as { type?: string })?.type === "ended" && this.running) {
+        this._playing = false;
+        this.running = false;
+        this.startOffset = this.buffer?.duration ?? 0;
+        this.onEnded?.();
+      }
+    };
+    // (Re)load the current PCM in case a track was set before the node attached.
+    this.loadEnginePcm();
+    this.updatePitch();
+  }
+
+  // Copy the current PCM (mix, or 4 time-aligned stems in STEM_NAMES order) into
+  // fresh Float32Arrays and hand them to the stretch engine (transferred — the
+  // deck keeps its own AudioBuffer for the waveform/analysis). The engine owns
+  // playback from here; this is the only place it gets audio.
+  private loadEnginePcm() {
+    const node = this.stretchNode;
+    const buf = this.buffer;
+    if (!node || !buf) return;
+    const gL: Float32Array[] = [];
+    const gR: Float32Array[] = [];
+    const transfer: ArrayBuffer[] = [];
+    const pushGroup = (b: AudioBuffer) => {
+      const L = b.getChannelData(0).slice();
+      const R = (b.numberOfChannels > 1 ? b.getChannelData(1) : b.getChannelData(0)).slice();
+      gL.push(L);
+      gR.push(R);
+      transfer.push(L.buffer, R.buffer);
+    };
+    if (this.stems) for (const name of STEM_NAMES) pushGroup(this.stems[name]);
+    else pushGroup(buf);
+    node.port.postMessage({ type: "loadPcm", gL, gR, length: buf.length }, transfer);
+  }
+
+  /** Push WSOLA quality config (grain/search/stride) to the engine. */
+  configureStretch(cfg: { frame: number; search: number; stride: number }) {
+    this.stretchNode?.port.postMessage({ type: "config", ...cfg });
   }
 
   setKeylock(on: boolean) {
@@ -249,13 +295,23 @@ export class Deck {
     this.scratchNode?.port.postMessage({ type: "stop" });
   }
 
-  // ratio = (key-lock cancels the source's tempo pitch) × (musical key shift).
-  // key-lock alone = 1/rate; +N semitones multiplies by 2^(N/12).
+  // De-tangled pitch: the stretch engine takes a `pitch` factor INDEPENDENT of
+  // tempo (the engine handles time-stretch separately), so there is no 1/rate
+  // correction. key-lock ON → pitch = the musical key shift only; key-lock OFF →
+  // pitch also rides the tempo rate (vinyl: faster = higher).
   private updatePitch() {
-    if (!this.pitchNode) return;
-    const lock = this._keylock ? 1 / this._rate : 1;
+    const p = this.stretchNode?.parameters.get("pitch");
+    if (!p) return;
     const shift = Math.pow(2, this._pitchSemis / 12);
-    this.pitchNode.parameters.get("ratio")!.value = lock * shift;
+    const pitch = this._keylock ? shift : this._rate * shift;
+    const t = this.ctx.currentTime;
+    try {
+      p.cancelScheduledValues(t);
+      p.setValueAtTime(p.value, t);
+      p.linearRampToValueAtTime(pitch, t + 0.02); // de-zipper key/keylock moves
+    } catch {
+      p.value = pitch;
+    }
   }
 
   /** Musical key shift in semitones (−12 … +12). Engages key-lock so the shift
@@ -295,7 +351,6 @@ export class Deck {
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.stemMuted = { vocals: false, drums: false, bass: false, other: false };
     this.stemGain = { vocals: 1, drums: 1, bass: 1, other: 1 };
-    this.curStemGains = {};
     this.stemPyramids = null;
     this.buffer = buffer;
     this.beatgrid = beatgrid;
@@ -303,6 +358,8 @@ export class Deck {
     this._pitchSemis = 0;
     this.updatePitch();
     this._loudness = null; // recompute lazily for the new track
+    this.loadEnginePcm(); // hand the mix PCM to the stretch engine
+    for (const name of STEM_NAMES) this.rampStem(name); // reset engine stem gains to all-on
     this.sendScratchBuffer();
   }
 
@@ -330,18 +387,14 @@ export class Deck {
   private effectiveStemGain(name: StemName): number {
     return this.stemMuted[name] ? 0 : this.stemGain[name];
   }
+  // Push a stem's live gain to the engine. The grain overlap-add (~one grain ≈
+  // 20 ms) cross-fades the change, so mutes/level moves stay click-free.
   private rampStem(name: StemName) {
-    const sg = this.curStemGains[name];
-    if (!sg) return;
-    const t = this.ctx.currentTime;
-    const target = this.effectiveStemGain(name);
-    try {
-      sg.gain.cancelScheduledValues(t);
-      sg.gain.setValueAtTime(sg.gain.value, t);
-      sg.gain.linearRampToValueAtTime(target, t + 0.02); // declick level/mute moves
-    } catch {
-      sg.gain.value = target;
-    }
+    this.stretchNode?.port.postMessage({
+      type: "stemGain",
+      index: STEM_NAMES.indexOf(name),
+      value: this.effectiveStemGain(name),
+    });
   }
   /** Set a stem's level (the mixer knob). Independent of the mute button. */
   setStemGain(name: StemName, level: number) {
@@ -355,16 +408,18 @@ export class Deck {
     this.stems = stems;
     this.stemsNeural = !!stems && neural;
     // Audio swaps in instantly (all-on === the mix, so it's seamless). The
-    // per-stem waveform envelopes are SECOND-CLASS: built lazily off the hot path
-    // so they never hang the main / UI / audio threads. Viewport shows the mix
-    // waveform until they're ready.
-    this.stemPyramids = null;
+    // per-stem waveform envelopes are SECOND-CLASS: built lazily off the hot path.
+    // KEEP the old envelopes on screen while the new ones build, so upgrading
+    // DSP→neural shows the (DSP) quad continuously instead of flashing back to the
+    // single mix waveform. Only clear when stems are removed (setBuffer handles a
+    // fresh track).
+    if (!stems) this.stemPyramids = null;
     const job = ++this.stemPyramidJob;
-    if (this._playing) {
-      const pos = this.position();
-      this.stopSource();
-      this.spawnSource(pos);
-    }
+    // Hand the new PCM (mix or 4 stems) to the engine; resume in place if playing.
+    const pos = this._playing ? this.position() : 0;
+    this.loadEnginePcm();
+    for (const name of STEM_NAMES) this.rampStem(name); // re-assert current stem gains
+    if (this._playing) this.spawnSource(pos);
     if (stems) void this.buildStemPyramidsLazy(stems, job);
   }
   // Time-sliced min/max envelope build (yields ~every 1M samples) — never blocks,
@@ -409,7 +464,10 @@ export class Deck {
       await idle();
       if (job !== this.stemPyramidJob) return;
     }
-    if (job === this.stemPyramidJob) this.stemPyramids = out;
+    if (job === this.stemPyramidJob) {
+      this.stemPyramids = out;
+      this.onStemPyramids?.(); // nudge the viewport to re-rasterise the quad lanes
+    }
   }
   setStemMute(name: StemName, muted: boolean) {
     this.stemMuted[name] = muted;
@@ -417,6 +475,14 @@ export class Deck {
   }
   toggleStem(name: StemName) {
     this.setStemMute(name, !this.stemMuted[name]);
+  }
+
+  /** Solo a stem: mute every other stem (so only this one plays). If it's already
+   *  the sole one playing, restore them all — so the same tap toggles solo on/off. */
+  soloStem(name: StemName) {
+    if (!this.hasStems) return;
+    const isSolo = this.stemActive(name) && STEM_NAMES.every((n) => n === name || !this.stemActive(n));
+    for (const n of STEM_NAMES) this.setStemMute(n, isSolo ? false : n !== name);
   }
   /** Reset every stem to its default: level back to unity (1) and un-muted. */
   resetStems() {
@@ -508,33 +574,42 @@ export class Deck {
       this.stopSource();
       this._playing = false;
     }
-    this.handPos = this.jogPos;
+    this.handPos = this.handLast = this.jogPos;
     this.jogVel = 0;
     this.handVel = 0;
-    this.pendingDelta = 0;
+    this.jogInputAt = this.ctx.currentTime;
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "grab";
     this.scratchStart();
     this.startJogLoop();
   }
 
-  /** Accumulate finger motion (track seconds); the physics tick consumes it. */
+  /** One (coalesced) pointer sample of finger motion, in track seconds. Applied
+   *  straight to the platter and voiced on the worklet immediately — so scratch
+   *  resolution tracks the mouse's true report rate (125–1000 Hz), not the display
+   *  refresh. Position only: the release-fling VELOCITY is derived at frame rate in
+   *  grabTick() (the AudioContext clock doesn't advance within a frame, so it can't
+   *  time individual samples — but the worklet gets full-rate position regardless). */
   scrubMove(deltaSec: number) {
     if (this.jogPhase !== "grab") return;
-    this.pendingDelta += deltaSec;
+    this.jogInputAt = this.ctx.currentTime;
+    let p = this.handPos + deltaSec;
+    const dur = this.buffer ? this.buffer.duration : 0;
+    if (p < 0) p = 0;
+    else if (p > dur) p = dur;
+    this.handPos = this.jogPos = p;
+    this.startOffset = p;
+    this.scratchMove(); // per-input-sample worklet push
   }
 
   scrubEnd() {
     if (this.jogPhase !== "grab") return;
-    // Fold in any motion that landed in the same frame as the release before
-    // handing the platter its release spin.
-    const dt = Math.max(this.ctx.currentTime - this.jogLast, 1 / 120);
-    this.consumeHand(dt);
-    this.jogLast = this.ctx.currentTime;
-    // Fling at the finger's release speed, capped so a violent flick can't launch
-    // the platter across the whole track (that's what made long skips screech).
+    // Motion was applied per input sample in scrubMove(); just hand the platter its
+    // release spin — the finger's last smoothed velocity, capped so a violent flick
+    // can't launch it across the whole track.
     const max = Deck.MAX_COAST;
     this.jogVel = Math.max(-max, Math.min(max, this.handVel));
+    this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
     this.startJogLoop();
   }
@@ -559,10 +634,13 @@ export class Deck {
       this.jogLast = now;
       if (dt > 0) {
         dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
-        if (phase === "grab") this.consumeHand(dt);
-        else this.stepCoast(dt); // may settle the platter to "off"
-        this.startOffset = this.jogPos;
-        if (this.jogPhase !== "off") this.scratchMove(); // voice the platter motion
+        if (phase === "grab") {
+          this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
+        } else {
+          this.stepCoast(dt); // may settle the platter to "off"
+          this.startOffset = this.jogPos;
+          if (this.jogPhase !== "off") this.scratchMove(); // voice the coast motion
+        }
       }
       if (this.jogPhase !== "off") this.jogRaf = requestAnimationFrame(tick);
     };
@@ -581,7 +659,6 @@ export class Deck {
     }
     this.jogVel = 0;
     this.handVel = 0;
-    this.pendingDelta = 0;
     this.scratchStop();
   }
 
@@ -593,26 +670,23 @@ export class Deck {
     this.jogReturnToPlay = false;
   }
 
-  // GRAB step: the platter IS the finger while gripped — 1:1, no spring lag, so
-  // scratches are sharp and track the hand exactly (the resampler adds only a few
-  // ms of de-zipper smoothing). The platter's weight is felt on RELEASE (the coast
-  // momentum below), not as drag under the hand.
-  private consumeHand(dt: number) {
-    const d = this.pendingDelta;
-    this.pendingDelta = 0;
-    this.handPos += d;
-    const inst = d / dt;
-    const hk = 1 - Math.exp(-dt / 0.03); // light velocity smoothing for the fling/extrapolation
+  // GRAB tick (frame rate): the platter IS the finger while gripped — each pointer
+  // sample is applied + voiced directly in scrubMove() at full input rate (1:1, no
+  // spring lag, sharp scratches). Here we only (a) track the release-fling velocity
+  // from the net hand motion this frame (the AudioContext clock can't time individual
+  // sub-frame samples), and (b) when the finger is HELD STILL / between input batches,
+  // feed the worklet the held position so it settles to zero speed.
+  private grabTick(dt: number) {
+    const moved = this.handPos - this.handLast;
+    this.handLast = this.handPos;
+    const inst = moved / dt;
+    const hk = 1 - Math.exp(-dt / 0.03); // light smoothing → clean release-fling velocity
     this.handVel += (inst - this.handVel) * hk;
-    this.jogPos = this.handPos;
     this.jogVel = this.handVel;
-    const dur = this.buffer ? this.buffer.duration : 0;
-    if (this.jogPos < 0) {
-      this.jogPos = this.handPos = 0;
-      this.jogVel = 0;
-    } else if (this.jogPos > dur) {
-      this.jogPos = this.handPos = dur;
-      this.jogVel = 0;
+    if (this.ctx.currentTime - this.jogInputAt > 0.006) {
+      // no fresh input: settle the worklet to the held position (else it would drift)
+      this.startOffset = this.jogPos;
+      this.scratchMove();
     }
   }
 
@@ -670,20 +744,20 @@ export class Deck {
     }
     this._tempo = tempoPercent;
     this._rate = rate;
-    // Glide the rate so fader moves bend the pitch smoothly instead of stepping —
-    // applied to every source in the group so stems stay sample-locked.
+    // Glide the engine's speed so fader moves bend tempo smoothly instead of
+    // stepping. Stems are one engine voice, so they stay sample-locked for free.
     const t = this.ctx.currentTime;
-    for (const src of this.sources) {
-      const p = src.playbackRate;
+    const sp = this.stretchNode?.parameters.get("speed");
+    if (sp) {
       try {
-        p.cancelScheduledValues(t);
-        p.setValueAtTime(p.value, t);
-        p.linearRampToValueAtTime(rate, t + 0.02);
+        sp.cancelScheduledValues(t);
+        sp.setValueAtTime(sp.value, t);
+        sp.linearRampToValueAtTime(rate, t + 0.02);
       } catch {
-        p.value = rate;
+        sp.value = rate;
       }
     }
-    this.updatePitch(); // keep key-lock tracking the tempo
+    this.updatePitch(); // vinyl mode (key-lock off) tracks the new tempo
     this.onTempoChange?.(); // AudioEngine sync hook: master→slave follow / release
   }
 
@@ -882,6 +956,7 @@ export class Deck {
     if (!this.loop) return;
     this.rebaseClock();
     this.loop.active = false;
+    this.adjusting = null; // leaving the loop ends any boundary edit (no stuck highlight)
     this.applyLoop();
   }
 
@@ -916,10 +991,25 @@ export class Deck {
   /** Toggle fine-adjust of a loop boundary. "in" targets the active loop's start
    *  (or a pending manual loop-in point); "out" targets the loop's end. Re-toggling
    *  the same side, or a side with nothing to move, turns it off. Returns the mode. */
+  /** Toggle loop-boundary fine-adjust (the IN/OUT "head editor"). A small state
+   *  machine so the IN/OUT button highlights contextually and every press does
+   *  something useful regardless of loop state:
+   *    - same boundary already armed → disarm (toggle off)
+   *    - IN → arm "in"; if there's no loop or in-point yet, drop one at the playhead
+   *    - OUT → arm "out"; if only an in-point exists, close the loop here first so
+   *      there's an end to nudge; with nothing at all, stay off (nothing to adjust) */
   toggleAdjust(which: "in" | "out"): "in" | "out" | null {
-    if (this.adjusting === which) return (this.adjusting = null);
-    const target = which === "in" ? this.loop != null || this.loopInPoint != null : this.loop != null;
-    this.adjusting = target ? which : null;
+    if (this.adjusting === which) {
+      this.adjusting = null;
+      return null;
+    }
+    if (which === "in") {
+      if (!this.loop && this.loopInPoint == null) this.loopInPoint = this.maybeSnap(this.position());
+      this.adjusting = "in";
+    } else {
+      if (!this.loop && this.loopInPoint != null) this.loopOut(); // close in→here, then adjust the end
+      this.adjusting = this.loop ? "out" : null;
+    }
     return this.adjusting;
   }
   endAdjust() {
@@ -931,12 +1021,10 @@ export class Deck {
     if (this.adjusting === "out") return this.loop ? this.loop.end : null;
     return null;
   }
-  /** Nudge the boundary under adjustment by `deltaSec` (drag / scroll / arrow keys),
-   *  clamped to the track and so in stays before out. Keeps the loop live + audible. */
-  adjustBy(deltaSec: number) {
-    const cur = this.adjustAnchor();
-    if (cur == null) return;
-    const pos = Math.max(0, Math.min(this.duration, cur + deltaSec));
+  /** Place the boundary under adjustment at `pos` (clamped to the track, in kept
+   *  before out), keeping the loop live + audible. Shared by drag / scroll / keys. */
+  private setAdjustPos(pos: number) {
+    pos = Math.max(0, Math.min(this.duration, pos));
     if (this.adjusting === "in") {
       if (this.loop) {
         this.loop.start = Math.min(pos, this.loop.end - 1e-3);
@@ -952,6 +1040,28 @@ export class Deck {
       this.applyLoop();
     }
   }
+  /** Continuous nudge of the adjusted boundary by `deltaSec` (waveform drag). The
+   *  lock follows the grid magnet: quantize on → the boundary snaps to the nearest
+   *  grid beat as you drag; off → it moves freely for surgical sub-beat placement. */
+  adjustBy(deltaSec: number) {
+    const cur = this.adjustAnchor();
+    if (cur == null) return;
+    this.setAdjustPos(this.maybeSnap(cur + deltaSec));
+  }
+  /** Discrete step of the adjusted boundary by `units` (arrow keys / scroll ticks).
+   *  Quantize on → move `units` whole beats along the real grid (lands on a beat);
+   *  off → move a fine fraction of a beat so unlocked edits stay surgical. */
+  adjustStep(units: number) {
+    const cur = this.adjustAnchor();
+    if (cur == null) return;
+    const g = this.beatgrid;
+    if (this.quantizeOn && g) {
+      this.setAdjustPos(beatTimeOffset(g, cur, units));
+    } else {
+      const interval = g?.interval ?? 60 / 120;
+      this.setAdjustPos(cur + units * interval * ADJUST_FINE_BEATS);
+    }
+  }
 
   // Re-anchor the playback clock to the CURRENT (wrapped) position. While a loop
   // is active, position() folds the ever-growing raw offset back into the loop
@@ -965,18 +1075,15 @@ export class Deck {
 
   private applyLoop() {
     const l = this.loop;
-    // Only loop on a finite, non-degenerate window — a NaN/inverted loopEnd hangs
-    // or crackles the source node, so any bad value just falls back to no loop.
+    // Only loop on a finite, non-degenerate window — a NaN/inverted loopEnd would
+    // hang the engine's playhead wrap, so any bad value just falls back to no loop.
     const valid = !!l && l.active && Number.isFinite(l.start) && Number.isFinite(l.end) && l.end > l.start;
-    for (const src of this.sources) {
-      if (valid && l) {
-        src.loopStart = l.start;
-        src.loopEnd = l.end;
-        src.loop = true;
-      } else {
-        src.loop = false;
-      }
-    }
+    this.stretchNode?.port.postMessage({
+      type: "loop",
+      active: valid,
+      start: valid ? l!.start : 0,
+      end: valid ? l!.end : 0,
+    });
   }
 
   // --- EQ / trim ---
@@ -1014,6 +1121,100 @@ export class Deck {
   setEqHigh(db: number) {
     this._eqHigh = db;
     this.eq.setHigh(db);
+  }
+
+  // --- EQ band frequencies (Pro-Q-style: drag a node sideways) ---
+  get eqLowFreq() {
+    return this.eq.lowFreq;
+  }
+  get eqMidFreq() {
+    return this.eq.midFreq;
+  }
+  get eqHighFreq() {
+    return this.eq.highFreq;
+  }
+  get eqMidQ() {
+    return this.eq.midQ;
+  }
+  setEqLowFreq(hz: number) {
+    this.eq.setLowFreq(hz);
+  }
+  setEqMidFreq(hz: number) {
+    this.eq.setMidFreq(hz);
+  }
+  setEqHighFreq(hz: number) {
+    this.eq.setHighFreq(hz);
+  }
+  setEqMidQ(q: number) {
+    this.eq.setMidQ(q);
+  }
+
+  // --- HP / LP cut filters (cutoff + resonance) ---
+  get eqHpFreq() {
+    return this.eq.hpFreq;
+  }
+  get eqHpQ() {
+    return this.eq.hpQ;
+  }
+  get eqLpFreq() {
+    return this.eq.lpFreq;
+  }
+  get eqLpQ() {
+    return this.eq.lpQ;
+  }
+  setEqHpFreq(hz: number) {
+    this.eq.setHpFreq(hz);
+  }
+  setEqHpQ(q: number) {
+    this.eq.setHpQ(q);
+  }
+  setEqLpFreq(hz: number) {
+    this.eq.setLpFreq(hz);
+  }
+  setEqLpQ(q: number) {
+    this.eq.setLpQ(q);
+  }
+
+  // --- EQ routing: bypass (A/B the EQ) + solo (audition one band) ---
+  get eqBypassed() {
+    return this.eq.bypassed;
+  }
+  setEqBypass(on: boolean) {
+    this.eq.setBypass(on);
+  }
+  soloBand(hz: number, q = 4) {
+    this.eq.solo(hz, q);
+  }
+  clearSolo() {
+    this.eq.clearSolo();
+  }
+
+  /** Restore the EQ to flat: all band gains 0 dB, every node back to its default
+   *  frequency / bell width, the cut filters parked off, bypass cleared. */
+  resetEq() {
+    this.eq.reset();
+    this._eqLow = 0;
+    this._eqMid = 0;
+    this._eqHigh = 0;
+  }
+
+  /** Combined EQ magnitude (dB) at each frequency in `freqHz`, into `outDb` — the
+   *  real biquad response, for drawing the curve. */
+  eqMagnitude(freqHz: Float32Array, outDb: Float32Array) {
+    this.eq.magnitude(freqHz, outDb);
+  }
+
+  /** Spectrum (0…255 per bin): post-fader by default, or pre-EQ (the raw track,
+   *  before this channel's EQ) when `source === "pre"`. */
+  get spectrumBins() {
+    return this.meterL.frequencyBinCount;
+  }
+  get sampleRate() {
+    return this.ctx.sampleRate;
+  }
+  spectrum(out: Uint8Array, source: "pre" | "post" = "post") {
+    const an = source === "pre" ? this.meterPre : this.meterL;
+    an.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
   }
 
   get filterValue() {
@@ -1076,18 +1277,15 @@ export class Deck {
   // playback feel "tight" like hardware.
   private static readonly FADE = 0.005;
 
+  // Start (or re-seat) the stretch engine at `offset`. The engine owns the
+  // playhead, looping, stem mixing and declick — so this just (re)asserts the
+  // loop + stem gains and tells it to start. position() stays analytical because
+  // the engine advances the playhead at exactly the tempo rate.
   private spawnSource(offset: number) {
-    if (!this.buffer) return;
-    // Never stack a second source group on top of a live one — that's an audible "double
-    // play" of the same track. Any stray double-spawn (e.g. a session tick re-playing a
-    // deck mid jog-coast) crossfades over the old group instead. play()/seek() already
-    // ensure this; this makes it true for EVERY caller.
-    if (this.source) this.stopSource();
+    if (!this.buffer || !this.stretchNode) return;
     const t = this.ctx.currentTime;
-    // With a loop active, fold the start point into [start, end) so the source
-    // loops cleanly. Starting a looping source at/after loopEnd makes Chrome play
-    // offset → buffer end BEFORE wrapping (the "overplay"), and during rapid
-    // navigation those leaked tails stack into audible overlap. The clock anchor
+    // With a loop active, fold the start point into [start, end) so playback
+    // begins inside the loop (the engine wraps from there). The clock anchor
     // (startOffset) stays = offset since position() folds it the same way.
     let startAt = offset;
     if (this.loop?.active) {
@@ -1097,124 +1295,18 @@ export class Deck {
         startAt = start + ((((startAt - start) % len) + len) % len);
       }
     }
-    // Shared declick envelope for the whole source group (the mix, OR the 4 stems).
-    const g = this.ctx.createGain();
-    g.connect(this.pitchNode ?? this.eq.input);
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(1, t + Deck.FADE);
-
-    const sources: AudioBufferSourceNode[] = [];
-    this.curStemGains = {};
-    const spawn = (buf: AudioBuffer, dest: AudioNode) => {
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      src.playbackRate.value = this._rate;
-      if (this.loop?.active) {
-        src.loopStart = this.loop.start;
-        src.loopEnd = this.loop.end;
-        src.loop = true;
-      }
-      src.connect(dest);
-      src.start(0, startAt);
-      sources.push(src);
-    };
-
-    if (this.stems) {
-      // One source per stem, each through its own (live-toggleable) gain, all
-      // started together at the same offset + rate so they stay sample-locked.
-      for (const name of STEM_NAMES) {
-        const sg = this.ctx.createGain();
-        sg.gain.value = this.effectiveStemGain(name);
-        sg.connect(g);
-        this.curStemGains[name] = sg;
-        spawn(this.stems[name], sg);
-      }
-    } else {
-      spawn(this.buffer, g);
-    }
-
-    const primary = sources[0];
-    primary.onended = () => {
-      if (primary === this.source) {
-        this._playing = false;
-        this.startOffset = this.buffer?.duration ?? 0;
-        this.onEnded?.();
-      }
-    };
-    this.sources = sources;
-    this.source = primary;
-    this.srcGain = g;
+    this.applyLoop();
+    for (const name of STEM_NAMES) this.rampStem(name);
+    this.stretchNode.port.postMessage({ type: "start", offset: startAt });
+    this.running = true;
     this.startOffset = offset;
     this.startedAt = t;
   }
 
+  // Stop the engine voice (it fades out over its own ~5 ms declick and goes idle).
   private stopSource() {
-    if (!this.source) return;
-    const sources = this.sources;
-    const g = this.srcGain;
-    const stemGains = this.curStemGains;
-    this.sources = [];
-    this.source = null;
-    this.srcGain = null;
-    this.curStemGains = {};
-    for (const s of sources) s.onended = null;
-    const cleanup = () => {
-      for (const s of sources) {
-        try {
-          s.disconnect();
-        } catch {
-          /* ignore */
-        }
-      }
-      for (const n of Object.values(stemGains)) {
-        try {
-          n?.disconnect();
-        } catch {
-          /* ignore */
-        }
-      }
-      try {
-        g?.disconnect();
-      } catch {
-        /* ignore */
-      }
-    };
-    if (g) {
-      // Fade out, then stop just after — the old group overlaps the new one for a
-      // few ms, so seeks/loops crossfade instead of clicking.
-      const t = this.ctx.currentTime;
-      const stopAt = t + Deck.FADE + 0.002;
-      try {
-        g.gain.cancelScheduledValues(t);
-        g.gain.setValueAtTime(g.gain.value, t);
-        g.gain.linearRampToValueAtTime(0, t + Deck.FADE);
-      } catch {
-        /* ignore */
-      }
-      try {
-        sources.forEach((s, i) => {
-          s.stop(stopAt);
-          if (i === 0) s.onended = cleanup; // one fires; it tears down the whole group
-        });
-      } catch {
-        for (const s of sources) {
-          try {
-            s.stop();
-          } catch {
-            /* already stopped */
-          }
-        }
-        cleanup();
-      }
-    } else {
-      for (const s of sources) {
-        try {
-          s.stop();
-        } catch {
-          /* already stopped */
-        }
-      }
-      cleanup();
-    }
+    if (!this.running) return;
+    this.running = false;
+    this.stretchNode?.port.postMessage({ type: "stop", fade: Deck.FADE });
   }
 }

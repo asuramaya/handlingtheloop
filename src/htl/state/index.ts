@@ -25,6 +25,10 @@ export {
   saveSettings,
   applySettings,
   surfaceColor,
+  type StretchQuality,
+  type StretchConfig,
+  STRETCH_PRESETS,
+  stretchConfig,
 } from "./settings";
 export {
   type DeckSnapshot,

@@ -20,11 +20,11 @@ export interface KeyAction {
 export const KEY_ACTIONS: KeyAction[] = [
   { id: "focusToggle", label: "Switch focused deck (A ↔ B)", group: "Global", defaultKey: "Tab" },
 
-  { id: "play", label: "Play / pause", group: "Transport", defaultKey: "Space", shiftLabel: "Play from cue" },
+  { id: "play", label: "Play / pause", group: "Transport", defaultKey: "Space", shiftLabel: "Reset channel" },
   { id: "cue", label: "Cue", group: "Transport", defaultKey: "KeyC", shiftLabel: "Jump to start" },
 
   { id: "sync", label: "Beat sync", group: "Mix", defaultKey: "KeyA", shiftLabel: "Reset pitch" },
-  { id: "keyMatch", label: "Key match", group: "Mix", defaultKey: "KeyS", shiftLabel: "Reset channel" },
+  { id: "keyMatch", label: "Key match", group: "Mix", defaultKey: "KeyS" },
   { id: "fx", label: "FX (filter) on / off", group: "Mix", defaultKey: "KeyD" },
   { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyF", shiftLabel: "Match gain (dB)" },
   { id: "grid", label: "Grid magnet (snap)", group: "Mix", defaultKey: "KeyG", shiftLabel: "Step skip size" },
@@ -35,15 +35,21 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "loopIn", label: "Loop In", group: "Loops", defaultKey: "KeyQ" },
   { id: "loopOut", label: "Loop Out", group: "Loops", defaultKey: "KeyW" },
   { id: "loopExit", label: "Loop Exit / Reloop", group: "Loops", defaultKey: "KeyE" },
-  { id: "beatLoop0", label: "Beat loop 1/2", group: "Loops", defaultKey: "KeyU", shiftLabel: "1 beat" },
-  { id: "beatLoop1", label: "Beat loop 1/4", group: "Loops", defaultKey: "KeyI", shiftLabel: "2 beats" },
-  { id: "beatLoop2", label: "Beat loop 1/8", group: "Loops", defaultKey: "KeyO", shiftLabel: "4 beats" },
-  { id: "beatLoop3", label: "Beat loop 1/16", group: "Loops", defaultKey: "KeyP", shiftLabel: "8 beats" },
+  // The 8 beat-loop pads, sorted ascending by size, each on its own key left→right
+  // (U I O P H J K L) to mirror the on-screen 4×2 grid.
+  { id: "beatLoop0", label: "Beat loop 1/16", group: "Loops", defaultKey: "KeyU" },
+  { id: "beatLoop1", label: "Beat loop 1/8", group: "Loops", defaultKey: "KeyI" },
+  { id: "beatLoop2", label: "Beat loop 1/4", group: "Loops", defaultKey: "KeyO" },
+  { id: "beatLoop3", label: "Beat loop 1/2", group: "Loops", defaultKey: "KeyP" },
+  { id: "beatLoop4", label: "Beat loop 1", group: "Loops", defaultKey: "KeyH" },
+  { id: "beatLoop5", label: "Beat loop 2", group: "Loops", defaultKey: "KeyJ" },
+  { id: "beatLoop6", label: "Beat loop 4", group: "Loops", defaultKey: "KeyK" },
+  { id: "beatLoop7", label: "Beat loop 8", group: "Loops", defaultKey: "KeyL" },
 
-  { id: "muteDrums", label: "Mute Drums", group: "Stems", defaultKey: "KeyH" },
-  { id: "muteBass", label: "Mute Bass", group: "Stems", defaultKey: "KeyJ" },
-  { id: "muteVocals", label: "Mute Vocals", group: "Stems", defaultKey: "KeyK" },
-  { id: "muteInst", label: "Mute Inst", group: "Stems", defaultKey: "KeyL" },
+  { id: "muteDrums", label: "Mute Drums", group: "Stems", defaultKey: "KeyV", shiftLabel: "Solo Drums" },
+  { id: "muteBass", label: "Mute Bass", group: "Stems", defaultKey: "KeyB", shiftLabel: "Solo Bass" },
+  { id: "muteVocals", label: "Mute Vocals", group: "Stems", defaultKey: "KeyN", shiftLabel: "Solo Vocals" },
+  { id: "muteInst", label: "Mute Inst", group: "Stems", defaultKey: "KeyM", shiftLabel: "Solo Inst" },
 
   { id: "jogBackBeat", label: "Nudge back a beat", group: "Jog", defaultKey: "ArrowLeft", shiftLabel: "Move loop back" },
   { id: "jogFwdBeat", label: "Nudge forward a beat", group: "Jog", defaultKey: "ArrowRight", shiftLabel: "Move loop forward" },

@@ -26,6 +26,7 @@ import {
   postAnalysis,
   applySettings,
   surfaceColor,
+  stretchConfig,
   loadSettings,
   saveSettings,
   useSettingsSync,
@@ -151,6 +152,15 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqLow: deck.eqLow,
     eqMid: deck.eqMid,
     eqHigh: deck.eqHigh,
+    eqLowFreq: deck.eqLowFreq,
+    eqMidFreq: deck.eqMidFreq,
+    eqHighFreq: deck.eqHighFreq,
+    eqMidQ: deck.eqMidQ,
+    eqHpFreq: deck.eqHpFreq,
+    eqHpQ: deck.eqHpQ,
+    eqLpFreq: deck.eqLpFreq,
+    eqLpQ: deck.eqLpQ,
+    eqBypass: deck.eqBypassed,
     filter: deck.filterValue,
     fxOn: deck.fxOn,
     keylock: deck.keylock,
@@ -189,6 +199,15 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   deck.setEqLow(s.eqLow);
   deck.setEqMid(s.eqMid);
   deck.setEqHigh(s.eqHigh);
+  if (s.eqLowFreq != null) deck.setEqLowFreq(s.eqLowFreq);
+  if (s.eqMidFreq != null) deck.setEqMidFreq(s.eqMidFreq);
+  if (s.eqHighFreq != null) deck.setEqHighFreq(s.eqHighFreq);
+  if (s.eqMidQ != null) deck.setEqMidQ(s.eqMidQ);
+  if (s.eqHpFreq != null) deck.setEqHpFreq(s.eqHpFreq);
+  if (s.eqHpQ != null) deck.setEqHpQ(s.eqHpQ);
+  if (s.eqLpFreq != null) deck.setEqLpFreq(s.eqLpFreq);
+  if (s.eqLpQ != null) deck.setEqLpQ(s.eqLpQ);
+  deck.setEqBypass(!!s.eqBypass);
   deck.setFilter(s.filter ?? 0);
   deck.setFx(s.fxOn ?? true);
   deck.setKeylock(s.keylock);
@@ -285,6 +304,7 @@ export function App() {
   const shift = shiftLatched || shiftHeld;
   // Which deck the keyboard drives (Tab toggles it; the focused deck is ringed).
   const [focused, setFocused] = useState<DeckId>("A");
+  const [expandedLane, setExpandedLane] = useState<DeckId | null>(null); // single-deck (maximized) view
   const ACCENT: Record<DeckId, string> = { A: settings.accentA, B: settings.accentB };
   // Post-crossfade attenuation per deck, so the bottom level-fader meters fade with the crossfader.
   const levelGainsDb = crossfadeGainsDb(crossfade);
@@ -391,9 +411,7 @@ export function App() {
       deck.setTempo(0);
       deck.setFilter(0);
       deck.setTrim(1);
-      deck.setEqLow(0);
-      deck.setEqMid(0);
-      deck.setEqHigh(0);
+      deck.resetEq(); // gains → 0 dB and every band node back to its default frequency
       deck.setPitch(0);
       deck.resetStems(); // also reset the stem faders (→ unity) and un-mute all stems
     };
@@ -403,16 +421,18 @@ export function App() {
     // selects the shifted variant. Mirrors the on-screen buttons + emits to co-DJs.
     type DeckRef = ReturnType<typeof engine.deck>;
     const TEMPO_NUDGE = 0.5;
-    const beatLoop = (deck: DeckRef, id: DeckId, s: boolean, i: number) => {
-      const beats = (s ? [1, 2, 4, 8] : [0.5, 0.25, 0.125, 0.0625])[i];
+    // The 8 beat-loop sizes, ascending — index = key order U I O P H J K L.
+    const LOOP_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8];
+    const beatLoop = (deck: DeckRef, id: DeckId, i: number) => {
+      const beats = LOOP_BEATS[i];
       deck.setBeatLoop(beats);
       emitRef.current({ kind: "loop", deck: id, action: "beat", beats });
     };
     const jogBy = (deck: DeckRef, id: DeckId, s: boolean, beats: number) => {
       if (deck.adjusting) {
-        // Boundary-adjust mode: arrows nudge the loop edge by `beats` on the grid.
-        const interval = deck.beatgrid?.interval ?? 60 / 120;
-        deck.adjustBy(beats * interval);
+        // Boundary-adjust mode: arrows step the loop edge; lock follows the grid
+        // magnet (snap to beats when on, fine sub-beat nudge when off).
+        deck.adjustStep(beats);
         return;
       }
       if (s) deck.moveLoop(beats);
@@ -421,10 +441,16 @@ export function App() {
         emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
       }
     };
-    const stem = (deck: DeckRef, id: DeckId, name: "drums" | "bass" | "vocals" | "other") => {
+    const STEMS = ["drums", "bass", "vocals", "other"] as const;
+    const stem = (deck: DeckRef, id: DeckId, name: (typeof STEMS)[number], s: boolean) => {
       if (!deck.hasStems) return;
-      deck.toggleStem(name);
-      emitRef.current({ kind: "stem", deck: id, stem: name, on: deck.stemActive(name) });
+      if (s) {
+        deck.soloStem(name); // Shift: solo this stem (mute the rest); same key un-solos
+        STEMS.forEach((n) => emitRef.current({ kind: "stem", deck: id, stem: n, on: deck.stemActive(n) }));
+      } else {
+        deck.toggleStem(name);
+        emitRef.current({ kind: "stem", deck: id, stem: name, on: deck.stemActive(name) });
+      }
     };
     const hotcue = (deck: DeckRef, id: DeckId, s: boolean, slot: number) => {
       if (s) {
@@ -443,10 +469,8 @@ export function App() {
     const HANDLERS: Record<string, (deck: DeckRef, id: DeckId, s: boolean) => void> = {
       play: (deck, id, s) => {
         if (s) {
-          deck.seek(deck.cuePoint);
-          if (!deck.playing) deck.play();
-          emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
-          emitRef.current({ kind: "transport", deck: id, action: "play" });
+          resetChannel(deck); // Shift+Space = reset the channel (tempo/pitch/EQ/filter/stems)
+          emitDeckRef.current(id);
         } else {
           deck.togglePlay();
           emitRef.current({ kind: "transport", deck: id, action: deck.playing ? "play" : "pause" });
@@ -474,13 +498,9 @@ export function App() {
         }
       },
       keyMatch: (deck, id, s) => {
-        if (s) {
-          resetChannel(deck);
-          emitDeckRef.current(id);
-        } else {
-          engine.toggleKey(id);
-          emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-        }
+        if (s) return; // KEY is a toggle — no shift action (channel reset is on Shift+Space)
+        engine.toggleKey(id);
+        emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
       },
       fx: (deck, id) => {
         deck.setFx(!deck.fxOn);
@@ -510,12 +530,14 @@ export function App() {
         emitRef.current({ kind: "control", deck: id, param: s ? "tempo" : "pitch", value: s ? deck.tempo : deck.pitch });
       },
       loopIn: (deck, id, s) => {
-        if (s) return void deck.toggleAdjust("in"); // Shift: arm loop-in fine-adjust
+        // Shift arms fine-adjust; a plain tap while already armed disarms it (so you
+        // don't have to re-hold Shift to release the lock).
+        if (s || deck.adjusting === "in") return void deck.toggleAdjust("in");
         deck.loopIn();
         emitRef.current({ kind: "loop", deck: id, action: "in" });
       },
       loopOut: (deck, id, s) => {
-        if (s) return void deck.toggleAdjust("out"); // Shift: arm loop-out fine-adjust
+        if (s || deck.adjusting === "out") return void deck.toggleAdjust("out");
         deck.loopOut();
         emitRef.current({ kind: "loop", deck: id, action: "out" });
       },
@@ -531,14 +553,18 @@ export function App() {
           emitRef.current({ kind: "loop", deck: id, action: "reloop" });
         }
       },
-      beatLoop0: (deck, id, s) => beatLoop(deck, id, s, 0),
-      beatLoop1: (deck, id, s) => beatLoop(deck, id, s, 1),
-      beatLoop2: (deck, id, s) => beatLoop(deck, id, s, 2),
-      beatLoop3: (deck, id, s) => beatLoop(deck, id, s, 3),
-      muteDrums: (deck, id) => stem(deck, id, "drums"),
-      muteBass: (deck, id) => stem(deck, id, "bass"),
-      muteVocals: (deck, id) => stem(deck, id, "vocals"),
-      muteInst: (deck, id) => stem(deck, id, "other"),
+      beatLoop0: (deck, id) => beatLoop(deck, id, 0),
+      beatLoop1: (deck, id) => beatLoop(deck, id, 1),
+      beatLoop2: (deck, id) => beatLoop(deck, id, 2),
+      beatLoop3: (deck, id) => beatLoop(deck, id, 3),
+      beatLoop4: (deck, id) => beatLoop(deck, id, 4),
+      beatLoop5: (deck, id) => beatLoop(deck, id, 5),
+      beatLoop6: (deck, id) => beatLoop(deck, id, 6),
+      beatLoop7: (deck, id) => beatLoop(deck, id, 7),
+      muteDrums: (deck, id, s) => stem(deck, id, "drums", s),
+      muteBass: (deck, id, s) => stem(deck, id, "bass", s),
+      muteVocals: (deck, id, s) => stem(deck, id, "vocals", s),
+      muteInst: (deck, id, s) => stem(deck, id, "other", s),
       jogBackBeat: (deck, id, s) => jogBy(deck, id, s, -1),
       jogFwdBeat: (deck, id, s) => jogBy(deck, id, s, 1),
       jogBack: (deck, id, s) => jogBy(deck, id, s, -deck.skipBeats),
@@ -592,6 +618,7 @@ export function App() {
     saveSettings(settings);
     engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
     engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
+    engine.setStretchConfig(stretchConfig(settings.stretchQuality));
   }, [settings, engine]);
 
   // Mirror settings to the account when signed in (last-write-wins by timestamp), so
@@ -718,6 +745,10 @@ export function App() {
       stemTrace(`derive ${id}`, `${model.id}${mobile ? " mobile" : ""}`);
       const applyDsp = async () => {
         try {
+          // Surface the DSP split as a processing indicator too (it's quick, but the
+          // deck sits on the single mix waveform until it lands — show that it's
+          // transitioning, the same as a neural split does).
+          setStatusFor(id, { phase: "separating", detail: "Splitting stems (DSP)…" });
           stemTrace(`dsp ${id}`); // crash here ⇒ the instant DSP split (424 MB) itself OOMs
           const dsp = await dspStems(mix);
           if (stale?.()) return;
@@ -759,6 +790,7 @@ export function App() {
       // set first so it stays single-set.
       if (model.kind === "dsp") {
         await applyDsp();
+        setStatusFor(id, null); // DSP quad is in → clear the processing indicator
         if (!mobile) await promoteCachedStems(id, videoId, mix, stale);
         return;
       }
@@ -1292,12 +1324,21 @@ export function App() {
           else if (intent.param === "eqLow") deck.setEqLow(intent.value);
           else if (intent.param === "eqMid") deck.setEqMid(intent.value);
           else if (intent.param === "eqHigh") deck.setEqHigh(intent.value);
+          else if (intent.param === "eqLowFreq") deck.setEqLowFreq(intent.value);
+          else if (intent.param === "eqMidFreq") deck.setEqMidFreq(intent.value);
+          else if (intent.param === "eqHighFreq") deck.setEqHighFreq(intent.value);
+          else if (intent.param === "eqMidQ") deck.setEqMidQ(intent.value);
+          else if (intent.param === "eqHpFreq") deck.setEqHpFreq(intent.value);
+          else if (intent.param === "eqHpQ") deck.setEqHpQ(intent.value);
+          else if (intent.param === "eqLpFreq") deck.setEqLpFreq(intent.value);
+          else if (intent.param === "eqLpQ") deck.setEqLpQ(intent.value);
           else if (intent.param === "filter") deck.setFilter(intent.value);
           else if (intent.param === "pitch") deck.setPitch(Math.round(intent.value));
           break;
         case "toggle":
           if (intent.param === "fx") deck.setFx(intent.value);
           else if (intent.param === "keylock") deck.setKeylock(intent.value);
+          else if (intent.param === "eqBypass") deck.setEqBypass(intent.value);
           else deck.setQuantize(intent.value);
           break;
         case "stemGain":
@@ -1428,6 +1469,15 @@ export function App() {
       emit({ kind: "control", deck: id, param: "eqLow", value: d.eqLow });
       emit({ kind: "control", deck: id, param: "eqMid", value: d.eqMid });
       emit({ kind: "control", deck: id, param: "eqHigh", value: d.eqHigh });
+      emit({ kind: "control", deck: id, param: "eqLowFreq", value: d.eqLowFreq });
+      emit({ kind: "control", deck: id, param: "eqMidFreq", value: d.eqMidFreq });
+      emit({ kind: "control", deck: id, param: "eqHighFreq", value: d.eqHighFreq });
+      emit({ kind: "control", deck: id, param: "eqMidQ", value: d.eqMidQ });
+      emit({ kind: "control", deck: id, param: "eqHpFreq", value: d.eqHpFreq });
+      emit({ kind: "control", deck: id, param: "eqHpQ", value: d.eqHpQ });
+      emit({ kind: "control", deck: id, param: "eqLpFreq", value: d.eqLpFreq });
+      emit({ kind: "control", deck: id, param: "eqLpQ", value: d.eqLpQ });
+      emit({ kind: "toggle", deck: id, param: "eqBypass", value: d.eqBypassed });
       emit({ kind: "control", deck: id, param: "filter", value: d.filterValue });
       emit({ kind: "control", deck: id, param: "pitch", value: d.pitch });
     },
@@ -1693,9 +1743,14 @@ export function App() {
               loopColor={settings.loopColor}
               markerColor={settings.markerColor}
               stripColor={settings.stripColor}
+              stemColors={{ drums: settings.stemDrumsColor, bass: settings.stemBassColor, vocals: settings.stemVocalsColor, other: settings.stemOtherColor }}
               meta={meta[id]}
               status={terseStem(status[id])}
+              stemStatus={status[id]}
               captions={captions[id]}
+              expanded={expandedLane === id}
+              collapsed={expandedLane != null && expandedLane !== id}
+              onToggleExpand={() => setExpandedLane((e) => (e === id ? null : id))}
               windowSec={zoom[id]}
               onZoom={(next) => setZoomFor(id, next)}
               refresh={refresh}
@@ -1724,6 +1779,8 @@ export function App() {
             id="A"
             deck={engine.deckA}
             accent={ACCENT.A}
+            otherDeck={engine.deckB}
+            otherAccent={ACCENT.B}
             focused={focused === "A"}
             onFocus={() => setFocused("A")}
             mirror={false}
@@ -1744,6 +1801,8 @@ export function App() {
             id="B"
             deck={engine.deckB}
             accent={ACCENT.B}
+            otherDeck={engine.deckA}
+            otherAccent={ACCENT.A}
             focused={focused === "B"}
             onFocus={() => setFocused("B")}
             mirror={false}

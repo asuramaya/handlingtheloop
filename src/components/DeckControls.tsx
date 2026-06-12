@@ -1,32 +1,28 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import type { Deck } from "@htl/audio";
-import { HOT_CUE_COUNT, EQ_MAX_DB, EQ_MIN_DB } from "@htl/audio";
+import { HOT_CUE_COUNT } from "@htl/audio";
 import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
 import { ValueCell } from "./ValueCell";
-import { KnobBorder } from "./KnobBorder";
+import { EqCurve } from "./EqCurve";
 import { LevelFader } from "./LevelFader";
-import { useValueDrag } from "./useValueDrag";
 
 // Per-stem cells (under the PITCH foot). Each is a level knob AND the mute toggle:
 // tap = mute / unmute, scroll/drag = level. `kbd` is the global keyboard hint.
 const STEM_CELLS: { name: StemName; label: string; kbd: string }[] = [
-  { name: "drums", label: "DRUM", kbd: "H" },
-  { name: "bass", label: "BASS", kbd: "J" },
-  { name: "vocals", label: "VOICE", kbd: "K" },
-  { name: "other", label: "INST", kbd: "L" },
+  { name: "drums", label: "DRUM", kbd: "V" },
+  { name: "bass", label: "BASS", kbd: "B" },
+  { name: "vocals", label: "VOICE", kbd: "N" },
+  { name: "other", label: "INST", kbd: "M" },
 ];
-
-// Per-deck effect the FX fader drives. Only the color filter today — the FX button
-// shows the current one and Shift-clicking it opens this list. Add reverb/echo here
-// later (and branch the mixer's FILT fader on the choice).
-const EFFECTS: { id: string; label: string }[] = [{ id: "filter", label: "Filter" }];
 
 interface DeckControlsProps {
   id: "A" | "B";
   deck: Deck;
   accent: string;
+  otherDeck: Deck; // the other deck (for the EQ clash view + copy-to)
+  otherAccent: string;
   focused: boolean;
   onFocus: () => void;
   mirror: boolean;
@@ -44,18 +40,17 @@ interface DeckControlsProps {
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
 }
 
-// Every beat-loop size, shown at once (half-width). Each pairs with a keyboard
-// U/I/O/P key: the fraction on a bare press, the whole beat under Shift — so the
-// four whole-beat pads carry a ⇧ prefix in their kbd hint.
+// The 8 beat-loop sizes, sorted ascending, in a 4×2 grid that mirrors the hot-cue
+// pads. Each has its own key, left→right top→bottom: U I O P / H J K L.
 const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
-  { n: 0.5, label: "1/2", kbd: "U" },
-  { n: 0.25, label: "1/4", kbd: "I" },
-  { n: 0.125, label: "1/8", kbd: "O" },
-  { n: 0.0625, label: "1/16", kbd: "P" },
-  { n: 1, label: "1", kbd: "⇧U" },
-  { n: 2, label: "2", kbd: "⇧I" },
-  { n: 4, label: "4", kbd: "⇧O" },
-  { n: 8, label: "8", kbd: "⇧P" },
+  { n: 0.0625, label: "1/16", kbd: "U" },
+  { n: 0.125, label: "1/8", kbd: "I" },
+  { n: 0.25, label: "1/4", kbd: "O" },
+  { n: 0.5, label: "1/2", kbd: "P" },
+  { n: 1, label: "1", kbd: "H" },
+  { n: 2, label: "2", kbd: "J" },
+  { n: 4, label: "4", kbd: "K" },
+  { n: 8, label: "8", kbd: "L" },
 ];
 
 // Tempo nudge step (percent) for SHIFT-clicking the ∓ pitch steppers.
@@ -68,9 +63,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
-  const [effect, setEffect] = useState(EFFECTS[0].id);
-  const [fxMenu, setFxMenu] = useState(false);
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -81,7 +74,6 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
     emit({ kind: "loop", deck: id, action: "exit" });
     refresh();
   };
-  const effectLabel = EFFECTS.find((e) => e.id === effect)?.label ?? "FX";
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
   const nudge = (dir: number) => {
@@ -100,10 +92,13 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
   };
   // Broadcast the deck's current playhead as a seek (after a jump/cue) so co-DJs follow.
   const emitSeek = () => emit({ kind: "transport", deck: id, action: "seek", position: deck.position() });
-  // Shift: move the loop; otherwise jump the playhead — both by the deck's skip.
+  // Loop-boundary adjust mode (Shift-IN / Shift-OUT armed) takes priority: the jog
+  // buttons step the armed edge — until the loop is exited. Otherwise Shift moves the
+  // whole loop, and a plain press jumps the playhead — both by the deck's skip.
   const jog = (beats: number) =>
     act(() => {
-      if (shift) deck.moveLoop(beats);
+      if (deck.adjusting) deck.adjustStep(beats);
+      else if (shift) deck.moveLoop(beats);
       else {
         deck.beatJump(beats);
         emitSeek();
@@ -111,13 +106,13 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
     });
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${focused ? "focused" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main">
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
         <div className="jog">
-          <button className="jog-btn" title={shift ? "Move loop back" : "Jump back"} onClick={jog(-deck.skipBeats)}>◀◀<span className="kbd">↓</span></button>
-          <button className="jog-btn" title={shift ? "Move loop back a beat" : "Back a beat"} onClick={jog(-1)}>◀<span className="kbd">←</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back` : shift ? "Move loop back" : "Jump back"} onClick={jog(-deck.skipBeats)}>◀◀<span className="kbd">↓</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back a beat` : shift ? "Move loop back a beat" : "Back a beat"} onClick={jog(-1)}>◀<span className="kbd">←</span></button>
           {shift ? (
             <button
               className="jog-btn mag skip"
@@ -139,8 +134,8 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
               ⌗<span className="kbd">G</span>
             </button>
           )}
-          <button className="jog-btn" title={shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
-          <button className="jog-btn" title={shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward a beat` : shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
         </div>
 
         {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes
@@ -151,9 +146,10 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
               that boundary. RELOOP/EXIT toggles the loop; SHIFT clears it outright. */}
           <button
             className={`loop-btn ${deck.loopInPoint != null ? "armed" : ""} ${deck.adjusting === "in" ? "adjust" : ""}`}
-            title={shift ? "Adjust loop-in — drag / scroll the wave or arrow-key it" : "Loop in"}
+            title={deck.adjusting === "in" ? "Tap to exit loop-in adjust" : shift ? "Adjust loop-in — drag / scroll / arrow-key (snaps to grid when ⌗ is on)" : "Loop in"}
             onClick={(e) => {
-              if (shift || e.shiftKey) deck.toggleAdjust("in");
+              // Already armed → a plain tap disarms (no need to re-hold Shift to release).
+              if (shift || e.shiftKey || deck.adjusting === "in") deck.toggleAdjust("in");
               else { deck.loopIn(); emit({ kind: "loop", deck: id, action: "in" }); }
               refresh();
             }}
@@ -162,9 +158,10 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
           </button>
           <button
             className={`loop-btn ${deck.adjusting === "out" ? "adjust" : ""}`}
-            title={shift ? "Adjust loop-out — drag / scroll the wave or arrow-key it" : "Loop out"}
+            title={deck.adjusting === "out" ? "Tap to exit loop-out adjust" : shift ? "Adjust loop-out — drag / scroll / arrow-key (snaps to grid when ⌗ is on)" : "Loop out"}
             onClick={(e) => {
-              if (shift || e.shiftKey) deck.toggleAdjust("out");
+              // Already armed → a plain tap disarms (no need to re-hold Shift to release).
+              if (shift || e.shiftKey || deck.adjusting === "out") deck.toggleAdjust("out");
               else { deck.loopOut(); emit({ kind: "loop", deck: id, action: "out" }); }
               refresh();
             }}
@@ -262,90 +259,17 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
           })}
         </div>
 
-        {/* SYNC·KEY·FX·range rack. SYNC beat-matches and KEY matches key — both
-            stay static under SHIFT (the channel RESET moved to PLAY's shift). FX
-            toggles the color filter; the range button sets the TEMPO/KEY knob span. */}
+        {/* − · TEMPO-range · PITCH-range · + rack: the ∓ tempo/key steppers flank the
+            two range buttons (SYNC and KEY moved down to the TEMPO/KEY row). */}
         <div className="transport">
-          <button
-            className={`hw-btn sync ${deck.syncRole !== "off" ? "on" : ""} ${deck.syncRole === "master" ? "master" : ""}`}
-            title={
-              deck.syncRole === "master"
-                ? "MASTER — the other deck follows this one (tap to follow it instead)"
-                : deck.syncRole === "slave"
-                  ? "Synced — following the other deck (tap to release)"
-                  : "Beat sync — lock tempo + phase to the other deck"
-            }
-            onClick={act(() => {
-              onSync();
-              emitControls(id);
-            })}
-          >
-            {deck.syncRole === "master" ? "MASTER" : "SYNC"}
-            <span className="kbd">A</span>
+          <button className="pitch-step" title={shift ? "Nudge tempo down 0.5%" : "Key down a semitone"} onClick={() => nudge(-1)}>−</button>
+          <button className="hw-btn range" title="TEMPO knob range (±%)" onClick={act(onCycleTempoRange)}>
+            ±{tempoRange}%<span className="kbd">F</span>
           </button>
-          <button
-            className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}
-            title={
-              deck.keyRole === "master"
-                ? "KEY MASTER — the other deck matches this one's key (tap to follow it instead)"
-                : deck.keyRole === "slave"
-                  ? "Key-locked — harmonically matched to the other deck (tap to release)"
-                  : "Key match — harmonically shift to be compatible with the other deck"
-            }
-            onClick={act(() => {
-              onKey();
-              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-            })}
-          >
-            {deck.keyRole === "master" ? "KMST" : "KEY"}
-            <span className="kbd">S</span>
+          <button className="hw-btn range" title="PITCH (KEY) knob range (± semitones)" onClick={act(onCyclePitchRange)}>
+            ±{pitchRange}st
           </button>
-          <div className="fx-wrap">
-            <FxButton
-              deck={deck}
-              label={effectLabel}
-              title={shift ? "Choose effect" : `${effectLabel}: tap on / off · scroll or drag to sweep LP↔HP (Shift: choose effect)`}
-              onToggle={act(() => {
-                if (shift) setFxMenu((o) => !o);
-                else {
-                  deck.setFx(!deck.fxOn);
-                  emit({ kind: "toggle", deck: id, param: "fx", value: deck.fxOn });
-                }
-              })}
-              onAdjust={(v) => {
-                deck.setFilter(v);
-                refresh();
-                emit({ kind: "control", deck: id, param: "filter", value: v });
-              }}
-            />
-            {fxMenu && (
-              <>
-                <div className="fx-menu-catch" onClick={() => setFxMenu(false)} />
-                <div className="fx-menu">
-                  {EFFECTS.map((e) => (
-                    <button
-                      key={e.id}
-                      className={`fx-menu-item ${e.id === effect ? "on" : ""}`}
-                      onClick={() => {
-                        setEffect(e.id);
-                        setFxMenu(false);
-                      }}
-                    >
-                      {e.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-          <button
-            className="hw-btn range"
-            title={shift ? "KEY knob range (± semitones)" : "TEMPO knob range (±%)"}
-            onClick={act(shift ? onCyclePitchRange : onCycleTempoRange)}
-          >
-            {shift ? `±${pitchRange}` : `±${tempoRange}`}
-            <span className="kbd">F</span>
-          </button>
+          <button className="pitch-step" title={shift ? "Nudge tempo up 0.5%" : "Key up a semitone"} onClick={() => nudge(1)}>+</button>
         </div>
 
         <div className="bank-load">
@@ -376,9 +300,7 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
                 deck.setTempo(0);
                 deck.setFilter(0);
                 deck.setTrim(1);
-                deck.setEqLow(0);
-                deck.setEqMid(0);
-                deck.setEqHigh(0);
+                deck.resetEq(); // gains → 0 dB and every band node back to its default frequency
                 deck.setPitch(0);
                 deck.setLevel(1); // volume back to centre (unity)
                 deck.resetStems(); // also reset stem faders → unity and un-mute all stems
@@ -403,10 +325,25 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
           </button>
         </div>
 
-        {/* PITCH foot: TEMPO + KEY knobs bracketed by the ∓ steppers (KEY ±1
-            semitone, or TEMPO ±0.5% under SHIFT). Ranges set by the F button. */}
+        {/* TEMPO + KEY knobs, now bracketed by SYNC (left) and KEY-match (right). */}
         <div className="pitch-row">
-          <button className="pitch-step" title={shift ? "Nudge tempo down 0.5%" : "Key down a semitone"} onClick={() => nudge(-1)}>−</button>
+          <button
+            className={`hw-btn sync ${deck.syncRole !== "off" ? "on" : ""} ${deck.syncRole === "master" ? "master" : ""}`}
+            title={
+              deck.syncRole === "master"
+                ? "MASTER — the other deck follows this one (tap to follow it instead)"
+                : deck.syncRole === "slave"
+                  ? "Synced — following the other deck (tap to release)"
+                  : "Beat sync — lock tempo + phase to the other deck"
+            }
+            onClick={act(() => {
+              onSync();
+              emitControls(id);
+            })}
+          >
+            {deck.syncRole === "master" ? "MASTER" : "SYNC"}
+            <span className="kbd">A</span>
+          </button>
           <ValueCell
             label="TEMPO"
             value={deck.tempo}
@@ -427,7 +364,23 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
             onChange={(v) => { deck.setPitch(Math.round(v)); refresh(); emit({ kind: "control", deck: id, param: "pitch", value: Math.round(v) }); }}
             format={(v) => `${v > 0 ? "+" : ""}${Math.round(v)}`}
           />
-          <button className="pitch-step" title={shift ? "Nudge tempo up 0.5%" : "Key up a semitone"} onClick={() => nudge(1)}>+</button>
+          <button
+            className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}
+            title={
+              deck.keyRole === "master"
+                ? "KEY MASTER — the other deck matches this one's key (tap to follow it instead)"
+                : deck.keyRole === "slave"
+                  ? "Key-locked — harmonically matched to the other deck (tap to release)"
+                  : "Key match — harmonically shift to be compatible with the other deck"
+            }
+            onClick={act(() => {
+              onKey();
+              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
+            })}
+          >
+            {deck.keyRole === "master" ? "KMST" : "KEY"}
+            <span className="kbd">S</span>
+          </button>
         </div>
 
         {/* STEMS foot: tap = mute / unmute, scroll/drag = level 0–150% (1 = unity).
@@ -444,19 +397,28 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
               min={0}
               max={1.5}
               reset={1}
-              onTap={() => { deck.toggleStem(s.name); refresh(); emit({ kind: "stem", deck: id, stem: s.name, on: deck.stemActive(s.name) }); }}
+              onTap={() => {
+                if (shift) {
+                  deck.soloStem(s.name); // Shift+tap = solo this stem (mute the rest)
+                  STEM_CELLS.forEach((c) => emit({ kind: "stem", deck: id, stem: c.name, on: deck.stemActive(c.name) }));
+                } else {
+                  deck.toggleStem(s.name);
+                  emit({ kind: "stem", deck: id, stem: s.name, on: deck.stemActive(s.name) });
+                }
+                refresh();
+              }}
               onChange={(v) => { deck.setStemGain(s.name, v); refresh(); emit({ kind: "stemGain", deck: id, stem: s.name, value: v }); }}
               format={(v) => `${Math.round(v * 100)}`}
             />
           ))}
         </div>
 
-        {/* EQ foot — bipolar (detent 0 dB): TRIM/HI/MID/LOW, same size as STEMS. */}
+        {/* EQ foot (bottom third) — a full-width Pro-Q-style response curve: drag a
+            node sideways = frequency, up/down = gain; mid wheel = bell width;
+            right-click / double-click a node = reset that band. Drawn over the live
+            spectrum. */}
         <div className="eq-row">
-          <ValueCell label="TRIM" value={gainToDb(deck.trim)} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { const g = dbToGain(v); deck.setTrim(g); refresh(); emit({ kind: "control", deck: id, param: "trim", value: g }); }} format={db} />
-          <ValueCell label="HI" value={deck.eqHigh} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqHigh(v); refresh(); emit({ kind: "control", deck: id, param: "eqHigh", value: v }); }} format={db} />
-          <ValueCell label="MID" value={deck.eqMid} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqMid(v); refresh(); emit({ kind: "control", deck: id, param: "eqMid", value: v }); }} format={db} />
-          <ValueCell label="LOW" value={deck.eqLow} min={EQ_MIN_DB} max={EQ_MAX_DB} pivot={0} onChange={(v) => { deck.setEqLow(v); refresh(); emit({ kind: "control", deck: id, param: "eqLow", value: v }); }} format={db} />
+          <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via
@@ -475,38 +437,3 @@ export function DeckControls({ id, deck, accent, focused, onFocus, mirror, shift
   );
 }
 
-// Compact dB readout for the EQ / trim cells (signed, no decimals).
-function db(v: number): string {
-  return `${v > 0 ? "+" : ""}${Math.round(v)}`;
-}
-function dbToGain(d: number): number {
-  return Math.pow(10, d / 20);
-}
-function gainToDb(gain: number): number {
-  return gain > 0 ? Math.max(EQ_MIN_DB, 20 * Math.log10(gain)) : EQ_MIN_DB;
-}
-
-// The merged effect control: tap toggles the effect on/off, scroll or vertical drag
-// sweeps the color filter (LP ← centre → HP), and Shift-tap opens the effect chooser
-// (handled by the parent's onToggle). A bipolar fill grows from the centre toward the
-// engaged side so the sweep reads at a glance.
-function FxButton({ deck, label, title, onToggle, onAdjust }: { deck: Deck; label: string; title: string; onToggle: () => void; onAdjust: (v: number) => void }) {
-  const f = deck.filterValue; // −1 … 0 … +1
-  const drag = useValueDrag<HTMLButtonElement>({ value: f, min: -1, max: 1, step: 0.01, onChange: onAdjust });
-  const dir = Math.abs(f) < 0.02 ? "" : f < 0 ? " · LP" : " · HP";
-  return (
-    <button
-      ref={drag.ref}
-      onPointerDown={drag.onPointerDown}
-      onPointerMove={drag.onPointerMove}
-      onPointerUp={drag.onPointerUp}
-      className={`hw-btn fx ${deck.fxOn ? "on" : ""}`}
-      title={title}
-      onClick={onToggle}
-    >
-      <KnobBorder value={f} min={-1} max={1} pivot={0} />
-      <span className="fx-label">{label}{dir}</span>
-      <span className="kbd">D</span>
-    </button>
-  );
-}

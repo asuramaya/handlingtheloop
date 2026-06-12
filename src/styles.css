@@ -15,6 +15,7 @@
   --neon-yellow: #ffe24a;
   --neon-purple: #b06bff;
   --accent: var(--neon-cyan); /* global default; decks/banks override per-side */
+  --shift: #ffd250; /* SHIFT-mode / alt-action highlight (customisable: "Accents") */
 }
 
 * {
@@ -1041,8 +1042,9 @@ body {
     height: auto;
   }
   .app {
-    height: auto;
-    min-height: 100dvh;
+    height: 100dvh; /* HARD cap to the viewport — never grow past it (iOS bottom spill) */
+    min-height: 0;
+    overflow: hidden;
   }
 
   .topbar {
@@ -1237,12 +1239,14 @@ body {
 
 .hotcues {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-items: start;
+  justify-items: center;
   gap: 5px;
 }
 .pad {
   position: relative;
-  aspect-ratio: 1.5 / 1;
+  aspect-ratio: 1 / 1; /* square — uniform with the loop pads (1×8) */
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--muted);
@@ -1297,10 +1301,10 @@ body {
 /* IN/OUT pad armed for boundary fine-adjust (Shift-IN / Shift-OUT): a live amber
    glow says "the wave + arrow keys now move this edge". */
 .loop-btn.adjust {
-  background: color-mix(in srgb, #ffd250 22%, transparent);
-  border-color: #ffd250;
-  color: #ffd250;
-  box-shadow: inset 0 0 9px color-mix(in srgb, #ffd250 28%, transparent), 0 0 8px color-mix(in srgb, #ffd250 35%, transparent);
+  background: color-mix(in srgb, var(--shift) 22%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 28%, transparent), 0 0 8px color-mix(in srgb, var(--shift) 35%, transparent);
 }
 .loop-btn.toggle {
   flex: 1.4;
@@ -1312,19 +1316,11 @@ body {
 }
 
 @media (max-width: 768px) {
-  .hotcues {
-    grid-template-columns: repeat(4, 1fr); /* 2 rows of 4 */
-  }
-  /* Half-HEIGHT cue pads (was 2/1): a flatter ratio shrinks the cue block so the
-     deck-controls third needs less height, freeing it for the taller waveforms up
-     top (the lanes get a bigger flex-grow below). */
-  .pad {
-    aspect-ratio: 3.4 / 1;
-    font-size: 13px;
-  }
+  /* Cue + loop pads stay a uniform square 1×8 (see the shared rule below) — just
+     trim the type on small screens. */
+  .pad,
   .loop-btn {
-    padding: 11px 0;
-    font-size: 13px;
+    font-size: 12px;
   }
 }
 
@@ -1432,17 +1428,35 @@ body.no-glow .caption-cue.on {
   min-width: 0;
 }
 .loop-btn.armed {
-  border-color: #ffd250;
-  color: #ffd250;
+  border-color: var(--shift);
+  color: var(--shift);
 }
 /* Every beat-loop size at once, half-width: fractions 1/2…1/16 then whole 1…8 */
 .loop-sizes {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  /* minmax(0,1fr) lets the square tracks shrink to exactly 1/8 (no spill right);
+     align-items:start stops the grid stretching the pads flat — aspect-ratio then
+     drives a true square off the column width; justify-items:center keeps capped
+     pads centred in their track on wide banks. Identical to .hotcues below. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-items: start;
+  justify-items: center;
   gap: 5px;
 }
+/* Loop pads = square, identical to the hot-cue pads (one uniform 1×8 block). The
+   max-width caps the square so a WIDE desktop bank doesn't blow it up to a giant
+   square that destabilises the row heights (the layout collapse on resize). */
 .loop-sizes .loop-btn {
   min-width: 0;
+  width: 100%;
+  max-width: 64px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .deck-hint {
@@ -1463,9 +1477,9 @@ body.no-glow .caption-cue.on {
   padding: 8px 12px;
 }
 .btn.keylock.on {
-  background: rgba(255, 210, 80, 0.16);
-  border-color: #ffd250;
-  color: #ffd250;
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
 }
 
 .jog {
@@ -1499,9 +1513,9 @@ body.no-glow .caption-cue.on {
   letter-spacing: 1px;
 }
 .jog-btn.mag.on {
-  background: rgba(255, 210, 80, 0.16);
-  border-color: #ffd250;
-  color: #ffd250;
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
 }
 /* In SHIFT the ⌗ becomes the skip-size selector — keep its label inside the
    same flex:1 cell (no widening, no wrap) so the jog row stays even at any size. */
@@ -1523,8 +1537,8 @@ body.no-glow .caption-cue.on {
 /* Section 1 (top third): stacked waveform lanes — grids line up vertically and
    the canvases fill the available height (redrawn via ResizeObserver). */
 .lanes {
-  flex: 1 1 0;
-  min-height: 96px;
+  flex: 1 1 0; /* waveforms FILL the space the natural-height controls leave (basis 0 so they don't squeeze the EQ) */
+  min-height: 140px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1538,6 +1552,92 @@ body.no-glow .caption-cue.on {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* Single-deck view: the tapped lane fills the whole lanes area, the other hides. */
+.lane.collapsed {
+  display: none;
+}
+.lane.expanded {
+  flex: 1 1 0;
+}
+
+/* Stem separation/fetch overlay — a centred pill over the waveform so a deck still
+   on the single mix waveform clearly reads as "stems incoming" (transitioning),
+   not stuck. Yellow = on-device PROCESS, green = cache FETCH. */
+.stem-busy {
+  position: absolute;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  backdrop-filter: blur(3px);
+  animation: stem-busy-pulse 1.5s ease-in-out infinite;
+}
+.stem-busy.process {
+  border-color: #ffd64a;
+  box-shadow: 0 0 16px color-mix(in srgb, #ffd64a 38%, transparent);
+}
+.stem-busy.fetch {
+  border-color: #5dff9e;
+  box-shadow: 0 0 16px color-mix(in srgb, #5dff9e 38%, transparent);
+}
+.stem-busy-spin {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  animation: stem-busy-rot 0.8s linear infinite;
+}
+.stem-busy.process .stem-busy-spin {
+  color: #ffd64a;
+  border-top-color: #ffd64a;
+}
+.stem-busy.fetch .stem-busy-spin {
+  color: #5dff9e;
+  border-top-color: #5dff9e;
+}
+.stem-busy-bar {
+  width: 84px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  overflow: hidden;
+}
+.stem-busy-bar > span {
+  display: block;
+  height: 100%;
+  transition: width 0.2s ease;
+}
+.stem-busy.process .stem-busy-bar > span {
+  background: #ffd64a;
+}
+.stem-busy.fetch .stem-busy-bar > span {
+  background: #5dff9e;
+}
+@keyframes stem-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.94;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+@keyframes stem-busy-rot {
+  to {
+    transform: rotate(360deg);
+  }
 }
 /* Keyboard-focused deck: an accent ring overlaying the whole lane (a pseudo so it
    paints above the absolutely-pinned canvas). Toggled with Tab. */
@@ -1582,10 +1682,28 @@ body.no-glow .caption-cue.on {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
+/* DECK id — a button that toggles single-deck (maximized) view. The parent
+   .lane-info is pointer-events:none (click-through to the waveform), so the button
+   must opt back IN to receive taps. */
 .lane-id {
   font-weight: 800;
   letter-spacing: 1px;
   color: var(--accent);
+  font-size: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.1s, border-color 0.1s;
+}
+.lane-id:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.lane-id.on {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
 }
 /* DECK id + title group (so the title gets its own full-width row on mobile). */
 .lane-head {
@@ -1664,7 +1782,7 @@ body.no-glow .caption-cue.on {
   white-space: nowrap;
 }
 .lane-status {
-  color: #ffd250;
+  color: var(--shift);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -1674,7 +1792,7 @@ body.no-glow .caption-cue.on {
   color: #46e08a;
 }
 .lane-status.tone-process {
-  color: #ffd250;
+  color: var(--shift);
 }
 .lane-status.tone-ok {
   color: #46e08a;
@@ -1782,7 +1900,7 @@ body.no-glow .caption-cue.on {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1804,51 +1922,28 @@ body.no-glow .caption-cue.on {
 /* Middle third — equal 1/3 with the others; scrolls internally if its content
    (jog … stems) is taller than the third, so it never overlaps the mixer. */
 .decks-row {
-  flex: 1 1 0;
+  flex: 0 1 auto; /* natural height, but may shrink (→ EQ trims) on very short windows */
   min-height: 0;
   display: flex;
   gap: 1px;
   background: var(--line);
-  overflow-y: auto;
 }
 .decks-row .bank {
   align-items: stretch;
   overflow: hidden;
 }
 .decks-row .bank-main {
-  /* Spread the rows to fill the third evenly instead of bunching in the centre
-     with dead space above and below. */
-  justify-content: space-between;
+  /* Pack every control row at its NATURAL height from the top (square pads stay
+     square, cells stay their cell height) — no airy gaps spread between rows. The
+     EQ row alone grows to absorb whatever height the third has left over, so there's
+     never dead space at the bottom either (it just gives the EQ more room). */
+  justify-content: flex-start;
 }
-/* DESKTOP: instead of spreading fixed-height rows with airy gaps, let every row
-   grow to share the bank height equally — the buttons auto-size to fill whatever
-   the third gives them, so it scales nicely on tall screens. (Mobile keeps the
-   packed natural-height layout: `.decks-row` is `flex:0 0 auto` there, where a
-   `basis:0` row would collapse.) */
-@media (min-width: 769px) {
-  .decks-row .bank-main {
-    justify-content: stretch;
-  }
-  .decks-row .bank-main > * {
-    flex: 1 1 0;
-    min-height: 0;
-  }
-  /* The foot rows (PITCH/STEMS/EQ cells + the level fader) keep their natural cell
-     height — the button ROWS above absorb the growth. Otherwise these rows stretch
-     while the fixed-height ValueCells don't, leaving the ∓ steppers taller than the
-     TEMPO/KEY cells beside them. */
-  .decks-row .bank-main > .lfader,
-  .decks-row .bank-main > .pitch-row,
-  .decks-row .bank-main > .stems-row,
-  .decks-row .bank-main > .eq-row {
-    flex: 0 0 auto;
-  }
-  /* Let the pixel-locked buttons stretch with their (taller) row. Higher
-     specificity than the global `.bank .pad`/`.jog-btn` height so order is moot. */
-  .decks-row .bank .pad,
-  .decks-row .bank .jog-btn {
-    height: auto;
-  }
+.decks-row .bank-main > .eq-row {
+  /* A fixed-height EQ strip (height on .eq-curve). It does NOT grow to fill slack;
+     it only SHRINKS when a short window would otherwise clip it off the bottom. */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 /* Bottom third — the two channel mixers side by side, crossfader beneath. */
@@ -1914,35 +2009,46 @@ body.no-glow .caption-cue.on {
     min-height: 0;
     overflow: hidden; /* fit to screen — no page scroll */
   }
-  /* Waveforms at ~half height so the (now single) control bank fits. */
+  /* Controls take their natural height (with a fixed EQ strip); the waveforms FILL
+     the rest of the screen (≥35dvh basis), so they absorb screen-size variance
+     instead of the EQ getting squeezed or leaving a gap. */
   .lanes {
-    flex: 0 0 40dvh;
-    min-height: 72px;
+    flex: 1 1 0;
+    min-height: 110px;
     overflow: hidden;
   }
-  /* The control section takes the rest; the bank scrolls if it overflows. */
   .decks-third {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-height: 0;
   }
   .decks-row {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
   }
   .decks-row .bank {
-    overflow: visible;
+    overflow: hidden;
     padding: 8px 10px;
     gap: 8px;
   }
+  /* Every row keeps its NATURAL height — nothing grows to fill, so the transport /
+     jog / loop rows can't balloon into giant buttons. The block stacks from the top;
+     any leftover space sits at the bottom rather than inflating the controls. */
   .decks-row .bank-main {
-    gap: 5px; /* tighten the row stack */
+    gap: 5px;
+    justify-content: flex-start;
+  }
+  .decks-row .bank-main > * {
+    flex: 0 0 auto;
+    min-height: 0;
   }
 }
 
-/* Middle third = the crossfader bar across the top, then the deck banks below. */
+/* Crossfader bar across the top, then the deck banks — natural height (the
+   waveforms above flex to fill the rest of the screen), shrink-allowed so a very
+   short window trims the EQ instead of clipping it. */
 .decks-third {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2531,9 +2637,9 @@ body.no-glow .caption-cue.on {
   color: var(--muted);
 }
 .hw-btn.key.on {
-  background: rgba(255, 210, 80, 0.18);
-  border-color: #ffd250;
-  color: #ffd250;
+  background: color-mix(in srgb, var(--shift) 18%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
 }
 /* FX master — lit when the color filter is engaged, dim when bypassed. */
 .hw-btn.fx.on {
@@ -2612,15 +2718,33 @@ body.no-glow .caption-cue.on {
   font-weight: 800;
 }
 .hw-btn.shift.on {
-  background: rgba(255, 210, 80, 0.18);
-  border-color: #ffd250;
-  color: #ffd250;
-  box-shadow: 0 0 10px rgba(255, 210, 80, 0.3);
+  background: color-mix(in srgb, var(--shift) 20%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+  /* Heavy neon halo when glow is on (the button reads lit, not stubby/flat). */
+  box-shadow:
+    0 0 22px color-mix(in srgb, var(--shift) 60%, transparent),
+    0 0 7px color-mix(in srgb, var(--shift) 75%, transparent),
+    inset 0 0 11px color-mix(in srgb, var(--shift) 24%, transparent);
+  text-shadow: 0 0 9px color-mix(in srgb, var(--shift) 75%, transparent);
+}
+/* Glow off → keep it flat/subtle. */
+body.no-glow .hw-btn.shift.on {
+  box-shadow: 0 0 6px color-mix(in srgb, var(--shift) 25%, transparent);
+  text-shadow: none;
 }
 /* While shifted, the jog row signals it's in loop-move mode */
 .bank.shifted .jog-btn {
-  border-color: color-mix(in srgb, #ffd250 45%, var(--line));
-  color: #ffd250;
+  border-color: color-mix(in srgb, var(--shift) 45%, var(--line));
+  color: var(--shift);
+}
+/* Loop-boundary adjust mode (Shift-IN / Shift-OUT armed) hijacks the jog row to
+   nudge the armed edge instead of moving the loop — give it the same amber glow as
+   the armed IN/OUT pad so the remap is obvious (and overrides the plain shift tint). */
+.bank.adjusting .jog-btn {
+  border-color: var(--shift);
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 22%, transparent);
 }
 /* …and the two remapped pad rows light up so their alt mode is obvious: loop-size
    pads → loop ROLL (cyan), hot-cue pads → SAVE-LOOP (green). A pad mid-roll (.on)
@@ -2639,14 +2763,32 @@ body.no-glow .caption-cue.on {
   color: #6ee7a8;
   box-shadow: inset 0 0 9px color-mix(in srgb, #6ee7a8 20%, transparent);
 }
+/* The pitch ∓ steppers and the IN / OUT / EXIT loop buttons keep their label when
+   shifted (unlike CUE→START / PLAY→RESET), so they'd give no hint of their alt mode.
+   Mark them with the same yellow shift tint as the jog row — ∓ → tempo nudge, IN/OUT
+   → arm fine-adjust, EXIT → clear. A button already in its active state (armed /
+   adjusting / loop-on) keeps that colour, so the tint only flags the available ones. */
+.bank.shifted .pitch-step,
+.bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled) {
+  border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
+}
+.bank.shifted .pitch-step:hover,
+.bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled):hover {
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+}
 .hw-btn.small {
   padding: 8px 12px;
   font-size: 12px;
 }
 .transport {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr)); /* tracks may shrink → no overflow */
   gap: 6px;
+}
+.transport > * {
+  min-width: 0; /* let the buttons shrink with their track on narrow widths */
 }
 .bank-load {
   display: flex;
@@ -2740,20 +2882,25 @@ body.no-glow .caption-cue.on {
   height: 38px;
   padding: 3px 5px;
   background: color-mix(in srgb, var(--accent) 6%, var(--bg));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  /* Transparent border (kept 1px for layout) — the KnobBorder trace IS the cell's
+     outline, so the old CSS border drew a SECOND rounded-rect behind it (the ghost).
+     Hover/focus brighten the trace itself instead. */
+  border: 1px solid transparent;
   border-radius: 6px;
   cursor: ns-resize;
   outline: none;
   user-select: none;
   touch-action: none;
-  transition: border-color 0.1s, box-shadow 0.1s;
+  transition: box-shadow 0.1s;
 }
-.vcell:hover {
-  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+.vcell:hover .vcell-knob-track {
+  stroke: color-mix(in srgb, var(--accent) 36%, transparent);
 }
-/* Selected (tapped/clicked) — a ring. */
+/* Selected (tapped/clicked) — a ring + bright trace. */
+.vcell:focus .vcell-knob-track {
+  stroke: var(--accent);
+}
 .vcell:focus {
-  border-color: var(--accent);
   box-shadow:
     inset 0 0 0 1px var(--accent),
     0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -2821,7 +2968,9 @@ body.no-glow .caption-cue.on {
 
 /* Pads — rubbery, light up in their cue color */
 .hotcues {
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 1fr)); /* no spill; square from width */
+  align-items: start;
+  justify-items: center;
 }
 .pad {
   background: var(--panel);
@@ -2872,7 +3021,7 @@ body.no-glow .caption-cue.on {
     letter-spacing: 0;
   }
   .transport {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr)); /* one row, quarter-width — like the pitch row */
     gap: 3px;
   }
   .jog {
@@ -2883,11 +3032,10 @@ body.no-glow .caption-cue.on {
     font-size: 10px;
   }
   .hotcues {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(8, minmax(0, 1fr)); /* square 1×8, same as loops */
     gap: 3px;
   }
   .bank .pad {
-    height: 24px;
     font-size: 10px;
   }
   .loops {
@@ -3046,19 +3194,18 @@ body.no-glow .caption-cue.on {
   }
 }
 
-/* Board pads: fixed compact height (not aspect-ratio) since banks are wide.
-   Desktop value here; mobile halves it just below. NOTE this `.bank .pad` rule
-   outranks the earlier `.pad { aspect-ratio }` (higher specificity + later), so
-   any height change MUST live on `.bank .pad` to actually take effect. */
+/* Cue pads = SQUARE, identical to the loop pads (one uniform 1×8 block). This
+   `.bank .pad` rule outranks the earlier `.pad { aspect-ratio }` (specificity +
+   order), so the square has to live here to win. */
 .bank .pad {
-  aspect-ratio: auto;
-  height: 34px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  width: 100%;
+  max-width: 64px; /* cap the square on wide banks (prevents the resize collapse) */
+  min-width: 0;
 }
 @media (max-width: 768px) {
-  /* Half-height cue pads → the deck-controls third needs less height, which the
-     lanes (flex:1 1 auto on mobile) absorb as taller waveforms up top. */
   .bank .pad {
-    height: 22px;
     font-size: 11px;
   }
 }
@@ -3630,8 +3777,8 @@ body.no-glow .caption-cue.on {
   font-size: 12px;
   line-height: 1.4;
   color: #ffd76a;
-  background: rgba(255, 210, 80, 0.08);
-  border-left: 2px solid #ffd250;
+  background: color-mix(in srgb, var(--shift) 8%, transparent);
+  border-left: 2px solid var(--shift);
   border-radius: 4px;
   padding: 7px 10px;
 }
@@ -4281,6 +4428,36 @@ body.no-glow .caption-cue.on {
   color: var(--neon-lime);
 }
 
+/* ===================== Glow ON — UX-wide neon edges ===================== */
+/* Default (glow on): bordered SURFACES and CONTROLS carry a soft neon edge so the
+   whole interface reads luminous — not just a handful of accent highlights. Each
+   glow is tinted by the element's own --accent (deck colour inside a bank, the
+   global accent elsewhere), so it follows the theme. `body.no-glow` (below) gates
+   it all off via the :not() selector → instant flat mode, no per-rule overrides. */
+body:not(.no-glow) .bank,
+body:not(.no-glow) .lane,
+body:not(.no-glow) .chan,
+body:not(.no-glow) .mixer-box,
+body:not(.no-glow) .lane-info,
+body:not(.no-glow) .decks-third,
+body:not(.no-glow) .topbar {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+body:not(.no-glow) .jog-btn,
+body:not(.no-glow) .loop-btn,
+body:not(.no-glow) .pad,
+body:not(.no-glow) .pitch-step,
+body:not(.no-glow) .grid-btn,
+body:not(.no-glow) .stem-btn {
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+/* The SHIFT-mode tinted rows glow in the shift accent instead of the deck accent. */
+body:not(.no-glow) .bank.shifted .jog-btn,
+body:not(.no-glow) .bank.shifted .pitch-step,
+body:not(.no-glow) .bank.adjusting .jog-btn {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--shift) 22%, transparent);
+}
+
 /* ===================== Glow off ===================== */
 body.no-glow .logo,
 body.no-glow .chan-id,
@@ -4327,16 +4504,153 @@ body.no-glow .lane.focused::after {
     font-size: 12px;
   }
 }
-/* PITCH (− TEMPO KEY +), STEMS (DRUM/BASS/VOICE/INST) and EQ (TRIM/HI/MID/LOW)
-   feet in the deck-controls bank — four equal columns across the bank width. */
+/* PITCH (− TEMPO KEY +) and STEMS (DRUM/BASS/VOICE/INST) feet in the deck-controls
+   bank — four equal columns across the bank width. */
 .pitch-row,
-.stems-row,
-.eq-row {
+.stems-row {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  grid-auto-columns: minmax(0, 1fr); /* tracks may shrink → no right-edge overflow */
   gap: 6px;
   align-items: stretch;
+}
+/* Let the cells/steppers shrink with their track on narrow widths (their 44px
+   min-width would otherwise overflow the row off the right). */
+.pitch-row > *,
+.stems-row > * {
+  min-width: 0;
+}
+/* EQ foot (bottom third): a single full-width Pro-Q curve, not a row of cells. It
+   grows to absorb the bank's leftover height, so it's a flex column that hands that
+   height down to the curve. */
+.eq-row {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* --- Pro parametric EQ (Pro-Q-style response curve + toolbar) --- */
+.eq-pro {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-height: 0;
+}
+.eq-pro.bypassed .eq-curve {
+  opacity: 0.6;
+}
+.eq-tools {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+.eq-tool {
+  flex: 1 1 0;
+  padding: 4px 2px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.eq-tool:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--text);
+}
+.eq-tool.on {
+  color: #08111a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.eq-readout {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: color-mix(in srgb, #000 55%, transparent);
+  border-radius: 5px;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 0.1s;
+  z-index: 3;
+}
+.eq-curve {
+  position: relative;
+  /* Fixed-height strip (image #15): a consistent ~140px curve that only shrinks on
+     short windows so it never clips off the bottom. */
+  flex: 0 1 auto;
+  height: 140px;
+  min-height: 56px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+  touch-action: none; /* nodes own the drag */
+}
+.eq-curve-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
+.eq-node {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--node);
+  background: color-mix(in srgb, var(--node) 35%, #000 40%);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--node) 60%, transparent), inset 0 0 4px color-mix(in srgb, var(--node) 50%, transparent);
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
+}
+.eq-node:hover {
+  background: var(--node);
+}
+.eq-node:active {
+  cursor: grabbing;
+}
+/* Cut nodes (HP / LP) read as squares to distinguish from the round band nodes. */
+.eq-node.cut {
+  border-radius: 4px;
+  width: 14px;
+  height: 14px;
+}
+/* Auditioning a band (held): pulsing ring so it's obvious you're soloing. */
+.eq-node.audition {
+  background: var(--node);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--node) 45%, transparent), 0 0 14px var(--node);
+  animation: eq-audition 0.7s ease-in-out infinite;
+}
+@keyframes eq-audition {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--node) 25%, transparent), 0 0 18px var(--node);
+  }
+}
+.eq-node-label {
+  position: absolute;
+  left: 50%;
+  top: -15px;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--node);
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 /* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
 @media (min-width: 769px) {
@@ -4597,7 +4911,7 @@ body.no-glow .stem-btn.on {
   opacity: 0.72;
 }
 .stem-status-row.separating .stem-status-detail {
-  color: #ffd250; /* on-device processing — yellow */
+  color: var(--shift); /* on-device processing — yellow */
 }
 .stem-status-row.cached .stem-status-detail,
 .stem-status-row.downloading .stem-status-detail,
@@ -5395,5 +5709,43 @@ button.room-tog:hover {
   z-index: 30;
   background: transparent;
   cursor: not-allowed;
+}
+
+/* ── Cue / loop pad layout per breakpoint ────────────────────────────────────
+   DESKTOP: the cue + loop pads WIDEN to fill their row (drop the square cap) so
+   there's no empty space between them — wide pads, fixed height. MOBILE (≤768):
+   a chunkier 2×4 grid for bigger touch targets, shorter pads, and a more compact
+   EQ so both 2×4 blocks fit. Appended at EOF to win the source-order tie. */
+@media (min-width: 769px) {
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    width: 100%;
+    max-width: none;
+    aspect-ratio: auto;
+    height: 42px; /* shorter wide pads → the fixed EQ strip keeps its full height */
+  }
+}
+@media (max-width: 768px) {
+  .loop-sizes,
+  .hotcues {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    width: 100%;
+    max-width: none;
+    aspect-ratio: auto;
+    height: 26px;
+  }
+  /* Mobile EQ = a shorter fixed strip (~96px) than desktop's 140, with a low floor
+     so very short phones shrink it rather than clip the tools. */
+  .decks-row .bank-main > .eq-row {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+  .eq-curve {
+    height: 96px;
+    min-height: 48px;
+  }
 }
 

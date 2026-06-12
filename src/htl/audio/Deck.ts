@@ -97,6 +97,12 @@ export class Deck {
   // pyramids are built (the iPhone OOM fix — see buildStemPyramidsLazy). hasStems and
   // the stem mixer stay live off this flag + the worklet, not the (freed) buffers.
   private stemsLoaded = false;
+  // Does the STRETCH ENGINE currently hold the 4 separate stems (vs a single mix)?
+  // On mobile we load only the mix into the worklet — 4 full-length stem PCM groups
+  // (~460 MB/deck) starve the iOS audio render thread and playback comes out silent
+  // (desktop has the headroom). Stem WAVEFORMS still render (built from the pyramids);
+  // only the per-stem mixer goes inert on a phone, gated off this flag.
+  private engineStems = false;
   private stemMuted: Record<StemName, boolean> = { vocals: false, drums: false, bass: false, other: false };
   private stemGain: Record<StemName, number> = { vocals: 1, drums: 1, bass: 1, other: 1 }; // per-stem level (knob)
   // Per-stem waveform envelopes for the viewport (null until built off the hot
@@ -252,8 +258,12 @@ export class Deck {
       gR.push(R);
       transfer.push(L.buffer, R.buffer);
     };
-    if (this.stems) for (const name of STEM_NAMES) pushGroup(this.stems[name]);
+    // MOBILE: feed only the mix to the engine (see `engineStems`) — 4 stem groups
+    // overrun the iOS audio thread and play silent. Desktop loads all 4 for the mixer.
+    const useStems = !!this.stems && !isMobileDevice();
+    if (useStems) for (const name of STEM_NAMES) pushGroup(this.stems![name]);
     else pushGroup(buf);
+    this.engineStems = useStems;
     node.port.postMessage({ type: "loadPcm", gL, gR, length: buf.length }, transfer);
   }
 
@@ -397,6 +407,9 @@ export class Deck {
   // Push a stem's live gain to the engine. The grain overlap-add (~one grain ≈
   // 20 ms) cross-fades the change, so mutes/level moves stay click-free.
   private rampStem(name: StemName) {
+    // Mix-only engine (mobile): there are no stem groups to address — and stem index
+    // 0 aliases the mix group, so posting would scale the whole mix. Leave it alone.
+    if (!this.engineStems) return;
     this.stretchNode?.port.postMessage({
       type: "stemGain",
       index: STEM_NAMES.indexOf(name),

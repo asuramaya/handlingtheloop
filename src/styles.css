@@ -2061,7 +2061,7 @@ body.no-glow .caption-cue.on {
   .stage .decks-row .bank {
     align-items: stretch;
     overflow: hidden;
-    padding: 8px 10px;
+    padding: 5px 8px;
     gap: 8px;
   }
   .stage .decks-row .bank-main {
@@ -2074,7 +2074,7 @@ body.no-glow .caption-cue.on {
      jog / loop rows can't balloon into giant buttons. The block stacks from the top;
      any leftover space sits at the bottom rather than inflating the controls. */
   .decks-row .bank-main {
-    gap: 5px;
+    gap: 3px;
     justify-content: flex-start;
   }
   .decks-row .bank-main > * {
@@ -3067,7 +3067,7 @@ body.no-glow .hw-btn.shift.on {
     gap: 2px;
   }
   .jog-btn {
-    padding: 6px 0;
+    padding: 4px 0;
     font-size: 10px;
   }
   .hotcues {
@@ -3085,7 +3085,7 @@ body.no-glow .hw-btn.shift.on {
   }
   .loop-btn {
     min-width: 20px;
-    padding: 5px 0;
+    padding: 4px 0;
     font-size: 10px;
   }
   .fader-label,
@@ -3292,6 +3292,20 @@ body.no-glow .hw-btn.shift.on {
   z-index: 50;
   padding: 16px;
   animation: backdrop-in 0.16s ease-out;
+}
+/* MOBILE: keep the top chin (Library / Search / Settings launchers) in the
+   FOREGROUND when a panel is open — float it above the backdrop and start the dim
+   below it, so the header is always visible + tappable (switch panels without
+   closing). The 36px chin height is stable across phone widths. Desktop docks share
+   the row in-flow (min-width:769 above), so this only affects the mobile modals. */
+@media (max-width: 768px) {
+  .chin {
+    position: relative;
+    z-index: 60; /* above the modal backdrop (50) */
+  }
+  .modal-backdrop {
+    top: 36px; /* clear the chin so it isn't covered/dimmed */
+  }
 }
 @keyframes backdrop-in {
   from {
@@ -5774,7 +5788,7 @@ button.room-tog:hover {
     width: 100%;
     max-width: none;
     aspect-ratio: auto;
-    height: 26px;
+    height: 22px;
   }
   /* Mobile EQ = a compact fixed strip (the tallest single control row, so trimming
      it claws back the most vertical space against the scroll). Low floor so very
@@ -5784,8 +5798,8 @@ button.room-tog:hover {
     min-height: 0;
   }
   .eq-curve {
-    height: 120px;
-    min-height: 96px;
+    height: 84px;
+    min-height: 64px;
   }
 }
 

@@ -230,7 +230,9 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
 }
 
 // Self-contained admin page (no build, no bundle). Vanilla JS over the JSON API.
-const ADMIN_HTML = `<!doctype html><html lang=en><head><meta charset=utf-8>
+// Served under a strict CSP: the inline <script> runs only via a per-request nonce
+// and there are no inline event handlers, so script-src needs no 'unsafe-inline'.
+const adminHtml = (nonce: string): string => `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>htl admin</title>
 <style>
 :root{--bg:#0b0b10;--panel:#15151f;--line:#26263a;--text:#e8e8f2;--muted:#9a9ab0;--accent:#6ee7a8;--danger:#ff6b6b}
@@ -278,18 +280,36 @@ button.danger{border-color:#5a2630;color:var(--danger)}button.act:hover{backgrou
 </main>
 <script>
 const $=s=>document.querySelector(s), api=(p,o)=>fetch(p,o).then(r=>r.json());
-const fmt=t=>t?new Date(t).toLocaleString():'—', esc=s=>(s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-async function stats(){const s=await api('/api/stats');$('#who').textContent=s.admin;$('#stats').innerHTML=
-  '<span class=stat>Tracks <b>'+s.tracks+'</b></span><span class=stat>Analyzed <b>'+s.analyzed+'</b></span><span class=stat>Last takedown <b>'+fmt(s.lastTakedownTs)+'</b></span>';}
+const fmt=t=>t?new Date(t).toLocaleString():'—';
+// DOM builders — every value enters via textContent (never innerHTML) and actions
+// bind via addEventListener (no inline onclick), so attacker-controlled catalog /
+// account data can't inject markup or script into this privileged page.
+function clear(n){while(n.firstChild)n.removeChild(n.firstChild);}
+function cell(text,cls){const td=document.createElement('td');if(cls)td.className=cls;td.textContent=text==null?'':String(text);return td;}
+function btn(label,cls,on){const b=document.createElement('button');b.className=cls;b.textContent=label;b.addEventListener('click',on);return b;}
+function emptyRow(msg){const tr=document.createElement('tr');const td=cell(msg,'muted');td.colSpan=5;tr.appendChild(td);return tr;}
+function safeUrl(u){try{const x=new URL(u);return(x.protocol==='http:'||x.protocol==='https:')?u:null;}catch(e){return null;}}
+async function stats(){const s=await api('/api/stats');$('#who').textContent=s.admin;const w=$('#stats');clear(w);
+  const mk=(label,val)=>{const sp=document.createElement('span');sp.className='stat';sp.appendChild(document.createTextNode(label+' '));const b=document.createElement('b');b.textContent=val;sp.appendChild(b);return sp;};
+  w.appendChild(mk('Tracks',s.tracks));w.appendChild(mk('Analyzed',s.analyzed));w.appendChild(mk('Last takedown',fmt(s.lastTakedownTs)));}
 async function takedown(v,purge){const reason=prompt((purge?'PURGE + ':'')+'Takedown reason for '+v+' (DMCA / note):','');if(reason===null)return;
   const r=await api('/api/takedown',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({videoId:v,reason,purge})});
   if(r.ok){alert('Removed'+(purge?(' + purged '+r.purgedObjects+' R2 objects'):''));loadCommunity();stats();}else alert('Failed: '+(r.error||''));}
 async function loadCommunity(){const q=$('#q').value.trim();const {tracks}=await api('/api/community?limit=500'+(q?'&q='+encodeURIComponent(q):''));
-  $('#ctbody').innerHTML=tracks.map(t=>'<tr><td>'+(t.thumbnail?'<img src="'+esc(t.thumbnail)+'">':'')+'</td><td>'+esc(t.title||'—')+'</td><td>'+esc(t.artist||'')+
-  '</td><td class=id>'+esc(t.videoId)+'</td><td style=white-space:nowrap><button class=act onclick="takedown(\\''+t.videoId+'\\',false)">Remove</button> '+
-  '<button class="act danger" onclick="takedown(\\''+t.videoId+'\\',true)">Remove + purge</button></td></tr>').join('')||'<tr><td colspan=5 class=muted>No tracks.</td></tr>';}
-async function loadTakedowns(){const {takedowns}=await api('/api/takedowns');$('#ttbody').innerHTML=takedowns.map(t=>'<tr><td>'+fmt(t.ts)+'</td><td class=id>'+esc(t.video_id)+'</td><td>'+esc(t.reason||'')+'</td><td class=muted>'+esc(t.by_email)+'</td><td>'+(t.purged?'yes':'no')+'</td></tr>').join('')||'<tr><td colspan=5 class=muted>None.</td></tr>';}
-async function loadUsers(){const {users}=await api('/api/users');$('#utbody').innerHTML=users.map(u=>'<tr><td>'+esc(u.email||'—')+'</td><td>'+esc(u.name||'')+'</td><td class=muted>'+esc(u.providers||'')+'</td><td class=muted>'+fmt(u.last_login)+'</td><td><button class="act danger" onclick="delUser(\\''+u.id+'\\',\\''+esc(u.email||u.id)+'\\')">Delete</button></td></tr>').join('')||'<tr><td colspan=5 class=muted>No accounts.</td></tr>';}
+  const tb=$('#ctbody');clear(tb);if(!tracks.length){tb.appendChild(emptyRow('No tracks.'));return;}
+  for(const t of tracks){const tr=document.createElement('tr');
+    const tdi=document.createElement('td');const src=safeUrl(t.thumbnail);if(src){const img=document.createElement('img');img.src=src;tdi.appendChild(img);}tr.appendChild(tdi);
+    tr.appendChild(cell(t.title||'—'));tr.appendChild(cell(t.artist||''));tr.appendChild(cell(t.videoId,'id'));
+    const tda=document.createElement('td');tda.style.whiteSpace='nowrap';
+    tda.appendChild(btn('Remove','act',()=>takedown(t.videoId,false)));tda.appendChild(document.createTextNode(' '));
+    tda.appendChild(btn('Remove + purge','act danger',()=>takedown(t.videoId,true)));tr.appendChild(tda);tb.appendChild(tr);}}
+async function loadTakedowns(){const {takedowns}=await api('/api/takedowns');const tb=$('#ttbody');clear(tb);
+  if(!takedowns.length){tb.appendChild(emptyRow('None.'));return;}
+  for(const t of takedowns){const tr=document.createElement('tr');tr.appendChild(cell(fmt(t.ts)));tr.appendChild(cell(t.video_id,'id'));tr.appendChild(cell(t.reason||''));tr.appendChild(cell(t.by_email,'muted'));tr.appendChild(cell(t.purged?'yes':'no'));tb.appendChild(tr);}}
+async function loadUsers(){const {users}=await api('/api/users');const tb=$('#utbody');clear(tb);
+  if(!users.length){tb.appendChild(emptyRow('No accounts.'));return;}
+  for(const u of users){const tr=document.createElement('tr');tr.appendChild(cell(u.email||'—'));tr.appendChild(cell(u.name||''));tr.appendChild(cell(u.providers||'','muted'));tr.appendChild(cell(fmt(u.last_login),'muted'));
+    const tda=document.createElement('td');tda.appendChild(btn('Delete','act danger',()=>delUser(u.id,u.email||u.id)));tr.appendChild(tda);tb.appendChild(tr);}}
 async function delUser(id,label){if(!confirm('Delete account '+label+'? Removes their sessions, connections and syncs. Cannot be undone.'))return;const r=await api('/api/user/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:id})});if(r.ok){alert('Deleted');loadUsers();}else alert('Failed: '+(r.error||''));}
 function parseId(s){s=(s||'').trim();if(/^[\\w-]{11}$/.test(s))return s;try{const u=new URL(s);if(u.hostname==='youtu.be')return u.pathname.slice(1,12);const v=u.searchParams.get('v');if(v)return v;const m=u.pathname.match(/\\/(?:shorts|embed|v|live)\\/([\\w-]{11})/);if(m)return m[1];}catch(e){}return null;}
 const fmtMB=b=>(b/1048576).toFixed(1)+' MB';

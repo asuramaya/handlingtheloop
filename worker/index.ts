@@ -27,6 +27,18 @@ import {
 } from "../server/db";
 import { readSessionId } from "../server/session";
 import {
+  type RateLimiter,
+  STEM_DOWNLOAD_CONTENT_TYPE,
+  DOWNLOAD_SAFE_HEADERS,
+  SECURITY_HEADERS,
+  allow,
+  clampNum,
+  cleanText,
+  clientIp,
+  looksLikeAudioStem,
+  sanitizeHttpUrl,
+} from "../server/security";
+import {
   type Service,
   type SourceTrack,
   addToDestPlaylist,
@@ -110,7 +122,20 @@ interface Env extends AccountEnv {
   // One DjRoom per account coordinates a shared live set across the account's
   // devices. Optional so plain `vite` dev (no binding) degrades gracefully.
   ROOM?: DurableObjectNamespace;
+  // Cloudflare Workers Rate Limiting bindings (wrangler.jsonc unsafe.bindings).
+  // Per-IP caps on the unauthenticated write/resolve paths. Optional → absent in
+  // plain `vite` dev, where `allow()` no-ops. RL_WRITE: catalog/analysis/stem
+  // contributions; RL_AUDIO: cold-cache YouTube resolves.
+  RL_WRITE?: RateLimiter;
+  RL_AUDIO?: RateLimiter;
+  // Allowed Origins for the shared-session WebSocket upgrade (comma-separated).
+  // Defaults to the request's own origin when unset.
+  WS_ALLOWED_ORIGINS?: string;
 }
+
+// Per-call cap on the client-supplied track array for /api/sync/match — bounds
+// the YouTube subrequest fan-out (Worker subrequest limit / abuse).
+const MAX_MATCH_TRACKS = 100;
 
 // Don't buffer/cache absurdly large files (protect Worker memory) — stream those.
 const MAX_CACHE_BYTES = 60 * 1024 * 1024;
@@ -162,12 +187,18 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
             headers: {
               "content-type": hit.httpMetadata?.contentType || "audio/mp4",
               "content-length": String(hit.size),
+              "x-content-type-options": "nosniff",
               "x-htl-cache": "hit",
               ...NO_CACHE,
             },
           });
         }
 
+        // Cold cache → we're about to fetch from YouTube and write to R2. Rate-limit
+        // this per IP so an anonymous client can't hammer it into a storage/egress bill.
+        if (!(await allow(env.RL_AUDIO, clientIp(req)))) {
+          return json(429, { error: "rate limited — try again shortly" });
+        }
         const r = await resolveAudio(v, readAuth(req));
 
         // Oversized (long mixes): stream chunk-by-chunk, skip caching to protect
@@ -183,7 +214,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
               }
             },
           });
-          const h: Record<string, string> = { "content-type": r.contentType, "x-htl-cache": "skip", ...NO_CACHE };
+          const h: Record<string, string> = { "content-type": r.contentType, "x-content-type-options": "nosniff", "x-htl-cache": "skip", ...NO_CACHE };
           if (r.contentLength) h["content-length"] = String(r.contentLength);
           return new Response(stream, { headers: h });
         }
@@ -225,6 +256,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           headers: {
             "content-type": r.contentType,
             "content-length": String(total),
+            "x-content-type-options": "nosniff",
             "x-htl-cache": "miss",
             ...NO_CACHE,
           },
@@ -353,6 +385,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // `m/<videoId>` sidecar). Anyone who resolves a legacy track's name writes
         // it here ONCE, and it's shared with every future visitor.
         if (req.method !== "POST") return json(405, { error: "POST only" });
+        if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
         const b = (await req.json().catch(() => ({}))) as {
           videoId?: string;
           title?: string;
@@ -361,23 +394,26 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           thumbnail?: string;
         };
         if (!isVideoId(b.videoId ?? null) || !b.title) return json(400, { error: "missing videoId or title" });
+        // Anonymous contribution → treat every field as hostile. Strip control chars,
+        // clamp length, and accept ONLY http(s) thumbnails (no javascript:/data: that
+        // could later be rendered somewhere). This is the write that fed the admin XSS.
+        const title = cleanText(b.title, 256);
+        if (!title) return json(400, { error: "empty title" });
+        const artist = cleanText(b.artist, 128);
+        const duration = clampNum(b.duration, 0, 86_400) ?? 0;
+        const thumbnail = sanitizeHttpUrl(b.thumbnail) ?? "";
         await env.AUDIO.put(`m/${b.videoId}`, new Uint8Array(0), {
-          customMetadata: {
-            title: String(b.title).slice(0, 256),
-            artist: String(b.artist ?? "").slice(0, 128),
-            duration: String(b.duration ?? 0),
-            thumbnail: String(b.thumbnail ?? "").slice(0, 400),
-          },
+          customMetadata: { title, artist, duration: String(duration), thumbnail },
         });
         // Mirror into the D1 index so it shows up in the ordered browse.
         if (env.DB) {
           ctx.waitUntil(
             upsertCommunityTrack(env.DB, {
               videoId: b.videoId!,
-              title: b.title,
-              artist: b.artist ?? null,
-              duration: Number(b.duration) || 0,
-              thumbnail: b.thumbnail ?? null,
+              title,
+              artist: artist || null,
+              duration,
+              thumbnail: thumbnail || null,
             }).catch(() => {}),
           );
         }
@@ -388,6 +424,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // recording, not the recording). Any client that analyzes a track posts it;
         // this is the clean, publishable dataset. Best-effort, no auth.
         if (req.method !== "POST") return json(405, { error: "POST only" });
+        if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
         const b = (await req.json().catch(() => ({}))) as {
           videoId?: string;
           bpm?: number;
@@ -397,15 +434,18 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           duration?: number;
         };
         if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
+        // This crowdsourced data is later published to a public HF dataset, so clamp
+        // numerics to sane ranges and bound the key strings — no anonymous poster can
+        // inject absurd values or oversized text into the export.
         if (env.DB) {
           ctx.waitUntil(
             upsertAnalysis(env.DB, {
               videoId: b.videoId!,
-              bpm: b.bpm ?? null,
-              key: b.key ?? null,
-              keyName: b.keyName ?? null,
-              beatOffset: b.beatOffset ?? null,
-              duration: b.duration ?? null,
+              bpm: clampNum(b.bpm, 1, 400),
+              key: b.key != null ? cleanText(b.key, 8) : null,
+              keyName: b.keyName != null ? cleanText(b.keyName, 32) : null,
+              beatOffset: clampNum(b.beatOffset, -600, 600),
+              duration: clampNum(b.duration, 0, 86_400),
             }).catch(() => {}),
           );
         }
@@ -434,6 +474,9 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           startIndex?: number;
         };
         if (!b.dest || !Array.isArray(b.tracks)) return json(400, { error: "missing dest or tracks" });
+        // Each track drives a YouTube search subrequest — cap the batch so a single
+        // call can't blow the Worker subrequest limit / fan out abusively.
+        if (b.tracks.length > MAX_MATCH_TRACKS) return json(413, { error: `too many tracks (max ${MAX_MATCH_TRACKS} per call)` });
         return json(200, { rows: await matchTracks(env, user.id, b.dest, b.tracks, b.startIndex ?? 0, { searchYouTube }) });
       }
       case "/api/sync/search": {
@@ -475,10 +518,19 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
 
         if (req.method === "PUT") {
           if (!s || !STEM_NAMES.includes(s)) return json(400, { error: "missing or invalid ?s=" });
+          if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
           const buf = await req.arrayBuffer();
           if (buf.byteLength === 0 || buf.byteLength > MAX_STEM_BYTES) return json(413, { error: "bad stem size" });
+          // Reject anything that isn't a recognized audio container. Without this an
+          // anonymous client could store arbitrary bytes (e.g. HTML/JS) under a
+          // predictable, fetchable key on our own origin.
+          if (!looksLikeAudioStem(new Uint8Array(buf, 0, Math.min(buf.byteLength, 64)))) {
+            return json(415, { error: "not a recognized audio stem" });
+          }
+          // We deliberately do NOT persist the client's Content-Type — GET always
+          // serves a fixed opaque type (the client sniffs the magic header anyway).
           await env.AUDIO.put(key(s), buf, {
-            httpMetadata: { contentType: req.headers.get("content-type") || "audio/webm" },
+            httpMetadata: { contentType: STEM_DOWNLOAD_CONTENT_TYPE },
           });
           return json(200, { ok: true });
         }
@@ -487,11 +539,14 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           if (!STEM_NAMES.includes(s)) return json(400, { error: "invalid ?s=" });
           const hit = await env.AUDIO.get(key(s));
           if (!hit) return json(404, { error: "stem not cached" });
+          // Force a non-renderable type + nosniff + attachment: even if a legacy
+          // object carries an HTML content-type, the browser can't execute it.
           return new Response(hit.body, {
             headers: {
-              "content-type": hit.httpMetadata?.contentType || "audio/webm",
+              "content-type": STEM_DOWNLOAD_CONTENT_TYPE,
               "content-length": String(hit.size),
               "x-htl-cache": "hit",
+              ...DOWNLOAD_SAFE_HEADERS,
               ...NO_CACHE,
             },
           });
@@ -537,6 +592,18 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
 async function handleRoom(req: Request, env: Env): Promise<Response> {
   if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return json(426, { error: "expected a websocket upgrade" });
+  }
+  // Defense-in-depth against cross-site WebSocket hijacking. SameSite=Lax already
+  // keeps the session cookie off cross-site handshakes, but also reject a mismatched
+  // Origin outright. Allowlist defaults to this request's own origin; override via
+  // WS_ALLOWED_ORIGINS (comma-separated) if the app is ever embedded elsewhere.
+  const origin = req.headers.get("Origin");
+  if (origin) {
+    const allowed = (env.WS_ALLOWED_ORIGINS || new URL(req.url).origin)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!allowed.includes(origin)) return json(403, { error: "origin not allowed" });
   }
   if (!env.ROOM) return json(503, { error: "shared sessions are not configured" });
   const user = await sessionUser(req, env);
@@ -584,6 +651,10 @@ export default {
     const headers = new Headers(res.headers);
     headers.set("Cross-Origin-Opener-Policy", "same-origin");
     headers.set("Cross-Origin-Embedder-Policy", "credentialless");
+    // Baseline security headers (CSP, nosniff, framing, referrer, permissions).
+    // CSP's script-src has no 'unsafe-inline', so an injected <script> can't run —
+    // turning any residual HTML-injection from account-takeover into a no-op.
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   },
 };

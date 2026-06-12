@@ -1047,27 +1047,6 @@ body {
     overflow: hidden;
   }
 
-  /* Board split (phone/narrow). The control stack is TALL (square pad rows + the
-     pro-EQ curve + stem cells + sync/tempo/pitch/key rack), and `.lanes` only takes
-     leftover space — so on a short iPhone the controls eat the screen and the
-     waveforms collapse to their min-height (the "viewports too short" bug). Pin the
-     lanes to ~half the viewport so the waveforms always read clearly; the controls
-     take the other half and SCROLL internally if they don't fit, so the bottom row
-     (EQ / BYPASS·RESET·COPY) stays reachable instead of spilling off the bottom. */
-  .lanes {
-    flex: 0 0 48dvh;
-    min-height: 0;
-  }
-  .decks-row {
-    flex: 1 1 0;
-    min-height: 0;
-  }
-  .decks-row .bank {
-    overflow-y: auto;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
-  }
-
   .topbar {
     padding: 12px 14px;
   }
@@ -2030,25 +2009,30 @@ body.no-glow .caption-cue.on {
     min-height: 0;
     overflow: hidden; /* fit to screen — no page scroll */
   }
-  /* Controls take their natural height (with a fixed EQ strip); the waveforms FILL
-     the rest of the screen (≥35dvh basis), so they absorb screen-size variance
-     instead of the EQ getting squeezed or leaving a gap. */
+  /* Pin the waveforms to ~half the viewport (the control stack — square pad rows +
+     the pro-EQ curve + stem cells + sync/tempo/pitch/key rack — is tall enough that
+     letting it take its natural height squeezed the waveforms to a sliver). The
+     controls get the other half; each deck bank SCROLLS internally if its rows don't
+     fit, so the foot (EQ / BYPASS·RESET·COPY) stays reachable instead of spilling
+     off the bottom. */
   .lanes {
-    flex: 1 1 0;
+    flex: 0 0 48dvh;
     min-height: 110px;
     overflow: hidden;
   }
   .decks-third {
-    flex: 0 1 auto;
+    flex: 1 1 0;
     min-height: 0;
   }
   .decks-row {
-    flex: 0 1 auto;
+    flex: 1 1 0;
     min-height: 0;
     overflow: hidden;
   }
   .decks-row .bank {
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
     padding: 8px 10px;
     gap: 8px;
   }

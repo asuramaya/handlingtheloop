@@ -126,8 +126,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (req.method === "PUT") {
         const body = (await req.json().catch(() => null)) as { data?: unknown; updatedAt?: number } | null;
         if (!body || body.data == null) return json(400, { error: "data required" });
+        const serialized = JSON.stringify(body.data);
+        // Cap the per-user settings blob so it can't be used to bloat D1.
+        if (serialized.length > 256 * 1024) return json(413, { error: "settings too large" });
         const ts = typeof body.updatedAt === "number" ? body.updatedAt : Date.now();
-        await putUserSettings(env.DB, user.id, JSON.stringify(body.data), ts);
+        await putUserSettings(env.DB, user.id, serialized, ts);
         return json(200, { ok: true, updatedAt: ts });
       }
       return json(405, { error: "GET or PUT only" });

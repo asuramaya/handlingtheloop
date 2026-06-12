@@ -2020,25 +2020,31 @@ body.no-glow .caption-cue.on {
      selector here loses the cascade to them. The extra class (0,2,0 > 0,1,0) wins
      regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
      collapsed to just the crossfader, and left the bottom half an empty void. */
+  /* A fixed waveform height can't satisfy both ends of the narrow range: a SHORT
+     phone needs the controls to shrink/scroll, a TALL narrow window needs the
+     waveforms to absorb the slack (else a dead gap opens under the control foot).
+     So: the lanes GROW to fill leftover space but never shrink below a floor (~half
+     on a phone, taller on a tall window — no gap); the control area takes its
+     NATURAL height and only shrinks (→ bank scrolls) when the phone is too short. */
   .stage .lanes {
-    flex: 0 0 40dvh;
-    min-height: 110px;
+    flex: 1 1 auto;
+    min-height: 36dvh;
     overflow: hidden;
   }
   .stage .decks-third {
-    flex: 1 1 0;
+    flex: 0 1 auto;
     min-height: 0;
   }
   .stage .decks-row {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
   }
-  /* The full control stack can't fit beside a ~40dvh waveform on a phone, so the
-     bank SCROLLS. align-items:stretch (not the base `center`) makes `.bank-main`
-     fill the bank's height and align to the TOP — without it the overflow is
-     centered, which clips both ends and can't be scrolled to. `.bank-main` is the
-     scroll container (definite height + min-height:0 + overflow-y:auto). */
+  /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
+     (not the base `center`) makes `.bank-main` fill the bank height and align to the
+     TOP — without it the overflow is centered, which clips both ends and can't be
+     scrolled to. `.bank-main` is the scroll container (definite height + min-height:0
+     + overflow-y:auto). On a tall window there's no overflow, so no scrollbar shows. */
   .stage .decks-row .bank {
     align-items: stretch;
     overflow: hidden;

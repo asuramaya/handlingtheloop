@@ -4951,6 +4951,22 @@ body.no-glow .stem-btn.on {
   white-space: nowrap;
 }
 
+/* Phone-only "stems are download/upgrade-only here" explainer. */
+.stem-mobile-note {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, #9aa);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.stem-mobile-note strong {
+  color: var(--text, #e8e8ea);
+  font-weight: 600;
+}
+
 /* A GPU model disabled after a crash — not selectable. */
 .stem-model.blocked {
   opacity: 0.45;

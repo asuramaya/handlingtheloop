@@ -58,7 +58,9 @@ function supportBadge(m: StemModel): { text: string; cls: string } {
     case "blocked":
       return { text: "Disabled — crashed here", cls: "warn" };
     default:
-      return { text: "Desktop separates", cls: "warn" };
+      // Mobile can't separate neural on-device (OOM-crashes Safari) — it's
+      // download-only: adopt the stems once a desktop has separated that track.
+      return { text: isMobileDevice() ? "Cached only · a desktop separates" : "Desktop separates", cls: "warn" };
   }
 }
 
@@ -461,12 +463,21 @@ export function SettingsPanel({
 
               <div className="settings-section">
                 <div className="settings-section-head">
-                  <span className="settings-label">Stem separation</span>
+                  <span className="settings-label">{isMobileDevice() ? "Stems" : "Stem separation"}</span>
                 </div>
+                {isMobileDevice() && (
+                  <div className="stem-mobile-note">
+                    Phones don't separate stems on-device — it OOM-crashes Safari. Pick a neural model to
+                    <strong> download</strong> its stems once a desktop has separated that track; otherwise the
+                    instant DSP split is used. (Upgrade-only.)
+                  </div>
+                )}
                 <div className="stem-models">
                   {STEM_MODELS
-                    // Hide demucs-GPU on phones (WebGPU OOM-crashes Safari). demucs-CPU
-                    // stays — on mobile it separates WINDOWED so it fits in memory.
+                    // Hide neural models a phone can never RUN nor benefit from selecting
+                    // for processing — but keep the ones whose results it can DOWNLOAD.
+                    // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
+                    // remaining neural models stay, shown as download-only.
                     .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
                     .map((m) => {
                     const sup = modelSupport(m);
@@ -504,7 +515,9 @@ export function SettingsPanel({
                     and a track is loaded. */}
                 {(() => {
                   const sel = getStemModel(settings.stemModel);
-                  if (sel.kind === "dsp") return null;
+                  // No on-device processing on a phone — it's upgrade-only (download a
+                  // desktop-separated result), so hide the re-analyze action entirely.
+                  if (sel.kind === "dsp" || isMobileDevice()) return null;
                   const canReanalyze = modelSupport(sel) === "runs" && loadedVideoIds.length > 0 && !!onReanalyze;
                   return (
                     <button

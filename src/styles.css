@@ -2020,19 +2020,21 @@ body.no-glow .caption-cue.on {
      selector here loses the cascade to them. The extra class (0,2,0 > 0,1,0) wins
      regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
      collapsed to just the crossfader, and left the bottom half an empty void. */
-  /* A fixed waveform height can't satisfy both ends of the narrow range: a SHORT
-     phone needs the controls to shrink/scroll, a TALL narrow window needs the
-     waveforms to absorb the slack (else a dead gap opens under the control foot).
-     So: the lanes GROW to fill leftover space but never shrink below a floor (~half
-     on a phone, taller on a tall window — no gap); the control area takes its
-     NATURAL height and only shrinks (→ bank scrolls) when the phone is too short. */
+  /* CONTROLS WIN. The control stack (square pad rows + pro-EQ curve + stem cells +
+     sync/tempo/pitch/key rack) must show in FULL — a `min-height` floor on the lanes
+     stole the space the EQ row needed and pushed it off the bottom (clipped), while
+     leaving a black void inside the lanes when a deck was empty. So `.decks-third`
+     takes its full NATURAL height (flex 0 0 auto — never shrinks, EQ always fits) and
+     the lanes take whatever's left (flex 1 1 0, no floor): they grow to fill a tall
+     narrow window (no gap under the foot) and shrink on a short phone (no clip). The
+     `.bank-main` scroll below stays as a safety net for the shortest phones. */
   .stage .lanes {
-    flex: 1 1 auto;
-    min-height: 36dvh;
+    flex: 1 1 0;
+    min-height: 0;
     overflow: hidden;
   }
   .stage .decks-third {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
   }
   .stage .decks-row {

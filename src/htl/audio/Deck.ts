@@ -235,8 +235,10 @@ export class Deck {
         this.onEnded?.();
       }
     };
-    // (Re)load the current PCM in case a track was set before the node attached.
+    // (Re)load the current PCM in case a track was set before the node attached, and
+    // re-assert the current tempo/pitch (now port messages, so they must be re-sent).
     this.loadEnginePcm();
+    this.stretchNode?.port.postMessage({ type: "speed", value: this._rate });
     this.updatePitch();
   }
 
@@ -316,18 +318,10 @@ export class Deck {
   // correction. key-lock ON → pitch = the musical key shift only; key-lock OFF →
   // pitch also rides the tempo rate (vinyl: faster = higher).
   private updatePitch() {
-    const p = this.stretchNode?.parameters.get("pitch");
-    if (!p) return;
     const shift = Math.pow(2, this._pitchSemis / 12);
     const pitch = this._keylock ? shift : this._rate * shift;
-    const t = this.ctx.currentTime;
-    try {
-      p.cancelScheduledValues(t);
-      p.setValueAtTime(p.value, t);
-      p.linearRampToValueAtTime(pitch, t + 0.02); // de-zipper key/keylock moves
-    } catch {
-      p.value = pitch;
-    }
+    // Port message, not an AudioParam — the worklet de-zippers it (see stretchWorklet).
+    this.stretchNode?.port.postMessage({ type: "pitch", value: pitch });
   }
 
   /** Musical key shift in semitones (−12 … +12). Engages key-lock so the shift
@@ -781,17 +775,8 @@ export class Deck {
     this._rate = rate;
     // Glide the engine's speed so fader moves bend tempo smoothly instead of
     // stepping. Stems are one engine voice, so they stay sample-locked for free.
-    const t = this.ctx.currentTime;
-    const sp = this.stretchNode?.parameters.get("speed");
-    if (sp) {
-      try {
-        sp.cancelScheduledValues(t);
-        sp.setValueAtTime(sp.value, t);
-        sp.linearRampToValueAtTime(rate, t + 0.02);
-      } catch {
-        sp.value = rate;
-      }
-    }
+    // Port message, not an AudioParam — the worklet de-zippers it (see stretchWorklet).
+    this.stretchNode?.port.postMessage({ type: "speed", value: rate });
     this.updatePitch(); // vinyl mode (key-lock off) tracks the new tempo
     this.onTempoChange?.(); // AudioEngine sync hook: master→slave follow / release
   }

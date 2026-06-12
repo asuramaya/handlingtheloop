@@ -29,18 +29,23 @@ const RING = 8192;          // intermediate FIFO length (> max FS + margin)
 const RMASK = RING - 1;     // RING is a power of two
 
 class Stretch extends AudioWorkletProcessor {
-  static get parameterDescriptors() {
-    return [
-      { name: 'speed', defaultValue: 1, minValue: 0.25, maxValue: 4, automationRate: 'k-rate' },
-      { name: 'pitch', defaultValue: 1, minValue: 0.25, maxValue: 4, automationRate: 'k-rate' },
-    ];
-  }
+  // NOTE: speed/pitch are driven by PORT MESSAGES, not AudioParams. iOS Safari has
+  // a history of AudioWorklet parameterDescriptors bugs — if the descriptors fail to
+  // register, process()'s \`params.speed\` is undefined, \`.length\` throws, and the
+  // processor is killed on its first block → permanent silence (while desktop is
+  // fine). Routing them over the port (smoothed here for de-zipper) sidesteps that
+  // entirely; there are no parameterDescriptors and process() takes no params arg.
   constructor() {
     super();
     this.loaded = false;
     this.playing = false;
     this.ended = false;
     this.sr = sampleRate;
+    // tempo (speed) + key (pitch) factors, smoothed toward their targets per block
+    // (~20 ms) so fader/key moves don't zipper — replaces the old AudioParam ramps.
+    this.speed = 1; this.speedTarget = 1;
+    this.pitch = 1; this.pitchTarget = 1;
+    this.kParam = 1 - Math.exp(-128 / (0.02 * this.sr));
     // PCM groups (1 = mix, 4 = stems): per-group L/R channels + live gains.
     this.gL = []; this.gR = []; this.gain_ = new Float32Array(4); this.nG = 0; this.length = 0;
     // transport
@@ -79,6 +84,8 @@ class Stretch extends AudioWorkletProcessor {
   }
   onMsg(d) {
     if (d.type === 'config') { this.applyConfig(d); return; }
+    if (d.type === 'speed') { this.speedTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
+    if (d.type === 'pitch') { this.pitchTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
     if (d.type === 'loadPcm') {
       this.gL = d.gL; this.gR = d.gR; this.nG = d.gL.length; this.length = d.length;
       for (let g = 0; g < 4; g++) this.gain_[g] = g < this.nG ? 1 : 0;
@@ -169,15 +176,17 @@ class Stretch extends AudioWorkletProcessor {
     const c4 = 0.5 * x * x * (x - 1);
     return s1 * c1 + s2 * c2 + s3 * c3 + s4 * c4;
   }
-  process(_inputs, outputs, params) {
+  process(_inputs, outputs) {
     const out = outputs[0];
     if (!out || out.length === 0) return true;
     const frames = out[0].length;
     const outL = out[0], outR = out.length > 1 ? out[1] : out[0];
     if (!this.loaded) { outL.fill(0); if (out.length > 1) outR.fill(0); return true; }
 
-    const speed = params.speed.length > 0 ? params.speed[params.speed.length - 1] : 1;
-    const pitch = params.pitch.length > 0 ? params.pitch[params.pitch.length - 1] : 1;
+    // glide speed/pitch toward their targets (de-zipper) — was the AudioParam ramp
+    this.speed += (this.speedTarget - this.speed) * this.kParam;
+    this.pitch += (this.pitchTarget - this.pitch) * this.kParam;
+    const speed = this.speed, pitch = this.pitch;
     const Ha = this.HS * speed / pitch;   // analysis hop (β = pitch/speed → Ha = HS/β)
     const gamma = pitch;             // resample ratio
 

@@ -23,6 +23,7 @@ function buildLodPyramid(min: Float32Array, max: Float32Array, length: number, s
   return { sampleRate: sr, length, levels };
 }
 import { STEM_NAMES, type StemName, type Stems } from "../stems";
+import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3 } from "./Eq3";
 
@@ -91,6 +92,11 @@ export class Deck {
   // Optional 4-stem playback: when set, each stem gets its own live-toggleable gain
   // and the sum (all stems on) is the original mix. null = play the plain buffer.
   private stems: Stems | null = null;
+  // "Stems are active" is tracked SEPARATELY from holding the raw `stems` AudioBuffers,
+  // because on mobile we FREE those buffers once the engine owns the PCM and the
+  // pyramids are built (the iPhone OOM fix — see buildStemPyramidsLazy). hasStems and
+  // the stem mixer stay live off this flag + the worklet, not the (freed) buffers.
+  private stemsLoaded = false;
   private stemMuted: Record<StemName, boolean> = { vocals: false, drums: false, bass: false, other: false };
   private stemGain: Record<StemName, number> = { vocals: 1, drums: 1, bass: 1, other: 1 }; // per-stem level (knob)
   // Per-stem waveform envelopes for the viewport (null until built off the hot
@@ -349,6 +355,7 @@ export class Deck {
     this.loopInPoint = null;
     this.stopJog();
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
+    this.stemsLoaded = false;
     this.stemMuted = { vocals: false, drums: false, bass: false, other: false };
     this.stemGain = { vocals: 1, drums: 1, bass: 1, other: 1 };
     this.stemPyramids = null;
@@ -368,7 +375,7 @@ export class Deck {
   // share the deck's clock, loop and tempo. With stems set, playback sums their
   // per-stem gains so any can be muted live; with all on the sum IS the mix.
   get hasStems(): boolean {
-    return this.stems != null;
+    return this.stemsLoaded;
   }
   stemActive(name: StemName): boolean {
     return !this.stemMuted[name];
@@ -406,6 +413,7 @@ export class Deck {
    *  builds the per-stem waveform envelopes so the viewport can render them. */
   setStems(stems: Stems | null, neural = false) {
     this.stems = stems;
+    this.stemsLoaded = !!stems;
     this.stemsNeural = !!stems && neural;
     // Audio swaps in instantly (all-on === the mix, so it's seamless). The
     // per-stem waveform envelopes are SECOND-CLASS: built lazily off the hot path.
@@ -467,6 +475,16 @@ export class Deck {
     if (job === this.stemPyramidJob) {
       this.stemPyramids = out;
       this.onStemPyramids?.(); // nudge the viewport to re-rasterise the quad lanes
+      // iPhone OOM FIX. The stretch engine already holds its OWN copy of the 4 stem
+      // PCM channels (transferred in loadEnginePcm) and the pyramids now own the
+      // visuals — so the deck's raw `stems` AudioBuffers (~424 MB for a 5-min track)
+      // are pure redundant memory. On MOBILE, where two stem'd decks otherwise hold
+      // ~2× and jetsam-kill the tab (→ crash loop), release them now. hasStems and
+      // the stem mixer keep working off `stemsLoaded` + the worklet; only the
+      // deep-zoom true-signal stem render (stemChannel) falls back to LOD, which is
+      // an acceptable trade on a phone. Desktop keeps the buffers (headroom + sharper
+      // zoom + safe against a stretch-node reattach).
+      if (isMobileDevice()) this.stems = null;
     }
   }
   setStemMute(name: StemName, muted: boolean) {

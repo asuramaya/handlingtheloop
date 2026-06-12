@@ -514,7 +514,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       <div className="eq-tools">
         <button className={`eq-tool ${deck.eqBypassed ? "on" : ""}`} title="Bypass the EQ (A/B)" onClick={toggleBypass}>BYPASS</button>
         <button className="eq-tool" title="Reset the EQ to flat" onClick={flat}>RESET</button>
-        <button className="eq-tool" title={`Copy this EQ to deck ${otherId}`} onClick={copyToOther}>COPY →{otherId}</button>
+        <button className="eq-tool" title={`Copy this EQ to deck ${otherId}`} onClick={copyToOther}>COPY</button>
       </div>
     </div>
   );

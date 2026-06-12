@@ -1047,6 +1047,27 @@ body {
     overflow: hidden;
   }
 
+  /* Board split (phone/narrow). The control stack is TALL (square pad rows + the
+     pro-EQ curve + stem cells + sync/tempo/pitch/key rack), and `.lanes` only takes
+     leftover space — so on a short iPhone the controls eat the screen and the
+     waveforms collapse to their min-height (the "viewports too short" bug). Pin the
+     lanes to ~half the viewport so the waveforms always read clearly; the controls
+     take the other half and SCROLL internally if they don't fit, so the bottom row
+     (EQ / BYPASS·RESET·COPY) stays reachable instead of spilling off the bottom. */
+  .lanes {
+    flex: 0 0 48dvh;
+    min-height: 0;
+  }
+  .decks-row {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .decks-row .bank {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .topbar {
     padding: 12px 14px;
   }

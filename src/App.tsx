@@ -1783,6 +1783,8 @@ export function App() {
             otherAccent={ACCENT.B}
             focused={focused === "A"}
             onFocus={() => setFocused("A")}
+            expanded={expandedLane === "A"}
+            collapsed={expandedLane != null && expandedLane !== "A"}
             mirror={false}
             shift={shift}
             tempoRange={settings.tempoRange}
@@ -1805,6 +1807,8 @@ export function App() {
             otherAccent={ACCENT.A}
             focused={focused === "B"}
             onFocus={() => setFocused("B")}
+            expanded={expandedLane === "B"}
+            collapsed={expandedLane != null && expandedLane !== "B"}
             mirror={false}
             shift={shift}
             tempoRange={settings.tempoRange}

@@ -1871,6 +1871,17 @@ body.no-glow .caption-cue.on {
 .decks-row .bank:not(.focused) {
   opacity: 0.86; /* recede the unfocused deck a touch */
 }
+/* Single-deck (solo) mode — driven by EXPAND, not focus. The expand button in a
+   deck's header (the DECK A / DECK B text) expands that deck's waveform lane and
+   collapses the other's; carry the same through to the control banks so the whole
+   deck goes full-width. Works on desktop AND mobile. When nothing is expanded,
+   neither class is set, both banks fall back to the base `flex:1` 2-deck row. */
+.decks-row .bank.expanded {
+  flex: 1 1 100%;
+}
+.decks-row .bank.collapsed {
+  display: none;
+}
 
 /* Per-button keyboard-shortcut letter, bottom-right. Hidden by default; shown only
    on desktop when Settings ▸ Keyboard hints is on (body.show-keys). The buttons
@@ -2041,15 +2052,6 @@ body.no-glow .caption-cue.on {
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
-  }
-  /* On a phone the two banks side-by-side are too cramped (and the EQ needs the
-     full width to be usable). Show ONLY the focused deck's bank, full width — tap
-     the OTHER deck's waveform above to switch focus (both lanes stay visible). */
-  .stage .decks-row .bank:not(.focused) {
-    display: none;
-  }
-  .stage .decks-row .bank.focused {
-    flex: 1 1 100%;
   }
   /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
      (not the base `center`) makes `.bank-main` fill the bank height and align to the

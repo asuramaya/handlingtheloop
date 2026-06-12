@@ -25,6 +25,8 @@ interface DeckControlsProps {
   otherAccent: string;
   focused: boolean;
   onFocus: () => void;
+  expanded: boolean; // this deck is solo'd (its lane is expanded) → controls go full-width
+  collapsed: boolean; // the OTHER deck is solo'd → this deck's controls hide
   mirror: boolean;
   shift: boolean;
   tempoRange: number;
@@ -63,7 +65,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -106,7 +108,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     });
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main">
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}

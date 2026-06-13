@@ -596,6 +596,7 @@ body {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  --tt-toolbar-h: 30px; /* toolbar height === header's sticky offset (no seam) */
   /* Drop table columns based on the TABLE area's real width (not the sidebar-
      inclusive library width) — so a wide dock with a wide sidebar still trims the
      table when it's actually cramped. See the @container query below. */
@@ -752,7 +753,10 @@ body {
 }
 .track-table thead th {
   position: sticky;
-  top: 29px; /* sits just below the sticky .tt-toolbar */
+  /* Pinned exactly below the (also-sticky) toolbar. Driven by the SAME variable as
+     the toolbar's height so the two can never drift apart and leak rows through a
+     seam. */
+  top: var(--tt-toolbar-h, 30px);
   background: var(--panel);
   color: var(--muted);
   font-weight: 600;
@@ -763,17 +767,19 @@ body {
   border-bottom: 1px solid var(--line);
   z-index: 1;
 }
-
-/* Row-size stepper bar, pinned above the (also-sticky) header. */
+/* Row-size stepper bar, pinned above the (also-sticky) header. Its box-sized height
+   is fixed so the header's sticky offset (--tt-toolbar-h) lines up to the pixel. */
 .tt-toolbar {
   position: sticky;
   top: 0;
   z-index: 3;
+  box-sizing: border-box;
+  height: var(--tt-toolbar-h, 30px);
   display: flex;
   align-items: center;
   justify-content: space-between; /* filter on the left, row-size stepper on the right */
   gap: 8px;
-  padding: 4px 8px;
+  padding: 2px 8px;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
@@ -876,17 +882,36 @@ body {
 .tt-caret {
   font-size: 8px;
 }
+/* Column resize handle: a slim grab zone on the cell's right edge, sitting just
+   INSIDE so the last column's handle never overflows the table (no stray h-scroll).
+   A faint persistent hairline marks every adjustable column; it lights up on hover
+   and while dragging so the gesture is discoverable. */
 .col-resize {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 8px;
+  right: 0;
+  width: 9px;
   height: 100%;
   cursor: col-resize;
   z-index: 2;
+  touch-action: none; /* let pointer-drag own the gesture on touch */
 }
-.col-resize:hover {
-  background: color-mix(in srgb, var(--accent, #36c2ff) 45%, transparent);
+.col-resize::after {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  right: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background 0.12s;
+}
+.col-resize:hover::after,
+.col-resize:active::after {
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent, #36c2ff) 70%, transparent);
 }
 .track-table tbody tr {
   border-bottom: 1px solid #16181f;
@@ -971,6 +996,11 @@ body {
   }
   .track-table .col-artist {
     width: 30%;
+  }
+  /* No column-resize handles in the cramped view: the columns are auto-proportioned
+     here and a thin drag target only fights tap-to-sort on touch. */
+  .track-table .col-resize {
+    display: none;
   }
 }
 
@@ -2702,6 +2732,96 @@ body.no-glow .caption-word.cw-on .cw-label {
     background: var(--accent, #36c2ff);
   }
 }
+
+/* TABLET PORTRAIT (iPad &c.) edge case — desktop layout, but too narrow for both
+   list docks AND a usable board. The docks floor at 280px each (560px), so below
+   ~980px the stage is squeezed under ~420px: two decks side-by-side become unusable
+   ("too small to open"). When BOTH docks are open in that band, drop the board and
+   let Library + Search split the width 50/50 — the user's intended fallback. Tightly
+   gated so it CANNOT regress: needs desktop layout (≥769px), a genuinely cramped
+   width (≤980px), and — via :has() — both docks actually open. One dock open keeps
+   the board (W−280 ≥ 489px, still fine). The decks stay mounted (display:none, audio
+   uninterrupted); closing either dock restores the board instantly. */
+@media (min-width: 769px) and (max-width: 980px) {
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
+    display: none;
+  }
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+  /* The board's gone, so the drag-to-resize handle on each dock's inner edge has
+     nothing to push against — hide it; the 50/50 split owns the width here. */
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .dock-resizer-edge {
+    display: none;
+  }
+}
+
+/* Touch tablets in the desktop layout render the dock content a touch large for the
+   physical panel (retina iPad). Tighten the search-result density a notch — scoped to
+   a COARSE primary pointer so laptops/desktops (fine pointer, even retina) are never
+   touched. The library table already self-adjusts via its @container column-drop. */
+@media (min-width: 769px) and (pointer: coarse) {
+  .result-row {
+    grid-template-columns: 92px 1fr;
+    gap: 10px;
+    padding: 7px 10px;
+  }
+  .thumb {
+    width: 92px;
+    height: 52px;
+  }
+  .result-title {
+    font-size: 13px;
+  }
+
+  /* DECK BANK — touch tablets (iPad &c.) keep the desktop layout but have far less
+     height, so the tall control stack (jog → loops → cues → tempo/key → stems → EQ)
+     clips at the foot. Compact the VERTICAL footprint: trim the slack between and
+     inside rows and cap the square pads, so the whole stack — through the EQ curve —
+     fits without clipping. Touch targets stay comfortable: pads ~48px, buttons ≥28px;
+     nothing here changes on a fine-pointer laptop (this whole block is coarse-only). */
+  .decks-row .bank-main {
+    gap: 4px;
+  }
+  .hw-btn {
+    padding: 6px 8px;
+  }
+  .jog-btn {
+    height: 28px;
+  }
+  .loops .loop-btn {
+    padding: 5px 0;
+  }
+  .loop-sizes,
+  .hotcues {
+    gap: 4px;
+  }
+  /* Cap the square pads smaller than the desktop 64px so two 8-pad rows don't eat the
+     viewport (aspect-ratio keeps them square at the capped width). */
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    max-width: 48px;
+  }
+  .pitch-row,
+  .stems-row {
+    gap: 4px;
+  }
+  .vcell {
+    height: 34px;
+  }
+  /* The EQ curve is the single biggest strip; halving its slack reclaims the most.
+     It already adapts to a CSS height change (same mechanism the ≤768px path uses). */
+  .eq-curve {
+    height: 92px;
+    min-height: 48px;
+  }
+  .eq-tool {
+    padding: 3px 2px;
+  }
+}
+
 /* Mobile: docks are centered modals, not resizable — hide every handle. (A
    non-overlapping max-width query so it never fights the desktop rules above.) */
 @media (max-width: 768px) {
@@ -4060,98 +4180,9 @@ body.no-glow .hw-btn.shift.on {
   accent-color: var(--neon-cyan);
   cursor: pointer;
 }
-/* ── Waveform palette presets + colour profiles (Color tab) ── */
-/* Saved colour profiles (account-synced, shareable). The dedicated band-palette
-   preset row was removed — band hues are now direct pickers in the Frequency bands
-   group. .color-profiles rides the shared .color-group frame (no own divider). */
-.cprofile-actions {
-  display: flex;
-  gap: 6px;
-}
-.cprofile-name-input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-.cprofile-name-input:focus {
-  outline: none;
-  border-color: var(--neon-cyan);
-}
-.cprofile-btn {
-  padding: 5px 9px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.cprofile-btn.save {
-  color: #08111a;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.cprofile-btn:hover {
-  border-color: var(--accent);
-}
-.cprofile-list {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.cprofile {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-}
-.cprofile.on {
-  border-color: var(--accent);
-}
-.cprofile-swatch {
-  width: 34px;
-  height: 16px;
-  border-radius: 4px;
-  flex: 0 0 auto;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-}
-.cprofile-load {
-  flex: 1;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  background: none;
-  border: none;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cprofile-icon {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 2px 4px;
-}
-.cprofile-icon:hover {
-  color: var(--text);
-}
-.cprofile-icon.danger:hover {
-  color: #ff5d73;
-}
+/* Saved colour themes now use the shared <ProfileBar> (.profilebar-*); the old
+   per-row .cprofile-* list + the band-palette preset row were removed (band hues
+   are direct pickers in the Frequency bands group). */
 .slider-hint {
   font-size: 11px;
   color: var(--muted);
@@ -4481,9 +4512,20 @@ body.no-glow .hw-btn.shift.on {
   border-color: #6ee7a8;
   background: color-mix(in srgb, #6ee7a8 14%, transparent);
 }
-/* Map manager */
-.midi-map-select {
+/* Shared profile manager (colour themes / keyboard profiles / MIDI maps) — ProfileBar */
+.profilebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.profilebar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.profilebar-select {
   flex: 1;
+  min-width: 0;
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--line);
@@ -4491,11 +4533,29 @@ body.no-glow .hw-btn.shift.on {
   padding: 6px 8px;
   font-size: 13px;
 }
-.midi-map-tools {
+.profilebar-badge {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.profilebar-swatch {
+  flex: none;
+  width: 40px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+}
+.profilebar-tools {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+.profilebar-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--neon-cyan);
 }
 .hw-btn.small.danger:not(:disabled) {
   color: #ff5d73;

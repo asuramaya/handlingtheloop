@@ -13,6 +13,7 @@ dist
 # Cloudflare local dev secrets (OAuth client overrides, etc.) — never publish
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
 # Rust engine build output (the .wasm is rebuilt from engine/src)
 engine/target/
 
@@ -25,3 +26,6 @@ public/models/
 
 # Dev stem cache (stands in for R2 locally)
 .stem-cache/
+
+# Dev account store (stands in for D1 locally — see server/devStore.ts)
+.dev-data/

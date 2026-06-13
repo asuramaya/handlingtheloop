@@ -29,16 +29,19 @@ interface MenuState {
 // Sortable columns (the "#" column sorts by the underlying list order).
 type SortKey = "index" | "title" | "artist" | "bpm" | "key" | "time";
 
-// Resizable data columns + their persisted default widths (px). #/thumb/act are
-// fixed-size (or zero-width) and not user-resizable; Title is the flex column that
-// absorbs the remaining width, so the table always fills its container (no dead
-// space) regardless of how the others are sized.
+// Resizable data columns + their persisted default widths (px). # and thumb are
+// fixed-size; Title is the flex column that absorbs the remaining width, so the
+// table always fills its container (no dead space) regardless of how the others are
+// sized. Each resizable column carries its own width and gets its own drag handle —
+// dragging a handle resizes ONLY that column, and Title yields/grows to match (so
+// narrowing any column is how you widen Title, and vice-versa).
 const RESIZABLE: { id: SortKey; min: number; def: number }[] = [
   { id: "artist", min: 70, def: 150 },
   { id: "bpm", min: 44, def: 60 },
   { id: "key", min: 40, def: 56 },
   { id: "time", min: 48, def: 64 },
 ];
+const TITLE_MIN = 120; // Title never collapses below this — caps how wide the others can grow
 const WIDTHS_KEY = "htl:ttWidths";
 const SCALE_KEY = "htl:ttScale";
 const SCALE_MIN = 0.8;
@@ -100,6 +103,7 @@ export function TrackTable({
   const [query, setQuery] = useState(""); // in-library filter (title / artist)
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths());
   const [scale, setScale] = useState<number>(() => loadScale());
+  const tableRef = useRef<HTMLTableElement>(null);
   const anchor = useRef<number | null>(null);
   const longPress = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false); // a long-press opened the menu → swallow the trailing click
@@ -141,24 +145,26 @@ export function TrackTable({
     }
   }
 
-  // Drag a column's right border: the dragged column and its right NEIGHBOUR trade
-  // width (a spreadsheet-style grab), so the border tracks the cursor exactly and the
-  // rest of the table stays put. The Title (flex) column only moves on container
-  // resize. The last resizable column has no right border to drag.
+  // Drag a column's right border to resize just THAT column; Title (the auto/flex
+  // column) absorbs the difference, so the table always fills its container with no
+  // dead space. The column can't drop below its own min, nor grow so far that Title
+  // would fall under TITLE_MIN — that cap is what lets you widen Title by narrowing
+  // any other column (and stops a runaway drag from crushing the title text).
   function startResize(e: React.PointerEvent, id: SortKey) {
     e.preventDefault();
     e.stopPropagation(); // don't trigger the header's sort
-    const idx = RESIZABLE.findIndex((c) => c.id === id);
-    const meta = RESIZABLE[idx];
-    const next = RESIZABLE[idx + 1];
-    if (!meta || !next) return;
+    const meta = RESIZABLE.find((c) => c.id === id);
+    if (!meta) return;
     const startX = e.clientX;
     const startW = widths[id] ?? meta.def;
-    const startNext = widths[next.id] ?? next.def;
     const onMove = (ev: PointerEvent) => {
-      // Clamp the delta so neither column drops below its min.
-      const dx = Math.max(meta.min - startW, Math.min(startNext - next.min, ev.clientX - startX));
-      setWidths((prev) => ({ ...prev, [id]: startW + dx, [next.id]: startNext - dx }));
+      // The other columns' current widths + the fixed #/thumb columns + Title's floor
+      // bound how wide this one may grow before Title would be squeezed past TITLE_MIN.
+      const others = RESIZABLE.reduce((s, c) => (c.id === id ? s : s + (widths[c.id] ?? c.def)), 0);
+      const thumbPx = 3.8 * 13 * scale; // .col-thumb is 3.8em of the scaled font-size
+      const avail = (tableRef.current?.clientWidth ?? 9999) - 36 /* #col */ - thumbPx - TITLE_MIN - others;
+      const w = Math.max(meta.min, Math.min(Math.max(meta.min, avail), startW + (ev.clientX - startX)));
+      setWidths((prev) => ({ ...prev, [id]: w }));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -239,8 +245,7 @@ export function TrackTable({
   // A clickable, sortable header cell with an asc/desc caret + (optionally) a
   // drag-to-resize border on its right edge.
   const SortTh = ({ id, label, cls }: { id: SortKey; label: string; cls: string }) => {
-    const idx = RESIZABLE.findIndex((c) => c.id === id);
-    const hasHandle = idx >= 0 && idx < RESIZABLE.length - 1; // last resizable col has no draggable right border
+    const hasHandle = RESIZABLE.some((c) => c.id === id); // every resizable column gets a drag handle
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
@@ -284,6 +289,7 @@ export function TrackTable({
         </button>
       </div>
       <table
+        ref={tableRef}
         className="track-table"
         style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px` }}
       >

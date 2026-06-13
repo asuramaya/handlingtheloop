@@ -1,0 +1,18 @@
+# Local Worker secrets for `wrangler dev` (`pnpm worker`). Copy to `.dev.vars`
+# (gitignored) and fill in real values. Only needed for the FULL backend path —
+# real Google sign-in, connected services, and the shared-session Durable Object.
+# Plain `pnpm dev` fakes all of this (see server/devStore.ts) and needs none of it.
+
+# Google OAuth web client (Google Cloud Console → Credentials → OAuth 2.0 Client ID).
+# Add this Authorized redirect URI to that client:  http://localhost:8787/api/auth/google/callback
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+
+# 32+ random chars — encrypts stored OAuth tokens at rest in D1.
+TOKEN_ENC_KEY=
+
+# Optional — playlist sync from Spotify / TIDAL.
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+TIDAL_CLIENT_ID=
+TIDAL_CLIENT_SECRET=

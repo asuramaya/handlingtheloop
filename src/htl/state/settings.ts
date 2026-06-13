@@ -4,6 +4,7 @@ import { Store, migrateLegacyKey } from "../persistence";
 import type { KeyBindings } from "./keybinds";
 import type { MidiLearnMap, MidiMap } from "../midi/types";
 import type { ColorProfile } from "./colorProfiles";
+import type { KeyProfile } from "./keyProfiles";
 
 export interface Settings {
   accentA: string; // deck A neon
@@ -32,7 +33,9 @@ export interface Settings {
   stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
   keyHints: boolean; // show the per-button keyboard-shortcut letters (desktop only)
-  keyBindings: KeyBindings; // user-remapped keyboard shortcuts (id → primary/secondary code); {} = defaults
+  keyBindings: KeyBindings; // the LIVE working keymap overlay (id → primary/secondary code); {} = defaults
+  keyProfiles: KeyProfile[]; // saved, shareable keyboard profiles (synced to account, same as midiMaps)
+  activeKeyProfileId: string | null; // which saved profile keyBindings was loaded from (null = ad-hoc / default)
   midiEnabled: boolean; // enable USB-MIDI controller support (Web MIDI; desktop Chromium only)
   midiBindings: MidiLearnMap; // the LIVE working overlay layered over the matched profile; {} = profile only
   midiMaps: MidiMap[]; // saved, shareable named maps (synced to account); load one → copies into midiBindings
@@ -146,6 +149,8 @@ export const DEFAULT_SETTINGS: Settings = {
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free
   keyHints: true, // per-button key letters on by default (CSS hides them on mobile)
   keyBindings: {}, // empty → every action uses its default key (see @htl keybinds)
+  keyProfiles: [], // no saved keyboard profiles yet
+  activeKeyProfileId: null,
   midiEnabled: false, // off until the user opts in (Web MIDI shows a permission prompt)
   midiBindings: {}, // empty → rely on the auto-matched built-in controller profile
   midiMaps: [], // no saved maps yet

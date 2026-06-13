@@ -3,23 +3,14 @@
 // Stored in settings (account-synced); exported as JSON to share custom maps.
 
 import type { MidiLearnMap, MidiMap } from "./types";
+import { uid, exportEnvelope, parseEnvelope } from "../state/profiles";
 
 const EXPORT_KIND = "htl-midi-map";
 const EXPORT_VERSION = 1;
 
-function uid(): string {
-  try {
-    const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-    if (c?.randomUUID) return c.randomUUID();
-  } catch {
-    /* fall through */
-  }
-  return `m_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`;
-}
-
 export function createMap(name: string, opts: { device?: string | null; basedOn?: string | null; bindings?: MidiLearnMap } = {}): MidiMap {
   return {
-    id: uid(),
+    id: uid("m"),
     name: name.trim() || "Untitled map",
     device: opts.device ?? null,
     basedOn: opts.basedOn ?? null,
@@ -29,32 +20,29 @@ export function createMap(name: string, opts: { device?: string | null; basedOn?
 }
 
 export function duplicateMap(map: MidiMap): MidiMap {
-  return { ...map, id: uid(), name: `${map.name} copy`, bindings: { ...map.bindings }, updatedAt: Date.now() };
+  return { ...map, id: uid("m"), name: `${map.name} copy`, bindings: { ...map.bindings }, updatedAt: Date.now() };
 }
 
 // Pretty JSON for download / clipboard.
 export function exportMap(map: MidiMap): string {
-  return JSON.stringify({ kind: EXPORT_KIND, version: EXPORT_VERSION, map }, null, 2);
+  return exportEnvelope(EXPORT_KIND, EXPORT_VERSION, "map", map);
 }
 
 // Parse a shared map (file or pasted text). Returns a FRESH-id copy so importing
 // never collides with an existing one. Returns null on anything malformed.
 export function parseMap(text: string): MidiMap | null {
-  try {
-    const o = JSON.parse(text) as { kind?: string; map?: Partial<MidiMap> };
-    const m = o?.kind === EXPORT_KIND && o.map ? o.map : (o as unknown as Partial<MidiMap>);
+  return parseEnvelope<MidiMap>(EXPORT_KIND, "map", text, (raw) => {
+    const m = raw as Partial<MidiMap>;
     if (!m || typeof m.bindings !== "object" || m.bindings == null) return null;
     return {
-      id: uid(),
+      id: uid("m"),
       name: typeof m.name === "string" && m.name.trim() ? m.name : "Imported map",
       device: typeof m.device === "string" ? m.device : null,
       basedOn: typeof m.basedOn === "string" ? m.basedOn : null,
       bindings: m.bindings as MidiLearnMap,
       updatedAt: Date.now(),
     };
-  } catch {
-    return null;
-  }
+  });
 }
 
 export function bindingCount(map: MidiMap): number {

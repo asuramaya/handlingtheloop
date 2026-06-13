@@ -71,3 +71,12 @@ export {
   bindingIndex,
   codeLabel,
 } from "./keybinds";
+export {
+  type KeyProfile,
+  createKeyProfile,
+  duplicateKeyProfile,
+  exportKeyProfile,
+  parseKeyProfile,
+  keyBindingCount,
+} from "./keyProfiles";
+export { uid, exportEnvelope, parseEnvelope } from "./profiles";

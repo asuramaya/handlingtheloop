@@ -11,6 +11,8 @@
 // reported so the caller falls back to YouTube captions — the feature never hard-crashes.
 const TJS = "https://esm.sh/@huggingface/transformers@3";
 
+import { FFT, hannPeriodic } from "../stems/fft";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface AsrChunk {
   text: string;
@@ -92,6 +94,99 @@ function stripNonSpeech(s: string): string {
     .trim();
 }
 
+// ---- vocal-onset alignment ------------------------------------------------------------
+// Whisper word starts are only ROUGHLY right (DTW over cross-attention; ~±100 ms, biased
+// early, fuzziest on sung/held vowels). We have the clean vocal stem, so we detect the REAL
+// vocal onsets via spectral flux (catches legato note changes, not just energy rises) and
+// snap each word to the nearest onset within a small window — pulling words onto the actual
+// transients. Where there's no clear onset (true legato) the word keeps Whisper's time.
+const ON_N = 1024;
+const ON_HOP = 160; // 10 ms @ 16 kHz
+const ON_BINS = ON_N / 2;
+const onFft = new FFT(ON_N);
+const onWin = hannPeriodic(ON_N);
+
+function detectOnsets(audio: Float32Array): number[] {
+  const frames = Math.floor((audio.length - ON_N) / ON_HOP) + 1;
+  if (frames < 4) return [];
+  const re = new Float32Array(ON_N);
+  const im = new Float32Array(ON_N);
+  let prevMag = new Float32Array(ON_BINS);
+  let curMag = new Float32Array(ON_BINS);
+  const flux = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    const off = f * ON_HOP;
+    for (let i = 0; i < ON_N; i++) {
+      re[i] = (audio[off + i] || 0) * onWin[i];
+      im[i] = 0;
+    }
+    onFft.transform(re, im, false);
+    let fl = 0;
+    for (let k = 0; k < ON_BINS; k++) {
+      const m = Math.hypot(re[k], im[k]);
+      curMag[k] = m;
+      const d = m - prevMag[k];
+      if (d > 0) fl += d; // half-wave-rectified spectral flux
+    }
+    flux[f] = fl;
+    const t = prevMag;
+    prevMag = curMag;
+    curMag = t;
+  }
+  // Adaptive peak-pick: a local max comfortably above its local mean, ≥50 ms apart.
+  const onsets: number[] = [];
+  const W = 8; // ±80 ms local window
+  let lastF = -100;
+  for (let f = 1; f < frames - 1; f++) {
+    if (flux[f] < flux[f - 1] || flux[f] < flux[f + 1]) continue;
+    let s = 0;
+    let c = 0;
+    for (let j = Math.max(0, f - W); j <= Math.min(frames - 1, f + W); j++) {
+      s += flux[j];
+      c++;
+    }
+    if (flux[f] > (s / c) * 1.6 + 1e-6 && f - lastF >= 5) {
+      onsets.push((f * ON_HOP) / 16000);
+      lastF = f;
+    }
+  }
+  return onsets;
+}
+
+function nearestOnset(onsets: number[], t: number): number {
+  let lo = 0;
+  let hi = onsets.length - 1;
+  if (t <= onsets[0]) return onsets[0];
+  if (t >= onsets[hi]) return onsets[hi];
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (onsets[m] < t) lo = m + 1;
+    else hi = m;
+  }
+  const a = onsets[lo - 1];
+  const b = onsets[lo];
+  return t - a <= b - t ? a : b;
+}
+
+// Snap each word's onset to the nearest vocal onset within ±WIN; keep its held duration and
+// stay strictly increasing (don't reorder words onto the same/earlier onset).
+function snapToOnsets(lines: OutLine[], onsets: number[]): OutLine[] {
+  if (onsets.length < 2) return lines;
+  const WIN = 0.16;
+  for (const ln of lines) {
+    if (!ln.words?.length) continue;
+    let prevT = -Infinity;
+    for (const wd of ln.words) {
+      const near = nearestOnset(onsets, wd.t);
+      if (Math.abs(near - wd.t) <= WIN && near > prevT) wd.t = near;
+      prevT = wd.t;
+    }
+    ln.start = ln.words[0].t;
+    ln.end = Math.max(ln.end, ln.words[ln.words.length - 1].t);
+  }
+  return lines;
+}
+
 // Group Whisper WORD chunks into lines. SILENCE is handled here: a gap between words longer
 // than GAP_S starts a new line, so an instrumental break leaves a clean break (no line
 // stretched across it), and a sentence-ending word closes a line. Consecutive duplicate
@@ -161,12 +256,32 @@ self.onmessage = async (e: MessageEvent) => {
     // WORD-level timestamps for karaoke highlighting; if the model lacks alignment heads it
     // throws, so fall back to segment-level (line highlighting) — always produce something.
     let lines: OutLine[];
+    let wordMode = false;
     try {
       const out = await pipe(audio, { return_timestamps: "word", ...common });
-      lines = groupWords(out.chunks ?? []);
+      const ch = out.chunks ?? [];
+      // DIAGNOSTIC for word-onset drift: if the LAST word's time is far short of the audio
+      // length, transformers.js isn't accumulating the per-chunk offset → words read
+      // increasingly early (our/library bug). If it ≈ the audio length, per-word error is
+      // the model. Compare lastWord vs audioSec in the console.
+      const lastT = ch.length ? (ch[ch.length - 1].timestamp?.[0] ?? 0) : 0;
+      (self as any).postMessage({
+        type: "diag",
+        audioSec: +(audio.length / 16000).toFixed(1),
+        words: ch.length,
+        lastWordSec: +lastT.toFixed(1),
+        sample: ch.slice(0, 6).map((c) => [Math.round((c.timestamp?.[0] ?? 0) * 10) / 10, (c.text || "").trim()]),
+      });
+      lines = groupWords(ch);
+      wordMode = true;
     } catch {
       const out = await pipe(audio, { return_timestamps: true, ...common });
       lines = cleanSegments(out.chunks);
+    }
+    // Snap word onsets to the real vocal transients (word mode only — segments have no words).
+    if (wordMode && lines.some((l) => l.words?.length)) {
+      (self as any).postMessage({ type: "progress", phase: "align", id });
+      lines = snapToOnsets(lines, detectOnsets(audio));
     }
     (self as any).postMessage({ type: "done", id, lines, lang: language || "en" });
   } catch (err: any) {

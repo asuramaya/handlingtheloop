@@ -7,6 +7,7 @@ import { createInnertubeApi } from "./innertube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
 import { fetchCaptions, fetchMeta, type YtAuth } from "./youtube";
 import { STEM_DOWNLOAD_CONTENT_TYPE, looksLikeAudioStem } from "./security";
+import * as devStore from "./devStore";
 
 // SECURITY: this Node handler is DEV-ONLY — it is mounted solely as Vite middleware
 // (see vite.config.ts) and intentionally sends `Access-Control-Allow-Origin: *` for
@@ -120,6 +121,26 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.end(payload);
+}
+
+// --- DEV-ONLY account emulation -------------------------------------------------------
+// The production account layer (server/accounts.ts) needs D1 + Google OAuth + a session
+// cookie, none of which exist in plain `vite` dev. To make sign-in / profile / settings
+// sync / lyrics testable locally we fake them here, backed by server/devStore.ts. This is
+// gated to non-production AND only ever mounted as Vite middleware (see the header note).
+const DEV_AUTH = process.env.NODE_ENV !== "production";
+const DEV_COOKIE = "htl_session";
+
+function signedIn(req: IncomingMessage): boolean {
+  const raw = req.headers.cookie ?? "";
+  return raw.split(/;\s*/).some((c) => c === `${DEV_COOKIE}=dev`);
+}
+
+function sendRedirect(res: ServerResponse, location: string, setCookie?: string): void {
+  res.statusCode = 302;
+  res.setHeader("Location", location);
+  if (setCookie) res.setHeader("Set-Cookie", setCookie);
+  res.end();
 }
 
 
@@ -295,10 +316,132 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         sendJson(res, 200, await refreshAccessToken(oauthCreds(process.env), refresh_token));
         return true;
       }
+      // --- DEV account emulation (fake auth + file-backed stores) ---
+      case "/api/auth/google/start": {
+        if (!DEV_AUTH) break;
+        // No real OAuth locally: drop a presence cookie and land back in the app, signed in
+        // as the single dev user. Real Google sign-in is the `wrangler dev` path (see DEV.md).
+        sendRedirect(res, "/", `${DEV_COOKIE}=dev; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`);
+        return true;
+      }
+      case "/api/auth/logout": {
+        if (!DEV_AUTH) break;
+        sendRedirect(res, "/", `${DEV_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+        return true;
+      }
+      case "/api/me": {
+        if (!DEV_AUTH) break;
+        if (!signedIn(req)) {
+          sendJson(res, 200, { user: null, connections: [] });
+          return true;
+        }
+        const u = await devStore.devUser();
+        sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, avatar: u.avatar }, connections: [] });
+        return true;
+      }
+      case "/api/me/profile": {
+        if (!DEV_AUTH) break;
+        if (!signedIn(req)) {
+          sendJson(res, 401, { error: "sign in first" });
+          return true;
+        }
+        const u = await devStore.devUser();
+        sendJson(res, 200, {
+          user: { id: u.id, email: u.email, name: u.name, avatar: u.avatar, memberSince: u.created_at },
+          connections: [],
+          topTracks: await devStore.topTracks(12),
+        });
+        return true;
+      }
+      case "/api/me/play": {
+        if (!DEV_AUTH) break;
+        if (req.method !== "POST") {
+          sendJson(res, 405, { error: "POST only" });
+          return true;
+        }
+        if (!signedIn(req)) {
+          sendJson(res, 401, { error: "sign in first" });
+          return true;
+        }
+        const b = (await readJsonBody(req)) as { videoId?: string; title?: string; artist?: string; thumbnail?: string };
+        if (!b.videoId || !/^[\w-]{11}$/.test(b.videoId)) {
+          sendJson(res, 400, { error: "bad videoId" });
+          return true;
+        }
+        await devStore.logPlay({ videoId: b.videoId, title: b.title, artist: b.artist, thumbnail: b.thumbnail });
+        sendJson(res, 200, { ok: true });
+        return true;
+      }
+      case "/api/me/settings": {
+        if (!DEV_AUTH) break;
+        if (!signedIn(req)) {
+          sendJson(res, 401, { error: "sign in first" });
+          return true;
+        }
+        if (req.method === "GET") {
+          const row = await devStore.getSettings();
+          sendJson(res, 200, { data: row?.data ?? null, updatedAt: row?.updated_at ?? 0 });
+          return true;
+        }
+        if (req.method === "PUT") {
+          const body = (await readJsonBody(req)) as { data?: unknown; updatedAt?: number };
+          if (body.data == null) {
+            sendJson(res, 400, { error: "data required" });
+            return true;
+          }
+          if (JSON.stringify(body.data).length > 256 * 1024) {
+            sendJson(res, 413, { error: "settings too large" });
+            return true;
+          }
+          const ts = typeof body.updatedAt === "number" ? body.updatedAt : Date.now();
+          await devStore.putSettings(body.data, ts);
+          sendJson(res, 200, { ok: true, updatedAt: ts });
+          return true;
+        }
+        sendJson(res, 405, { error: "GET or PUT only" });
+        return true;
+      }
+      case "/api/lyrics": {
+        if (!DEV_AUTH) break;
+        const v = url.searchParams.get("v");
+        if (req.method === "GET") {
+          if (!v || !/^[\w-]{11}$/.test(v)) {
+            sendJson(res, 400, { error: "missing or invalid ?v=" });
+            return true;
+          }
+          const row = await devStore.getLyrics(v);
+          sendJson(res, 200, {
+            transcript: row
+              ? { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, lines: row.lines, createdAt: 0 }
+              : null,
+          });
+          return true;
+        }
+        if (req.method === "POST") {
+          const b = (await readJsonBody(req)) as { videoId?: string; model?: string; lang?: string; conf?: number; lines?: unknown };
+          if (!b.videoId || !/^[\w-]{11}$/.test(b.videoId) || !Array.isArray(b.lines) || !b.lines.length) {
+            sendJson(res, 400, { error: "bad payload" });
+            return true;
+          }
+          await devStore.putLyrics(b.videoId, {
+            model: b.model === "small" ? "small" : "base",
+            lang: typeof b.lang === "string" ? b.lang : "en",
+            conf: typeof b.conf === "number" ? b.conf : 0,
+            lines: b.lines,
+          });
+          sendJson(res, 200, { ok: true });
+          return true;
+        }
+        sendJson(res, 405, { error: "GET or POST only" });
+        return true;
+      }
+
       default:
         sendJson(res, 404, { error: `unknown endpoint ${path}` });
         return true;
     }
+    sendJson(res, 404, { error: `unknown endpoint ${path}` });
+    return true;
   } catch (e) {
     sendJson(res, 502, { error: (e as Error).message });
     return true;

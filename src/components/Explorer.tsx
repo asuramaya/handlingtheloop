@@ -3,6 +3,7 @@ import type { TrackMeta } from "@htl/library";
 import { searchYouTube, fetchMeta, parseVideoId, parsePlaylistId } from "@htl/media";
 import { loadSearchState, saveSearchState, type SortKey } from "@htl/state";
 import { fmtTime, fmtViews } from "../util/format";
+import { TRACK_DND_MIME } from "./TrackTable";
 
 interface ExplorerProps {
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
@@ -182,6 +183,14 @@ export function Explorer({ onLoad, onAdd, inCollection, onIngestPlaylist, playli
           <div
             className="result-row"
             key={t.videoId}
+            // Drag a search result straight onto the library (Collection or a sidebar
+            // playlist) — same payload the TrackTable rows carry, so the existing drop
+            // targets in LibraryPanel file it without a round-trip through the menu.
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(TRACK_DND_MIME, JSON.stringify([t]));
+              e.dataTransfer.effectAllowed = "copy";
+            }}
             // Left click / tap → pick a deck; right click / long-press → file menu.
             onClick={(e) => {
               if (suppressClick.current) {

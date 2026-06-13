@@ -149,7 +149,7 @@ async function persistStems(videoId: string, modelId: string, stems: Stems): Pro
       }
     }
   }
-  void saveStemsLocal(videoId, modelId, blobs); // local: survives refresh
+  await saveStemsLocal(videoId, modelId, blobs); // local FIRST (awaited) so a re-derive finds it
   for (let i = 0; i < STEM_NAMES.length; i++) {
     try {
       await uploadStem(videoId, STEM_NAMES[i], blobs[i], "audio/octet-stream", modelId); // R2: shared

@@ -28,9 +28,15 @@ import {
   clearStemTrace,
   formatStemTrace,
   type StemModel,
+  createKeyProfile,
+  duplicateKeyProfile,
+  exportKeyProfile,
+  parseKeyProfile,
+  keyBindingCount,
 } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { KeyMap } from "./KeyHelp";
+import { ProfileBar } from "./ProfileBar";
 import { type UseMidi } from "@htl/midi";
 import { MidiPanel } from "./MidiPanel";
 import { ColorProfiles } from "./ColorProfiles";
@@ -513,6 +519,32 @@ export function SettingsPanel({
                   hint={settings.jogDrag < 0.2 ? "long glide" : settings.jogDrag > 0.7 ? "quick stop" : "balanced"}
                   value={settings.jogDrag}
                   onChange={(v) => set({ jogDrag: v })}
+                />
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-head">
+                  <span className="settings-label">Keyboard profiles</span>
+                </div>
+                <ProfileBar
+                  adapter={{
+                    profiles: settings.keyProfiles ?? [],
+                    activeId: settings.activeKeyProfileId ?? null,
+                    zeroLabel: "Default keys",
+                    zeroPayload: () => ({}),
+                    snapshotCurrent: () => ({ ...settings.keyBindings }),
+                    payloadOf: (p) => p.bindings,
+                    buildNew: (name, b) => createKeyProfile(name, b),
+                    duplicate: duplicateKeyProfile,
+                    updateProfile: (p, b) => ({ ...p, bindings: b, updatedAt: Date.now() }),
+                    parseText: parseKeyProfile,
+                    exportText: exportKeyProfile,
+                    describe: (p) => `${keyBindingCount(p)} custom`,
+                    fileExt: "htlkeys.json",
+                    noun: "profile",
+                    onCommit: ({ profiles, activeId, payload }) =>
+                      set({ keyProfiles: profiles, activeKeyProfileId: activeId, ...(payload ? { keyBindings: payload } : {}) }),
+                  }}
                 />
               </div>
 

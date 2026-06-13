@@ -262,7 +262,10 @@ function shape(v: number): number {
 interface WaveMeta {
   left: number;
   span: number;
-  secPerPx: number; // the VIEW's secPerPx this layer was built for (zoom-staleness check)
+  win: number; // the VIEW window (zoom) this layer was built for — RATE-INDEPENDENT, so a
+  // tempo change re-uses the layer (blit-scaled) instead of forcing a rebuild. Only a real
+  // zoom (this changing) is a content-resolution change worth a fresh rasterise.
+  secPerPx: number; // the VIEW's secPerPx at build time (for the coarse/fine ratio guard)
   colSec: number; // seconds per OFFSCREEN column (≥ secPerPx; the layer is rendered coarser)
   w: number;
   h: number;
@@ -291,6 +294,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 }); // cached device-px size (no per-frame reflow)
   const dirty = useRef(true); // request one composite (set on any React render / resize)
   const waveRef = useRef<HTMLCanvasElement | null>(null); // offscreen rasterised waveform
+  const scratchRef = useRef<HTMLCanvasElement | null>(null); // scratch for the scroll-shift blit
   const waveMeta = useRef<WaveMeta | null>(null);
   const rebuildTimer = useRef(0); // debounced crisp rebuild after a zoom settles
   const localWin = useRef<number | null>(null); // live zoom during a gesture (avoids App re-renders)
@@ -540,7 +544,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
 
   // Rasterise a fresh offscreen layer (3× viewport wide) centred on the view.
   // This is the only place the heavy per-pixel loop runs.
-  const rebuildWave = (left: number, tw: number, secPerPx: number, w: number, h: number) => {
+  const rebuildWave = (left: number, tw: number, secPerPx: number, win: number, w: number, h: number) => {
     const p = view.current;
     const stems = deck.stemPyramids;
     const mask = stemMask(deck, stems);
@@ -568,11 +572,67 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (!wctx) return;
     wctx.clearRect(0, 0, ow, h);
     rasterize(wctx, waveLeft, colSec, ow, h);
-    waveMeta.current = { left: waveLeft, span, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
     }
+  };
+
+  // Keep the cached layer centred on the moving view by SHIFTING it and rasterising only the
+  // newly-exposed leading strip — instead of re-rasterising the whole 3×-wide layer every time
+  // playback scrolls off it. This is the core playback-smoothness fix: a full rebuild is O(span)
+  // and used to fire in a single rAF frame every ~0.9 window-widths of scroll (a periodic spike
+  // that, at deep zoom, lands every few frames and the playhead can outrun) — the sawtooth GPU
+  // burst + the visible skips. Shifting turns it into O(Δcolumns) of steady per-frame work: a
+  // cheap GPU blit of the existing pixels + a tiny strip raster at the edge.
+  //
+  // `m` MUST match the current geometry (same win, w, h) — the caller guarantees it. Returns
+  // false if the shift is too large to be a scroll (a seek/jump) so the caller full-rebuilds.
+  const PAD = 12; // strip overlap (≥ glow blur radius) so the re-rendered seam is glow-continuous
+  const shiftToCover = (left: number, trackWindow: number, m: WaveMeta): boolean => {
+    const wc = waveRef.current;
+    if (!wc) return false;
+    const ow = wc.width;
+    const h = wc.height;
+    // Target: re-centre the view inside the layer so there's symmetric runway both directions.
+    const wantLeft = left - (m.span - trackWindow) / 2;
+    const shiftCols = Math.round((wantLeft - m.left) / m.colSec);
+    if (shiftCols === 0) return true; // sub-column drift — the blit's fractional srcX covers it
+    if (Math.abs(shiftCols) >= ow - PAD) return false; // a jump, not a scroll → let caller rebuild
+    const wctx = wc.getContext("2d");
+    if (!wctx) return false;
+
+    // Shift existing pixels via a scratch copy (robust vs. overlapping self-blit). Forward play
+    // (shiftCols > 0) moves content LEFT; a backward seek moves it right.
+    let sc = scratchRef.current;
+    if (!sc) {
+      sc = document.createElement("canvas");
+      scratchRef.current = sc;
+    }
+    if (sc.width !== ow || sc.height !== h) {
+      sc.width = ow;
+      sc.height = h;
+    }
+    const sctx = sc.getContext("2d");
+    if (!sctx) return false;
+    sctx.clearRect(0, 0, ow, h);
+    sctx.drawImage(wc, 0, 0);
+    wctx.clearRect(0, 0, ow, h);
+    wctx.drawImage(sc, -shiftCols, 0);
+
+    // Re-rasterise the now-uncovered band (+ PAD on the preserved side so glow joins seamlessly).
+    const newStart = shiftCols > 0 ? ow - shiftCols : 0;
+    const c0 = Math.max(0, newStart - PAD);
+    const c1 = Math.min(ow, newStart + Math.abs(shiftCols) + PAD);
+    const newLeft = m.left + shiftCols * m.colSec;
+    wctx.clearRect(c0, 0, c1 - c0, h);
+    wctx.save();
+    wctx.translate(c0, 0);
+    rasterize(wctx, newLeft + c0 * m.colSec, m.colSec, c1 - c0, h);
+    wctx.restore();
+    m.left = newLeft;
+    return true;
   };
 
   // Per-frame composite: background, loop tint, the blitted waveform, grid,
@@ -618,6 +678,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // DECK A/B focus switching feel instant instead of blocking on a full re-rasterise.
     const stemsNow = deck.stemPyramids;
     const maskNow = stemMask(deck, stemsNow);
+    const curWin = localWin.current ?? p.windowSec; // the zoom intent, WITHOUT the rate scale
     const m0 = waveMeta.current;
     const contentStale =
       !m0 ||
@@ -631,16 +692,29 @@ export function WaveformViewport(props: WaveformViewportProps) {
       m0.viv !== p.vividness ||
       m0.glow !== p.glow ||
       m0.stemCols !== stemColsKey(p.stemColors);
-    const scrolledOff = !!m0 && (left < m0.left + trackWindow * 0.1 || left + trackWindow > m0.left + m0.span - trackWindow * 0.1);
-    const geomStale = !!m0 && (m0.w !== w || m0.h !== h || m0.secPerPx !== secPerPx);
-    if (contentStale || scrolledOff) {
-      rebuildWave(left, trackWindow, secPerPx, w, h);
+    // GEOMETRY staleness is a ZOOM or a box-resize — NOT a tempo change. The layer maps track-
+    // time→column via colSec, so any rate/scroll is just a blit-scale + shift; only the window
+    // (zoom) or the canvas size warrant a fresh rasterise. A big sustained tempo change is the
+    // one rate case that coarsens the layer past usefulness — the ratio guard below catches it.
+    const geomStale = !!m0 && (m0.w !== w || m0.h !== h || m0.win !== curWin);
+    // Window unchanged but a big sustained TEMPO move coarsened/sharpened the layer past
+    // usefulness — the one rate case that needs a fresh rasterise (checked only when NOT
+    // mid-zoom, so it never pre-empts the smooth-zoom blit-scale below).
+    const ratioOff = !!m0 && (secPerPx > m0.colSec * 2.2 || secPerPx < m0.colSec * 0.4);
+    if (contentStale) {
+      rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
     } else if (geomStale) {
+      // Zoom / resize: blit-SCALE the cached layer now (below) for instant feedback and debounce
+      // ONE crisp rebuild once the geometry settles — keeps zoom + deck A/B focus snappy.
       if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
       rebuildTimer.current = window.setTimeout(() => {
         waveMeta.current = null;
         dirty.current = true;
       }, 130);
+    } else if (m0 && (ratioOff || !shiftToCover(left, trackWindow, m0))) {
+      // Same zoom/size/content but either the tempo coarsened the layer (ratioOff) or the view
+      // scrolled past a shiftable range (a seek → shiftToCover returns false) — rebuild fresh.
+      rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
     }
     const m = waveMeta.current;
     const wc = waveRef.current;

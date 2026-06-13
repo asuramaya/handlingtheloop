@@ -789,6 +789,12 @@ export function App() {
   // stops the "DSP ↔ enhance" cycle (whatever re-fires the effect, the work runs once).
   // Cleared on a fresh track load so reloading the same track still re-derives.
   const deriveGuard = useRef<Record<DeckId, string>>({ A: "", B: "" });
+  // What neural stems are ACTUALLY on each deck now (`${videoId}:${modelId}`). deriveGuard is
+  // cleared by the model/auto-enhance effect to force a re-derive, but a re-derive must NOT
+  // re-separate stems the deck already holds — that's the "runs demucs again on an already-
+  // processed track" bug (the local IndexedDB persist lags the separation by the encode time,
+  // so loadStemsLocal misses in that window). This tracks the real state and short-circuits.
+  const stemLoadedKey = useRef<Record<DeckId, string>>({ A: "", B: "" });
 
   // In-flight neural jobs, keyed by `${videoId}:${modelId}` and SHARED across decks
   // (both decks on the same track+model await ONE separation). The entry is removed
@@ -940,11 +946,23 @@ export function App() {
       // (from a previous separation/download), decode them straight from disk and apply —
       // NO R2 re-download, NO re-separation. This is what stops a page refresh from redoing
       // the work. (Every selectable model here is neural — "single" returned above.)
+      // Already separated + still on this deck (e.g. the model/auto-enhance effect cleared the
+      // guard, or the local persist hasn't landed yet) → DON'T re-separate; it's already here.
+      if (engine.deck(id).hasStems && stemLoadedKey.current[id] === guardKey) {
+        setStatusFor(id, null);
+        return;
+      }
+
+      // Refresh-fast path: if THIS track's neural stems are already persisted in IndexedDB
+      // (from a previous separation/download), decode them straight from disk and apply —
+      // NO R2 re-download, NO re-separation. This is what stops a page refresh from redoing
+      // the work. (Every selectable model here is neural — "single" returned above.)
       {
         const local = await loadStemsLocal(engine.ctx, videoId, model.id);
         if (local) {
           if (stale?.()) return;
           engine.deck(id).setStems(local, true); // neural → per-stem lanes
+          stemLoadedKey.current[id] = guardKey;
           refresh();
           // Make a cache hit OBVIOUS (green), so it reads differently from a fresh
           // separation — these stems came straight off disk, no work was done. The
@@ -1023,6 +1041,7 @@ export function App() {
         const neural = await job;
         if (stale?.()) return;
         engine.deck(id).setStems(neural, true); // neural → per-stem lanes
+        stemLoadedKey.current[id] = guardKey; // remember it's loaded → never re-separate it
         refresh();
         // Persistent active-stems chip (clears on next track load).
         setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready.` });
@@ -1114,6 +1133,7 @@ export function App() {
       stemTrace(`load ${id}:start`, track.title?.slice(0, 40));
       engine.deck(id).setStems(null);
       deriveGuard.current[id] = ""; // new load → allow a fresh derive even for the same track
+      stemLoadedKey.current[id] = ""; // new track → the old deck stems are gone
       setCaptions((c) => ({ ...c, [id]: [] })); // drop the old track's captions
       setLoading((l) => ({ ...l, [id]: true }));
       try {
@@ -1267,6 +1287,7 @@ export function App() {
           },
         }));
         deriveGuard.current[id] = ""; // fresh file → allow a re-derive
+        stemLoadedKey.current[id] = "";
         void deriveStems(id, file.name, buffer);
       } catch (e) {
         setStatusFor(id, { phase: "failed", detail: `Load failed: ${(e as Error).message}` });

@@ -49,7 +49,11 @@ function ensureWorker(): Worker {
     worker = new Worker(new URL("./transcribe.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent) => {
       const m = e.data;
-      if (m?.type === "progress") {
+      if (m?.type === "diag") {
+        // Word-onset drift check: lastWordSec should ≈ audioSec. If it's far short, the
+        // library isn't accumulating chunk offsets → words read increasingly early.
+        console.log(`[htl-lyrics] audio=${m.audioSec}s words=${m.words} lastWord=${m.lastWordSec}s`, m.sample);
+      } else if (m?.type === "progress") {
         if (typeof m.id === "number") jobs.get(m.id)?.onProgress?.(m.phase, m.pct);
         else jobs.forEach((j) => j.onProgress?.(m.phase, m.pct)); // model-load progress has no id
       } else if (m?.type === "done") {
@@ -83,8 +87,8 @@ function transcribe(pcm: Float32Array, sampleRate: number, repo: string, onProgr
 // in-flight job per videoId coalesces concurrent loads (both decks, StrictMode double-fire).
 // Transcript-FORMAT version. Bump when the decode/shape changes so stale cached transcripts
 // (e.g. the old segment-only [MUSIC]-laden ones) are ignored and re-decoded. 2 = word-timed +
-// non-speech stripped; 3 = words carry held-duration (d).
-const LYRICS_VER = 3;
+// non-speech stripped; 3 = words carry held-duration (d); 4 = onsets snapped to vocal transients.
+const LYRICS_VER = 4;
 const mem = new Map<string, LyricsLine[]>(); // videoId → lines (any model — first good wins)
 const inflight = new Map<string, Promise<LyricsLine[] | null>>();
 
@@ -118,7 +122,7 @@ function transcribeOnce(
       const m = whisperModel(model);
       onStatus?.(`Transcribing lyrics (${m.label})…`);
       const lines = await transcribe(vocals, sampleRate, m.repo, (phase, pct) =>
-        onStatus?.(phase === "model" ? `Loading ${m.label} model… ${pct}%` : "Transcribing lyrics…"),
+        onStatus?.(phase === "model" ? `Loading ${m.label} model… ${pct}%` : phase === "align" ? "Aligning words to vocals…" : "Transcribing lyrics…"),
       );
       if (lines.length) {
         mem.set(videoId, lines);

@@ -1,5 +1,5 @@
 import { fetchCaptions } from "@htl/media";
-import { getLyricsLocal, putLyricsLocal } from "@htl/persistence";
+import { getLyricsLocal, putLyricsLocal, deleteLyricsLocal } from "@htl/persistence";
 import type { Deck } from "@htl/audio";
 import type { LyricsLine, LyricsSource, LyricsTranscript } from "./types";
 import type { LyricsModel } from "./models";
@@ -27,7 +27,10 @@ async function poolGet(videoId: string): Promise<LyricsTranscript | null> {
     return null;
   }
 }
+const postedLyrics = new Set<string>(); // contribute each track once per session (no re-writes on re-decode)
 async function poolPut(t: LyricsTranscript): Promise<void> {
+  if (postedLyrics.has(t.videoId)) return;
+  postedLyrics.add(t.videoId);
   try {
     await fetch(`/api/lyrics`, {
       method: "POST",
@@ -96,6 +99,20 @@ export function cacheRemoteLyrics(videoId: string, lines: LyricsLine[], source: 
   if (!videoId || !lines?.length) return;
   mem.set(videoId, lines);
   void putLyricsLocal(videoId, { lines, model: source === "youtube" ? "youtube" : "base", ver: LYRICS_VER });
+}
+
+// User-triggered "reprocess lyrics": wipe every cached copy of this track's transcript so a
+// forced resolve can't be short-circuited by a stale/contaminated entry. Clears the session
+// memory, the in-flight job (so a fresh decode actually starts, not a join of the old one),
+// the once-per-session pool-contribution guard, and the IndexedDB record. The shared POOL
+// (D1) row is intentionally NOT deleted from here (no client auth); the forced resolve simply
+// SKIPS the pool and re-decodes locally, then re-contributes the fresh result.
+export async function clearLyricsCache(videoId: string): Promise<void> {
+  if (!videoId) return;
+  mem.delete(videoId);
+  inflight.delete(videoId);
+  postedLyrics.delete(videoId);
+  await deleteLyricsLocal(videoId).catch(() => {});
 }
 
 async function cachedLines(videoId: string): Promise<LyricsLine[] | null> {
@@ -180,6 +197,7 @@ export interface ResolveOpts {
   deck: Deck;
   model: LyricsModel;
   engine?: "whisper" | "youtube"; // explicit lyrics engine: Whisper (default) or YouTube captions
+  force?: boolean; // user reprocess: skip the local cache AND the pool, re-decode fresh
   enabled: boolean; // settings.lyricsAuto
   sampleRate: number; // engine ctx sample rate (stems share it)
   stale: () => boolean;
@@ -199,6 +217,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
   // on-device decode, no GPU. Skip even the local Whisper cache so the engine choice is honoured
   // predictably. Works everywhere (mobile included).
   if (o.engine === "youtube") {
+    if (o.force) await clearLyricsCache(o.videoId); // wipe any bad cached whisper copy too
     const cues = await fetchCaptions(o.videoId);
     if (o.stale()) return;
     if (cues.length) {
@@ -210,23 +229,30 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
     return;
   }
 
-  // 0) Local cache — the fix for the re-transcribe loop. If we've decoded this track before
-  // (this session OR a past one), use it and STOP. No vocals wait, no worker, no spinner.
-  const cached = await cachedLines(o.videoId);
-  if (o.stale()) return;
-  if (cached) {
-    o.onCues(cached, "whisper");
-    return;
-  }
+  // A forced reprocess (the user got wrong/contaminated lyrics) wipes every cached copy first
+  // and SKIPS both the local cache (step 0) and the pool (step 1) — those are exactly what
+  // served the bad transcript — going straight to a fresh on-device decode below.
+  if (o.force) {
+    await clearLyricsCache(o.videoId);
+  } else {
+    // 0) Local cache — the fix for the re-transcribe loop. If we've decoded this track before
+    // (this session OR a past one), use it and STOP. No vocals wait, no worker, no spinner.
+    const cached = await cachedLines(o.videoId);
+    if (o.stale()) return;
+    if (cached) {
+      o.onCues(cached, "whisper");
+      return;
+    }
 
-  // 1) Community pool.
-  const pooled = await poolGet(o.videoId);
-  if (o.stale()) return;
-  if (pooled?.lines?.length) {
-    mem.set(o.videoId, pooled.lines);
-    void putLyricsLocal(o.videoId, { lines: pooled.lines, model: pooled.model, ver: LYRICS_VER });
-    o.onCues(pooled.lines, "pool");
-    return;
+    // 1) Community pool.
+    const pooled = await poolGet(o.videoId);
+    if (o.stale()) return;
+    if (pooled?.lines?.length) {
+      mem.set(o.videoId, pooled.lines);
+      void putLyricsLocal(o.videoId, { lines: pooled.lines, model: pooled.model, ver: LYRICS_VER });
+      o.onCues(pooled.lines, "pool");
+      return;
+    }
   }
 
   // 2) YouTube as the instant placeholder / ultimate fallback — unless Whisper beats it.

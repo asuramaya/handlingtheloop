@@ -5,8 +5,8 @@
 import { oauthCreds } from "./oauth";
 import { googleAuthUrl, googleExchange } from "./googleAuth";
 import { spotifyAuthUrl, spotifyCreds, spotifyExchange } from "./spotifyAuth";
-import { pkceChallenge, pkceVerifier, tidalAuthUrl, tidalCreds, tidalExchange } from "./tidalAuth";
-import { getValidToken } from "./connections";
+import { pkceChallenge, pkceVerifier, tidalAuthUrl, tidalCreds, tidalExchange, tidalScopes } from "./tidalAuth";
+import { getValidToken, getValidConnection } from "./connections";
 import { fetchPlaylistData, getMyPlaylistsData } from "./ytdata";
 import { getMySpotifyPlaylists } from "./spotifyData";
 import { getMyTidalPlaylists } from "./tidalData";
@@ -15,7 +15,6 @@ import {
   createSession,
   deleteConnection,
   deleteSession,
-  getConnection,
   getTopTracks,
   getUserSettings,
   listConnections,
@@ -47,6 +46,7 @@ export interface AccountEnv {
   SPOTIFY_CLIENT_SECRET?: string;
   TIDAL_CLIENT_ID?: string;
   TIDAL_CLIENT_SECRET?: string;
+  TIDAL_SCOPES?: string; // optional override of the requested TIDAL OAuth scopes
   TOKEN_ENC_KEY?: string;
 }
 
@@ -238,7 +238,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const headers = new Headers();
       headers.append("set-cookie", stateCookie(state));
       headers.append("set-cookie", pkceCookie(verifier));
-      headers.set("location", tidalAuthUrl(creds.clientId, `${url.origin}/api/auth/tidal/callback`, state, challenge));
+      headers.set(
+        "location",
+        tidalAuthUrl(creds.clientId, `${url.origin}/api/auth/tidal/callback`, state, challenge, tidalScopes(env)),
+      );
       return new Response(null, { status: 302, headers });
     }
 
@@ -278,13 +281,12 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const user = await currentUser(env, req);
       if (!user) return json(401, { error: "sign in first" });
       if (!env.TOKEN_ENC_KEY) return json(503, { error: "not configured" });
-      const token = await getValidToken(env, user.id, "tidal");
-      if (!token) return json(400, { error: "TIDAL not connected" });
-      // The TIDAL user id was stored on the connection at link time (needed to
-      // scope "my playlists").
-      const conn = await getConnection(env.DB, user.id, "tidal", env.TOKEN_ENC_KEY.trim());
-      if (!conn?.providerUserId) return json(400, { error: "TIDAL user id unavailable — reconnect TIDAL" });
-      return json(200, { playlists: await getMyTidalPlaylists(token, conn.providerUserId) });
+      // One D1 read: getValidConnection returns the whole connection (valid token + the TIDAL
+      // user id stored at link time), so we don't re-fetch the connection just for providerUserId.
+      const conn = await getValidConnection(env, user.id, "tidal");
+      if (!conn) return json(400, { error: "TIDAL not connected" });
+      if (!conn.providerUserId) return json(400, { error: "TIDAL user id unavailable — reconnect TIDAL" });
+      return json(200, { playlists: await getMyTidalPlaylists(conn.accessToken, conn.providerUserId) });
     }
 
     // The signed-in user's YouTube playlists, via their ACCOUNT's Google token

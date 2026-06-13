@@ -10,4 +10,5 @@ export {
   clearStemBlobsByPrefix,
   getLyricsLocal,
   putLyricsLocal,
+  deleteLyricsLocal,
 } from "./audioCache";

@@ -160,6 +160,23 @@ export async function putLyricsLocal(videoId: string, rec: { lines: unknown[]; m
     }
   });
 }
+// Drop a cached transcript so a forced re-transcribe (user "reprocess lyrics") can't be
+// short-circuited by the stale local record.
+export async function deleteLyricsLocal(videoId: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(LYRICS_STORE, "readwrite");
+      tx.objectStore(LYRICS_STORE).delete(videoId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
 
 // Cheap existence check — does NOT load the (possibly 100s-of-MB) blobs into RAM.
 export async function hasStemBlobs(key: string): Promise<boolean> {

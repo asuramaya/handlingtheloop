@@ -149,8 +149,8 @@ export async function matchTracks(
     if (!destToken) throw new Error(`${dest} is not connected`);
   }
 
-  const rows: MatchRow[] = [];
-  for (let i = 0; i < tracks.length; i++) {
+  const rows: MatchRow[] = new Array(tracks.length);
+  const matchOne = async (i: number): Promise<void> => {
     const t = tracks[i];
     const q = cleanQuery(t.artist, t.title);
     let candidates: Candidate[] = [];
@@ -175,14 +175,25 @@ export async function matchTracks(
     }
     const ranked = rank({ title: t.title, artist: t.artist, duration: t.duration }, candidates);
     const best = ranked[0] ?? null;
-    rows.push({
+    rows[i] = {
       index: startIndex + i,
       source: t,
       best: best?.cand ?? null,
       confidence: best ? confidenceOf(best.score) : "none",
       alternatives: ranked.slice(0, 5).map((r) => r.cand),
-    });
-  }
+    };
+  };
+  // Bounded-concurrency worker pool: run the per-track searches in parallel (was a serial loop
+  // = the SUM of every search's latency) but cap simultaneous in-flight requests so we don't
+  // burst the destination API's rate limit or the Worker subrequest budget. Order is preserved
+  // (rows is indexed, not pushed).
+  const CONCURRENCY = 6;
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, tracks.length) }, async () => {
+      while (next < tracks.length) await matchOne(next++);
+    }),
+  );
   return rows;
 }
 

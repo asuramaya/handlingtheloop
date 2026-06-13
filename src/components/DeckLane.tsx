@@ -16,6 +16,8 @@ export interface DeckMeta {
   bpm: number | null;
   duration: number;
   pyramid: Pyramid | null;
+  videoId?: string | null; // the loaded catalog track's id (null for local files) — drag-to-add source
+  thumbnail?: string | null;
 }
 
 interface DeckLaneProps {
@@ -57,6 +59,7 @@ interface DeckLaneProps {
   onJog?: (deltaSeconds: number) => void;
   onJogEnd?: () => void;
   onSeek?: (position: number) => void;
+  onReprocessLyrics?: (engine: "whisper" | "youtube") => void;
 }
 
 // Just the time readout, self-animating via its own rAF. Isolating it here means
@@ -114,7 +117,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, glow, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, glow, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -130,6 +133,30 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   const procTitle = stemBusy && stemStatus ? stemStatus.detail : lyricStatus || undefined;
   // Highlight the lane while a library/search track row is dragged over it.
   const [dropActive, setDropActive] = useState(false);
+
+  // Drag the deck header OUT to a library playlist / Collection to file the loaded
+  // track — the same TRACK_DND_MIME payload the table rows carry, so the existing
+  // LibraryPanel drop targets accept it. Only catalog tracks (with a videoId) can be
+  // filed; local-file loads have none.
+  const canDrag = !!meta.videoId;
+  function onHeaderDragStart(e: React.DragEvent) {
+    if (!meta.videoId) {
+      e.preventDefault();
+      return;
+    }
+    const track: TrackMeta = {
+      videoId: meta.videoId,
+      title: meta.name,
+      artist: meta.artist,
+      duration: meta.duration,
+      thumbnail: meta.thumbnail ?? null,
+      views: null,
+      bpm: meta.bpm ?? undefined,
+    };
+    e.dataTransfer.setData(TRACK_DND_MIME, JSON.stringify([track]));
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
   return (
     <section
       className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${dropActive ? "drop-target" : ""}`}
@@ -171,8 +198,14 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
       }}
     >
       <div className="lane-info">
-        {/* DECK id + scrolling title — its own full-width row on mobile. */}
-        <div className="lane-head">
+        {/* DECK id + scrolling title — its own full-width row on mobile. Drag the
+            header (or the grip) onto a playlist to file the loaded track. */}
+        <div
+          className={`lane-head ${canDrag ? "draggable" : ""}`}
+          draggable={canDrag}
+          onDragStart={onHeaderDragStart}
+          title={canDrag ? "Drag to a playlist to add this track" : undefined}
+        >
           <button
             className={`lane-id ${expanded ? "on" : ""}`}
             onClick={onToggleExpand}
@@ -182,6 +215,11 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
             DECK {id}
           </button>
           <LaneTitle name={meta.name} artist={meta.artist} />
+          {canDrag && (
+            <span className="lane-drag" aria-hidden="true" title="Drag to a playlist to add this track">
+              ⠿
+            </span>
+          )}
         </div>
         <span className="lane-time">
           <LaneTime deck={deck} duration={meta.duration} />
@@ -244,6 +282,11 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         glow={glow}
         stemColors={stemColors}
         gridSize={deck.skipBeats}
+        separating={
+          stemStatus && (stemStatus.phase === "separating" || stemStatus.phase === "downloading")
+            ? stemStatus.pct ?? 0
+            : null
+        }
         windowSec={windowSec}
         onZoom={onZoom}
         onScrubStart={() => {
@@ -278,7 +321,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           }
         }}
       />
-      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} onSeek={onSeek} />
+      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} onSeek={onSeek} onReprocess={onReprocessLyrics} />
     </section>
   );
 }

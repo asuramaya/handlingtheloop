@@ -8,3 +8,4 @@ export * from "./analysis";
 export * from "./media";
 export * from "./library";
 export * from "./stems";
+export * from "./automix";

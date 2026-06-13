@@ -5,6 +5,7 @@ import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
+import { MixQueuePanel } from "./components/MixQueuePanel";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
@@ -38,6 +39,11 @@ import {
   loadSettings,
   saveSettings,
   useSettingsSync,
+  localTs,
+  stampLocal,
+  snapshotColors,
+  COLOR_PROFILE_KEYS,
+  type ColorValue,
   mergeBindings,
   bindingIndex,
   TEMPO_RANGES,
@@ -52,6 +58,7 @@ import {
   putAudio,
   loadStems,
   loadStemsLocal,
+  dspStems,
   getStemModel,
   modelSupport,
   deviceSupportsModel,
@@ -67,6 +74,9 @@ import {
   DEFAULT_STEM_MODEL,
   type Stems,
   type StemModel,
+  useMixQueue,
+  AutoMixer,
+  type AutoMixStatus,
 } from "@htl";
 import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 
@@ -133,6 +143,12 @@ function terseStem(s: StemStatus | null | undefined): StemBadge | null {
   }
 }
 
+// Stems are actively loading (fetching from cache or separating) — used to show the
+// "Stems loading…" placeholder in the stem-mixer row so a deck whose stems aren't
+// ready yet stays height-aligned with one whose stems are.
+const stemLoading = (s: StemStatus | null | undefined): boolean =>
+  !!s && (s.phase === "downloading" || s.phase === "separating");
+
 // Short engine label for the deck chip: "HT-Demucs (GPU)"/"(CPU)" → "Demucs",
 // "Open-Unmix" stays, anything else → its label. (DSP never shows a chip.)
 function stemSrcLabel(modelId: string): string {
@@ -145,7 +161,7 @@ function stemSrcLabel(modelId: string): string {
 // (GPU) result, else Open-Unmix.
 const PROMOTE_ORDER = ["htdemucs-onnx", "umxl-int8"];
 
-const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null };
+const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null, videoId: null, thumbnail: null };
 
 // Wait until the browser is idle (with a timeout) so the heavy stem pass runs
 // AFTER the freshly-loaded deck UI has painted, instead of stalling the load.
@@ -202,6 +218,16 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
   };
 }
 
+// Serialise mobile on-device DSP stem derives across decks — two full-track offline renders at
+// once is the memory spike that OOM-killed the tab. Chaining keeps the transient to one at a time.
+let mobileDeriveChain: Promise<unknown> = Promise.resolve();
+
+// A stable JSON signature of just the colour/theme settings — drives the instant cross-device
+// colour-sync de-dupe (an adopted change must not bounce straight back out as a fresh broadcast).
+function colorSig(s: Settings): string {
+  return JSON.stringify(COLOR_PROFILE_KEYS.map((k) => (s as unknown as Record<string, unknown>)[k]));
+}
+
 // Stem names in the fixed deck order — for snapshot apply.
 const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
 // The 8 beat-loop sizes, ascending — pad/key index → beats (shared by the keyboard
@@ -214,7 +240,10 @@ function applyDeckStems(deck: Deck, s: DeckSnapshot) {
   // A stem-less remote (mobile) marks the SOURCE device's stems present so its mixer
   // cells light up and drive them — without holding any local buffers (mix-only
   // audio). Desktops separate locally, so they never take the remote path.
-  if (isMobileDevice()) deck.markRemoteStems(!!s.hasStems, !!s.stemsNeural);
+  // Mirror the host's stems as a REMOTE display ONLY when this device has no real stems of its
+  // own. A phone now derives a local DSP set (audible + synced) — authoritative — so don't stomp
+  // it back to a remote mirror; the per-stem mixer state below still applies to the local stems.
+  if (isMobileDevice() && !(deck.hasStems && !deck.remoteStems)) deck.markRemoteStems(!!s.hasStems, !!s.stemsNeural);
   for (const name of STEM_KEYS) {
     if (s.stemGains && s.stemGains[name] != null) deck.setStemGain(name, s.stemGains[name]);
     if (s.stemMutes) deck.setStemMute(name, !!s.stemMutes[name]);
@@ -295,6 +324,11 @@ export function App() {
   // Where each deck's ribbon text came from — Whisper (vocal stem) / pool / YouTube — for the
   // little source tag on the caption bar. null = none shown yet.
   const [captionSource, setCaptionSource] = useState<Record<DeckId, LyricsSource | null>>({ A: null, B: null });
+  // Which videoId each deck's CURRENT captions actually belong to — so the host broadcasts
+  // the lines paired with their true id (not a momentarily-stale loaded[id]) and a guest only
+  // applies streamed lyrics whose id matches the track it's showing. Prevents the cross-track
+  // contamination (e.g. a 50 Cent deck showing/caching another track's lyrics).
+  const captionVidRef = useRef<Record<DeckId, string>>({ A: "", B: "" });
   // Lyric processing/failure tell per deck (model download %, "Transcribing…", "unavailable").
   const [lyricStatus, setLyricStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [, setTick] = useState(0);
@@ -548,7 +582,7 @@ export function App() {
     };
     const STEMS = ["drums", "bass", "vocals", "other"] as const;
     const stem = (deck: DeckRef, id: DeckId, name: (typeof STEMS)[number], s: boolean) => {
-      if (!deck.hasStems) return;
+      if (!deck.stemControlsReady) return;
       if (s) {
         deck.soloStem(name); // Shift: solo this stem (mute the rest); same key un-solos
         STEMS.forEach((n) => emitRef.current({ kind: "stem", deck: id, stem: n, on: deck.stemActive(n) }));
@@ -731,7 +765,13 @@ export function App() {
     saveSettings(settings);
     engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
     engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
-    engine.setStretchConfig(stretchConfig(settings.stretchQuality));
+    engine.setStretchConfig({
+      ...stretchConfig(settings.stretchQuality),
+      engine: settings.stretchEngine,
+      transient: settings.stretchTransient,
+      aa: settings.stretchAa,
+      tThresh: settings.stretchTThresh,
+    });
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
   }, [settings, engine]);
 
@@ -894,7 +934,13 @@ export function App() {
       // On DESKTOP, if auto-enhance is on and a neural set already exists for this track (on
       // disk or pooled in R2), silently promote it — a free quality win with no separation.
       // Otherwise the deck just plays the mix (lightest path, no 424 MB stem set held).
-      if (model.id === "off") {
+      // In a SESSION whose host is using stems, a phone derives a local DSP set even when its OWN
+      // model is "Single" — otherwise a guest sees the host's stem moves but can't HEAR them (the
+      // original bug). It falls through to the mobile DSP path below; everyone else treats "off" as
+      // the plain no-stems mix.
+      const sessionWantsStems =
+        isMobileDevice() && snapFollowRef.current && !!lastSnapshotRef.current?.decks?.[id]?.hasStems;
+      if (model.id === "off" && !sessionWantsStems) {
         if (!isMobileDevice() && autoEnhanceRef.current) {
           await whenIdle();
           if (stale?.()) return;
@@ -928,22 +974,34 @@ export function App() {
       }
       stemTrace(`derive ${id}`, `${model.id}${mobile ? " mobile" : ""}`);
 
-      // MOBILE = PLAIN MIX ONLY. Decoding a ~424 MB stem set (neural OR DSP) for two
-      // decks at once OOM-crash-loops iOS, so phones never build stems locally. Stems
-      // appear only when this device is a REMOTE controller for a host that has them:
-      // the session marks them present (markRemoteStems) and streams the host's stem
-      // envelopes for the display. Local audio is always the plain mix → no OOM.
+      // MOBILE BASELINE = the on-device DSP split. Phones can't run neural separation (OOM /
+      // mobile-WebGPU crash), so they used to fall back to a dead mix — the stem mixer lit up
+      // but nothing drove it, and a session guest couldn't HEAR the host's stem moves. The
+      // engine now holds stems as int16 with ONE shared-offset WSOLA (no per-stem stretch
+      // duplication), so four stems fit in a phone's budget. Derive them locally with the
+      // lightweight DSP separator (pure Web Audio, deterministic, sums back to the mix exactly):
+      // the per-stem mixer works and its mute/gain INTENTS sync per device, zero extra bandwidth.
+      // Neural stays a desktop/upgrade quality tier that swaps in seamlessly via setStems().
       if (mobile) {
-        engine.deck(id).setStems(null);
-        refresh();
-        // Phones never separate locally. For a neural model: if we're a controlling remote,
-        // ask the host to make + stream them; otherwise say so plainly instead of silently
-        // leaving the user with no stems (dead end). ("Single" already returned above.)
-        if (!requestStemsFromHost(id, model)) {
-          setStatusFor(id, {
-            phase: "unavailable",
-            detail: "Stems need a desktop — open htl on a computer, or join a session hosted by one.",
-          });
+        setStatusFor(id, { phase: "separating", detail: "Splitting stems on-device…" });
+        await whenIdle();
+        if (stale?.()) return;
+        try {
+          // Serialise the heavy offline render ACROSS DECKS on mobile — two full-track
+          // separations at once is the memory spike that jetsam-killed the tab (the OOM that
+          // kept phones mix-only). One deck at a time keeps the transient bounded.
+          const run = mobileDeriveChain.then(() => dspStems(mix));
+          mobileDeriveChain = run.catch(() => undefined);
+          const dsp = await run;
+          if (stale?.()) return;
+          engine.deck(id).setStems(dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
+          stemLoadedKey.current[id] = guardKey;
+          refresh();
+          setStatusFor(id, { phase: "ready", detail: "On-device stems (DSP)." });
+        } catch (e) {
+          console.warn("[htl] on-device DSP stems failed:", e);
+          engine.deck(id).setStems(null);
+          setStatusFor(id, null);
         }
         return;
       }
@@ -1141,6 +1199,7 @@ export function App() {
       deriveGuard.current[id] = ""; // new load → allow a fresh derive even for the same track
       stemLoadedKey.current[id] = ""; // new track → the old deck stems are gone
       setCaptions((c) => ({ ...c, [id]: [] })); // drop the old track's captions
+      captionVidRef.current[id] = ""; // no captions belong to the incoming track yet
       setLoading((l) => ({ ...l, [id]: true }));
       try {
         // Resolve to a decodable YouTube id. YouTube tracks pass straight through;
@@ -1180,6 +1239,7 @@ export function App() {
           stale,
           onCues: (cues, source) => {
             if (stale()) return;
+            captionVidRef.current[id] = vid; // these lines belong to THIS track
             setCaptions((c) => ({ ...c, [id]: cues }));
             setCaptionSource((s) => ({ ...s, [id]: source }));
           },
@@ -1238,6 +1298,8 @@ export function App() {
             bpm: cached!.analysis.bpm ?? track.bpm ?? null,
             duration: cached!.buffer.duration,
             pyramid: cached!.analysis.pyramid,
+            videoId: track.videoId || null,
+            thumbnail: track.thumbnail ?? null,
           },
         }));
         setStatusFor(id, null);
@@ -1291,6 +1353,8 @@ export function App() {
             bpm: analysis.bpm,
             duration: buffer.duration,
             pyramid: analysis.pyramid,
+            videoId: null, // local file — no catalog id, so not drag-to-add-able
+            thumbnail: null,
           },
         }));
         deriveGuard.current[id] = ""; // fresh file → allow a re-derive
@@ -1778,7 +1842,12 @@ export function App() {
   const onRoomStemView = useCallback(
     (deck: DeckId, view: unknown) => {
       try {
-        engine.deck(deck).setRemoteStemView(view as StemView);
+        const d = engine.deck(deck);
+        // Local stems (the on-device DSP baseline) win over a streamed remote view — keep this
+        // device's display and audio consistent instead of painting the host's envelopes over
+        // stems we actually play. Without local stems, mirror the host's view as before.
+        if (d.hasStems && !d.remoteStems) return;
+        d.setRemoteStemView(view as StemView);
         // The host's stems are now displayed here — cancel any pending "couldn't deliver"
         // timer, clear the "Requesting…" chip, and show the view is live from the host.
         if (stemReqTimers.current[deck]) {
@@ -1794,6 +1863,25 @@ export function App() {
     [engine, refresh, setStatusFor],
   );
 
+  // Instant cross-device colour sync (inbound): a same-account device re-themed → adopt its
+  // colours here too. The DO relays this ONLY between the owner's own devices, so it never
+  // carries another account's look. LWW on the shared timestamp so a stale echo can't stomp a
+  // fresher local edit; prime liveColorSig to the merged value so adopting doesn't re-broadcast.
+  const liveColorSig = useRef<string | null>(null);
+  const onRoomSettings = useCallback((data: unknown, updatedAt: number) => {
+    if (!data || typeof data !== "object" || !(updatedAt > localTs())) return;
+    const src = data as Record<string, unknown>;
+    const incoming: Record<string, unknown> = {};
+    for (const k of COLOR_PROFILE_KEYS) if (src[k] !== undefined) incoming[k] = src[k];
+    if (Object.keys(incoming).length === 0) return;
+    stampLocal(updatedAt);
+    setSettings((s) => {
+      const merged = { ...s, ...incoming } as Settings;
+      liveColorSig.current = colorSig(merged); // so the broadcast effect sees no change → no echo
+      return merged;
+    });
+  }, []);
+
   // The host streams its resolved, word-timed lyrics → apply them to this deck's caption ribbon
   // (and persist), so a guest gets the SAME playhead-accurate captions the host sees — even on a
   // phone (no GPU) or with the YouTube engine. The host's stream wins over any local fallback.
@@ -1801,12 +1889,55 @@ export function App() {
     (deck: DeckId, videoId: string, lines: unknown, source: string) => {
       const ls = lines as LyricsLine[];
       if (!Array.isArray(ls) || ls.length === 0) return;
+      // Only apply/cache the host's lyrics if THIS deck is actually showing that track —
+      // otherwise a timing race (host on a different track, or mid-load) would paint and
+      // persist the wrong track's lyrics (the cross-track contamination). Always cache the
+      // (videoId, lines) pair though: it's correct for that id even if not for this deck now.
       const src = (source as LyricsSource) || "whisper";
+      cacheRemoteLyrics(videoId, ls, src);
+      if (videoId && videoId !== latest.current.loaded[deck]) return;
+      captionVidRef.current[deck] = videoId;
       setCaptions((c) => ({ ...c, [deck]: ls }));
       setCaptionSource((s) => ({ ...s, [deck]: src }));
-      cacheRemoteLyrics(videoId, ls, src);
     },
     [],
+  );
+
+  // User "reprocess lyrics": wipe this deck's cached/pooled transcript and re-resolve from
+  // scratch — the escape hatch for wrong/contaminated lyrics. `engineOverride` picks the
+  // source: "whisper" re-decodes the vocal stem on-device; "youtube" pulls fresh captions.
+  const reprocessLyrics = useCallback(
+    (id: DeckId, engineOverride?: "whisper" | "youtube") => {
+      const vid = latest.current.loaded[id];
+      if (!vid) return;
+      const seq = loadSeq.current[id];
+      const stale = () => seq !== loadSeq.current[id];
+      const eng = engineOverride ?? (lyricsModelRef.current === "youtube" ? "youtube" : "whisper");
+      captionVidRef.current[id] = "";
+      setCaptions((c) => ({ ...c, [id]: [] })); // drop the wrong lyrics immediately
+      setCaptionSource((s) => ({ ...s, [id]: null }));
+      setLyricStatus((s) => ({ ...s, [id]: eng === "youtube" ? "Reloading captions…" : "Reprocessing lyrics…" }));
+      void resolveLyrics({
+        videoId: vid,
+        deck: engine.deck(id),
+        model: lyricsModelRef.current === "small" ? "small" : "base",
+        engine: eng,
+        force: true,
+        enabled: true, // explicit user action → decode even if auto-lyrics is off
+        sampleRate: engine.ctx.sampleRate,
+        stale,
+        onCues: (cues, source) => {
+          if (stale()) return;
+          captionVidRef.current[id] = vid;
+          setCaptions((c) => ({ ...c, [id]: cues }));
+          setCaptionSource((s) => ({ ...s, [id]: source }));
+        },
+        onStatus: (msg) => {
+          if (!stale()) setLyricStatus((s) => ({ ...s, [id]: msg }));
+        },
+      });
+    },
+    [engine],
   );
 
   const room = useRoom(
@@ -1816,6 +1947,7 @@ export function App() {
       onTick: onRoomTick,
       onStemView: onRoomStemView,
       onLyrics: onRoomLyrics,
+      onSettings: onRoomSettings,
       onKicked: (reason) => setKickedNotice(reason || "You left the session."),
     },
     settings.accentA, // our account accent → synced so the room can take the host's vibe
@@ -1829,15 +1961,47 @@ export function App() {
   // same-account devices share an accent, so there's correctly nothing to inherit there —
   // the vibe is visible when a guest on a DIFFERENT account has a different accent.)
   useEffect(() => {
-    const root = document.documentElement;
+    const body = document.body;
     const vibe =
       room.status === "online" && settings.inheritRoomColor && room.hostColor && room.hostColor !== settings.accentA;
-    if (vibe) root.style.setProperty("--accent", room.hostColor!);
-    else root.style.removeProperty("--accent");
+    // Paint the vibe on <body>, NOT :root. applySettings owns :root's --neon-cyan/--accent and
+    // rewrites them on every settings change — an override THERE gets clobbered the next time the
+    // guest touches any setting. <body> sits below :root but above the whole app, so its custom-prop
+    // overrides win for the entire tree while present, and removing them falls cleanly back to the
+    // device's own theme. Override the PRIMARY accent (--neon-cyan) too, not just bare --accent: most
+    // chrome is coloured off --neon-cyan, so an --accent-only override was nearly invisible — the
+    // reported "room colour not syncing". Decks keep their identity (each bank sets --accent inline,
+    // which is more specific; waveforms take their colour via props, not the CSS var).
+    if (vibe) {
+      body.style.setProperty("--accent", room.hostColor!);
+      body.style.setProperty("--neon-cyan", room.hostColor!);
+    } else {
+      body.style.removeProperty("--accent");
+      body.style.removeProperty("--neon-cyan");
+    }
     return () => {
-      root.style.removeProperty("--accent");
+      body.style.removeProperty("--accent");
+      body.style.removeProperty("--neon-cyan");
     };
   }, [room.status, room.hostColor, settings.inheritRoomColor, settings.accentA]);
+
+  // Instant cross-device colour sync (outbound): the moment I re-theme, push my colours to my
+  // OWN other devices over the account room (the DO relays host-only). Primed on the first
+  // connected render so neither the initial theme nor a just-adopted remote change echoes back;
+  // only the colour keys are hashed, so non-colour settings changes never broadcast. Gated on
+  // signed-in + online — a guest in someone else's room is host=false, so the DO drops it anyway.
+  useEffect(() => {
+    if (!room.signedIn || room.status !== "online") return;
+    const sig = colorSig(settings);
+    if (liveColorSig.current === null) {
+      liveColorSig.current = sig; // prime — don't broadcast the theme we loaded with
+      return;
+    }
+    if (sig === liveColorSig.current) return;
+    liveColorSig.current = sig;
+    const ts = stampLocal();
+    room.sendSettings(snapshotColors(settings as unknown as Record<string, ColorValue>), ts);
+  }, [settings, room.signedIn, room.status, room.sendSettings]);
 
   // The kicked/denied notice is transient — clear it after a few seconds.
   useEffect(() => {
@@ -1878,9 +2042,14 @@ export function App() {
     if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
     const lines = captionsRef.current[id];
     if (!lines || !lines.length) return;
+    // Broadcast the videoId the lines ACTUALLY belong to (set alongside them in onCues), and
+    // only when it still matches the loaded track — never a stale loaded[id] (the cross-track
+    // contamination guard). If they've diverged (mid-load), skip until they reconcile.
+    const lyricsVid = captionVidRef.current[id];
+    if (!lyricsVid || lyricsVid !== latest.current.loaded[id]) return;
     if (!force && lines === lastLyricsSent.current[id]) return;
     lastLyricsSent.current[id] = lines;
-    r.sendLyrics(id, latest.current.loaded[id] || "", lines, captionSourceRef.current[id] || "whisper");
+    r.sendLyrics(id, lyricsVid, lines, captionSourceRef.current[id] || "whisper");
   }, []);
   // Broadcast whenever a deck's captions change and we're the board authority.
   useEffect(() => {
@@ -2337,6 +2506,105 @@ export function App() {
     [emit, loadTrackToDeck, room.enabled, room.controlling],
   );
 
+  // ---- Auto-mix (auto-DJ) ------------------------------------------------------
+  // The AutoMixer drives the real deck/engine controls to beatmatch + crossfade one
+  // track into the next; the MixQueue feeds it (a playlist, or radio suggestions).
+  const mixQueue = useMixQueue();
+  const [autoStatus, setAutoStatus] = useState<AutoMixStatus>({
+    enabled: false,
+    phase: "idle",
+    liveDeck: null,
+    plan: null,
+    mixOutTime: null,
+    countdownSec: null,
+  });
+
+  // Apply a crossfade value through the one canonical path (engine + state + session).
+  const applyCrossfade = useCallback(
+    (x: number) => {
+      const v = x < -1 ? -1 : x > 1 ? 1 : x;
+      setCrossfade(v);
+      engine.setCrossfade(v);
+      if (room.controlling) room.sendIntent({ kind: "crossfade", value: v });
+    },
+    [engine, room],
+  );
+
+  // Load a track onto a deck for the auto-mixer (shares the load in a session) and
+  // resolve once the buffer + analysis are attached.
+  const autoLoad = useCallback(
+    async (id: DeckId, track: TrackMeta) => {
+      if (track.videoId) {
+        roomLoadTarget.current[id] = track.videoId;
+        if (!room.enabled || room.controlling) {
+          emit({ kind: "load", deck: id, videoId: track.videoId, name: track.title, artist: track.artist });
+        }
+      }
+      await loadTrackToDeck(id, track);
+    },
+    [emit, loadTrackToDeck, room.enabled, room.controlling],
+  );
+
+  // The TrackMeta currently on a deck (so the mixer can adopt a manually-started
+  // deck and seed radio from it), enriched with analyzed key/bpm from the library.
+  const deckTrack = useCallback(
+    (id: DeckId): TrackMeta | null => {
+      const m = meta[id];
+      if (!m.videoId) return null;
+      const lib = library.collection.find((t) => t.videoId === m.videoId);
+      return {
+        videoId: m.videoId,
+        title: m.name,
+        artist: m.artist,
+        duration: m.duration,
+        thumbnail: m.thumbnail ?? null,
+        views: null,
+        bpm: m.bpm ?? lib?.bpm ?? null,
+        key: lib?.key ?? null,
+      };
+    },
+    [meta, library.collection],
+  );
+
+  // Latest callbacks behind a ref so the (stably-constructed) AutoMixer never holds
+  // a stale closure.
+  const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack });
+  autoDeps.current.autoLoad = autoLoad;
+  autoDeps.current.applyCrossfade = applyCrossfade;
+  autoDeps.current.deckTrack = deckTrack;
+  const mixerRef = useRef<AutoMixer | null>(null);
+  if (mixerRef.current === null) {
+    mixerRef.current = new AutoMixer({
+      engine,
+      queue: mixQueue,
+      loadDeck: (id, t) => autoDeps.current.autoLoad(id, t),
+      applyCrossfade: (x) => autoDeps.current.applyCrossfade(x),
+      deckTrack: (id) => autoDeps.current.deckTrack(id),
+      onChange: (s) => setAutoStatus(s),
+    });
+  }
+
+  // Tick the state machine on a steady cadence while AUTO is on.
+  useEffect(() => {
+    if (!autoStatus.enabled) return;
+    const iv = setInterval(() => void mixerRef.current?.tick(), 150);
+    return () => clearInterval(iv);
+  }, [autoStatus.enabled]);
+
+  const [mixqOpen, setMixqOpen] = useState(false);
+  const toggleAuto = useCallback(() => {
+    const m = mixerRef.current;
+    if (!m) return;
+    if (m.isEnabled()) m.disable();
+    else {
+      m.enable();
+      setMixqOpen(true); // surface the queue when the user turns auto-mix on
+    }
+  }, []);
+  const autoMixNow = useCallback(() => mixerRef.current?.mixNow(), []);
+  const autoSkip = useCallback(() => mixerRef.current?.skip(), []);
+  const autoHold = useCallback(() => mixerRef.current?.hold(), []);
+
   // The audio master publishes the authoritative set so a joiner (or a device that
   // just became master) mirrors it. EVENT-DRIVEN ONLY — on peer-join (someone new to
   // catch up) or a loaded-track change. There is deliberately NO periodic heartbeat:
@@ -2381,16 +2649,22 @@ export function App() {
       const g = STEM_KEYS.map((n) => deck.stemLevel(n));
       const m = STEM_KEYS.map((n) => !deck.stemActive(n));
       const key = `${g.map((x) => x.toFixed(3)).join(",")}|${m.map((x) => (x ? 1 : 0)).join("")}`;
-      const include = lastStemKey.current[id] !== key || tickN.current % 13 === 0;
+      const include = lastStemKey.current[id] !== key || tickN.current % 4 === 0;
       lastStemKey.current[id] = key;
       const tick: DeckTick = { pos: deck.position(), playing: deck.playing };
       if (include) tick.stems = { g, m };
       return tick;
     };
+    // 250 ms (4/s), not 80 ms (12.5/s): the tick is only a drift CORRECTION + stem-state heartbeat —
+    // followers animate the playhead off their own clock between ticks, and transport flips ride
+    // immediate intents — so a slower tick is imperceptible for sync but cuts the anchor's per-message
+    // Durable-Object REQUESTS ~3× (the steady drain that would otherwise eat the 1M/mo DO-request
+    // allowance on the $5 plan). Heartbeat stays ~1 Hz (every 4 ticks). Tunable: raise to 400–500 ms
+    // for even more headroom if sessions run many hours/day.
     const iv = setInterval(() => {
       tickN.current++;
       room.sendTick({ A: buildTick(engine.deckA, "A"), B: buildTick(engine.deckB, "B") });
-    }, 80);
+    }, 250);
     return () => clearInterval(iv);
   }, [engine, room.isAnchor, room.status, room.sendTick]);
 
@@ -2732,6 +3006,7 @@ export function App() {
               onJog={(delta) => emitJog(id, delta)}
               onJogEnd={() => onJogEnd(id)}
               onSeek={(pos) => emitSeekTo(id, pos)}
+              onReprocessLyrics={(eng) => reprocessLyrics(id, eng)}
             />
           ))}
         </div>
@@ -2739,13 +3014,31 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
+          <div className="automix-bar">
+            <button
+              className={`automix-toggle ${autoStatus.enabled ? "on" : ""}`}
+              onClick={toggleAuto}
+              aria-pressed={autoStatus.enabled}
+              title="Auto-mix: beatmatch and blend each track into the next"
+            >
+              AUTO
+              {autoStatus.enabled && autoStatus.countdownSec != null && autoStatus.phase !== "idle" && (
+                <span className="automix-count">
+                  {autoStatus.phase === "mixing" ? "mixing" : `${Math.ceil(autoStatus.countdownSec)}s`}
+                </span>
+              )}
+            </button>
+            <button className="automix-queue-btn" onClick={() => setMixqOpen((v) => !v)} title="Auto-mix queue">
+              ☰ Queue{mixQueue.upcoming.length ? ` (${mixQueue.upcoming.length})` : ""}
+            </button>
+          </div>
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}
             accentA={ACCENT.A}
             accentB={ACCENT.B}
             crossfade={crossfade}
-            onCrossfade={(v) => { setCrossfade(v); engine.setCrossfade(v); if (room.controlling) room.sendIntent({ kind: "crossfade", value: v }); }}
+            onCrossfade={applyCrossfade}
           />
           <div className="decks-row">
           <DeckControls
@@ -2760,6 +3053,9 @@ export function App() {
             collapsed={expandedLane != null && expandedLane !== "A"}
             mirror={false}
             shift={bankShift("A")}
+            stemPending={stemLoading(status.A)}
+            stemPendingPct={status.A?.pct ?? null}
+            otherStemPending={stemLoading(status.B)}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.a}
@@ -2784,6 +3080,9 @@ export function App() {
             collapsed={expandedLane != null && expandedLane !== "B"}
             mirror={false}
             shift={bankShift("B")}
+            stemPending={stemLoading(status.B)}
+            stemPendingPct={status.B?.pct ?? null}
+            otherStemPending={stemLoading(status.A)}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.b}
@@ -2836,6 +3135,19 @@ export function App() {
 
       {socialOpen && (
         <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
+      )}
+
+      {mixqOpen && (
+        <MixQueuePanel
+          queue={mixQueue}
+          status={autoStatus}
+          library={library}
+          onToggleAuto={toggleAuto}
+          onMixNow={autoMixNow}
+          onSkip={autoSkip}
+          onHold={autoHold}
+          onClose={() => setMixqOpen(false)}
+        />
       )}
 
       {kickedNotice && (

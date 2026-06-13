@@ -4,6 +4,7 @@ import path from "node:path";
 import { Innertube } from "youtubei.js";
 import { streamAudio } from "./audioProxy";
 import { createInnertubeApi } from "./innertube";
+import { recommendNext } from "./recommend";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
 import { fetchCaptions, fetchMeta, type YtAuth } from "./youtube";
 import { STEM_DOWNLOAD_CONTENT_TYPE, looksLikeAudioStem } from "./security";
@@ -78,7 +79,7 @@ async function handleStems(req: IncomingMessage, res: ServerResponse, url: URL):
   sendJson(res, 200, { stems: present, complete: present.length === STEM_NAMES.length });
 }
 
-const { searchYouTube, fetchPlaylist, getMyPlaylists } = createInnertubeApi(Innertube as never);
+const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext } = createInnertubeApi(Innertube as never);
 
 function readAuth(req: IncomingMessage): YtAuth | undefined {
   const h = (n: string) => {
@@ -178,6 +179,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         sendJson(res, 200, { results: await searchYouTube(q, limit) });
         return true;
       }
+      case "/api/recommend": {
+        const v = url.searchParams.get("v");
+        if (!v || !/^[\w-]{11}$/.test(v)) {
+          sendJson(res, 400, { error: "missing or invalid ?v=" });
+          return true;
+        }
+        const limit = Number(url.searchParams.get("limit")) || 30;
+        const provider = url.searchParams.get("provider");
+        const a = readAuth(req);
+        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit }, { cookie: a?.cookie, token: a?.accessToken });
+        sendJson(res, 200, { candidates });
+        return true;
+      }
       case "/api/playlist": {
         const raw = url.searchParams.get("list") ?? url.searchParams.get("url");
         if (!raw) {
@@ -242,6 +256,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           duration: number;
           thumbnail: string;
           views: null;
+          stems: boolean; // the dev pool IS the stem cache, so these always have stems
         }[] = [];
         const models = (await fs.readdir(STEM_CACHE_DIR).catch(() => [] as string[])).filter((d) => !d.startsWith("_"));
         for (const model of models) {
@@ -262,6 +277,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
               duration: m.duration ?? 0,
               thumbnail: m.thumbnail ?? `https://i.ytimg.com/vi/${v}/hqdefault.jpg`,
               views: null,
+              stems: true,
             });
           }
         }

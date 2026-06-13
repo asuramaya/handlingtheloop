@@ -29,6 +29,9 @@ interface DeckControlsProps {
   collapsed: boolean; // the OTHER deck is solo'd → this deck's controls hide
   mirror: boolean;
   shift: boolean;
+  stemPending: boolean; // this deck's stems are still loading (downloading/separating)
+  stemPendingPct?: number | null; // load progress 0–100 for the placeholder label
+  otherStemPending: boolean; // the OTHER deck's stems are loading (so reserve the row to stay aligned)
   tempoRange: number;
   pitchRange: number;
   levelGainDb: number; // post-crossfade attenuation for this deck's level meter
@@ -65,7 +68,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -406,9 +409,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             Dimmed when muted. HIDDEN entirely when the deck has no stems — mix-only
             mobile or the "Off" model — so the row doesn't sit there dead. It returns
             when stems exist locally (desktop split/neural) OR as a remote display in a
-            session whose desktop host streams its stem envelopes (markRemoteStems →
-            hasStems true), where the cells drive the host's stems over the session. */}
-        {deck.hasStems && (
+            session whose host streams its stem envelopes — but for a REMOTE deck only
+            once those envelopes actually land (stemControlsReady), so the cells never sit
+            above a single combined waveform while the host hasn't / can't stream them. */}
+        {deck.stemControlsReady ? (
         <div className="stems-row">
           {STEM_CELLS.map((s) => (
             <ValueCell
@@ -435,7 +439,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             />
           ))}
         </div>
-        )}
+        ) : stemPending || otherDeck.stemControlsReady || otherStemPending ? (
+          // This deck has no stem row yet but the OTHER deck shows one (ready or
+          // loading), or this deck's own stems are still loading. Reserve the row's
+          // height with a "Stems loading…" placeholder so both decks' EQ + foot buttons
+          // stay aligned, instead of the gap collapsing to the bottom.
+          <div className="stems-row stems-pending" aria-live="polite">
+            <span className="stems-pending-dot" />
+            Stems loading{stemPendingPct != null ? ` ${Math.round(stemPendingPct)}%` : "…"}
+          </div>
+        ) : null}
 
         {/* EQ foot (bottom third) — a full-width Pro-Q-style response curve: drag a
             node sideways = frequency, up/down = gain; mid wheel = bell width;

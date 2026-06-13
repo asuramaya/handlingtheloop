@@ -22,6 +22,10 @@ interface WaveformViewportProps {
   vividness: number; // band-colour saturation (0 grey … 1 as-picked … 2 neon)
   glow: boolean; // neon bloom halo behind the waveform
   gridSize: number;
+  // A replacement stem set is being computed (model switch / enhance), as a 0–100 %, or
+  // null when idle. Only dims/overlays when stems are ALREADY shown — the FIRST separation
+  // has no stem lanes (the deck shows the plain mix), so it stays clean.
+  separating: number | null;
   windowSec: number; // REAL seconds across the view (shared by both decks)
   onZoom: (nextWindowSec: number) => void;
   onScrubStart: () => void;
@@ -296,6 +300,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const waveRef = useRef<HTMLCanvasElement | null>(null); // offscreen rasterised waveform
   const scratchRef = useRef<HTMLCanvasElement | null>(null); // scratch for the scroll-shift blit
   const waveMeta = useRef<WaveMeta | null>(null);
+  const prevPos = useRef<number>(Number.NaN); // last frame's playhead, to detect a seek/cue JUMP
+  const geomKey = useRef(""); // last frame's zoom/size signature — so a zoom DEBOUNCE settles
   const rebuildTimer = useRef(0); // debounced crisp rebuild after a zoom settles
   const localWin = useRef<number | null>(null); // live zoom during a gesture (avoids App re-renders)
   const zoomCommit = useRef(0);
@@ -497,8 +503,16 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // Does this pyramid carry real band data? Remote-stem display (setRemoteStemView)
     // has it zeroed — fall back to the flat stem colour rather than painting it black.
     const hasBands = (py: Pyramid): boolean => {
-      const top = py.levels[py.levels.length - 1];
-      return top.low[0] + top.mid[0] + top.high[0] > 1e-6;
+      // Scan the whole coarse top level, not just bucket[0] — a stem that's silent at the
+      // track START (vocals/other after an intro) has zero energy in the first bucket but
+      // real bands later. Sampling only [0] made that one stem fall back to a flat colour
+      // on mobile while drums/bass (content at t=0) painted banded. Early-exits on the
+      // first non-zero bucket, so a real-band pyramid costs O(1).
+      const { low, mid, high } = py.levels[py.levels.length - 1];
+      for (let i = 0; i < low.length; i++) {
+        if (low[i] + mid[i] + high[i] > 1e-6) return true;
+      }
+      return false;
     };
 
     if (stems) {
@@ -654,6 +668,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const r = Math.max(deck.rate, 0.01);
     const trackWindow = (localWin.current ?? p.windowSec) * r;
     const left = pos - trackWindow / 2;
+    // A seek/cue/loop JUMP moves the playhead far more than playback could in one frame
+    // (smooth play is ≤ rate·dt ≈ rate/60 s). The incremental scroll-shift below is built
+    // for smooth scrolling, NOT a discontinuity — trusting it across a jump left the stem
+    // lanes blank. Detect the jump and force a clean full rebuild instead.
+    const jumped = Number.isFinite(prevPos.current) && Math.abs(pos - prevPos.current) > r * 0.1 + 0.02;
+    prevPos.current = pos;
     const secPerPx = trackWindow / w;
     const toX = (t: number) => ((t - left) / trackWindow) * w;
 
@@ -701,19 +721,47 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // usefulness — the one rate case that needs a fresh rasterise (checked only when NOT
     // mid-zoom, so it never pre-empts the smooth-zoom blit-scale below).
     const ratioOff = !!m0 && (secPerPx > m0.colSec * 2.2 || secPerPx < m0.colSec * 0.4);
+    // Does the cached layer still span the visible view? (the blit-scale below reads
+    // [srcX, srcX+srcW] columns out of [0, ow] — if that runs off either edge the
+    // uncovered side draws BLANK.) Used to bail out of the deferred-rebuild path the
+    // instant a stale layer stops covering the scrolling view.
+    const covers = (mm: WaveMeta | null): boolean => {
+      const wcw = waveRef.current?.width ?? 0;
+      if (!mm || !wcw) return false;
+      const sX = (left - mm.left) / mm.colSec;
+      return sX >= -0.5 && sX + trackWindow / mm.colSec <= wcw + 0.5;
+    };
+    // Track whether the geometry is STILL changing this frame (an ongoing zoom/resize
+    // gesture) vs. has settled. draw() runs every frame while the deck plays, so the
+    // debounce timer must only be (re)armed when the signature actually changes —
+    // otherwise it was cleared+rescheduled 60×/s and NEVER fired during playback, the
+    // layer never got rebuilt at the new zoom, and the scrolling view ran off it → the
+    // blank stem lanes + waveform-vs-grid drift.
+    const gk = curWin + ":" + w + ":" + h;
+    const geomChanging = gk !== geomKey.current;
+    geomKey.current = gk;
     if (contentStale) {
       rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
+    } else if (geomStale && covers(m0)) {
+      // Zoom / resize, layer still covers the view: blit-SCALE the cached layer now
+      // (below) for instant feedback and debounce ONE crisp rebuild once the geometry
+      // SETTLES (re-arm only while the signature keeps changing) — keeps zoom + deck
+      // A/B focus snappy without starving the rebuild.
+      if (geomChanging) {
+        if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
+        rebuildTimer.current = window.setTimeout(() => {
+          waveMeta.current = null;
+          dirty.current = true;
+        }, 130);
+      }
     } else if (geomStale) {
-      // Zoom / resize: blit-SCALE the cached layer now (below) for instant feedback and debounce
-      // ONE crisp rebuild once the geometry settles — keeps zoom + deck A/B focus snappy.
-      if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
-      rebuildTimer.current = window.setTimeout(() => {
-        waveMeta.current = null;
-        dirty.current = true;
-      }, 130);
-    } else if (m0 && (ratioOff || !shiftToCover(left, trackWindow, m0))) {
-      // Same zoom/size/content but either the tempo coarsened the layer (ratioOff) or the view
-      // scrolled past a shiftable range (a seek → shiftToCover returns false) — rebuild fresh.
+      // Geometry changed AND the stale layer no longer covers the view (zoomed wider than
+      // the layer, or playback scrolled off it before the debounce fired) — rebuild NOW so
+      // we never present a blank/partial frame.
+      rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
+    } else if (m0 && (jumped || ratioOff || !shiftToCover(left, trackWindow, m0))) {
+      // A discontinuous JUMP (cue/seek/loop — short-circuits before the shift), a tempo that
+      // coarsened the layer (ratioOff), or a scroll past the shiftable range — rebuild fresh.
       rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
     }
     const m = waveMeta.current;
@@ -725,6 +773,17 @@ export function WaveformViewport(props: WaveformViewportProps) {
       const srcX = (left - m.left) / m.colSec;
       const srcW = trackWindow / m.colSec;
       ctx.drawImage(wc, srcX, 0, srcW, m.h, 0, 0, w, h);
+    }
+
+    // A replacement stem set is computing over the stems already on screen — dim the wave
+    // (~half) so it never reads as finished, while the grid / loop / markers / playhead
+    // below still draw at full brightness on top (the mixer stays usable). No-op during a
+    // first separation: stemPyramids is null then, so the deck just shows the plain mix.
+    const sep = p.separating;
+    const dimStems = sep != null && sep >= 0 && !!deck.stemPyramids;
+    if (dimStems) {
+      ctx.fillStyle = "rgba(6,8,12,0.5)";
+      ctx.fillRect(0, 0, w, h);
     }
 
     // Beat grid sized by gridSize. Prefer the DYNAMIC grid (tracked beats that
@@ -863,6 +922,24 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // Centre playhead.
     ctx.fillStyle = p.selectorColor;
     ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
+
+    // "Separating new set" pill — drawn last (over everything) so the dimmed stems read
+    // as PENDING-an-upgrade, not loaded. The current stems still play + mix underneath.
+    if (dimStems) {
+      const txt = `⟳ Separating ${Math.round(sep as number)}% · new set`;
+      ctx.font = `bold ${12 * dpr}px ui-monospace, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(txt).width;
+      const cx = w / 2;
+      const cy = 16 * dpr;
+      ctx.fillStyle = "rgba(6,8,12,0.82)";
+      ctx.fillRect(cx - tw / 2 - 10 * dpr, cy - 11 * dpr, tw + 20 * dpr, 22 * dpr);
+      ctx.fillStyle = p.accent;
+      ctx.fillText(txt, cx, cy + dpr);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
   };
 
   // One perpetual rAF: composites while the deck plays/jogs or when something

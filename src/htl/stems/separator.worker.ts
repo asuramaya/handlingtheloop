@@ -19,7 +19,7 @@ type Target = (typeof TARGETS)[number];
 // ~frame gap lets it idle and render between submissions. Cheap vs the per-segment
 // compute (~1 s GPU / multi-s CPU), so smoothness wins. Keeps playback + controls
 // primary, as asked.
-const SEGMENT_YIELD_MS = 12;
+const SEGMENT_YIELD_MS = 16; // ~one frame, so the compositor gets a full paint slot per segment
 const yieldSegment = () => new Promise((r) => setTimeout(r, SEGMENT_YIELD_MS));
 
 const fft = new FFT(NFFT);
@@ -330,16 +330,19 @@ async function demucsCorePass(
     return { start, segLen: end - start, frames, magT, mixT, run: sess.run({ mag: magT, mix: mixT }) };
   };
 
-  // PIPELINE: launch segment ci+1's GPU run BEFORE doing ci's CPU iSTFT/overlap-add, so the GPU
-  // chews the next segment while the CPU finishes the current one — instead of the GPU idling
-  // through every iSTFT (the dominant dip in the sawtooth). Pure SCHEDULING: same STFT, same
-  // sess.run, same OLA accumulation keyed by `start`/`win` → bit-identical output. The 12 ms
-  // yield stays so the compositor still paints, now overlapped with useful GPU work.
+  // SCHEDULING for UI smoothness over raw throughput (playback + controls are primary, as
+  // asked). We deliberately do NOT pipeline the next GPU run ahead of this segment's CPU
+  // iSTFT: pinning the GPU continuously starved the browser compositor (same GPU) for the
+  // whole separation → the deck/UI froze, and the worker's back-to-back CPU work crowded the
+  // audio thread → playback lag. Instead, each segment runs the GPU, then does the CPU
+  // iSTFT/OLA (GPU now IDLE → compositor can paint), then yields a frame with BOTH the GPU
+  // and the worker CPU idle, THEN launches the next run. Output is unchanged (pure ordering).
+  // Cost: the GPU idles through each iSTFT (the sawtooth dip) — that idle IS what keeps the
+  // UI alive. For headless/idle-deck separation, relaunch-ahead pipelining would be faster.
   let cur = prep(0);
   for (let ci = 0; ci < nchunks; ci++) {
     const { start, segLen, frames, magT, mixT, run } = cur;
     const res = await run;
-    const next = ci + 1 < nchunks ? prep(ci + 1) : null; // GPU starts ci+1 now → overlaps the CPU below
     const fo = res.freq_out.data as Float32Array; // [1,4,4,BINS,frames]
     const to = res.time_out.data as Float32Array; // [1,4,2,seg]
     const chStride = DEMUCS_BINS * frames;
@@ -365,9 +368,11 @@ async function demucsCorePass(
     res.time_out.dispose?.();
     for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
     post((ci + 1) / nchunks);
-    if (next) {
-      cur = next;
-      await yieldSegment(); // compositor paints here while the GPU works the next segment
+    // Yield a frame with the GPU + worker CPU IDLE so the compositor paints and the audio
+    // thread gets a core, THEN launch the next segment's GPU run.
+    if (ci + 1 < nchunks) {
+      await yieldSegment();
+      cur = prep(ci + 1);
     }
   }
   for (const t of TARGETS) {

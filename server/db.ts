@@ -425,10 +425,14 @@ export async function getUserSettings(
 
 /** Upsert the user's settings blob (last-write-wins by the client-supplied timestamp). */
 export async function putUserSettings(db: D1Database, userId: string, data: string, updatedAt: number): Promise<void> {
+  // Conditional upsert: only write when the incoming value is BOTH newer (last-write-wins) AND
+  // actually different. A stale or identical PUT (a cross-device adopt re-pushing the same blob)
+  // no-ops at the DB — 0 rows written, no separate read needed.
   await db
     .prepare(
       `INSERT INTO user_settings (user_id, data, updated_at) VALUES (?,?,?)
-       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+         WHERE excluded.updated_at > user_settings.updated_at AND excluded.data <> user_settings.data`,
     )
     .bind(userId, data, updatedAt)
     .run();
@@ -461,10 +465,13 @@ export async function listUsers(db: D1Database, limit = 200): Promise<AdminUser[
 // WebSocket into that session's DjRoom. Codes are non-secret (the session itself is
 // authed per-connection) and stable per host, so a host's link doesn't churn.
 
+let ensuredInvites = false;
 async function ensureRoomInvites(db: D1Database): Promise<void> {
+  if (ensuredInvites) return; // once per isolate — the CREATE was running on every invite mint / guest join
   await db
     .prepare("CREATE TABLE IF NOT EXISTS room_invites (code TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL)")
     .run();
+  ensuredInvites = true;
 }
 
 const INVITE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no ambiguous chars (0/o/1/l/i)

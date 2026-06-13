@@ -27,6 +27,7 @@ export function CaptionBar({
   source,
   windowSec,
   onSeek,
+  onReprocess,
 }: {
   deck: Deck;
   accent: string;
@@ -34,6 +35,7 @@ export function CaptionBar({
   source?: LyricsSource | null;
   windowSec: number;
   onSeek?: (position: number) => void;
+  onReprocess?: (engine: "whisper" | "youtube") => void; // wrong lyrics → re-resolve from scratch
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -180,11 +182,33 @@ export function CaptionBar({
           ))}
         </div>
       </div>
-      {tag && (
-        <span className="caption-source" title={tag.label} aria-label={tag.label}>
-          {tag.icon}
-        </span>
-      )}
+      <span className="caption-tools">
+        {tag && (
+          <span className="caption-source" title={tag.label} aria-label={tag.label}>
+            {tag.icon}
+          </span>
+        )}
+        {onReprocess && (
+          <span className="caption-reprocess">
+            <button
+              className="caption-redo"
+              title="Wrong lyrics? Re-transcribe from the vocal stem (Whisper)"
+              aria-label="Re-transcribe lyrics with Whisper"
+              onClick={() => onReprocess("whisper")}
+            >
+              🎤↻
+            </button>
+            <button
+              className="caption-redo"
+              title="Wrong lyrics? Reload YouTube captions instead"
+              aria-label="Reload YouTube captions"
+              onClick={() => onReprocess("youtube")}
+            >
+              ▶↻
+            </button>
+          </span>
+        )}
+      </span>
     </div>
   );
 }

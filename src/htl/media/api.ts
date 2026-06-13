@@ -36,6 +36,8 @@ export interface MyPlaylist {
   title: string;
   count: number;
   thumbnail: string | null;
+  ownerName?: string | null; // set for Spotify playlists; carries the owner's display name
+  ownedByMe?: boolean; // false = followed / shared-with-me
 }
 
 /** The signed-in user's own YouTube playlists (requires Google sign-in). */
@@ -54,7 +56,11 @@ export async function fetchCommunity(limit = 60, signal?: AbortSignal): Promise<
   return tracks;
 }
 
-/** Contribute a track's analysis (BPM/key/grid) to the shared dataset. Best-effort. */
+// Analysis is deterministic (same BPM/key/grid every time), so contribute each track at most
+// once per session — a reload / re-analyze / both-decks-same-track shouldn't each write D1.
+const postedAnalysis = new Set<string>();
+
+/** Contribute a track's analysis (BPM/key/grid) to the shared dataset. Best-effort, de-duped. */
 export async function postAnalysis(a: {
   videoId: string;
   bpm?: number | null;
@@ -63,6 +69,8 @@ export async function postAnalysis(a: {
   beatOffset?: number | null;
   duration?: number | null;
 }): Promise<void> {
+  if (postedAnalysis.has(a.videoId)) return; // already contributed this session
+  postedAnalysis.add(a.videoId);
   await fetch("/api/analysis", {
     method: "POST",
     headers: { "content-type": "application/json" },

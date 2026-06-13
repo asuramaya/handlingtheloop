@@ -5,6 +5,10 @@
   "compatibility_date": "2024-09-23",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  // Hard per-invocation CPU ceiling (default is 30 s). Nothing here is CPU-bound — the Worker
+  // proxies/streams (I/O) and ALL heavy DSP runs in the browser — so 1 s is a generous runaway
+  // backstop a normal request can never trip, but it caps a pathological loop's CPU-ms bill.
+  "limits": { "cpu_ms": 1000 },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -31,13 +35,15 @@
     { "pattern": "www.handlingtheloop.com", "custom_domain": true }
   ],
   // Per-IP rate limiting on the unauthenticated write/resolve paths (server/security.ts
-  // `allow()` consults these; absent in `vite` dev → no-op). RL_WRITE: catalog/analysis/
-  // stem contributions (60/min); RL_AUDIO: cold-cache YouTube resolves (120/min).
+  // `allow()` consults these; absent in `vite` dev → no-op). Tightened to protect the $5 plan's
+  // included allowances from a single abusive IP without touching real users (no human contributes
+  // 30×/min or cold-resolves 60 NEW tracks/min). RL_WRITE: catalog/analysis/stem contributions
+  // (30/min); RL_AUDIO: cold-cache YouTube resolves → R2 writes (60/min).
   // `period` must be 10 or 60; namespace_id is any unique per-account integer.
   "unsafe": {
     "bindings": [
-      { "name": "RL_WRITE", "type": "ratelimit", "namespace_id": "2001", "simple": { "limit": 60, "period": 60 } },
-      { "name": "RL_AUDIO", "type": "ratelimit", "namespace_id": "2002", "simple": { "limit": 120, "period": 60 } }
+      { "name": "RL_WRITE", "type": "ratelimit", "namespace_id": "2001", "simple": { "limit": 30, "period": 60 } },
+      { "name": "RL_AUDIO", "type": "ratelimit", "namespace_id": "2002", "simple": { "limit": 60, "period": 60 } }
     ]
   },
   "observability": { "enabled": true }

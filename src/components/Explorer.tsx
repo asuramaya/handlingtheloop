@@ -4,6 +4,7 @@ import { searchYouTube, fetchMeta, parseVideoId, parsePlaylistId } from "@htl/me
 import { loadSearchState, saveSearchState, type SortKey } from "@htl/state";
 import { fmtTime, fmtViews } from "../util/format";
 import { TRACK_DND_MIME } from "./TrackTable";
+import { CachePips, useCacheStatus } from "./CachePips";
 
 interface ExplorerProps {
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
@@ -58,6 +59,7 @@ export function Explorer({ onLoad, onAdd, inCollection, onIngestPlaylist, playli
   const [filter, setFilter] = useState(saved.filter);
   const [sort, setSort] = useState<SortKey>(saved.sort);
   const [menu, setMenu] = useState<{ x: number; y: number; t: TrackMeta; kind: "load" | "add" } | null>(null);
+  useCacheStatus(); // light the cache pips once the pool manifest lands
   const longPress = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false); // a long-press opened the file menu → swallow the click
   const abort = useRef<AbortController | null>(null);
@@ -219,6 +221,7 @@ export function Explorer({ onLoad, onAdd, inCollection, onIngestPlaylist, playli
             </div>
             <div className="result-meta">
               <div className="result-title" title={t.title}>
+                <CachePips videoId={t.videoId} />
                 {t.title}
               </div>
               <div className="result-sub">

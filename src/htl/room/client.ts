@@ -16,6 +16,7 @@ export interface RoomHandlers {
   state?: (snapshot: unknown) => void;
   stemview?: (deck: DeckId, view: unknown) => void;
   lyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
+  settings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings landed
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -200,6 +201,11 @@ export class RoomClient {
   sendStemView(deck: DeckId, view: unknown): void {
     this.send({ t: "stemview", deck, view });
   }
+  /** Broadcast my colour/theme settings to my OTHER signed-in devices (the server relays
+   *  ONLY to the account owner's own devices). updatedAt drives last-write-wins on the receiver. */
+  sendSettings(settings: unknown, updatedAt: number): void {
+    this.send({ t: "settings", settings, updatedAt });
+  }
   requestState(): void {
     this.send({ t: "request-state" });
   }
@@ -309,6 +315,9 @@ export class RoomClient {
         break;
       case "stemview":
         this.h.stemview?.(msg.deck, msg.view);
+        break;
+      case "settings":
+        this.h.settings?.(msg.settings, msg.updatedAt);
         break;
       case "kicked":
         // Denied entry or removed by the host. Forget our intent to be in (and the invite

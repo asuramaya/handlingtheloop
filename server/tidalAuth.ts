@@ -19,8 +19,17 @@ const TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const ME_URL = "https://openapi.tidal.com/v2/users/me";
 
 // Scopes for reading + writing the user's playlists/collection. TIDAL's portal is
-// the source of truth for the exact strings — adjust if a grant is rejected.
+// the source of truth for the exact strings. TIDAL rejects the WHOLE authorize
+// request (its hosted login shows "Something went wrong" / error 11102) if the app
+// asks for a scope its registered client isn't provisioned for — so this is
+// overridable via the TIDAL_SCOPES env (e.g. trim to read-only to match a read-only
+// app, or to bisect which scope is unapproved) without a code change.
 const SCOPES = ["user.read", "collection.read", "collection.write", "playlists.read", "playlists.write"].join(" ");
+
+/** The scope string to request — the TIDAL_SCOPES env override, else the default set. */
+export function tidalScopes(env?: { TIDAL_SCOPES?: string }): string {
+  return env?.TIDAL_SCOPES?.trim() || SCOPES;
+}
 
 const TIMEOUT_MS = 8000;
 const FORM = { "content-type": "application/x-www-form-urlencoded" };
@@ -54,17 +63,28 @@ export async function pkceChallenge(verifier: string): Promise<string> {
 }
 
 /** The URL we redirect the user to. `state` is echoed back for CSRF checking. */
-export function tidalAuthUrl(clientId: string, redirectUri: string, state: string, codeChallenge: string): string {
-  const q = new URLSearchParams({
-    client_id: clientId,
-    response_type: "code",
-    redirect_uri: redirectUri,
-    scope: SCOPES,
-    state,
-    code_challenge_method: "S256",
-    code_challenge: codeChallenge,
-  });
-  return `${AUTH_URL}?${q.toString()}`;
+export function tidalAuthUrl(
+  clientId: string,
+  redirectUri: string,
+  state: string,
+  codeChallenge: string,
+  scope: string = SCOPES,
+): string {
+  // Build the query by hand. URLSearchParams serializes spaces as "+", but TIDAL's
+  // /authorize only accepts RFC-3986 percent-encoding (%20) in `scope` — a "+"-joined
+  // value is parsed as ONE bogus scope and the request fails with error 11102 on the
+  // hosted login page. encodeURIComponent emits %20 for spaces, so the scopes survive.
+  const params: [string, string][] = [
+    ["client_id", clientId],
+    ["response_type", "code"],
+    ["redirect_uri", redirectUri],
+    ["scope", scope],
+    ["state", state],
+    ["code_challenge_method", "S256"],
+    ["code_challenge", codeChallenge],
+  ];
+  const q = params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  return `${AUTH_URL}?${q}`;
 }
 
 interface TidalTokenResponse {

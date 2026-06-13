@@ -3,6 +3,7 @@ import {
   contrastWarnings,
   type Settings,
   type StretchQuality,
+  type StretchEngine,
   STRETCH_PRESETS,
   type StemQuality,
   STEM_PRESETS,
@@ -609,6 +610,25 @@ export function SettingsPanel({
                   <span className="settings-label">Stretch engine</span>
                 </div>
                 <div className="seg">
+                  {([
+                    ["wsola", "WSOLA"],
+                    ["pv", "Phase-locked"],
+                  ] as [StretchEngine, string][]).map(([e, label]) => (
+                    <button
+                      key={e}
+                      className={`seg-btn ${settings.stretchEngine === e ? "on" : ""}`}
+                      onClick={() => set({ stretchEngine: e })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="settings-hint muted">
+                  {settings.stretchEngine === "pv"
+                    ? "Phase-locked vocoder — cleanest on full mixes (kills the metallic edge), more CPU."
+                    : "Time-domain WSOLA — lightest CPU, crisp transients; can sound metallic on dense mixes."}
+                </p>
+                <div className="seg">
                   {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
                     <button
                       key={q}
@@ -622,6 +642,42 @@ export function SettingsPanel({
                 <p className="settings-hint muted">
                   ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms latency · grain{" "}
                   {STRETCH_PRESETS[settings.stretchQuality].frame}
+                </p>
+                <div className="settings-row">
+                  <span className="settings-label">Transient preservation</span>
+                  <button
+                    className={`toggle ${settings.stretchTransient ? "on" : ""}`}
+                    onClick={() => set({ stretchTransient: !settings.stretchTransient })}
+                    role="switch"
+                    aria-checked={settings.stretchTransient}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                {settings.stretchTransient && (
+                  <Slider
+                    label="Transient threshold"
+                    hint={settings.stretchTThresh <= 1.7 ? "sensitive" : settings.stretchTThresh >= 3 ? "strict" : "balanced"}
+                    value={settings.stretchTThresh}
+                    onChange={(v) => set({ stretchTThresh: v })}
+                    min={1.3}
+                    max={4}
+                    step={0.1}
+                  />
+                )}
+                <div className="settings-row">
+                  <span className="settings-label">Anti-alias pitch-up</span>
+                  <button
+                    className={`toggle ${settings.stretchAa ? "on" : ""}`}
+                    onClick={() => set({ stretchAa: !settings.stretchAa })}
+                    role="switch"
+                    aria-checked={settings.stretchAa}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                <p className="settings-hint muted">
+                  Keep attacks crisp under big tempo stretch; remove fizz on key-ups.
                 </p>
               </div>
 
@@ -1042,11 +1098,17 @@ function Slider({
   hint,
   value,
   onChange,
+  min = 0,
+  max = 1,
+  step = 0.05,
 }: {
   label: string;
   hint: string;
   value: number;
   onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
 }) {
   return (
     <div className="settings-row slider-row">
@@ -1056,9 +1118,9 @@ function Slider({
       <input
         type="range"
         className="settings-slider"
-        min={0}
-        max={1}
-        step={0.05}
+        min={min}
+        max={max}
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
       />

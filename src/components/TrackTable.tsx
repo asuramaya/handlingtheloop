@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TrackMeta } from "@htl/library";
 import { fmtTime } from "../util/format";
+import { CachePips, useCacheStatus } from "./CachePips";
 
 // Drag payload: JSON array of videoIds. Sidebar playlists are drop targets.
 export const TRACK_DND_MIME = "application/x-htl-tracks";
@@ -29,20 +30,23 @@ interface MenuState {
 // Sortable columns (the "#" column sorts by the underlying list order).
 type SortKey = "index" | "title" | "artist" | "bpm" | "key" | "time";
 
-// Resizable data columns + their persisted default widths (px). # and thumb are
-// fixed-size; Title is the flex column that absorbs the remaining width, so the
-// table always fills its container (no dead space) regardless of how the others are
-// sized. Each resizable column carries its own width and gets its own drag handle —
-// dragging a handle resizes ONLY that column, and Title yields/grows to match (so
-// narrowing any column is how you widen Title, and vice-versa).
+// Data columns are sized as a FRACTION of the table width (0..1) and rendered as a
+// percentage, so they scale proportionally when the dock panel is resized (before,
+// only Title — the flex column — grew). # and thumb stay fixed; Title is the
+// auto/flex column that absorbs whatever's left, so the table always fills its
+// container. `min` is a px floor; `def` is the default fraction. Each border between
+// data columns drags to resize: the Title|Artist border adjusts Artist (Title
+// absorbs); the others resize their own column (Title absorbs), capped so Title never
+// falls under TITLE_MIN.
 const RESIZABLE: { id: SortKey; min: number; def: number }[] = [
-  { id: "artist", min: 70, def: 150 },
-  { id: "bpm", min: 44, def: 60 },
-  { id: "key", min: 40, def: 56 },
-  { id: "time", min: 48, def: 64 },
+  { id: "artist", min: 70, def: 0.22 },
+  { id: "bpm", min: 44, def: 0.09 },
+  { id: "key", min: 40, def: 0.08 },
+  { id: "time", min: 48, def: 0.1 },
 ];
-const TITLE_MIN = 120; // Title never collapses below this — caps how wide the others can grow
-const WIDTHS_KEY = "htl:ttWidths";
+const TITLE_MIN = 120; // px — Title never collapses below this; caps how wide the others grow
+const FIXED_PX = 36; // the # column (px); the thumb column is added live (it scales with row size)
+const WIDTHS_KEY = "htl:ttCols"; // fractions (new key; the old px-based htl:ttWidths is ignored)
 const SCALE_KEY = "htl:ttScale";
 const SCALE_MIN = 0.8;
 const SCALE_MAX = 1.8;
@@ -103,6 +107,7 @@ export function TrackTable({
   const [query, setQuery] = useState(""); // in-library filter (title / artist)
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths());
   const [scale, setScale] = useState<number>(() => loadScale());
+  useCacheStatus(); // re-render rows when the cached-pool manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   const anchor = useRef<number | null>(null);
   const longPress = useRef<number | undefined>(undefined);
@@ -145,26 +150,33 @@ export function TrackTable({
     }
   }
 
-  // Drag a column's right border to resize just THAT column; Title (the auto/flex
-  // column) absorbs the difference, so the table always fills its container with no
-  // dead space. The column can't drop below its own min, nor grow so far that Title
-  // would fall under TITLE_MIN — that cap is what lets you widen Title by narrowing
-  // any other column (and stops a runaway drag from crushing the title text).
+  // Drag a column border to resize. Everything works in fractions of the table width
+  // (so columns stay proportional as the panel resizes) and Title (the auto/flex
+  // column) absorbs the difference, so the table always fills its container. The Title
+  // handle resizes the Title|Artist border — it shrinks/grows Artist inversely (drag
+  // right widens Title, narrows Artist); every other border resizes its own column. A
+  // column can't drop below its px min, nor grow so far that Title falls under
+  // TITLE_MIN — that cap is what lets you widen Title by narrowing any other column.
   function startResize(e: React.PointerEvent, id: SortKey) {
     e.preventDefault();
     e.stopPropagation(); // don't trigger the header's sort
-    const meta = RESIZABLE.find((c) => c.id === id);
+    const target = id === "title" ? "artist" : id; // the Title handle drives Artist…
+    const invert = id === "title"; // …inverted, so dragging right widens Title
+    const meta = RESIZABLE.find((c) => c.id === target);
     if (!meta) return;
     const startX = e.clientX;
-    const startW = widths[id] ?? meta.def;
+    const startFrac = widths[target] ?? meta.def;
     const onMove = (ev: PointerEvent) => {
-      // The other columns' current widths + the fixed #/thumb columns + Title's floor
-      // bound how wide this one may grow before Title would be squeezed past TITLE_MIN.
-      const others = RESIZABLE.reduce((s, c) => (c.id === id ? s : s + (widths[c.id] ?? c.def)), 0);
+      const tw = tableRef.current?.clientWidth || 1;
+      // The other columns + the fixed #/thumb columns + Title's floor bound how wide
+      // this one may grow before Title would be squeezed past TITLE_MIN.
+      const othersFrac = RESIZABLE.reduce((s, c) => (c.id === target ? s : s + (widths[c.id] ?? c.def)), 0);
       const thumbPx = 3.8 * 13 * scale; // .col-thumb is 3.8em of the scaled font-size
-      const avail = (tableRef.current?.clientWidth ?? 9999) - 36 /* #col */ - thumbPx - TITLE_MIN - others;
-      const w = Math.max(meta.min, Math.min(Math.max(meta.min, avail), startW + (ev.clientX - startX)));
-      setWidths((prev) => ({ ...prev, [id]: w }));
+      const minFrac = meta.min / tw;
+      const maxFrac = Math.max(minFrac, 1 - (TITLE_MIN + FIXED_PX + thumbPx) / tw - othersFrac);
+      const dFrac = ((ev.clientX - startX) / tw) * (invert ? -1 : 1);
+      const f = Math.max(minFrac, Math.min(maxFrac, startFrac + dFrac));
+      setWidths((prev) => ({ ...prev, [target]: f }));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -196,7 +208,10 @@ export function TrackTable({
     });
   }
 
-  const colWidth = (id: SortKey) => widths[id] ?? RESIZABLE.find((c) => c.id === id)!.def;
+  const colWidth = (id: SortKey) => {
+    const f = widths[id] ?? RESIZABLE.find((c) => c.id === id)!.def;
+    return `${(f * 100).toFixed(3)}%`; // fraction → CSS percentage (proportional with the table)
+  };
 
   if (tracks.length === 0) return <div className="lib-empty">{emptyHint}</div>;
 
@@ -245,7 +260,10 @@ export function TrackTable({
   // A clickable, sortable header cell with an asc/desc caret + (optionally) a
   // drag-to-resize border on its right edge.
   const SortTh = ({ id, label, cls }: { id: SortKey; label: string; cls: string }) => {
-    const hasHandle = RESIZABLE.some((c) => c.id === id); // every resizable column gets a drag handle
+    // Title gets a handle too (its right border = the Title|Artist divider); plus every
+    // resizable data column. Title isn't in RESIZABLE — it's the flex absorber — so it's
+    // called out explicitly.
+    const hasHandle = id === "title" || RESIZABLE.some((c) => c.id === id);
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
@@ -365,6 +383,7 @@ export function TrackTable({
               <td className="col-num">{i + 1}</td>
               <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
               <td className="col-title" title={t.title}>
+                <CachePips videoId={t.videoId} />
                 {t.title}
               </td>
               <td className="col-artist" title={t.artist}>

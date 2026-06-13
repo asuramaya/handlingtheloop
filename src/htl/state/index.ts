@@ -32,6 +32,7 @@ export {
   applySettings,
   surfaceColor,
   type StretchQuality,
+  type StretchEngine,
   type StretchConfig,
   STRETCH_PRESETS,
   stretchConfig,
@@ -49,7 +50,7 @@ export {
   clearSession,
 } from "./session";
 export { type SearchState, type SortKey, loadSearchState, saveSearchState } from "./searchState";
-export { useSettingsSync } from "./settingsSync";
+export { useSettingsSync, localTs, stampLocal } from "./settingsSync";
 export {
   type ColorProfile,
   type ColorSnapshot,

@@ -44,6 +44,13 @@ interface Attachment {
   color: string; // this device's account accent (hex) — the room "vibe" is the host's color
 }
 
+// Device kinds (from the client's `kind` param, see deviceName) that are phones/tablets. The
+// anchor (clock) prefers a DESKTOP over these among the owner's own devices, so a desktop refresh
+// doesn't hand the clock to a phone for good. (iPadOS Safari often reports "Mac" — fine, it then
+// counts as a desktop, which is the capable-DJ-surface behaviour we want anyway.)
+const MOBILE_KINDS = new Set(["iPhone", "iPad", "Android"]);
+const isMobileKind = (kind: string): boolean => MOBILE_KINDS.has(kind);
+
 export class DjRoom {
   private state: DurableObjectState;
   private anchorId: string | null = null;
@@ -62,6 +69,15 @@ export class DjRoom {
   // Guest device ids the host has approved into the session (the handshake). Persisted so
   // an approved guest who refreshes re-enters without knocking again. Cleared on deny/kick.
   private approved = new Set<string>();
+  // Coalesce storage WRITES. A busy session updates snapshot/stemview/lyrics many times a second;
+  // persisting EACH one burned the DO write quota (it blew Cloudflare's free-tier daily cap). The
+  // in-memory copies are always current for live relay + catch-up; disk is only a cold-restart
+  // fallback (and a present host re-publishes everything on join), so a few seconds of on-disk lag
+  // is fine. Throttle each cache to at most one write per PERSIST_MIN_MS.
+  private static PERSIST_MIN_MS = 10_000;
+  private snapAt = 0;
+  private stemAt = 0;
+  private lyricAt = 0;
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -91,8 +107,11 @@ export class DjRoom {
   // under the DO's 128 KiB per-value cap (oversized ones live in memory only — the host
   // re-streams on the next join / track change anyway) and never throw.
   private async persistStemViews(): Promise<void> {
+    const now = Date.now();
+    if (now - this.stemAt < DjRoom.PERSIST_MIN_MS) return; // throttled — in-memory copy stays live
     try {
       if (JSON.stringify(this.lastStemView).length > 120_000) return;
+      this.stemAt = now;
       await this.state.storage.put("stemviews", this.lastStemView);
     } catch {
       /* best-effort — a failed persist must never tear down a socket */
@@ -102,8 +121,11 @@ export class DjRoom {
   // Same best-effort contract as the stem envelopes: a long track's word list can be sizeable,
   // so cap it well under the 128 KiB per-value limit (oversized stays in memory + re-streams).
   private async persistLyrics(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lyricAt < DjRoom.PERSIST_MIN_MS) return; // throttled — in-memory copy stays live
     try {
       if (JSON.stringify(this.lastLyrics).length > 120_000) return;
+      this.lyricAt = now;
       await this.state.storage.put("lyrics", this.lastLyrics);
     } catch {
       /* best-effort — never tear down a socket over a persist */
@@ -275,11 +297,17 @@ export class DjRoom {
         if (self === this.anchorId || this.anchorId === null) {
           this.lastSnapshot = msg.snapshot;
           this.relay(self, { t: "state", snapshot: msg.snapshot });
-          // Persist best-effort — never let a storage error close the socket (flap).
-          try {
-            await this.state.storage.put("snapshot", msg.snapshot);
-          } catch {
-            /* keep the in-memory snapshot; persistence is non-critical */
+          // Persist THROTTLED + best-effort — the in-memory copy above already serves live relay
+          // and catch-up; disk is just the cold-restart fallback, so one write per PERSIST_MIN_MS
+          // is plenty (was: a write on EVERY control change, which blew the free-tier write cap).
+          const now = Date.now();
+          if (now - this.snapAt >= DjRoom.PERSIST_MIN_MS) {
+            this.snapAt = now;
+            try {
+              await this.state.storage.put("snapshot", msg.snapshot);
+            } catch {
+              /* keep the in-memory snapshot; persistence is non-critical */
+            }
           }
         }
         break;
@@ -318,6 +346,17 @@ export class DjRoom {
         // room "vibe" (the host's colour) and the roster swatches sync instantly.
         this.patch(ws, { color: (msg.color || "").slice(0, 9) });
         this.broadcastPresence();
+        break;
+      }
+      case "settings": {
+        // ACCOUNT-PRIVATE live theme sync: a signed-in device's colour/theme settings changed
+        // → fan out to the OWNER's OTHER devices ONLY (a.host, set un-forgeably by the Worker).
+        // Guests on other accounts must never send OR receive this, so gate on the sender being
+        // a host device and relay only to host devices. NOT persisted — D1 (/api/me/settings) is
+        // the durable store; this is purely the instant nudge (the poll backstop covers misses).
+        if (this.isHostDevice(self)) {
+          this.relayToOwnDevices(self, { t: "settings", settings: msg.settings, updatedAt: msg.updatedAt });
+        }
         break;
       }
     }
@@ -364,6 +403,16 @@ export class DjRoom {
     return false;
   }
 
+  // A phone/tablet (by its reported device kind). Used only to bias the clock toward a desktop.
+  private isMobile(device: string | null): boolean {
+    if (!device) return false;
+    for (const ws of this.state.getWebSockets(device)) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a && isMobileKind(a.kind)) return true;
+    }
+    return false;
+  }
+
   private hasOtherSocket(device: string, except: Ws): boolean {
     for (const ws of this.state.getWebSockets(device)) if (ws !== except) return true;
     return false;
@@ -383,6 +432,17 @@ export class DjRoom {
       await this.setAnchor(self); // a driver took over → make it the board's source of truth
     } else if (anchorActive && !anchorControls && !anchorIsHost && this.isHostDevice(self) && this.isJoined(self) && self !== this.anchorId) {
       await this.setAnchor(self); // owner joined → reclaim authority from a lone guest anchor (#7)
+    } else if (
+      anchorActive &&
+      this.isHostDevice(self) && this.isJoined(self) && self !== this.anchorId &&
+      !this.isMobile(self) && this.isMobile(this.anchorId) && anchorIsHost &&
+      (this.isControlling(self) || !anchorControls)
+    ) {
+      // The owner's DESKTOP reclaims the clock from its own phone/tablet. When the desktop (the
+      // anchor) refreshes, its socket close hands the clock to the mobile (nextAnchor); on the
+      // desktop's return it should take it BACK — the phone only held it because the desktop
+      // dropped. Guard: don't steal from a mobile that's actively DRIVING while we're idle.
+      await this.setAnchor(self);
     } else if (!this.isJoined(self) && self === this.anchorId) {
       await this.setAnchor(this.nextAnchor(self));
     } else {
@@ -402,17 +462,30 @@ export class DjRoom {
   // real board) › a HOST device (the session owner, authoritative even while only
   // listening — keeps a lone guest from freezing the board, #7) › any joined participant.
   private nextAnchor(except: string, exceptWs?: Ws): string | null {
-    let hostFallback: string | null = null;
-    let anyFallback: string | null = null;
+    let ctrlDesktop: string | null = null;
+    let ctrlAny: string | null = null;
+    let hostDesktop: string | null = null;
+    let hostAny: string | null = null;
+    let anyJoined: string | null = null;
     for (const ws of this.state.getWebSockets()) {
       if (ws === exceptWs) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!a || !a.joined || a.device === except) continue;
-      if (a.controlling) return a.device;
-      if (a.host && !hostFallback) hostFallback = a.device;
-      if (!anyFallback) anyFallback = a.device;
+      const mobile = isMobileKind(a.kind);
+      if (a.controlling) {
+        if (!mobile && !ctrlDesktop) ctrlDesktop = a.device;
+        if (!ctrlAny) ctrlAny = a.device;
+      }
+      if (a.host) {
+        if (!mobile && !hostDesktop) hostDesktop = a.device;
+        if (!hostAny) hostAny = a.device;
+      }
+      if (!anyJoined) anyJoined = a.device;
     }
-    return hostFallback ?? anyFallback;
+    // Preference: a controlling DESKTOP › any controller › a host DESKTOP › any host › anyone.
+    // Desktops outrank phones/tablets so the clock lands on the natural DJ machine, not a phone
+    // that only happened to be the last one standing.
+    return ctrlDesktop ?? ctrlAny ?? hostDesktop ?? hostAny ?? anyJoined;
   }
 
   private patch(ws: Ws, fields: Partial<Attachment>): void {
@@ -480,6 +553,12 @@ export class DjRoom {
   }
 
   private async setAnchor(device: string | null, except?: Ws): Promise<void> {
+    // No-op if the anchor isn't actually changing — skip the storage write AND the role broadcast.
+    // (A reconnect storm can call this repeatedly with the same device; each used to write a row.)
+    if (device === this.anchorId) {
+      this.broadcastPresence(except);
+      return;
+    }
     this.anchorId = device;
     await this.state.storage.put("anchor", device);
     this.broadcast({ t: "role", anchorId: device }, except);
@@ -490,6 +569,17 @@ export class DjRoom {
     const json = JSON.stringify(msg);
     for (const ws of this.state.getWebSockets()) {
       if (this.deviceOf(ws) === from) continue;
+      ws.send(json);
+    }
+  }
+
+  // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited
+  // guests on other accounts. For account-private live sync (settings) that must not leak.
+  private relayToOwnDevices(from: string, msg: ServerMsg): void {
+    const json = JSON.stringify(msg);
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (!a?.host || a.device === from) continue;
       ws.send(json);
     }
   }

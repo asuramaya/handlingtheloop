@@ -67,8 +67,18 @@ export async function fetchProfile(signal?: AbortSignal): Promise<Profile | null
   return (await res.json()) as Profile;
 }
 
-/** Record one play of a track for the signed-in user's stats. Fire-and-forget. */
+// Per-track de-dupe so reloads, rewinds, model/stem re-derives, and room-driven re-loads of
+// the SAME track don't each fire a D1 write. logPlay used to POST on every track load — a
+// careless write (each one is a D1 UPSERT). One play per track per window is plenty for stats.
+const PLAY_LOG_WINDOW_MS = 60_000;
+const lastPlayLog = new Map<string, number>();
+
+/** Record one play of a track for the signed-in user's stats. Fire-and-forget, de-duped. */
 export function logPlay(t: { videoId: string; title?: string; artist?: string; thumbnail?: string | null }): void {
+  const now = Date.now();
+  const prev = lastPlayLog.get(t.videoId);
+  if (prev !== undefined && now - prev < PLAY_LOG_WINDOW_MS) return; // already logged this track recently
+  lastPlayLog.set(t.videoId, now);
   void fetch("/api/me/play", {
     method: "POST",
     credentials: "same-origin",
@@ -88,6 +98,8 @@ export interface ServicePlaylist {
   title: string;
   count: number;
   thumbnail: string | null;
+  ownerName?: string | null; // playlist owner's display name (Spotify)
+  ownedByMe?: boolean; // false = followed / shared-with-me (Spotify may block reading its tracks)
 }
 
 /** The signed-in user's Spotify playlists (YouTube ones come from @htl/media). */

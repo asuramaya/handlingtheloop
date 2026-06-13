@@ -56,6 +56,10 @@ interface InnertubeInstance {
   search(q: string, opts: { type: string }): Promise<{ results?: unknown[] }>;
   getPlaylist(id: string): Promise<{ info?: { title?: string }; videos?: unknown[] }>;
   getPlaylists?(): Promise<{ playlists?: unknown[] }>;
+  // Raw endpoint executor — the same Actions API in both youtubei.js builds. We
+  // use it to hit `/next` (watch-next) directly and parse the raw JSON ourselves,
+  // sidestepping the broken player/getInfo path (see header note).
+  actions?: { execute(endpoint: string, args?: Record<string, unknown>): Promise<{ data?: unknown }> };
 }
 interface InnertubeLike {
   // `cookie` authenticates the WEB client natively (youtubei.js computes the
@@ -84,6 +88,8 @@ export interface MyPlaylist {
   title: string;
   count: number;
   thumbnail: string | null;
+  ownerName?: string | null; // display name of the playlist owner (Spotify)
+  ownedByMe?: boolean; // false = followed / shared-with-me (may not be API-readable)
 }
 
 export interface InnertubeApi {
@@ -92,6 +98,9 @@ export interface InnertubeApi {
   fetchPlaylist(listId: string, auth?: BrowseAuth): Promise<{ title: string; tracks: TrackMeta[] }>;
   // The signed-in user's own playlists (requires a cookie, or an OAuth token).
   getMyPlaylists(auth: BrowseAuth): Promise<MyPlaylist[]>;
+  // YouTube watch-next / autoplay graph for a video — the universal "what plays
+  // after this" feed. auth is optional (personalizes the feed when present).
+  getWatchNext(videoId: string, auth?: BrowseAuth): Promise<TrackMeta[]>;
 }
 
 // youtubei.js wraps strings in Text nodes (`{ text }`) and counts in Text too —
@@ -106,6 +115,62 @@ function textOf(v: unknown): string {
 function numOf(v: unknown): number {
   const s = textOf(v).replace(/[^\d]/g, "");
   return s ? parseInt(s, 10) : 0;
+}
+
+// --- Watch-next parsing -------------------------------------------------------
+// The `/next` response embeds the up-next/autoplay set as `compactVideoRenderer`
+// nodes scattered through the layout (secondaryResults, autoplay, continuations).
+// Rather than chase the exact path (which shifts by client/version), we walk the
+// raw JSON and collect every compactVideoRenderer — robust across shapes.
+
+function runsText(runs: unknown): string | undefined {
+  if (!Array.isArray(runs)) return undefined;
+  const s = runs.map((r) => (r as { text?: string }).text ?? "").join("");
+  return s || undefined;
+}
+
+interface CompactRenderer {
+  videoId?: string;
+  title?: { simpleText?: string; runs?: unknown };
+  lengthText?: { simpleText?: string; runs?: unknown };
+  longBylineText?: { runs?: unknown };
+  shortBylineText?: { runs?: unknown };
+  viewCountText?: { simpleText?: string; runs?: unknown };
+  shortViewCountText?: { simpleText?: string };
+  thumbnail?: { thumbnails?: { url: string }[] };
+}
+
+function fromCompact(r: CompactRenderer): TrackMeta | null {
+  const id = r.videoId;
+  if (!id || !/^[\w-]{11}$/.test(id)) return null;
+  const thumbs = r.thumbnail?.thumbnails;
+  return {
+    videoId: id,
+    title: r.title?.simpleText ?? runsText(r.title?.runs) ?? id,
+    artist: runsText(r.longBylineText?.runs) ?? runsText(r.shortBylineText?.runs) ?? "",
+    duration: parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs)),
+    thumbnail:
+      thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    views: parseViews(r.viewCountText?.simpleText ?? runsText(r.viewCountText?.runs) ?? r.shortViewCountText?.simpleText),
+  };
+}
+
+function collectCompact(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
+  if (!node || depth > 40) return;
+  if (Array.isArray(node)) {
+    for (const x of node) collectCompact(x, push, depth + 1);
+    return;
+  }
+  if (typeof node !== "object") return;
+  const obj = node as Record<string, unknown>;
+  if (obj.compactVideoRenderer) {
+    const t = fromCompact(obj.compactVideoRenderer as CompactRenderer);
+    if (t) push(t);
+  }
+  for (const k in obj) {
+    if (k === "compactVideoRenderer") continue;
+    collectCompact(obj[k], push, depth + 1);
+  }
 }
 
 /** Build the search/playlist API from an Innertube class (Node or cf-worker). */
@@ -184,6 +249,26 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       if (out.length === 0 && raw.length > 0) {
         throw new Error(`browse returned ${raw.length} items but none parsed as playlists`);
       }
+      return out;
+    },
+    async getWatchNext(videoId, auth) {
+      // Cookie personalizes the feed (recently-played aware); otherwise anonymous.
+      const yt = auth?.cookie ? await cookieClient(auth.cookie) : await client();
+      if (!yt.actions?.execute) throw new Error("watch-next unavailable in this youtubei build");
+      let data: unknown;
+      try {
+        const res = await yt.actions.execute("/next", { videoId, parse: false });
+        data = res?.data ?? res;
+      } catch (e) {
+        throw new Error(`watch-next failed: ${(e as Error).message}`);
+      }
+      const out: TrackMeta[] = [];
+      const seen = new Set<string>([videoId]); // never suggest the seed itself
+      collectCompact(data, (t) => {
+        if (seen.has(t.videoId)) return;
+        seen.add(t.videoId);
+        out.push(t);
+      });
       return out;
     },
   };

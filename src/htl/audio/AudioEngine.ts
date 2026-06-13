@@ -1,5 +1,5 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
-import { Deck, type SyncRole } from "./Deck";
+import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 
@@ -25,7 +25,7 @@ export class AudioEngine {
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
   // Desired WSOLA engine config; re-applied whenever the stretch nodes (re)attach.
-  private stretchCfg = { frame: 1024, search: 200, stride: 2 };
+  private stretchCfg: StretchEngineConfig = { frame: 1024, search: 200, stride: 2 };
   // TEMP iPhone diagnostics: surface worklet-module load failures (console is
   // invisible on an iPhone) so the on-screen overlay can show WHY playback is dead.
   workletError = "";
@@ -134,7 +134,7 @@ export class AudioEngine {
 
   /** Set the time-stretch engine quality on both decks (from the Audio Engine
    *  settings tab). Stored so it survives node re-attach. */
-  setStretchConfig(cfg: { frame: number; search: number; stride: number }) {
+  setStretchConfig(cfg: StretchEngineConfig) {
     this.stretchCfg = cfg;
     this.deckA.configureStretch(cfg);
     this.deckB.configureStretch(cfg);

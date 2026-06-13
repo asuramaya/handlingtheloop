@@ -42,11 +42,22 @@ interface SpotifyPlaylist {
   name?: string;
   images?: SpotifyImage[];
   tracks?: { total?: number };
+  owner?: { id?: string; display_name?: string };
+  collaborative?: boolean;
 }
 
-/** The user's own/followed Spotify playlists. */
+/** The user's own/followed Spotify playlists, each tagged with ownership. `/me/playlists`
+    returns BOTH playlists the user owns and ones they only follow / were shared. We flag
+    the shared ones because Spotify frequently won't let a third-party app read their
+    tracks (the items call 403/404s) even though they list fine here. */
 export async function getMySpotifyPlaylists(token: string): Promise<MyPlaylist[]> {
   const out: MyPlaylist[] = [];
+  let meId = "";
+  try {
+    meId = ((await sget("/me", token)) as { id?: string }).id ?? "";
+  } catch {
+    /* non-fatal — ownership tags just won't be set */
+  }
   let url: string | null = "/me/playlists?limit=50";
   while (url) {
     const j = await sget(url, token);
@@ -57,6 +68,8 @@ export async function getMySpotifyPlaylists(token: string): Promise<MyPlaylist[]
         title: p.name || "Playlist",
         count: p.tracks?.total ?? 0,
         thumbnail: p.images?.[0]?.url ?? null,
+        ownerName: p.owner?.display_name ?? null,
+        ownedByMe: !!meId && p.owner?.id === meId,
       });
     }
     url = (j.next as string | null) ?? null;

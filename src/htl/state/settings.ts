@@ -42,7 +42,11 @@ export interface Settings {
   activeMidiMapId: string | null; // which saved map midiBindings was loaded from (null = ad-hoc / built-in only)
   colorProfiles: ColorProfile[]; // saved, shareable colour themes (synced to account, same as midiMaps)
   activeColorProfileId: string | null; // which saved profile is loaded (null = ad-hoc / built-in)
-  stretchQuality: StretchQuality; // tempo/pitch (WSOLA) engine quality preset
+  stretchEngine: StretchEngine; // time-stretch algorithm: time-domain WSOLA or phase-locked vocoder
+  stretchQuality: StretchQuality; // tempo/pitch engine quality preset (grain/FFT size)
+  stretchTransient: boolean; // copy/sharpen attacks (WSOLA 1:1 copy / PV phase reset) — see stretchWorklet
+  stretchAa: boolean; // WSOLA: anti-aliased windowed-sinc resampling when pitching up
+  stretchTThresh: number; // WSOLA transient-detector threshold (flux/EMA ratio); lower = more sensitive
   stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
   audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
   autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
@@ -54,6 +58,10 @@ export interface Settings {
   lyricsModel: string; // lyrics engine: whisper model id "base" | "small" (WHISPER_MODELS), or "youtube" for YouTube captions
 }
 
+// Time-stretch algorithm. WSOLA = time-domain overlap-add (crisp transients, but
+// metallic on dense polyphony — aligns one grain). PV = phase-LOCKED phase vocoder
+// (Laroche-Dolson identity locking) — clean on full mixes, the pro fix, more CPU.
+export type StretchEngine = "wsola" | "pv";
 // The unified time-stretch engine's quality/latency trade-off (see stretchWorklet).
 export type StretchQuality = "fast" | "balanced" | "hifi";
 export interface StretchConfig {
@@ -157,7 +165,11 @@ export const DEFAULT_SETTINGS: Settings = {
   activeMidiMapId: null,
   colorProfiles: [], // no saved colour themes yet
   activeColorProfileId: null,
+  stretchEngine: "wsola", // proven default; PV is opt-in until ear-tested across devices
   stretchQuality: "balanced", // crisp + low-latency default
+  stretchTransient: true, // preserve attacks by default
+  stretchAa: true, // anti-alias pitch-ups by default
+  stretchTThresh: 2.2, // matches the worklet's built-in default
   stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
   audioOutputId: "", // system default output until the user picks a device
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
@@ -176,10 +188,10 @@ export const TEXT_PRESETS = ["#ecedfb", "#ffffff", "#cdd3ff", "#ffe9c2", "#bfffe
 // Border / line presets, subtle → neon.
 export const BORDER_PRESETS = ["#1a1a28", "#2a2a3d", "#0c0c14", "#39314f", "#2a3d3a", "#4d3a2a", "#00e5ff", "#ff2d9c"];
 
-export const TEMPO_RANGES = [6, 8, 10, 16, 50];
+export const TEMPO_RANGES = [6, 8, 10, 16, 50, 100];
 
-// KEY knob half-ranges (± semitones). 12 = a full octave each way.
-export const PITCH_RANGES = [1, 2, 4, 7, 12];
+// KEY knob half-ranges (± semitones). 12 = a full octave each way, 24 = two octaves.
+export const PITCH_RANGES = [1, 2, 4, 7, 12, 24];
 
 // Beat-jump resolution choices (beats). 4 = one bar.
 export const JUMP_RESOLUTIONS = [1, 2, 4, 8, 16];

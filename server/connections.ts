@@ -21,15 +21,17 @@ export interface ConnEnv {
 
 const SKEW_MS = 60_000; // refresh a minute early to avoid edge expiries mid-request
 
-/** A valid access token for the user's `provider` connection, or null if unlinked. */
-export async function getValidToken(env: ConnEnv, userId: string, provider: Provider): Promise<string | null> {
+/** The user's `provider` connection with a guaranteed-valid access token (refreshing if needed),
+ *  or null if unlinked. Returns the WHOLE connection so a caller that also needs `providerUserId`
+ *  doesn't re-read it from D1 (the playlist routes used to fetch the connection twice per call). */
+export async function getValidConnection(env: ConnEnv, userId: string, provider: Provider) {
   if (!env.TOKEN_ENC_KEY) throw new Error("TOKEN_ENC_KEY is not configured");
   const encKey = env.TOKEN_ENC_KEY.trim();
   const conn = await getConnection(env.DB, userId, provider, encKey);
   if (!conn) return null;
 
   const stillValid = conn.expiresAt != null && conn.expiresAt - SKEW_MS > Date.now();
-  if (stillValid || !conn.refreshToken) return conn.accessToken;
+  if (stillValid || !conn.refreshToken) return conn;
 
   // Expired (or unknown expiry) + we have a refresh token → mint a fresh one.
   const tokens =
@@ -45,7 +47,12 @@ export async function getValidToken(env: ConnEnv, userId: string, provider: Prov
     { ...tokens, provider_user_id: conn.providerUserId ?? undefined },
     encKey,
   );
-  return tokens.access_token;
+  return { ...conn, accessToken: tokens.access_token };
+}
+
+/** A valid access token for the user's `provider` connection, or null if unlinked. */
+export async function getValidToken(env: ConnEnv, userId: string, provider: Provider): Promise<string | null> {
+  return (await getValidConnection(env, userId, provider))?.accessToken ?? null;
 }
 
 const YT_WRITE_SCOPE = "https://www.googleapis.com/auth/youtube";

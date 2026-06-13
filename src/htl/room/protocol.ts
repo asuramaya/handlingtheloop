@@ -100,6 +100,7 @@ export type ClientMsg =
   | { t: "stemview"; deck: DeckId; view: unknown } // per-deck stem waveform envelopes (opaque; for remote display)
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host streams word-timed lyrics → guests
   | { t: "color"; color: string } // update this device's account accent (re-broadcast in presence)
+  | { t: "settings"; settings: unknown; updatedAt: number } // ACCOUNT-PRIVATE: my colour/theme settings → my OTHER signed-in devices (host-only relay)
   | { t: "request-state" };
 
 export type ServerMsg =
@@ -111,5 +112,6 @@ export type ServerMsg =
   | { t: "state"; snapshot: unknown }
   | { t: "stemview"; deck: DeckId; view: unknown } // host's per-deck stem envelopes, relayed to remotes
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host's word-timed lyrics, relayed to remotes
+  | { t: "settings"; settings: unknown; updatedAt: number } // a same-account device's colour/theme settings, relayed to the owner's OTHER devices
   | { t: "kicked"; reason?: string } // you were denied entry or removed — drop sync + show why
   | { t: "error"; message: string };

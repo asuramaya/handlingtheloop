@@ -957,6 +957,28 @@ body {
 .col-title {
   width: auto; /* the flex column — absorbs all leftover width */
 }
+/* Cache status pips: a green dot when the song is pooled (instant load), a blue dot
+   when its stems are cached too. Shared by the Library table + Search result rows;
+   absent entirely when nothing is cached, so they only flag what's special. */
+.cache-pips {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.cache-pips .pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.cache-pips .pip-song {
+  background: #3ddc84; /* cached audio — loads instantly */
+}
+.cache-pips .pip-stems {
+  background: var(--accent, #36c2ff); /* stems cached too */
+}
 .col-artist {
   color: var(--muted);
 }
@@ -1411,12 +1433,17 @@ body {
   pointer-events: none;
 }
 /* Provenance tag, pinned to the ribbon's right edge. Whisper/pool vs YouTube. */
-.caption-source {
+.caption-tools {
   position: absolute;
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.caption-source {
   font-size: 10px;
   line-height: 1;
   opacity: 0.5;
@@ -1424,6 +1451,32 @@ body {
   background: color-mix(in srgb, var(--surface) 70%, #000);
   padding: 1px 2px;
   border-radius: 3px;
+}
+/* Reprocess controls — appear on hover so they don't clutter the ribbon; the
+   user reaches for them only when the lyrics are wrong. */
+.caption-reprocess {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.caption-bar:hover .caption-reprocess {
+  opacity: 1;
+}
+.caption-redo {
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--surface) 80%, #000);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.caption-redo:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 }
 /* Word-timed timeline: the track is scrolled by the rAF transform, sharing the waveform's
    exact time axis. Two layers sit inside it — phrase labels and per-word markers — toggled
@@ -1954,6 +2007,31 @@ body.no-glow .caption-word.cw-on .cw-label {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+/* When a catalog track is loaded the header becomes a drag SOURCE (drop onto a
+   library playlist to file it). The parent .lane-info is pointer-events:none for
+   waveform click-through, so the draggable header must opt back in to start a drag. */
+.lane-head.draggable {
+  pointer-events: auto;
+  cursor: grab;
+}
+.lane-head.draggable:active {
+  cursor: grabbing;
+}
+/* The ⠿ grip — a small affordance that the header can be dragged to a playlist. */
+.lane-drag {
+  flex: none;
+  pointer-events: auto;
+  cursor: grab;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.55;
+  transition: color 0.1s, opacity 0.1s;
+}
+.lane-head.draggable:hover .lane-drag {
+  opacity: 1;
+  color: var(--accent);
 }
 /* Title = a clipping box; the inner text truncates with an ellipsis when it fits,
    or auto-scrolls (ticker) when it's longer than the box (`.ticker`, set by JS). */
@@ -2737,6 +2815,23 @@ body.no-glow .caption-word.cw-on .cw-label {
   .app.dock-swapped .modal-backdrop.dock-right .dock-resizer-edge {
     left: auto;
     right: -3px;
+  }
+  /* A side-swap moves the Library (.dock-left) to the screen's RIGHT edge. Mirror its
+     internals so the sidebar — and the ☰ that toggles it — sit against the outer edge,
+     like a natural right-docked panel; otherwise the nav/hamburger read as "on the
+     wrong side". The inner sidebar resizer derives its grow direction from geometry,
+     so reversing the row keeps sidebar-resize working with no other change. */
+  .app.dock-swapped .modal-backdrop.dock-left .library {
+    flex-direction: row-reverse;
+  }
+  .app.dock-swapped .modal-backdrop.dock-left .lib-sidebar {
+    border-right: none;
+    border-left: 1px solid var(--line);
+  }
+  .app.dock-swapped .modal-backdrop.dock-left .lib-burger {
+    order: 1; /* move ☰ to the head's right end, above the now-right-side sidebar */
+    margin-right: 0;
+    margin-left: 8px;
   }
   /* A subtle line that lights up on hover/drag so the grab target is discoverable. */
   .dock-resizer-edge::after {
@@ -4929,6 +5024,20 @@ body.no-glow .hw-btn.shift.on {
   font-size: 13px;
   color: var(--muted);
 }
+/* Shown when a →YouTube transfer needs the manage scope: one-click incremental auth. */
+.sync-write-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent, #36c2ff);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #36c2ff) 12%, transparent);
+  font-size: 13px;
+}
 .sync-review {
   flex: 1;
   overflow-y: auto;
@@ -5103,6 +5212,17 @@ body.no-glow .hw-btn.shift.on {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* "shared" = a followed / shared-with-me playlist Spotify may refuse to read. */
+.sync-pl-tag {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--muted);
+  border: 1px solid var(--line);
 }
 .sync-run {
   display: flex;
@@ -5361,6 +5481,33 @@ body.no-glow .lane.focused::after {
 .pitch-row > *,
 .stems-row > * {
   min-width: 0;
+}
+/* Placeholder shown in the stem-row slot when this deck's stems aren't ready yet but
+   the other deck's are — reserves the row's height (matching .vcell) so both decks'
+   EQ + foot buttons stay aligned instead of the gap collapsing to the bottom. */
+.stems-row.stems-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+.stems-pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: stem-pending-pulse 1s ease-in-out infinite;
+}
+@keyframes stem-pending-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 /* EQ foot (bottom third): a single full-width Pro-Q curve, not a row of cells. It
    grows to absorb the bank's leftover height, so it's a flex column that hands that
@@ -7216,3 +7363,183 @@ button.room-tog:hover {
 }
 
 
+
+/* ---- Auto-mix (auto-DJ) ------------------------------------------------------ */
+.automix-bar {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+.automix-toggle {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.automix-toggle.on {
+  color: #061018;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.automix-count {
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+.automix-queue-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.automix-queue-btn:hover { border-color: var(--accent); }
+
+/* The queue panel — a docked overlay on the right. */
+.mixq {
+  position: fixed;
+  top: 64px;
+  right: 12px;
+  bottom: 12px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.mixq-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mixq-auto {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mixq-auto.on { color: #061018; background: var(--accent); border-color: var(--accent); }
+.mixq-mode { display: flex; gap: 0; margin-left: auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.mixq-mode button {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.mixq-mode button[aria-selected="true"] { color: var(--text); background: var(--panel-2); }
+.mixq-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.mixq-seed {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mixq-seed select {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.mixq-smart { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.mixq-now {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.mixq-countdown { font-size: 11px; color: var(--accent); white-space: nowrap; }
+.mixq-list { flex: 1; overflow-y: auto; margin: 0; padding: 4px; list-style: none; }
+.mixq-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.mixq-track { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.mixq-track img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+.mixq-track-text { display: flex; flex-direction: column; min-width: 0; }
+.mixq-title { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixq-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixq-badge {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mixq-badge.tier-high { color: #061810; background: #3ddc84; }
+.mixq-badge.tier-mid { color: #1a1405; background: #e8b84b; }
+.mixq-badge.tier-low { color: #fff; background: #c8506a; }
+.mixq-item-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.mixq-item-actions button {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.mixq-item-actions button:disabled { opacity: 0.3; cursor: default; }
+.mixq-empty { padding: 16px 10px; text-align: center; color: var(--muted); font-size: 12px; }
+.mixq-controls { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); }
+.mixq-controls button {
+  flex: 1;
+  padding: 7px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mixq-controls button:disabled { opacity: 0.4; cursor: default; }
+.mixq-controls button:not(:disabled):hover { border-color: var(--accent); }

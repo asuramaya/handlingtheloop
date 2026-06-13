@@ -11,6 +11,7 @@
 // heavy compute (decode / waveform / BPM / DSP). Nothing else runs anywhere.
 import { Innertube } from "youtubei.js/cf-worker";
 import { createInnertubeApi } from "../server/innertube";
+import { recommendNext } from "../server/recommend";
 import { audioChunks, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
@@ -86,8 +87,9 @@ interface R2Bucket {
     prefix?: string;
     limit?: number;
     cursor?: string;
+    delimiter?: string;
     include?: ("customMetadata" | "httpMetadata")[];
-  }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string }>;
+  }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string; delimitedPrefixes?: string[] }>;
 }
 
 // 4-stem model (Demucs order). Stems are cached in R2 by videoId so they're
@@ -142,7 +144,7 @@ const MAX_MATCH_TRACKS = 100;
 // Don't buffer/cache absurdly large files (protect Worker memory) — stream those.
 const MAX_CACHE_BYTES = 60 * 1024 * 1024;
 
-const { searchYouTube, fetchPlaylist, getMyPlaylists } = createInnertubeApi(Innertube as never);
+const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext } = createInnertubeApi(Innertube as never);
 
 // The SPA and the API are served by this same Worker, so every /api/* call is
 // same-origin and needs no CORS. We deliberately do NOT send
@@ -158,6 +160,37 @@ function json(status: number, body: unknown): Response {
 }
 
 const isVideoId = (v: string | null): v is string => !!v && /^[\w-]{11}$/.test(v);
+
+// The set of videoIds with cached stems, derived from a delimited walk of the stem
+// keyspace (`s/<model>/<videoId>/<stem>`) — a "directory" listing that yields the ids
+// without fetching every stem object. Used only when the Library/Search lists ask for
+// the per-track stems flag (`/api/community?stems=1`), so the plain pool browse stays
+// a single indexed query.
+// Per-isolate memo so back-to-back Library/Search requests (and both decks' badge fetches)
+// don't each re-walk the whole stem keyspace with Class-A list() ops. 60 s is plenty fresh
+// for a "has cached stems" badge; a brand-new separation just shows up a minute later.
+let stemIdsMemo: { ids: Set<string>; at: number } | null = null;
+const STEM_IDS_TTL_MS = 60_000;
+
+async function stemCachedIds(env: Env): Promise<Set<string>> {
+  if (stemIdsMemo && Date.now() - stemIdsMemo.at < STEM_IDS_TTL_MS) return stemIdsMemo.ids;
+  const ids = new Set<string>();
+  const models = await env.AUDIO.list({ prefix: "s/", delimiter: "/" });
+  for (const mp of models.delimitedPrefixes ?? []) {
+    // mp = "s/<model>/" — list its videoId sub-prefixes.
+    let cursor: string | undefined;
+    do {
+      const page = await env.AUDIO.list({ prefix: mp, delimiter: "/", cursor });
+      for (const vp of page.delimitedPrefixes ?? []) {
+        const vid = vp.slice(mp.length, -1); // strip "s/<model>/" prefix + trailing "/"
+        if (isVideoId(vid)) ids.add(vid);
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  }
+  stemIdsMemo = { ids, at: Date.now() };
+  return ids;
+}
 
 // Resolve the htl account from the session cookie (for the sync routes).
 async function sessionUser(req: Request, env: Env) {
@@ -269,6 +302,16 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         if (!q) return json(400, { error: "missing ?q=" });
         const limit = Number(url.searchParams.get("limit")) || 25;
         return json(200, { results: await searchYouTube(q, limit) });
+      }
+      case "/api/recommend": {
+        // "What plays after this track" — the auto-mix / radio suggestion feed.
+        const v = url.searchParams.get("v");
+        if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
+        const limit = Number(url.searchParams.get("limit")) || 30;
+        const provider = url.searchParams.get("provider");
+        const a = readAuth(req);
+        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit }, { cookie: a?.cookie, token: a?.accessToken });
+        return json(200, { candidates });
       }
       case "/api/playlist": {
         const raw = url.searchParams.get("list") ?? url.searchParams.get("url");
@@ -383,6 +426,9 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // index (ordered, paginated, O(limit)). FALLBACK: scan R2 directly — used
         // pre-migration or before the one-time reindex has populated D1.
         const limit = Math.min(Number(url.searchParams.get("limit")) || 60, 200);
+        // The Library/Search cache badges ask for a per-track stems flag; the plain
+        // pool browse omits it so it stays a single indexed query (no R2 walk).
+        const stemIds = url.searchParams.get("stems") === "1" ? await stemCachedIds(env) : null;
 
         if (env.DB) {
           try {
@@ -393,6 +439,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
                   ...t,
                   thumbnail: t.thumbnail || `https://i.ytimg.com/vi/${t.videoId}/hqdefault.jpg`,
                   views: null,
+                  ...(stemIds ? { stems: stemIds.has(t.videoId) } : {}),
                 })),
               });
             }
@@ -429,6 +476,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
               duration: Number(m?.duration) || 0,
               thumbnail: m?.thumbnail || `https://i.ytimg.com/vi/${v}/hqdefault.jpg`,
               views: null,
+              ...(stemIds ? { stems: stemIds.has(v) } : {}),
             });
           }
           cursor = page.truncated ? page.cursor : undefined;
@@ -647,7 +695,13 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         return json(404, { error: `unknown endpoint ${url.pathname}` });
     }
   } catch (e) {
-    return json(502, { error: (e as Error).message });
+    const msg = (e as Error).message;
+    // Writing TO YouTube needs the manage scope the user may not have granted at
+    // read-only sign-in. Surface it as an actionable 403 so the client can send them
+    // through incremental auth (/api/auth/google/start?write=1) and retry, instead of
+    // a dead-end 502 with a cryptic body.
+    if (msg === "youtube_write_required") return json(403, { error: "youtube_write_required", needsWrite: true });
+    return json(502, { error: msg });
   }
 }
 

@@ -14,6 +14,7 @@ export interface RoomCallbacks {
   onTick?: (decks: TickDecks) => void;
   onStemView?: (deck: DeckId, view: unknown) => void;
   onLyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
+  onSettings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings → adopt (LWW)
   onKicked?: (reason?: string) => void;
 }
 
@@ -54,6 +55,7 @@ export interface RoomState {
   publishState: (snapshot: unknown) => void;
   sendStemView: (deck: DeckId, view: unknown) => void;
   sendLyrics: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
+  sendSettings: (settings: unknown, updatedAt: number) => void; // broadcast my settings to my other devices
   requestState: () => void;
 }
 
@@ -130,6 +132,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
       tick: (d) => cbRef.current.onTick?.(d),
       stemview: (deck, view) => cbRef.current.onStemView?.(deck, view),
       lyrics: (deck, videoId, lines, source) => cbRef.current.onLyrics?.(deck, videoId, lines, source),
+      settings: (s, updatedAt) => cbRef.current.onSettings?.(s, updatedAt),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -182,6 +185,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   const sendTick = useCallback((decks: TickDecks) => clientRef.current?.sendTick(decks), []);
   const publishState = useCallback((snapshot: unknown) => clientRef.current?.publishState(snapshot), []);
   const sendStemView = useCallback((deck: DeckId, view: unknown) => clientRef.current?.sendStemView(deck, view), []);
+  const sendSettings = useCallback((settings: unknown, updatedAt: number) => clientRef.current?.sendSettings(settings, updatedAt), []);
   const sendLyrics = useCallback((deck: DeckId, videoId: string, lines: unknown, source: string) => clientRef.current?.sendLyrics(deck, videoId, lines, source), []);
   const requestState = useCallback(() => clientRef.current?.requestState(), []);
   // Re-broadcast the accent whenever it changes (the user re-themed) so peers re-vibe live.
@@ -243,6 +247,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
     sendTick,
     publishState,
     sendStemView,
+    sendSettings,
     sendLyrics,
     requestState,
   };

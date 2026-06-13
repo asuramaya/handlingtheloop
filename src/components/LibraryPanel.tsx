@@ -231,9 +231,12 @@ export function LibraryPanel({
       const { name, tracks } = await syncReadSource(service, sp.id);
       if (!tracks.length) throw new Error("empty playlist");
       const matched: TrackMeta[] = [];
-      for (let i = 0; i < tracks.length; ) {
-        const rows = await syncMatch("youtube", tracks, i);
-        if (!rows.length) break;
+      // Match in slices: each track is one YouTube search subrequest, and the Worker
+      // caps a single /api/sync/match call (a whole playlist in one call 413s and was
+      // the "stuck / can't import" bug). Paging also gives real per-slice progress.
+      const SLICE = 15;
+      for (let i = 0; i < tracks.length; i += SLICE) {
+        const rows = await syncMatch("youtube", tracks.slice(i, i + SLICE), i);
         for (const r of rows) {
           if (r.best && r.best.kind === "video") {
             matched.push({
@@ -246,8 +249,7 @@ export function LibraryPanel({
             });
           }
         }
-        i += rows.length;
-        setImportMsg(`Matching ${Math.min(i, tracks.length)}/${tracks.length}…`);
+        setImportMsg(`Matching ${Math.min(i + SLICE, tracks.length)}/${tracks.length} from ${label}…`);
       }
       if (!matched.length) throw new Error("no YouTube matches found");
       const cleanTitle = cleanPlaylistName(name || sp.title);

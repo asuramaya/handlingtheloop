@@ -10,6 +10,7 @@ import {
   type ServicePlaylist,
   type SourceTrack,
   fetchSpotifyPlaylists,
+  fetchTidalPlaylists,
   syncAdd,
   syncCreate,
   syncMatch,
@@ -29,6 +30,13 @@ const fmtDur = (s: number) => (s > 0 ? `${Math.floor(s / 60)}:${String(s % 60).p
 // for many endpoints while the app sits in dev mode / the owner lapses. Surface
 // it as something a user can act on instead of a raw status line.
 function friendly(msg: string): string {
+  // A playlist that lists fine but won't read: Spotify blocks third-party API reads of
+  // playlists it owns (editorial/algorithmic — Discover Weekly, Daily Mix, Top…) and of
+  // some that were only shared with you. The list call succeeds; the items call 403/404s
+  // (tagged with the `/playlists/…/items` endpoint). Tell the user how to make it syncable.
+  if (/\[\/playlists\/.*\/items\]/.test(msg) && /\bspotify (403|404)\b/i.test(msg)) {
+    return "Spotify won't let apps read this playlist's tracks — it's one Spotify owns (Discover Weekly, Daily Mix, an editorial mix…) or one that was only shared with you. In the Spotify app, open it and tap ⋯ → Add to your own library (or duplicate it), then sync that copy.";
+  }
   if (/premium/i.test(msg) || /\bspotify 403\b/i.test(msg)) {
     return "Spotify is blocking this right now — its API currently needs the app owner to hold an active Premium subscription (a temporary Spotify limitation that can take a few hours to clear). Try again later, or sync to YouTube instead.";
   }
@@ -114,6 +122,8 @@ export function SyncPanel({
   const [searchBusy, setSearchBusy] = useState<number | null>(null);
   const [report, setReport] = useState<{ url: string; added: number; total: number } | null>(null);
   const [err, setErr] = useState("");
+  const [writeNeeded, setWriteNeeded] = useState(false); // YouTube needs the manage scope → prompt incremental auth
+  const [reloadNonce, setReloadNonce] = useState(0); // bump to re-fetch the source playlists after an error
 
   const lists = source === "htl" ? nativeLists : playlists;
 
@@ -143,13 +153,15 @@ export function SyncPanel({
     let cancelled = false;
     setPlState("loading");
     setPlErr("");
-    (source === "youtube" ? fetchMyPlaylists() : fetchSpotifyPlaylists())
+    const load =
+      source === "youtube" ? fetchMyPlaylists() : source === "tidal" ? fetchTidalPlaylists() : fetchSpotifyPlaylists();
+    load
       .then((pls) => !cancelled && (setPlaylists(pls), setPlState("idle")))
       .catch((e) => !cancelled && (setPlErr(friendly((e as Error).message)), setPlState("error")));
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, reloadNonce]);
 
   const includedCount = useMemo(
     () => Object.values(picks).filter((p) => p.include && p.id).length,
@@ -198,6 +210,11 @@ export function SyncPanel({
     try {
       const srcTracks =
         source === "htl" ? nativeSourceTracks(selected.id) : (await syncReadSource(source, selected.id)).tracks;
+      if (srcTracks.length === 0) {
+        setErr(`“${selected.title}” has no tracks to sync.`);
+        setStep("pick");
+        return;
+      }
       setProgress({ done: 0, total: srcTracks.length });
 
       const rowsOut: MatchRow[] = [];
@@ -234,6 +251,7 @@ export function SyncPanel({
 
   async function commit() {
     setErr("");
+    setWriteNeeded(false);
     setStep("committing");
     try {
       const ids = rows
@@ -249,7 +267,13 @@ export function SyncPanel({
       setReport({ url, added, total: rows.length });
       setStep("done");
     } catch (e) {
-      setErr(friendly((e as Error).message));
+      const msg = (e as Error).message;
+      // Writing to YouTube needs the manage scope; the Worker returns this when the
+      // user only granted read-only sign-in. Offer the one-click grant instead of a
+      // raw error (the destination playlist may already exist as an empty shell —
+      // re-running Transfer after granting fills it).
+      if (/youtube_write_required/.test(msg)) setWriteNeeded(true);
+      else setErr(friendly(msg));
       setStep("review");
     }
   }
@@ -287,6 +311,7 @@ export function SyncPanel({
                   <option value="htl">htl (Collection &amp; playlists)</option>
                   {hasYouTube && <option value="youtube">YouTube</option>}
                   {hasSpotify && <option value="spotify">Spotify</option>}
+                  {hasTidal && <option value="tidal">TIDAL</option>}
                 </select>
               </label>
               <span className="sync-arrow">→</span>
@@ -315,7 +340,14 @@ export function SyncPanel({
               <>
                 <div className="sync-picker">
                   {plState === "loading" && <div className="lib-mine-msg">Loading {LABEL[source]} playlists…</div>}
-                  {plState === "error" && <div className="lib-mine-msg lib-mine-err">{plErr}</div>}
+                  {plState === "error" && (
+                    <div className="lib-mine-msg lib-mine-err">
+                      {plErr}
+                      <button className="link-btn" onClick={() => setReloadNonce((n) => n + 1)}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
                   {plState === "idle" && lists.length === 0 && <div className="lib-mine-msg">No playlists found.</div>}
                   {plState !== "error" &&
                     lists.map((p) => (
@@ -329,6 +361,14 @@ export function SyncPanel({
                       >
                         {p.thumbnail && <img className="sync-pl-thumb" src={p.thumbnail} alt="" />}
                         <span className="sync-pl-name">{p.title}</span>
+                        {p.ownedByMe === false && (
+                          <span
+                            className="sync-pl-tag"
+                            title={`Shared with you${p.ownerName ? ` by ${p.ownerName}` : ""} — Spotify may not let us read its tracks. If it errors, save your own copy and sync that.`}
+                          >
+                            shared
+                          </span>
+                        )}
                         {p.count > 0 && <span className="lib-count">{p.count}</span>}
                       </button>
                     ))}
@@ -393,6 +433,14 @@ export function SyncPanel({
                 Transfer {includedCount} →
               </button>
             </div>
+            {writeNeeded && (
+              <div className="sync-write-prompt">
+                <span>YouTube needs your permission to create &amp; edit playlists.</span>
+                <a className="hw-btn signin" href="/api/auth/google/start?write=1">
+                  Grant access →
+                </a>
+              </div>
+            )}
             {err && <p className="signin-err">{err}</p>}
             <div className="sync-review">
               {rows.map((row) => {

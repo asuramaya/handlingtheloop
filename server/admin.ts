@@ -7,6 +7,7 @@ import {
   type D1Database,
   listCommunityTracks,
   deleteCommunityTrack,
+  deleteLyrics,
   countCommunityTracks,
   countAnalysis,
   listAnalysis,
@@ -213,6 +214,7 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
     const b = (await req.json().catch(() => ({}))) as { videoId?: string; reason?: string; purge?: boolean };
     if (!isVideoId(b.videoId)) return json(400, { error: "bad videoId" });
     await deleteCommunityTrack(env.DB, b.videoId);
+    await deleteLyrics(env.DB, b.videoId).catch(() => {}); // pooled transcripts are derivative — purge them too
     const purgedObjects = b.purge ? await purgeTrack(env.AUDIO, b.videoId) : 0;
     await logTakedown(env.DB, { videoId: b.videoId, reason: b.reason ?? null, byEmail: admin.email, purged: !!b.purge });
     return json(200, { ok: true, purgedObjects });

@@ -14,6 +14,14 @@ const OVERLAP_SEC = 0.75;
 const TARGETS = ["vocals", "drums", "bass", "other"] as const;
 type Target = (typeof TARGETS)[number];
 
+// Pause between segments. On the WebGPU path the GPU is otherwise saturated back-to-
+// back and the browser compositor (same GPU) can't paint → the deck/UI stutters; a
+// ~frame gap lets it idle and render between submissions. Cheap vs the per-segment
+// compute (~1 s GPU / multi-s CPU), so smoothness wins. Keeps playback + controls
+// primary, as asked.
+const SEGMENT_YIELD_MS = 12;
+const yieldSegment = () => new Promise((r) => setTimeout(r, SEGMENT_YIELD_MS));
+
 const fft = new FFT(NFFT);
 const WIN = hannPeriodic(NFFT);
 
@@ -22,14 +30,25 @@ const WIN = hannPeriodic(NFFT);
 // (Conv2d/InstanceNorm/ConvTranspose2d) → garbage spectrogram stems. Fixed in 1.21+
 // (verified maxErr 3e-6 vs PyTorch). Open-Unmix (wasm EP) is unaffected by the bump.
 const ORT_VER = "1.22.0";
-const ORT_CDN = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/ort.webgpu.min.mjs`;
+const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+// We only drive the WebGPU (JSEP) execution provider on CHROMIUM. Outside it, JSEP is
+// unreliable: on Safari/WebKit the JSEP build triggers a severe JSC wasm-compile leak
+// (onnxruntime#26827 — CPU pegs, memory climbs past 10 GB, the tab is killed; still
+// unfixed), and Firefox's WebGPU device-losts under heavy compute. So on non-Chromium
+// we load the PLAIN-WASM bundle (no JSEP at all → the leak can't happen) and run demucs
+// on the CPU EP: slower, but stable. On an Apple-Silicon Mac this means Chrome → Metal-
+// backed WebGPU (fast), Safari → multi-threaded wasm SIMD (stable). The worker has its
+// own `navigator`, so the UA check here matches the main thread's `isChromium()`.
+const UA = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+const USE_WEBGPU = /Chrome\/|Chromium\//.test(UA); // Chromium family only (incl. new Edge/Brave/Opera)
+const ORT_CDN = `${ORT_BASE}${USE_WEBGPU ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs"}`;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let ortPromise: Promise<any> | null = null;
 function loadOrt(threads: number): Promise<any> {
   if (!ortPromise) {
     ortPromise = (async () => {
       const ort = await import(/* @vite-ignore */ ORT_CDN);
-      ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+      ort.env.wasm.wasmPaths = ORT_BASE;
       ort.env.wasm.numThreads = Math.max(1, threads); // wasm SIMD threads (needs COI)
       return ort;
     })();
@@ -196,7 +215,7 @@ async function runOpenUnmix(
     }
     stems = null;
     post((ci + 1) / nchunks);
-    await new Promise((r) => setTimeout(r, 0));
+    await yieldSegment();
   }
   return acc;
 }
@@ -251,7 +270,7 @@ async function runDemucs(
     }
     for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
     post((ci + 1) / nchunks);
-    await new Promise((r) => setTimeout(r, 0));
+    await yieldSegment();
   }
   for (const t of TARGETS) {
     for (let c = 0; c < 2; c++) {
@@ -267,20 +286,26 @@ async function runDemucs(
 // ORT's WebGPU kernels run it at ~1s per 7.8s segment. STFT/CaC/iSTFT/combine here
 // are bit-exact vs PyTorch (see fft.ts). Output: freq_out [1,4,4,BINS,F] (CaC) +
 // time_out [1,4,2,seg]; final stem = time_out + iSTFT(freq_out). ------------------
-async function runDemucsCore(
+interface DemucsQuality {
+  shifts: number; // random-shift TTA passes averaged (0 = single aligned pass)
+  overlap: number; // segment overlap fraction (0..0.5) — higher = smoother seams
+}
+
+// One aligned demucs-core pass over `full` (length N). 7.8s segments, triangular
+// overlap-add at `overlapFrac`. Raising overlap averages more segment passes per
+// sample (smoother seams, fewer transient smears) at ~1/(1-overlap)× the segment
+// count. Factored out so shift-TTA can run it on randomly-delayed copies.
+async function demucsCorePass(
   ort: any,
-  url: string,
+  sess: any,
   full: Float32Array[],
   N: number,
+  overlapFrac: number,
   post: Post,
-  eps: string[] = ["webgpu", "wasm"],
 ): Promise<Record<Target, Float32Array[]>> {
   const seg = DEMUCS_SEG;
-  const overlap = Math.floor(seg / 4);
+  const overlap = Math.min(seg >> 1, Math.max(0, Math.floor(seg * overlapFrac)));
   const stride = seg - overlap;
-  // GPU variant → ["webgpu","wasm"] (default); CPU variant → ["wasm"] (stable on
-  // iOS, no JSEP crash) — same graph + same stems, only the backend differs.
-  const sess = await getSession(ort, url, eps);
   const win = transitionWindow(seg, overlap);
   const acc: Record<Target, Float32Array[]> = {} as never;
   for (const t of TARGETS) acc[t] = [new Float32Array(N), new Float32Array(N)];
@@ -303,10 +328,9 @@ async function runDemucsCore(
     mixBuf.set(Lbuf, 0);
     mixBuf.set(Rbuf, seg);
 
-    const res = await sess.run({
-      mag: new ort.Tensor("float32", mag, [1, 4, DEMUCS_BINS, frames]),
-      mix: new ort.Tensor("float32", mixBuf, [1, 2, seg]),
-    });
+    const magT = new ort.Tensor("float32", mag, [1, 4, DEMUCS_BINS, frames]);
+    const mixT = new ort.Tensor("float32", mixBuf, [1, 2, seg]);
+    const res = await sess.run({ mag: magT, mix: mixT });
     const fo = res.freq_out.data as Float32Array; // [1,4,4,BINS,frames]
     const to = res.time_out.data as Float32Array; // [1,4,2,seg]
     const chStride = DEMUCS_BINS * frames;
@@ -323,9 +347,18 @@ async function runDemucsCore(
         for (let s = 0; s < segLen; s++) dst[start + s] += (to[tb + s] + fchan[s]) * win[s];
       }
     }
+    // Free the per-segment tensors NOW (we've read fo/to into acc above) instead of
+    // waiting for GC. On the WebGPU EP each run otherwise leaves the input upload +
+    // output staging GPUBuffers live — on Apple-Silicon's UNIFIED memory that pressure
+    // builds across a 30-segment track; on the wasm EP it frees the heap copies. ORT
+    // ≥1.16 has Tensor.dispose; guard with ?. for the wasm bundle.
+    magT.dispose?.();
+    mixT.dispose?.();
+    res.freq_out.dispose?.();
+    res.time_out.dispose?.();
     for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
     post((ci + 1) / nchunks);
-    await new Promise((r) => setTimeout(r, 0));
+    await yieldSegment();
   }
   for (const t of TARGETS) {
     for (let c = 0; c < 2; c++) {
@@ -334,6 +367,59 @@ async function runDemucsCore(
     }
   }
   return acc;
+}
+
+// demucs-core entry. Without shifts → a single aligned pass (the original, lightest
+// path). With `shifts` → demucs `--shifts` test-time augmentation: average N passes,
+// each on the mix delayed by a random offset ≤ MAX_SHIFT then realigned back. This
+// is the single biggest perceptual artifact reducer and a pure GPU-time-for-quality
+// trade (≈shifts× cost) — desktop GPU only. We DELAY (not advance) and size the work
+// buffer to N+MAX_SHIFT so every realigned output sample is covered: no degraded tail
+// at the track end (matches demucs' 2·max_shift padding).
+async function runDemucsCore(
+  ort: any,
+  url: string,
+  full: Float32Array[],
+  N: number,
+  post: Post,
+  eps: string[] = ["webgpu", "wasm"],
+  quality: DemucsQuality = { shifts: 0, overlap: 0.25 },
+): Promise<Record<Target, Float32Array[]>> {
+  // GPU variant → ["webgpu","wasm"] (default); CPU variant → ["wasm"] (stable on
+  // iOS, no JSEP crash) — same graph + same stems, only the backend differs. Outside
+  // Chromium we loaded the wasm-only bundle (see ORT_CDN), which has no WebGPU EP, so
+  // force the wasm EP rather than asking for an absent one.
+  const sess = await getSession(ort, url, USE_WEBGPU ? eps : ["wasm"]);
+  const overlapFrac = Math.min(0.5, Math.max(0, quality.overlap));
+  const shifts = Math.max(0, quality.shifts | 0);
+  if (shifts < 1) return demucsCorePass(ort, sess, full, N, overlapFrac, post);
+
+  const MAX_SHIFT = Math.round(0.5 * MODEL_SR); // demucs uses 0.5s
+  const N2 = N + MAX_SHIFT;
+  const out: Record<Target, Float32Array[]> = {} as never;
+  for (const t of TARGETS) out[t] = [new Float32Array(N), new Float32Array(N)];
+  for (let sh = 0; sh < shifts; sh++) {
+    const offset = Math.floor(Math.random() * (MAX_SHIFT + 1)); // [0, MAX_SHIFT]
+    const delayed = [new Float32Array(N2), new Float32Array(N2)];
+    delayed[0].set(full[0], offset); // zeros[0,offset) then the mix → a pure delay
+    delayed[1].set(full[1], offset);
+    const pass = await demucsCorePass(ort, sess, delayed, N2, overlapFrac, (p) => post((sh + p) / shifts));
+    for (const t of TARGETS) {
+      for (let c = 0; c < 2; c++) {
+        const dst = out[t][c];
+        const src = pass[t][c]; // realign: drop the `offset` samples we delayed by
+        for (let i = 0; i < N; i++) dst[i] += src[i + offset];
+      }
+    }
+  }
+  const inv = 1 / shifts;
+  for (const t of TARGETS) {
+    for (let c = 0; c < 2; c++) {
+      const a = out[t][c];
+      for (let i = 0; i < N; i++) a[i] *= inv;
+    }
+  }
+  return out;
 }
 
 interface SeparateMsg {
@@ -346,6 +432,7 @@ interface SeparateMsg {
   urls?: Record<string, string>;
   url?: string;
   eps?: string[]; // demucs-core EP override: GPU → default ["webgpu","wasm"], CPU → ["wasm"]
+  quality?: DemucsQuality; // demucs-core shift-TTA + overlap (desktop quality knobs)
   threads: number;
 }
 
@@ -361,7 +448,7 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
 
     const acc =
       msg.arch === "demucs-core"
-        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps)
+        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps, msg.quality)
         : msg.arch === "demucs"
           ? await runDemucs(ort, msg.url!, full, N, post)
           : await runOpenUnmix(ort, msg.urls!, full, N, post);

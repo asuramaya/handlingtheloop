@@ -13,6 +13,7 @@ import {
 import {
   fetchMe,
   fetchSpotifyPlaylists,
+  fetchTidalPlaylists,
   syncReadSource,
   syncMatch,
   type Me,
@@ -77,7 +78,26 @@ export function LibraryPanel({
   onSearchOpenChange,
 }: LibraryPanelProps) {
   const [view, setView] = useState<View>("collection");
+  // Sidebar (nav) collapse — toggled by the ☰ hamburger. Persisted; defaults open on
+  // desktop and collapsed on a phone so the track table fills the full-screen panel.
+  const [navOpen, setNavOpen] = useState(() => {
+    const saved = localStorage.getItem("htl:libNav");
+    if (saved != null) return saved === "1";
+    return window.innerWidth >= 769;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("htl:libNav", navOpen ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [navOpen]);
   const [syncOpen, setSyncOpen] = useState(false);
+  // Picking any library view (Collection / Community / a playlist) exits the Sync
+  // subsection — they share the main content area.
+  useEffect(() => {
+    setSyncOpen(false);
+  }, [view]);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
@@ -90,12 +110,16 @@ export function LibraryPanel({
   const [spotMine, setSpotMine] = useState<ServicePlaylist[]>([]);
   const [spotState, setSpotState] = useState<"idle" | "loading" | "error">("idle");
   const [, setSpotErr] = useState("");
+  // …and their TIDAL playlists.
+  const [tidalMine, setTidalMine] = useState<ServicePlaylist[]>([]);
+  const [tidalState, setTidalState] = useState<"idle" | "loading" | "error">("idle");
 
   // htl account (server session) — its Google connection is what reaches the
   // user's YouTube playlists. A login cookie (SAPISID) is a fallback path.
   const [me, setMe] = useState<Me | null>(null);
   const ytConnected = !!me?.connections.includes("google");
   const spotifyConnected = !!me?.connections.includes("spotify");
+  const tidalConnected = !!me?.connections.includes("tidal");
 
   // The shared community pool (tracks already cached — load instantly, no resolve).
   const [community, setCommunity] = useState<TrackMeta[]>([]);
@@ -180,15 +204,31 @@ export function LibraryPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spotifyConnected]);
 
-  // Import a Spotify playlist INTO the library: read its tracks, match each to a
-  // playable YouTube video (paged to stay under the Worker subrequest cap), then
-  // file the best matches into a local playlist tagged with the Spotify source so it
-  // lives under MY SPOTIFY. Auto-picks the top match (use Sync for review/fixups).
-  async function importSpotifyPlaylist(sp: ServicePlaylist) {
-    setImporting(true);
-    setImportMsg(`Reading “${sp.title}” from Spotify…`);
+  async function loadTidal() {
+    setTidalState("loading");
     try {
-      const { name, tracks } = await syncReadSource("spotify", sp.id);
+      setTidalMine(await fetchTidalPlaylists());
+      setTidalState("idle");
+    } catch {
+      setTidalState("error");
+    }
+  }
+  useEffect(() => {
+    if (tidalConnected) loadTidal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tidalConnected]);
+
+  // Import a streaming-service playlist INTO the library: read its tracks, match
+  // each to a playable YouTube video (paged to stay under the Worker subrequest
+  // cap), then file the best matches into a local playlist tagged with the source
+  // service so it lives under MY SPOTIFY / MY TIDAL. Auto-picks the top match (use
+  // Sync for review/fixups). Provider-agnostic — Spotify and TIDAL share it.
+  async function importServicePlaylist(service: "spotify" | "tidal", sp: ServicePlaylist) {
+    const label = service === "tidal" ? "TIDAL" : "Spotify";
+    setImporting(true);
+    setImportMsg(`Reading “${sp.title}” from ${label}…`);
+    try {
+      const { name, tracks } = await syncReadSource(service, sp.id);
       if (!tracks.length) throw new Error("empty playlist");
       const matched: TrackMeta[] = [];
       for (let i = 0; i < tracks.length; ) {
@@ -213,14 +253,14 @@ export function LibraryPanel({
       const cleanTitle = cleanPlaylistName(name || sp.title);
       const existing =
         library.playlists.find((p) => p.sourceListId === sp.id) ??
-        library.playlists.find((p) => p.sourceService === "spotify" && cleanPlaylistName(p.name) === cleanTitle);
-      const id = existing?.id ?? library.createPlaylist(cleanTitle, sp.id, "spotify");
-      if (existing && !existing.sourceListId) library.linkSource(existing.id, sp.id, "spotify");
+        library.playlists.find((p) => p.sourceService === service && cleanPlaylistName(p.name) === cleanTitle);
+      const id = existing?.id ?? library.createPlaylist(cleanTitle, sp.id, service);
+      if (existing && !existing.sourceListId) library.linkSource(existing.id, sp.id, service);
       for (const t of matched) library.addToPlaylist(id, t);
       setView({ playlistId: id });
       setImportMsg(null);
     } catch (e) {
-      setImportMsg(`Spotify import failed: ${(e as Error).message}`);
+      setImportMsg(`${label} import failed: ${(e as Error).message}`);
     } finally {
       setImporting(false);
     }
@@ -412,7 +452,10 @@ export function LibraryPanel({
         {cleanPlaylistName(p.name) || p.name}
       </span>
       {p.sourceListId && (
-        <span className="lib-pl-src" title={`Synced with ${p.sourceService === "spotify" ? "Spotify" : "YouTube"}`}>
+        <span
+          className="lib-pl-src"
+          title={`Synced with ${p.sourceService === "spotify" ? "Spotify" : p.sourceService === "tidal" ? "TIDAL" : "YouTube"}`}
+        >
           ⇄
         </span>
       )}
@@ -433,8 +476,11 @@ export function LibraryPanel({
   // synced to a service under that service's section. (Only YouTube sources exist
   // today; Spotify/Tidal sections slot in here when those imports land.)
   const localPlaylists = library.playlists.filter((p) => !p.sourceListId);
-  const youtubePlaylists = library.playlists.filter((p) => p.sourceListId && p.sourceService !== "spotify");
+  const youtubePlaylists = library.playlists.filter(
+    (p) => p.sourceListId && p.sourceService !== "spotify" && p.sourceService !== "tidal",
+  );
   const spotifyPlaylists = library.playlists.filter((p) => p.sourceService === "spotify");
+  const tidalPlaylists = library.playlists.filter((p) => p.sourceService === "tidal");
 
   // Header label for the current view: name + where it's "from".
   const headInfo: { name: string; from: string | null } = (() => {
@@ -442,7 +488,14 @@ export function LibraryPanel({
     if (view === "community") return { name: "Community", from: "shared pool" };
     const p = library.playlists.find((pl) => pl.id === activePlaylistId);
     if (!p) return { name: "Playlist", from: null };
-    const from = p.sourceService === "spotify" ? "Spotify" : p.sourceListId ? "YouTube" : "local playlist";
+    const from =
+      p.sourceService === "spotify"
+        ? "Spotify"
+        : p.sourceService === "tidal"
+          ? "TIDAL"
+          : p.sourceListId
+            ? "YouTube"
+            : "local playlist";
     return { name: cleanPlaylistName(p.name) || p.name, from };
   })();
 
@@ -450,9 +503,18 @@ export function LibraryPanel({
     <>
       {open && (
         <div className="modal-backdrop dock-left" onPointerDown={() => onOpenChange(false)}>
-          <DockResizer varName="--dock-w-left" grow="right" measure="parent" />
+          <DockResizer varName="--dock-w-left" measure="parent" />
           <div className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             <div className="settings-head">
+              <button
+                className={`lib-burger ${navOpen ? "on" : ""}`}
+                onClick={() => setNavOpen((v) => !v)}
+                aria-label={navOpen ? "Hide sidebar" : "Show sidebar"}
+                aria-pressed={navOpen}
+                title={navOpen ? "Hide sidebar" : "Show sidebar"}
+              >
+                ☰
+              </button>
               <div className="lib-head">
                 <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
@@ -463,7 +525,9 @@ export function LibraryPanel({
                 ✕
               </button>
             </div>
-            <div className="library">
+            <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
+            {navOpen && (
+            <>
             <aside className="lib-sidebar">
         <button
           className={`lib-nav ${view === "collection" ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
@@ -490,7 +554,7 @@ export function LibraryPanel({
         </button>
         {me?.user && (
           <button
-            className="lib-nav lib-sync-nav"
+            className={`lib-nav lib-sync-nav ${syncOpen ? "active" : ""}`}
             onClick={() => setSyncOpen(true)}
             title="Sync playlists between YouTube and Spotify"
           >
@@ -580,7 +644,44 @@ export function LibraryPanel({
                       className="lib-nav small"
                       title={`Import “${p.title}” from Spotify (matches tracks to YouTube)`}
                       disabled={importing}
-                      onClick={() => importSpotifyPlaylist(p)}
+                      onClick={() => importServicePlaylist("spotify", p)}
+                    >
+                      <span className="lib-nav-ico">♫</span>
+                      <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
+                      {p.count > 0 && <span className="lib-count">{p.count}</span>}
+                    </button>
+                  ))}
+            </div>
+          </>
+        )}
+
+        {/* MY TIDAL: imported TIDAL playlists + the rest to import. Mirrors MY
+            SPOTIFY; audio is still the matched YouTube stream (TIDAL is DRM-locked,
+            catalog-only). Hidden unless connected or something's already imported. */}
+        {(tidalPlaylists.length > 0 || (tidalConnected && tidalState !== "error")) && (
+          <>
+            <div className="lib-section">
+              <span>MY TIDAL</span>
+              {tidalConnected && (
+                <button className="lib-add" title="Refresh" onClick={loadTidal} disabled={tidalState === "loading"}>
+                  ⟳
+                </button>
+              )}
+            </div>
+            <div className="lib-playlists">
+              {tidalPlaylists.map(renderPlaylistItem)}
+              {tidalConnected && tidalState === "loading" && <div className="lib-mine-msg">Loading…</div>}
+              {tidalConnected &&
+                tidalState === "idle" &&
+                tidalMine
+                  .filter((p) => !library.playlists.some((pl) => pl.sourceListId === p.id))
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      className="lib-nav small"
+                      title={`Import “${p.title}” from TIDAL (matches tracks to YouTube)`}
+                      disabled={importing}
+                      onClick={() => importServicePlaylist("tidal", p)}
                     >
                       <span className="lib-nav-ico">♫</span>
                       <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
@@ -594,9 +695,17 @@ export function LibraryPanel({
         {importMsg && <div className="lib-import-msg">{importMsg}</div>}
       </aside>
 
-      <DockResizer varName="--lib-side-w" grow="right" measure="prev" />
+      <DockResizer varName="--lib-side-w" measure="prev" />
+      </>
+      )}
 
       <div className="lib-main">
+        {syncOpen && me?.user ? (
+          // Sync is a SUBSECTION of the library — it takes over this content area
+          // (embedded, no separate modal) so the top chin stays clean.
+          <SyncPanel embedded me={me} library={library} onClose={() => setSyncOpen(false)} />
+        ) : (
+        <>
         {view === "collection" && (
           <TrackTable
             tracks={library.collection.map(withCached)}
@@ -645,6 +754,8 @@ export function LibraryPanel({
               />
             );
           })()}
+        </>
+        )}
             </div>
           </div>
           </div>
@@ -693,9 +804,6 @@ export function LibraryPanel({
             </button>
           </div>
         </>
-      )}
-      {syncOpen && me?.user && (
-        <SyncPanel me={me} library={library} onClose={() => setSyncOpen(false)} />
       )}
       {dialog?.kind === "prompt" && (
         <PromptModal

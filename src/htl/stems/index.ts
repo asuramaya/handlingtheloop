@@ -11,6 +11,7 @@
 import { decodeAudio } from "../audio/decode";
 import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
 import { separateOpenUnmix } from "./openunmix";
+export { setDemucsQuality } from "./openunmix";
 import { separateDemucs } from "./demucs";
 import { getStemModel, deviceSupportsModel, type StemModel } from "./models";
 import { opusStemsSupported, encodeStemOpus, isOpusStem, decodeStemOpus } from "./opus";

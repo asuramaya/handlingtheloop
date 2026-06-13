@@ -28,13 +28,13 @@ const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 // Public, well-known YouTube-on-TV credentials (shipped in youtubei.js / yt-dlp).
 const DEFAULT_CLIENT_ID = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com";
 const DEFAULT_CLIENT_SECRET = "SboVhoG9s0rNafixCSGGKXAT";
-// Scopes the TV client is allowed to request: account-bound YouTube access
-// (browse/library/playlists), which also makes the player API trust the request.
-const SCOPE = [
-  "http://gdata.youtube.com",
-  "https://www.googleapis.com/auth/youtube",
-  "https://www.googleapis.com/auth/youtube-paid-content",
-].join(" ");
+// Scope the TV client requests: read-only, account-bound YouTube access. That is
+// all playback needs — a valid signed-in token makes the player API trust the
+// request; it never writes. We deliberately do NOT ask for the full `youtube`
+// (manage) scope here, nor the legacy `gdata` v2 scope or `youtube-paid-content`
+// — those widened the Google consent screen ("see, edit, and delete your
+// videos…") for no functional gain on the playback path.
+const SCOPE = ["https://www.googleapis.com/auth/youtube.readonly"].join(" ");
 
 const TIMEOUT_MS = 8000;
 const sig = (): RequestInit => ({ signal: AbortSignal.timeout(TIMEOUT_MS) });

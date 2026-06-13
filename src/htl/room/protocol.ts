@@ -27,11 +27,19 @@ export interface Peer {
   listening: boolean; // rendering its own audio stream?
   controlling: boolean; // allowed to drive the decks (shared — many at once)?
   anchor: boolean; // the playhead-clock / snapshot authority (invisible plumbing)?
+  pending: boolean; // a GUEST who knocked (opened an invite) and is awaiting the host's approval
+  joinedAt: number; // epoch ms this device became a participant (0 until joined) — for "joined 3m ago"
+  color: string; // this device's account accent (hex) — the room's "vibe" is the host's
 }
 
 export interface DeckTick {
   pos: number; // playhead position in seconds (the anchor's real clock)
   playing: boolean;
+  // Compact AUTHORITATIVE per-stem mixer state from the anchor, piggybacked on the tick
+  // only when it CHANGED or on a ~1 Hz heartbeat — so stem mute/gain self-heals a dropped
+  // intent without re-sending it every tick. g = gains, m = mutes, both length-4 in the
+  // fixed stem order [drums, bass, vocals, other]. Absent on most ticks.
+  stems?: { g: number[]; m: boolean[] };
 }
 export type TickDecks = Record<DeckId, DeckTick>;
 
@@ -68,6 +76,7 @@ export type Intent =
   | { kind: "sync"; slave: DeckId | null } // beat-sync: which deck follows (null = off); for the button
   | { kind: "key"; slave: DeckId | null } // key-match: which deck is shifted (null = off); for the button
   | { kind: "skip"; deck: DeckId; beats: number } // jog / beat-jump resolution (absolute)
+  | { kind: "reqStems"; deck: DeckId; model: string } // a remote asks the audio host to separate stems + stream the view
   | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics
@@ -77,15 +86,19 @@ export type Intent =
   | { kind: "load"; deck: DeckId; videoId: string; name?: string; artist?: string };
 
 export type ClientMsg =
-  | { t: "join" } // establish sync — become a participant (listening on, control off)
+  | { t: "join" } // establish sync — become a participant (host: immediate; unapproved guest: knocks → pending)
   | { t: "leave" } // back to your own solo decks
   | { t: "control"; on: boolean } // 🎛️ my OWN drive switch — INDEPENDENT of audio (guests: host grants it)
   | { t: "listen"; on: boolean } // 🔊 my OWN sound switch — INDEPENDENT of control
   | { t: "grant"; to: string; on: boolean } // HOST grants/revokes another device's control
+  | { t: "approve"; to: string } // HOST lets a knocking guest in (the handshake)
+  | { t: "deny"; to: string } // HOST turns a knocking guest away (before they're in)
+  | { t: "kick"; to: string } // HOST removes a guest who is already in
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
   | { t: "stemview"; deck: DeckId; view: unknown } // per-deck stem waveform envelopes (opaque; for remote display)
+  | { t: "color"; color: string } // update this device's account accent (re-broadcast in presence)
   | { t: "request-state" };
 
 export type ServerMsg =
@@ -96,4 +109,5 @@ export type ServerMsg =
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
   | { t: "stemview"; deck: DeckId; view: unknown } // host's per-deck stem envelopes, relayed to remotes
+  | { t: "kicked"; reason?: string } // you were denied entry or removed — drop sync + show why
   | { t: "error"; message: string };

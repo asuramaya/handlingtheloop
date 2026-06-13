@@ -20,7 +20,7 @@ import {
 // Source can be either connected service OR the in-app library ("htl"): your
 // Collection and htl playlists, pushed straight out to a streaming service.
 type SyncSource = "htl" | Service;
-const LABEL: Record<SyncSource, string> = { htl: "htl", youtube: "YouTube", spotify: "Spotify" };
+const LABEL: Record<SyncSource, string> = { htl: "htl", youtube: "YouTube", spotify: "Spotify", tidal: "TIDAL" };
 const MATCH_SLICE = 15; // tracks matched per request (Worker subrequest budget)
 const COLLECTION_ID = "__collection__"; // sentinel: the whole htl Collection
 const fmtDur = (s: number) => (s > 0 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "");
@@ -53,12 +53,27 @@ interface Pick {
 // source playlist, match every track on the destination, REVIEW and fix matches,
 // then write only what you confirmed. Tracks that already carry the destination's
 // stream id (your htl/YouTube collection → YouTube) match instantly, no search.
-export function SyncPanel({ me, library, onClose }: { me: Me; library: Library; onClose: () => void }) {
+export function SyncPanel({
+  me,
+  library,
+  onClose,
+  embedded = false,
+}: {
+  me: Me;
+  library: Library;
+  onClose: () => void;
+  embedded?: boolean; // render inline (taking over its parent), not as a full-screen modal
+}) {
   const hasYouTube = me.connections.includes("google");
   const hasSpotify = me.connections.includes("spotify");
+  const hasTidal = me.connections.includes("tidal");
   const connected = useMemo<Service[]>(
-    () => [...(hasYouTube ? (["youtube"] as const) : []), ...(hasSpotify ? (["spotify"] as const) : [])],
-    [hasYouTube, hasSpotify],
+    () => [
+      ...(hasYouTube ? (["youtube"] as const) : []),
+      ...(hasSpotify ? (["spotify"] as const) : []),
+      ...(hasTidal ? (["tidal"] as const) : []),
+    ],
+    [hasYouTube, hasSpotify, hasTidal],
   );
 
   const [step, setStep] = useState<Step>("pick");
@@ -241,9 +256,11 @@ export function SyncPanel({ me, library, onClose }: { me: Me; library: Library; 
 
   const noDest = destOptions.length === 0;
 
-  return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
-      <div className="sync-full" onPointerDown={(e) => e.stopPropagation()}>
+  const inner = (
+      <div
+        className={`sync-full ${embedded ? "embedded" : ""}`}
+        onPointerDown={embedded ? undefined : (e) => e.stopPropagation()}
+      >
         <div className="settings-head">
           <h2>
             Sync playlists{" "}
@@ -251,14 +268,14 @@ export function SyncPanel({ me, library, onClose }: { me: Me; library: Library; 
               {LABEL[source]} → {dest ? LABEL[dest] : "—"}
             </span>
           </h2>
-          <button className="mini x" onClick={onClose} aria-label="Close">
+          <button className="mini x" onClick={onClose} aria-label={embedded ? "Back to library" : "Close"}>
             ✕
           </button>
         </div>
 
         {connected.length === 0 ? (
           <p className="settings-hint">
-            Connect <strong>YouTube</strong> or <strong>Spotify</strong> in Settings → Account &amp; sync to transfer
+            Connect <strong>YouTube</strong> or <strong>Spotify</strong> in your <strong>Profile</strong> (🌐) to transfer
             playlists.
           </p>
         ) : step === "pick" ? (
@@ -465,6 +482,12 @@ export function SyncPanel({ me, library, onClose }: { me: Me; library: Library; 
           </>
         )}
       </div>
+  );
+  return embedded ? (
+    inner
+  ) : (
+    <div className="modal-backdrop" onPointerDown={onClose}>
+      {inner}
     </div>
   );
 }

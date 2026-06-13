@@ -15,6 +15,12 @@ interface WaveformViewportProps {
   markerColor: string;
   stripColor: string;
   stemColors: Record<string, string>; // per-stem overrides; "" / missing = built-in default
+  freqColors: boolean; // collapsed (non-stem) wave: rekordbox-style low/mid/high band colours
+  freqLow: string; // band hues (already resolved to a real hex — never "")
+  freqMid: string;
+  freqHigh: string;
+  vividness: number; // band-colour saturation (0 grey … 1 as-picked … 2 neon)
+  glow: boolean; // neon bloom halo behind the waveform
   gridSize: number;
   windowSec: number; // REAL seconds across the view (shared by both decks)
   onZoom: (nextWindowSec: number) => void;
@@ -22,6 +28,7 @@ interface WaveformViewportProps {
   onScrub: (deltaSeconds: number) => void;
   onScrubEnd: () => void;
   onNeedleDrop: (deltaSeconds: number) => void;
+  onBend: (deltaSeconds: number) => void; // Shift+wheel → momentary pitch-bend (not a seek)
 }
 
 const CUE_COLORS = ["#ff5d73", "#ffb13c", "#ffe24a", "#6ee7a8", "#36c2ff", "#7b9cff", "#c77bff", "#ff7bd0"];
@@ -61,6 +68,12 @@ function rgba(hex: string, a: number): string {
 // bucket is 256 samples, so at/above 256 spp the LOD never upsamples. The SAME signed
 // envelope is drawn either way — LOD vs raw is purely a performance source swap.
 const RAW_SPP = 256;
+
+// Cap the canvas backing store at 2× device pixels. Phones report dpr 3–4; a dpr-3 panel
+// rasterises ~2.25× the pixels of dpr-2 for no visible gain on a soft waveform or grid
+// text, while every per-frame composite AND every offscreen rebuild pays that area. The
+// single biggest mobile lever — applies to the whole component, not just the wave layer.
+const MAX_DPR = 2;
 
 // The coarsest LOD level whose bucket still fits within `spp` samples-per-pixel (so each
 // pixel averages ≥1 bucket → no upsampling). Levels are ordered finest→coarsest.
@@ -161,15 +174,86 @@ function envelope(
   }
 }
 
+// Per-column low/mid/high band energy (0..1) sampled from a LOD level — the data behind
+// the rekordbox/Serato frequency-coloured waveform. Max over the buckets a column spans
+// (mirrors the min/max envelope). The caller passes the finest level even when zoomed into
+// raw PCM, so colour holds at every zoom.
+function sampleBands(
+  lod: PyramidLevel,
+  chSr: number,
+  rLeft: number,
+  secPerPx: number,
+  ow: number,
+  lowOut: Float32Array,
+  midOut: Float32Array,
+  highOut: Float32Array,
+): void {
+  const B = lod.bucket;
+  const n = lod.low.length;
+  const spp = secPerPx * chSr;
+  for (let x = 0; x < ow; x++) {
+    const s0 = (rLeft + x * secPerPx) * chSr;
+    let b0 = Math.floor(s0 / B);
+    let b1 = Math.floor((s0 + spp) / B);
+    if (b1 < 0 || b0 >= n) {
+      lowOut[x] = 0;
+      midOut[x] = 0;
+      highOut[x] = 0;
+      continue;
+    }
+    if (b0 < 0) b0 = 0;
+    if (b1 >= n) b1 = n - 1;
+    let l = 0;
+    let m = 0;
+    let hgh = 0;
+    for (let b = b0; b <= b1; b++) {
+      if (lod.low[b] > l) l = lod.low[b];
+      if (lod.mid[b] > m) m = lod.mid[b];
+      if (lod.high[b] > hgh) hgh = lod.high[b];
+    }
+    lowOut[x] = l;
+    midOut[x] = m;
+    highOut[x] = hgh;
+  }
+}
+
+// Rekordbox-style band colour anchors: blue(bass) / amber(mid) / white(high). The per-
+// column blend (weighted by each band's energy) is computed inline in paintBanded so the
+// rgb() string is rebuilt only on a colour change, not per pixel.
+// #rrggbb → [r,g,b]. The frequency-colour band hues come from settings (resolved to a real
+// hex), parsed once per rasterise; the per-column blend is computed inline in paintBanded so
+// the rgb() string is rebuilt only on a colour change, not per pixel.
+function hexRGB(hex: string): [number, number, number] {
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  return Number.isNaN(n) || h.length !== 6 ? [255, 255, 255] : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
 // Perceptual amplitude curve: music peaks well below full scale, so a linear map leaves
 // every waveform a thin sliver in a sea of black. A gentle gain + soft knee lifts quiet
 // passages so they have body, while loud peaks ease into the lane edge instead of clipping
 // flat. Sign-preserving so the signed waveform shape is kept.
+//
+// Baked into a LUT: shape() is the single hottest call in a rasterise — invoked up to 4×
+// per column (top+bottom envelope, and again in paintBanded) across thousands of columns ×
+// up to 4 stem lanes, so the soft-knee exp() ran tens of thousands of times per rebuild.
+// The curve is a pure function of |v|, so a 2048-entry table over the gained magnitude
+// turns it into a table lookup on the hot path. Visual envelope → no interpolation needed.
+const SHAPE_LUT_N = 2048;
+const SHAPE_LUT_MAX = 4; // domain of |v|·1.7; music exceeds unity, clamp past this (curve ≈1)
+const SHAPE_LUT = (() => {
+  const t = new Float32Array(SHAPE_LUT_N + 1);
+  for (let i = 0; i <= SHAPE_LUT_N; i++) {
+    const a = (i / SHAPE_LUT_N) * SHAPE_LUT_MAX;
+    t[i] = a <= 0.8 ? a : 0.8 + (1 - 0.8) * (1 - Math.exp(-(a - 0.8) / (1 - 0.8)));
+  }
+  return t;
+})();
 function shape(v: number): number {
-  const g = v * 1.7;
-  const a = Math.abs(g);
-  // soft-clip above 0.8 so peaks compress smoothly toward ±1 rather than slamming flat
-  const y = a <= 0.8 ? a : 0.8 + (1 - 0.8) * (1 - Math.exp(-(a - 0.8) / (1 - 0.8)));
+  let a = v < 0 ? -v : v;
+  a *= 1.7;
+  const y = a >= SHAPE_LUT_MAX ? 1 : SHAPE_LUT[((a / SHAPE_LUT_MAX) * SHAPE_LUT_N) | 0];
   return v < 0 ? -y : y;
 }
 
@@ -178,7 +262,8 @@ function shape(v: number): number {
 interface WaveMeta {
   left: number;
   span: number;
-  secPerPx: number;
+  secPerPx: number; // the VIEW's secPerPx this layer was built for (zoom-staleness check)
+  colSec: number; // seconds per OFFSCREEN column (≥ secPerPx; the layer is rendered coarser)
   w: number;
   h: number;
   pyr: Pyramid | null;
@@ -186,11 +271,15 @@ interface WaveMeta {
   mask: string;
   strip: string;
   accent: string;
+  freq: boolean; // frequency-colour mode (toggle → re-rasterise)
+  freqCols: string; // band hues joined — recolour → re-rasterise
+  viv: number; // vividness (change → re-rasterise)
+  glow: boolean; // glow on/off (change → re-rasterise)
   stemCols: string; // per-stem colour overrides, joined — recolour → re-rasterise
 }
 
 export function WaveformViewport(props: WaveformViewportProps) {
-  const { deck, onZoom, onScrubStart, onScrub, onScrubEnd, onNeedleDrop } = props;
+  const { deck, onZoom, onScrubStart, onScrub, onScrubEnd, onNeedleDrop, onBend } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // `started` flips true only once the finger has moved past MOVE_PX — until then
   // it's a potential tap (instant seek), not a scrub.
@@ -239,7 +328,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const measure = () => {
     const el = canvasRef.current;
     if (!el) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
     const rect = el.getBoundingClientRect();
     const w = Math.max(1, Math.floor(rect.width * dpr));
     const h = Math.max(1, Math.floor(rect.height * dpr));
@@ -249,12 +338,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
       el.height = h;
     }
     sizeRef.current = { w, h, dpr };
-    waveMeta.current = null; // force the offscreen layer to rebuild at the new size
     dirty.current = true;
-    // Assigning el.width above BLANKS the canvas. ResizeObserver fires before
-    // paint, so redraw synchronously NOW — otherwise the cleared canvas paints for
-    // one frame and the (stem-coloured) waveform visibly blinks out and back when a
-    // dock (Library/Search) opens and squeezes the board.
+    // DON'T discard the offscreen layer here. draw() blit-SCALES the existing layer to the
+    // new box (a cheap GPU stretch) and debounces ONE crisp rebuild once the size settles —
+    // so expand/collapse a deck (DECK A/B focus) or open a dock feels instant instead of
+    // blocking on a full re-rasterise at the new (often larger) size before the first paint.
+    // Assigning el.width above BLANKS the canvas; ResizeObserver fires before paint, so
+    // redraw synchronously NOW (the blit fills it) — otherwise the cleared canvas shows for
+    // one frame and the waveform visibly blinks out and back.
     if (changed) draw();
   };
 
@@ -271,7 +362,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   useEffect(() => {
     measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, stemColsKey(props.stemColors)]);
+  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, props.freqColors, props.freqLow, props.freqMid, props.freqHigh, props.vividness, props.glow, stemColsKey(props.stemColors)]);
 
   const clampWin = (wsec: number) => {
     const dur = deck.buffer?.duration ?? 1;
@@ -293,11 +384,33 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const stems = deck.stemPyramids;
     const lo = new Float32Array(ow);
     const hi = new Float32Array(ow);
+    const lb = new Float32Array(ow); // per-column low/mid/high band energy (freq-colour)
+    const mb = new Float32Array(ow);
+    const hb = new Float32Array(ow);
+    const cL = hexRGB(p.freqLow); // band hues (from settings) parsed once per rasterise
+    const cM = hexRGB(p.freqMid);
+    const cH = hexRGB(p.freqHigh);
+    const viv = p.vividness; // band saturation
+    const glow = p.glow; // deck-coloured bloom behind the wave
 
     // ONE signed-envelope renderer, used identically for the mix and every stem lane. The
     // shape is the same at all zooms — it just compresses sideways as you zoom out and
     // resolves down to individual samples as you zoom in. `srcSr`/`raw`/`lodPy` pick the
     // cheapest source for the zoom (LOD when out, raw PCM when in); the visual is identical.
+    const buildSilhouette = (yc: number, amp: number): Path2D => {
+      const path = new Path2D();
+      path.moveTo(0, yc - shape(hi[0]) * amp);
+      for (let x = 1; x < ow; x++) path.lineTo(x, yc - shape(hi[x]) * amp); // top edge (max) →
+      for (let x = ow - 1; x >= 0; x--) path.lineTo(x, yc - shape(lo[x]) * amp); // bottom edge (min) ←
+      path.closePath();
+      return path;
+    };
+    const fillEnvelope = (srcSr: number, raw: Float32Array | null, raw1: Float32Array | null, lodPy: Pyramid | null) => {
+      if (raw) envelope(raw, raw1, srcSr, rLeft, secPerPx, ow, lo, hi, null);
+      else if (lodPy) envelope(null, null, srcSr, rLeft, secPerPx, ow, lo, hi, pickLevel(lodPy, secPerPx * srcSr));
+      else return false;
+      return true;
+    };
     const paintWave = (
       srcSr: number,
       raw: Float32Array | null,
@@ -307,16 +420,81 @@ export function WaveformViewport(props: WaveformViewportProps) {
       amp: number,
       color: string,
     ) => {
-      if (raw) envelope(raw, raw1, srcSr, rLeft, secPerPx, ow, lo, hi, null);
-      else if (lodPy) envelope(null, null, srcSr, rLeft, secPerPx, ow, lo, hi, pickLevel(lodPy, secPerPx * srcSr));
-      else return;
-      const path = new Path2D();
-      path.moveTo(0, yc - shape(hi[0]) * amp);
-      for (let x = 1; x < ow; x++) path.lineTo(x, yc - shape(hi[x]) * amp); // top edge (max) →
-      for (let x = ow - 1; x >= 0; x--) path.lineTo(x, yc - shape(lo[x]) * amp); // bottom edge (min) ←
-      path.closePath();
+      if (!fillEnvelope(srcSr, raw, raw1, lodPy)) return;
+      const path = buildSilhouette(yc, amp);
+      if (glow) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+      }
       ctx.fillStyle = color;
       ctx.fill(path);
+      ctx.shadowBlur = 0;
+    };
+    // Frequency-coloured variant: same silhouette, but each column is painted its band
+    // colour (blue bass / amber mid / white high). COLOUR always comes from the LOD bands
+    // (so it holds even when the SHAPE reads raw PCM); `alpha` dims a muted stem lane. The
+    // per-column fills only run at rasterise time, so they stay off the per-frame path.
+    const paintBanded = (
+      srcSr: number,
+      raw: Float32Array | null,
+      raw1: Float32Array | null,
+      lodPy: Pyramid,
+      yc: number,
+      amp: number,
+      alpha: number,
+    ) => {
+      if (!fillEnvelope(srcSr, raw, raw1, lodPy)) return;
+      sampleBands(pickLevel(lodPy, secPerPx * srcSr), srcSr, rLeft, secPerPx, ow, lb, mb, hb);
+      ctx.save();
+      if (alpha < 1) ctx.globalAlpha = alpha;
+      // Glow = ONE deck-coloured, shadow-blurred fill of the silhouette behind the bands
+      // (one fill, not per-column → cheap). Gives each deck a distinct bloom under the
+      // shared band scheme.
+      if (glow) {
+        ctx.save();
+        ctx.shadowColor = p.accent;
+        ctx.shadowBlur = 9;
+        ctx.fillStyle = rgba(p.accent, 0.5);
+        ctx.fill(buildSilhouette(yc, amp));
+        ctx.restore();
+      }
+      // Each column is a 1px vertical bar spanning its own envelope top→bottom (the bars
+      // ARE the silhouette, so NO clip), coloured by its band mix + vividness. The
+      // fillStyle string is rebuilt ONLY when the quantised colour changes — flat regions
+      // cost one fillStyle per run, not per pixel.
+      let lastKey = -1;
+      for (let x = 0; x < ow; x++) {
+        const top = yc - shape(hi[x]) * amp;
+        let height = yc - shape(lo[x]) * amp - top;
+        if (height < 0.75) height = 0.75; // a visible sliver through silence
+        const sum = lb[x] + mb[x] + hb[x] + 1e-4;
+        let rf = (lb[x] * cL[0] + mb[x] * cM[0] + hb[x] * cH[0]) / sum;
+        let gf = (lb[x] * cL[1] + mb[x] * cM[1] + hb[x] * cH[1]) / sum;
+        let bf = (lb[x] * cL[2] + mb[x] * cM[2] + hb[x] * cH[2]) / sum;
+        if (viv !== 1) {
+          // Saturate around luminance: <1 toward grey, >1 boosts toward neon.
+          const gray = 0.299 * rf + 0.587 * gf + 0.114 * bf;
+          rf = gray + (rf - gray) * viv;
+          gf = gray + (gf - gray) * viv;
+          bf = gray + (bf - gray) * viv;
+        }
+        const r = (rf < 0 ? 0 : rf > 255 ? 255 : rf | 0) & 0xf8;
+        const g = (gf < 0 ? 0 : gf > 255 ? 255 : gf | 0) & 0xf8;
+        const b = (bf < 0 ? 0 : bf > 255 ? 255 : bf | 0) & 0xf8;
+        const key = (r << 16) | (g << 8) | b;
+        if (key !== lastKey) {
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          lastKey = key;
+        }
+        ctx.fillRect(x, top, 1, height);
+      }
+      ctx.restore();
+    };
+    // Does this pyramid carry real band data? Remote-stem display (setRemoteStemView)
+    // has it zeroed — fall back to the flat stem colour rather than painting it black.
+    const hasBands = (py: Pyramid): boolean => {
+      const top = py.levels[py.levels.length - 1];
+      return top.low[0] + top.mid[0] + top.high[0] > 1e-6;
     };
 
     if (stems) {
@@ -332,19 +510,31 @@ export function WaveformViewport(props: WaveformViewportProps) {
         if (!py) continue;
         const ssr = py.sampleRate;
         const raw = secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
-        const color = p.stemColors[name] || STEM_COLORS[name] || p.accent;
         // Brightness tracks the stem's KNOB level (muted/0 → dim, unity → full).
         const amp = deck.stemActive(name) ? deck.stemLevel(name) : 0;
         const alpha = 0.16 + 0.84 * Math.min(1, amp);
-        paintWave(ssr, raw, null, py, (li + 0.5) * laneH, half, rgba(color, alpha));
+        const yc = (li + 0.5) * laneH;
+        if (p.freqColors && hasBands(py)) {
+          paintBanded(ssr, raw, null, py, yc, half, alpha); // each stem in its own band colours
+        } else {
+          const color = p.stemColors[name] || STEM_COLORS[name] || p.accent;
+          paintWave(ssr, raw, null, py, yc, half, rgba(color, alpha));
+        }
       }
     } else if (deck.buffer && p.pyramid) {
       // ONE collapsed waveform — no stems, or while a split's per-stem envelopes are
-      // still building. Same renderer, full height, single colour.
+      // still building. Full height.
       const bsr = deck.buffer.sampleRate;
       const raw = secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
       const raw1 = raw && deck.buffer.numberOfChannels > 1 ? deck.buffer.getChannelData(1) : null;
-      paintWave(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, p.stripColor || p.accent);
+      if (p.freqColors) {
+        // rekordbox-style 3-band colour of the mix.
+        paintBanded(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, 1);
+      } else {
+        // Flat single colour (Strip colour, else the deck accent — so clearing Strip
+        // gives each deck its own colour).
+        paintWave(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, p.stripColor || p.accent);
+      }
     }
   };
 
@@ -356,7 +546,15 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const mask = stemMask(deck, stems);
     const span = tw * 3;
     const waveLeft = left - tw;
-    const ow = w * 3;
+    // The offscreen wave is GPU-blitted (scaled) into the lane, so it doesn't need full
+    // device-pixel column density — render it at ~1.5 columns per CSS pixel regardless of
+    // DPR. On a dpr-2/3 phone this is the dominant rebuild saving (fewer columns → fewer
+    // per-column band fillRects, the hot loop). Grid + text stay crisp (main canvas, full
+    // res). `colSec` (seconds per offscreen column) drives the blit so the math is exact
+    // whatever the column count; at dpr 1 waveQ is 1 → desktop is unchanged.
+    const waveQ = Math.min(1, 1.5 / sizeRef.current.dpr);
+    const ow = Math.max(2, Math.round(w * 3 * waveQ));
+    const colSec = span / ow;
     let wc = waveRef.current;
     if (!wc) {
       wc = document.createElement("canvas");
@@ -369,8 +567,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const wctx = wc.getContext("2d");
     if (!wctx) return;
     wctx.clearRect(0, 0, ow, h);
-    rasterize(wctx, waveLeft, secPerPx, ow, h);
-    waveMeta.current = { left: waveLeft, span, secPerPx, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, stemCols: stemColsKey(p.stemColors) };
+    rasterize(wctx, waveLeft, colSec, ow, h);
+    waveMeta.current = { left: waveLeft, span, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
@@ -411,28 +609,33 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fillRect(lx + lw - 2 * dpr, 0, 2 * dpr, h);
     }
 
-    // Waveform — presented from the offscreen layer. Rebuild it (the heavy part)
-    // only when a static input changed or the view scrolled off it. While ZOOMING
-    // (scale changed but still on-layer), DON'T rasterise per wheel tick — blit the
-    // cached layer SCALED for instant feedback and schedule ONE crisp rebuild once
-    // zooming settles. That keeps zoom smooth without 3×-wide re-rasterises.
+    // Waveform — presented from the offscreen layer. A rebuild (the heavy 3×-wide
+    // re-rasterise) is forced ONLY when the layer's CONTENT is stale (track/stems/mute/
+    // colours) or the view scrolled off it. A pure GEOMETRY change — zoom OR a box resize
+    // (expand/collapse a deck, open a dock) — does NOT rebuild on the spot: the cached layer
+    // is blit-SCALED (a cheap GPU stretch, both axes) for instant feedback and ONE crisp
+    // rebuild is debounced until the geometry settles. That keeps zoom smooth AND makes
+    // DECK A/B focus switching feel instant instead of blocking on a full re-rasterise.
     const stemsNow = deck.stemPyramids;
     const maskNow = stemMask(deck, stemsNow);
     const m0 = waveMeta.current;
-    const staleStatic =
+    const contentStale =
       !m0 ||
-      m0.w !== w ||
-      m0.h !== h ||
       m0.pyr !== p.pyramid ||
       m0.stems !== stemsNow ||
       m0.mask !== maskNow ||
       m0.strip !== p.stripColor ||
       m0.accent !== p.accent ||
+      m0.freq !== p.freqColors ||
+      m0.freqCols !== p.freqLow + p.freqMid + p.freqHigh ||
+      m0.viv !== p.vividness ||
+      m0.glow !== p.glow ||
       m0.stemCols !== stemColsKey(p.stemColors);
     const scrolledOff = !!m0 && (left < m0.left + trackWindow * 0.1 || left + trackWindow > m0.left + m0.span - trackWindow * 0.1);
-    if (staleStatic || scrolledOff) {
+    const geomStale = !!m0 && (m0.w !== w || m0.h !== h || m0.secPerPx !== secPerPx);
+    if (contentStale || scrolledOff) {
       rebuildWave(left, trackWindow, secPerPx, w, h);
-    } else if (m0.secPerPx !== secPerPx) {
+    } else if (geomStale) {
       if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
       rebuildTimer.current = window.setTimeout(() => {
         waveMeta.current = null;
@@ -442,9 +645,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const m = waveMeta.current;
     const wc = waveRef.current;
     if (m && wc) {
-      const srcX = (left - m.left) / m.secPerPx;
-      const srcW = trackWindow / m.secPerPx; // == w at native scale; scales the blit while zooming
-      ctx.drawImage(wc, srcX, 0, srcW, h, 0, 0, w, h);
+      // Map view→layer in the layer's OWN units: colSec (seconds/column, folds in the wave-
+      // quality downscale) horizontally and the layer's build-time height m.h vertically, so
+      // a box resize stretches the old layer correctly until the debounced rebuild lands.
+      const srcX = (left - m.left) / m.colSec;
+      const srcW = trackWindow / m.colSec;
+      ctx.drawImage(wc, srcX, 0, srcW, m.h, 0, 0, w, h);
     }
 
     // Beat grid sized by gridSize. Prefer the DYNAMIC grid (tracked beats that
@@ -504,13 +710,13 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // stepping by whole groups so the whole-song view stays cheap. The label shows
       // the bar number; at coarse steps that reads as 1, 9, 17… (8s) or 1, 17, 33… (16s).
       const leftBar = Math.floor(((left - firstBeat) / interval - downbeat) / beatsPerBar / barStep) * barStep;
+      if (showLabels) ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`; // set once, not per labelled bar
       for (let b = leftBar - barStep; ; b += barStep) {
         const t = beatTimeAt(downbeat + b * beatsPerBar);
         if (t > right) break;
         vline(t, 2.2, barCol);
         if (showLabels && t >= left && t <= right && t >= 0 && t <= dur) {
           ctx.fillStyle = barCol;
-          ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`;
           ctx.fillText(String(b + 1), toX(t) + 3 * dpr, h - 4 * dpr);
         }
       }
@@ -626,10 +832,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
         onWheel={(e) => {
           // In loop-boundary adjust mode the wheel steps the edge (routed downstream
           // via onNeedleDrop → adjustStep) — no Shift needed, that's the mode's point.
-          // Otherwise a plain wheel zooms the view; Shift+wheel jogs the playhead
-          // (scrubs by a slice of the visible window per tick). needleDrop is a relative seek.
-          if (deck.adjusting || e.shiftKey) {
+          // A plain wheel zooms the view. Shift+wheel is a PITCH-BEND: while playing it
+          // momentarily pushes/pulls the tempo (beat-match nudge), while paused deck.bend
+          // frame-searches. Window-INDEPENDENT scale (≈0.2 s roll per mouse notch) so the
+          // bend strength doesn't change with zoom; the engine clamps + decays it.
+          if (deck.adjusting) {
             onNeedleDrop((e.deltaY / 700) * trackWindowNow());
+          } else if (e.shiftKey) {
+            onBend((e.deltaY / 700) * 0.2);
           } else {
             applyZoom(clampWin((localWin.current ?? props.windowSec) * (e.deltaY > 0 ? 1.25 : 0.8)));
           }

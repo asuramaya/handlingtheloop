@@ -9,9 +9,9 @@ import type { Intent } from "@htl/room";
 // Shelves/bell: drag X = frequency, Y = gain (MID wheel/drag-Y peers = bell width).
 // Cut nodes: drag X = cutoff, Y = resonance (Q), wheel = Q. The curve is read straight
 // off the filters (getFrequencyResponse), so it IS the filter. Extras: the OTHER
-// deck's post spectrum overlaid faintly (clash view), long-press a node to audition
-// just that band, always-on peak-hold, harmonic guides from the detected key, a
-// cursor freq/dB readout, and a BYPASS / RESET / COPY toolbar UNDER the curve.
+// deck's post spectrum overlaid faintly (clash view), always-on peak-hold, harmonic
+// guides from the detected key, a cursor freq/dB readout, and a BYPASS / RESET / COPY
+// toolbar UNDER the curve.
 //
 // Rendering is imperative (canvas + rAF, like the waveform) so dragging and the
 // animating spectrum never churn React.
@@ -24,9 +24,6 @@ const DB_TOP = 12;
 const DB_BOT = -12;
 const Q_TOP_PAD = 0.14; // fraction of height reserved above centre for max resonance
 const GRID_HZ = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
-const LONG_PRESS_MS = 220;
-const MOVE_CANCEL_PX = 5;
-const SOLO_Q = 6; // audition bandpass selectivity
 
 type Vert = "gain" | "q";
 interface NodeDef {
@@ -92,10 +89,9 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const otherSpec = useRef<Uint8Array>(new Uint8Array(0));
   const peakBuf = useRef<Uint8Array>(new Uint8Array(0));
   const dirty = useRef(true);
-  // active gesture on a node: drag (sweep) or hold-to-audition
-  const drag = useRef<{ i: number; moved: boolean; timer: number; audition: boolean } | null>(null);
-  // when auditioning, the soloed centre freq (+ Q) so the draw loop can spotlight it
-  const soloViz = useRef<{ freq: number; q: number } | null>(null);
+  const eqSig = useRef(0); // cheap signature of the EQ params → redraw when it changes (e.g. a MIDI knob while paused)
+  // active gesture on a node: a drag (sweep).
+  const drag = useRef<{ i: number } | null>(null);
   const [, bump] = useState(0);
 
   const otherId = id === "A" ? "B" : "A";
@@ -170,9 +166,14 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   useEffect(() => {
     let raf = 0;
     const tick = () => {
-      if (deck.playing || otherDeck.playing || dirty.current) {
+      // While paused the spectrum is static, so also redraw when the EQ params change
+      // (a MIDI knob / sync-copy moves the curve with no pointer event or playback).
+      const sig =
+        deck.eqLow + deck.eqMid * 7 + deck.eqHigh * 13 + deck.eqLowFreq + deck.eqMidFreq * 3 + deck.eqHighFreq * 5 + deck.eqMidQ * 17 + deck.eqHpFreq + deck.eqLpFreq + (deck.eqBypassed ? 1e6 : 0);
+      if (deck.playing || otherDeck.playing || dirty.current || sig !== eqSig.current) {
         draw();
         dirty.current = false;
+        eqSig.current = sig;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -290,32 +291,6 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // audition spotlight: dim everything outside the soloed band, glow inside it,
-      // bright centre line — follows the sweep live so you see what you're hearing.
-      const sv = soloViz.current;
-      if (sv) {
-        const edge = Math.pow(2, 0.6 / sv.q); // half-bandwidth in octaves, narrower at high Q
-        const xLo = clamp(xFromFreq(sv.freq / edge, w), 0, w);
-        const xHi = clamp(xFromFreq(sv.freq * edge, w), 0, w);
-        const xC = xFromFreq(sv.freq, w);
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillRect(0, 0, xLo, h);
-        ctx.fillRect(xHi, 0, w - xHi, h);
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = 0.1;
-        ctx.fillRect(xLo, 0, xHi - xLo, h);
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = accent;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = accent;
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.moveTo(xC, 0);
-        ctx.lineTo(xC, h);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      }
-
       // reposition node dots to match the live filter
       for (let i = 0; i < NODES.length; i++) {
         const el = handleRefs.current[i];
@@ -375,52 +350,16 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     }
     const g = drag.current;
     if (!g) return;
-    const n = NODES[g.i];
-    if (!g.moved) {
-      const dx = Math.abs(e.movementX) + Math.abs(e.movementY);
-      if (dx > MOVE_CANCEL_PX) {
-        g.moved = true;
-        clearTimeout(g.timer);
-      }
-    }
-    if (g.audition) {
-      // sweep the audition frequency by dragging — the spotlight tracks live
-      const rect = wrapRef.current!.getBoundingClientRect();
-      const hz = clamp(freqFromX(e.clientX - rect.left, size.current.w), F_MIN, F_MAX);
-      deck.soloBand(hz, SOLO_Q);
-      soloViz.current = { freq: hz, q: SOLO_Q };
-      dirty.current = true;
-      return;
-    }
-    applyDrag(n, e.clientX, e.clientY);
+    applyDrag(NODES[g.i], e.clientX, e.clientY);
   };
 
   const startDrag = (i: number, e: React.PointerEvent) => {
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    const timer = window.setTimeout(() => {
-      const g = drag.current;
-      if (g && !g.moved) {
-        g.audition = true;
-        const n = NODES[g.i];
-        const hz = n.getFreq(deck);
-        deck.soloBand(hz, SOLO_Q);
-        soloViz.current = { freq: hz, q: SOLO_Q };
-        dirty.current = true;
-        bump((x) => x + 1);
-      }
-    }, LONG_PRESS_MS);
-    drag.current = { i, moved: false, timer, audition: false };
+    drag.current = { i };
   };
   const endDrag = (e: React.PointerEvent) => {
-    const g = drag.current;
-    if (!g) return;
-    clearTimeout(g.timer);
-    if (g.audition) {
-      deck.clearSolo();
-      soloViz.current = null;
-      dirty.current = true;
-    }
+    if (!drag.current) return;
     drag.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     bump((x) => x + 1);
@@ -496,8 +435,8 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             ref={(el) => {
               handleRefs.current[i] = el;
             }}
-            className={`eq-node ${drag.current?.i === i && drag.current?.audition ? "audition" : ""} ${n.vert === "q" ? "cut" : ""}`}
-            title={`${n.label} · ${Math.round(n.getFreq(deck))} Hz${n.vert === "gain" ? ` · ${n.getGain(deck) > 0 ? "+" : ""}${n.getGain(deck).toFixed(1)} dB` : ` · Q ${n.getQ(deck).toFixed(1)}`} — hold to audition, right-click to reset`}
+            className={`eq-node ${n.vert === "q" ? "cut" : ""}`}
+            title={`${n.label} · ${Math.round(n.getFreq(deck))} Hz${n.vert === "gain" ? ` · ${n.getGain(deck) > 0 ? "+" : ""}${n.getGain(deck).toFixed(1)} dB` : ` · Q ${n.getQ(deck).toFixed(1)}`} — right-click to reset`}
             style={{ ["--node" as string]: n.color } as CSSProperties}
             onPointerDown={(e) => startDrag(i, e)}
             onDoubleClick={() => resetNode(n)}
@@ -510,9 +449,9 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       </div>
       {/* Controls sit UNDER the curve. */}
       <div className="eq-tools">
-        <button className={`eq-tool ${deck.eqBypassed ? "on" : ""}`} title="Bypass the EQ (A/B)" onClick={toggleBypass}>BYPASS</button>
-        <button className="eq-tool" title="Reset the EQ to flat" onClick={flat}>RESET</button>
-        <button className="eq-tool" title={`Copy this EQ to deck ${otherId}`} onClick={copyToOther}>COPY</button>
+        <button className={`eq-tool bypass ${deck.eqBypassed ? "on" : ""}`} title="Bypass the EQ (A/B)" onClick={toggleBypass}>BYPASS</button>
+        <button className="eq-tool reset" title="Reset the EQ to flat" onClick={flat}>RESET</button>
+        <button className="eq-tool copy" title={`Copy this EQ to deck ${otherId}`} onClick={copyToOther}>COPY</button>
       </div>
     </div>
   );

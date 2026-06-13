@@ -5,9 +5,10 @@
 //   token authenticates the TV client only. youtubei.js's browse uses the WEB
 //   client, which REJECTS a TV token (HTTP 400/401) — the same client mismatch
 //   that bars the token from the player. The official Data API, by contrast,
-//   accepts any validly-scoped OAuth Bearer (our scope includes
-//   https://www.googleapis.com/auth/youtube), so it's the reliable way to read a
-//   signed-in user's own playlists. Pure-JS fetch; runs in Worker and Node alike.
+//   accepts any validly-scoped OAuth Bearer. Reading playlists needs only
+//   youtube.readonly (what sign-in now grants); the write helpers below need the
+//   full youtube scope, added on demand (see googleAuth.ts incremental auth).
+//   Pure-JS fetch; runs in Worker and Node alike.
 //
 // A cookie-authenticated user goes through innertube instead (see innertube.ts);
 // this path is exclusively for the OAuth (Google sign-in) credential.

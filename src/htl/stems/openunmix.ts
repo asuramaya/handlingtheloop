@@ -13,6 +13,17 @@ const mb = (n: number, sets = 1) => Math.round((n * 2 * 4 * sets) / 1e5) / 10;
 
 const MODEL_SR = 44100;
 
+// Wasm SIMD thread count for a separation. CRITICAL for smoothness: leave cores for
+// the MAIN thread (UI / controls) and the AUDIO render thread (playback), so a
+// separation never saturates the CPU and stutters the deck. Playback + controls stay
+// primary; the separation just runs a little slower. Threads need cross-origin
+// isolation (SharedArrayBuffer); without it ORT is single-threaded anyway.
+function separationThreads(): number {
+  if (!globalThis.crossOriginIsolated) return 1;
+  const cores = navigator.hardwareConcurrency || 4;
+  return Math.max(1, Math.min(cores - 2, 6)); // keep ≥2 cores free for UI + audio; cap at 6
+}
+
 // One long-lived worker; jobs are serialized (see separateOpenUnmix) so it only
 // ever processes one track at a time.
 let worker: Worker | null = null;
@@ -85,6 +96,15 @@ async function resample(buf: AudioBuffer, dstRate: number, dstLen: number): Prom
 
 export type SeparateProgress = (pct: number) => void;
 
+// Desktop demucs-GPU quality knobs (shift-TTA + segment overlap), set from Settings
+// and forwarded to the worker per job. Default = the original single aligned pass at
+// 25% overlap, so unset behaviour is unchanged. Only consumed by the demucs-core arch
+// (Open-Unmix ignores it). See STEM_PRESETS in @htl/state.
+let demucsQuality = { shifts: 0, overlap: 0.25 };
+export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
+  demucsQuality = { shifts: Math.max(0, q.shifts | 0), overlap: Math.min(0.5, Math.max(0, q.overlap)) };
+}
+
 // Serialize ALL separations app-wide: one worker job at a time, so two decks / a
 // dev StrictMode double-fire / a model switch can't stack work or memory.
 let chain: Promise<unknown> = Promise.resolve();
@@ -118,7 +138,12 @@ function runWorkerJob(
   return new Promise<Record<string, ArrayBuffer[]>>((resolve, reject) => {
     jobs.set(id, { resolve, reject, onProgress });
     w.postMessage(
-      { type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length, arch: model.arch, urls: model.urls, url: model.url, eps: model.eps, threads },
+      {
+        type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length, arch: model.arch,
+        urls: model.urls, url: model.url, eps: model.eps,
+        quality: model.arch === "demucs-core" ? demucsQuality : undefined,
+        threads,
+      },
       [L.buffer, R.buffer],
     );
   });
@@ -130,8 +155,7 @@ async function separateInner(mix: AudioBuffer, model: StemModel, onProgress?: Se
   const m44 = await resample(mix, MODEL_SR, Math.round(mix.duration * MODEL_SR));
   const L = m44.getChannelData(0).slice();
   const R = (m44.numberOfChannels > 1 ? m44.getChannelData(1) : m44.getChannelData(0)).slice();
-  const threads = globalThis.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 4, 8) : 1;
-  const raw = await runWorkerJob(L, R, model, threads, onProgress);
+  const raw = await runWorkerJob(L, R, model, separationThreads(), onProgress);
   // resample each stem back to the deck's rate/length
   const out = {} as Stems;
   for (const t of STEM_NAMES) {

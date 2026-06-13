@@ -1,3 +1,4 @@
+export type DeckId = "A" | "B"; // which deck a control targets — the shared audio primitive
 export { AudioEngine } from "./AudioEngine";
 export { Deck, HOT_CUE_COUNT, type Loop, type StemView } from "./Deck";
 export { Eq3, EQ_MIN_DB, EQ_MAX_DB, EQ_BANDS, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, type EqRoute } from "./Eq3";

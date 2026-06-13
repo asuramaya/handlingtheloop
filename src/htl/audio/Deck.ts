@@ -4,9 +4,24 @@ import { beatTimeOffset, nearestBeat, shiftKey } from "../analysis/analyze";
 // LOD pyramid from a precomputed level-0 min/max envelope (bands zeroed — stems
 // colour per-stem, not by band). Cheap O(count) downsample; the O(n) min/max pass
 // is done time-sliced by the caller so nothing blocks.
-function buildLodPyramid(min: Float32Array, max: Float32Array, length: number, sr: number, bucket: number): Pyramid {
+function buildLodPyramid(
+  min: Float32Array,
+  max: Float32Array,
+  length: number,
+  sr: number,
+  bucket: number,
+  // Optional per-bucket band energy (0..1) for the level-0 mip — gives stem lanes the
+  // same rekordbox frequency colouring as the mix. Omitted (remote-stem display, which
+  // has no PCM to band-split) → zeroed, and the renderer falls back to the flat colour.
+  low0?: Float32Array,
+  mid0?: Float32Array,
+  high0?: Float32Array,
+): Pyramid {
   const zeros = (k: number) => new Float32Array(k);
-  const levels: PyramidLevel[] = [{ bucket, min, max, low: zeros(min.length), mid: zeros(min.length), high: zeros(min.length) }];
+  const L0 = low0 ?? zeros(min.length);
+  const M0 = mid0 ?? zeros(min.length);
+  const H0 = high0 ?? zeros(min.length);
+  const levels: PyramidLevel[] = [{ bucket, min, max, low: L0, mid: M0, high: H0 }];
   while (levels[levels.length - 1].min.length > 1) {
     const prev = levels[levels.length - 1];
     const pc = prev.min.length;
@@ -17,6 +32,9 @@ function buildLodPyramid(min: Float32Array, max: Float32Array, length: number, s
       const b = Math.min(pc - 1, a + 1);
       lvl.min[i] = Math.min(prev.min[a], prev.min[b]);
       lvl.max[i] = Math.max(prev.max[a], prev.max[b]);
+      lvl.low[i] = (prev.low[a] + prev.low[b]) * 0.5;
+      lvl.mid[i] = (prev.mid[a] + prev.mid[b]) * 0.5;
+      lvl.high[i] = (prev.high[a] + prev.high[b]) * 0.5;
     }
     levels.push(lvl);
   }
@@ -25,7 +43,7 @@ function buildLodPyramid(min: Float32Array, max: Float32Array, length: number, s
 import { STEM_NAMES, type StemName, type Stems } from "../stems";
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
-import { Eq3 } from "./Eq3";
+import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -104,7 +122,6 @@ export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   private readonly trimNode: GainNode;
   private readonly eq: Eq3;
-  private readonly filter: BiquadFilterNode; // single-knob HP/LP color filter
   // Post-fader stereo meter: split L/R into two analysers (sinks). The UI reads
   // instantaneous peak per channel and applies its own ballistics, so any number
   // of readers a frame is fine (no shared smoothed state to fight over).
@@ -118,7 +135,11 @@ export class Deck {
   private _eqLow = 0;
   private _eqMid = 0;
   private _eqHigh = 0;
-  private _filter = 0; // -1 full low-pass … 0 off … +1 full high-pass
+  // Filter = two INDEPENDENT cut amounts (0 = off … 1 = full), so HP and LP can be on
+  // together (band-pass). The legacy one-knob bipolar filter just drives one side and
+  // zeroes the other; the Starrypad's two knobs drive each side on its own.
+  private _hp = 0; // high-pass amount 0..1
+  private _lp = 0; // low-pass amount 0..1
   private _fxOn = true; // FX master: when off the color filter is bypassed
   private _loudness: number | null = null; // cached integrated RMS of the track
   skipBeats = 4; // per-deck jog skip / beat-jump resolution (beats; 4 = one bar)
@@ -187,6 +208,17 @@ export class Deck {
   private jogReturnToPlay = false; // release should spin back up to play, not rest
   private _jogWeight = 0.4; // 0 = featherweight/snappy … 1 = heavy flywheel
   private _jogDrag = 0.4; // 0 = frictionless glide … 1 = quick brake
+  // --- pitch-bend (jog outer-ring / un-gripped turn / scroll while playing) ---
+  // A momentary tempo push for beat-matching: `_bend` is a fractional offset folded
+  // into the sounding rate (effRate = _rate·(1+_bend)). Each nudge adds to it and it
+  // decays back to 0, so a faster turn piles up a bigger sustained push and letting go
+  // eases home to the set tempo. NEVER a re-seek (that would glitch at the tick rate).
+  private _bend = 0;
+  private bendRaf = 0;
+  private static readonly BEND_GAIN = 6; // ticks→push: how hard a turn bends the tempo
+  private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
+  private static readonly BEND_MAX = 0.6; // cap the push at ±60% of the set tempo
+  private static readonly BEND_SEARCH = 6; // paused: scale a bend nudge into a frame-search seek
   cuePoint = 0;
   hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
   hotLoops: (Loop | null)[] = new Array(HOT_CUE_COUNT).fill(null); // saved loops per pad
@@ -217,15 +249,11 @@ export class Deck {
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
     this.eq = new Eq3(ctx);
-    // eq -> filter -> trim -> level(output) -> crossfader
-    this.filter = ctx.createBiquadFilter();
-    this.filter.type = "lowpass";
-    this.filter.frequency.value = 22050; // transparent at rest
-    this.filter.Q.value = 0.9;
+    // eq -> trim -> level(output) -> crossfader. The one-knob "filter" now drives the
+    // EQ's own HP/LP cut nodes (see applyFilter) — there's no separate color-filter node.
     this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
-    this.eq.output.connect(this.filter);
-    this.filter.connect(this.trimNode);
+    this.eq.output.connect(this.trimNode);
     this.trimNode.connect(this.output);
     // Post-fader meter tap: a channel splitter feeding two analyser sinks (no
     // onward connection) so the meter reads exactly what feeds the crossfader,
@@ -377,7 +405,7 @@ export class Deck {
   // pitch also rides the tempo rate (vinyl: faster = higher).
   private updatePitch() {
     const shift = Math.pow(2, this._pitchSemis / 12);
-    const pitch = this._keylock ? shift : this._rate * shift;
+    const pitch = this._keylock ? shift : this.effRate() * shift;
     // Port message, not an AudioParam — the worklet de-zippers it (see stretchWorklet).
     this.stretchNode?.port.postMessage({ type: "pitch", value: pitch });
   }
@@ -457,6 +485,10 @@ export class Deck {
   /** HOST: snapshot this deck's stem waveform envelopes for transmission to remotes.
    *  null until the neural pyramids are built. Coarse level → small payload. */
   extractStemView(): StemView | null {
+    // A remote-display deck holds the HOST's envelopes (rebuilt via setRemoteStemView),
+    // not its own — it must never re-publish them, or a granted/clock remote would
+    // overwrite the host's real stem view with a coarser re-derivation (feedback).
+    if (this.remoteStems) return null;
     const py = this.stemPyramids;
     if (!py || !this.stemsNeural) return null;
     const stems = {} as Record<StemName, { min: string; max: string }>;
@@ -468,8 +500,12 @@ export class Deck {
       if (!p || !p.levels.length) return null;
       length = p.length;
       sampleRate = p.sampleRate;
-      // Coarsest level still ≥ ~2048-sample buckets — plenty for a remote display.
-      const lvl = p.levels.find((l) => l.bucket >= 2048) ?? p.levels[p.levels.length - 1];
+      // Pick a level coarse enough to cap the BUCKET COUNT (~3000 max), so a long track's
+      // envelope stays small: ≥2048-sample buckets for resolution, but coarser still when
+      // the track is long enough that 2048 would blow past 3000 buckets. Keeps the 4-deck
+      // payload well under the session/DO limits (a long track previously made it huge).
+      const minBucket = Math.max(2048, Math.ceil(p.length / 3000));
+      const lvl = p.levels.find((l) => l.bucket >= minBucket) ?? p.levels[p.levels.length - 1];
       bucket = lvl.bucket;
       stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };
     }
@@ -564,20 +600,53 @@ export class Deck {
       const count = Math.max(1, Math.ceil(n / BUCKET));
       const min = new Float32Array(count);
       const max = new Float32Array(count);
+      // Per-bucket low/mid/high band energy so each stem lane gets its OWN frequency
+      // colouring (cheap: two one-pole LPFs per sample, same split as the mix pyramid).
+      const low = new Float32Array(count);
+      const mid = new Float32Array(count);
+      const high = new Float32Array(count);
+      const aLow = 1 - Math.exp((-2 * Math.PI * 200) / b.sampleRate);
+      const aMid = 1 - Math.exp((-2 * Math.PI * 2000) / b.sampleRate);
+      let lp200 = 0;
+      let lp2000 = 0;
+      let lSum = 0;
+      let mSum = 0;
+      let hSum = 0;
+      let maxLow = 1e-9;
+      let maxMid = 1e-9;
+      let maxHigh = 1e-9;
       let bMin = 1;
       let bMax = -1;
       let cnt = 0;
       let bi = 0;
       for (let i = 0; i < n; i++) {
         const s = ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i];
+        lp200 += aLow * (s - lp200);
+        lp2000 += aMid * (s - lp2000);
+        const lo = lp200;
+        const md = lp2000 - lp200;
+        const hi = s - lp2000;
         if (s < bMin) bMin = s;
         if (s > bMax) bMax = s;
+        lSum += lo * lo;
+        mSum += md * md;
+        hSum += hi * hi;
         if (++cnt >= BUCKET || i === n - 1) {
+          const lv = Math.sqrt(lSum / cnt);
+          const mv = Math.sqrt(mSum / cnt);
+          const hv = Math.sqrt(hSum / cnt);
           min[bi] = bMin;
           max[bi] = bMax;
+          low[bi] = lv;
+          mid[bi] = mv;
+          high[bi] = hv;
+          if (lv > maxLow) maxLow = lv;
+          if (mv > maxMid) maxMid = mv;
+          if (hv > maxHigh) maxHigh = hv;
           bi++;
           bMin = 1;
           bMax = -1;
+          lSum = mSum = hSum = 0;
           cnt = 0;
         }
         if ((i & 0xfffff) === 0xfffff) {
@@ -585,7 +654,12 @@ export class Deck {
           if (job !== this.stemPyramidJob) return; // superseded by a newer track/stems
         }
       }
-      out[name] = buildLodPyramid(min, max, n, b.sampleRate, BUCKET);
+      for (let i = 0; i < count; i++) {
+        low[i] /= maxLow;
+        mid[i] /= maxMid;
+        high[i] /= maxHigh;
+      }
+      out[name] = buildLodPyramid(min, max, n, b.sampleRate, BUCKET, low, mid, high);
       await idle();
       if (job !== this.stemPyramidJob) return;
     }
@@ -630,11 +704,18 @@ export class Deck {
     }
   }
 
+  /** Sounding playback rate = the set tempo, momentarily scaled by an active bend.
+   *  Everything that advances the playhead reads THIS, not the raw tempo, so a bend
+   *  speeds/slows the audio + clock together and stays drift-free. */
+  private effRate(): number {
+    return this._rate * (1 + this._bend);
+  }
+
   /** Current playhead position in seconds (wraps inside an active loop). */
   position(): number {
     if (!this.buffer) return 0;
     let pos = this._playing
-      ? this.startOffset + (this.ctx.currentTime - this.startedAt) * this._rate
+      ? this.startOffset + (this.ctx.currentTime - this.startedAt) * this.effRate()
       : this.startOffset;
     if (this._playing && this.loop?.active) {
       const len = this.loop.end - this.loop.start;
@@ -686,6 +767,11 @@ export class Deck {
    *  clock is frozen/suspended); everyone else draws their real local clock. */
   visualPosition(): number {
     if (!this.followOn || this.jogging || !this.buffer) return this.position();
+    // When our OWN audio clock is live (context running), it's the smoothest, most
+    // accurate playhead AND it's exactly what we hear — draw it. The tick-extrapolated
+    // clock is only a fallback for a SUSPENDED context (a mobile passenger), where
+    // position() would freeze between ticks; on desktop it just added per-tick jitter.
+    if (this.ctx.state === "running") return this.position();
     let pos = this.followPlaying ? this.followExtrapolate(Deck.nowSec()) : this.followPos;
     if (this.followPlaying && this.loop?.active) {
       const len = this.loop.end - this.loop.start;
@@ -695,12 +781,13 @@ export class Deck {
   }
   /** Is the DRAWN playhead advancing? (drives the viewport's rAF.) */
   get visualPlaying(): boolean {
-    if (!this.followOn || this.jogging) return this._playing;
+    if (!this.followOn || this.jogging || this.ctx.state === "running") return this._playing;
     return this.followPlaying;
   }
 
   play() {
     this.cancelJog(); // a transport action wins over an in-flight platter coast
+    this.clearBend();
     if (!this.buffer || this._playing) return;
     // iOS boots the AudioContext SUSPENDED (clock frozen) until a gesture resumes
     // it. Scrub/needle-drop already do this, but tapping Play first does not — so a
@@ -711,6 +798,7 @@ export class Deck {
   }
   pause() {
     this.cancelJog();
+    this.clearBend();
     if (!this._playing) return;
     this.startOffset = this.position();
     this.stopSource();
@@ -722,6 +810,7 @@ export class Deck {
 
   seek(seconds: number) {
     this.cancelJog();
+    this.clearBend();
     const target = Math.max(0, Math.min(this.duration, seconds));
     if (this._playing) {
       this.stopSource();
@@ -762,6 +851,7 @@ export class Deck {
     // scrub before the first Play sees dt≈0 every frame and the platter never
     // moves. Resuming on the grab gesture unlocks it.
     if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.clearBend(); // a grab takes over the clock — drop any decaying bend first
     // Gripping the platter stops it dead (like a hand on vinyl) — it then follows
     // the finger from rest, so there's no forward lurch/creep when you take hold.
     this.jogReturnToPlay = this._playing || (this.jogPhase === "coast" && this.jogReturnToPlay);
@@ -819,6 +909,82 @@ export class Deck {
     this.seek(this.position() + deltaSec);
   }
 
+  // --- pitch-bend (the jog's outer ring, an un-gripped turn, or scroll while playing) ---
+  //
+  // A momentary tempo push for beat-matching. The platter ISN'T gripped, so we don't
+  // scratch or stop — we nudge the sounding rate and let it ease back to the set tempo,
+  // exactly like leaning on a spinning record. Driven by relative ticks: turn faster
+  // and the pushes pile up into a bigger sustained bend; stop and it decays home. While
+  // PAUSED there's nothing to bend, so the same gesture frame-searches through the track
+  // (how you fine-tune a cue point) instead of doing nothing.
+
+  /** One relative bend nudge. `deltaSec` = how far the platter rolled (sign = direction).
+   *  Playing → bends the tempo and auto-reverts; paused → needle-searches. */
+  bend(deltaSec: number) {
+    if (this.jogPhase !== "off") return; // a gripped / coasting platter owns the motion
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    if (!this._playing) {
+      this.needleDrop(deltaSec * Deck.BEND_SEARCH);
+      return;
+    }
+    // Convert the roll distance into a push relative to the set tempo (so it feels the
+    // same at any pitch-fader setting), accumulate, and clamp.
+    const push = (deltaSec / Math.max(0.05, this._rate)) * Deck.BEND_GAIN;
+    this.reanchorRate(); // freeze position() at the OLD rate before the rate changes
+    this._bend = Math.max(-Deck.BEND_MAX, Math.min(Deck.BEND_MAX, this._bend + push));
+    this.pushRate();
+    this.startBendDecay();
+  }
+
+  // Snapshot the playhead at the CURRENT sounding rate so the next rate change is
+  // seamless (no position jump): position() with the new rate continues from here.
+  private reanchorRate() {
+    if (!this._playing) return;
+    this.startOffset = this.position();
+    this.startedAt = this.ctx.currentTime;
+  }
+  // Push the sounding rate (tempo × bend) to the engine voice + key-lock/vinyl pitch.
+  private pushRate() {
+    this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
+    this.updatePitch();
+  }
+  // Ease an active bend back to 0 over BEND_DECAY, re-anchoring the clock each frame so
+  // the playhead stays continuous as the rate glides home.
+  private startBendDecay() {
+    if (this.bendRaf || typeof requestAnimationFrame === "undefined") return;
+    let last = this.ctx.currentTime;
+    const tick = () => {
+      this.bendRaf = 0;
+      const now = this.ctx.currentTime;
+      const dt = Math.min(0.05, Math.max(0, now - last));
+      last = now;
+      const live = this._bend !== 0 && this._playing && this.jogPhase === "off";
+      if (live) {
+        this.reanchorRate();
+        this._bend *= Math.exp(-dt / Deck.BEND_DECAY);
+        if (Math.abs(this._bend) < 1e-3) this._bend = 0;
+        this.pushRate();
+      }
+      if (this._bend !== 0 && this._playing && this.jogPhase === "off") {
+        this.bendRaf = requestAnimationFrame(tick);
+      }
+    };
+    this.bendRaf = requestAnimationFrame(tick);
+  }
+  // Drop any active bend back to the set tempo at once — a transport action / scrub /
+  // explicit tempo change takes over the clock, so the residual push must not linger.
+  private clearBend() {
+    if (this.bendRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
+      this.bendRaf = 0;
+    }
+    if (this._bend !== 0) {
+      this.reanchorRate();
+      this._bend = 0;
+      this.pushRate();
+    }
+  }
+
   private startJogLoop() {
     if (this.jogRaf || typeof requestAnimationFrame === "undefined") return;
     this.jogLast = this.ctx.currentTime;
@@ -862,6 +1028,11 @@ export class Deck {
   // Full reset on track load: cancel the jog and zero the platter.
   private stopJog() {
     this.cancelJog();
+    if (this.bendRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
+      this.bendRaf = 0;
+    }
+    this._bend = 0;
     this.jogPos = 0;
     this.handPos = 0;
     this.jogReturnToPlay = false;
@@ -934,6 +1105,7 @@ export class Deck {
   }
 
   setTempo(tempoPercent: number) {
+    this.clearBend(); // a deliberate tempo move supersedes any momentary bend
     const rate = 1 + tempoPercent / 100;
     if (this._playing) {
       this.startOffset = this.position();
@@ -1173,7 +1345,7 @@ export class Deck {
     this.loop.active = false;
     if (this._playing) {
       // Raw (un-wrapped) offset = where playback would have reached with no loop.
-      const raw = this.startOffset + (this.ctx.currentTime - this.startedAt) * this._rate;
+      const raw = this.startOffset + (this.ctx.currentTime - this.startedAt) * this.effRate();
       this.applyLoop();
       this.seek(Math.max(0, Math.min(this.duration, raw)));
     } else {
@@ -1422,13 +1594,40 @@ export class Deck {
     an.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
   }
 
+  // Bipolar representation for the one-knob UI / session sync: +hp, −lp, 0 = flat.
+  // (When both sides are engaged independently it reports the HP side — the single
+  // knob can't draw a band-pass, but the EQ curve shows both real cuts.)
   get filterValue() {
-    return this._filter;
+    return this._hp > 0 ? this._hp : -this._lp;
   }
   // One-knob DJ color filter: left = low-pass (cutoff sweeps down), right =
-  // high-pass (cutoff sweeps up), centre = bypassed. Cutoffs map logarithmically.
+  // high-pass (cutoff sweeps up), centre = bypassed. Bipolar → drives one side, parks
+  // the other (so the on-screen knob stays a single flat-centre control).
   setFilter(v: number) {
-    this._filter = Math.max(-1, Math.min(1, v));
+    const x = Math.max(-1, Math.min(1, v));
+    if (x >= 0) {
+      this._hp = x;
+      this._lp = 0;
+    } else {
+      this._lp = -x;
+      this._hp = 0;
+    }
+    this.applyFilter();
+  }
+  // Independent high-pass / low-pass amount (0 = off … 1 = full) — the Starrypad's two
+  // dedicated knobs, which can engage both at once (band-pass) instead of one-or-other.
+  get hpAmount() {
+    return this._hp;
+  }
+  get lpAmount() {
+    return this._lp;
+  }
+  setHpAmount(a: number) {
+    this._hp = Math.max(0, Math.min(1, a));
+    this.applyFilter();
+  }
+  setLpAmount(a: number) {
+    this._lp = Math.max(0, Math.min(1, a));
     this.applyFilter();
   }
 
@@ -1441,19 +1640,15 @@ export class Deck {
     this._fxOn = on;
     this.applyFilter();
   }
+  // Drive the EQ's own HP/LP cut nodes (the curve's edge handles) INDEPENDENTLY from the
+  // two amounts: HP sweeps its cutoff up (20 → 2200 Hz), LP sweeps its cutoff down
+  // (20000 → 320 Hz); 0 on a side parks it open. Both can be engaged (band-pass).
+  // FX-off pins both transparent while keeping the amounts.
   private applyFilter() {
-    const f = this.filter;
-    const x = this._fxOn ? this._filter : 0;
-    if (Math.abs(x) < 0.02) {
-      f.type = "lowpass";
-      f.frequency.value = 22050;
-    } else if (x < 0) {
-      f.type = "lowpass";
-      f.frequency.value = 22050 * Math.pow(180 / 22050, -x); // 22k → 180 Hz
-    } else {
-      f.type = "highpass";
-      f.frequency.value = 20 * Math.pow(7000 / 20, x); // 20 → 7000 Hz
-    }
+    const hp = this._fxOn ? this._hp : 0;
+    const lp = this._fxOn ? this._lp : 0;
+    this.eq.setHpFreq(hp > 0 ? EQ_HP.min * Math.pow(EQ_HP.max / EQ_HP.min, hp) : EQ_HP.min);
+    this.eq.setLpFreq(lp > 0 ? EQ_LP.max * Math.pow(EQ_LP.min / EQ_LP.max, lp) : EQ_LP.max);
   }
 
   // Integrated RMS loudness (linear) of the loaded track, computed once and
@@ -1496,8 +1691,13 @@ export class Deck {
     if (this.loop?.active) {
       const { start, end } = this.loop;
       const len = end - start;
-      if (len > 0 && (startAt < start || startAt >= end)) {
-        startAt = start + ((((startAt - start) % len) + len) % len);
+      // Fold ONLY a start that's PAST the loop end back into [start, end) — that's
+      // exactly what position() does (it wraps only once pos > loop.start). A point
+      // BEFORE the loop must stay put so playback runs UP TO the loop and starts
+      // wrapping when it arrives; folding it into the loop made the audio jump into
+      // the loop while the drawn playhead (position()) sat before it — they desynced.
+      if (len > 0 && startAt >= end) {
+        startAt = start + ((startAt - start) % len);
       }
     }
     this.applyLoop();

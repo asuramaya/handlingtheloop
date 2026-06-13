@@ -9,20 +9,27 @@ import type { GoogleProfile, TokenSet } from "./db";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
-// openid/email/profile → htl identity; youtube → read+write the user's playlists
-// (for sync). youtube.readonly would block writing the destination playlist.
-const SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/youtube"].join(" ");
+// Incremental authorization. Sign-in asks only for identity + READ of the user's
+// playlists — that covers everyone who only pulls FROM YouTube (e.g. YouTube→
+// Spotify sync) and keeps the consent screen tame. The full `youtube` (write)
+// scope is requested separately, on demand, the first time a user pushes a sync
+// INTO YouTube (via googleAuthUrl(..., write=true) + include_granted_scopes).
+// openid stays in both sets so the callback always gets an id_token (the profile).
+const READ_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/youtube.readonly"].join(" ");
+const WRITE_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/youtube"].join(" ");
 
 const TIMEOUT_MS = 8000;
 const FORM = { "content-type": "application/x-www-form-urlencoded" };
 
-/** The URL we redirect the user to. `state` is echoed back for CSRF checking. */
-export function googleAuthUrl(clientId: string, redirectUri: string, state: string): string {
+/** The URL we redirect the user to. `state` is echoed back for CSRF checking.
+ *  `write=true` requests the full youtube (manage) scope for the on-demand
+ *  upgrade; default sign-in requests read-only. */
+export function googleAuthUrl(clientId: string, redirectUri: string, state: string, write = false): string {
   const q = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: SCOPES,
+    scope: write ? WRITE_SCOPES : READ_SCOPES,
     state,
     access_type: "offline", // get a refresh_token
     prompt: "consent", // force refresh_token even on re-auth

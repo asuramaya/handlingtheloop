@@ -11,7 +11,7 @@
 // Matching uses the FREE innertube search for →YouTube (Data API search.list
 // costs 100 quota units; we avoid it), and Spotify search for →Spotify. IDs/ISRC
 // ride along as anchors for future incremental re-sync.
-import { type ConnEnv, getValidToken } from "./connections";
+import { type ConnEnv, getValidToken, googleHasYouTubeWrite } from "./connections";
 import { addToYouTubePlaylist, createYouTubePlaylist, fetchPlaylistData } from "./ytdata";
 import {
   addSpotifyTracks,
@@ -20,10 +20,23 @@ import {
   getSpotifyUserId,
   searchSpotifyTracks,
 } from "./spotifyData";
+import { addTidalTracks, createTidalPlaylist, getTidalPlaylistTracks, searchTidalTracks } from "./tidalData";
 import { type Candidate, type Confidence, confidenceOf, rank } from "./match";
 
-export type Service = "youtube" | "spotify";
-const providerOf = (s: Service): "google" | "spotify" => (s === "youtube" ? "google" : "spotify");
+export type Service = "youtube" | "spotify" | "tidal";
+// YouTube rides the Google connection; the others map 1:1 to their provider.
+const providerOf = (s: Service): "google" | "spotify" | "tidal" => (s === "youtube" ? "google" : s);
+
+// Thrown when a sync would WRITE to YouTube but the user only granted the
+// read-only sign-in scope. The HTTP layer should catch this and tell the client
+// to send the user through /api/auth/google/start?write=1 (incremental auth),
+// then retry. Identity / read paths never hit this.
+export class YouTubeWriteRequired extends Error {
+  constructor() {
+    super("youtube_write_required");
+    this.name = "YouTubeWriteRequired";
+  }
+}
 
 export interface SourceTrack {
   title: string;
@@ -87,6 +100,24 @@ export async function readSource(
     };
   }
 
+  if (source === "tidal") {
+    const tracks = await getTidalPlaylistTracks(token, playlistId);
+    return {
+      name: "Playlist",
+      // ISRC carries the cross-service match; tidalId isn't kept as an anchor (ISRC
+      // + title/artist is enough for the resolver).
+      tracks: tracks.map((t) => ({
+        title: t.title,
+        artist: t.artist,
+        duration: t.duration,
+        thumbnail: t.thumbnail,
+        isrc: t.isrc,
+        spotifyId: null,
+        videoId: null,
+      })),
+    };
+  }
+
   const r = await fetchPlaylistData(token, playlistId);
   return {
     name: r.title,
@@ -111,10 +142,11 @@ export async function matchTracks(
   startIndex: number,
   deps: SyncDeps,
 ): Promise<MatchRow[]> {
-  let spotifyToken: string | null = null;
-  if (dest === "spotify") {
-    spotifyToken = await getValidToken(env, userId, "spotify");
-    if (!spotifyToken) throw new Error("spotify is not connected");
+  // Non-YouTube destinations search via the user's connected token.
+  let destToken: string | null = null;
+  if (dest !== "youtube") {
+    destToken = await getValidToken(env, userId, providerOf(dest));
+    if (!destToken) throw new Error(`${dest} is not connected`);
   }
 
   const rows: MatchRow[] = [];
@@ -133,8 +165,10 @@ export async function matchTracks(
           duration: r.duration,
           thumbnail: r.thumbnail,
         }));
+      } else if (dest === "tidal") {
+        candidates = await searchTidalTracks(destToken!, q, 5);
       } else {
-        candidates = await searchSpotifyTracks(spotifyToken!, q, 5);
+        candidates = await searchSpotifyTracks(destToken!, q, 5);
       }
     } catch {
       candidates = [];
@@ -171,9 +205,9 @@ export async function searchDest(
       thumbnail: r.thumbnail,
     }));
   }
-  const token = await getValidToken(env, userId, "spotify");
-  if (!token) throw new Error("spotify is not connected");
-  return searchSpotifyTracks(token, query, 6);
+  const token = await getValidToken(env, userId, providerOf(dest));
+  if (!token) throw new Error(`${dest} is not connected`);
+  return dest === "tidal" ? searchTidalTracks(token, query, 6) : searchSpotifyTracks(token, query, 6);
 }
 
 /** Phase 3a: create the (private) destination playlist. */
@@ -186,8 +220,13 @@ export async function createDestPlaylist(
   const token = await getValidToken(env, userId, providerOf(dest));
   if (!token) throw new Error(`${dest} is not connected`);
   if (dest === "youtube") {
+    if (!(await googleHasYouTubeWrite(env, userId))) throw new YouTubeWriteRequired();
     const id = await createYouTubePlaylist(token, name, "Synced via handlingtheloop.com");
     return { playlistId: id, url: `https://www.youtube.com/playlist?list=${id}` };
+  }
+  if (dest === "tidal") {
+    const id = await createTidalPlaylist(token, name, "Synced via handlingtheloop.com");
+    return { playlistId: id, url: `https://tidal.com/playlist/${id}` };
   }
   const user = await getSpotifyUserId(token);
   const id = await createSpotifyPlaylist(token, user, name, "Synced via handlingtheloop.com");
@@ -205,12 +244,17 @@ export async function addToDestPlaylist(
   const token = await getValidToken(env, userId, providerOf(dest));
   if (!token) throw new Error(`${dest} is not connected`);
   if (dest === "youtube") {
+    if (!(await googleHasYouTubeWrite(env, userId))) throw new YouTubeWriteRequired();
     let added = 0;
     for (const videoId of ids) {
       await addToYouTubePlaylist(token, playlistId, videoId);
       added++;
     }
     return added;
+  }
+  if (dest === "tidal") {
+    await addTidalTracks(token, playlistId, ids); // ids are TIDAL track ids
+    return ids.length;
   }
   await addSpotifyTracks(token, playlistId, ids); // ids are spotify uris
   return ids.length;

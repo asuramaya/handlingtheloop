@@ -2,6 +2,8 @@
 // / body classes so the whole UI re-themes without prop drilling.
 import { Store, migrateLegacyKey } from "../persistence";
 import type { KeyBindings } from "./keybinds";
+import type { MidiLearnMap, MidiMap } from "../midi/types";
+import type { ColorProfile } from "./colorProfiles";
 
 export interface Settings {
   accentA: string; // deck A neon
@@ -18,17 +20,35 @@ export interface Settings {
   stemBassColor: string;
   stemVocalsColor: string;
   stemOtherColor: string;
+  freqLowColor: string; // frequency-colour band hues (when freqColors is on); "" each = built-in default
+  freqMidColor: string;
+  freqHighColor: string;
   glow: boolean; // neon glow on/off
   tempoRange: number; // tempo fader half-range (±%)
   pitchRange: number; // KEY knob half-range (± semitones)
   jumpBeats: number; // beat-jump / loop-move "skip" resolution, in beats
   jogWeight: number; // platter inertia, 0 = featherweight/snappy … 1 = heavy flywheel
   jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
-  stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "dsp" = instant split
+  stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
   keyHints: boolean; // show the per-button keyboard-shortcut letters (desktop only)
   keyBindings: KeyBindings; // user-remapped keyboard shortcuts (id → primary/secondary code); {} = defaults
+  midiEnabled: boolean; // enable USB-MIDI controller support (Web MIDI; desktop Chromium only)
+  midiBindings: MidiLearnMap; // the LIVE working overlay layered over the matched profile; {} = profile only
+  midiMaps: MidiMap[]; // saved, shareable named maps (synced to account); load one → copies into midiBindings
+  activeMidiMapId: string | null; // which saved map midiBindings was loaded from (null = ad-hoc / built-in only)
+  colorProfiles: ColorProfile[]; // saved, shareable colour themes (synced to account, same as midiMaps)
+  activeColorProfileId: string | null; // which saved profile is loaded (null = ad-hoc / built-in)
   stretchQuality: StretchQuality; // tempo/pitch (WSOLA) engine quality preset
+  stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
+  audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
+  autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
+  freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
+  freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
+  uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
+  inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
+  lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
+  lyricsModel: string; // whisper model id (see @htl/lyrics WHISPER_MODELS): "base" | "small"
 }
 
 // The unified time-stretch engine's quality/latency trade-off (see stretchWorklet).
@@ -48,9 +68,55 @@ export function stretchConfig(q: StretchQuality): StretchConfig {
   return { frame: p.frame, search: p.search, stride: p.stride };
 }
 
+// Desktop demucs-GPU separation quality. Pure GPU-time-for-quality knobs (no model
+// change): `overlap` averages more segment passes per sample (smoother seams);
+// `shifts` is demucs' random-shift test-time augmentation — the biggest artifact
+// reducer, at ≈shifts× the compute. Mobile never separates, so this is desktop-only.
+// `mult` is the rough compute multiplier vs the old single pass (shown in the picker).
+export type StemQuality = "fast" | "balanced" | "hifi";
+export interface StemConfig {
+  shifts: number;
+  overlap: number;
+}
+export const STEM_PRESETS: Record<StemQuality, StemConfig & { label: string; mult: string; blurb: string }> = {
+  fast: { shifts: 0, overlap: 0.25, label: "Fast", mult: "1×", blurb: "Single pass at 25% overlap. Fastest separation — the original path." },
+  balanced: { shifts: 1, overlap: 0.5, label: "Balanced", mult: "~2.7×", blurb: "Recommended. One shift pass + 50% overlap — cleaner seams and fewer artifacts." },
+  hifi: { shifts: 2, overlap: 0.5, label: "Hi-Fi", mult: "~5×", blurb: "Two shift passes + 50% overlap — the cleanest stems this model gives, but slow." },
+};
+export function stemConfig(q: StemQuality): StemConfig {
+  const p = STEM_PRESETS[q] ?? STEM_PRESETS.balanced;
+  return { shifts: p.shifts, overlap: p.overlap };
+}
+
+// Default frequency-colour band hues (rekordbox-style) — shared by the waveform renderer
+// (the "" fallback) and the Settings pickers (the swatch shown for an unset value).
+export const FREQ_LOW_DEFAULT = "#2a74ff"; // blue (bass)
+export const FREQ_MID_DEFAULT = "#ff9c30"; // amber (mid)
+export const FREQ_HIGH_DEFAULT = "#e4f0ff"; // near-white (high)
+
+// One-tap waveform frequency palettes (low/mid/high). The first IS the default trio.
+export interface BandPalette {
+  name: string;
+  low: string;
+  mid: string;
+  high: string;
+}
+export const BAND_PALETTES: BandPalette[] = [
+  { name: "Rekordbox", low: FREQ_LOW_DEFAULT, mid: FREQ_MID_DEFAULT, high: FREQ_HIGH_DEFAULT },
+  { name: "Serato", low: "#1f6feb", mid: "#2ec27e", high: "#ff5d73" },
+  { name: "Sunset", low: "#6a2c9c", mid: "#ff6b35", high: "#ffd23f" },
+  { name: "Ice", low: "#0066ff", mid: "#00d4ff", high: "#eaffff" },
+  { name: "Heat", low: "#3a2bff", mid: "#ff2d6b", high: "#ffe24a" },
+  { name: "Vapor", low: "#ff5dd2", mid: "#7b5cff", high: "#9bf6ff" },
+  { name: "Mono", low: "#5a5a5a", mid: "#9a9a9a", high: "#ffffff" },
+];
+
 export const DEFAULT_BG = "#050507";
 export const DEFAULT_TEXT = "#ecedfb";
 export const DEFAULT_BORDER = "#1a1a28";
+// UI contrast / "ink" depth (0 = soft grey fills, 1 = deepest ink). Declared up here
+// so DEFAULT_SETTINGS can reference it (module eval order).
+export const DEFAULT_CONTRAST = 0.7;
 
 export const DEFAULT_SETTINGS: Settings = {
   accentA: "#00e5ff",
@@ -67,17 +133,35 @@ export const DEFAULT_SETTINGS: Settings = {
   stemBassColor: "",
   stemVocalsColor: "",
   stemOtherColor: "",
+  freqLowColor: "", // empty each = the built-in band colour (blue / amber / white)
+  freqMidColor: "",
+  freqHighColor: "",
   glow: true,
   tempoRange: 8,
   pitchRange: 12,
   jumpBeats: 4,
   jogWeight: 0.4,
   jogDrag: 0.4,
-  stemModel: "dsp", // always DSP until the user explicitly picks a neural engine (every platform)
+  stemModel: "off", // "Single" (plain mix, no stems) until the user picks a neural engine; DSP split was dropped
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free
   keyHints: true, // per-button key letters on by default (CSS hides them on mobile)
   keyBindings: {}, // empty → every action uses its default key (see @htl keybinds)
+  midiEnabled: false, // off until the user opts in (Web MIDI shows a permission prompt)
+  midiBindings: {}, // empty → rely on the auto-matched built-in controller profile
+  midiMaps: [], // no saved maps yet
+  activeMidiMapId: null,
+  colorProfiles: [], // no saved colour themes yet
+  activeColorProfileId: null,
   stretchQuality: "balanced", // crisp + low-latency default
+  stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
+  audioOutputId: "", // system default output until the user picks a device
+  autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
+  freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
+  freqVividness: 1, // as-picked saturation by default
+  uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
+  inheritRoomColor: true, // catch the host's vibe in a shared session by default
+  lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
+  lyricsModel: "base", // fast tier by default; "small" is better on sung lyrics
 };
 
 // Dark base-colour presets for the background picker (varied dark hues).
@@ -174,12 +258,23 @@ function shift(hex: string, dr: number, dg: number, db: number): string {
   const h2 = (x: number) => clampByte(x).toString(16).padStart(2, "0");
   return `#${h2(r + dr)}${h2(g + dg)}${h2(b + db)}`;
 }
-// The darkest UI surface (lanes/buttons) derived from the chosen base — the same
-// value applySettings writes to --surface. Exported so the waveform canvas can
-// take it as a prop instead of reading getComputedStyle (which is one commit
-// stale, since applySettings runs in a parent effect after the canvas's effects).
-export function surfaceColor(bg: string): string {
-  return shift(bg || DEFAULT_BG, 3, 3, 6);
+// How far the panel/surface fills lift OFF the base, scaled by the contrast knob:
+// 0 → 1.55× (soft, washed grey), 1 → 0.3× (inky — fills hug the base for maximum
+// separation from the bright text). Lower scale = darker darks.
+function panelScale(contrast: number): number {
+  const c = Math.max(0, Math.min(1, Number.isFinite(contrast) ? contrast : DEFAULT_CONTRAST));
+  return 1.55 - 1.25 * c;
+}
+
+// The darkest UI surface (lanes/buttons) derived from the chosen base + contrast.
+// Luminance-aware: on a LIGHT theme the fills go darker than the base instead of
+// clamping to white. Exported so the waveform canvas can take it as a prop instead
+// of reading getComputedStyle (which is one commit stale, since applySettings runs
+// in a parent effect after the canvas's effects).
+export function surfaceColor(bg: string, contrast: number = DEFAULT_CONTRAST): string {
+  const sc = panelScale(contrast);
+  const sgn = relLum(bg || DEFAULT_BG) < 0.5 ? 1 : -1;
+  return shift(bg || DEFAULT_BG, sgn * 3 * sc, sgn * 3 * sc, sgn * 6 * sc);
 }
 // Linear blend of two hex colours; t = 0 → a, 1 → b.
 function blend(a: string, b: string, t: number): string {
@@ -225,11 +320,20 @@ export function applySettings(s: Settings) {
   // background colour (the panels otherwise cover the body, hiding plain --bg).
   const bg = s.bgColor || DEFAULT_BG;
   root.style.setProperty("--bg", bg);
-  root.style.setProperty("--surface", surfaceColor(bg)); // darkest UI surfaces (buttons, lanes)
-  root.style.setProperty("--panel", shift(bg, 6, 6, 10));
-  root.style.setProperty("--panel-2", shift(bg, 11, 11, 18));
-  // Text + border are user-controlled; muted is text faded halfway toward the bg.
-  const text = s.textColor || DEFAULT_TEXT;
+  // Panel/surface fills follow the contrast knob (inkier = deeper). Luminance-aware
+  // so the lift direction flips for light themes (panels go darker, not clamp-white).
+  const c = Math.max(0, Math.min(1, Number.isFinite(s.uiContrast) ? s.uiContrast : DEFAULT_CONTRAST));
+  const sc = panelScale(c);
+  const dark = relLum(bg) < 0.5;
+  const sgn = dark ? 1 : -1;
+  const lift = (r: number, g: number, b: number) => shift(bg, sgn * r * sc, sgn * g * sc, sgn * b * sc);
+  root.style.setProperty("--surface", surfaceColor(bg, c)); // darkest UI surfaces (buttons, lanes)
+  root.style.setProperty("--panel", lift(6, 6, 10));
+  root.style.setProperty("--panel-2", lift(11, 11, 18));
+  // Text + border are user-controlled; contrast nudges the text toward the theme's
+  // extreme (whiter on dark, blacker on light) for "brighter whites", and muted is
+  // that result faded halfway toward the bg.
+  const text = blend(s.textColor || DEFAULT_TEXT, dark ? "#ffffff" : "#000000", 0.3 * c);
   root.style.setProperty("--text", text);
   root.style.setProperty("--muted", blend(text, bg, 0.55));
   root.style.setProperty("--line", s.borderColor || DEFAULT_BORDER);

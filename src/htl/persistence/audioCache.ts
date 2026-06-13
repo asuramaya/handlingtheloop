@@ -7,7 +7,8 @@
 const DB_NAME = "htl";
 const STORE = "audio";
 const STEM_STORE = "stems"; // separated stems (WAV bytes) keyed by `${videoId}:${modelId}`
-const DB_VERSION = 2;
+const LYRICS_STORE = "lyrics"; // Whisper transcripts (JSON) keyed by videoId — never re-decode
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
@@ -21,6 +22,7 @@ function openDb(): Promise<IDBDatabase | null> {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
         if (!db.objectStoreNames.contains(STEM_STORE)) db.createObjectStore(STEM_STORE);
+        if (!db.objectStoreNames.contains(LYRICS_STORE)) db.createObjectStore(LYRICS_STORE);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);
@@ -110,6 +112,48 @@ export async function putStemBlobs(key: string, blobs: ArrayBuffer[]): Promise<v
       tx.objectStore(STEM_STORE).put({ blobs, savedAt: Date.now() } as StemRecord, key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve(); // fail soft (quota, etc.) — R2 remains the fallback
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+// --- lyric-transcript cache. A Whisper decode is expensive (GPU + model download), so its
+// JSON result is persisted by videoId and re-used forever: a track is transcribed ONCE,
+// then every later load reads it straight from here (no re-decode, no spinner). ---
+export interface LyricsCacheRecord {
+  lines: unknown[]; // LyricsLine[] (kept untyped here to avoid a layer dep)
+  model: string;
+  ver?: number; // transcript-format version — bumped by the client to invalidate stale shapes
+  savedAt: number;
+}
+export async function getLyricsLocal(videoId: string): Promise<LyricsCacheRecord | null> {
+  const db = await openDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(LYRICS_STORE, "readonly");
+      const req = tx.objectStore(LYRICS_STORE).get(videoId);
+      req.onsuccess = () => {
+        const rec = req.result as LyricsCacheRecord | undefined;
+        resolve(rec?.lines?.length ? rec : null);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+export async function putLyricsLocal(videoId: string, rec: { lines: unknown[]; model: string; ver?: number }): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(LYRICS_STORE, "readwrite");
+      tx.objectStore(LYRICS_STORE).put({ ...rec, savedAt: Date.now() } as LyricsCacheRecord, videoId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
       tx.onabort = () => resolve();
     } catch {
       resolve();

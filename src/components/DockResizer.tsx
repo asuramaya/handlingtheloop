@@ -15,7 +15,6 @@ type Measure = "parent" | "prev";
 
 interface Props {
   varName: string; // CSS custom property (on <html>) this handle drives
-  grow: "left" | "right"; // which drag direction WIDENS the panel
   measure: Measure; // where the starting width is read: the handle's parent, or
   //   its previous sibling (the element actually being sized)
   min?: number;
@@ -26,8 +25,13 @@ interface Props {
 // <html> and persisting it to localStorage. Used for the Library/Search docks
 // (measure the backdrop = parent) and the Library's inner sidebar (measure its
 // previous sibling). Hidden on mobile, where the docks are centered modals.
-export function DockResizer({ varName, grow, measure, min = 220, max = 920 }: Props) {
-  const data = useRef({ x: 0, w: 0 });
+//
+// The grow DIRECTION is derived from geometry at grab time (which side of the sized
+// element the handle sits on) rather than a fixed prop — so it stays correct after
+// the docks are swapped left↔right (the handle moves to the inner edge via CSS, and
+// this picks up the new side automatically).
+export function DockResizer({ varName, measure, min = 220, max = 920 }: Props) {
+  const data = useRef({ x: 0, w: 0, sign: 1 });
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -35,14 +39,19 @@ export function DockResizer({ varName, grow, measure, min = 220, max = 920 }: Pr
     const handle = e.currentTarget;
     const target = (measure === "parent" ? handle.parentElement : handle.previousElementSibling) as HTMLElement | null;
     if (!target) return;
-    data.current = { x: e.clientX, w: target.getBoundingClientRect().width };
+    const handleRect = handle.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    // If the handle sits on the target's RIGHT half, dragging right widens it (+dx);
+    // if it's on the left half (e.g. after a side-swap), dragging right shrinks it.
+    const sign = handleRect.left + handleRect.width / 2 >= targetRect.left + targetRect.width / 2 ? 1 : -1;
+    data.current = { x: e.clientX, w: targetRect.width, sign };
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
 
     const root = document.documentElement;
     const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - data.current.x;
-      const w = Math.max(min, Math.min(max, data.current.w + (grow === "right" ? dx : -dx)));
+      const dx = (ev.clientX - data.current.x) * data.current.sign;
+      const w = Math.max(min, Math.min(max, data.current.w + dx));
       root.style.setProperty(varName, `${w}px`);
     };
     const onUp = () => {
@@ -62,7 +71,7 @@ export function DockResizer({ varName, grow, measure, min = 220, max = 920 }: Pr
 
   return (
     <div
-      className={`dock-resizer ${measure === "prev" ? "dock-resizer-inline" : "dock-resizer-edge"} grow-${grow}`}
+      className={`dock-resizer ${measure === "prev" ? "dock-resizer-inline" : "dock-resizer-edge"}`}
       onPointerDown={onPointerDown}
       title="Drag to resize"
     />

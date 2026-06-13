@@ -19,6 +19,12 @@ export {
   DEFAULT_BG,
   DEFAULT_TEXT,
   DEFAULT_BORDER,
+  DEFAULT_CONTRAST,
+  FREQ_LOW_DEFAULT,
+  FREQ_MID_DEFAULT,
+  FREQ_HIGH_DEFAULT,
+  type BandPalette,
+  BAND_PALETTES,
   contrastRatio,
   contrastWarnings,
   loadSettings,
@@ -29,6 +35,10 @@ export {
   type StretchConfig,
   STRETCH_PRESETS,
   stretchConfig,
+  type StemQuality,
+  type StemConfig,
+  STEM_PRESETS,
+  stemConfig,
 } from "./settings";
 export {
   type DeckSnapshot,
@@ -40,6 +50,17 @@ export {
 } from "./session";
 export { type SearchState, type SortKey, loadSearchState, saveSearchState } from "./searchState";
 export { useSettingsSync } from "./settingsSync";
+export {
+  type ColorProfile,
+  type ColorSnapshot,
+  type ColorValue,
+  COLOR_PROFILE_KEYS,
+  snapshotColors,
+  createColorProfile,
+  duplicateColorProfile,
+  exportColorProfile,
+  parseColorProfile,
+} from "./colorProfiles";
 export {
   type KeyAction,
   type KeyBinding,

@@ -4,6 +4,7 @@
 
 export const SESSION_COOKIE = "htl_session";
 export const STATE_COOKIE = "htl_oauth_state";
+export const PKCE_COOKIE = "htl_oauth_pkce"; // PKCE code_verifier (Tidal requires PKCE for all clients)
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function cookie(name: string, value: string, maxAgeSec: number): string {
@@ -28,6 +29,15 @@ export function clearStateCookie(): string {
   return cookie(STATE_COOKIE, "", 0);
 }
 
+// Short-lived cookie holding the PKCE code_verifier between the auth redirect and
+// the callback exchange (Tidal mandates PKCE even for confidential clients).
+export function pkceCookie(verifier: string): string {
+  return cookie(PKCE_COOKIE, verifier, 600);
+}
+export function clearPkceCookie(): string {
+  return cookie(PKCE_COOKIE, "", 0);
+}
+
 function readCookie(req: Request, name: string): string | null {
   const raw = req.headers.get("cookie") || "";
   const m = raw.match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
@@ -36,6 +46,7 @@ function readCookie(req: Request, name: string): string | null {
 
 export const readSessionId = (req: Request): string | null => readCookie(req, SESSION_COOKIE);
 export const readState = (req: Request): string | null => readCookie(req, STATE_COOKIE);
+export const readPkce = (req: Request): string | null => readCookie(req, PKCE_COOKIE);
 
 /** A URL-safe random token for session ids and OAuth state. */
 export function randomToken(bytes = 32): string {

@@ -23,6 +23,7 @@ interface CrossfaderProps {
 // (deck A leftward, deck B rightward), both post-crossfade so they fade as you sweep.
 export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade }: CrossfaderProps) {
   const { a: gainDbA, b: gainDbB } = crossfadeGainsDb(crossfade);
+  const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   return (
     <div className="xfader-bar">
       <div className="xbar-track">
@@ -33,9 +34,20 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
         <input
           type="range" className="xbar-input" min={-1} max={1} step={0.01} value={crossfade}
           title="A ↔ B crossfade"
+          // Tint the handle the PURE colour of the side it's landed on (so it matches
+          // that deck's channel-fader handle exactly) — A left of centre, B right.
+          style={{
+            ["--xa" as string]: accentA,
+            ["--xb" as string]: accentB,
+            ["--xpct" as string]: crossfade > 0 ? "100%" : "0%",
+          }}
           onChange={(e) => onCrossfade(Number(e.target.value))}
           onContextMenu={(e) => { e.preventDefault(); onCrossfade(0); }}
         />
+        {/* A↔B position (0 = full A, 50 = centre, 100 = full B) printed on the handle. */}
+        <div className="lfader-val xbar-val" style={{ left: `calc(${frac} * (100% - 38px) + 19px)` }}>
+          <span>{Math.round(frac * 100)}</span>
+        </div>
       </div>
     </div>
   );

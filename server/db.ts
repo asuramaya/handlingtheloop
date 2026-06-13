@@ -20,7 +20,7 @@ export interface D1Database {
 const now = () => Date.now();
 const uuid = () => crypto.randomUUID();
 
-export type Provider = "google" | "spotify";
+export type Provider = "google" | "spotify" | "tidal";
 
 export interface User {
   id: string;
@@ -28,6 +28,7 @@ export interface User {
   email: string | null;
   name: string | null;
   avatar: string | null;
+  created_at: number | null; // epoch ms the account was created — "member since" on the profile
 }
 
 export interface GoogleProfile {
@@ -48,7 +49,7 @@ export interface TokenSet {
 /** Find-or-create a user by their Google identity; refresh profile + last_login. */
 export async function upsertGoogleUser(db: D1Database, p: GoogleProfile): Promise<User> {
   const existing = await db
-    .prepare("SELECT id, google_sub, email, name, avatar FROM users WHERE google_sub = ?")
+    .prepare("SELECT id, google_sub, email, name, avatar, created_at FROM users WHERE google_sub = ?")
     .bind(p.sub)
     .first<User>();
   if (existing) {
@@ -59,11 +60,12 @@ export async function upsertGoogleUser(db: D1Database, p: GoogleProfile): Promis
     return { ...existing, email: p.email ?? null, name: p.name ?? null, avatar: p.picture ?? null };
   }
   const id = uuid();
+  const createdAt = now();
   await db
     .prepare("INSERT INTO users (id, google_sub, email, name, avatar, created_at, last_login) VALUES (?,?,?,?,?,?,?)")
-    .bind(id, p.sub, p.email ?? null, p.name ?? null, p.picture ?? null, now(), now())
+    .bind(id, p.sub, p.email ?? null, p.name ?? null, p.picture ?? null, createdAt, createdAt)
     .run();
-  return { id, google_sub: p.sub, email: p.email ?? null, name: p.name ?? null, avatar: p.picture ?? null };
+  return { id, google_sub: p.sub, email: p.email ?? null, name: p.name ?? null, avatar: p.picture ?? null, created_at: createdAt };
 }
 
 export async function createSession(db: D1Database, userId: string, sessionId: string, ttlMs: number): Promise<void> {
@@ -76,7 +78,7 @@ export async function createSession(db: D1Database, userId: string, sessionId: s
 export async function userBySession(db: D1Database, sessionId: string): Promise<User | null> {
   const row = await db
     .prepare(
-      `SELECT u.id, u.google_sub, u.email, u.name, u.avatar
+      `SELECT u.id, u.google_sub, u.email, u.name, u.avatar, u.created_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > ?`,
     )
@@ -266,6 +268,46 @@ export async function putCachedCaptions(
     .run();
 }
 
+// ---- community-pooled lyric transcripts (Whisper-on-vocal-stem; migration 0009) ------
+// The PRIMARY lyrics source: one desktop GPU decodes a track's vocal stem and contributes
+// here, so every later device + repeat play gets accurate, track-timed lyrics for free.
+// The `captions` table above is the fallback. Best transcript on file wins (prefer the
+// larger `small` model, else newest).
+export interface LyricsRow {
+  model: string;
+  lang: string;
+  conf: number;
+  lines: { start: number; end: number; text: string; words?: { t: number; w: string; d?: number }[] }[];
+}
+export async function getLyrics(db: D1Database, videoId: string): Promise<LyricsRow | null> {
+  const row = await db
+    .prepare("SELECT model, lang, conf, lines FROM lyrics WHERE video_id = ? ORDER BY (model = 'small') DESC, created_at DESC LIMIT 1")
+    .bind(videoId)
+    .first<{ model: string; lang: string; conf: number; lines: string }>();
+  if (!row?.lines) return null;
+  try {
+    const lines = JSON.parse(row.lines);
+    return Array.isArray(lines) ? { model: row.model, lang: row.lang, conf: row.conf, lines } : null;
+  } catch {
+    return null;
+  }
+}
+export async function putLyrics(
+  db: D1Database,
+  v: { videoId: string; model: string; lang: string; conf: number; lines: unknown; contributor?: string | null },
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO lyrics (video_id, model, lang, conf, lines, contributor, created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(video_id, model) DO UPDATE SET lang = excluded.lang, conf = excluded.conf, lines = excluded.lines, contributor = excluded.contributor, created_at = excluded.created_at",
+    )
+    .bind(v.videoId, v.model, v.lang, v.conf, JSON.stringify(v.lines), v.contributor ?? null, now())
+    .run();
+}
+// Takedown lever — drop every pooled transcript for a video (all models).
+export async function deleteLyrics(db: D1Database, videoId: string): Promise<void> {
+  await db.prepare("DELETE FROM lyrics WHERE video_id = ?").bind(videoId).run();
+}
+
 /** Remove a track from the catalog (takedown). Bytes stay in R2 until separately purged. */
 export async function deleteCommunityTrack(db: D1Database, videoId: string): Promise<void> {
   await db.prepare("DELETE FROM community_tracks WHERE video_id = ?").bind(videoId).run();
@@ -450,4 +492,74 @@ export async function inviteOwner(db: D1Database, code: string): Promise<string 
   await ensureRoomInvites(db);
   const row = await db.prepare("SELECT user_id FROM room_invites WHERE code = ?").bind(code.slice(0, 16)).first<{ user_id: string }>();
   return row?.user_id ?? null;
+}
+
+// --- Per-user play stats (the profile's "top songs") ---------------------------
+// An aggregate, not a log: one row per (user, track) with a running count, so "top N"
+// is an indexed query and the table can't grow without bound. See migration 0008 — also
+// ensured here so it works before the migration is applied to an existing DB.
+let ensuredPlays = false;
+async function ensureUserPlays(db: D1Database): Promise<void> {
+  if (ensuredPlays) return;
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS user_track_stats (
+         user_id TEXT NOT NULL, video_id TEXT NOT NULL,
+         title TEXT, artist TEXT, thumbnail TEXT,
+         plays INTEGER NOT NULL DEFAULT 0, last_played_at INTEGER NOT NULL,
+         PRIMARY KEY (user_id, video_id))`,
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_user_track_plays ON user_track_stats(user_id, plays DESC)").run();
+  ensuredPlays = true;
+}
+
+export interface TopTrack {
+  videoId: string;
+  title: string;
+  artist: string;
+  thumbnail: string | null;
+  plays: number;
+}
+
+/** Record one play of a track by a user (increments the running count, refreshes meta). */
+export async function logUserPlay(
+  db: D1Database,
+  userId: string,
+  t: { videoId: string; title?: string; artist?: string; thumbnail?: string | null },
+): Promise<void> {
+  await ensureUserPlays(db);
+  await db
+    .prepare(
+      `INSERT INTO user_track_stats (user_id, video_id, title, artist, thumbnail, plays, last_played_at)
+       VALUES (?,?,?,?,?,1,?)
+       ON CONFLICT(user_id, video_id) DO UPDATE SET
+         plays = plays + 1,
+         last_played_at = excluded.last_played_at,
+         title = COALESCE(excluded.title, title),
+         artist = COALESCE(excluded.artist, artist),
+         thumbnail = COALESCE(excluded.thumbnail, thumbnail)`,
+    )
+    .bind(userId, t.videoId, t.title ?? null, t.artist ?? null, t.thumbnail ?? null, now())
+    .run();
+}
+
+/** A user's most-played tracks, highest first (the profile's top songs). */
+export async function getTopTracks(db: D1Database, userId: string, limit = 12): Promise<TopTrack[]> {
+  await ensureUserPlays(db);
+  const r = await db
+    .prepare(
+      `SELECT video_id, title, artist, thumbnail, plays
+       FROM user_track_stats WHERE user_id = ?
+       ORDER BY plays DESC, last_played_at DESC LIMIT ?`,
+    )
+    .bind(userId, Math.min(Math.max(limit, 1), 50))
+    .all<{ video_id: string; title: string | null; artist: string | null; thumbnail: string | null; plays: number }>();
+  return (r.results ?? []).map((row) => ({
+    videoId: row.video_id,
+    title: row.title || "",
+    artist: row.artist || "",
+    thumbnail: row.thumbnail,
+    plays: row.plays,
+  }));
 }

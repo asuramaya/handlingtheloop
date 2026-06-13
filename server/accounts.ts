@@ -5,16 +5,21 @@
 import { oauthCreds } from "./oauth";
 import { googleAuthUrl, googleExchange } from "./googleAuth";
 import { spotifyAuthUrl, spotifyCreds, spotifyExchange } from "./spotifyAuth";
+import { pkceChallenge, pkceVerifier, tidalAuthUrl, tidalCreds, tidalExchange } from "./tidalAuth";
 import { getValidToken } from "./connections";
 import { fetchPlaylistData, getMyPlaylistsData } from "./ytdata";
 import { getMySpotifyPlaylists } from "./spotifyData";
+import { getMyTidalPlaylists } from "./tidalData";
 import {
   type D1Database,
   createSession,
   deleteConnection,
   deleteSession,
+  getConnection,
+  getTopTracks,
   getUserSettings,
   listConnections,
+  logUserPlay,
   putUserSettings,
   saveConnection,
   upsertGoogleUser,
@@ -22,9 +27,12 @@ import {
 } from "./db";
 import {
   SESSION_TTL_MS,
+  clearPkceCookie,
   clearSessionCookie,
   clearStateCookie,
+  pkceCookie,
   randomToken,
+  readPkce,
   readSessionId,
   readState,
   sessionCookie,
@@ -37,6 +45,8 @@ export interface AccountEnv {
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   SPOTIFY_CLIENT_ID?: string;
   SPOTIFY_CLIENT_SECRET?: string;
+  TIDAL_CLIENT_ID?: string;
+  TIDAL_CLIENT_SECRET?: string;
   TOKEN_ENC_KEY?: string;
 }
 
@@ -70,10 +80,15 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
 
   switch (path) {
     // Kick off Google sign-in: set a CSRF state cookie, bounce to Google.
+    // `?write=1` requests the full youtube (manage) scope — the on-demand upgrade
+    // triggered when a user first pushes a sync INTO YouTube. Plain sign-in is
+    // read-only (see googleAuth.ts). include_granted_scopes makes the upgrade add
+    // write to the existing grant rather than replace it.
     case "/api/auth/google/start": {
       requireEnv(env);
+      const write = url.searchParams.get("write") === "1";
       const state = randomToken(16);
-      return redirect(googleAuthUrl(oauthCreds(env).clientId, googleRedirectUri, state), {
+      return redirect(googleAuthUrl(oauthCreds(env).clientId, googleRedirectUri, state, write), {
         "set-cookie": stateCookie(state),
       });
     }
@@ -111,6 +126,45 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar },
         connections,
       });
+    }
+
+    // The signed-in user's full profile: identity + "member since" + top songs. Backs
+    // the Profile screen. Own-profile only (peers are device-scoped in the room DO, never
+    // linked to an account id, by design).
+    case "/api/me/profile": {
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const [topTracks, connections] = await Promise.all([
+        getTopTracks(env.DB, user.id, 12),
+        listConnections(env.DB, user.id),
+      ]);
+      return json(200, {
+        user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, memberSince: user.created_at },
+        connections,
+        topTracks,
+      });
+    }
+
+    // Record one play of a track by the signed-in user (feeds the profile's top songs).
+    // Fire-and-forget from the client on track load; cheap, idempotent-ish (a counter).
+    case "/api/me/play": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const b = (await req.json().catch(() => ({}))) as {
+        videoId?: string;
+        title?: string;
+        artist?: string;
+        thumbnail?: string;
+      };
+      if (!b.videoId || !/^[\w-]{11}$/.test(b.videoId)) return json(400, { error: "bad videoId" });
+      await logUserPlay(env.DB, user.id, {
+        videoId: b.videoId,
+        title: b.title?.slice(0, 256),
+        artist: b.artist?.slice(0, 128),
+        thumbnail: b.thumbnail?.slice(0, 400),
+      });
+      return json(200, { ok: true });
     }
 
     // Cross-device UI settings sync (the @htl Settings blob). GET pulls the stored
@@ -171,6 +225,68 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       return redirect("/?connected=spotify", { "set-cookie": clearStateCookie() });
     }
 
+    // Link a TIDAL account (Authorization Code + PKCE). We stash the code_verifier
+    // in a short-lived cookie alongside the CSRF state, then exchange both back.
+    case "/api/auth/tidal/start": {
+      const creds = tidalCreds(env);
+      if (!creds) return json(503, { error: "TIDAL is not configured" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const state = randomToken(16);
+      const verifier = pkceVerifier();
+      const challenge = await pkceChallenge(verifier);
+      const headers = new Headers();
+      headers.append("set-cookie", stateCookie(state));
+      headers.append("set-cookie", pkceCookie(verifier));
+      headers.set("location", tidalAuthUrl(creds.clientId, `${url.origin}/api/auth/tidal/callback`, state, challenge));
+      return new Response(null, { status: 302, headers });
+    }
+
+    case "/api/auth/tidal/callback": {
+      const creds = tidalCreds(env);
+      const clearAuthCookies = () => {
+        const h = new Headers();
+        h.append("set-cookie", clearStateCookie());
+        h.append("set-cookie", clearPkceCookie());
+        return h;
+      };
+      if (!creds || !env.TOKEN_ENC_KEY) return redirect("/?connect_error=not_configured");
+      const user = await currentUser(env, req);
+      const code = url.searchParams.get("code");
+      const state = url.searchParams.get("state");
+      const verifier = readPkce(req);
+      const expected = readState(req);
+      if (!user) {
+        const h = clearAuthCookies();
+        h.set("location", "/?connect_error=not_signed_in");
+        return new Response(null, { status: 302, headers: h });
+      }
+      if (url.searchParams.get("error") || !code || !state || state !== expected || !verifier) {
+        const h = clearAuthCookies();
+        h.set("location", "/?connect_error=tidal");
+        return new Response(null, { status: 302, headers: h });
+      }
+      const tokens = await tidalExchange(creds, code, `${url.origin}/api/auth/tidal/callback`, verifier);
+      await saveConnection(env.DB, user.id, "tidal", tokens, env.TOKEN_ENC_KEY.trim());
+      const h = clearAuthCookies();
+      h.set("location", "/?connected=tidal");
+      return new Response(null, { status: 302, headers: h });
+    }
+
+    // The signed-in user's TIDAL playlists.
+    case "/api/me/tidal/playlists": {
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      if (!env.TOKEN_ENC_KEY) return json(503, { error: "not configured" });
+      const token = await getValidToken(env, user.id, "tidal");
+      if (!token) return json(400, { error: "TIDAL not connected" });
+      // The TIDAL user id was stored on the connection at link time (needed to
+      // scope "my playlists").
+      const conn = await getConnection(env.DB, user.id, "tidal", env.TOKEN_ENC_KEY.trim());
+      if (!conn?.providerUserId) return json(400, { error: "TIDAL user id unavailable — reconnect TIDAL" });
+      return json(200, { playlists: await getMyTidalPlaylists(token, conn.providerUserId) });
+    }
+
     // The signed-in user's YouTube playlists, via their ACCOUNT's Google token
     // (our Data-API-enabled project). Falls through to the legacy cookie/header
     // route only when not signed in.
@@ -219,7 +335,9 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const user = await currentUser(env, req);
       if (!user) return json(401, { error: "sign in first" });
       const { provider } = (await req.json().catch(() => ({}))) as { provider?: string };
-      if (provider !== "google" && provider !== "spotify") return json(400, { error: "bad provider" });
+      if (provider !== "google" && provider !== "spotify" && provider !== "tidal") {
+        return json(400, { error: "bad provider" });
+      }
       await deleteConnection(env.DB, user.id, provider);
       return json(200, { ok: true });
     }

@@ -39,6 +39,9 @@ interface Attachment {
   joined: boolean; // a participant — STICKY: only `leave`/disconnect clears it
   listening: boolean; // rendering its own audio stream
   controlling: boolean; // allowed to drive the decks (shared); guests need a host grant
+  pending: boolean; // a guest who knocked and is waiting on the host's approval (the handshake)
+  joinedAt: number; // epoch ms this device last became a participant (0 until joined) — for "joined Nm ago"
+  color: string; // this device's account accent (hex) — the room "vibe" is the host's color
 }
 
 export class DjRoom {
@@ -54,6 +57,9 @@ export class DjRoom {
   // Device ids the host has granted control. Persisted so a granted guest survives a
   // page refresh with its control intact instead of silently dropping to a listener (#10).
   private grants = new Set<string>();
+  // Guest device ids the host has approved into the session (the handshake). Persisted so
+  // an approved guest who refreshes re-enters without knocking again. Cleared on deny/kick.
+  private approved = new Set<string>();
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -66,11 +72,28 @@ export class DjRoom {
     this.lastSnapshot = await this.state.storage.get("snapshot");
     this.lastStemView = (await this.state.storage.get<Record<string, unknown>>("stemviews")) ?? {};
     this.grants = new Set((await this.state.storage.get<string[]>("grants")) ?? []);
+    this.approved = new Set((await this.state.storage.get<string[]>("approved")) ?? []);
     this.loaded = true;
   }
 
   private async saveGrants(): Promise<void> {
     await this.state.storage.put("grants", [...this.grants]);
+  }
+
+  private async saveApproved(): Promise<void> {
+    await this.state.storage.put("approved", [...this.approved]);
+  }
+
+  // Best-effort persistence of the per-deck stem envelopes. They can be large; stay well
+  // under the DO's 128 KiB per-value cap (oversized ones live in memory only — the host
+  // re-streams on the next join / track change anyway) and never throw.
+  private async persistStemViews(): Promise<void> {
+    try {
+      if (JSON.stringify(this.lastStemView).length > 120_000) return;
+      await this.state.storage.put("stemviews", this.lastStemView);
+    } catch {
+      /* best-effort — a failed persist must never tear down a socket */
+    }
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -84,6 +107,7 @@ export class DjRoom {
     const name = (url.searchParams.get("name") || "Guest").slice(0, 48);
     const kind = (url.searchParams.get("kind") || "Device").slice(0, 24);
     const host = url.searchParams.get("host") === "1"; // set by the Worker from the authed identity
+    const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
 
     // A device reconnecting replaces its stale socket(s) — keep one per device.
     for (const old of this.state.getWebSockets(device)) old.close(1000, "replaced");
@@ -95,7 +119,7 @@ export class DjRoom {
     // auto-engaging) puts the device in. A previously host-granted device keeps its drive
     // right across a refresh (#10) — joined still requires its own auto-join on welcome.
     const granted = this.grants.has(device);
-    server.serializeAttachment({ device, name, kind, host, joined: false, listening: false, controlling: granted } satisfies Attachment);
+    server.serializeAttachment({ device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, joinedAt: 0, color } satisfies Attachment);
     this.state.acceptWebSocket(server, [device]);
 
     server.send(
@@ -124,8 +148,21 @@ export class DjRoom {
         // You opt into sound (🔊, self-only) and the host opts you into control (🎛️). The
         // session-starter turns both on itself (client startSession). Granted control (the
         // `grants` set) is preserved across this patch.
-        this.patch(ws, { joined: true });
-        await this.settle(self);
+        //
+        // THE HANDSHAKE: the host's own devices (a.host) and already-approved guests enter
+        // immediately; any other guest only KNOCKS — they sit `pending` until the host
+        // approves (case "approve"). This is the door to the session.
+        const aj = ws.deserializeAttachment() as Attachment | null;
+        if (!aj) break;
+        if (aj.host || this.approved.has(self)) {
+          this.patch(ws, { joined: true, pending: false, joinedAt: aj.joinedAt || Date.now() });
+          await this.settle(self);
+        } else {
+          // A guest knocking. Mark pending (not joined) so the host's roster shows the
+          // request; broadcast so every host device sees it. Anchor is untouched.
+          this.patch(ws, { pending: true, joined: false });
+          this.broadcastPresence();
+        }
         break;
       }
       case "control": {
@@ -162,6 +199,46 @@ export class DjRoom {
         await this.settle(target);
         break;
       }
+      case "approve": {
+        // HOST opens the door for a knocking guest (the handshake). They come in HEARING the
+        // mix (listening on) but not driving — control is a separate grant. Approval persists
+        // so a refresh re-enters without re-knocking.
+        if (!this.isHostDevice(self)) break;
+        const target = (msg.to || "").slice(0, 64);
+        if (!target || !this.isLive(target) || this.isHostDevice(target)) break;
+        this.approved.add(target);
+        await this.saveApproved();
+        for (const t of this.state.getWebSockets(target)) {
+          this.patch(t, { joined: true, pending: false, listening: true, joinedAt: Date.now() });
+          // Hand the freshly-approved guest the current board immediately — the snapshot
+          // (decks/stems/controls) + the host's stem envelopes — so its display + mixer
+          // fill in without waiting on a client-side request round-trip.
+          this.sendCatchUp(t);
+        }
+        await this.settle(target);
+        break;
+      }
+      case "deny": {
+        // HOST turns a knocking guest away BEFORE they're in — close them out with a reason.
+        if (!this.isHostDevice(self)) break;
+        const target = (msg.to || "").slice(0, 64);
+        if (!target || this.isHostDevice(target)) break;
+        this.evict(target, "The host didn't let you in.");
+        break;
+      }
+      case "kick": {
+        // HOST removes a guest who is already in. Drop their approval + any granted control,
+        // tell them why, and close the socket. Hosts can't kick their own account's devices.
+        if (!this.isHostDevice(self)) break;
+        const target = (msg.to || "").slice(0, 64);
+        if (!target || target === self || this.isHostDevice(target)) break;
+        let dirty = false;
+        if (this.approved.delete(target)) dirty = true;
+        if (dirty) await this.saveApproved();
+        if (this.grants.delete(target)) await this.saveGrants();
+        this.evict(target, "You were removed from the session.");
+        break;
+      }
       case "leave": {
         this.patch(ws, { controlling: false, listening: false, joined: false });
         // A full leave drops any granted drive right too — the host re-grants on return.
@@ -183,31 +260,39 @@ export class DjRoom {
         // The anchor (or, while vacant, anyone) defines the authoritative set.
         if (self === this.anchorId || this.anchorId === null) {
           this.lastSnapshot = msg.snapshot;
-          await this.state.storage.put("snapshot", msg.snapshot);
           this.relay(self, { t: "state", snapshot: msg.snapshot });
+          // Persist best-effort — never let a storage error close the socket (flap).
+          try {
+            await this.state.storage.put("snapshot", msg.snapshot);
+          } catch {
+            /* keep the in-memory snapshot; persistence is non-critical */
+          }
         }
         break;
       }
       case "stemview": {
-        // Whoever drives + has the stems streams its per-deck waveform envelopes;
-        // store (last wins) so late joiners get them on request-state, and relay.
-        if (this.isControlling(self) && (msg.deck === "A" || msg.deck === "B")) {
+        // Whoever speaks for the board + has the stems streams its per-deck waveform
+        // envelopes: any controller OR the anchor (snapshot authority). Keep in memory +
+        // relay (what remotes actually need); persistence is BEST-EFFORT and must never
+        // throw out of here — a long track's envelope can exceed the DO's 128 KiB
+        // per-value storage cap, and a rejected put would close this socket (1006) into a
+        // reconnect flap that reads as "stuck connecting".
+        if ((this.isControlling(self) || self === this.anchorId) && (msg.deck === "A" || msg.deck === "B")) {
           this.lastStemView[msg.deck] = msg.view;
-          await this.state.storage.put("stemviews", this.lastStemView);
           this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
+          void this.persistStemViews();
         }
         break;
       }
       case "request-state": {
-        if (this.lastSnapshot !== undefined) {
-          ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
-        }
-        // Catch the joiner up on any stem envelopes too, so its 4-lane display fills in.
-        for (const d of ["A", "B"] as const) {
-          if (this.lastStemView[d] !== undefined) {
-            ws.send(JSON.stringify({ t: "stemview", deck: d, view: this.lastStemView[d] } satisfies ServerMsg));
-          }
-        }
+        this.sendCatchUp(ws);
+        break;
+      }
+      case "color": {
+        // This device's account accent changed → update + re-broadcast presence so the
+        // room "vibe" (the host's colour) and the roster swatches sync instantly.
+        this.patch(ws, { color: (msg.color || "").slice(0, 9) });
+        this.broadcastPresence();
         break;
       }
     }
@@ -311,6 +396,37 @@ export class DjRoom {
     ws.serializeAttachment({ ...a, ...fields } satisfies Attachment);
   }
 
+  // Forcibly remove a device (deny a knock / kick a guest): tell each of its sockets WHY,
+  // then close them. webSocketClose reconciles the anchor + presence as they drop; we nudge
+  // once here so the roster updates promptly even if the runtime defers those callbacks.
+  private evict(device: string, reason: string): void {
+    for (const ws of this.state.getWebSockets(device)) {
+      try {
+        ws.send(JSON.stringify({ t: "kicked", reason } satisfies ServerMsg));
+      } catch {
+        /* socket already gone */
+      }
+      ws.close(4001, "removed");
+    }
+    if (device === this.anchorId) void this.setAnchor(this.nextAnchor(device));
+    else this.broadcastPresence();
+  }
+
+  // Catch a single socket up on the authoritative board: the last snapshot
+  // (decks/stems/controls) + the host's per-deck stem envelopes (so a stem-less
+  // remote's 4-lane display fills in). Used on request-state AND right after a guest
+  // is approved, so it doesn't depend on the client asking at the right moment.
+  private sendCatchUp(ws: Ws): void {
+    if (this.lastSnapshot !== undefined) {
+      ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
+    }
+    for (const d of ["A", "B"] as const) {
+      if (this.lastStemView[d] !== undefined) {
+        ws.send(JSON.stringify({ t: "stemview", deck: d, view: this.lastStemView[d] } satisfies ServerMsg));
+      }
+    }
+  }
+
   private peers(except?: Ws): Peer[] {
     const out: Peer[] = [];
     for (const ws of this.state.getWebSockets()) {
@@ -326,6 +442,9 @@ export class DjRoom {
           listening: !!a.listening,
           controlling: !!a.controlling,
           anchor: a.device === this.anchorId,
+          pending: !!a.pending,
+          joinedAt: a.joinedAt || 0,
+          color: a.color || "",
         });
     }
     return out;

@@ -4,10 +4,13 @@ import {
   type Settings,
   type StretchQuality,
   STRETCH_PRESETS,
+  type StemQuality,
+  STEM_PRESETS,
   STEM_MODELS,
   getStemModel,
   modelSupport,
   isMobileDevice,
+  isChromium,
   fetchStemManifest,
   hasStemsLocal,
   probeWebGPU,
@@ -17,22 +20,23 @@ import {
   stemFailLevel,
   resetStemGuard,
   isUntestedGpuPlatform,
+  FREQ_LOW_DEFAULT,
+  FREQ_MID_DEFAULT,
+  FREQ_HIGH_DEFAULT,
+  DEFAULT_CONTRAST,
   readStemTrace,
   clearStemTrace,
   formatStemTrace,
   type StemModel,
 } from "@htl";
-import {
-  type Me,
-  fetchMe,
-  startGoogleSignIn,
-  startSpotifyConnect,
-  logout as accountLogout,
-  disconnectService,
-} from "@htl/account";
 import type { StemStatus, DebugSection } from "../App";
 import { KeyMap } from "./KeyHelp";
-import { maskName, maskEmail, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
+import { type UseMidi } from "@htl/midi";
+import { MidiPanel } from "./MidiPanel";
+import { ColorProfiles } from "./ColorProfiles";
+import { LyricsSettings } from "./LyricsSettings";
+import { MidiDebug } from "./MidiDebug";
+// Account & connections moved to the full-screen Profile (see ProfileScreen).
 
 interface SettingsPanelProps {
   settings: Settings;
@@ -42,7 +46,9 @@ interface SettingsPanelProps {
   stemStatus?: Record<"A" | "B", StemStatus | null>; // live per-deck separation status/errors
   onReanalyze?: (modelId: string) => void; // force a fresh separation of the loaded track(s)
   onGpuReenable?: () => void; // user opted to re-enable GPU after a crash auto-disabled it
+  outputSupported?: boolean; // browser can route to a chosen output device (AudioContext.setSinkId)
   debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)
+  midi?: UseMidi; // USB-MIDI controller status + learn (MIDI tab)
 }
 
 // What each model can do on THIS device, as a short badge for the picker.
@@ -67,12 +73,12 @@ function supportBadge(m: StemModel): { text: string; cls: string } {
   }
 }
 
-type Tab = "color" | "controls" | "audio" | "accounts" | "debug" | "about";
+type Tab = "color" | "controls" | "midi" | "audio" | "debug" | "about";
 const TABS: { key: Tab; label: string }[] = [
   { key: "color", label: "Color" },
   { key: "controls", label: "Controls" },
+  { key: "midi", label: "MIDI" },
   { key: "audio", label: "Audio" },
-  { key: "accounts", label: "Accounts" },
   { key: "debug", label: "Debug" },
   { key: "about", label: "About" },
 ];
@@ -92,22 +98,68 @@ type ColorKey =
   | "stemDrumsColor"
   | "stemBassColor"
   | "stemVocalsColor"
-  | "stemOtherColor";
-const COLOR_TARGETS: { key: ColorKey; label: string }[] = [
-  { key: "accentA", label: "Deck A" },
-  { key: "accentB", label: "Deck B" },
-  { key: "bgColor", label: "Background" },
-  { key: "textColor", label: "Text" },
-  { key: "borderColor", label: "Border" },
-  { key: "selectorColor", label: "Selector" },
-  { key: "loopColor", label: "Loops" },
-  { key: "markerColor", label: "Markers" },
-  { key: "shiftColor", label: "Accents" },
-  { key: "stripColor", label: "Strip" },
-  { key: "stemDrumsColor", label: "Drums" },
-  { key: "stemBassColor", label: "Bass" },
-  { key: "stemVocalsColor", label: "Vocals" },
-  { key: "stemOtherColor", label: "Inst" },
+  | "stemOtherColor"
+  | "freqLowColor"
+  | "freqMidColor"
+  | "freqHighColor";
+// `def` is the built-in colour shown for an UNSET ("") value (so a picker reads its real
+// default, not deck-A's accent). Omitted → falls back to accent A (e.g. Strip).
+type ColorTarget = { key: ColorKey; label: string; def?: string };
+// The colour pickers, grouped by WHAT they change with a one-line explanation each —
+// so the Color tab reads as a labelled control surface, not a flat wall of swatches.
+const COLOR_GROUPS: { id: string; title: string; desc: string; targets: ColorTarget[] }[] = [
+  {
+    id: "decks",
+    title: "Decks",
+    desc: "Each deck's signature colour — its waveform, buttons, faders and meter.",
+    targets: [
+      { key: "accentA", label: "Deck A" },
+      { key: "accentB", label: "Deck B" },
+    ],
+  },
+  {
+    id: "interface",
+    title: "Interface",
+    desc: "The app itself: base background, text, and the panel border lines.",
+    targets: [
+      { key: "bgColor", label: "Background" },
+      { key: "textColor", label: "Text" },
+      { key: "borderColor", label: "Border" },
+    ],
+  },
+  {
+    id: "waveform",
+    title: "Waveform",
+    desc: "Markers drawn over the waveforms, plus the waveform body (Strip — unset follows the deck colour).",
+    targets: [
+      { key: "selectorColor", label: "Playhead" },
+      { key: "loopColor", label: "Loops" },
+      { key: "markerColor", label: "Beat grid" },
+      { key: "shiftColor", label: "Shift" },
+      { key: "stripColor", label: "Strip" },
+    ],
+  },
+  {
+    id: "stems",
+    title: "Stem lanes",
+    desc: "Per-stem waveform colours — they match the DRUM / BASS / VOICE / INST buttons.",
+    targets: [
+      { key: "stemDrumsColor", label: "Drums", def: "#ff5d73" },
+      { key: "stemBassColor", label: "Bass", def: "#b06bff" },
+      { key: "stemVocalsColor", label: "Vocals", def: "#5dff9e" },
+      { key: "stemOtherColor", label: "Inst", def: "#36c2ff" },
+    ],
+  },
+  {
+    id: "bands",
+    title: "Frequency bands",
+    desc: "Bass / mid / high hues for the frequency-coloured waveform (when Frequency colours is on).",
+    targets: [
+      { key: "freqLowColor", label: "Lows", def: FREQ_LOW_DEFAULT },
+      { key: "freqMidColor", label: "Mids", def: FREQ_MID_DEFAULT },
+      { key: "freqHighColor", label: "Highs", def: FREQ_HIGH_DEFAULT },
+    ],
+  },
 ];
 
 // HSL → #rrggbb (h 0–360, s/l 0–100).
@@ -145,6 +197,9 @@ function randomTheme(): Pick<Settings, ColorKey> {
     stemBassColor: vividHex(),
     stemVocalsColor: vividHex(),
     stemOtherColor: vividHex(),
+    freqLowColor: vividHex(),
+    freqMidColor: vividHex(),
+    freqHighColor: vividHex(),
   };
 }
 
@@ -170,6 +225,9 @@ function randomMono(): Pick<Settings, ColorKey> {
     stemBassColor: vividHex(),
     stemVocalsColor: vividHex(),
     stemOtherColor: vividHex(),
+    freqLowColor: vividHex(),
+    freqMidColor: vividHex(),
+    freqHighColor: vividHex(),
   };
 }
 
@@ -183,11 +241,55 @@ export function SettingsPanel({
   stemStatus,
   onReanalyze,
   onGpuReenable,
+  outputSupported = false,
   debug,
+  midi,
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [tab, setTab] = useState<Tab>("color");
-  const revealed = usePrivacyRevealed();
+
+  // Audio OUTPUT devices (speaker select). enumerateDevices only fills in `label`
+  // once the page has been granted mic permission at least once; until then the OS
+  // hides device names. `outputNeedsPerm` tracks that so we can offer a one-tap
+  // "Show device names" that asks for (and immediately drops) a mic stream. Listed
+  // only when the Audio tab is open and the browser supports setSinkId.
+  const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
+  const [outputNeedsPerm, setOutputNeedsPerm] = useState(false);
+  useEffect(() => {
+    if (tab !== "audio" || !outputSupported || !navigator.mediaDevices?.enumerateDevices) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+        if (cancelled) return;
+        setOutputs(devs);
+        // labels blank = permission not yet granted (names hidden by the OS)
+        setOutputNeedsPerm(devs.length > 0 && devs.every((d) => !d.label));
+      } catch {
+        /* enumerate can throw in locked-down contexts; just show none */
+      }
+    };
+    void refresh();
+    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
+    };
+  }, [tab, outputSupported]);
+
+  // One-shot: ask for mic permission so enumerateDevices reveals output labels,
+  // then immediately stop the stream (we never record — we only want the names).
+  const revealOutputNames = async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      setOutputs(devs);
+      setOutputNeedsPerm(devs.length > 0 && devs.every((d) => !d.label));
+    } catch {
+      /* user denied — leave the generic labels */
+    }
+  };
 
   // Live diagnostics for the Debug tab — poll the collector (engine/session/device)
   // a few times a second WHILE that tab is open; idle otherwise. `copied` flashes the
@@ -254,34 +356,6 @@ export function SettingsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedKey, doneKey]);
 
-  // htl account (server-side session via /api/me).
-  const [me, setMe] = useState<Me | null>(null);
-  const [meLoading, setMeLoading] = useState(true);
-  const refreshMe = async () => {
-    setMeLoading(true);
-    try {
-      setMe(await fetchMe());
-    } finally {
-      setMeLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    refreshMe();
-  }, []);
-
-  const signOut = async () => {
-    await accountLogout();
-    await refreshMe();
-  };
-  const disconnect = async (provider: "google" | "spotify") => {
-    await disconnectService(provider);
-    await refreshMe();
-  };
-
-  const signedIn = !!me?.user;
-  const hasSpotify = !!me?.connections.includes("spotify");
-  const connected = signedIn;
 
   return (
     <div className="modal-backdrop" onPointerDown={onClose}>
@@ -303,30 +377,18 @@ export function SettingsPanel({
 
         <div className="settings-body">
           {tab === "color" && (
-            <>
-              {/* Each pill IS the colour picker — tap to open the OS wheel. */}
-              <div className="color-targets">
-                {COLOR_TARGETS.map((t) => {
-                  // Strip defaults to "" (= follow deck accent); show accent A then.
-                  const value = settings[t.key] || settings.accentA;
-                  return (
-                    <label key={t.key} className="color-target" title={`${t.label} — ${value}`}>
-                      <span className="color-target-dot" style={{ background: value }} />
-                      {t.label}
-                      <input type="color" value={value} onChange={(e) => set({ [t.key]: e.target.value } as Partial<Settings>)} />
-                    </label>
-                  );
-                })}
-                <button className="color-target color-random" onClick={() => set(randomTheme())} title="Roll a random theme">
-                  🎲 Random
-                </button>
-                <button
-                  className="color-target color-random"
-                  onClick={() => set(randomMono())}
-                  title="Roll a pure black/white theme (random which is text vs background)"
-                >
-                  ⬛⬜ Mono
-                </button>
+            <div className="color-tab">
+              {/* Header: one-shot rolls to explore, on the right of the intro line. */}
+              <div className="color-intro">
+                <span className="color-intro-text">Make it yours. Every surface follows the colours below — pick a swatch to change it live.</span>
+                <div className="color-rolls">
+                  <button className="color-roll" onClick={() => set(randomTheme())} title="Roll a whole random theme">
+                    🎲 Random
+                  </button>
+                  <button className="color-roll" onClick={() => set(randomMono())} title="Pure black/white base with vivid accents">
+                    ⬛⬜ Mono
+                  </button>
+                </div>
               </div>
 
               {/* Collision detection: warn only when text/border can't be read. */}
@@ -343,18 +405,92 @@ export function SettingsPanel({
                 ) : null;
               })()}
 
-              <div className="settings-row">
-                <span className="settings-label">Neon glow</span>
-                <button
-                  className={`toggle ${settings.glow ? "on" : ""}`}
-                  onClick={() => set({ glow: !settings.glow })}
-                  role="switch"
-                  aria-checked={settings.glow}
-                >
-                  <span className="toggle-knob" />
-                </button>
+              {/* Grouped pickers: each section says WHAT it changes. The pill IS the
+                  OS colour wheel (tap to open). */}
+              {COLOR_GROUPS.map((g) => (
+                <div key={g.id} className="color-group">
+                  <div className="color-group-head">
+                    <span className="color-group-title">{g.title}</span>
+                    <span className="color-group-desc">{g.desc}</span>
+                  </div>
+                  <div className="color-targets">
+                    {g.targets.map((t) => {
+                      // Strip / unset values show their built-in default (or deck A).
+                      const value = settings[t.key] || t.def || settings.accentA;
+                      return (
+                        <label key={t.key} className="color-target" title={`${t.label} — ${value}`}>
+                          <span className="color-target-dot" style={{ background: value }} />
+                          {t.label}
+                          <input type="color" value={value} onChange={(e) => set({ [t.key]: e.target.value } as Partial<Settings>)} />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {/* Appearance: the look-and-feel knobs that aren't a single colour. */}
+              <div className="color-group">
+                <div className="color-group-head">
+                  <span className="color-group-title">Appearance</span>
+                  <span className="color-group-desc">Depth, glow, the band-colour look, and shared-session vibe.</span>
+                </div>
+
+                <Slider
+                  label="Contrast"
+                  hint={settings.uiContrast < 0.25 ? "soft" : settings.uiContrast > 0.8 ? "inky" : "balanced"}
+                  value={settings.uiContrast ?? DEFAULT_CONTRAST}
+                  onChange={(v) => set({ uiContrast: v })}
+                />
+
+                <div className="settings-row">
+                  <span className="settings-label">Neon glow</span>
+                  <button
+                    className={`toggle ${settings.glow ? "on" : ""}`}
+                    onClick={() => set({ glow: !settings.glow })}
+                    role="switch"
+                    aria-checked={settings.glow}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">
+                    Frequency colors
+                    <span className="settings-sub muted"> · waveform by band (bass/mid/high)</span>
+                  </span>
+                  <button
+                    className={`toggle ${settings.freqColors ? "on" : ""}`}
+                    onClick={() => set({ freqColors: !settings.freqColors })}
+                    role="switch"
+                    aria-checked={settings.freqColors}
+                    title="Color the single (non-stem) waveform by frequency content — bass / mid / high (rekordbox-style), tuned by the Frequency bands above. Off = flat Strip color (clear Strip → each deck's accent)."
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">
+                    Room color
+                    <span className="settings-sub muted"> · catch the host's accent in a session</span>
+                  </span>
+                  <button
+                    className={`toggle ${settings.inheritRoomColor ? "on" : ""}`}
+                    onClick={() => set({ inheritRoomColor: !settings.inheritRoomColor })}
+                    role="switch"
+                    aria-checked={settings.inheritRoomColor}
+                    title="While you're in a shared session, take on the host's accent color so the whole room shares a vibe. Reverts to your own the moment you're solo or leave. Only the global accent changes — your deck colors stay."
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
               </div>
-            </>
+
+              {/* Vividness (band look) + saved/synced/shareable colour profiles. */}
+              <ColorProfiles settings={settings} onChange={onChange} />
+            </div>
           )}
 
           {tab === "controls" && (
@@ -397,8 +533,45 @@ export function SettingsPanel({
             </>
           )}
 
+          {tab === "midi" && midi && <MidiPanel midi={midi} settings={settings} onChange={onChange} />}
+
           {tab === "audio" && (
             <>
+              <div className="settings-section">
+                <div className="settings-section-head">
+                  <span className="settings-label">Output device</span>
+                </div>
+                {outputSupported ? (
+                  <>
+                    <select
+                      className="settings-select"
+                      value={settings.audioOutputId}
+                      onChange={(e) => set({ audioOutputId: e.target.value })}
+                    >
+                      <option value="">System default</option>
+                      {outputs.map((d, i) => (
+                        <option key={d.deviceId || i} value={d.deviceId}>
+                          {d.label || `Output ${i + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                    {outputNeedsPerm && (
+                      <p className="settings-hint muted">
+                        Device names are hidden until you grant audio permission once.{" "}
+                        <button className="link-btn" onClick={revealOutputNames}>
+                          Show device names
+                        </button>
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="settings-hint muted">
+                    This browser can’t switch the output device (Chrome or Edge can). Use your system sound settings to
+                    choose a speaker.
+                  </p>
+                )}
+              </div>
+
               <div className="settings-section">
                 <div className="settings-section-head">
                   <span className="settings-label">Stretch engine</span>
@@ -459,8 +632,8 @@ export function SettingsPanel({
                 </div>
                 {isMobileDevice() ? (
                   <div className="stem-mobile-note">
-                    Phones load stems automatically at the best available quality (a cached desktop split, else the
-                    instant DSP one).
+                    Phones load stems from the shared cache when a desktop has already made them; otherwise the deck
+                    plays the plain mix.
                     {stemFailLevel() > 0 && (
                       <>
                         {" "}
@@ -512,6 +685,45 @@ export function SettingsPanel({
                   </div>
                 )}
 
+                {!isMobileDevice() && (
+                  <div className="settings-row stem-autoenhance">
+                    <span className="settings-label">
+                      Auto-enhance
+                      <span className="settings-sub muted"> · use cached neural stems when a track has them</span>
+                    </span>
+                    <button
+                      className={`toggle ${settings.autoEnhance ? "on" : ""}`}
+                      onClick={() => set({ autoEnhance: !settings.autoEnhance })}
+                      role="switch"
+                      aria-checked={settings.autoEnhance}
+                      title="When a track already has cached neural stems, use them automatically instead of the plain mix"
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </div>
+                )}
+
+                {!isMobileDevice() && getStemModel(settings.stemModel).tier === "gpu" && (
+                  <div className="stem-quality">
+                    <div className="settings-section-head">
+                      <span className="settings-label">Separation quality</span>
+                      <span className="settings-sub muted">{STEM_PRESETS[settings.stemQuality].mult} compute</span>
+                    </div>
+                    <div className="seg">
+                      {(Object.keys(STEM_PRESETS) as StemQuality[]).map((q) => (
+                        <button
+                          key={q}
+                          className={`seg-btn ${settings.stemQuality === q ? "on" : ""}`}
+                          onClick={() => set({ stemQuality: q })}
+                        >
+                          {STEM_PRESETS[q].label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="settings-hint muted">{STEM_PRESETS[settings.stemQuality].blurb}</p>
+                  </div>
+                )}
+
                 {(() => {
                   const sel = getStemModel(settings.stemModel);
                   if (sel.kind === "dsp" || isMobileDevice()) return null;
@@ -537,96 +749,45 @@ export function SettingsPanel({
                   const sel = getStemModel(settings.stemModel);
                   const gpu = sel.tier === "gpu";
                   const sup = modelSupport(sel);
-                  const gpuAvail = gpu && sup === "runs";
+                  const chromium = isChromium();
+                  // A GPU-tier model only runs on the GPU under CHROMIUM; on Safari/
+                  // Firefox the worker runs this same model on the stable wasm CPU EP
+                  // (the JSEP/WebGPU path is Chromium-only — see isChromium). Show what's
+                  // actually in play so the speed expectation is honest.
+                  const onGpu = gpu && chromium && sup === "runs";
                   const adapter = webGpuAdapterInfo();
-                  const kind = gpu ? (gpuAvail ? "gpu" : "none") : "cpu";
+                  const kind = gpu ? (chromium ? (sup === "runs" ? "gpu" : "none") : "cpu") : "cpu";
                   const text = gpu
-                    ? gpuAvail
-                      ? adapter || (isMobileDevice() ? "WebGPU (experimental)" : "WebGPU")
-                      : sup === "blocked"
-                        ? "Disabled after a crash — re-enable above, or use a CPU model / cached result"
-                        : "WebGPU not available here — pick a CPU model, or use a cached result"
+                    ? chromium
+                      ? onGpu
+                        ? adapter || "WebGPU"
+                        : sup === "blocked"
+                          ? "Disabled after a crash — re-enable above, or use a CPU model / cached result"
+                          : "WebGPU not available here — pick a CPU model, or use a cached result"
+                      : "Runs on CPU here (wasm SIMD) — slower than a Chromium GPU, but stable. The result caches for everyone."
                     : sel.kind === "dsp"
-                      ? "DSP filter (instant)"
+                      ? "Plain mix · no stem separation"
                       : "Neural · ORT WebAssembly";
                   return (
                     <div className={`stem-device ${kind}`}>
-                      <span className="stem-device-tag">{gpu ? "GPU" : "CPU"}</span>
+                      <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
                       <span className="stem-device-text">{text}</span>
                     </div>
                   );
                 })()}
               </div>
+
+              <LyricsSettings settings={settings} onChange={onChange} />
             </>
           )}
 
-          {tab === "accounts" && (
-            <>
-              <div className="settings-section-head">
-                <span className="settings-label">
-                  Account &amp; sync
-                  <span className={`yt-status ${connected ? "on" : ""}`}>
-                    {signedIn ? "● signed in" : "○ not connected"}
-                  </span>
-                </span>
-              </div>
-
-              {/* htl account — Google sign-in + connected services. Accounts are
-                  PLAYLIST-ONLY; streaming is always anonymous (no cookie/credential). */}
-              <div className="yt-sub">
-                <div className="yt-sub-head">
-                  htl account <span className="yt-sub-note">connect YouTube / Spotify to sync your playlists</span>
-                </div>
-                {meLoading ? (
-                  <p className="settings-hint">Checking…</p>
-                ) : signedIn ? (
-                  <>
-                    <div className="acct-profile">
-                      {me?.user?.avatar && (
-                        <img className={`acct-avatar ${revealed ? "" : "private"}`} src={me.user.avatar} alt="" />
-                      )}
-                      <div className="acct-id">
-                        <div className="acct-name">
-                          {me?.user?.name ? (revealed ? me.user.name : maskName(me.user.name)) : "Signed in"}
-                        </div>
-                        {me?.user?.email && <div className="acct-email">{revealed ? me.user.email : maskEmail(me.user.email)}</div>}
-                      </div>
-                      <button
-                        className={`room-eye ${revealed ? "on" : ""}`}
-                        onClick={toggleRevealed}
-                        title={revealed ? "Hide name & email (streaming-safe)" : "Reveal name & email"}
-                        aria-label={revealed ? "Hide name and email" : "Reveal name and email"}
-                      >
-                        {revealed ? "🙈" : "👁"}
-                      </button>
-                      <button className="hw-btn small" onClick={signOut}>
-                        Sign out
-                      </button>
-                    </div>
-                    <div className="conn-list">
-                      <ConnRow label="YouTube" connected note="via Google" onAction={() => disconnect("google")} actionLabel="Disconnect" />
-                      <ConnRow
-                        label="Spotify"
-                        connected={hasSpotify}
-                        onAction={() => (hasSpotify ? disconnect("spotify") : startSpotifyConnect())}
-                        actionLabel={hasSpotify ? "Disconnect" : "Connect"}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="yt-actions">
-                    <button className="hw-btn signin" onClick={startGoogleSignIn}>
-                      Sign in with Google
-                    </button>
-                  </div>
-                )}
-              </div>
-
-            </>
-          )}
 
           {tab === "debug" && (
             <>
+              {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
+                  and reverse-engineering LED / RGB protocols. Open-source debug surface. */}
+              {midi && <MidiDebug midi={midi} />}
+
               {/* Live engine / session / device diagnostics (was the green ctx overlay).
                   Polled only while this tab is open; Copy dumps it for sharing — the
                   only practical way to read state off a phone (no visible console). */}
@@ -873,28 +1034,3 @@ function Slider({
   );
 }
 
-// One connected-service row: name, status dot, and a connect/disconnect action.
-function ConnRow({
-  label,
-  connected,
-  note,
-  actionLabel,
-  onAction,
-}: {
-  label: string;
-  connected: boolean;
-  note?: string;
-  actionLabel: string;
-  onAction: () => void;
-}) {
-  return (
-    <div className="conn-row">
-      <span className={`conn-dot ${connected ? "on" : ""}`} />
-      <span className="conn-name">{label}</span>
-      {connected && note && <span className="conn-note">{note}</span>}
-      <button className="hw-btn small conn-action" onClick={onAction}>
-        {actionLabel}
-      </button>
-    </div>
-  );
-}

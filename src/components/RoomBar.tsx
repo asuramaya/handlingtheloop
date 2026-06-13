@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RoomState } from "@htl/room";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
+import { QRCode } from "./QRCode";
 
 // Chin control for the shared DJ session — the LOBBY.
 //
@@ -11,7 +12,7 @@ import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 //   2) IN A SESSION — once ≥2 devices are actually joined, each shows two INDEPENDENT
 //      switches: 🎛️ drive and 🔊 sound. Alone in a session → switches hidden (waiting).
 // Names are masked for streaming privacy (owner's own only) behind a 👁 toggle.
-export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: () => void }) {
+export function RoomBar({ room, onActivate, onExpand }: { room: RoomState; onActivate?: () => void; onExpand?: () => void }) {
   const [open, setOpen] = useState(false);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -23,6 +24,7 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
   const others = room.peers.filter((p) => p.id !== room.you);
   const participants = room.peers.filter((p) => p.joined);
   const sessionLive = participants.length > 0;
+  const knocks = room.host ? room.peers.filter((p) => p.pending) : []; // guests waiting on the handshake
   // Switches only mean something with a real, multi-device synced session.
   const showSwitches = room.joined && participants.length >= 2;
 
@@ -49,19 +51,23 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
     chipText = "Live";
   }
 
+  async function copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard blocked — the link + QR are shown for manual copy/scan */
+    }
+  }
+
   async function makeInvite() {
     setInviting(true);
     const inv = await room.createInvite();
     setInviting(false);
     if (inv) {
       setInviteUrl(inv.url);
-      try {
-        await navigator.clipboard.writeText(inv.url);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1600);
-      } catch {
-        /* clipboard blocked — the link is shown for manual copy */
-      }
+      await copyLink(inv.url);
     }
   }
 
@@ -74,12 +80,16 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
     room.setControl(true); // the starter drives…
     room.setListening(true); // …and hears, by default
   };
-  // A joiner syncs HEARING the mix by default (they joined to listen) but not driving —
-  // the host opts them into 🎛️. They can still mute themselves (🔇) once in.
+  // Joining a LIVE session — role by relationship:
+  //  • your OWN other device (host) → a CONTROL EXTENSION: drive on, audio OFF. The
+  //    device already in the session stays the audio master; this one is a silent remote
+  //    (tap 🔊 if you want it to play too).
+  //  • a GUEST from another account → a LISTENER: audio on, control off (host grants 🎛️).
   const joinSession = () => {
     onActivate?.();
     room.join();
-    room.setListening(true); // audio on by default for guests
+    if (room.host) room.setControl(true);
+    else room.setListening(true);
   };
 
   return (
@@ -91,7 +101,11 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
         title="Shared DJ session"
       >
         <span className={`chin-room-i ${dot}`} aria-hidden="true">⇅</span>
-        {others.length > 0 && <span className="room-count">{others.length}</span>}
+        {knocks.length > 0 ? (
+          <span className="room-count knock">{knocks.length}</span>
+        ) : (
+          others.length > 0 && <span className="room-count">{others.length}</span>
+        )}
       </button>
 
       {open && (
@@ -100,7 +114,7 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
           <div className="room-pop" onClick={(e) => e.stopPropagation()}>
             {!inSession ? (
               <p className="room-hint">
-                Sign in under <strong>Settings ▸ Accounts</strong>, or open an invite link, to join a shared session.
+                Sign in under <strong>Profile</strong>, or open an invite link, to join a shared session.
               </p>
             ) : (
               <>
@@ -108,6 +122,17 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
                   <div className="room-sesh-head">
                     <span className="room-sesh-title">{room.isGuest ? "Guest session" : "Session"}</span>
                     <span className="room-sesh-tools">
+                      <button
+                        className="room-expand"
+                        onClick={() => {
+                          setOpen(false);
+                          onExpand?.();
+                        }}
+                        title="Open the full social screen"
+                        aria-label="Expand to the social screen"
+                      >
+                        ⤢
+                      </button>
                       <button
                         className={`room-eye ${revealed ? "on" : ""}`}
                         onClick={toggleRevealed}
@@ -119,6 +144,18 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
                       <span className={`room-status ${chipCls}`}>{chipText}</span>
                     </span>
                   </div>
+                  {room.pending && <p className="room-sesh-sub">⏳ Waiting for the host to let you in…</p>}
+                  {knocks.length > 0 && (
+                    <button
+                      className="room-knock-cta"
+                      onClick={() => {
+                        setOpen(false);
+                        onExpand?.();
+                      }}
+                    >
+                      {knocks.length} {knocks.length === 1 ? "person wants" : "people want"} to join → review
+                    </button>
+                  )}
                   {room.joined && participants.length < 2 && (
                     <p className="room-sesh-sub">Waiting for another device to join…</p>
                   )}
@@ -138,12 +175,25 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
 
                 <div className="room-foot">
                   {!room.joined ? (
-                    sessionLive ? (
-                      <button className="room-cta" onClick={joinSession} title="Sync in as a listener — then tap 🎛️ on your row to take the decks">
-                        Join session
+                    !online ? (
+                      // The socket can't reach the session service (e.g. running the
+                      // Vite dev server, which has no /api/room) — show that plainly
+                      // instead of a Start button that silently does nothing.
+                      <button className="room-cta" disabled title="Can't reach the session service — the room backend runs on the deployed site / wrangler dev, not plain `vite` dev.">
+                        {room.status === "error" ? "Offline — retrying…" : "Connecting…"}
                       </button>
+                    ) : sessionLive ? (
+                      room.host ? (
+                        <button className="room-cta" onClick={joinSession} title="Join as a remote control for your master device — drive the decks; this device stays silent (tap 🔊 to also hear)">
+                          Join as remote
+                        </button>
+                      ) : (
+                        <button className="room-cta" onClick={joinSession} title="Sync in as a listener — then the host can hand you 🎛️ to take the decks">
+                          Join session
+                        </button>
+                      )
                     ) : (
-                      <button className="room-cta" onClick={startSession} title="Host a new session and drive the decks (others join as listeners)">
+                      <button className="room-cta" onClick={startSession} title="Host a new session and drive the decks (your other devices join as remotes; guests as listeners)">
                         Start session
                       </button>
                     )
@@ -159,8 +209,17 @@ export function RoomBar({ room, onActivate }: { room: RoomState; onActivate?: ()
                     </button>
                   )}
                   {inviteUrl && (
-                    <div className="room-invite-link" title={inviteUrl}>
-                      {inviteUrl.replace(/^https?:\/\//, "")}
+                    <div className="room-invite-share">
+                      <button
+                        type="button"
+                        className="room-invite-link"
+                        title="Tap to copy"
+                        onClick={() => copyLink(inviteUrl)}
+                      >
+                        {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
+                      </button>
+                      <QRCode value={inviteUrl} size={148} className="room-invite-qr" />
+                      <span className="room-invite-scan">Scan to join on another device</span>
                     </div>
                   )}
                 </div>

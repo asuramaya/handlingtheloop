@@ -15,27 +15,36 @@ export interface RoomHandlers {
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
   stemview?: (deck: DeckId, view: unknown) => void;
+  kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
 
 export interface RoomOptions {
   name?: string; // friendly participant label (account name) — falls back to the device
   joinCode?: string; // invite code → the Worker routes us into that host's session
+  color?: string; // this device's account accent (hex) — the room vibe is the host's
 }
 
 const DEVICE_KEY = "htl_device_id";
 
-/** Stable, non-secret per-device id (persisted in localStorage). */
+/** Stable, non-secret per-TAB device id. Stored in sessionStorage (not localStorage) so
+ *  each browser tab/window is its OWN participant: opening htl twice in one browser yields
+ *  two devices that see + sync with each other, instead of sharing one id — which made the
+ *  room treat them as the same device and forcibly close one socket when the other
+ *  connected (a connect/disconnect flap that looked like a hang). It survives a same-tab
+ *  refresh (sessionStorage persists across reloads); a fresh tab / browser restart starts
+ *  a new id, and the ENGAGE auto-rejoin (localStorage) covers re-entry into a live set. */
 export function deviceId(): string {
+  const mint = () => "d-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
   try {
-    let id = localStorage.getItem(DEVICE_KEY);
+    let id = sessionStorage.getItem(DEVICE_KEY);
     if (!id) {
-      id = "d-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-      localStorage.setItem(DEVICE_KEY, id);
+      id = mint();
+      sessionStorage.setItem(DEVICE_KEY, id);
     }
     return id;
   } catch {
-    return "d-" + Math.random().toString(36).slice(2, 10);
+    return mint();
   }
 }
 
@@ -90,6 +99,7 @@ export class RoomClient {
   readonly name: string;
   readonly kind = deviceName(); // device TYPE (iPhone / Mac / Linux …), separate from the label
   private joinCode: string | null;
+  private color: string;
   anchorId: string | null = null;
   peers: Peer[] = [];
   status: RoomStatus = "offline";
@@ -108,6 +118,7 @@ export class RoomClient {
   constructor(opts: RoomOptions = {}) {
     this.name = opts.name || deviceName();
     this.joinCode = opts.joinCode ?? joinCodeFromUrl();
+    this.color = opts.color ?? "";
     const e = loadEngage();
     this.wantJoined = e.joined;
     this.wantControl = e.control;
@@ -163,6 +174,15 @@ export class RoomClient {
   grant(to: string, on: boolean): void {
     this.send({ t: "grant", to, on });
   }
+  approve(to: string): void {
+    this.send({ t: "approve", to });
+  }
+  deny(to: string): void {
+    this.send({ t: "deny", to });
+  }
+  kick(to: string): void {
+    this.send({ t: "kick", to });
+  }
   sendIntent(intent: Intent): void {
     this.send({ t: "intent", intent });
   }
@@ -178,11 +198,18 @@ export class RoomClient {
   requestState(): void {
     this.send({ t: "request-state" });
   }
+  /** Update this device's account accent and broadcast it (the room vibe / roster swatch). */
+  setColor(color: string): void {
+    if (color === this.color) return;
+    this.color = color;
+    this.send({ t: "color", color });
+  }
 
   private open(): void {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const params = new URLSearchParams({ device: this.you, name: this.name, kind: this.kind });
     if (this.joinCode) params.set("join", this.joinCode);
+    if (this.color) params.set("color", this.color);
     const url = `${proto}://${location.host}/api/room?${params.toString()}`;
     this.setStatus("connecting");
     let ws: WebSocket;
@@ -274,6 +301,16 @@ export class RoomClient {
         break;
       case "stemview":
         this.h.stemview?.(msg.deck, msg.view);
+        break;
+      case "kicked":
+        // Denied entry or removed by the host. Forget our intent to be in (and the invite
+        // code) so the imminent socket close + reconnect doesn't immediately re-knock.
+        this.wantJoined = false;
+        this.wantControl = false;
+        this.wantListen = false;
+        this.joinCode = null;
+        saveEngage(false, false, false);
+        this.h.kicked?.(msg.reason);
         break;
       case "error":
         this.h.error?.(msg.message);

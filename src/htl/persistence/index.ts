@@ -8,4 +8,6 @@ export {
   hasStemBlobs,
   deleteStemBlobs,
   clearStemBlobsByPrefix,
+  getLyricsLocal,
+  putLyricsLocal,
 } from "./audioCache";

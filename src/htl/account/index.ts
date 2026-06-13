@@ -2,7 +2,7 @@
 // server-side redirect flow, so "sign in" / "connect" are full-page navigations;
 // session state lives in an httpOnly cookie and is read back via /api/me.
 
-export type Provider = "google" | "spotify";
+export type Provider = "google" | "spotify" | "tidal";
 
 export interface AccountUser {
   id: string;
@@ -29,6 +29,9 @@ export const startGoogleSignIn = () => {
 export const startSpotifyConnect = () => {
   window.location.href = "/api/auth/spotify/start";
 };
+export const startTidalConnect = () => {
+  window.location.href = "/api/auth/tidal/start";
+};
 
 export async function logout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
@@ -43,9 +46,42 @@ export async function disconnectService(provider: Provider): Promise<void> {
   });
 }
 
+// --- Profile (identity + member-since + top songs) -------------------------
+export interface TopTrack {
+  videoId: string;
+  title: string;
+  artist: string;
+  thumbnail: string | null;
+  plays: number;
+}
+export interface Profile {
+  user: AccountUser & { memberSince: number | null };
+  connections: Provider[];
+  topTracks: TopTrack[];
+}
+
+/** The signed-in user's full profile (identity, member-since, top songs). Null if signed out. */
+export async function fetchProfile(signal?: AbortSignal): Promise<Profile | null> {
+  const res = await fetch("/api/me/profile", { signal, credentials: "same-origin" });
+  if (!res.ok) return null;
+  return (await res.json()) as Profile;
+}
+
+/** Record one play of a track for the signed-in user's stats. Fire-and-forget. */
+export function logPlay(t: { videoId: string; title?: string; artist?: string; thumbnail?: string | null }): void {
+  void fetch("/api/me/play", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(t),
+  }).catch(() => {
+    /* best-effort stats — never surface a failure */
+  });
+}
+
 
 // --- Playlist sync ---------------------------------------------------------
-export type Service = "youtube" | "spotify";
+export type Service = "youtube" | "spotify" | "tidal";
 
 export interface ServicePlaylist {
   id: string;
@@ -57,6 +93,14 @@ export interface ServicePlaylist {
 /** The signed-in user's Spotify playlists (YouTube ones come from @htl/media). */
 export async function fetchSpotifyPlaylists(): Promise<ServicePlaylist[]> {
   const res = await fetch("/api/me/spotify/playlists", { credentials: "same-origin" });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((j as { error?: string }).error || `HTTP ${res.status}`);
+  return (j as { playlists: ServicePlaylist[] }).playlists;
+}
+
+/** The signed-in user's TIDAL playlists. */
+export async function fetchTidalPlaylists(): Promise<ServicePlaylist[]> {
+  const res = await fetch("/api/me/tidal/playlists", { credentials: "same-origin" });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((j as { error?: string }).error || `HTTP ${res.status}`);
   return (j as { playlists: ServicePlaylist[] }).playlists;

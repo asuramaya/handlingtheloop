@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Deck } from "@htl/audio";
 import type { Pyramid } from "@htl/analysis";
-import type { CaptionCue } from "@htl/media";
+import type { LyricsSource, LyricsLine } from "@htl/lyrics";
+import type { TrackMeta } from "@htl/library";
 import { gridLabel, stepSkip } from "@htl/state";
 import { WaveformViewport } from "./WaveformViewport";
 import { CaptionBar } from "./CaptionBar";
+import { TRACK_DND_MIME } from "./TrackTable";
 import { fmtTime } from "../util/format";
 import type { StemBadge, StemStatus } from "../App";
 
@@ -27,11 +29,19 @@ interface DeckLaneProps {
   loopColor: string;
   markerColor: string;
   stripColor: string;
+  freqColors: boolean;
+  freqLow: string;
+  freqMid: string;
+  freqHigh: string;
+  vividness: number;
+  glow: boolean;
   stemColors: Record<string, string>;
   meta: DeckMeta;
   status: StemBadge | null;
   stemStatus: StemStatus | null; // full status for the on-waveform processing overlay
-  captions: CaptionCue[];
+  captions: LyricsLine[];
+  captionSource?: LyricsSource | null; // provenance tag on the ribbon (whisper / pool / youtube)
+  lyricStatus?: string | null; // lyric processing/failure tell shown on the caption bar
   windowSec: number;
   expanded: boolean; // this lane is maximized to single-deck view
   collapsed: boolean; // the OTHER lane is maximized → this one is hidden
@@ -39,6 +49,8 @@ interface DeckLaneProps {
   onZoom: (next: number) => void;
   refresh: () => void;
   onLoadFile: (file: File) => void;
+  // Drag a track row from the library/search onto a lane to load it to that deck.
+  onLoadTrack?: (track: TrackMeta) => void;
   // Shared session: stream the scrub as start / move(delta) / end so a co-DJ drives
   // the master's platter physics; onSeek is the one-shot tap (needle drop).
   onJogStart?: () => void;
@@ -102,24 +114,54 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, stemColors, meta, status, stemStatus, captions, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, glow, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
   const stemBusy =
     stemStatus != null &&
     (stemStatus.phase === "separating" || (stemStatus.phase === "downloading" && !!stemStatus.src));
+  // Highlight the lane while a library/search track row is dragged over it.
+  const [dropActive, setDropActive] = useState(false);
   return (
     <section
-      className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""}`}
+      className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${dropActive ? "drop-target" : ""}`}
       style={{ ["--accent" as string]: accent }}
       onPointerDownCapture={onFocus}
       onDrop={(e) => {
         e.preventDefault();
+        setDropActive(false);
+        // A dragged track row (full TrackMeta JSON) → load it to this deck.
+        const raw = e.dataTransfer.getData(TRACK_DND_MIME);
+        if (raw && onLoadTrack) {
+          try {
+            const parsed = JSON.parse(raw);
+            const first = (Array.isArray(parsed) ? parsed[0] : parsed) as TrackMeta | undefined;
+            if (first && first.videoId) {
+              onLoadTrack(first);
+              return;
+            }
+          } catch {
+            /* fall through to a file drop */
+          }
+        }
         const f = e.dataTransfer.files[0];
         if (f) onLoadFile(f);
       }}
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={(e) => {
+        // Accept both track-row drags and audio files; mark the row drag for the cue.
+        if (e.dataTransfer.types.includes(TRACK_DND_MIME)) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setDropActive(true);
+        } else {
+          e.preventDefault();
+        }
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the lane (not on inner children).
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropActive(false);
+      }}
     >
       <div className="lane-info">
         {/* DECK id + scrolling title — its own full-width row on mobile. */}
@@ -181,6 +223,12 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         loopColor={loopColor}
         markerColor={markerColor}
         stripColor={stripColor}
+        freqColors={freqColors}
+        freqLow={freqLow}
+        freqMid={freqMid}
+        freqHigh={freqHigh}
+        vividness={vividness}
+        glow={glow}
         stemColors={stemColors}
         gridSize={deck.skipBeats}
         windowSec={windowSec}
@@ -206,6 +254,16 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           refresh(); // a paused tap-seek isn't "jogging" — nudge one redraw
           onSeek?.(deck.position());
         }}
+        onBend={(d) => {
+          // Shift+wheel → pitch-bend. deck.bend self-routes (playing = tempo nudge that
+          // auto-reverts; paused = frame-search). deck.jogging drives the rAF while a
+          // bend rides, so the playhead redraws; paused search still wants one nudge.
+          deck.bend(d);
+          if (!deck.playing) {
+            refresh();
+            onSeek?.(deck.position());
+          }
+        }}
       />
       {stemBusy && stemStatus && (
         <div className={`stem-busy ${stemStatus.phase === "separating" ? "process" : "fetch"}`} aria-live="polite">
@@ -218,7 +276,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           )}
         </div>
       )}
-      <CaptionBar deck={deck} accent={accent} cues={captions} />
+      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} status={lyricStatus} onSeek={onSeek} />
     </section>
   );
 }

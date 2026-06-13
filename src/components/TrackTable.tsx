@@ -97,6 +97,7 @@ export function TrackTable({
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("index");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const [query, setQuery] = useState(""); // in-library filter (title / artist)
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths());
   const [scale, setScale] = useState<number>(() => loadScale());
   const anchor = useRef<number | null>(null);
@@ -105,12 +106,17 @@ export function TrackTable({
   const byId = useMemo(() => new Map(tracks.map((t) => [t.videoId, t])), [tracks]);
   const canFile = !!onAddToPlaylist || !!onCreatePlaylistWith;
 
-  // The rows as currently ordered. "index" keeps the source order (reversed when
-  // descending); any other key sorts a copy so the original list is untouched.
+  // The rows as currently ordered + filtered. The filter (title / artist substring)
+  // runs first; "index" then keeps source order (reversed when descending), any other
+  // key sorts a copy so the original list is untouched.
   const view = useMemo(() => {
-    if (sortKey === "index") return sortDir === 1 ? tracks : [...tracks].reverse();
-    return [...tracks].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
-  }, [tracks, sortKey, sortDir]);
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? tracks.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q))
+      : tracks;
+    if (sortKey === "index") return sortDir === 1 ? filtered : [...filtered].reverse();
+    return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
+  }, [tracks, sortKey, sortDir, query]);
 
   // Close the menu on any escape hatch.
   useEffect(() => {
@@ -234,12 +240,10 @@ export function TrackTable({
   // drag-to-resize border on its right edge.
   const SortTh = ({ id, label, cls }: { id: SortKey; label: string; cls: string }) => {
     const idx = RESIZABLE.findIndex((c) => c.id === id);
-    const hasWidth = idx >= 0;
     const hasHandle = idx >= 0 && idx < RESIZABLE.length - 1; // last resizable col has no draggable right border
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
-        style={hasWidth ? { width: colWidth(id) } : undefined}
         onClick={() => toggleSort(id)}
         title={`Sort by ${label || "track #"}`}
       >
@@ -255,6 +259,22 @@ export function TrackTable({
   return (
     <>
       <div className="tt-toolbar">
+        <div className="tt-filter">
+          <span className="tt-filter-ico" aria-hidden="true">🔎</span>
+          <input
+            className="tt-filter-input"
+            type="search"
+            value={query}
+            placeholder="Filter…"
+            aria-label="Filter tracks"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="tt-filter-clear" title="Clear filter" onClick={() => setQuery("")} aria-label="Clear filter">
+              ✕
+            </button>
+          )}
+        </div>
         <span className="tt-rows-label">Rows</span>
         <button className="tt-step" title="Smaller rows" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
           −
@@ -267,6 +287,19 @@ export function TrackTable({
         className="track-table"
         style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px` }}
       >
+        {/* Column widths live here (one place) so table-layout:fixed resizing is
+            stable — the resizable columns carry the dragged width, Title (auto)
+            absorbs the rest. Dropping narrow columns is a container query on the
+            .col-* classes (which sit on the cells), independent of these. */}
+        <colgroup>
+          <col className="col-num" />
+          <col className="col-thumb" />
+          <col className="col-title" />
+          <col className="col-artist" style={{ width: colWidth("artist") }} />
+          <col className="col-bpm" style={{ width: colWidth("bpm") }} />
+          <col className="col-key" style={{ width: colWidth("key") }} />
+          <col className="col-time" style={{ width: colWidth("time") }} />
+        </colgroup>
         <thead>
           <tr>
             <SortTh id="index" label="#" cls="col-num" />
@@ -328,22 +361,19 @@ export function TrackTable({
               <td className="col-title" title={t.title}>
                 {t.title}
               </td>
-              <td className="col-artist" title={t.artist} style={{ width: colWidth("artist") }}>
+              <td className="col-artist" title={t.artist}>
                 {t.artist}
               </td>
-              <td className="col-bpm" style={{ width: colWidth("bpm") }}>
-                {t.bpm != null ? t.bpm.toFixed(1) : "—"}
-              </td>
-              <td className="col-key" style={{ width: colWidth("key") }}>
-                {t.key || "—"}
-              </td>
-              <td className="col-time" style={{ width: colWidth("time") }}>
-                {fmtTime(t.duration)}
-              </td>
+              <td className="col-bpm">{t.bpm != null ? t.bpm.toFixed(1) : "—"}</td>
+              <td className="col-key">{t.key || "—"}</td>
+              <td className="col-time">{fmtTime(t.duration)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {view.length === 0 && query && (
+        <div className="lib-empty">No tracks match “{query.trim()}”.</div>
+      )}
 
       {menu && (
         <>

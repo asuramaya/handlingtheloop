@@ -17,6 +17,7 @@ interface LevelFaderProps {
 // decks' faders grow OUTWARD from the shared centre. The range is 0…2 so the centre
 // (1 = unity) is the default rest position: drag inward to cut, outward to boost.
 export function LevelFader({ deck, accent, level, gainDb, label, mirror, onLevel }: LevelFaderProps) {
+  const frac = Math.max(0, Math.min(1, level / 2)); // 0..1 across the 0..2 throw
   return (
     <div className={`lfader ${mirror ? "mirror" : ""}`} style={{ ["--accent" as string]: accent }}>
       <div className="lfader-track">
@@ -27,6 +28,11 @@ export function LevelFader({ deck, accent, level, gainDb, label, mirror, onLevel
           onChange={(e) => onLevel(Number(e.target.value))}
           onContextMenu={(e) => { e.preventDefault(); onLevel(1); }}
         />
+        {/* Level % printed on the (widened) handle. Tracks the thumb; the inner span
+            counter-flips so deck A's mirrored fader stays readable. */}
+        <div className="lfader-val" style={{ left: `calc(${frac} * (100% - 38px) + 19px)` }}>
+          <span>{Math.round(level * 100)}</span>
+        </div>
       </div>
     </div>
   );

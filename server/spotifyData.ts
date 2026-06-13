@@ -175,9 +175,11 @@ export interface SpotifyTrack extends TrackMeta {
     403 on the old /tracks path); each page row holds the track under `item`. */
 export async function getSpotifyPlaylistTracks(token: string, playlistId: string): Promise<SpotifyTrack[]> {
   const out: SpotifyTrack[] = [];
-  // market=from_token relinks tracks to the user's region (avoids spurious
-  // unavailability) and is required for some playlists to return tracks at all.
-  let url: string | null = `/playlists/${encodeURIComponent(playlistId)}/items?limit=100&additional_types=track&market=from_token`;
+  // No market param: with a USER token Spotify applies the user's own country
+  // automatically (relinking tracks to their region). The legacy `market=from_token`
+  // value is no longer accepted and now 400s ("Invalid market code"). limit caps at
+  // 50 for this endpoint (100 also 400s).
+  let url: string | null = `/playlists/${encodeURIComponent(playlistId)}/items?limit=50&additional_types=track`;
   while (url) {
     const j = await sget(url, token);
     for (const it of (j.items as SpotifyTrackItem[]) ?? []) {

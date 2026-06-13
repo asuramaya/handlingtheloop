@@ -5,6 +5,7 @@ import { type D1Database, type Provider, getConnection, saveConnection } from ".
 import { oauthCreds } from "./oauth";
 import { googleRefresh } from "./googleAuth";
 import { spotifyCreds, spotifyRefresh } from "./spotifyAuth";
+import { tidalCreds, tidalRefresh } from "./tidalAuth";
 
 // Structural env (matches AccountEnv) — declared here to avoid an import cycle.
 export interface ConnEnv {
@@ -14,6 +15,8 @@ export interface ConnEnv {
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   SPOTIFY_CLIENT_ID?: string;
   SPOTIFY_CLIENT_SECRET?: string;
+  TIDAL_CLIENT_ID?: string;
+  TIDAL_CLIENT_SECRET?: string;
 }
 
 const SKEW_MS = 60_000; // refresh a minute early to avoid edge expiries mid-request
@@ -32,7 +35,9 @@ export async function getValidToken(env: ConnEnv, userId: string, provider: Prov
   const tokens =
     provider === "google"
       ? await googleRefresh(oauthCreds(env), conn.refreshToken)
-      : await refreshSpotify(env, conn.refreshToken);
+      : provider === "tidal"
+        ? await refreshTidal(env, conn.refreshToken)
+        : await refreshSpotify(env, conn.refreshToken);
   await saveConnection(
     env.DB,
     userId,
@@ -43,8 +48,31 @@ export async function getValidToken(env: ConnEnv, userId: string, provider: Prov
   return tokens.access_token;
 }
 
+const YT_WRITE_SCOPE = "https://www.googleapis.com/auth/youtube";
+
+/** Whether a space-separated scope string carries the full youtube (write) scope.
+ *  Exact-token match — `youtube.readonly` must NOT count as write. */
+export function hasYouTubeWriteScope(scope: string | null | undefined): boolean {
+  return !!scope && scope.split(/\s+/).includes(YT_WRITE_SCOPE);
+}
+
+/** True if the user's Google connection was granted the write scope. Sign-in only
+ *  grants youtube.readonly; write is added on demand via the incremental-auth
+ *  upgrade (`/api/auth/google/start?write=1`). Callers gate playlist writes on this. */
+export async function googleHasYouTubeWrite(env: ConnEnv, userId: string): Promise<boolean> {
+  if (!env.TOKEN_ENC_KEY) throw new Error("TOKEN_ENC_KEY is not configured");
+  const conn = await getConnection(env.DB, userId, "google", env.TOKEN_ENC_KEY.trim());
+  return hasYouTubeWriteScope(conn?.scope);
+}
+
 async function refreshSpotify(env: ConnEnv, refreshToken: string) {
   const creds = spotifyCreds(env);
   if (!creds) throw new Error("Spotify is not configured");
   return spotifyRefresh(creds, refreshToken);
+}
+
+async function refreshTidal(env: ConnEnv, refreshToken: string) {
+  const creds = tidalCreds(env);
+  if (!creds) throw new Error("TIDAL is not configured");
+  return tidalRefresh(creds, refreshToken);
 }

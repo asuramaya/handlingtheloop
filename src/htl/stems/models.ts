@@ -51,13 +51,18 @@ const UMX = (file: (t: StemName) => string): Record<StemName, string> => ({
 
 export const STEM_MODELS: StemModel[] = [
   {
-    id: "dsp",
-    label: "DSP split",
+    // "Single" — no stem separation; the deck plays the plain mix and the per-stem mixer is
+    // hidden. The DEFAULT and the lightest path (no split, no 4× buffers). Typed `dsp`/
+    // `instant` to satisfy the unions; `deriveStems` special-cases the id "off" (applies NO
+    // stems, optionally auto-promoting a cached neural set on desktop). The old "DSP split"
+    // entry was dropped — its band/centre approximation was poor, so it's single OR neural.
+    id: "off",
+    label: "Single",
     kind: "dsp",
     arch: "dsp",
     tier: "instant",
     sizeMB: 0,
-    note: "Instant · no download · band/centre isolator (drums approximate)",
+    note: "No stem separation — plain mix only (no stem mixer, lightest on memory)",
   },
   {
     // The ONLY Open-Unmix tier we ship. By ear, int8 "L" is the best Open-Unmix —
@@ -95,10 +100,11 @@ export const STEM_MODELS: StemModel[] = [
   },
   // (HT-Demucs CPU removed — demucs only runs on the GPU. The CPU/wasm path is too
   // memory-heavy for a phone, and on a desktop the GPU path is strictly better.
-  // Lineup: DSP everywhere, Open-Unmix (CPU) desktop+mobile, HT-Demucs (GPU) desktop.)
+  // Lineup: Single (no stems) everywhere, Open-Unmix (CPU) desktop+mobile, HT-Demucs
+  // (GPU) desktop. The old DSP band/centre split was dropped — single OR neural.)
 ];
 
-export const DEFAULT_STEM_MODEL = "dsp";
+export const DEFAULT_STEM_MODEL = "off";
 
 export function getStemModel(id: string): StemModel {
   return STEM_MODELS.find((m) => m.id === id) ?? STEM_MODELS[0];
@@ -322,15 +328,29 @@ export function resetStemGuard(): void {
   }
 }
 
-// Browsers where on-device WebGPU separation is UNTESTED / known-flaky and should
-// be dimmed with a warning (still selectable — the crash guard protects the user).
-// Firefox's Linux WebGPU device-losts on heavy compute; Safari desktop is unproven.
-export function isUntestedGpuPlatform(): boolean {
+// Chromium family (Chrome / Edge / Brave / Opera / Chromium). This is the ONLY place
+// we drive the ORT WebGPU (JSEP) execution provider: it's the engine the JSEP backend
+// is built and tested against. Elsewhere the separator worker loads the plain-wasm ORT
+// bundle and runs demucs on the CPU EP instead (see separator.worker.ts ORT_CDN) — so
+// the Safari JSEP memory-leak crash (onnxruntime#26827) and Firefox device-losts can't
+// happen. The worker's own UA check (`USE_WEBGPU`) mirrors this exactly.
+export function isChromium(): boolean {
   if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/Firefox\//.test(ua)) return true;
-  // Desktop Safari (not Chromium-based, not mobile): WebGPU compute unproven for this.
-  if (/Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua) && !isMobileDevice()) return true;
+  return /Chrome\/|Chromium\//.test(navigator.userAgent);
+}
+
+// Is the FAST WebGPU runtime actually in play for separation? Only on Chromium with a
+// usable adapter — everywhere else demucs runs on the stable (slower) wasm CPU EP. The
+// UI uses this to label the device as GPU vs CPU and set the speed expectation.
+export function gpuRuntimeAvailable(): boolean {
+  return isChromium() && hasWebGPU();
+}
+
+// Browsers where on-device GPU separation would be UNTESTED / known-flaky. Now that
+// non-Chromium falls back to the stable wasm bundle (the JSEP/WebGPU path runs ONLY on
+// Chromium, where it's proven), no platform attempts an untested GPU path — so there's
+// nothing left to warn about. Kept exported (callers reference it) but always false.
+export function isUntestedGpuPlatform(): boolean {
   return false;
 }
 

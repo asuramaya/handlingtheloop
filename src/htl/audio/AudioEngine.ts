@@ -30,6 +30,16 @@ export class AudioEngine {
   // invisible on an iPhone) so the on-screen overlay can show WHY playback is dead.
   workletError = "";
 
+  // iOS BACKGROUND-AUDIO bridge. iOS suspends a raw AudioContext the moment Safari is
+  // backgrounded / the phone locks / audio is handed to BT/CarPlay — there's no API to
+  // keep a Web Audio graph alive. The ONLY way through: route the mix into a
+  // MediaStream feeding a PLAYING <audio> element; iOS keeps a media element alive in
+  // the background (like a music app), which keeps the context rendering. Fail-safe:
+  // any failure reverts to the plain destination so audio is never lost.
+  private streamDest: MediaStreamAudioDestinationNode | null = null;
+  private keepAlive: HTMLAudioElement | null = null;
+  private bgAudioOn = false;
+
   constructor() {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
 
@@ -128,6 +138,100 @@ export class AudioEngine {
     this.stretchCfg = cfg;
     this.deckA.configureStretch(cfg);
     this.deckB.configureStretch(cfg);
+  }
+
+  /** True when this browser can route the context to a chosen output device
+   *  (AudioContext.setSinkId — Chromium/Edge; Firefox/Safari currently can't). */
+  get canSetSink(): boolean {
+    return typeof (this.ctx as unknown as { setSinkId?: unknown }).setSinkId === "function";
+  }
+
+  /** Route the whole mix to a specific audio output device (Settings → Audio).
+   *  `deviceId` "" = system default. No-op returning false when unsupported, so
+   *  the UI can explain instead of throwing. Safe on a suspended context. */
+  async setSinkId(deviceId: string): Promise<boolean> {
+    const ctx = this.ctx as unknown as { setSinkId?: (id: string) => Promise<void> };
+    if (typeof ctx.setSinkId !== "function") return false;
+    try {
+      await ctx.setSinkId(deviceId || ""); // "" → default device
+      return true;
+    } catch (e) {
+      console.warn("[htl] setSinkId failed:", e);
+      return false;
+    }
+  }
+
+  get backgroundAudioActive(): boolean {
+    return this.bgAudioOn;
+  }
+
+  /** Bridge the mix through a MediaStream into a hidden, playing <audio> element so
+   *  iOS keeps it alive in the background (lock / app-switch / Bluetooth / CarPlay).
+   *  MUST be called from a user gesture (the element's play()). Idempotent. Any error
+   *  — or a rejected play — reverts to ctx.destination so playback is never lost. */
+  enableBackgroundAudio(): void {
+    if (this.bgAudioOn || typeof document === "undefined") return;
+    try {
+      const dest = this.ctx.createMediaStreamDestination();
+      const el = document.createElement("audio");
+      el.setAttribute("playsinline", "");
+      el.autoplay = true;
+      el.loop = true; // a live stream never ends; loop is just belt-and-braces
+      el.srcObject = dest.stream;
+      el.style.display = "none";
+      document.body.appendChild(el);
+      // Re-route the terminal: limiter → media element (via the stream), not → device.
+      try {
+        this.limiter.disconnect(this.ctx.destination);
+      } catch {
+        /* wasn't connected (already bridged) — ignore */
+      }
+      this.limiter.connect(dest);
+      this.streamDest = dest;
+      this.keepAlive = el;
+      this.bgAudioOn = true;
+      void el.play().catch(() => this.disableBackgroundAudio()); // fail-safe revert
+    } catch {
+      this.disableBackgroundAudio();
+    }
+  }
+
+  /** Tear the bridge down and go back to plain ctx.destination output (the fail-safe,
+   *  and the desktop path). */
+  disableBackgroundAudio(): void {
+    if (this.streamDest) {
+      try {
+        this.limiter.disconnect(this.streamDest);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      this.limiter.connect(this.ctx.destination);
+    } catch {
+      /* already connected — ignore */
+    }
+    if (this.keepAlive) {
+      try {
+        this.keepAlive.pause();
+        this.keepAlive.srcObject = null;
+        this.keepAlive.remove();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.keepAlive = null;
+    this.streamDest = null;
+    this.bgAudioOn = false;
+  }
+
+  /** Wake the output after a backgrounding / lock / route change: resume the context
+   *  AND re-play the keep-alive element (iOS pauses it on an interruption). Call on
+   *  return-to-foreground and on audio-route changes so the sound doesn't stay dead. */
+  resumeOutput(): void {
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    const el = this.keepAlive;
+    if (el && el.paused) void el.play().catch(() => {});
   }
 
   deck(id: "A" | "B"): Deck {

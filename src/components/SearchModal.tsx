@@ -28,7 +28,7 @@ export function SearchModal({
 }: SearchModalProps) {
   return (
     <div className="modal-backdrop dock-right" onPointerDown={onClose}>
-      <DockResizer varName="--dock-w-right" grow="left" measure="parent" />
+      <DockResizer varName="--dock-w-right" measure="parent" />
       <div className="panel search-panel" onPointerDown={(e) => e.stopPropagation()}>
         <div className="settings-head">
           <button className="mini x" onClick={onClose} aria-label="Close">

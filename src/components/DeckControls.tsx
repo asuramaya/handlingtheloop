@@ -219,8 +219,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerCancel={endRoll}
                 onClick={(e) => {
                   if (shift || e.shiftKey) return; // handled as a roll by the pointer events
-                  deck.setBeatLoop(s.n);
-                  emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
+                  // Re-clicking the ACTIVE size exits; a different size resizes; else set.
+                  if (active) {
+                    deck.exitLoop();
+                    emit({ kind: "loop", deck: id, action: "exit" });
+                  } else {
+                    deck.setBeatLoop(s.n);
+                    emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
+                  }
                   refresh();
                 }}
               >
@@ -297,10 +303,18 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             {shift ? "START" : "CUE"}
             <span className="kbd">C</span>
           </button>
-          <button
-            className="hw-btn play"
-            title={shift ? "Reset channel (EQ / filter / trim / tempo / key / stems)" : "Play / pause"}
-            onClick={act(() => {
+          {/* PLAY is a button-knob (like the stem cells): tap = play/pause (Shift =
+              reset channel), scroll / drag = TRIM gain, shown as a percentage. Double-
+              click resets trim to unity. The board's TRIM knob drives the same value. */}
+          <ValueCell
+            className={`play ${deck.playing ? "playing" : ""}`}
+            label={shift ? "RESET" : "TRIM"}
+            value={deck.trim}
+            min={0}
+            max={2}
+            pivot={1}
+            kbd="⎵"
+            onTap={() => {
               if (shift) {
                 deck.setTempo(0);
                 deck.setFilter(0);
@@ -315,11 +329,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 deck.togglePlay();
                 emit({ kind: "transport", deck: id, action: deck.playing ? "play" : "pause" });
               }
-            })}
-          >
-            {shift ? "RESET" : deck.playing ? "❚❚" : "▶"}
-            <span className="kbd">⎵</span>
-          </button>
+              refresh();
+            }}
+            onChange={(v) => { deck.setTrim(v); refresh(); emit({ kind: "control", deck: id, param: "trim", value: v }); }}
+            format={(v) => `${Math.round(v * 100)}`}
+          />
           <button
             className={`hw-btn shift ${shift ? "on" : ""}`}
             onClick={onToggleShift}
@@ -389,16 +403,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
 
         {/* STEMS foot: tap = mute / unmute, scroll/drag = level 0–150% (1 = unity).
-            Dimmed when muted; disabled until the deck has stems. */}
+            Dimmed when muted. HIDDEN entirely when the deck has no stems — mix-only
+            mobile or the "Off" model — so the row doesn't sit there dead. It returns
+            when stems exist locally (desktop split/neural) OR as a remote display in a
+            session whose desktop host streams its stem envelopes (markRemoteStems →
+            hasStems true), where the cells drive the host's stems over the session. */}
+        {deck.hasStems && (
         <div className="stems-row">
           {STEM_CELLS.map((s) => (
             <ValueCell
               key={s.name}
               label={s.label}
               kbd={s.kbd}
-              disabled={!deck.hasStems}
-              active={deck.hasStems ? deck.stemActive(s.name) : undefined}
-              value={deck.hasStems ? deck.stemLevel(s.name) : 1}
+              active={deck.stemActive(s.name)}
+              value={deck.stemLevel(s.name)}
               min={0}
               max={1.5}
               reset={1}
@@ -417,6 +435,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             />
           ))}
         </div>
+        )}
 
         {/* EQ foot (bottom third) — a full-width Pro-Q-style response curve: drag a
             node sideways = frequency, up/down = gain; mid wheel = bell width;

@@ -24,6 +24,8 @@ import {
   inviteOwner,
   getCachedCaptions,
   putCachedCaptions,
+  getLyrics,
+  putLyrics,
 } from "../server/db";
 import { readSessionId } from "../server/session";
 import {
@@ -311,6 +313,70 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         } catch {
           return json(200, { cues: [] }); // captions are optional — never fail the load
         }
+      }
+      case "/api/lyrics": {
+        // Community-pooled Whisper transcripts — the PRIMARY lyrics source. GET serves the
+        // best transcript on file (instant, works on phones); POST is a desktop GPU
+        // contributing what it decoded so the next device gets it free. Best-effort, no
+        // auth — same posture as /api/analysis (facts about the recording, not the bytes).
+        const v = url.searchParams.get("v");
+        if (req.method === "GET") {
+          if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
+          if (!env.DB) return json(200, { transcript: null });
+          const row = await getLyrics(env.DB, v).catch(() => null);
+          if (!row) return json(200, { transcript: null });
+          return json(200, {
+            transcript: { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, lines: row.lines, createdAt: 0 },
+          });
+        }
+        if (req.method === "POST") {
+          if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
+          const b = (await req.json().catch(() => ({}))) as { videoId?: string; model?: string; lang?: string; conf?: number; lines?: unknown };
+          if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
+          const model = b.model === "small" ? "small" : "base";
+          // Shape-validate + bound the payload so no anonymous poster can store garbage or an
+          // oversized blob: {start,end,text, words?:[{t,w}]} clamped, capped at 2000 lines /
+          // 40 words. The optional per-word timings drive the karaoke highlight.
+          const clampT = (n: number) => Math.max(0, Math.min(86_400, n));
+          const raw = Array.isArray(b.lines) ? (b.lines as unknown[]) : [];
+          const lines = raw
+            .filter((l): l is { start: number; end: number; text: string; words?: unknown } => {
+              const o = l as { start?: unknown; end?: unknown; text?: unknown };
+              return typeof o?.start === "number" && typeof o?.end === "number" && typeof o?.text === "string";
+            })
+            .slice(0, 2000)
+            .map((l) => {
+              const base = { start: clampT(l.start), end: clampT(l.end), text: cleanText(l.text, 200) };
+              const wr = Array.isArray(l.words) ? (l.words as unknown[]) : null;
+              const words = wr
+                ? wr
+                    .filter((x): x is { t: number; w: string; d?: number } => {
+                      const o = x as { t?: unknown; w?: unknown };
+                      return typeof o?.t === "number" && typeof o?.w === "string";
+                    })
+                    .slice(0, 40)
+                    .map((x) => ({ t: clampT(x.t), w: cleanText(x.w, 40), d: typeof x.d === "number" ? Math.max(0, Math.min(60, x.d)) : 0 }))
+                    .filter((x) => x.w.length > 0)
+                : [];
+              return words.length ? { ...base, words } : base;
+            })
+            .filter((l) => l.text.length > 0);
+          if (!lines.length) return json(400, { error: "no valid lines" });
+          if (env.DB) {
+            ctx.waitUntil(
+              putLyrics(env.DB, {
+                videoId: b.videoId!,
+                model,
+                lang: cleanText(b.lang ?? "en", 8) || "en",
+                conf: clampNum(b.conf, 0, 1) ?? 0,
+                lines,
+                contributor: null,
+              }).catch(() => {}),
+            );
+          }
+          return json(200, { ok: true });
+        }
+        return json(405, { error: "GET or POST only" });
       }
       case "/api/community": {
         // The shared cache, surfaced as a browsable pool. PRIMARY path: the D1

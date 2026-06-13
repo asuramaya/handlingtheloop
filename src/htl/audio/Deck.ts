@@ -64,6 +64,14 @@ export interface StemView {
   sampleRate: number;
   bucket: number; // sample bucket of the shipped level
   stems: Record<StemName, { min: string; max: string }>; // base64(Int8Array)
+  // Optional COARSE per-stem band energy (low/mid/high, base64 int8) so a stem-less remote
+  // (a phone — it has no PCM to band-split) gets the SAME rekordbox frequency colouring as the
+  // host. Shipped at a low bucket count (~768) since colour changes slowly across a waveform;
+  // the remote upsamples to the min/max resolution on rebuild. Optional → an older peer that
+  // omits them still renders (flat per-stem colour, the prior behaviour). Adds ~12 KB/track,
+  // well under the session/DO size budget. Rides INSIDE the opaque stemview `view` — no
+  // protocol change.
+  bands?: Record<StemName, { low: string; mid: string; high: string }>;
 }
 
 function quantizeI8(f: Float32Array): Int8Array {
@@ -87,6 +95,35 @@ function b64ToF32(b: string): Float32Array {
   for (let i = 0; i < bin.length; i++) {
     const v = bin.charCodeAt(i); // 0..255
     out[i] = (v < 128 ? v : v - 256) / 127; // int8 → −1..1
+  }
+  return out;
+}
+
+// Average-pool a band envelope down to n buckets (host → wire). Colour changes slowly across
+// a waveform, so a coarse band track upsamples back to full resolution with no visible loss.
+function downsampleAvg(src: Float32Array, n: number): Float32Array {
+  if (src.length <= n) return src;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor((i * src.length) / n);
+    const b = Math.max(a + 1, Math.floor(((i + 1) * src.length) / n));
+    let s = 0;
+    for (let j = a; j < b; j++) s += src[j];
+    out[i] = s / (b - a);
+  }
+  return out;
+}
+// Linearly stretch a coarse band envelope back up to n buckets (remote rebuild).
+function upsampleTo(src: Float32Array, n: number): Float32Array {
+  if (src.length === n) return src;
+  const out = new Float32Array(n);
+  if (src.length === 0 || n === 0) return out;
+  if (src.length === 1) return out.fill(src[0]);
+  for (let i = 0; i < n; i++) {
+    const x = (i * (src.length - 1)) / (n - 1 || 1);
+    const a = Math.floor(x);
+    const b = Math.min(src.length - 1, a + 1);
+    out[i] = src[a] + (src[b] - src[a]) * (x - a);
   }
   return out;
 }
@@ -492,6 +529,8 @@ export class Deck {
     const py = this.stemPyramids;
     if (!py || !this.stemsNeural) return null;
     const stems = {} as Record<StemName, { min: string; max: string }>;
+    const bands = {} as Record<StemName, { low: string; mid: string; high: string }>;
+    const BAND_BUCKETS = 768; // coarse band resolution shipped over the wire
     let bucket = 256;
     let length = 0;
     let sampleRate = this.ctx.sampleRate;
@@ -508,8 +547,15 @@ export class Deck {
       const lvl = p.levels.find((l) => l.bucket >= minBucket) ?? p.levels[p.levels.length - 1];
       bucket = lvl.bucket;
       stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };
+      // Coarse band energy (0..1) → int8 → base64, downsampled to ≤768 buckets.
+      const bb = Math.min(BAND_BUCKETS, lvl.min.length);
+      bands[name] = {
+        low: i8ToB64(quantizeI8(downsampleAvg(lvl.low, bb))),
+        mid: i8ToB64(quantizeI8(downsampleAvg(lvl.mid, bb))),
+        high: i8ToB64(quantizeI8(downsampleAvg(lvl.high, bb))),
+      };
     }
-    return { length, sampleRate, bucket, stems };
+    return { length, sampleRate, bucket, stems, bands };
   }
   /** REMOTE: rebuild the 4-lane stem display from a host's transmitted envelopes.
    *  No local PCM — marks remote stems present so the mixer cells light up too. */
@@ -521,7 +567,13 @@ export class Deck {
       if (!s) return;
       const min = b64ToF32(s.min);
       const max = b64ToF32(s.max);
-      out[name] = buildLodPyramid(min, max, view.length, view.sampleRate, view.bucket);
+      // Band energy when the host shipped it (newer peers) → upsampled to the min/max
+      // resolution → real rekordbox stem colouring. Omitted → zeroed → flat colour (old peers).
+      const b = view.bands?.[name];
+      const low = b ? upsampleTo(b64ToF32(b.low), min.length) : undefined;
+      const mid = b ? upsampleTo(b64ToF32(b.mid), min.length) : undefined;
+      const high = b ? upsampleTo(b64ToF32(b.high), min.length) : undefined;
+      out[name] = buildLodPyramid(min, max, view.length, view.sampleRate, view.bucket, low, mid, high);
     }
     this.markRemoteStems(true, true);
     this.stemPyramids = out; // markRemoteStems cleared it; set the real envelopes

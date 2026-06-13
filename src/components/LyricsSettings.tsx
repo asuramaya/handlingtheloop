@@ -38,8 +38,20 @@ export function LyricsSettings({ settings, onChange }: { settings: Settings; onC
                 {m.label}
               </button>
             ))}
+            {/* Explicit YouTube engine: skip the GPU entirely and use YouTube's own captions. */}
+            <button
+              className={`seg-btn ${settings.lyricsModel === "youtube" ? "on" : ""}`}
+              onClick={() => set({ lyricsModel: "youtube" })}
+              title="Use YouTube's caption track directly — instant, no GPU, works on phones (less tightly synced than Whisper)"
+            >
+              YouTube
+            </button>
           </div>
-          <p className="settings-hint muted">{active.blurb}</p>
+          <p className="settings-hint muted">
+            {settings.lyricsModel === "youtube"
+              ? "YouTube captions directly — instant and GPU-free, but only as accurate as the uploader's captions and looser on timing."
+              : active.blurb}
+          </p>
         </>
       )}
       <p className="settings-hint muted">

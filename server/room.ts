@@ -54,6 +54,8 @@ export class DjRoom {
   // stem-less remote (a phone) can render the 4-lane display. Stored so a late joiner
   // gets them on request-state, like the snapshot.
   private lastStemView: Record<string, unknown> = {};
+  // Last per-deck word-timed lyrics the host streamed, so a late guest's caption ribbon fills in.
+  private lastLyrics: Record<string, { videoId: string; lines: unknown; source: string }> = {};
   // Device ids the host has granted control. Persisted so a granted guest survives a
   // page refresh with its control intact instead of silently dropping to a listener (#10).
   private grants = new Set<string>();
@@ -71,6 +73,7 @@ export class DjRoom {
     this.anchorId = (await this.state.storage.get<string>("anchor")) ?? null;
     this.lastSnapshot = await this.state.storage.get("snapshot");
     this.lastStemView = (await this.state.storage.get<Record<string, unknown>>("stemviews")) ?? {};
+    this.lastLyrics = (await this.state.storage.get<Record<string, { videoId: string; lines: unknown; source: string }>>("lyrics")) ?? {};
     this.grants = new Set((await this.state.storage.get<string[]>("grants")) ?? []);
     this.approved = new Set((await this.state.storage.get<string[]>("approved")) ?? []);
     this.loaded = true;
@@ -93,6 +96,17 @@ export class DjRoom {
       await this.state.storage.put("stemviews", this.lastStemView);
     } catch {
       /* best-effort — a failed persist must never tear down a socket */
+    }
+  }
+
+  // Same best-effort contract as the stem envelopes: a long track's word list can be sizeable,
+  // so cap it well under the 128 KiB per-value limit (oversized stays in memory + re-streams).
+  private async persistLyrics(): Promise<void> {
+    try {
+      if (JSON.stringify(this.lastLyrics).length > 120_000) return;
+      await this.state.storage.put("lyrics", this.lastLyrics);
+    } catch {
+      /* best-effort — never tear down a socket over a persist */
     }
   }
 
@@ -284,6 +298,17 @@ export class DjRoom {
         }
         break;
       }
+      case "lyrics": {
+        // The board's authority (controller / anchor) streams the deck's word-timed lyrics so
+        // stem-less or YouTube-engine guests still get accurate, playhead-aligned captions. Same
+        // best-effort persistence contract as stemview (never throw out of here).
+        if ((this.isControlling(self) || self === this.anchorId) && (msg.deck === "A" || msg.deck === "B")) {
+          this.lastLyrics[msg.deck] = { videoId: msg.videoId, lines: msg.lines, source: msg.source };
+          this.relay(self, { t: "lyrics", deck: msg.deck, videoId: msg.videoId, lines: msg.lines, source: msg.source });
+          void this.persistLyrics();
+        }
+        break;
+      }
       case "request-state": {
         this.sendCatchUp(ws);
         break;
@@ -423,6 +448,10 @@ export class DjRoom {
     for (const d of ["A", "B"] as const) {
       if (this.lastStemView[d] !== undefined) {
         ws.send(JSON.stringify({ t: "stemview", deck: d, view: this.lastStemView[d] } satisfies ServerMsg));
+      }
+      const ly = this.lastLyrics[d];
+      if (ly) {
+        ws.send(JSON.stringify({ t: "lyrics", deck: d, videoId: ly.videoId, lines: ly.lines, source: ly.source } satisfies ServerMsg));
       }
     }
   }

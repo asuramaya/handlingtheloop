@@ -26,7 +26,6 @@ export function CaptionBar({
   cues,
   source,
   windowSec,
-  status,
   onSeek,
 }: {
   deck: Deck;
@@ -34,7 +33,6 @@ export function CaptionBar({
   cues: LyricsLine[];
   source?: LyricsSource | null;
   windowSec: number;
-  status?: string | null;
   onSeek?: (position: number) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -64,17 +62,8 @@ export function CaptionBar({
     ro.observe(wrap);
     track.classList.toggle("has-words", words.length > 0); // youtube fallback (no words) lights whole lines
 
-    // Median word spacing → the zoom at which per-word labels get room (rap is denser, so it
-    // needs more zoom before labels appear). Computed once per cue set.
     const wordT: number[] = words.map((w) => w.t);
     const wordD: number[] = words.map((w) => w.d ?? 0); // held duration → bar length
-    let medianGap = Infinity;
-    if (wordT.length > 2) {
-      const gaps: number[] = [];
-      for (let i = 1; i < wordT.length; i++) gaps.push(wordT[i] - wordT[i - 1]);
-      gaps.sort((a, b) => a - b);
-      medianGap = gaps[gaps.length >> 1] || 0.3;
-    }
 
     let raf = 0;
     let laidPps = -1;
@@ -93,16 +82,21 @@ export function CaptionBar({
 
         // Layout (positions + LOD) only when the scale changes — not per frame.
         if (Math.abs(pps - laidPps) > 1e-4 || w !== laidW) {
-          // Word ticks/labels at their EXACT times; the duration BAR spans how long the word
-          // is held (so a sustained word reads long, a clipped one short).
+          // Word ticks + duration BARS at EXACT times — the marker style is identical at EVERY
+          // zoom. Only the LABEL is LOD'd, PER WORD: it shows when the gap to the next word has
+          // room, so dense passages thin to a clean tick comb while sparse ones keep their words
+          // (no global word↔phrase style switch — that mismatch was the "incongruent" part).
           for (let i = 0; i < wordT.length; i++) {
             const el = wordsEl.children[i] as HTMLElement | undefined;
             if (!el) continue;
             el.style.left = `${wordT[i] * pps}px`;
             const bar = el.children[1] as HTMLElement | undefined;
             if (bar) bar.style.width = `${wordD[i] * pps}px`;
+            const gap = (i + 1 < wordT.length ? wordT[i + 1] - wordT[i] : 1) * pps;
+            el.classList.toggle("no-label", gap < WORD_LABEL_PX);
           }
-          // Phrase labels at line start, clipped to the gap before the next line.
+          // Phrase line text at line start. With per-word data only the ACTIVE line shows (CSS) as
+          // a readable chip when zoomed out; the YouTube segment-only path (no words) shows all.
           for (let i = 0; i < cues.length; i++) {
             const el = phrasesEl.children[i] as HTMLElement | undefined;
             if (!el) continue;
@@ -111,10 +105,6 @@ export function CaptionBar({
             el.style.left = `${left}px`;
             el.style.maxWidth = `${Math.max(24, right - left - 6)}px`;
           }
-          // Global LOD: word labels only when the median word has room; else phrase text.
-          const wordMode = wordT.length > 0 && medianGap * pps >= WORD_LABEL_PX;
-          track.classList.toggle("word-lod", wordMode);
-          track.classList.toggle("phrase-lod", !wordMode);
           laidPps = pps;
           laidW = w;
         }
@@ -166,7 +156,7 @@ export function CaptionBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck, cues]);
 
-  if (cues.length === 0 && !status) return null;
+  if (cues.length === 0) return null;
   const tag = source ? SOURCE_TAG[source] : null;
   return (
     <div className="caption-bar beatlock" ref={wrapRef} style={{ ["--accent" as string]: accent }}>
@@ -190,12 +180,6 @@ export function CaptionBar({
           ))}
         </div>
       </div>
-      {status && (
-        <span className="caption-status" aria-live="polite">
-          <span className="caption-spin" />
-          {status}
-        </span>
-      )}
       {tag && (
         <span className="caption-source" title={tag.label} aria-label={tag.label}>
           {tag.icon}

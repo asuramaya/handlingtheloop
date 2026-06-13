@@ -68,7 +68,7 @@ import {
   type Stems,
   type StemModel,
 } from "@htl";
-import { resolveLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 
 type DeckId = "A" | "B";
 
@@ -438,6 +438,12 @@ export function App() {
   // dedupes so we reconcile a given videoId once (live edits after that flow via intents).
   const lastSnapshotRef = useRef<SessionSnapshot | null>(null);
   const reconciledTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
+  // Graceful follower sync: when we last did a follow-driven seek (so the steady-state drift
+  // corrector doesn't fire back-to-back and "skip/repeat"), and when we last saw a tick per
+  // deck (so the post-decode fallback doesn't start from the now-stale snapshot position when
+  // a tick is about to seek to the live one).
+  const followSeekAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  const lastTickAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
 
   const cycleTempoRange = useCallback(() => {
     const i = TEMPO_RANGES.indexOf(settings.tempoRange);
@@ -1167,7 +1173,8 @@ export function App() {
         void resolveLyrics({
           videoId: vid,
           deck: engine.deck(id),
-          model: (lyricsModelRef.current === "small" ? "small" : "base"),
+          model: lyricsModelRef.current === "small" ? "small" : "base",
+          engine: lyricsModelRef.current === "youtube" ? "youtube" : "whisper",
           enabled: lyricsAutoRef.current,
           sampleRate: engine.ctx.sampleRate,
           stale,
@@ -1412,13 +1419,34 @@ export function App() {
   // loop / cue / hot-cue STATE (absolute positions, so exact regardless of our own
   // playhead). Crossfade + zoom always track; faders + playhead arrive via intents
   // + ticks, so we don't reset them here.
-  // Mirror a deck's DISCRETE state from a snapshot (loop / cue / hot-cues / stem mutes+
-  // levels / fx / keylock / quantize). Absolute positions, so exact regardless of our own
-  // playhead. Continuous main faders + playhead come via intents + ticks (not touched here,
-  // so a live drag isn't fought).
+  // Mirror a deck's full state from a snapshot — the INITIAL alignment for a pure follower.
+  // Deduped per videoId by the caller, so it runs once per (re)load, NOT on every republished
+  // snapshot. Adopts CONTINUOUS controls too (tempo / pitch / levels / EQ / filter): a guest
+  // must never keep a stale local tempo (e.g. +8%) that desyncs its own playback from the host
+  // on join. Safe because applyRoomSnapshot only runs for non-driving followers, which have no
+  // live drag of their own to fight; ongoing host changes still cross as intents. Playhead is
+  // left to ticks/transport (no seek here — that would skip).
   const reconcileDeckState = useCallback(
     (id: DeckId, d: DeckSnapshot) => {
       const deck = engine.deck(id);
+      deck.setTempo(d.tempo);
+      deck.setTrim(d.trim);
+      deck.setLevel(d.level);
+      deck.setEqLow(d.eqLow);
+      deck.setEqMid(d.eqMid);
+      deck.setEqHigh(d.eqHigh);
+      if (d.eqLowFreq != null) deck.setEqLowFreq(d.eqLowFreq);
+      if (d.eqMidFreq != null) deck.setEqMidFreq(d.eqMidFreq);
+      if (d.eqHighFreq != null) deck.setEqHighFreq(d.eqHighFreq);
+      if (d.eqMidQ != null) deck.setEqMidQ(d.eqMidQ);
+      deck.setFilter(d.filter ?? 0);
+      if (d.eqHpFreq != null) deck.setEqHpFreq(d.eqHpFreq);
+      if (d.eqHpQ != null) deck.setEqHpQ(d.eqHpQ);
+      if (d.eqLpFreq != null) deck.setEqLpFreq(d.eqLpFreq);
+      if (d.eqLpQ != null) deck.setEqLpQ(d.eqLpQ);
+      deck.setEqBypass(!!d.eqBypass);
+      deck.setPitch(d.pitchSemis ?? 0);
+      // Discrete state — absolute, so exact regardless of our own playhead.
       deck.cuePoint = d.cuePoint;
       deck.hotCues = [...d.hotCues];
       deck.hotLoops = (d.hotLoops ?? []).map((l) => (l ? { ...l } : null));
@@ -1481,7 +1509,8 @@ export function App() {
           // can't crash the tree. (Stem sets, not base decodes, are the iOS memory hog and
           // never run on phones — canSeparate — so concurrent base decodes are safe.) The
           // freshly-loaded track's discrete state lands via the post-decode effect.
-          if (snap.zoom?.[id] != null) setZoomFor(id, snap.zoom[id]);
+          // Waveform zoom is LOCAL view state (not a synced control) — each device keeps its
+          // own, so we don't apply snap.zoom here.
           const track: TrackMeta = {
             videoId: d.videoId,
             title: d.name,
@@ -1502,7 +1531,7 @@ export function App() {
       });
       refresh();
     },
-    [engine, runRoomLoad, reconcileDeckState, refresh, setZoomFor],
+    [engine, runRoomLoad, reconcileDeckState, refresh],
   );
 
   // Once a remote-driven track finishes DECODING (loaded[id] catches up to the target),
@@ -1521,13 +1550,18 @@ export function App() {
         reconcileDeckState(id, d);
         reconciledTarget.current[id] = d.videoId;
         // Make a freshly-decoded follower actually SOUND: honor the snapshot transport.
-        // Ticks also do this, but a late joiner can sit decoded-but-paused if no tick
-        // flips it. resume() is enough now that the output was unlocked on first gesture.
+        // Ticks also do this, but a late joiner can sit decoded-but-paused if no tick flips
+        // it — so this is the FALLBACK. When the anchor IS ticking this deck, let onRoomTick
+        // start playback at the LIVE position (its flip branch seeks fresh): starting here
+        // from the now-stale snapshot position would get yanked forward an instant later —
+        // the audible skip on join. Only start from the snapshot when no tick is driving.
         const deck = engine.deck(id);
-        if (d.playing && !deck.playing) {
+        const tickDriving = performance.now() - (lastTickAt.current[id] ?? 0) < 1000;
+        if (d.playing && !deck.playing && !tickDriving) {
           engine.resume();
           deck.seek(d.position);
           deck.play();
+          followSeekAt.current[id] = performance.now();
         }
         any = true;
       }
@@ -1683,19 +1717,29 @@ export function App() {
       (["A", "B"] as DeckId[]).forEach((id) => {
         const t = decks[id];
         const deck = engine.deck(id);
-        if (!t || !deck.buffer || scrubbing.current[id]) return; // don't fight a local scrub
+        if (!t) return;
+        lastTickAt.current[id] = now; // the anchor is ticking this deck (used by the join fallback)
+        if (!deck.buffer || scrubbing.current[id]) return; // don't fight a local scrub
         const drift = Math.abs(deck.position() - t.pos);
         if (t.playing && !deck.playing) {
           engine.resume(); // iOS starts suspended
           if (drift > 0.05) deck.seek(t.pos); // catch up cleanly BEFORE the source starts
           deck.play();
+          followSeekAt.current[id] = now;
           flipped = true;
         } else if (!t.playing && deck.playing) {
           deck.pause();
           if (drift > 0.05) deck.seek(t.pos); // land on the master's paused position
+          followSeekAt.current[id] = now;
           flipped = true;
         } else if (deck.playing) {
-          if (drift > 0.6) deck.seek(t.pos); // steady audible playback → only fix a real desync
+          // Steady audible playback → only fix a real desync, and NEVER back-to-back: a
+          // freshly-joined follower settles instead of skip/repeating. 1.2s grace after any
+          // seek lets the audio glide back into tolerance on its own.
+          if (drift > 0.6 && now - followSeekAt.current[id] > 1200) {
+            deck.seek(t.pos);
+            followSeekAt.current[id] = now;
+          }
         } else {
           if (drift > 0.12) deck.seek(t.pos); // both paused → tight align is silent, no skip
         }
@@ -1750,30 +1794,50 @@ export function App() {
     [engine, refresh, setStatusFor],
   );
 
+  // The host streams its resolved, word-timed lyrics → apply them to this deck's caption ribbon
+  // (and persist), so a guest gets the SAME playhead-accurate captions the host sees — even on a
+  // phone (no GPU) or with the YouTube engine. The host's stream wins over any local fallback.
+  const onRoomLyrics = useCallback(
+    (deck: DeckId, videoId: string, lines: unknown, source: string) => {
+      const ls = lines as LyricsLine[];
+      if (!Array.isArray(ls) || ls.length === 0) return;
+      const src = (source as LyricsSource) || "whisper";
+      setCaptions((c) => ({ ...c, [deck]: ls }));
+      setCaptionSource((s) => ({ ...s, [deck]: src }));
+      cacheRemoteLyrics(videoId, ls, src);
+    },
+    [],
+  );
+
   const room = useRoom(
     {
       onState: applyRoomSnapshot,
       onIntent: onRoomIntent,
       onTick: onRoomTick,
       onStemView: onRoomStemView,
+      onLyrics: onRoomLyrics,
       onKicked: (reason) => setKickedNotice(reason || "You left the session."),
     },
     settings.accentA, // our account accent → synced so the room can take the host's vibe
   );
 
-  // Contextual room colour: while in a session (and opted in), wear the HOST's accent so
-  // the whole room shares a vibe. Override ONLY the global --accent (not the per-deck
-  // colours) and revert to our own the moment we're solo or opt out.
+  // Contextual room colour: while CONNECTED to a session (and opted in), wear the HOST's
+  // accent so the whole room shares a vibe. Gated on being connected (status online) rather
+  // than fully joined, so a guest catches the vibe the moment they're in the room — even
+  // mid-handshake — instead of only after approval. Override ONLY the global --accent (not
+  // the per-deck colours) and revert to our own the moment we're solo or opt out. (Note:
+  // same-account devices share an accent, so there's correctly nothing to inherit there —
+  // the vibe is visible when a guest on a DIFFERENT account has a different accent.)
   useEffect(() => {
     const root = document.documentElement;
     const vibe =
-      room.enabled && settings.inheritRoomColor && room.hostColor && room.hostColor !== settings.accentA;
+      room.status === "online" && settings.inheritRoomColor && room.hostColor && room.hostColor !== settings.accentA;
     if (vibe) root.style.setProperty("--accent", room.hostColor!);
     else root.style.removeProperty("--accent");
     return () => {
       root.style.removeProperty("--accent");
     };
-  }, [room.enabled, room.hostColor, settings.inheritRoomColor, settings.accentA]);
+  }, [room.status, room.hostColor, settings.inheritRoomColor, settings.accentA]);
 
   // The kicked/denied notice is transient — clear it after a few seconds.
   useEffect(() => {
@@ -1799,6 +1863,30 @@ export function App() {
     },
     [engine],
   );
+
+  // HOST streams its resolved, word-timed lyrics to the room (the lyric twin of stem-view
+  // streaming). Read via refs so the broadcast effect below isn't a dependency knot; reference-
+  // equality on the lines array (fresh per resolve) sends ONCE per resolution, and `force`
+  // re-sends to a newly-joined guest even when nothing changed.
+  const captionsRef = useRef(captions);
+  captionsRef.current = captions;
+  const captionSourceRef = useRef(captionSource);
+  captionSourceRef.current = captionSource;
+  const lastLyricsSent = useRef<Record<DeckId, LyricsLine[] | null>>({ A: null, B: null });
+  const sendHostLyrics = useCallback((id: DeckId, force = false) => {
+    const r = roomRef.current;
+    if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
+    const lines = captionsRef.current[id];
+    if (!lines || !lines.length) return;
+    if (!force && lines === lastLyricsSent.current[id]) return;
+    lastLyricsSent.current[id] = lines;
+    r.sendLyrics(id, latest.current.loaded[id] || "", lines, captionSourceRef.current[id] || "whisper");
+  }, []);
+  // Broadcast whenever a deck's captions change and we're the board authority.
+  useEffect(() => {
+    sendHostLyrics("A");
+    sendHostLyrics("B");
+  }, [captions, captionSource, room.status, room.controlling, room.isAnchor, sendHostLyrics]);
 
   // HOST side of a remote's stem request: only the audio authority (anchor) fulfills it —
   // separate the deck with the asked-for model, which fires onStemsReady → streams the
@@ -2269,9 +2357,12 @@ export function App() {
       // joining) so a remote's 4-lane display fills in alongside the board snapshot.
       sendHostStemView("A");
       sendHostStemView("B");
+      // …and the word-timed lyrics (forced) so a fresh joiner's caption ribbon fills in too.
+      sendHostLyrics("A", true);
+      sendHostLyrics("B", true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView]);
+  }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView, sendHostLyrics]);
 
   // The MOMENT we join an existing session (and we're not the clock), pull the current
   // set so decks/waveforms/transport snap into place immediately. followRef is already
@@ -2589,7 +2680,7 @@ export function App() {
         >
           <span className="chin-globe" aria-hidden="true">🌐</span>
         </button>
-        <RoomBar room={room} onActivate={() => engine.unlock()} onExpand={() => setSocialOpen(true)} />
+        <RoomBar room={room} onExpand={() => setSocialOpen(true)} />
       </nav>
 
       {/* Workspace: on desktop a flex ROW so the Library/Search docks SHARE the

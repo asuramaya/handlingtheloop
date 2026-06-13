@@ -6,6 +6,7 @@
 import { STEM_NAMES, type Stems } from "./index";
 import { type StemModel, isMobileDevice } from "./models";
 import { stemTrace } from "./trace";
+import { gpuRun } from "./gpuQueue";
 import { putStemBlobs, getStemBlobs, deleteStemBlobs, clearStemBlobsByPrefix } from "../persistence";
 
 // ~MB of a stereo float32 buffer set of `n` samples × `sets` (4 stems = 4).
@@ -105,9 +106,9 @@ export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
   demucsQuality = { shifts: Math.max(0, q.shifts | 0), overlap: Math.min(0.5, Math.max(0, q.overlap)) };
 }
 
-// Serialize ALL separations app-wide: one worker job at a time, so two decks / a
-// dev StrictMode double-fire / a model switch can't stack work or memory.
-let chain: Promise<unknown> = Promise.resolve();
+// Separation shares the app-wide GPU queue (see gpuQueue): one heavy WebGPU job at a time
+// across BOTH separation and Whisper, so two decks / a dev StrictMode double-fire / a model
+// switch / a concurrent transcription can't stack GPU work or thrash the compositor.
 export function separateOpenUnmix(mix: AudioBuffer, model: StemModel, onProgress?: SeparateProgress): Promise<Stems> {
   // On a PHONE, demucs would OOM-crash if the worker built the whole-track output
   // (4 full-length stereo float32 buffers ≈ 424 MB) in one pass. So mobile demucs
@@ -116,12 +117,7 @@ export function separateOpenUnmix(mix: AudioBuffer, model: StemModel, onProgress
   // together on the main thread. Desktop / Open-Unmix keep the one-shot path.
   const windowed = isMobileDevice() && model.arch === "demucs-core";
   const inner = () => (windowed ? separateDemucsWindowed(mix, model, onProgress) : separateInner(mix, model, onProgress));
-  const run = chain.then(inner, inner);
-  chain = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+  return gpuRun(inner);
 }
 
 // Post ONE separation job to the worker; resolve with the raw stem PCM (keyed by

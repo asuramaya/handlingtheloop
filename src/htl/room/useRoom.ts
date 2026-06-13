@@ -13,6 +13,7 @@ export interface RoomCallbacks {
   onState?: (snapshot: unknown) => void;
   onTick?: (decks: TickDecks) => void;
   onStemView?: (deck: DeckId, view: unknown) => void;
+  onLyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   onKicked?: (reason?: string) => void;
 }
 
@@ -52,6 +53,7 @@ export interface RoomState {
   sendTick: (decks: TickDecks) => void;
   publishState: (snapshot: unknown) => void;
   sendStemView: (deck: DeckId, view: unknown) => void;
+  sendLyrics: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   requestState: () => void;
 }
 
@@ -127,6 +129,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
       state: (s) => cbRef.current.onState?.(s),
       tick: (d) => cbRef.current.onTick?.(d),
       stemview: (deck, view) => cbRef.current.onStemView?.(deck, view),
+      lyrics: (deck, videoId, lines, source) => cbRef.current.onLyrics?.(deck, videoId, lines, source),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -179,6 +182,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   const sendTick = useCallback((decks: TickDecks) => clientRef.current?.sendTick(decks), []);
   const publishState = useCallback((snapshot: unknown) => clientRef.current?.publishState(snapshot), []);
   const sendStemView = useCallback((deck: DeckId, view: unknown) => clientRef.current?.sendStemView(deck, view), []);
+  const sendLyrics = useCallback((deck: DeckId, videoId: string, lines: unknown, source: string) => clientRef.current?.sendLyrics(deck, videoId, lines, source), []);
   const requestState = useCallback(() => clientRef.current?.requestState(), []);
   // Re-broadcast the accent whenever it changes (the user re-themed) so peers re-vibe live.
   useEffect(() => {
@@ -239,6 +243,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
     sendTick,
     publishState,
     sendStemView,
+    sendLyrics,
     requestState,
   };
 }

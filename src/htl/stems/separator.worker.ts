@@ -311,26 +311,35 @@ async function demucsCorePass(
   for (const t of TARGETS) acc[t] = [new Float32Array(N), new Float32Array(N)];
   const weight = new Float32Array(N);
   const nchunks = Math.max(1, Math.ceil(N / stride));
-  const Lbuf = new Float32Array(seg);
-  const Rbuf = new Float32Array(seg);
-  const mixBuf = new Float32Array(2 * seg);
-
-  for (let ci = 0; ci < nchunks; ci++) {
+  // Prepare ONE segment's inputs (CPU STFT) and immediately launch its GPU run. Each call
+  // allocates its OWN Lbuf/Rbuf/mixBuf/mag — no shared/reused buffers — so a segment that's still
+  // uploading to the GPU can't be clobbered by the next segment's prep (the async-upload race).
+  const prep = (ci: number) => {
     const start = ci * stride;
     const end = Math.min(start + seg, N);
-    const segLen = end - start;
-    Lbuf.fill(0);
-    Rbuf.fill(0);
+    const Lbuf = new Float32Array(seg); // zero-padded tail for the last (short) segment
+    const Rbuf = new Float32Array(seg);
     Lbuf.set(full[0].subarray(start, end));
     Rbuf.set(full[1].subarray(start, end));
-
     const { mag, frames } = demucsMag(fft, Lbuf, Rbuf);
+    const mixBuf = new Float32Array(2 * seg);
     mixBuf.set(Lbuf, 0);
     mixBuf.set(Rbuf, seg);
-
     const magT = new ort.Tensor("float32", mag, [1, 4, DEMUCS_BINS, frames]);
     const mixT = new ort.Tensor("float32", mixBuf, [1, 2, seg]);
-    const res = await sess.run({ mag: magT, mix: mixT });
+    return { start, segLen: end - start, frames, magT, mixT, run: sess.run({ mag: magT, mix: mixT }) };
+  };
+
+  // PIPELINE: launch segment ci+1's GPU run BEFORE doing ci's CPU iSTFT/overlap-add, so the GPU
+  // chews the next segment while the CPU finishes the current one — instead of the GPU idling
+  // through every iSTFT (the dominant dip in the sawtooth). Pure SCHEDULING: same STFT, same
+  // sess.run, same OLA accumulation keyed by `start`/`win` → bit-identical output. The 12 ms
+  // yield stays so the compositor still paints, now overlapped with useful GPU work.
+  let cur = prep(0);
+  for (let ci = 0; ci < nchunks; ci++) {
+    const { start, segLen, frames, magT, mixT, run } = cur;
+    const res = await run;
+    const next = ci + 1 < nchunks ? prep(ci + 1) : null; // GPU starts ci+1 now → overlaps the CPU below
     const fo = res.freq_out.data as Float32Array; // [1,4,4,BINS,frames]
     const to = res.time_out.data as Float32Array; // [1,4,2,seg]
     const chStride = DEMUCS_BINS * frames;
@@ -347,18 +356,19 @@ async function demucsCorePass(
         for (let s = 0; s < segLen; s++) dst[start + s] += (to[tb + s] + fchan[s]) * win[s];
       }
     }
-    // Free the per-segment tensors NOW (we've read fo/to into acc above) instead of
-    // waiting for GC. On the WebGPU EP each run otherwise leaves the input upload +
-    // output staging GPUBuffers live — on Apple-Silicon's UNIFIED memory that pressure
-    // builds across a 30-segment track; on the wasm EP it frees the heap copies. ORT
-    // ≥1.16 has Tensor.dispose; guard with ?. for the wasm bundle.
+    // Free this segment's tensors NOW (fo/to already read into acc) instead of waiting for GC. On
+    // the WebGPU EP each run otherwise leaves the input upload + output staging GPUBuffers live —
+    // across a 30-segment track that pressure builds (unified memory). ORT ≥1.16 has dispose.
     magT.dispose?.();
     mixT.dispose?.();
     res.freq_out.dispose?.();
     res.time_out.dispose?.();
     for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
     post((ci + 1) / nchunks);
-    await yieldSegment();
+    if (next) {
+      cur = next;
+      await yieldSegment(); // compositor paints here while the GPU works the next segment
+    }
   }
   for (const t of TARGETS) {
     for (let c = 0; c < 2; c++) {

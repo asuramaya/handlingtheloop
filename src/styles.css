@@ -896,22 +896,31 @@ body {
   z-index: 2;
   touch-action: none; /* let pointer-drag own the gesture on touch */
 }
+/* The persistent column divider is the uniform cell border below; the handle's own
+   hairline stays transparent until hover/drag, when it lights up accent — so a
+   resizable column shows ONE line (the divider), brightening where it's grabbable. */
 .col-resize::after {
   content: "";
   position: absolute;
-  top: 18%;
-  bottom: 18%;
+  top: 0;
+  bottom: 0;
   right: 0;
   width: 2px;
   border-radius: 2px;
-  background: var(--line);
+  background: transparent;
   transition: background 0.12s;
 }
 .col-resize:hover::after,
 .col-resize:active::after {
-  top: 0;
-  bottom: 0;
   background: color-mix(in srgb, var(--accent, #36c2ff) 70%, transparent);
+}
+/* Vertical grid markers between EVERY column (rekordbox-style), so Num·Thumb·Title
+   read as separated as the resizable columns do — not just the ones with a handle.
+   Right border on all but the last cell; the sticky header keeps its own (it already
+   carries the bottom border fine). */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 1px solid var(--line);
 }
 .track-table tbody tr {
   border-bottom: 1px solid #16181f;
@@ -1485,9 +1494,9 @@ body {
   border-radius: 1px;
   background: var(--accent);
 }
-/* Zoomed out (phrase LOD): hide per-word labels + bars, keep the tick comb. */
-.caption-track.phrase-lod .cw-label,
-.caption-track.phrase-lod .cw-bar {
+/* Per-word LOD: hide ONLY a word's label when there's no room before the next word. The tick +
+   duration bar stay, so the marker style is identical at every zoom (dense → clean tick comb). */
+.caption-word.no-label .cw-label {
   display: none;
 }
 /* The word being sung — deck-coloured tick + label, at any zoom. */
@@ -1539,8 +1548,10 @@ body.no-glow .caption-word.cw-on .cw-label {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-/* Zoomed in (word LOD): the phrase labels give way entirely to the per-word labels. */
-.caption-track.word-lod .caption-phrase {
+/* With per-word data the static line text is suppressed — only the ACTIVE line shows as a chip
+   (readability when zoomed out), the word ticks ARE the timeline. The YouTube segment-only path
+   (no word ticks → :not(.has-words)) keeps every line visible. */
+.caption-track.has-words .caption-phrase:not(.on) {
   display: none;
 }
 /* The line being sung — a readable chip. With per-word data its text stays STANDARD colour
@@ -2033,6 +2044,27 @@ body.no-glow .caption-word.cw-on .cw-label {
 }
 .lane-status.tone-idle {
   color: var(--muted);
+}
+/* GPU-job tell in the header (stem separation/fetch %, then lyric transcription %) — plain text
+   + a small spinner dot, NO floating bubble. Sits on the same row as BPM/key/grid. */
+.lane-proc {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+.lane-proc-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: caption-spin 0.8s linear infinite;
 }
 /* Beat-grid size control in the header (− value +). lane-info is click-through,
    so this re-enables pointer events for the buttons. */
@@ -2755,6 +2787,25 @@ body.no-glow .caption-word.cw-on .cw-label {
      nothing to push against — hide it; the 50/50 split owns the width here. */
   .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .dock-resizer-edge {
     display: none;
+  }
+}
+
+/* TABLET LANDSCAPE (iPad &c., above the collapse band) — there's room for the board,
+   but two 28vw docks (~56% together) squeeze it to ~44%, reading like a third. On a
+   touch tablet rebalance to a desktop-like split: the BOARD keeps ~half and the two
+   docks share the other half (≈25% each, still ≥270px — wide enough for the list).
+   Coarse-pointer + width-banded so laptops/desktops keep the default 28vw docks. The
+   ratio only re-flows when BOTH docks are open; one open keeps the board-heavy default
+   (board already gets ~72%). flex-basis here overrides the per-side --dock-w. */
+@media (min-width: 981px) and (max-width: 1366px) and (pointer: coarse) {
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
+    flex: 1 1 25%;
+    min-width: 0;
   }
 }
 

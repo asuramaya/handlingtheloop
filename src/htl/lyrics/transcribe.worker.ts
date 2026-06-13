@@ -250,34 +250,63 @@ self.onmessage = async (e: MessageEvent) => {
   };
   try {
     const pipe = await getPipe(repo);
-    (self as any).postMessage({ type: "progress", phase: "decode", pct: 0, id });
     const audio = to16k(pcm, sampleRate);
-    const common = { chunk_length_s: 30, stride_length_s: 5, ...(language ? { language } : {}) };
-    // WORD-level timestamps for karaoke highlighting; if the model lacks alignment heads it
-    // throws, so fall back to segment-level (line highlighting) — always produce something.
-    let lines: OutLine[];
-    let wordMode = false;
-    try {
-      const out = await pipe(audio, { return_timestamps: "word", ...common });
-      const ch = out.chunks ?? [];
-      // DIAGNOSTIC for word-onset drift: if the LAST word's time is far short of the audio
-      // length, transformers.js isn't accumulating the per-chunk offset → words read
-      // increasingly early (our/library bug). If it ≈ the audio length, per-word error is
-      // the model. Compare lastWord vs audioSec in the console.
-      const lastT = ch.length ? (ch[ch.length - 1].timestamp?.[0] ?? 0) : 0;
-      (self as any).postMessage({
-        type: "diag",
-        audioSec: +(audio.length / 16000).toFixed(1),
-        words: ch.length,
-        lastWordSec: +lastT.toFixed(1),
-        sample: ch.slice(0, 6).map((c) => [Math.round((c.timestamp?.[0] ?? 0) * 10) / 10, (c.text || "").trim()]),
-      });
-      lines = groupWords(ch);
-      wordMode = true;
-    } catch {
-      const out = await pipe(audio, { return_timestamps: true, ...common });
-      lines = cleanSegments(out.chunks);
+    const SR = 16000;
+    const total = audio.length;
+    (self as any).postMessage({ type: "progress", phase: "decode", pct: 0, id });
+
+    // MANUAL 30 s / 5 s-overlap chunking (instead of one pipe() call over the whole track). Three
+    // wins over letting transformers.js chunk internally: (1) a real per-chunk decode % to show in
+    // the UI; (2) EXPLICIT per-chunk time offsets — the library doesn't reliably accumulate them on
+    // long word-timestamp runs, so words drifted progressively EARLY; adding `offset` ourselves
+    // makes word times correct by construction (this supersedes the old drift diagnostic); (3) it
+    // sets up streaming partial lines later. Each chunk OWNS half of each overlap so a word near a
+    // seam is emitted by exactly one chunk (no dupes / no gaps).
+    const CHUNK = 30 * SR;
+    const OVERLAP = 5 * SR;
+    const step = CHUNK - OVERLAP; // 25 s hop
+    const nChunks = total <= CHUNK ? 1 : Math.ceil((total - OVERLAP) / step);
+    const langOpt = language ? { language } : {};
+
+    let wordMode = true;
+    const wChunks: AsrChunk[] = []; // accumulated WORD chunks at ABSOLUTE time (word mode)
+    const sChunks: AsrChunk[] = []; // accumulated SEGMENT chunks at absolute time (fallback)
+
+    for (let ci = 0; ci < nChunks; ci++) {
+      const start = ci * step;
+      const end = Math.min(total, start + CHUNK);
+      const seg = audio.slice(start, end); // copy — the pipe may detach/transfer its input
+      const offset = start / SR;
+      // This chunk's authoritative span (absolute seconds): cede half of each overlap to the
+      // neighbour so a seam word lands in exactly one chunk.
+      const vStart = ci > 0 ? offset + OVERLAP / SR / 2 : 0;
+      const vEnd = end >= total ? Infinity : end / SR - OVERLAP / SR / 2;
+      const push = (dst: AsrChunk[], out: { chunks?: AsrChunk[] }) => {
+        for (const c of out.chunks ?? []) {
+          const t = (c.timestamp?.[0] ?? 0) + offset;
+          const e = (c.timestamp?.[1] ?? t) + offset;
+          if (t >= vStart && t < vEnd) dst.push({ text: c.text, timestamp: [t, e] });
+        }
+      };
+
+      if (wordMode) {
+        try {
+          push(wChunks, await pipe(seg, { return_timestamps: "word", ...langOpt }));
+        } catch {
+          // The model lacks word-alignment heads → drop to segment mode for the WHOLE track and
+          // restart from chunk 0 so the result is never half word / half segment.
+          wordMode = false;
+          wChunks.length = 0;
+          ci = -1;
+          continue;
+        }
+      } else {
+        push(sChunks, await pipe(seg, { return_timestamps: true, ...langOpt }));
+      }
+      (self as any).postMessage({ type: "progress", phase: "decode", pct: Math.round(((ci + 1) / nChunks) * 100), id });
     }
+
+    let lines: OutLine[] = wordMode ? groupWords(wChunks) : cleanSegments(sChunks);
     // Snap word onsets to the real vocal transients (word mode only — segments have no words).
     if (wordMode && lines.some((l) => l.words?.length)) {
       (self as any).postMessage({ type: "progress", phase: "align", id });

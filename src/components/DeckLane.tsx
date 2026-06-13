@@ -121,6 +121,13 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   const stemBusy =
     stemStatus != null &&
     (stemStatus.phase === "separating" || (stemStatus.phase === "downloading" && !!stemStatus.src));
+  // GPU-job tells live in the deck HEADER now (no floating bubbles): stem separation/fetch %
+  // takes the slot first (it gates lyrics), then the lyric transcription %. Both are plain
+  // header text with a small spinner dot, on the SAME axis as BPM/key/grid.
+  const procText = stemBusy && stemStatus
+    ? `${stemStatus.phase === "separating" ? "Separating" : "Fetching stems"}${stemStatus.pct != null ? ` ${Math.round(stemStatus.pct)}%` : "…"}`
+    : lyricStatus || null;
+  const procTitle = stemBusy && stemStatus ? stemStatus.detail : lyricStatus || undefined;
   // Highlight the lane while a library/search track row is dragged over it.
   const [dropActive, setDropActive] = useState(false);
   return (
@@ -213,6 +220,12 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           </button>
         </span>
         {status && <span className={`lane-status tone-${status.tone}`}>{status.text}</span>}
+        {procText && (
+          <span className="lane-proc" aria-live="polite" title={procTitle}>
+            <span className="lane-proc-dot" />
+            {procText}
+          </span>
+        )}
       </div>
       <WaveformViewport
         deck={deck}
@@ -265,18 +278,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           }
         }}
       />
-      {stemBusy && stemStatus && (
-        <div className={`stem-busy ${stemStatus.phase === "separating" ? "process" : "fetch"}`} aria-live="polite">
-          <span className="stem-busy-spin" />
-          <span className="stem-busy-text">{stemStatus.detail}</span>
-          {stemStatus.pct != null && (
-            <span className="stem-busy-bar">
-              <span style={{ width: `${stemStatus.pct}%` }} />
-            </span>
-          )}
-        </div>
-      )}
-      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} status={lyricStatus} onSeek={onSeek} />
+      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} onSeek={onSeek} />
     </section>
   );
 }

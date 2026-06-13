@@ -4,6 +4,7 @@ import type { Deck } from "@htl/audio";
 import type { LyricsLine, LyricsSource, LyricsTranscript } from "./types";
 import type { LyricsModel } from "./models";
 import { whisperModel } from "./models";
+import { gpuRun } from "../stems/gpuQueue";
 
 // Capability gate — only desktop Chromium with WebGPU runs the model locally (the same
 // gate neural stems use). Everyone else still gets pooled transcripts + the YouTube
@@ -49,11 +50,7 @@ function ensureWorker(): Worker {
     worker = new Worker(new URL("./transcribe.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent) => {
       const m = e.data;
-      if (m?.type === "diag") {
-        // Word-onset drift check: lastWordSec should ≈ audioSec. If it's far short, the
-        // library isn't accumulating chunk offsets → words read increasingly early.
-        console.log(`[htl-lyrics] audio=${m.audioSec}s words=${m.words} lastWord=${m.lastWordSec}s`, m.sample);
-      } else if (m?.type === "progress") {
+      if (m?.type === "progress") {
         if (typeof m.id === "number") jobs.get(m.id)?.onProgress?.(m.phase, m.pct);
         else jobs.forEach((j) => j.onProgress?.(m.phase, m.pct)); // model-load progress has no id
       } else if (m?.type === "done") {
@@ -92,6 +89,15 @@ const LYRICS_VER = 4;
 const mem = new Map<string, LyricsLine[]>(); // videoId → lines (any model — first good wins)
 const inflight = new Map<string, Promise<LyricsLine[] | null>>();
 
+// A session GUEST received the host's streamed lyrics → keep them (memory + IndexedDB) so they
+// show instantly and a reload doesn't re-fetch. Same store the on-device decode + pool use, so a
+// later solo play of the same track finds them. Encapsulated here to keep LYRICS_VER private.
+export function cacheRemoteLyrics(videoId: string, lines: LyricsLine[], source: LyricsSource): void {
+  if (!videoId || !lines?.length) return;
+  mem.set(videoId, lines);
+  void putLyricsLocal(videoId, { lines, model: source === "youtube" ? "youtube" : "base", ver: LYRICS_VER });
+}
+
 async function cachedLines(videoId: string): Promise<LyricsLine[] | null> {
   const hit = mem.get(videoId);
   if (hit) return hit;
@@ -121,9 +127,19 @@ function transcribeOnce(
       if (!vocals) return null; // no neural vocals (Single mode / cancelled / timeout)
       const m = whisperModel(model);
       onStatus?.(`Transcribing lyrics (${m.label})…`);
-      const lines = await transcribe(vocals, sampleRate, m.repo, (phase, pct) =>
-        onStatus?.(phase === "model" ? `Loading ${m.label} model… ${pct}%` : phase === "align" ? "Aligning words to vocals…" : "Transcribing lyrics…"),
-      );
+      // Take the shared GPU queue ONLY now — the heavy WebGPU transcription — AFTER vocals are
+      // ready. Acquiring it earlier would deadlock: we'd hold the GPU while waiting on the
+      // separation that needs it. waitForNeuralVocals already blocked until separation released
+      // the queue, so here it's free; stems↔lyrics now strictly take turns on the GPU.
+      const lines = await gpuRun(() => transcribe(vocals, sampleRate, m.repo, (phase, pct) =>
+        onStatus?.(
+          phase === "model"
+            ? `Loading ${m.label} model… ${pct}%`
+            : phase === "align"
+              ? "Aligning words to vocals…"
+              : `Transcribing lyrics… ${pct}%`,
+        ),
+      ));
       if (lines.length) {
         mem.set(videoId, lines);
         void putLyricsLocal(videoId, { lines, model, ver: LYRICS_VER }); // survive refresh → never re-decode
@@ -163,6 +179,7 @@ export interface ResolveOpts {
   videoId: string;
   deck: Deck;
   model: LyricsModel;
+  engine?: "whisper" | "youtube"; // explicit lyrics engine: Whisper (default) or YouTube captions
   enabled: boolean; // settings.lyricsAuto
   sampleRate: number; // engine ctx sample rate (stems share it)
   stale: () => boolean;
@@ -178,6 +195,21 @@ export interface ResolveOpts {
 //   3) fresh on-device Whisper over the neural vocal stem (desktop GPU, decoded ONCE,
 //      then cached locally + contributed to the pool). Whisper wins over the placeholder.
 export async function resolveLyrics(o: ResolveOpts): Promise<void> {
+  // YouTube ENGINE (explicit choice): the user wants YouTube's captions, full stop — no pool, no
+  // on-device decode, no GPU. Skip even the local Whisper cache so the engine choice is honoured
+  // predictably. Works everywhere (mobile included).
+  if (o.engine === "youtube") {
+    const cues = await fetchCaptions(o.videoId);
+    if (o.stale()) return;
+    if (cues.length) {
+      o.onCues(cues, "youtube");
+    } else {
+      o.onStatus?.("No YouTube captions");
+      setTimeout(() => !o.stale() && o.onStatus?.(null), 4000);
+    }
+    return;
+  }
+
   // 0) Local cache — the fix for the re-transcribe loop. If we've decoded this track before
   // (this session OR a past one), use it and STOP. No vocals wait, no worker, no spinner.
   const cached = await cachedLines(o.videoId);

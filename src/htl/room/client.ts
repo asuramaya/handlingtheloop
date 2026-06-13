@@ -15,6 +15,7 @@ export interface RoomHandlers {
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
   stemview?: (deck: DeckId, view: unknown) => void;
+  lyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -192,6 +193,10 @@ export class RoomClient {
   publishState(snapshot: unknown): void {
     this.send({ t: "state", snapshot });
   }
+  sendLyrics(deck: DeckId, videoId: string, lines: unknown, source: string): void {
+    this.send({ t: "lyrics", deck, videoId, lines, source });
+  }
+
   sendStemView(deck: DeckId, view: unknown): void {
     this.send({ t: "stemview", deck, view });
   }
@@ -298,6 +303,9 @@ export class RoomClient {
         break;
       case "state":
         this.h.state?.(msg.snapshot);
+        break;
+      case "lyrics":
+        this.h.lyrics?.(msg.deck, msg.videoId, msg.lines, msg.source);
         break;
       case "stemview":
         this.h.stemview?.(msg.deck, msg.view);

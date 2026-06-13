@@ -51,7 +51,7 @@ export interface Settings {
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
-  lyricsModel: string; // whisper model id (see @htl/lyrics WHISPER_MODELS): "base" | "small"
+  lyricsModel: string; // lyrics engine: whisper model id "base" | "small" (WHISPER_MODELS), or "youtube" for YouTube captions
 }
 
 // The unified time-stretch engine's quality/latency trade-off (see stretchWorklet).

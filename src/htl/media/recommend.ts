@@ -7,6 +7,9 @@ import { ytAuthHeaders } from "./auth";
 
 export interface RecommendOpts {
   provider?: string | null; // seed track's catalog, to try provider-radio first
+  isrc?: string | null; // seed's ISRC — lets the server seed TIDAL track-radio directly
+  title?: string | null; // seed title/artist — lets the server FIND the seed on TIDAL
+  artist?: string | null; // (a YouTube seed has no ISRC, so we match it by name)
   limit?: number;
   signal?: AbortSignal;
 }
@@ -14,6 +17,9 @@ export interface RecommendOpts {
 export async function fetchRecommendations(videoId: string, opts: RecommendOpts = {}): Promise<TrackMeta[]> {
   const params = new URLSearchParams({ v: videoId });
   if (opts.provider) params.set("provider", opts.provider);
+  if (opts.isrc) params.set("isrc", opts.isrc);
+  if (opts.title) params.set("title", opts.title);
+  if (opts.artist) params.set("artist", opts.artist);
   if (opts.limit) params.set("limit", String(opts.limit));
   const res = await fetch(`/api/recommend?${params.toString()}`, {
     signal: opts.signal,

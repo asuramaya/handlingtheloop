@@ -1,0 +1,16 @@
+{
+  "name": "htl-fingerprint",
+  "type": "module",
+  "description": "Chromaprint (AcoustID-compatible) fingerprint of decoded PCM, compiled to wasm.",
+  "version": "0.0.1",
+  "files": [
+    "htl_fingerprint_bg.wasm",
+    "htl_fingerprint.js",
+    "htl_fingerprint.d.ts"
+  ],
+  "main": "htl_fingerprint.js",
+  "types": "htl_fingerprint.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

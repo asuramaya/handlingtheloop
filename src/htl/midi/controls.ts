@@ -56,6 +56,10 @@ export const LEARN_CONTROLS: LearnControl[] = [
   ...perDeck("jogBend", "Jog bend (outer ring)", "Jog", () => ({ kind: "jogBend" })),
   ...perDeck("jogBack", "Nudge back (grid)", "Jog", () => action("jogBack")),
   ...perDeck("jogFwd", "Nudge forward (grid)", "Jog", () => action("jogFwd")),
+  // Browse / zoom encoders (relative)
+  ...perDeck("zoom", "Waveform zoom", "Jog", () => ({ kind: "zoom" })),
+  { id: "browse", label: "Library scroll", group: "Modifier", control: { kind: "browse" } },
+  { id: "selector", label: "Library open/close", group: "Modifier", control: { kind: "selector" } },
   // Shift modifier (per deck)
   ...perDeck("shift", "Shift", "Modifier", () => ({ kind: "shift" })),
   // Deck focus — for pad-style boards that drive one deck at a time (A/B switch)

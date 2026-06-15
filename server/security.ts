@@ -135,5 +135,12 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "strict-origin-when-cross-origin",
   "x-frame-options": "DENY",
-  "permissions-policy": "geolocation=(), microphone=(), camera=(), browsing-topics=()",
+  // microphone=(self): output-device SELECTION needs it — enumerateDevices only fills
+  //   in real deviceIds/labels for audiooutput once an audio permission is granted, and
+  //   the cue/output picker reveals names via a one-shot getUserMedia (immediately
+  //   stopped, never recorded). microphone=() (empty) blocked that at the policy layer,
+  //   so device routing silently no-op'd. speaker-selection=(self): lets setSinkId /
+  //   selectAudioOutput route to a chosen device. Both same-origin only; geo/camera/
+  //   topics stay fully disabled.
+  "permissions-policy": "geolocation=(), microphone=(self), camera=(), browsing-topics=(), speaker-selection=(self)",
 };

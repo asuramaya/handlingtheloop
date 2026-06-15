@@ -19,6 +19,17 @@ interface AnyNode {
   short_view_count?: { text?: string };
 }
 
+// Hard global cap: anything longer than this is a mix/compilation/livestream, never a
+// mixable track. Enforced at the PARSER level so it's filtered out of EVERY list
+// (search, watch-next, recommendations) — duration-based, since titles are unreliable
+// ("… (1080p) || HD"). 0 = unknown duration, which we keep (the client load guard
+// catches any that slip through).
+export const MAX_TRACK_SECONDS = 15 * 60;
+
+function tooLong(durationSec: number): boolean {
+  return durationSec > MAX_TRACK_SECONDS;
+}
+
 function parseDuration(text?: string): number {
   if (!text) return 0;
   const parts = text.split(":").map(Number);
@@ -36,11 +47,13 @@ function parseViews(text?: string): number | null {
 
 function normalize(n: AnyNode): TrackMeta | null {
   if (!n.id || !/^[\w-]{11}$/.test(n.id)) return null;
+  const duration = n.duration?.seconds ?? parseDuration(n.duration?.text);
+  if (tooLong(duration)) return null;
   return {
     videoId: n.id,
     title: n.title?.text ?? n.id,
     artist: n.author?.name ?? "",
-    duration: n.duration?.seconds ?? parseDuration(n.duration?.text),
+    duration,
     thumbnail:
       n.thumbnails && n.thumbnails.length
         ? n.thumbnails[n.thumbnails.length - 1].url
@@ -143,22 +156,84 @@ interface CompactRenderer {
 function fromCompact(r: CompactRenderer): TrackMeta | null {
   const id = r.videoId;
   if (!id || !/^[\w-]{11}$/.test(id)) return null;
+  const duration = parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs));
+  if (tooLong(duration)) return null;
   const thumbs = r.thumbnail?.thumbnails;
   return {
     videoId: id,
     title: r.title?.simpleText ?? runsText(r.title?.runs) ?? id,
     artist: runsText(r.longBylineText?.runs) ?? runsText(r.shortBylineText?.runs) ?? "",
-    duration: parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs)),
+    duration,
     thumbnail:
       thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
     views: parseViews(r.viewCountText?.simpleText ?? runsText(r.viewCountText?.runs) ?? r.shortViewCountText?.simpleText),
   };
 }
 
-function collectCompact(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
+// YouTube migrated watch-next to the new component system: related videos now arrive
+// as `lockupViewModel` (the old `compactVideoRenderer` is gone on the WEB client). We
+// parse both so the feed keeps working across the rollout.
+interface LockupVM {
+  contentId?: string;
+  contentType?: string;
+  metadata?: {
+    lockupMetadataViewModel?: {
+      title?: { content?: string };
+      metadata?: { contentMetadataViewModel?: { metadataRows?: { metadataParts?: { text?: { content?: string } }[] }[] } };
+    };
+  };
+  contentImage?: {
+    thumbnailViewModel?: { overlays?: { thumbnailBottomOverlayViewModel?: { badges?: { thumbnailBadgeViewModel?: { text?: string } }[] } }[] };
+  };
+}
+
+// YouTube's own "this is music" tag (Content-ID derived): a thumbnail badge with a
+// MUSIC icon. It cleanly separates real tracks from non-music slop (gameplay,
+// reactions, podcasts, "try not to laugh") in the watch-next feed — no title regex.
+function lockupIsMusic(node: unknown, depth = 0): boolean {
+  if (!node || depth > 25) return false;
+  if (Array.isArray(node)) return node.some((x) => lockupIsMusic(x, depth + 1));
+  if (typeof node !== "object") return false;
+  const obj = node as Record<string, unknown>;
+  if (obj.imageName === "MUSIC") return true;
+  for (const k in obj) if (lockupIsMusic(obj[k], depth + 1)) return true;
+  return false;
+}
+
+function fromLockup(l: LockupVM): TrackMeta | null {
+  const id = l.contentId;
+  if (!id || !/^[\w-]{11}$/.test(id)) return null; // 11-char = a video (skips playlist/channel lockups)
+  if (l.contentType && l.contentType !== "LOCKUP_CONTENT_TYPE_VIDEO") return null;
+  if (!lockupIsMusic(l)) return null; // reject non-music (YouTube's own MUSIC tag)
+  const meta = l.metadata?.lockupMetadataViewModel;
+  const title = meta?.title?.content;
+  if (!title) return null; // skip placeholders / the current-video echo (no real title)
+  // First metadata row's first part is the channel/artist (best-effort).
+  const artist = meta?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content ?? "";
+  // Duration sits in a thumbnail badge ("3:42").
+  let durText: string | undefined;
+  for (const o of l.contentImage?.thumbnailViewModel?.overlays ?? []) {
+    for (const b of o.thumbnailBottomOverlayViewModel?.badges ?? []) {
+      const t = b.thumbnailBadgeViewModel?.text;
+      if (t && /^\d+(:\d+)+$/.test(t)) durText = t;
+    }
+  }
+  const duration = parseDuration(durText);
+  if (tooLong(duration)) return null; // drop hour-long mixes / livestreams
+  return {
+    videoId: id,
+    title,
+    artist,
+    duration,
+    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    views: null,
+  };
+}
+
+function collectVideos(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
   if (!node || depth > 40) return;
   if (Array.isArray(node)) {
-    for (const x of node) collectCompact(x, push, depth + 1);
+    for (const x of node) collectVideos(x, push, depth + 1);
     return;
   }
   if (typeof node !== "object") return;
@@ -167,9 +242,13 @@ function collectCompact(node: unknown, push: (t: TrackMeta) => void, depth = 0):
     const t = fromCompact(obj.compactVideoRenderer as CompactRenderer);
     if (t) push(t);
   }
+  if (obj.lockupViewModel) {
+    const t = fromLockup(obj.lockupViewModel as LockupVM);
+    if (t) push(t);
+  }
   for (const k in obj) {
-    if (k === "compactVideoRenderer") continue;
-    collectCompact(obj[k], push, depth + 1);
+    if (k === "compactVideoRenderer" || k === "lockupViewModel") continue;
+    collectVideos(obj[k], push, depth + 1);
   }
 }
 
@@ -264,7 +343,7 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       }
       const out: TrackMeta[] = [];
       const seen = new Set<string>([videoId]); // never suggest the seed itself
-      collectCompact(data, (t) => {
+      collectVideos(data, (t) => {
         if (seen.has(t.videoId)) return;
         seen.add(t.videoId);
         out.push(t);

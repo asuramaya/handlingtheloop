@@ -65,6 +65,14 @@ class Stretch extends AudioWorkletProcessor {
     // intermediate FIFO (stretched, pre-resample)
     this.ringL = new Float32Array(RING); this.ringR = new Float32Array(RING);
     this.wHead = 0; this.rHead = 0; // FIFO write (int) / read (frac) cursors
+    // Pre-roll reserve (samples) the producer keeps AHEAD of the read cursor. 0 = the
+    // original just-in-time behaviour (lowest tempo/pitch control latency). The host
+    // RAISES this during on-device stem separation so a CPU-pressured quantum outputs
+    // pre-built grains instead of running the WSOLA/PV search and overrunning its
+    // ~2.7 ms budget (the per-segment stutter). Built bounded (see process) so it never
+    // itself spikes the audio thread; the drawn playhead is clock-based (Deck.position
+    // reads ctx.currentTime, not this producer cursor) so deepening it never desyncs.
+    this.reserve = 0;
     // declick
     this.gain = 0; this.gainTarget = 0;
     this.kGain = 1 - Math.exp(-1 / (0.005 * this.sr)); // ~5 ms
@@ -107,6 +115,10 @@ class Stretch extends AudioWorkletProcessor {
     if (c.transient !== undefined) this.transientOn = !!c.transient;
     if (c.aa !== undefined) this.aaOn = !!c.aa;
     if (c.tThresh) this.tThresh = +c.tThresh;
+    // Pre-roll reserve — a cheap knob, set BEFORE the geometry early-return below so a
+    // reserve-only change (host raising it for a separation) applies without a grain
+    // rebuild. Clamp so reserve + grain headroom always fits the RING.
+    if (c.reserve !== undefined) this.reserve = Math.max(0, Math.min(RING - 1536, c.reserve | 0));
     // Engine selection (wsola | pv) + the PV's FFT size. A swap or an FFT-size
     // change while PLAYING would discontinuity the FIFO/OLA → click, so it goes
     // through the declicked seek path (fade out → re-seat at idealPos → fade in).
@@ -179,6 +191,11 @@ class Stretch extends AudioWorkletProcessor {
       this.pcmScale = d.int16 === false ? 1 : INV16;
       for (let g = 0; g < 4; g++) this.gain_[g] = g < this.nG ? 1 : 0;
       this.loaded = true;
+      // A new source invalidates any grains ALREADY synthesised from the OLD PCM that are
+      // still queued in the output FIFO — drop them so the previous track can't bleed through
+      // before the next start/seek re-seats the read head. (start/seek reset these anyway, but
+      // a swap that isn't immediately followed by one would otherwise drain stale audio.)
+      this.wHead = 0; this.rHead = 0; this.olaL.fill(0); this.olaR.fill(0); this.seekPending = -1;
     } else if (d.type === 'start') {
       this.reset(d.offset || 0); this.playing = true; this.ended = false; this.gainTarget = 1;
     } else if (d.type === 'seek') {
@@ -524,6 +541,20 @@ class Stretch extends AudioWorkletProcessor {
       const r = useAa ? this.sincRing(this.ringR, this.rHead, c) : this.cubicRing(this.ringR, this.rHead);
       outL[i] = l * this.gain; outR[i] = r * this.gain;
       this.rHead += gamma;
+    }
+    // Pre-roll headroom: with a reserve configured (host raises it during on-device stem
+    // separation), produce a BOUNDED number of grains ahead so a CPU-pressured quantum
+    // outputs from the reserve without running the WSOLA/PV search — process() stays cheap
+    // and finishes inside its budget instead of glitching each separation segment. Capped
+    // per block so building the reserve never itself spikes the audio thread; skipped while
+    // a declick-seek is fading out (about to reset the FIFO).
+    if (this.reserve > 0 && this.playing && !this.ended && this.seekPending < 0) {
+      let ahead = 0;
+      while (this.wHead - this.rHead < need + this.reserve && ahead < 4) {
+        if (pv) this.pvFrame(Aa); else this.grain(Aa);
+        if (this.ended) break;
+        ahead++;
+      }
     }
     // TEMP iPhone diagnostics: report live state ~4×/s so the UI can show why a deck
     // is (not) sounding — loaded? playing? FIFO filling? output actually non-zero?

@@ -61,8 +61,14 @@ export class DjRoom {
   // stem-less remote (a phone) can render the 4-lane display. Stored so a late joiner
   // gets them on request-state, like the snapshot.
   private lastStemView: Record<string, unknown> = {};
+  // Per-(sender·deck) last-relay timestamp → server-side rate limit on stemview, so a
+  // buggy/abusive peer can't amplify the ~70 KB envelope to every device on a tight loop
+  // (the client self-throttles, but the relay must not trust that). See the stemview case.
+  private stemViewRate: Record<string, number> = {};
   // Last per-deck word-timed lyrics the host streamed, so a late guest's caption ribbon fills in.
   private lastLyrics: Record<string, { videoId: string; lines: unknown; source: string }> = {};
+  // Last auto-DJ queue + status the host streamed, so a joining guest sees what's coming.
+  private lastAutomix: unknown;
   // Device ids the host has granted control. Persisted so a granted guest survives a
   // page refresh with its control intact instead of silently dropping to a listener (#10).
   private grants = new Set<string>();
@@ -320,9 +326,20 @@ export class DjRoom {
         // per-value storage cap, and a rejected put would close this socket (1006) into a
         // reconnect flap that reads as "stuck connecting".
         if ((this.isControlling(self) || self === this.anchorId) && (msg.deck === "A" || msg.deck === "B")) {
-          this.lastStemView[msg.deck] = msg.view;
-          this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
-          void this.persistStemViews();
+          // Trust nothing about size or cadence. A malformed/oversized envelope must not
+          // be fanned out to every peer (memory pressure), and the sender is rate-limited
+          // per deck so a tight re-publish loop can't amplify. Both are server-enforced —
+          // the client's own throttle is an optimisation, not a guarantee.
+          const size = JSON.stringify(msg.view ?? null).length;
+          const now = Date.now();
+          const rk = `${self}:${msg.deck}`;
+          const tooSoon = now - (this.stemViewRate[rk] ?? 0) < 2000;
+          if (size <= 400_000 && !tooSoon) {
+            this.stemViewRate[rk] = now;
+            this.lastStemView[msg.deck] = msg.view;
+            this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
+            void this.persistStemViews();
+          }
         }
         break;
       }
@@ -334,6 +351,15 @@ export class DjRoom {
           this.lastLyrics[msg.deck] = { videoId: msg.videoId, lines: msg.lines, source: msg.source };
           this.relay(self, { t: "lyrics", deck: msg.deck, videoId: msg.videoId, lines: msg.lines, source: msg.source });
           void this.persistLyrics();
+        }
+        break;
+      }
+      case "automix": {
+        // The board's authority (controller / anchor) streams the auto-DJ queue + status.
+        // In-memory + relay only — it regenerates, so not worth the DO storage-cap risk.
+        if (this.isControlling(self) || self === this.anchorId) {
+          this.lastAutomix = msg.state;
+          this.relay(self, { t: "automix", state: msg.state });
         }
         break;
       }
@@ -517,6 +543,9 @@ export class DjRoom {
   private sendCatchUp(ws: Ws): void {
     if (this.lastSnapshot !== undefined) {
       ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
+    }
+    if (this.lastAutomix !== undefined) {
+      ws.send(JSON.stringify({ t: "automix", state: this.lastAutomix } satisfies ServerMsg));
     }
     for (const d of ["A", "B"] as const) {
       if (this.lastStemView[d] !== undefined) {

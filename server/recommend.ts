@@ -21,6 +21,12 @@ import type { BrowseAuth, InnertubeApi } from "./innertube";
 export interface RecommendOpts {
   provider?: string | null;
   limit?: number;
+  // Tier A — provider radio (Tidal/YT-Music). The route supplies this closure
+  // (already token-authed + resolved to videoIds) when the seed has the right
+  // provenance + a connected token; it is merged AHEAD of YouTube. Tidal's radio
+  // endpoint is still env-gated/unverified (see server/tidalData.ts), so the live
+  // routes leave this unset today and the YouTube spine carries the feed.
+  providerRadio?: () => Promise<TrackMeta[]>;
 }
 
 export async function recommendNext(
@@ -41,17 +47,22 @@ export async function recommendNext(
     }
   };
 
-  // Tier A — provider radio booster (placeholder; resolves to nothing until the
-  // provider radio endpoints + ISRC resolve are wired). Kept here so the merge
-  // order (provider first, then the YouTube floor) is already correct.
-  // if (opts.provider) add(await providerRadio(opts.provider, videoId, auth));
+  // Tier A — provider radio (music-aware, genre/vibe-tight) takes precedence.
+  if (opts.providerRadio) {
+    try {
+      add(await opts.providerRadio());
+    } catch {
+      /* provider radio failed — fall through to the YouTube floor */
+    }
+  }
 
-  // Tier B — YouTube watch-next spine. Tolerate failure (rate limit / parse drift):
-  // a recommender that 500s would break the queue, so we degrade to "no suggestions".
-  try {
-    add(await api.getWatchNext(videoId, auth));
-  } catch {
-    /* return whatever we have (possibly empty) */
+  // Tier B — YouTube watch-next spine. The universal floor; tolerate failure.
+  if (out.length < limit) {
+    try {
+      add(await api.getWatchNext(videoId, auth));
+    } catch {
+      /* return whatever we have (possibly empty) */
+    }
   }
 
   return out.slice(0, limit);

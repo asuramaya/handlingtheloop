@@ -50,6 +50,35 @@ function loadOrt(threads: number): Promise<any> {
       const ort = await import(/* @vite-ignore */ ORT_CDN);
       ort.env.wasm.wasmPaths = ORT_BASE;
       ort.env.wasm.numThreads = Math.max(1, threads); // wasm SIMD threads (needs COI)
+      // Hand ORT a WebGPU device with the WGSL `shader-f16` feature ENABLED, so an fp16 model's
+      // generated f16 shaders (e.g. `array<vec4<f16>>` in the Cast/Sub kernels) actually compile.
+      // ORT-web otherwise creates the device WITHOUT extra features → "'f16' type used without
+      // 'f16' extension enabled" → the Cast pipeline is invalid → cascade → garbage/noise stems.
+      // THIS — a forgotten device feature, not broken kernels — is what the old "ORT miscomputes
+      // f16" folklore actually was. We request the adapter's MAX limits too so the fp32 path (large
+      // demucs storage buffers) is unaffected by supplying our own device. Best-effort: any failure
+      // (no shader-f16 support, request rejected) leaves ORT to make its own device → fp32 still works,
+      // fp16 just won't compile on that GPU (then the self-check / ear-test shows it).
+      if (USE_WEBGPU) {
+        try {
+          const gpu: any = (navigator as any).gpu;
+          const adapter = gpu && (await gpu.requestAdapter({ powerPreference: "high-performance" }));
+          if (adapter?.features?.has?.("shader-f16")) {
+            const lim: any = adapter.limits;
+            const want = [
+              "maxStorageBufferBindingSize", "maxBufferSize", "maxStorageBuffersPerShaderStage",
+              "maxUniformBufferBindingSize", "maxComputeWorkgroupStorageSize", "maxComputeInvocationsPerWorkgroup",
+              "maxComputeWorkgroupSizeX", "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ",
+              "maxComputeWorkgroupsPerDimension",
+            ];
+            const requiredLimits: Record<string, number> = {};
+            for (const k of want) if (typeof lim?.[k] === "number") requiredLimits[k] = lim[k]; // adapter max → ≥ ORT's needs
+            ort.env.webgpu.device = await adapter.requestDevice({ requiredFeatures: ["shader-f16"], requiredLimits });
+          }
+        } catch {
+          /* keep ORT's own device — fp32 unaffected; fp16 just can't compile here */
+        }
+      }
       return ort;
     })();
   }
@@ -369,7 +398,10 @@ async function demucsCorePass(
     for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
     post((ci + 1) / nchunks);
     // Yield a frame with the GPU + worker CPU IDLE so the compositor paints and the audio
-    // thread gets a core, THEN launch the next segment's GPU run.
+    // thread gets a core, THEN launch the next segment's GPU run. (Tried relaunch-ahead
+    // pipelining on discrete GPUs for speed, but pinning the GPU continuously starved the
+    // browser compositor — same GPU — and the deck waveform/playhead went visibly laggy. On
+    // a single shared GPU the per-segment GPU-idle here IS what keeps the UI smooth.)
     if (ci + 1 < nchunks) {
       await yieldSegment();
       cur = prep(ci + 1);
@@ -382,6 +414,53 @@ async function demucsCorePass(
     }
   }
   return acc;
+}
+
+// fp16 A/B self-check: run ONE representative (middle) segment through the fp16 session AND
+// the fp32 reference on the SAME WebGPU EP, then report the max/RMS error between their raw
+// model outputs (time_out + freq_out, BEFORE the JS iSTFT — so this measures the f16 kernels
+// directly). relTime = maxErr / fp32-peak: ~0 = correct, ~1 = garbage (the "ORT miscomputes
+// f16" claim). Best-effort: any throw (e.g. an f16-I/O type mismatch, or the ref failing to
+// load) is reported and never breaks the real separation. Runs once, then the fp16 pass
+// proceeds normally regardless of the verdict — the user judges by ear too.
+async function f16SelfCheck(ort: any, f16Sess: any, refUrl: string, full: Float32Array[], N: number): Promise<void> {
+  const seg = DEMUCS_SEG;
+  const start = Math.max(0, Math.min(N - seg, (N - seg) >> 1)); // a middle segment (real content, not the silent head/tail)
+  const Lbuf = new Float32Array(seg);
+  const Rbuf = new Float32Array(seg);
+  const end = Math.min(start + seg, N);
+  Lbuf.set(full[0].subarray(start, end));
+  Rbuf.set(full[1].subarray(start, end));
+  const { mag, frames } = demucsMag(fft, Lbuf, Rbuf);
+  const mixBuf = new Float32Array(2 * seg);
+  mixBuf.set(Lbuf, 0);
+  mixBuf.set(Rbuf, seg);
+  // Fresh tensors per run (the WebGPU EP detaches the upload buffer — can't share, see prep()).
+  const inputs = () => ({
+    mag: new ort.Tensor("float32", mag.slice(), [1, 4, DEMUCS_BINS, frames]),
+    mix: new ort.Tensor("float32", mixBuf.slice(), [1, 2, seg]),
+  });
+  const a = await f16Sess.run(inputs()); // fp16 (already loaded)
+  const refSess = await getSession(ort, refUrl, ["webgpu", "wasm"]); // fp32 reference
+  const b = await refSess.run(inputs());
+  const stat = (x: Float32Array, y: Float32Array) => {
+    const n = Math.min(x.length, y.length);
+    let mx = 0, se = 0;
+    for (let i = 0; i < n; i++) { const d = Math.abs(x[i] - y[i]); if (d > mx) mx = d; se += d * d; }
+    return { maxErr: mx, rms: Math.sqrt(se / n) };
+  };
+  const refT = b.time_out.data as Float32Array;
+  let peak = 0;
+  for (let i = 0; i < refT.length; i++) { const v = Math.abs(refT[i]); if (v > peak) peak = v; }
+  const t = stat(a.time_out.data as Float32Array, refT);
+  const f = stat(a.freq_out.data as Float32Array, b.freq_out.data as Float32Array);
+  self.postMessage({
+    type: "f16check", peak,
+    maxErrTime: t.maxErr, rmsTime: t.rms, relTime: peak ? t.maxErr / peak : 0,
+    maxErrFreq: f.maxErr, rmsFreq: f.rms,
+  });
+  a.time_out.dispose?.(); a.freq_out.dispose?.();
+  b.time_out.dispose?.(); b.freq_out.dispose?.();
 }
 
 // demucs-core entry. Without shifts → a single aligned pass (the original, lightest
@@ -399,12 +478,20 @@ async function runDemucsCore(
   post: Post,
   eps: string[] = ["webgpu", "wasm"],
   quality: DemucsQuality = { shifts: 0, overlap: 0.25 },
+  selfCheck = false,
+  refUrl?: string,
 ): Promise<Record<Target, Float32Array[]>> {
   // GPU variant → ["webgpu","wasm"] (default); CPU variant → ["wasm"] (stable on
   // iOS, no JSEP crash) — same graph + same stems, only the backend differs. Outside
   // Chromium we loaded the wasm-only bundle (see ORT_CDN), which has no WebGPU EP, so
   // force the wasm EP rather than asking for an absent one.
   const sess = await getSession(ort, url, USE_WEBGPU ? eps : ["wasm"]);
+  // fp16 A/B: before the real pass, compare ONE segment fp16-vs-fp32 on WebGPU (best-effort).
+  if (selfCheck && refUrl && USE_WEBGPU) {
+    await f16SelfCheck(ort, sess, refUrl, full, N).catch((e) =>
+      self.postMessage({ type: "f16check", error: String((e as Error)?.message ?? e) }),
+    );
+  }
   const overlapFrac = Math.min(0.5, Math.max(0, quality.overlap));
   const shifts = Math.max(0, quality.shifts | 0);
   if (shifts < 1) return demucsCorePass(ort, sess, full, N, overlapFrac, post);
@@ -448,6 +535,8 @@ interface SeparateMsg {
   url?: string;
   eps?: string[]; // demucs-core EP override: GPU → default ["webgpu","wasm"], CPU → ["wasm"]
   quality?: DemucsQuality; // demucs-core shift-TTA + overlap (desktop quality knobs)
+  selfCheck?: boolean; // fp16 model: numerically compare ONE segment vs the fp32 refUrl on WebGPU
+  refUrl?: string; // fp32 reference model URL for the fp16 self-check
   threads: number;
 }
 
@@ -463,7 +552,7 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
 
     const acc =
       msg.arch === "demucs-core"
-        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps, msg.quality)
+        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps, msg.quality, msg.selfCheck, msg.refUrl)
         : msg.arch === "demucs"
           ? await runDemucs(ort, msg.url!, full, N, post)
           : await runOpenUnmix(ort, msg.urls!, full, N, post);

@@ -18,13 +18,21 @@ const AUTH_URL = "https://login.tidal.com/authorize";
 const TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const ME_URL = "https://openapi.tidal.com/v2/users/me";
 
-// Scopes for reading + writing the user's playlists/collection. TIDAL's portal is
-// the source of truth for the exact strings. TIDAL rejects the WHOLE authorize
-// request (its hosted login shows "Something went wrong" / error 11102) if the app
-// asks for a scope its registered client isn't provisioned for — so this is
-// overridable via the TIDAL_SCOPES env (e.g. trim to read-only to match a read-only
-// app, or to bisect which scope is unapproved) without a code change.
-const SCOPES = ["user.read", "collection.read", "collection.write", "playlists.read", "playlists.write"].join(" ");
+// Exactly the scopes the code actually exercises, no more:
+//   user.read      → /users/me (the provider_user_id every playlist call is scoped by)
+//   collection.read→ /userCollections/{id}/relationships/playlists (how we list playlists)
+//   playlists.read → read a playlist's tracks (getTidalPlaylistTracks)
+//   playlists.write→ create the synced playlist + add tracks (createTidalPlaylist/addTidalTracks)
+//   search.read    → match tracks during sync (searchTidalTracks/tidalTrackIdByIsrc) — sync
+//                    silently fails at the matching step without it
+// We deliberately DON'T request collection.write (we never touch favorites), playback (TIDAL
+// is catalog/metadata-only here — DRM-locked, never streamed), entitlements.read, search.write,
+// or recommendations.read (track-radio is unused). TIDAL rejects the WHOLE authorize request
+// (hosted login shows "Something went wrong" / error 11102) if the app asks for a scope its
+// registered client isn't provisioned for — AND requires the redirect_uri to EXACTLY match a
+// registered one (scheme+host+path, no trailing slash, www vs apex matters). Overridable via the
+// TIDAL_SCOPES env (e.g. to add recommendations.read for radio, or bisect an unapproved scope).
+const SCOPES = ["user.read", "collection.read", "playlists.read", "playlists.write", "search.read"].join(" ");
 
 /** The scope string to request — the TIDAL_SCOPES env override, else the default set. */
 export function tidalScopes(env?: { TIDAL_SCOPES?: string }): string {
@@ -147,6 +155,58 @@ export async function tidalExchange(
     }
   }
   return tokens;
+}
+
+// --- Client-credentials (app token) -----------------------------------------
+// TIDAL's CATALOG endpoints (search, tracks, track-radio) are 2-legged: a
+// client-credentials token minted from the app's id/secret reads them with NO user
+// login. This is what lets the auto-mixer use TIDAL relatedness without every user
+// linking a TIDAL account — and lets the dev probe work with just the two secrets.
+let clientTokenCache: { token: string; exp: number } | null = null;
+
+export async function tidalClientToken(creds: TidalCreds | null): Promise<string | null> {
+  if (!creds) return null;
+  if (clientTokenCache && clientTokenCache.exp - 30_000 > Date.now()) return clientTokenCache.token;
+  try {
+    const basic = btoa(`${creds.clientId}:${creds.clientSecret}`);
+    const res = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { ...FORM, authorization: `Basic ${basic}` },
+      body: new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const j = (await res.json()) as TidalTokenResponse;
+    if (!res.ok || !j.access_token) return null;
+    clientTokenCache = { token: j.access_token, exp: Date.now() + (j.expires_in ?? 3600) * 1000 };
+    return j.access_token;
+  } catch {
+    return null;
+  }
+}
+
+/** Diagnostic: attempt a client-credentials token and report the raw outcome, so we
+ *  can tell "no creds" from "Tidal rejected them" (and read the error reason). */
+export async function tidalClientTokenDebug(creds: TidalCreds | null): Promise<{
+  hasCreds: boolean;
+  clientIdLen?: number;
+  ok: boolean;
+  status?: number;
+  body?: string;
+}> {
+  if (!creds) return { hasCreds: false, ok: false };
+  try {
+    const basic = btoa(`${creds.clientId}:${creds.clientSecret}`);
+    const res = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { ...FORM, authorization: `Basic ${basic}` },
+      body: new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const body = await res.text();
+    return { hasCreds: true, clientIdLen: creds.clientId.length, ok: res.ok, status: res.status, body: body.slice(0, 300) };
+  } catch (e) {
+    return { hasCreds: true, clientIdLen: creds.clientId.length, ok: false, body: (e as Error).message };
+  }
 }
 
 /** Exchange a stored refresh_token for a fresh access_token. */

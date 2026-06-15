@@ -16,6 +16,7 @@ import {
   hasStemsLocal,
   probeWebGPU,
   webGpuAdapterInfo,
+  webGpuShaderF16,
   isGpuBlocked,
   unblockGpu,
   stemFailLevel,
@@ -43,6 +44,7 @@ import { MidiPanel } from "./MidiPanel";
 import { ColorProfiles } from "./ColorProfiles";
 import { LyricsSettings } from "./LyricsSettings";
 import { MidiDebug } from "./MidiDebug";
+import { DockResizer } from "./DockResizer";
 // Account & connections moved to the full-screen Profile (see ProfileScreen).
 
 interface SettingsPanelProps {
@@ -262,6 +264,7 @@ export function SettingsPanel({
   // only when the Audio tab is open and the browser supports setSinkId.
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
   const [outputNeedsPerm, setOutputNeedsPerm] = useState(false);
+  const [outputPermErr, setOutputPermErr] = useState(""); // why a reveal failed (blocked / no device)
   useEffect(() => {
     if (tab !== "audio" || !outputSupported || !navigator.mediaDevices?.enumerateDevices) return;
     let cancelled = false;
@@ -287,14 +290,25 @@ export function SettingsPanel({
   // One-shot: ask for mic permission so enumerateDevices reveals output labels,
   // then immediately stop the stream (we never record — we only want the names).
   const revealOutputNames = async () => {
+    setOutputPermErr("");
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach((t) => t.stop());
       const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
       setOutputs(devs);
       setOutputNeedsPerm(devs.length > 0 && devs.every((d) => !d.label));
-    } catch {
-      /* user denied — leave the generic labels */
+    } catch (e) {
+      // Surface WHY instead of silently no-op'ing (the old behaviour looked like the
+      // button did nothing). NotAllowedError = blocked by the user OR by a restrictive
+      // Permissions-Policy (microphone=()); NotFoundError = no input device.
+      const name = e instanceof DOMException ? e.name : "";
+      setOutputPermErr(
+        name === "NotAllowedError"
+          ? "Microphone access is blocked — allow it for this site (it's only used to read device names; nothing is recorded). On the deployed site this needs the latest build."
+          : name === "NotFoundError"
+            ? "No audio input device found — your OS hides output names until some audio device is available."
+            : "Couldn't read device names on this browser.",
+      );
     }
   };
 
@@ -365,13 +379,11 @@ export function SettingsPanel({
 
 
   return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
+    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
+      <DockResizer varName="--dock-w-right" measure="parent" />
       <div className="panel settings-panel" onPointerDown={(e) => e.stopPropagation()}>
         <div className="settings-head">
           <h2>Settings</h2>
-          <button className="mini x" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
         </div>
 
         <div className="settings-tabs">
@@ -480,6 +492,22 @@ export function SettingsPanel({
 
                 <div className="settings-row">
                   <span className="settings-label">
+                    De-brickwall
+                    <span className="settings-sub muted"> · open up loud, over-limited masters</span>
+                  </span>
+                  <button
+                    className={`toggle ${settings.waveformDebrick ? "on" : ""}`}
+                    onClick={() => set({ waveformDebrick: !settings.waveformDebrick })}
+                    role="switch"
+                    aria-checked={settings.waveformDebrick}
+                    title="Most modern masters are brick-walled (limited near full-scale), so the waveform flat-tops into a solid block. This re-expands local contrast — transients and micro-dynamics show as contour — while keeping whole-track loud/quiet shape (drops & breakdowns still dip). Off = raw amplitude."
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">
                     Room color
                     <span className="settings-sub muted"> · catch the host's accent in a session</span>
                   </span>
@@ -521,6 +549,18 @@ export function SettingsPanel({
                   value={settings.jogDrag}
                   onChange={(v) => set({ jogDrag: v })}
                 />
+                <div className="settings-row">
+                  <span className="settings-label">Wheel seeks (else zooms)</span>
+                  <button
+                    className={`toggle ${settings.wheelSeeks ? "on" : ""}`}
+                    onClick={() => set({ wheelSeeks: !settings.wheelSeeks })}
+                    role="switch"
+                    aria-checked={settings.wheelSeeks}
+                    title="Mouse wheel over a waveform: ON = scrub the playhead (Ctrl/⌘+wheel zooms); OFF = zoom the view"
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
               </div>
 
               <div className="settings-section">
@@ -596,6 +636,7 @@ export function SettingsPanel({
                         </button>
                       </p>
                     )}
+                    {outputPermErr && <p className="settings-hint" style={{ color: "#ffd250" }}>{outputPermErr}</p>}
                   </>
                 ) : (
                   <p className="settings-hint muted">
@@ -604,6 +645,39 @@ export function SettingsPanel({
                   </p>
                 )}
               </div>
+
+              {outputSupported && (
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <span className="settings-label">Cue / Headphone</span>
+                  </div>
+                  <select
+                    className="settings-select"
+                    value={settings.audioCueOutputId}
+                    onChange={(e) => set({ audioCueOutputId: e.target.value })}
+                  >
+                    <option value="">None — single output</option>
+                    {outputs.map((d, i) => (
+                      <option key={d.deviceId || i} value={d.deviceId}>
+                        {d.label || `Output ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="settings-hint muted">
+                    Pick a second device (headphones) to pre-listen each deck like a DJ board. The deck’s <strong>CUE</strong>{" "}
+                    button becomes a fader — tap still sets / jumps the cue point, drag or scroll sets its headphone level.
+                    Tapped pre-fader, so you can cue a deck that’s faded out.
+                  </p>
+                  {outputNeedsPerm && (
+                    <p className="settings-hint muted">
+                      Device names are hidden until you grant audio permission once.{" "}
+                      <button className="link-btn" onClick={revealOutputNames}>
+                        Show device names
+                      </button>
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="settings-section">
                 <div className="settings-section-head">
@@ -742,9 +816,17 @@ export function SettingsPanel({
                 ) : (
                   <div className="stem-models">
                     {STEM_MODELS
+                      // Open-Unmix is retired from the picker — HT-Demucs (GPU) is the only
+                      // neural splitter we offer now. The registry entry stays so already-
+                      // cached umx stems still resolve; it's just no longer selectable.
+                      .filter((m) => m.arch !== "openunmix")
                       // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
                       // rest stay, shown as download-only on mobile.
                       .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
+                      // The fp16 demucs model only works where the adapter exposes shader-f16
+                      // (absent on today's Linux+NVIDIA WebGPU → its f16 shaders → noise). Hide
+                      // it until the feature appears, then it auto-shows.
+                      .filter((m) => !m.needsShaderF16 || webGpuShaderF16())
                       .map((m) => {
                         const sup = modelSupport(m);
                         const badge = supportBadge(m);

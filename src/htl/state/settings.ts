@@ -1,6 +1,7 @@
 // User customization, persisted via the @htl Store and applied as CSS variables
 // / body classes so the whole UI re-themes without prop drilling.
 import { Store, migrateLegacyKey } from "../persistence";
+import { getStemModel } from "../stems/models";
 import type { KeyBindings } from "./keybinds";
 import type { MidiLearnMap, MidiMap } from "../midi/types";
 import type { ColorProfile } from "./colorProfiles";
@@ -30,6 +31,7 @@ export interface Settings {
   jumpBeats: number; // beat-jump / loop-move "skip" resolution, in beats
   jogWeight: number; // platter inertia, 0 = featherweight/snappy … 1 = heavy flywheel
   jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
+  wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
   stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
   keyHints: boolean; // show the per-button keyboard-shortcut letters (desktop only)
@@ -49,9 +51,11 @@ export interface Settings {
   stretchTThresh: number; // WSOLA transient-detector threshold (flux/EMA ratio); lower = more sensitive
   stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
   audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
+  audioCueOutputId: string; // separate cue/headphone output device (PFL pre-listen); "" = no separate cue (single output)
   autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
+  waveformDebrick: boolean; // re-expand local contrast on brick-walled (limited) masters so the waveform shows contour
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
@@ -153,6 +157,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jumpBeats: 4,
   jogWeight: 0.4,
   jogDrag: 0.4,
+  wheelSeeks: false,
   stemModel: "off", // "Single" (plain mix, no stems) until the user picks a neural engine; DSP split was dropped
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free
   keyHints: true, // per-button key letters on by default (CSS hides them on mobile)
@@ -172,9 +177,11 @@ export const DEFAULT_SETTINGS: Settings = {
   stretchTThresh: 2.2, // matches the worklet's built-in default
   stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
   audioOutputId: "", // system default output until the user picks a device
+  audioCueOutputId: "", // no separate cue device by default (CUE stays a plain button)
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
+  waveformDebrick: true, // de-brickwall loud masters by default
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
@@ -251,7 +258,12 @@ const store = new Store<Settings>("settings", DEFAULT_SETTINGS, 1);
 migrateLegacyKey("htl.settings", store); // pre-versioned key
 
 export function loadSettings(): Settings {
-  return store.get();
+  const s = store.get();
+  // Open-Unmix is retired — coerce a stored umx selection back to Single so a stale
+  // hidden model doesn't drive separation on the next track load. HT-Demucs (GPU) is
+  // the only neural splitter now; the user re-picks it explicitly.
+  if (getStemModel(s.stemModel).arch === "openunmix") s.stemModel = "off";
+  return s;
 }
 
 export function saveSettings(s: Settings) {

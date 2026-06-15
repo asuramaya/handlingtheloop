@@ -36,6 +36,7 @@ interface DeckLaneProps {
   freqMid: string;
   freqHigh: string;
   vividness: number;
+  debrick: boolean;
   glow: boolean;
   stemColors: Record<string, string>;
   meta: DeckMeta;
@@ -49,6 +50,7 @@ interface DeckLaneProps {
   collapsed: boolean; // the OTHER lane is maximized → this one is hidden
   onToggleExpand: () => void;
   onZoom: (next: number) => void;
+  wheelSeeks?: boolean; // mouse wheel over the waveform: false = zoom (default), true = seek/scrub
   refresh: () => void;
   onLoadFile: (file: File) => void;
   // Drag a track row from the library/search onto a lane to load it to that deck.
@@ -117,7 +119,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, glow, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -257,7 +259,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
             +
           </button>
         </span>
-        {status && <span className={`lane-status tone-${status.tone}`}>{status.text}</span>}
+        {/* One processing indicator: while stems are separating/fetching, procText owns
+            the slot ("Separating 8%"); the terse stem badge (✦ Cached / ✓ Done / Failed)
+            shows only when nothing's in progress, so they never double up. */}
+        {status && !procText && <span className={`lane-status tone-${status.tone}`}>{status.text}</span>}
         {procText && (
           <span className="lane-proc" aria-live="polite" title={procTitle}>
             <span className="lane-proc-dot" />
@@ -279,6 +284,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         freqMid={freqMid}
         freqHigh={freqHigh}
         vividness={vividness}
+        debrick={debrick}
         glow={glow}
         stemColors={stemColors}
         gridSize={deck.skipBeats}
@@ -289,6 +295,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         }
         windowSec={windowSec}
         onZoom={onZoom}
+        wheelSeeks={wheelSeeks}
         onScrubStart={() => {
           if (deck.adjusting) return; // boundary-adjust mode: no platter scrub
           deck.scrubBegin();

@@ -40,6 +40,7 @@ interface DeckControlsProps {
   onToggleShift: () => void;
   onSync: () => void;
   onKey: () => void;
+  cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
   refresh: () => void;
   emit: (intent: Intent) => void; // broadcast one action to a shared session (no-op when off)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
@@ -68,7 +69,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, refresh, emit, emitControls }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -109,6 +110,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         emitSeek();
       }
     });
+  // CUE-point action (set / jump-to-cue / START-on-shift). Shared by the plain CUE
+  // button and — when a separate cue device is selected — the CUE fader's tap.
+  const cueAction = () => {
+    if (shift) {
+      deck.seek(0);
+      emit({ kind: "transport", deck: id, action: "seek", position: 0 });
+    } else if (deck.playing) {
+      deck.jumpToCue();
+      emitSeek();
+    } else {
+      deck.setCue();
+      emit({ kind: "cue", deck: id, position: deck.cuePoint });
+    }
+  };
 
   return (
     <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
@@ -287,25 +302,34 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
 
         <div className="bank-load">
-          <button
-            className="hw-btn cue"
-            title={shift ? "Jump to start" : "Cue"}
-            onPointerDown={act(() => {
-              if (shift) {
-                deck.seek(0);
-                emit({ kind: "transport", deck: id, action: "seek", position: 0 });
-              } else if (deck.playing) {
-                deck.jumpToCue();
-                emitSeek();
-              } else {
-                deck.setCue();
-                emit({ kind: "cue", deck: id, position: deck.cuePoint });
-              }
-            })}
-          >
-            {shift ? "START" : "CUE"}
-            <span className="kbd">C</span>
-          </button>
+          {cueFader ? (
+            /* A separate cue device is selected → CUE is a headphone-level "buttonoid"
+               (like TRIM/TEMPO): TAP = the cue-point action (set / jump / START-on-shift,
+               unchanged), DRAG / SCROLL = this deck's PFL level into the cue device.
+               Double-tap kills the cue level. Local monitor only — never broadcast. */
+            <ValueCell
+              className={`cue cue-fader ${deck.cueLevel > 0 ? "cue-on" : ""}`}
+              label={shift ? "START" : "CUE"}
+              value={deck.cueLevel}
+              min={0}
+              max={1}
+              step={0.02}
+              reset={0}
+              kbd="C"
+              onTap={() => { cueAction(); refresh(); }}
+              onChange={(v) => { deck.setCueLevel(v); refresh(); }}
+              format={(v) => `${Math.round(v * 100)}`}
+            />
+          ) : (
+            <button
+              className="hw-btn cue"
+              title={shift ? "Jump to start" : "Cue"}
+              onPointerDown={act(cueAction)}
+            >
+              {shift ? "START" : "CUE"}
+              <span className="kbd">C</span>
+            </button>
+          )}
           {/* PLAY is a button-knob (like the stem cells): tap = play/pause (Shift =
               reset channel), scroll / drag = TRIM gain, shown as a percentage. Double-
               click resets trim to unity. The board's TRIM knob drives the same value. */}

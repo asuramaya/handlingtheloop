@@ -24,6 +24,14 @@ export class AudioEngine {
   private readonly xfadeB: GainNode;
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
+  // Headphone-cue (PFL) bus: both decks' pre-fader cueSend taps mix into cueMaster,
+  // which — when a separate cue device is chosen — bridges through a MediaStream into a
+  // hidden <audio> element pinned to that device via setSinkId (the only way to drive a
+  // SECOND physical output from one AudioContext). Built lazily; dangling = silent.
+  private readonly cueMaster: GainNode;
+  private cueStreamDest: MediaStreamAudioDestinationNode | null = null;
+  private cueEl: HTMLAudioElement | null = null;
+  private cueDeviceId = ""; // currently routed cue device ("" = none / single output)
   // Desired WSOLA engine config; re-applied whenever the stretch nodes (re)attach.
   private stretchCfg: StretchEngineConfig = { frame: 1024, search: 200, stride: 2 };
   // TEMP iPhone diagnostics: surface worklet-module load failures (console is
@@ -65,6 +73,12 @@ export class AudioEngine {
     this.deckB = new Deck(this.ctx);
     this.deckA.output.connect(this.xfadeA);
     this.deckB.output.connect(this.xfadeB);
+    // Cue bus: both decks' pre-fader sends mix into cueMaster (unity). Its downstream
+    // (the second device sink) is built on demand in setCueSinkId — until then this is
+    // a dangling sub-mix with no output, so it costs nothing and makes no sound.
+    this.cueMaster = this.ctx.createGain();
+    this.deckA.cueSend.connect(this.cueMaster);
+    this.deckB.cueSend.connect(this.cueMaster);
     // Sync follow/release: any tempo change routes through the state machine.
     this.deckA.onTempoChange = () => this.onDeckTempo("A");
     this.deckB.onTempoChange = () => this.onDeckTempo("B");
@@ -133,11 +147,27 @@ export class AudioEngine {
   }
 
   /** Set the time-stretch engine quality on both decks (from the Audio Engine
-   *  settings tab). Stored so it survives node re-attach. */
+   *  settings tab). Stored so it survives node re-attach. Preserves the live
+   *  separation reserve (a quality change mustn't drop pre-roll headroom). */
   setStretchConfig(cfg: StretchEngineConfig) {
-    this.stretchCfg = cfg;
-    this.deckA.configureStretch(cfg);
-    this.deckB.configureStretch(cfg);
+    this.stretchCfg = { ...cfg, reserve: this.stretchCfg.reserve };
+    this.deckA.configureStretch(this.stretchCfg);
+    this.deckB.configureStretch(this.stretchCfg);
+  }
+
+  /** Raise/lower the worklet's pre-roll FIFO headroom on BOTH decks. The host bumps
+   *  this while an on-device stem separation is in flight: the per-segment CPU FFT
+   *  bursts (separator.worker) momentarily crowd the audio thread, and a reserve lets
+   *  a pressured render quantum output pre-built grains instead of running the WSOLA/PV
+   *  search and overrunning its budget (the mid-split stutter). 0 off = zero tempo/pitch
+   *  control latency the rest of the time. Resends the FULL config so the worklet's
+   *  geometry early-return fires (no grain rebuild / click). */
+  setStretchReserve(samples: number) {
+    const reserve = Math.max(0, Math.round(samples));
+    if (this.stretchCfg.reserve === reserve) return;
+    this.stretchCfg = { ...this.stretchCfg, reserve };
+    this.deckA.configureStretch(this.stretchCfg);
+    this.deckB.configureStretch(this.stretchCfg);
   }
 
   /** True when this browser can route the context to a chosen output device
@@ -158,6 +188,77 @@ export class AudioEngine {
     } catch (e) {
       console.warn("[htl] setSinkId failed:", e);
       return false;
+    }
+  }
+
+  /** True when this browser can pin a media element to a chosen output device
+   *  (HTMLMediaElement.setSinkId — Chromium/Edge). Gates the cue-device UI; the cue
+   *  bus needs a SECOND sink, which only the element variant provides. */
+  get canCueDevice(): boolean {
+    return typeof document !== "undefined" && typeof HTMLMediaElement !== "undefined" && typeof HTMLMediaElement.prototype.setSinkId === "function";
+  }
+
+  /** Route the headphone-cue (PFL) bus to a separate output device (Settings → Audio).
+   *  `deviceId` "" tears the cue bus down (back to single output). Bridges cueMaster
+   *  through a MediaStream into a hidden <audio> element pinned to the device — the
+   *  only way to drive a second physical output from one AudioContext. No-op returning
+   *  false when unsupported, so the UI can explain instead of throwing. */
+  async setCueSinkId(deviceId: string): Promise<boolean> {
+    this.cueDeviceId = deviceId || "";
+    if (!this.cueDeviceId) {
+      this.teardownCueBus();
+      return true;
+    }
+    if (typeof document === "undefined") return false;
+    try {
+      if (!this.cueStreamDest) {
+        this.cueStreamDest = this.ctx.createMediaStreamDestination();
+        this.cueMaster.connect(this.cueStreamDest);
+      }
+      if (!this.cueEl) {
+        const el = document.createElement("audio");
+        el.setAttribute("playsinline", "");
+        el.autoplay = true;
+        el.srcObject = this.cueStreamDest.stream;
+        el.style.display = "none";
+        document.body.appendChild(el);
+        this.cueEl = el;
+      }
+      const el = this.cueEl as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+      if (typeof el.setSinkId !== "function") {
+        this.teardownCueBus();
+        return false;
+      }
+      await el.setSinkId(deviceId);
+      void el.play().catch(() => {}); // best-effort; starts once the context is running
+      return true;
+    } catch (e) {
+      console.warn("[htl] cue setSinkId failed:", e);
+      this.teardownCueBus();
+      return false;
+    }
+  }
+
+  /** Disconnect + remove the cue bridge, reverting to single-output. Safe to call when
+   *  nothing is built. cueMaster stays (dangling/silent) for the next time around. */
+  private teardownCueBus(): void {
+    if (this.cueStreamDest) {
+      try {
+        this.cueMaster.disconnect(this.cueStreamDest);
+      } catch {
+        /* wasn't connected — ignore */
+      }
+      this.cueStreamDest = null;
+    }
+    if (this.cueEl) {
+      try {
+        this.cueEl.pause();
+        this.cueEl.srcObject = null;
+        this.cueEl.remove();
+      } catch {
+        /* ignore */
+      }
+      this.cueEl = null;
     }
   }
 

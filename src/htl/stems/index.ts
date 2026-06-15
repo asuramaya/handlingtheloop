@@ -304,6 +304,131 @@ export async function dspStems(buffer: AudioBuffer): Promise<Stems> {
   return { vocals, drums, bass, other };
 }
 
+// PRE-PACKED stems: int16 PCM per group (in STEM_NAMES order, so the worklet's stemGain
+// indices line up) + the level-0 min/max + low/mid/high envelope per group (for the LOD
+// pyramids). The point is to NEVER hold the full float32 stem set — it's the build TRANSIENT
+// (~90 MB/min × 4 stems) that OOM-kills a phone on a long track. The engine loads this with
+// Deck.loadPackedStems (no float32 intermediate).
+export interface PackedStems {
+  gL: Int16Array[];
+  gR: Int16Array[];
+  length: number;
+  sampleRate: number;
+  base: Record<StemName, { min: Float32Array; max: Float32Array; low: Float32Array; mid: Float32Array; high: Float32Array; bucket: number }>;
+}
+
+const PACK_BUCKET = 256; // MUST match STEM_BASE_BUCKET in Deck.ts (the pyramid level-0 bucket)
+const DSP_WIN_BUCKETS = 4096; // window ≈ 4096·256 ≈ 21.8 s @ 48 k, bucket-aligned (no straddling buckets)
+const DSP_LEAD_SEC = 0.75; // IIR warm-up rendered before each window then discarded → continuous audio
+
+// WINDOWED DSP → int16, for LONG tracks. dspStems renders the whole track through OfflineAudio-
+// Context biquads → 4 full-length float32 buffers, then the engine packs them to int16; that
+// double (float32 output + int16) peaks at ~138 MB/min and OOMs a phone past ~6 min. This walks
+// the track in bucket-aligned windows, reuses dspStems on a SHORT slice (+ a lead-in so the IIR
+// filters settle → seam-free audio), packs each window straight into the resident int16 output,
+// and accumulates the envelope — so the float32 transient is bounded to ONE window regardless of
+// length. The band-split LPFs for the COLOUR envelope restart per window (a negligible colour
+// seam; the audio shape is continuous via the lead-in). Yields between windows.
+export async function dspStemsWindowedInt16(buffer: AudioBuffer, signal?: AbortSignal): Promise<PackedStems> {
+  const sr = buffer.sampleRate;
+  const N = buffer.length;
+  const ch = buffer.numberOfChannels;
+  const WIN = DSP_WIN_BUCKETS * PACK_BUCKET;
+  const LEAD = Math.round(DSP_LEAD_SEC * sr);
+  const buckets = Math.ceil(N / PACK_BUCKET);
+  const gL = STEM_NAMES.map(() => new Int16Array(N));
+  const gR = STEM_NAMES.map(() => new Int16Array(N));
+  const acc = STEM_NAMES.map(() => ({
+    min: new Float32Array(buckets),
+    max: new Float32Array(buckets),
+    low: new Float32Array(buckets),
+    mid: new Float32Array(buckets),
+    high: new Float32Array(buckets),
+    maxLow: 1e-9,
+    maxMid: 1e-9,
+    maxHigh: 1e-9,
+  }));
+  const aLow = 1 - Math.exp((-2 * Math.PI * 200) / sr);
+  const aMid = 1 - Math.exp((-2 * Math.PI * 2000) / sr);
+
+  for (let s = 0; s < N; s += WIN) {
+    if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+    const e = Math.min(N, s + WIN);
+    const leadStart = Math.max(0, s - LEAD);
+    const sliceLen = e - leadStart;
+    const slice = new AudioBuffer({ length: sliceLen, sampleRate: sr, numberOfChannels: ch });
+    for (let c = 0; c < ch; c++) slice.getChannelData(c).set(buffer.getChannelData(c).subarray(leadStart, e));
+    const stems = await dspStems(slice); // reuse the whole split on a short slice (with lead-in)
+    const off = s - leadStart; // first real (post-lead-in) sample inside the slice
+    for (let gi = 0; gi < STEM_NAMES.length; gi++) {
+      const stem = stems[STEM_NAMES[gi]];
+      const fL = stem.getChannelData(0);
+      const fR = stem.numberOfChannels > 1 ? stem.getChannelData(1) : fL;
+      const a = acc[gi];
+      const oL = gL[gi];
+      const oR = gR[gi];
+      let lp200 = 0;
+      let lp2000 = 0;
+      let lSum = 0;
+      let mSum = 0;
+      let hSum = 0;
+      let bMin = 1;
+      let bMax = -1;
+      let cnt = 0;
+      let bi = (s / PACK_BUCKET) | 0; // s is WIN-aligned ⇒ exact bucket index
+      for (let i = off, oi = s; i < sliceLen; i++, oi++) {
+        const l = fL[i];
+        const r = fR[i];
+        const sl = l * 32767;
+        const srr = r * 32767;
+        oL[oi] = sl < -32767 ? -32767 : sl > 32767 ? 32767 : Math.round(sl);
+        oR[oi] = srr < -32767 ? -32767 : srr > 32767 ? 32767 : Math.round(srr);
+        const m = (l + r) * 0.5;
+        lp200 += aLow * (m - lp200);
+        lp2000 += aMid * (m - lp2000);
+        const lo = lp200;
+        const md = lp2000 - lp200;
+        const hi = m - lp2000;
+        if (m < bMin) bMin = m;
+        if (m > bMax) bMax = m;
+        lSum += lo * lo;
+        mSum += md * md;
+        hSum += hi * hi;
+        if (++cnt >= PACK_BUCKET || oi === N - 1) {
+          const lv = Math.sqrt(lSum / cnt);
+          const mv = Math.sqrt(mSum / cnt);
+          const hv = Math.sqrt(hSum / cnt);
+          a.min[bi] = bMin;
+          a.max[bi] = bMax;
+          a.low[bi] = lv;
+          a.mid[bi] = mv;
+          a.high[bi] = hv;
+          if (lv > a.maxLow) a.maxLow = lv;
+          if (mv > a.maxMid) a.maxMid = mv;
+          if (hv > a.maxHigh) a.maxHigh = hv;
+          bi++;
+          bMin = 1;
+          bMax = -1;
+          lSum = mSum = hSum = 0;
+          cnt = 0;
+        }
+      }
+    }
+    await yieldToMain(); // one window's float32 is now GC-able before the next
+  }
+  const base = {} as PackedStems["base"];
+  for (let gi = 0; gi < STEM_NAMES.length; gi++) {
+    const a = acc[gi];
+    for (let i = 0; i < buckets; i++) {
+      a.low[i] /= a.maxLow;
+      a.mid[i] /= a.maxMid;
+      a.high[i] /= a.maxHigh;
+    }
+    base[STEM_NAMES[gi]] = { min: a.min, max: a.max, low: a.low, mid: a.mid, high: a.high, bucket: PACK_BUCKET };
+  }
+  return { gL, gR, length: N, sampleRate: sr, base };
+}
+
 function renderFiltered(
   ref: AudioBuffer,
   srcBuffer: AudioBuffer,

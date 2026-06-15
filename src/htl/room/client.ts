@@ -14,6 +14,7 @@ export interface RoomHandlers {
   intent?: (intent: Intent, from: string, seq: number) => void;
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
+  automix?: (state: unknown) => void;
   stemview?: (deck: DeckId, view: unknown) => void;
   lyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   settings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings landed
@@ -54,7 +55,12 @@ export function deviceId(): string {
 export function deviceName(): string {
   const ua = navigator.userAgent;
   if (/iPhone/.test(ua)) return "iPhone";
-  if (/iPad/.test(ua)) return "iPad";
+  // iPadOS ≥13 Safari reports a DESKTOP "Macintosh" UA, so /iPad/ alone misses it — tell a
+  // real Mac from an iPad by touch points (a Mac reports maxTouchPoints 0). Misclassifying an
+  // iPad as "Mac" made the session treat it as a DESKTOP, so the clock-anchor logic never
+  // reclaimed the clock from it (server MOBILE_KINDS didn't match) — it stayed the anchor with
+  // a frozen/suspended audio clock and the session never recovered after the host refreshed.
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && (navigator.maxTouchPoints ?? 0) > 1)) return "iPad";
   if (/Android/.test(ua)) return "Android";
   if (/Macintosh|Mac OS X/.test(ua)) return "Mac";
   if (/Windows/.test(ua)) return "Windows PC";
@@ -201,6 +207,10 @@ export class RoomClient {
   sendStemView(deck: DeckId, view: unknown): void {
     this.send({ t: "stemview", deck, view });
   }
+  /** Broadcast the auto-DJ queue + status to the room (host → guests). */
+  sendAutomix(state: unknown): void {
+    this.send({ t: "automix", state });
+  }
   /** Broadcast my colour/theme settings to my OTHER signed-in devices (the server relays
    *  ONLY to the account owner's own devices). updatedAt drives last-write-wins on the receiver. */
   sendSettings(settings: unknown, updatedAt: number): void {
@@ -312,6 +322,9 @@ export class RoomClient {
         break;
       case "lyrics":
         this.h.lyrics?.(msg.deck, msg.videoId, msg.lines, msg.source);
+        break;
+      case "automix":
+        this.h.automix?.(msg.state);
         break;
       case "stemview":
         this.h.stemview?.(msg.deck, msg.view);

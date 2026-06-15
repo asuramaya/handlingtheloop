@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Library, Playlist } from "@htl/library";
 import type { TrackMeta } from "@htl/library";
-import { getCachedTrack } from "@htl/audio";
+import { getCachedMeta } from "@htl/audio";
 import {
   fetchPlaylist,
   fetchMyPlaylists,
@@ -14,19 +14,24 @@ import {
   fetchMe,
   fetchSpotifyPlaylists,
   fetchTidalPlaylists,
+  friendlySyncError,
   syncReadSource,
   syncMatch,
+  usePlaylistSource,
   type Me,
   type ServicePlaylist,
 } from "@htl/account";
 import { Store } from "@htl/persistence";
+import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type MixQueue } from "@htl";
+import { MixQueuePanel } from "./MixQueuePanel";
 
 // Backfilled metadata for community (legacy-cached) tracks, persisted so titles
 // survive reloads and we don't re-hit /api/meta on every library open.
 type CachedMeta = { title: string; artist: string; duration: number; thumbnail: string | null };
 const communityMeta = new Store<Record<string, CachedMeta>>("community-meta", {}, 1);
-import { SearchModal } from "./SearchModal";
+import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
+import { SetupWizard } from "./SetupWizard";
 import { TRACK_DND_MIME, TrackTable } from "./TrackTable";
 import { ConfirmModal, PromptModal } from "./Dialog";
 import { DockResizer } from "./DockResizer";
@@ -47,12 +52,15 @@ function cleanPlaylistName(title: string): string {
 // before it was first loaded to a deck (persisted values win once they exist).
 function withCached(t: TrackMeta): TrackMeta {
   if (t.bpm != null && t.key != null) return t;
-  const a = getCachedTrack(t.videoId)?.analysis;
-  if (!a) return t;
+  // Read the LIGHT bpm/key cache, not getCachedTrack — the heavy decoded-buffer cache is now
+  // LRU-bounded (mobile OOM fix), so its entry may have been evicted, but the scalar bpm/key
+  // is kept for the whole session so the columns stay filled.
+  const m = getCachedMeta(t.videoId);
+  if (!m) return t;
   return {
     ...t,
-    bpm: t.bpm ?? a.bpm ?? null,
-    key: t.key ?? a.key?.camelot ?? null,
+    bpm: t.bpm ?? m.bpm ?? null,
+    key: t.key ?? m.key ?? null,
   };
 }
 
@@ -60,10 +68,32 @@ interface LibraryPanelProps {
   library: Library;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   loadedIds: Set<string>;
+  deckLoaded: { A: string | null; B: string | null }; // videoIds on each deck → A/B chips in the lists
+  deckColors: { A: string; B: string }; // deck accent colours for the chips
   open?: boolean; // the floating library panel is shown (defaults to visible)
   onOpenChange?: (open: boolean) => void;
-  searchOpen: boolean;
-  onSearchOpenChange: (open: boolean) => void;
+  // Auto-mix (auto-DJ) controls, surfaced in the library header; the queue view
+  // takes over the song-list area (like Sync) rather than floating.
+  auto?: {
+    status: AutoMixStatus;
+    queue: MixQueue;
+    queueCount: number;
+    queueOpen: boolean;
+    mirror?: AutoMixMirror | null; // session: the host's queue/status (read-only mirror)
+    // Queue mutations route through one authority (host local / remote → intent → host).
+    edit: {
+      add: (t: TrackMeta) => void;
+      addNext: (t: TrackMeta) => void;
+      remove: (videoId: string) => void;
+      move: (from: number, to: number) => void;
+    };
+    canEdit: boolean; // host/solo, or a controlling remote
+    onToggle: () => void;
+    onToggleQueue: () => void;
+    onMixNow: () => void;
+    onSkip: () => void;
+    onHold: () => void;
+  };
 }
 
 type View = "collection" | "community" | { playlistId: string };
@@ -72,12 +102,16 @@ export function LibraryPanel({
   library,
   onLoad,
   loadedIds,
+  deckLoaded,
+  deckColors,
   open = true,
   onOpenChange = () => {},
-  searchOpen,
-  onSearchOpenChange,
+  auto,
 }: LibraryPanelProps) {
   const [view, setView] = useState<View>("collection");
+  // Search is baked into the library now (no separate dock): selecting it shows the
+  // Explorer (its own search bar + results) in the main content area, like Sync.
+  const [searchView, setSearchView] = useState(false);
   // Sidebar (nav) collapse — toggled by the ☰ hamburger. Persisted; defaults open on
   // desktop and collapsed on a phone so the track table fills the full-screen panel.
   const [navOpen, setNavOpen] = useState(() => {
@@ -92,27 +126,58 @@ export function LibraryPanel({
       /* ignore */
     }
   }, [navOpen]);
+  // Collapsible sidebar sections (PLAYLISTS / MY YOUTUBE / MY SPOTIFY / MY TIDAL) — the
+  // header row toggles; persisted so a tidied sidebar stays tidied across reloads.
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
+    try {
+      return new Set<string>(JSON.parse(localStorage.getItem("htl:libSections") || "[]"));
+    } catch {
+      return new Set<string>();
+    }
+  });
+  const toggleSection = (key: string) =>
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      try {
+        localStorage.setItem("htl:libSections", JSON.stringify([...next]));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  // A section header that doubles as a collapse toggle (caret + label), keeping its
+  // optional action button (＋ new / ⟳ refresh) on the right.
+  const sectionHead = (key: string, label: string, action?: ReactNode) => (
+    <div className="lib-section">
+      <button
+        className="lib-section-toggle"
+        onClick={() => toggleSection(key)}
+        aria-expanded={!collapsedSections.has(key)}
+        title={collapsedSections.has(key) ? "Expand" : "Collapse"}
+      >
+        <span className="lib-section-caret" aria-hidden="true">{collapsedSections.has(key) ? "▸" : "▾"}</span>
+        <span>{label}</span>
+      </button>
+      {action}
+    </div>
+  );
   const [syncOpen, setSyncOpen] = useState(false);
   // Picking any library view (Collection / Community / a playlist) exits the Sync
   // subsection — they share the main content area.
   useEffect(() => {
     setSyncOpen(false);
+    setSearchView(false);
   }, [view]);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
-  // The signed-in user's own YouTube playlists.
-  const [mine, setMine] = useState<MyPlaylist[]>([]);
-  const [mineState, setMineState] = useState<"idle" | "loading" | "error">("idle");
-  const [mineErr, setMineErr] = useState("");
-
-  // The signed-in user's Spotify playlists.
-  const [spotMine, setSpotMine] = useState<ServicePlaylist[]>([]);
-  const [spotState, setSpotState] = useState<"idle" | "loading" | "error">("idle");
-  const [, setSpotErr] = useState("");
-  // …and their TIDAL playlists.
-  const [tidalMine, setTidalMine] = useState<ServicePlaylist[]>([]);
-  const [tidalState, setTidalState] = useState<"idle" | "loading" | "error">("idle");
+  // Selecting any library section (Collection / Community / a playlist…) returns to the
+  // song list by closing the auto-mix queue view — the queue is just another tab now, so
+  // there's no explicit "← Songs" button.
+  const closeQueue = () => {
+    if (auto?.queueOpen) auto.onToggleQueue();
+  };
 
   // htl account (server session) — its Google connection is what reaches the
   // user's YouTube playlists. A login cookie (SAPISID) is a fallback path.
@@ -120,6 +185,34 @@ export function LibraryPanel({
   const ytConnected = !!me?.connections.includes("google");
   const spotifyConnected = !!me?.connections.includes("spotify");
   const tidalConnected = !!me?.connections.includes("tidal");
+
+  // Setup/import wizard: auto-launch once on first sign-in with an empty library;
+  // also openable any time from the sidebar.
+  const [wizardOpen, setWizardOpen] = useState(false);
+  useEffect(() => {
+    // Desktop only — a full-screen wizard auto-popping on a phone reads as a freeze.
+    if (me?.user && !isMobileDevice() && library.playlists.length === 0 && !localStorage.getItem("htl:wizardSeen")) {
+      localStorage.setItem("htl:wizardSeen", "1");
+      setWizardOpen(true);
+    }
+  }, [me?.user, library.playlists.length]);
+
+  // Provider playlist LISTS via the smart cache: shown instantly from the last
+  // result, only refetched when stale (5 min) or when ⟳ forces it — no redundant
+  // hammering on every library open.
+  const ytSrc = usePlaylistSource<MyPlaylist>("youtube", fetchMyPlaylists, ytConnected);
+  const spotSrc = usePlaylistSource<ServicePlaylist>("spotify", fetchSpotifyPlaylists, spotifyConnected);
+  const tidalSrc = usePlaylistSource<ServicePlaylist>("tidal", fetchTidalPlaylists, tidalConnected);
+  const mine = ytSrc.items;
+  const mineState = ytSrc.state;
+  const mineErr = ytSrc.err;
+  const loadMine = ytSrc.refresh;
+  const spotMine = spotSrc.items;
+  const spotState = spotSrc.state;
+  const loadSpotify = spotSrc.refresh;
+  const tidalMine = tidalSrc.items;
+  const tidalState = tidalSrc.state;
+  const loadTidal = tidalSrc.refresh;
 
   // The shared community pool (tracks already cached — load instantly, no resolve).
   const [community, setCommunity] = useState<TrackMeta[]>([]);
@@ -169,54 +262,9 @@ export function LibraryPanel({
     };
   }, []);
 
-  async function loadMine() {
-    setMineState("loading");
-    setMineErr("");
-    try {
-      setMine(await fetchMyPlaylists());
-      setMineState("idle");
-    } catch (e) {
-      setMineErr((e as Error).message);
-      setMineState("error");
-    }
-  }
   useEffect(() => {
     fetchMe().then(setMe);
   }, []);
-  useEffect(() => {
-    if (ytConnected) loadMine();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ytConnected]);
-
-  async function loadSpotify() {
-    setSpotState("loading");
-    setSpotErr("");
-    try {
-      setSpotMine(await fetchSpotifyPlaylists());
-      setSpotState("idle");
-    } catch (e) {
-      setSpotErr((e as Error).message);
-      setSpotState("error");
-    }
-  }
-  useEffect(() => {
-    if (spotifyConnected) loadSpotify();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spotifyConnected]);
-
-  async function loadTidal() {
-    setTidalState("loading");
-    try {
-      setTidalMine(await fetchTidalPlaylists());
-      setTidalState("idle");
-    } catch {
-      setTidalState("error");
-    }
-  }
-  useEffect(() => {
-    if (tidalConnected) loadTidal();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tidalConnected]);
 
   // Import a streaming-service playlist INTO the library: read its tracks, match
   // each to a playable YouTube video (paged to stay under the Worker subrequest
@@ -262,7 +310,105 @@ export function LibraryPanel({
       setView({ playlistId: id });
       setImportMsg(null);
     } catch (e) {
-      setImportMsg(`${label} import failed: ${(e as Error).message}`);
+      setImportMsg(`${label} import failed — ${friendlySyncError((e as Error).message)}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  // The not-yet-imported service playlists, split so the main list stays clean: ones you
+  // OWN (importable) show inline; ones only SHARED with you (ownedByMe === false) — which
+  // the provider's API blocks third-party apps from reading (a 403), so importing them
+  // dead-ends — are tucked into a collapsed disclosure with how-to-fix guidance instead of
+  // cluttering the list with rows that fail. (TIDAL doesn't report ownership, so its rows
+  // are all treated as owned; its large-playlist failures are 429s, handled by retry.)
+  const renderImportList = (service: "spotify" | "tidal", mine: ServicePlaylist[]) => {
+    const pending = mine.filter((p) => !library.playlists.some((pl) => pl.sourceListId === p.id));
+    const owned = pending.filter((p) => p.ownedByMe !== false);
+    const shared = pending.filter((p) => p.ownedByMe === false);
+    const label = service === "tidal" ? "TIDAL" : "Spotify";
+    const importBtn = (p: ServicePlaylist) => (
+      <button
+        key={p.id}
+        className="lib-nav small"
+        title={`Import “${p.title}” from ${label} (matches tracks to YouTube)`}
+        disabled={importing}
+        onClick={() => importServicePlaylist(service, p)}
+      >
+        <span className="lib-nav-ico">♫</span>
+        <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
+        {p.count > 0 && <span className="lib-count">{p.count}</span>}
+      </button>
+    );
+    return (
+      <>
+        {owned.map(importBtn)}
+        {shared.length > 0 && (
+          <details className="lib-shared">
+            <summary>Shared with you · {shared.length}</summary>
+            <div className="lib-shared-note">
+              {label} blocks apps from reading playlists you don’t own. Open one in {label}, add it to your
+              own library (or duplicate it), then import that copy. Importing here will just report this.
+            </div>
+            {shared.map(importBtn)}
+          </details>
+        )}
+      </>
+    );
+  };
+
+  // Match provider source-tracks to playable YouTube videos (paged to stay under the
+  // Worker subrequest cap). Shared by import + re-sync.
+  async function matchTracksToYouTube(
+    tracks: Parameters<typeof syncMatch>[1],
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<TrackMeta[]> {
+    const matched: TrackMeta[] = [];
+    const SLICE = 15;
+    for (let i = 0; i < tracks.length; i += SLICE) {
+      const rows = await syncMatch("youtube", tracks.slice(i, i + SLICE), i);
+      for (const r of rows) {
+        if (r.best && r.best.kind === "video") {
+          matched.push({ videoId: r.best.id, title: r.best.title, artist: r.best.artist, duration: r.best.duration, thumbnail: r.best.thumbnail, views: null });
+        }
+      }
+      onProgress?.(Math.min(i + SLICE, tracks.length), tracks.length);
+    }
+    return matched;
+  }
+
+  // Re-sync an already-imported playlist: re-read the provider's CURRENT tracks and
+  // merge any new ones into the local copy (provider playlists have no change hooks).
+  // Removed tracks are pruned only for exact-id YouTube sources — matched (Spotify/
+  // TIDAL) playlists can re-match to a different video, so we never prune those.
+  async function resyncPlaylist(pl: Playlist) {
+    if (!pl.sourceListId || !pl.sourceService || importing) return;
+    const service = pl.sourceService;
+    setImporting(true);
+    setImportMsg(`Re-syncing “${cleanPlaylistName(pl.name)}”…`);
+    try {
+      let fresh: TrackMeta[];
+      if (service === "youtube") {
+        fresh = (await fetchPlaylist(pl.sourceListId)).tracks;
+      } else if (service === "spotify" || service === "tidal") {
+        const { tracks } = await syncReadSource(service, pl.sourceListId);
+        fresh = await matchTracksToYouTube(tracks, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
+      } else {
+        return;
+      }
+      const have = new Set(pl.trackIds);
+      let added = 0;
+      for (const t of fresh) if (!have.has(t.videoId)) { library.addToPlaylist(pl.id, t); added++; }
+      let removed = 0;
+      if (service === "youtube") {
+        const freshIds = new Set(fresh.map((t) => t.videoId));
+        for (const vid of pl.trackIds) if (!freshIds.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
+      }
+      library.markSynced(pl.id, Date.now());
+      setImportMsg(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date");
+      window.setTimeout(() => setImportMsg((m) => (m && m.startsWith("Synced") || m === "Already up to date" ? null : m)), 2500);
+    } catch (e) {
+      setImportMsg(`Re-sync failed: ${(e as Error).message}`);
     } finally {
       setImporting(false);
     }
@@ -412,12 +558,13 @@ export function LibraryPanel({
   const renderPlaylistItem = (p: Playlist) => (
     <button
       key={p.id}
-      className={`lib-nav small ${activePlaylistId === p.id ? "active" : ""} ${dragPl === p.id ? "drag-over" : ""}`}
+      className={`lib-nav small ${!auto?.queueOpen && activePlaylistId === p.id ? "active" : ""} ${dragPl === p.id ? "drag-over" : ""}`}
       onClick={() => {
         if (plSuppress.current) {
           plSuppress.current = false;
           return;
         }
+        closeQueue();
         setView({ playlistId: p.id });
       }}
       onContextMenu={(e) => {
@@ -456,9 +603,15 @@ export function LibraryPanel({
       {p.sourceListId && (
         <span
           className="lib-pl-src"
-          title={`Synced with ${p.sourceService === "spotify" ? "Spotify" : p.sourceService === "tidal" ? "TIDAL" : "YouTube"}`}
+          role="button"
+          tabIndex={0}
+          title={`Re-sync from ${p.sourceService === "spotify" ? "Spotify" : p.sourceService === "tidal" ? "TIDAL" : "YouTube"}${p.lastSynced ? ` — last synced ${new Date(p.lastSynced).toLocaleString()}` : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void resyncPlaylist(p);
+          }}
         >
-          ⇄
+          {importing ? "⟳" : "⇄"}
         </span>
       )}
       <span className="lib-count">{p.trackIds.length}</span>
@@ -508,21 +661,38 @@ export function LibraryPanel({
           <DockResizer varName="--dock-w-left" measure="parent" />
           <div className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             <div className="settings-head">
+              {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
+                  the sections menu. A caret marks it as a disclosure. */}
               <button
-                className={`lib-burger ${navOpen ? "on" : ""}`}
+                className={`lib-head lib-head-toggle ${navOpen ? "on" : ""}`}
                 onClick={() => setNavOpen((v) => !v)}
-                aria-label={navOpen ? "Hide sidebar" : "Show sidebar"}
                 aria-pressed={navOpen}
-                title={navOpen ? "Hide sidebar" : "Show sidebar"}
+                aria-label={navOpen ? "Hide sections" : "Show sections"}
+                title={navOpen ? "Hide sections" : "Show sections"}
               >
-                ☰
-              </button>
-              <div className="lib-head">
+                <span className="lib-head-caret" aria-hidden="true">{navOpen ? "▾" : "▸"}</span>
                 <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
                 </span>
                 {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
-              </div>
+              </button>
+              {auto && (
+                <div className="automix-bar">
+                  <button
+                    className={`automix-toggle ${auto.status.enabled ? "on" : ""}`}
+                    onClick={auto.onToggle}
+                    aria-pressed={auto.status.enabled}
+                    title="Auto-mix: beatmatch and blend each track into the next"
+                  >
+                    AUTO
+                    {auto.status.enabled && auto.status.countdownSec != null && auto.status.phase !== "idle" && (
+                      <span className="automix-count">
+                        {auto.status.phase === "mixing" ? "mixing" : `${Math.ceil(auto.status.countdownSec)}s`}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
               <button className="mini x" onClick={() => onOpenChange(false)} aria-label="Close">
                 ✕
               </button>
@@ -531,9 +701,43 @@ export function LibraryPanel({
             {navOpen && (
             <>
             <aside className="lib-sidebar">
+        {auto && (
+          <button
+            className={`lib-nav lib-queue-nav ${auto.queueOpen ? "active" : ""}`}
+            onClick={() => {
+              // Opening the Queue must leave the other exclusive views, or two nav rows
+              // light up at once (the double-select bug): Search/Sync stay "active" while
+              // the queue takes over the content area.
+              if (!auto.queueOpen) {
+                setSearchView(false);
+                setSyncOpen(false);
+              }
+              auto.onToggleQueue();
+            }}
+            aria-pressed={auto.queueOpen}
+            title="Auto-mix queue — up-next suggestions and playlist"
+          >
+            <span className="lib-nav-ico">☰</span> Queue
+            {auto.queueCount ? <span className="lib-count">{auto.queueCount}</span> : null}
+          </button>
+        )}
         <button
-          className={`lib-nav ${view === "collection" ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
-          onClick={() => setView("collection")}
+          className={`lib-nav lib-search-nav ${searchView && !auto?.queueOpen ? "active" : ""}`}
+          onClick={() => {
+            closeQueue();
+            setSyncOpen(false);
+            setSearchView(true);
+          }}
+          title="Search YouTube and add tracks to your library"
+        >
+          <span className="lib-nav-ico">🔍</span> Search
+        </button>
+        <button
+          className={`lib-nav ${view === "collection" && !searchView && !auto?.queueOpen ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
+          onClick={() => {
+            closeQueue();
+            setView("collection");
+          }}
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes(TRACK_DND_MIME)) {
               e.preventDefault();
@@ -547,8 +751,11 @@ export function LibraryPanel({
           <span className="lib-count">{library.collection.length}</span>
         </button>
         <button
-          className={`lib-nav ${view === "community" ? "active" : ""}`}
-          onClick={() => setView("community")}
+          className={`lib-nav ${view === "community" && !auto?.queueOpen ? "active" : ""}`}
+          onClick={() => {
+            closeQueue();
+            setView("community");
+          }}
           title="Tracks already cached on htl — load instantly, no download"
         >
           <span className="lib-nav-ico">🌐</span> Community
@@ -557,37 +764,55 @@ export function LibraryPanel({
         {me?.user && (
           <button
             className={`lib-nav lib-sync-nav ${syncOpen ? "active" : ""}`}
-            onClick={() => setSyncOpen(true)}
+            onClick={() => {
+              closeQueue();
+              setSyncOpen(true);
+            }}
             title="Sync playlists between YouTube and Spotify"
           >
             <span className="lib-nav-ico">⇄</span> Sync
           </button>
         )}
+        <button
+          className="lib-nav"
+          onClick={() => {
+            closeQueue();
+            setWizardOpen(true);
+          }}
+          title="Connect a service and import playlists"
+        >
+          <span className="lib-nav-ico">⤓</span> Import
+        </button>
 
-        <div className="lib-section">
-          <span>PLAYLISTS</span>
+        {sectionHead(
+          "local",
+          "PLAYLISTS",
           <button className="lib-add" title="New playlist" onClick={createPlaylist}>
             +
-          </button>
-        </div>
-        <div className="lib-playlists">
-          {localPlaylists.length === 0 && <div className="lib-mine-msg">No local playlists yet.</div>}
-          {localPlaylists.map(renderPlaylistItem)}
-        </div>
+          </button>,
+        )}
+        {!collapsedSections.has("local") && (
+          <div className="lib-playlists">
+            {localPlaylists.length === 0 && <div className="lib-mine-msg">No local playlists yet.</div>}
+            {localPlaylists.map(renderPlaylistItem)}
+          </div>
+        )}
 
         {/* MY YOUTUBE: playlists synced to YouTube live here (whether or not you're
             currently connected — they're local data), plus your remaining YouTube
             playlists to import when connected. */}
         {(ytConnected || youtubePlaylists.length > 0) && (
           <>
-            <div className="lib-section">
-              <span>MY YOUTUBE</span>
-              {ytConnected && (
+            {sectionHead(
+              "youtube",
+              "MY YOUTUBE",
+              ytConnected && (
                 <button className="lib-add" title="Refresh" onClick={loadMine} disabled={mineState === "loading"}>
                   ⟳
                 </button>
-              )}
-            </div>
+              ),
+            )}
+            {!collapsedSections.has("youtube") && (
             <div className="lib-playlists">
               {/* Synced playlists (have a YouTube source) — full local rows. */}
               {youtubePlaylists.map(renderPlaylistItem)}
@@ -616,6 +841,7 @@ export function LibraryPanel({
                 </>
               )}
             </div>
+            )}
           </>
         )}
 
@@ -625,35 +851,22 @@ export function LibraryPanel({
             raw error; the section disappears entirely when nothing's been imported. */}
         {(spotifyPlaylists.length > 0 || (spotifyConnected && spotState !== "error")) && (
           <>
-            <div className="lib-section">
-              <span>MY SPOTIFY</span>
-              {spotifyConnected && (
+            {sectionHead(
+              "spotify",
+              "MY SPOTIFY",
+              spotifyConnected && (
                 <button className="lib-add" title="Refresh" onClick={loadSpotify} disabled={spotState === "loading"}>
                   ⟳
                 </button>
-              )}
-            </div>
-            <div className="lib-playlists">
-              {spotifyPlaylists.map(renderPlaylistItem)}
-              {spotifyConnected && spotState === "loading" && <div className="lib-mine-msg">Loading…</div>}
-              {spotifyConnected &&
-                spotState === "idle" &&
-                spotMine
-                  .filter((p) => !library.playlists.some((pl) => pl.sourceListId === p.id))
-                  .map((p) => (
-                    <button
-                      key={p.id}
-                      className="lib-nav small"
-                      title={`Import “${p.title}” from Spotify (matches tracks to YouTube)`}
-                      disabled={importing}
-                      onClick={() => importServicePlaylist("spotify", p)}
-                    >
-                      <span className="lib-nav-ico">♫</span>
-                      <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
-                      {p.count > 0 && <span className="lib-count">{p.count}</span>}
-                    </button>
-                  ))}
-            </div>
+              ),
+            )}
+            {!collapsedSections.has("spotify") && (
+              <div className="lib-playlists">
+                {spotifyPlaylists.map(renderPlaylistItem)}
+                {spotifyConnected && spotState === "loading" && <div className="lib-mine-msg">Loading…</div>}
+                {spotifyConnected && spotState === "idle" && renderImportList("spotify", spotMine)}
+              </div>
+            )}
           </>
         )}
 
@@ -662,35 +875,22 @@ export function LibraryPanel({
             catalog-only). Hidden unless connected or something's already imported. */}
         {(tidalPlaylists.length > 0 || (tidalConnected && tidalState !== "error")) && (
           <>
-            <div className="lib-section">
-              <span>MY TIDAL</span>
-              {tidalConnected && (
+            {sectionHead(
+              "tidal",
+              "MY TIDAL",
+              tidalConnected && (
                 <button className="lib-add" title="Refresh" onClick={loadTidal} disabled={tidalState === "loading"}>
                   ⟳
                 </button>
-              )}
-            </div>
-            <div className="lib-playlists">
-              {tidalPlaylists.map(renderPlaylistItem)}
-              {tidalConnected && tidalState === "loading" && <div className="lib-mine-msg">Loading…</div>}
-              {tidalConnected &&
-                tidalState === "idle" &&
-                tidalMine
-                  .filter((p) => !library.playlists.some((pl) => pl.sourceListId === p.id))
-                  .map((p) => (
-                    <button
-                      key={p.id}
-                      className="lib-nav small"
-                      title={`Import “${p.title}” from TIDAL (matches tracks to YouTube)`}
-                      disabled={importing}
-                      onClick={() => importServicePlaylist("tidal", p)}
-                    >
-                      <span className="lib-nav-ico">♫</span>
-                      <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
-                      {p.count > 0 && <span className="lib-count">{p.count}</span>}
-                    </button>
-                  ))}
-            </div>
+              ),
+            )}
+            {!collapsedSections.has("tidal") && (
+              <div className="lib-playlists">
+                {tidalPlaylists.map(renderPlaylistItem)}
+                {tidalConnected && tidalState === "loading" && <div className="lib-mine-msg">Loading…</div>}
+                {tidalConnected && tidalState === "idle" && renderImportList("tidal", tidalMine)}
+              </div>
+            )}
           </>
         )}
 
@@ -702,7 +902,43 @@ export function LibraryPanel({
       )}
 
       <div className="lib-main">
-        {syncOpen && me?.user ? (
+        {auto?.queueOpen ? (
+          // The auto-mix queue takes over the song-list area (embedded, not floating).
+          <MixQueuePanel
+            embedded
+            queue={auto.queue}
+            status={auto.status}
+            mirror={auto.mirror}
+            edit={auto.edit}
+            canEdit={auto.canEdit}
+            library={library}
+            onLoad={onLoad}
+            deckLoaded={deckLoaded}
+            deckColors={deckColors}
+            onToggleAuto={auto.onToggle}
+            onMixNow={auto.onMixNow}
+            onSkip={auto.onSkip}
+            onHold={auto.onHold}
+            onClose={auto.onToggleQueue}
+          />
+        ) : searchView ? (
+          // Search baked into the library: the Explorer (its own search bar + results)
+          // takes over the content area — no separate dock anymore.
+          <Explorer
+            onLoad={onLoad}
+            onAdd={library.addTrack}
+            inCollection={inCollection}
+            deckLoaded={deckLoaded}
+            deckColors={deckColors}
+            onIngestPlaylist={async (listId) => {
+              await ingestPlaylist(listId, "Imported playlist");
+              setSearchView(false); // jump to the freshly imported playlist
+            }}
+            playlists={playlistRefs}
+            onAddToPlaylist={library.addToPlaylist}
+            onCreatePlaylistWith={createPlaylistWith}
+          />
+        ) : syncOpen && me?.user ? (
           // Sync is a SUBSECTION of the library — it takes over this content area
           // (embedded, no separate modal) so the top chin stays clean.
           <SyncPanel embedded me={me} library={library} onClose={() => setSyncOpen(false)} />
@@ -716,6 +952,8 @@ export function LibraryPanel({
             removeTitle="Remove from collection"
             emptyHint="Your collection is empty. Tap “Search YouTube” to find tracks and add them with +."
             loadedIds={loadedIds}
+            deckLoaded={deckLoaded}
+            deckColors={deckColors}
             playlists={playlistRefs}
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
@@ -727,6 +965,8 @@ export function LibraryPanel({
             onLoad={onLoad}
             emptyHint="No community tracks yet — they appear here as people load and cache songs. (Production only.)"
             loadedIds={loadedIds}
+            deckLoaded={deckLoaded}
+            deckColors={deckColors}
             playlists={playlistRefs}
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
@@ -750,6 +990,8 @@ export function LibraryPanel({
                 removeTitle="Remove from playlist"
                 emptyHint="Empty playlist. Add tracks from Search or your Collection."
                 loadedIds={loadedIds}
+                deckLoaded={deckLoaded}
+                deckColors={deckColors}
                 playlists={playlistRefs.filter((p) => p.id !== pl.id)}
                 onAddToPlaylist={library.addToPlaylist}
                 onCreatePlaylistWith={createPlaylistWith}
@@ -764,21 +1006,17 @@ export function LibraryPanel({
         </div>
       )}
 
-      {searchOpen && (
-        <SearchModal
-          onClose={() => onSearchOpenChange(false)}
-          onLoad={onLoad}
-          onAdd={library.addTrack}
-          inCollection={inCollection}
-          onIngestPlaylist={async (listId) => {
-            await ingestPlaylist(listId, "Imported playlist");
-            onSearchOpenChange(false); // jump to the freshly imported playlist
-          }}
-          playlists={playlistRefs}
-          onAddToPlaylist={library.addToPlaylist}
-          onCreatePlaylistWith={createPlaylistWith}
+      {wizardOpen && (
+        <SetupWizard
+          me={me}
+          library={library}
+          ytPlaylists={mine}
+          spotifyPlaylists={spotMine}
+          tidalPlaylists={tidalMine}
+          onClose={() => setWizardOpen(false)}
         />
       )}
+
       {plMenu && (
         <>
           <div className="ctx-backdrop" onClick={() => setPlMenu(null)} onContextMenu={(e) => e.preventDefault()} />

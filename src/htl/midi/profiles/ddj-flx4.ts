@@ -126,8 +126,9 @@ export const DDJ_FLX4: DeviceProfile = {
     // the cue, shift+jog moves the loop, etc.).
     { control: { kind: "shift" }, deck: "A", status: NOTE_A, data: 0x3f, type: "note" },
     { control: { kind: "shift" }, deck: "B", status: NOTE_B, data: 0x3f, type: "note" },
-    // Faders / knobs (14-bit). Tempo inverted = up→slower, Pioneer convention.
-    ...knob("tempo", 0x00, true),
+    // Faders / knobs (14-bit). Tempo fader: NOT inverted — push up → faster, matching
+    // the on-screen tempo cell + how the FLX4 actually reports its pitch fader here.
+    ...knob("tempo", 0x00, false),
     ...knob("level", 0x13),
     ...knob("trim", 0x04),
     ...knob("eqHi", 0x07),

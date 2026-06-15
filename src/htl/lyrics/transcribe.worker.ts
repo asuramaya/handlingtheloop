@@ -34,24 +34,37 @@ async function loadTjs(): Promise<any> {
   return tjs;
 }
 
-// Build (and cache) the ASR pipeline for a model repo. WebGPU/fp32 on Chromium for speed;
-// wasm/q8 elsewhere for stability. Model download progress is reported to the caller.
+// Build (and cache) the ASR pipeline for a model repo. Model download progress → caller.
+//
+// WHY THE DECODER IS 4-BIT ON WebGPU: Whisper decodes AUTOREGRESSIVELY — one token at a time,
+// each a separate GPU dispatch — so the decoder's weight precision dominates wall-clock (this
+// is why transcription feels slower than the single-pass demucs forward). Running it at fp32
+// was the bottleneck. q4 (4-bit, the transformers.js whisper-webgpu reference config) roughly
+// halves decode time. The encoder is a SINGLE pass over the whole clip → keep it fp32 for
+// transcription accuracy. q4 uses INTEGER MatMulNBits kernels, NOT the fp16 shader path that
+// ORT-web's WebGPU EP miscomputes / can't compile on Linux+NVIDIA (see the demucs fp16 saga),
+// so it's both faster AND safe here. If a repo lacks q4 files, fall back to fp32 (no hard fail).
 function getPipe(repo: string): Promise<AsrPipe> {
   let p = pipes.get(repo);
   if (!p) {
     p = (async () => {
       const t = await loadTjs();
-      const device = WEBGPU ? "webgpu" : "wasm";
-      const dtype = WEBGPU ? "fp32" : "q8";
-      return (await t.pipeline("automatic-speech-recognition", repo, {
-        device,
-        dtype,
-        progress_callback: (e: any) => {
-          if (e?.status === "progress" && typeof e.progress === "number") {
-            (self as any).postMessage({ type: "progress", phase: "model", pct: Math.round(e.progress) });
-          }
-        },
-      })) as unknown as AsrPipe;
+      const onProg = (e: any) => {
+        if (e?.status === "progress" && typeof e.progress === "number") {
+          (self as any).postMessage({ type: "progress", phase: "model", pct: Math.round(e.progress) });
+        }
+      };
+      const build = (device: string, dtype: any) =>
+        t.pipeline("automatic-speech-recognition", repo, { device, dtype, progress_callback: onProg }) as Promise<AsrPipe>;
+      if (WEBGPU) {
+        try {
+          return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" });
+        } catch (err) {
+          (self as any).postMessage({ type: "progress", phase: "model", pct: 100 });
+          return await build("webgpu", "fp32"); // repo has no q4 export → full-precision
+        }
+      }
+      return await build("wasm", "q8"); // non-Chromium: stable CPU bundle
     })();
     pipes.set(repo, p);
   }
@@ -273,6 +286,10 @@ self.onmessage = async (e: MessageEvent) => {
     const sChunks: AsrChunk[] = []; // accumulated SEGMENT chunks at absolute time (fallback)
 
     for (let ci = 0; ci < nChunks; ci++) {
+      // Advance the bar as each chunk STARTS (not only when it finishes) — a single chunk can
+      // take seconds, so end-only updates make the slow first chunk look hung. Reserve the last
+      // 5% for the onset-align pass after the loop.
+      (self as any).postMessage({ type: "progress", phase: "decode", pct: Math.round((ci / nChunks) * 95), id });
       const start = ci * step;
       const end = Math.min(total, start + CHUNK);
       const seg = audio.slice(start, end); // copy — the pipe may detach/transfer its input
@@ -303,7 +320,7 @@ self.onmessage = async (e: MessageEvent) => {
       } else {
         push(sChunks, await pipe(seg, { return_timestamps: true, ...langOpt }));
       }
-      (self as any).postMessage({ type: "progress", phase: "decode", pct: Math.round(((ci + 1) / nChunks) * 100), id });
+      (self as any).postMessage({ type: "progress", phase: "decode", pct: Math.round(((ci + 1) / nChunks) * 95), id });
     }
 
     let lines: OutLine[] = wordMode ? groupWords(wChunks) : cleanSegments(sChunks);

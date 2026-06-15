@@ -57,15 +57,23 @@ export interface Mixability {
   score: number; // 0..1
   keyDistance: number | null;
   bpmRatio: number | null;
+  keyKnown: boolean; // both tracks had a parseable key
+  tempoKnown: boolean; // both tracks had a BPM
 }
 
 /** Overall mixability of B-after-A. Key weighted slightly above tempo (a harmonic
  *  clash is more jarring than a small tempo pull, which SYNC corrects anyway). */
 export function mixability(a: TrackMeta, b: TrackMeta): Mixability {
+  const keyDistance = camelotDistance(a.key, b.key);
+  const bpmRatio = bpmRatioFolded(a.bpm, b.bpm);
   return {
-    score: 0.55 * keyScore(a, b) + 0.45 * bpmScore(a, b),
-    keyDistance: camelotDistance(a.key, b.key),
-    bpmRatio: bpmRatioFolded(a.bpm, b.bpm),
+    // Tempo continuity matters more for a flowing set than exact key, so weight BPM
+    // a touch higher — keeps the energy/pace consistent instead of lurching.
+    score: 0.45 * keyScore(a, b) + 0.55 * bpmScore(a, b),
+    keyDistance,
+    bpmRatio,
+    keyKnown: keyDistance != null,
+    tempoKnown: bpmRatio != null,
   };
 }
 
@@ -74,22 +82,60 @@ export function mixabilityTier(score: number): MixabilityTier {
   return score >= 0.75 ? "high" : score >= 0.5 ? "mid" : "low";
 }
 
+/** Badge colour tier for a planned transition — grey ("unknown") when we had no
+ *  analysis to judge by, so the UI doesn't imply a confidence it doesn't have. */
+export function planTier(p: TransitionPlan): MixabilityTier | "unknown" {
+  return p.confident ? mixabilityTier(p.score) : "unknown";
+}
+
+/** A normalized "song identity" from a title — drops version/remix/feature/mashup
+ *  markers so different uploads of the SAME song collapse to one key. Used to stop the
+ *  queue from suggesting "Danza Kuduro → Danza Kuduro (Original Mix) → Danza Kuduro x …".
+ *  This is song-level DEDUP (matching the song name in the title), not slop filtering. */
+export function songCore(title: string): string {
+  let s = (title || "").toLowerCase();
+  s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " "); // drop (…) and […]
+  // Cut at the first remix/version/feature/mashup marker.
+  s = s.replace(/\b(feat\.?|ft\.?|featuring|vs\.?|remix|mix|cover|version|mashup|edit|bootleg|live|acoustic|remaster(?:ed)?|official|lyrics?|audio|video)\b.*$/i, " ");
+  s = s.replace(/\s+x\s+.*$/i, " "); // "Song x Other" mashup → keep the first song
+  s = s.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return s;
+}
+
+/** Average mixability of a candidate against several seed tracks (both loaded
+ *  decks) — how well it fits the current two-track context. */
+export function avgMixability(seeds: TrackMeta[], track: TrackMeta): number {
+  if (!seeds.length) return 0.5;
+  return seeds.reduce((s, sd) => s + mixability(sd, track).score, 0) / seeds.length;
+}
+
 /** Auto-adapt the transition to how compatible the pair is: a long harmonic blend
  *  when they sit well together, a quick EQ cut when they clash. The AutoMixer may
  *  upgrade `blend` → `stemswap` at mix time if both decks have stems. */
 export function pickTransition(a: TrackMeta, b: TrackMeta): TransitionPlan {
-  const { score, keyDistance } = mixability(a, b);
-  const keyMatch = keyDistance == null ? true : keyDistance <= 2;
-  if (score >= 0.75) return { style: "blend", bars: 24, bassSwapBar: 8, keyMatch, score };
-  if (score >= 0.5) return { style: "blend", bars: 12, bassSwapBar: 4, keyMatch, score };
-  return { style: "cut", bars: 4, bassSwapBar: 0, keyMatch: false, score };
+  const { score, keyDistance, keyKnown, tempoKnown } = mixability(a, b);
+  const keyMatch = keyDistance == null ? true : keyDistance <= 2; // still attempt at runtime
+  const confident = keyKnown || tempoKnown;
+  // Pick the transition AND the DSP palette by how well the pair fits:
+  //   high compat → long harmonic EQ3 blend (bass-swap, key+tempo locked)
+  //   mid         → shorter EQ3 blend
+  //   unknown/low → FILTER sweep: the cheap one-knob filter masks an unproven pair
+  //                 and still rides tempo/key sync — sounds intentional, not a guess
+  //   clash       → quick cut
+  if (!confident) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
+  if (score >= 0.75) return { style: "blend", bars: 24, bassSwapBar: 8, keyMatch, score, keyKnown, confident };
+  if (score >= 0.55) return { style: "blend", bars: 16, bassSwapBar: 6, keyMatch, score, keyKnown, confident };
+  if (score >= 0.38) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
+  return { style: "cut", bars: 6, bassSwapBar: 0, keyMatch: false, score, keyKnown, confident };
 }
 
-/** Short human label for a transition badge in the queue UI. */
+/** Short human label for a transition badge in the queue UI. Only claims "Harmonic"
+ *  when the key relationship is actually known and compatible. */
 export function transitionLabel(p: TransitionPlan): string {
   if (p.style === "stemswap") return `Stem swap · ${p.bars}`;
   if (p.style === "cut") return "Quick cut";
-  return `${p.keyMatch ? "Harmonic" : "Blend"} · ${p.bars} bar`;
+  if (p.style === "filter") return `Filter · ${p.bars} bar${p.confident ? "" : "?"}`;
+  return `${p.keyKnown && p.keyMatch ? "Harmonic" : "Blend"} · ${p.bars} bar`;
 }
 
 /** Rank candidate tracks by how well each mixes after `seed` (best first). Stable

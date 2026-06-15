@@ -5,6 +5,8 @@ import { Innertube } from "youtubei.js";
 import { streamAudio } from "./audioProxy";
 import { createInnertubeApi } from "./innertube";
 import { recommendNext } from "./recommend";
+import { featuresByIsrc, isrcForMbid } from "./features";
+import { acoustidLookup } from "./acoustid";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
 import { fetchCaptions, fetchMeta, type YtAuth } from "./youtube";
 import { STEM_DOWNLOAD_CONTENT_TYPE, looksLikeAudioStem } from "./security";
@@ -192,6 +194,37 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         sendJson(res, 200, { candidates });
         return true;
       }
+      case "/api/features": {
+        const isrc = url.searchParams.get("isrc");
+        if (!isrc) {
+          sendJson(res, 400, { error: "missing ?isrc=" });
+          return true;
+        }
+        sendJson(res, 200, { features: await featuresByIsrc(isrc) });
+        return true;
+      }
+      case "/api/identify": {
+        // Dev parity (no D1 cache): fingerprint → AcoustID → ISRC. Reads the key from
+        // process.env (export ACOUSTID_API_KEY for `pnpm dev`); fail-soft otherwise.
+        if (req.method !== "POST") {
+          sendJson(res, 405, { error: "POST only" });
+          return true;
+        }
+        const b = (await readJsonBody(req)) as { fingerprint?: string; duration?: number };
+        const key = process.env.ACOUSTID_API_KEY;
+        if (!key) {
+          sendJson(res, 200, { identity: null, reason: "no_key" });
+          return true;
+        }
+        if (!b.fingerprint || !b.duration) {
+          sendJson(res, 400, { error: "missing fingerprint/duration" });
+          return true;
+        }
+        const match = await acoustidLookup(key, b.fingerprint, b.duration);
+        const isrc = match?.mbid ? await isrcForMbid(match.mbid) : null;
+        sendJson(res, 200, { identity: match ? { isrc, mbid: match.mbid, artist: match.artist, title: match.title } : null });
+        return true;
+      }
       case "/api/playlist": {
         const raw = url.searchParams.get("list") ?? url.searchParams.get("url");
         if (!raw) {
@@ -221,8 +254,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return true;
       }
       case "/api/analysis": {
-        // No D1 in plain vite dev — accept and no-op so the client's best-effort
-        // contribution doesn't error locally. (wrangler/prod stores it in D1.)
+        // No D1 in plain vite dev. GET → empty map (auto-mix falls back to provider
+        // order); POST → accept + no-op so the client's contribution doesn't error.
+        if (req.method === "GET") {
+          sendJson(res, 200, { analysis: {} });
+          return true;
+        }
         sendJson(res, 200, { ok: true });
         return true;
       }

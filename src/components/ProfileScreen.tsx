@@ -12,6 +12,7 @@ import {
   disconnectService,
 } from "@htl/account";
 import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
+import { DockResizer } from "./DockResizer";
 
 // The full-screen Profile — the home for everything account-shaped (moved out of
 // Settings ▸ Accounts): identity, connected services, member-since, and the user's
@@ -59,13 +60,11 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
-      <div className="profile-screen" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
+      <DockResizer varName="--dock-w-right" measure="parent" />
+      <div className="panel profile-screen" onPointerDown={(e) => e.stopPropagation()}>
         <div className="profile-head">
           <span className="profile-head-title">Profile</span>
-          <button className="profile-x" onClick={onClose} aria-label="Close profile">
-            ✕
-          </button>
         </div>
 
         {loading ? (

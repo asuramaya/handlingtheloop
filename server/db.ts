@@ -348,6 +348,67 @@ export async function upsertAnalysis(
     .run();
 }
 
+/** Fetch known analysis (BPM/key) for a batch of videoIds — lets the auto-mixer
+ *  score/transition candidates it hasn't decoded, using the crowdsourced dataset. */
+export async function getAnalysisByIds(db: D1Database, ids: string[]): Promise<TrackAnalysisRow[]> {
+  const clean = Array.from(new Set(ids.filter((id) => /^[\w-]{11}$/.test(id)))).slice(0, 100);
+  if (!clean.length) return [];
+  const ph = clean.map(() => "?").join(",");
+  const r = await db
+    .prepare(`SELECT video_id, bpm, music_key, key_name, beat_offset, duration FROM track_analysis WHERE video_id IN (${ph})`)
+    .bind(...clean)
+    .all<TrackAnalysisRow>();
+  return r.results ?? [];
+}
+
+// --- Acoustic identity (the global AcoustID cache) --------------------------
+
+export interface TrackIdentityRow {
+  video_id: string;
+  isrc: string | null;
+  mbid: string | null;
+  artist: string | null;
+  title: string | null;
+  source: string | null;
+}
+
+/** The cached identity for a video (null if never looked up). */
+export async function getIdentity(db: D1Database, videoId: string): Promise<TrackIdentityRow | null> {
+  return db
+    .prepare("SELECT video_id, isrc, mbid, artist, title, source FROM track_identity WHERE video_id = ?")
+    .bind(videoId)
+    .first<TrackIdentityRow>();
+}
+
+/** Cached identities for a batch of videoIds (auto-mix candidate ISRCs). */
+export async function getIdentitiesByIds(db: D1Database, ids: string[]): Promise<TrackIdentityRow[]> {
+  const clean = Array.from(new Set(ids.filter((id) => /^[\w-]{11}$/.test(id)))).slice(0, 100);
+  if (!clean.length) return [];
+  const ph = clean.map(() => "?").join(",");
+  const r = await db
+    .prepare(`SELECT video_id, isrc, mbid, artist, title, source FROM track_identity WHERE video_id IN (${ph})`)
+    .bind(...clean)
+    .all<TrackIdentityRow>();
+  return r.results ?? [];
+}
+
+/** Record an identification (or a "no match", with nulls) so we never re-query it. */
+export async function upsertIdentity(
+  db: D1Database,
+  v: { videoId: string; isrc?: string | null; mbid?: string | null; artist?: string | null; title?: string | null; source: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO track_identity (video_id, isrc, mbid, artist, title, source, updated_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(video_id) DO UPDATE SET
+         isrc=excluded.isrc, mbid=excluded.mbid, artist=excluded.artist,
+         title=excluded.title, source=excluded.source, updated_at=excluded.updated_at`,
+    )
+    .bind(v.videoId, v.isrc ?? null, v.mbid ?? null, v.artist ?? null, v.title ?? null, v.source, now())
+    .run();
+}
+
 /** How many tracks have analysis (for admin coverage). */
 export async function countAnalysis(db: D1Database): Promise<number> {
   const r = await db.prepare("SELECT COUNT(*) AS n FROM track_analysis").first<{ n: number }>();

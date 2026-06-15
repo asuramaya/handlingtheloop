@@ -37,10 +37,20 @@ async function tget(urlOrPath: string, token: string): Promise<JsonApiDoc> {
   const url = urlOrPath.startsWith("http") ? urlOrPath : `${API}${urlOrPath}`;
   // Only follow TIDAL's own pagination links — never send the Bearer elsewhere.
   if (new URL(url).host !== "openapi.tidal.com") throw new Error("refusing non-TIDAL URL");
-  const res = await fetch(url, {
-    headers: { authorization: `Bearer ${token}`, accept: JSONAPI },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
+  // TIDAL throttles hard: paging a large playlist's items (60+ pages, e.g. a 1200-track
+  // list) trips 429. Back off and retry (honoring Retry-After) so big playlists import
+  // instead of dying on the first throttle. Capped attempts/wait keep the Worker request bounded.
+  let res: Response;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}`, accept: JSONAPI },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if ((res.status !== 429 && res.status !== 503) || attempt >= 4) break;
+    const ra = Number(res.headers.get("retry-after"));
+    const waitMs = Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 500 * 2 ** attempt, 4000);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
   const text = await res.text();
   let j: JsonApiDoc = {};
   try {
@@ -203,6 +213,102 @@ export async function getTidalPlaylistTracks(token: string, playlistId: string):
     url = j.links?.next ?? null;
   }
   return out;
+}
+
+/** TIDAL's "track radio" — the algorithmic next-track graph for a seed track,
+ *  normalized + ISRC-tagged so the auto-mixer can match each back to a videoId.
+ *  ⚠ ENDPOINT TO VERIFY (see header): the v2 path for track radio/recommendations
+ *  isn't confirmed against a live key. We try the JSON:API relationship traversal
+ *  and fail soft (→ []) so a wrong path never breaks the recommendation merge. */
+export async function getTidalTrackRadio(token: string, trackId: string, limit = 25): Promise<TidalTrack[]> {
+  try {
+    // VERIFIED against a live key: `similarTracks` is the track-radio relationship
+    // (trackRadio 404s; `radio` returns a playlist). It returns up to ~40 track refs
+    // with the resources sideloaded in `included[]`.
+    // Nested include pulls each similar track's artist resources too, so we get a
+    // real "artist — title" to resolve against YouTube (not just the title).
+    const j = await tget(
+      `/tracks/${encodeURIComponent(trackId)}/relationships/similarTracks?include=similarTracks.artists&countryCode=${COUNTRY}`,
+      token,
+    );
+    const included = new Map<string, JsonApiResource>();
+    for (const r of j.included ?? []) included.set(`${r.type}:${r.id}`, r);
+    const out: TidalTrack[] = [];
+    // Order follows the relationship data[]; resolve each referenced track resource.
+    for (const ref of asArray(j.data)) {
+      const t = included.get(`${ref.type}:${ref.id}`) ?? (ref.attributes ? ref : undefined);
+      if (!t || t.type !== "tracks") continue;
+      out.push(trackFromResource(t, included));
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch {
+    return []; // endpoint unverified / unavailable — caller falls back to YouTube
+  }
+}
+
+/** Find a TIDAL track id for an ISRC (to seed track-radio from a non-TIDAL track). */
+export async function tidalTrackIdByIsrc(token: string, isrc: string): Promise<string | null> {
+  try {
+    const j = await tget(`/tracks?filter[isrc]=${encodeURIComponent(isrc.toUpperCase())}&countryCode=${COUNTRY}`, token);
+    return asArray(j.data).find((r) => r.type === "tracks")?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Diagnostic: hit the candidate ISRC-filter + track-radio endpoints raw and report
+ *  HTTP status + result count for each, so we can confirm which v2 path actually
+ *  works against a live key (the radio endpoint is otherwise unverified). */
+export async function tidalProbe(token: string, opts: { isrc?: string | null; query?: string | null }) {
+  const raw = async (path: string) => {
+    try {
+      const res = await fetch(`${API}${path}`, {
+        headers: { authorization: `Bearer ${token}`, accept: JSONAPI },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      const text = await res.text();
+      let count: number | null = null;
+      let trackId: string | null = null;
+      try {
+        const j = JSON.parse(text) as JsonApiDoc;
+        const arr = asArray(j.data);
+        count = arr.length + (j.included?.length ?? 0);
+        // The seed track id may be: a track in data[] (ISRC filter), the nested
+        // searchResults→tracks relationship, or a sideloaded included[] track.
+        const dataObj = Array.isArray(j.data) ? undefined : (j.data as JsonApiResource | undefined);
+        trackId =
+          arr.find((r) => r.type === "tracks")?.id ??
+          (dataObj?.relationships?.tracks?.data as { id?: string }[] | undefined)?.[0]?.id ??
+          j.included?.find((r) => r.type === "tracks")?.id ??
+          null;
+      } catch {
+        /* non-JSON */
+      }
+      return { path, status: res.status, count, trackId, sample: text.slice(0, 200) };
+    } catch (e) {
+      return { path, status: 0, error: (e as Error).message };
+    }
+  };
+
+  // Resolve a seed track id either by ISRC filter, or by searching a free-text query.
+  let id: string | null = null;
+  let seed: Record<string, unknown> = {};
+  if (opts.isrc) {
+    const code = opts.isrc.trim().toUpperCase();
+    const byIsrc = await raw(`/tracks?filter[isrc]=${encodeURIComponent(code)}&countryCode=${COUNTRY}`);
+    id = byIsrc.trackId ?? null;
+    seed = { isrc: code, trackLookup: byIsrc };
+  } else if (opts.query) {
+    const search = await raw(`/searchResults/${encodeURIComponent(opts.query)}?countryCode=${COUNTRY}&include=tracks`);
+    id = search.trackId ?? null;
+    seed = { query: opts.query, searchLookup: search };
+  }
+
+  const radios = id ? await raw(`/tracks/${id}/relationships/similarTracks?include=similarTracks&countryCode=${COUNTRY}`) : null;
+  // End-to-end check: what getTidalTrackRadio actually parses out (title/artist/isrc).
+  const parsed = id ? (await getTidalTrackRadio(token, id, 5)) : [];
+  return { ...seed, resolvedTrackId: id, similarTracks: radios, parsedSample: parsed };
 }
 
 /** Create a private playlist under the user, returning its id. */

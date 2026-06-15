@@ -167,6 +167,26 @@ export const syncReadSource = (source: Service, sourcePlaylistId: string) =>
 export const syncMatch = (dest: Service, tracks: SourceTrack[], startIndex: number) =>
   postJson<{ rows: MatchRow[] }>("/api/sync/match", { dest, tracks, startIndex }).then((r) => r.rows);
 
+/** Map a raw sync/import error to an actionable message. Spotify blocks third-party API
+    reads of playlists it owns (editorial/algorithmic) and of some only shared with you
+    (list succeeds, items 403/404); TIDAL rate-limits (429) a big playlist's paged item
+    reads, and 403/404s ones you don't own. Shared by SyncPanel + the Library quick-import. */
+export function friendlySyncError(msg: string): string {
+  if (/\[\/playlists\/.*\/items\]/.test(msg) && /\bspotify (403|404)\b/i.test(msg)) {
+    return "Spotify won't let apps read this playlist's tracks — it's one Spotify owns (Discover Weekly, Daily Mix, an editorial mix…) or one that was only shared with you. In the Spotify app, open it and tap ⋯ → Add to your own library (or duplicate it), then import that copy.";
+  }
+  if (/premium/i.test(msg) || /\bspotify 403\b/i.test(msg)) {
+    return "Spotify is blocking this right now — its API currently needs the app owner to hold an active Premium subscription (a temporary Spotify limitation that can take a few hours to clear). Try again later, or import to YouTube instead.";
+  }
+  if (/\btidal 429\b/i.test(msg)) {
+    return "TIDAL rate-limited this import (it happens on large playlists) — the import backs off and retries, but a very big one can still trip it. Wait a few seconds and try again.";
+  }
+  if (/\btidal (403|404)\b/i.test(msg) && /\[\/playlists\//.test(msg)) {
+    return "TIDAL won't let apps read this playlist — it's one you don't own or that isn't shared at the API level. In TIDAL, add it to your own collection (or recreate it), then import that copy.";
+  }
+  return msg;
+}
+
 /** Free-text search of the destination service (manual per-track re-match). */
 export const syncSearch = (dest: Service, query: string) =>
   postJson<{ candidates: Candidate[] }>("/api/sync/search", { dest, query }).then((r) => r.candidates);
@@ -178,3 +198,5 @@ export const syncCreate = (dest: Service, name: string) =>
 /** Phase 3b: append a chunk of confirmed ids (videoIds for YT, uris for Spotify). */
 export const syncAdd = (dest: Service, playlistId: string, ids: string[]) =>
   postJson<{ added: number }>("/api/sync/add", { dest, playlistId, ids }).then((r) => r.added);
+
+export { usePlaylistSource, type PlaylistSource } from "./usePlaylistSource";

@@ -92,6 +92,10 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Containing block for the .stage-lock overlay — without this its inset:0 resolves
+     against a higher ancestor and spills over the (full-screen, mobile) Library modal,
+     swallowing its touches for a watch-only remote. Keep the lock confined to the board. */
+  position: relative;
 }
 
 /* Scrollbars: the native ones looked unstyled (chunky light grey with arrow caps).
@@ -557,6 +561,31 @@ body {
   letter-spacing: 1px;
   color: var(--muted);
 }
+/* The section label doubles as a collapse toggle (caret + name), filling the row so the
+   whole header is the hit target; the ＋/⟳ action button stays on the right. */
+.lib-section-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.lib-section-toggle:hover {
+  color: var(--text);
+}
+.lib-section-caret {
+  font-size: 8px;
+  width: 8px;
+  flex: none;
+}
 .lib-add {
   background: transparent;
   border: none;
@@ -588,6 +617,35 @@ body {
 .lib-mine-err {
   color: var(--neon-pink, #ff5c8a);
   word-break: break-word;
+}
+/* Collapsed "shared with you" disclosure: tucks away non-owned (un-importable) service
+   playlists so they don't clutter the main import list. */
+.lib-shared {
+  margin-top: 2px;
+}
+.lib-shared > summary {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.lib-shared > summary::-webkit-details-marker {
+  display: none;
+}
+.lib-shared > summary::before {
+  content: "▸ ";
+}
+.lib-shared[open] > summary::before {
+  content: "▾ ";
+}
+.lib-shared-note {
+  padding: 2px 10px 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  opacity: 0.85;
 }
 
 .lib-main {
@@ -946,13 +1004,49 @@ body {
 .col-thumb {
   width: 3.8em; /* scales with the row-size stepper so the artwork column fits */
 }
+/* Optional trailing column (the Queue's per-pair transition badge). Fixed width so it
+   doesn't eat the auto Title column; right-aligned to sit against the row edge. */
+.col-extra {
+  width: 94px;
+}
+td.col-extra {
+  text-align: right;
+}
+/* Search button living in the shared toolbar (Search context only). */
+.tt-search-btn {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  font-size: 12px;
+}
+/* Queue toolbar has no filter (curated order) — a label fills the left instead. */
+.tt-queue-label {
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Drag-reorder (Queue): mark the row the dragged item would drop onto. */
+.track-table tr.reorder-over td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
 .col-thumb img {
-  /* em units so the artwork scales with the row-size stepper (font-size). */
-  width: 3.4em;
-  height: 2em;
+  /* Fill the (resizable, px-width) artwork column so the thumbnail is CENTRED, not a
+     fixed-width image floating left in a wider cell (the off-centre bug). Height stays
+     em-based so it still scales with the row-size stepper. */
+  width: 100%;
+  height: 2.1em;
   object-fit: cover;
   border-radius: 3px;
   display: block;
+}
+/* Centre the artwork in its cell + give the header th a positioning context for the
+   drag-to-resize handle (the empty thumb header carries one now). */
+td.col-thumb {
+  text-align: center;
+  padding: var(--tt-row-pad, 7px) 4px;
+}
+th.col-thumb {
+  position: relative;
 }
 .col-title {
   width: auto; /* the flex column — absorbs all leftover width */
@@ -1019,7 +1113,11 @@ body {
   .track-table .col-num,
   .track-table .col-thumb,
   .track-table .col-bpm,
-  .track-table .col-key {
+  .track-table .col-key,
+  /* The Queue's fixed-px "Mix" badge column is ADDED on top of the %-based columns, so on
+     a phone it pushes the table ~94px past the edge (the right-side cutoff). Drop it in the
+     cramped view — the queue order + titles still read; the transition badge is desktop-only. */
+  .track-table .col-extra {
     display: none;
   }
   .track-table .col-title {
@@ -1062,6 +1160,12 @@ body {
   flex-direction: column;
   gap: 1px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+}
+/* Keep every row at its natural height: with a long playlist list past max-height, a flex
+   column will otherwise SHRINK each child below its line-height (rows overlap) instead of
+   scrolling. flex-shrink:0 forces the overflow to scroll, which is what we want. */
+.ctx-menu > * {
+  flex-shrink: 0;
 }
 .ctx-menu button {
   text-align: left;
@@ -2742,12 +2846,22 @@ body.no-glow .caption-word.cw-on .cw-label {
     animation: none;
   }
   /* Per-side resizable width (drag handle writes these on <html>); falls back to the
-     shared default until the user resizes that side. */
+     shared default until the user resizes that side. min-width:0 + max-width PIN the
+     dock to exactly that width: otherwise a panel with wide, hard-to-shrink content
+     (e.g. Profile's long song titles) raises the flex item's automatic minimum size
+     above the basis and the dock balloons. The panel clips/ellipsises inside. */
   .modal-backdrop.dock-left {
     flex-basis: var(--dock-w-left, var(--dock-w));
+    /* Cap at the stored width OR whatever leaves the board ≥160px, whichever is SMALLER —
+       so a dock resized wide on a big screen doesn't run off the right edge (cutting its
+       own content) when the window is later narrower. */
+    max-width: min(var(--dock-w-left, var(--dock-w)), calc(100vw - 160px));
+    min-width: 0;
   }
   .modal-backdrop.dock-right {
     flex-basis: var(--dock-w-right, var(--dock-w));
+    max-width: min(var(--dock-w-right, var(--dock-w)), calc(100vw - 160px));
+    min-width: 0;
   }
   .modal-backdrop.dock-left {
     order: -1;
@@ -2770,6 +2884,7 @@ body.no-glow .caption-word.cw-on .cw-label {
     border-radius: 0;
     border-top: none;
     border-bottom: none;
+    box-shadow: none; /* in-flow dock, not a floater — no drop-shadow band on the board edge */
   }
   .modal-backdrop.dock-left > .panel {
     animation: dock-in-left 0.16s ease-out;
@@ -2852,7 +2967,9 @@ body.no-glow .caption-word.cw-on .cw-label {
     flex: 0 0 5px;
     align-self: stretch;
     cursor: col-resize;
-    background: var(--line);
+    /* Transparent until hover — the sidebar's own border-right is the divider, so a solid
+       fill here just read as an ugly grey bar beside it. Lights accent on hover/drag. */
+    background: transparent;
     transition: background 0.12s;
   }
   .dock-resizer-inline:hover {
@@ -2975,43 +3092,28 @@ body.no-glow .caption-word.cw-on .cw-label {
     display: none;
   }
 }
-/* Swap-sides launcher: a persistent square in the chin (like the gear + info). It
-   flips which side the Library/Search docks sit on AND swaps the two launcher
-   buttons themselves. Desktop only — on mobile the docks are centered modals. */
+/* Swap-sides launcher: a persistent square in the chin, just right of the gear. It
+   flips which side the Library dock and the Profile/Session dock sit on. Desktop
+   only — on mobile the docks are full-screen panels with no left/right. Placement is
+   plain DOM order now (Library · ⚙ · ⇄ · 🌐 · ⇅), no flex-order juggling. */
 .chin-btn.chin-swap {
-  display: none; /* swap shown on DESKTOP only (mobile docks are centered modals) */
-  order: 3; /* dead CENTER — between the Library + Search launchers */
+  display: none; /* swap shown on DESKTOP only (mobile docks are full-screen) */
 }
 .chin-swap-i {
   font-size: 16px;
   line-height: 1;
-}
-/* Chin order applies at ALL widths so Settings is a left gear square on mobile too:
-   [⚙ settings][Library][⇄ swap (desktop)][Search][i info]. Library + Search flex
-   equally; swapping flips the two launchers around the centered ⇄ (and the panels). */
-.chin-btn.chin-settings {
-  order: 0;
-}
-.chin-btn.chin-library {
-  order: 2;
-}
-.chin-btn.chin-search {
-  order: 4;
-}
-.chin-btn.chin-info {
-  order: 10;
-}
-.app.dock-swapped .chin-btn.chin-library {
-  order: 4;
-}
-.app.dock-swapped .chin-btn.chin-search {
-  order: 2;
 }
 @media (min-width: 769px) {
   .chin-btn.chin-swap {
     display: flex;
     flex: 0 0 auto;
     width: 42px;
+  }
+  /* Swapping the dock sides mirrors the whole chin: the ⇄ moves to the right, the
+     Library launcher follows the left dock, and the Settings/Profile/Session cluster
+     follows the right dock — a left-to-right flip via row-reverse. */
+  .app.dock-swapped .chin {
+    flex-direction: row-reverse;
   }
 }
 @keyframes dock-in-left {
@@ -3372,6 +3474,24 @@ body.no-glow .hw-btn.shift.on {
     0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .bank-load .vcell.play.playing .vcell-value {
+  color: var(--accent);
+}
+/* CUE as a headphone-level fader (shown only when a separate cue device is picked).
+   Reads like the TRIM cell; lights an accent ring while this deck is in the cue bus
+   (level > 0) — the DJ-board "this channel is in my headphones" tell. */
+.bank-load .vcell.cue-fader .vcell-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.bank-load .vcell.cue-fader.cue-on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 10px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.bank-load .vcell.cue-fader.cue-on .vcell-value {
   color: var(--accent);
 }
 
@@ -4175,14 +4295,20 @@ body.no-glow .hw-btn.shift.on {
 .search-panel {
   padding: 14px 16px 0;
 }
+/* No frame padding on the library panel: the 16px inset made the table area's --bg
+   meet the panel border across a strip of --panel, reading as an ugly DOUBLE edge at
+   the dock boundary. Edge-to-edge instead (single border); the header carries its own
+   inset so the title still breathes. */
 .lib-panel {
-  padding: 14px 16px;
+  padding: 0;
 }
-.search-panel .explorer {
+.search-panel .explorer,
+.lib-main .explorer {
   flex: 1;
   min-height: 0;
 }
-.search-panel .search-bar {
+.search-panel .search-bar,
+.lib-main .search-bar {
   position: static;
   padding: 0 0 12px;
   background: transparent;
@@ -4192,6 +4318,12 @@ body.no-glow .hw-btn.shift.on {
   flex: 1;
   overflow-y: auto;
   margin: 0 -16px; /* let rows reach the panel edges */
+}
+/* Search baked into the library: the Explorer fills the .lib-main content area and
+   its result list scrolls inside (the rows already reach the lib-main edges). */
+.lib-main .result-list {
+  flex: 1;
+  overflow-y: auto;
 }
 
 /* Filter + sort toolbar above the results (stays put while results scroll). */
@@ -4254,7 +4386,14 @@ body.no-glow .hw-btn.shift.on {
 /* Library header shows the current view's name + source, with the close button right. */
 .lib-panel .settings-head {
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  padding: 12px 12px 10px;
+}
+/* No explicit ✕ on the library — the chin Library button toggles it open/closed on
+   every platform (it was only hidden on desktop before, leaving a redundant ✕ on the
+   phone). Matches the Settings/Profile/Session panels. */
+.lib-panel .settings-head .mini.x {
+  display: none;
 }
 .lib-head {
   display: flex;
@@ -4301,6 +4440,44 @@ body.no-glow .hw-btn.shift.on {
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
+}
+/* The title text doubles as the sidebar (sections) toggle — no separate ☰ button. */
+.lib-head-toggle {
+  align-items: center; /* caret + title + "from" share a centre line */
+  background: none;
+  border: none;
+  padding: 4px 8px 4px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+.lib-head-toggle:hover {
+  background: var(--panel-2);
+}
+.lib-head-caret {
+  flex: none;
+  font-size: 10px;
+  color: var(--muted);
+  transition: color 0.12s;
+}
+.lib-head-toggle:hover .lib-head-caret {
+  color: var(--accent);
+}
+/* A/B chip on a track row that's currently loaded on a deck — coloured with that
+   deck's accent (set inline), dark ink for contrast so it reads on any accent. */
+.tt-deck {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.35em;
+  height: 1.35em;
+  padding: 0 0.25em;
+  margin-right: 5px;
+  border-radius: 4px;
+  font-size: 0.78em;
+  font-weight: 800;
+  line-height: 1;
+  color: #08121a;
+  vertical-align: middle;
 }
 .settings-head h2 {
   margin: 0;
@@ -7427,6 +7604,9 @@ button.room-tog:hover {
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
   overflow: hidden;
 }
+/* Drag a track in from the library / search / a deck → append to the queue. */
+.mixq.drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.mixq.embedded.drop-active { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .mixq-head {
   display: flex;
   align-items: center;
@@ -7492,13 +7672,35 @@ button.room-tog:hover {
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 .mixq-countdown { font-size: 11px; color: var(--accent); white-space: nowrap; }
-.mixq-list { flex: 1; overflow-y: auto; margin: 0; padding: 4px; list-style: none; }
+.mixq-list { flex: 1; overflow-y: auto; margin: 0; padding: 4px; list-style: none; border-radius: 6px; }
+/* A library track is hovering the queue → highlight the whole list as a drop target. */
+.mixq-list.drop-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 .mixq-item {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 4px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-top: 2px solid transparent; /* reserved for the drag-over insertion marker */
+  border-radius: 4px;
+}
+.mixq-item[draggable="true"] {
+  cursor: grab;
+}
+.mixq-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+.mixq-item:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+/* Drag-over: a bright top rule marks where the dragged row will drop. */
+.mixq-item.drag-over {
+  border-top-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .mixq-track { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .mixq-track img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
@@ -7543,3 +7745,84 @@ button.room-tog:hover {
 }
 .mixq-controls button:disabled { opacity: 0.4; cursor: default; }
 .mixq-controls button:not(:disabled):hover { border-color: var(--accent); }
+
+/* Auto-mix controls when hosted in the library header (compact, inline). */
+.settings-head .automix-bar { margin: 0; flex: 0 0 auto; align-items: center; }
+.settings-head .automix-toggle { flex: 0 0 auto; padding: 5px 12px; }
+
+.mixq-badge.tier-unknown { color: var(--text); background: var(--line); }
+.mixq-augment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Embedded in the library content area (takes over the song list, not a floater).
+   `display: contents` dissolves the .mixq wrapper so the shared TrackTable it renders
+   (toolbar + now-playing/seed + table + controls) lays out directly in .lib-main —
+   identical scroll/sticky behaviour to the library + search views. */
+.mixq.embedded {
+  display: contents;
+}
+.mixq.embedded .mixq-close {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* Re-sync affordance on imported playlists. */
+.lib-pl-src { cursor: pointer; opacity: 0.6; transition: opacity 0.12s, color 0.12s; }
+.lib-pl-src:hover { opacity: 1; color: var(--accent); }
+
+/* ---- Setup / import wizard --------------------------------------------------- */
+.wizard {
+  position: relative;
+  width: 460px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.wizard-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.wizard-title { font-weight: 700; font-size: 15px; }
+.wizard-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.wizard-center { align-items: center; text-align: center; padding: 36px 16px; }
+.wizard-lead { color: var(--muted); font-size: 13px; margin: 0; }
+.wizard-svc { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.wizard-svc button { padding: 5px 12px; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 6px; cursor: pointer; }
+.wizard-ok { color: #3ddc84; font-size: 13px; }
+.wizard-pick { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.wizard-pl { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.wizard-pl:hover { background: var(--panel-2); }
+.wizard-pl-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.wizard-pl-meta { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.wizard-empty { color: var(--muted); text-align: center; padding: 20px; font-size: 13px; }
+.wizard-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.wizard-foot button { padding: 8px 16px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 7px; cursor: pointer; font-size: 13px; }
+.wizard-foot button.primary { background: var(--accent); color: #061018; border-color: var(--accent); font-weight: 600; }
+.wizard-foot button:disabled { opacity: 0.4; cursor: default; }
+.wizard-review { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; }
+.wizard-flag { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.wizard-flag-src { display: flex; flex-direction: column; }
+.wizard-flag-src strong { font-size: 13px; }
+.wizard-flag-src span { font-size: 11px; color: var(--muted); }
+.wizard-flag select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; font-size: 12px; }
+.wizard-done { font-size: 15px; color: #3ddc84; }
+.wizard-spinner { width: 32px; height: 32px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: wizard-spin 0.8s linear infinite; margin-bottom: 12px; }
+@keyframes wizard-spin { to { transform: rotate(360deg); } }
+
+/* Simplified queue row: single remove control. */
+.mixq-item-x {
+  width: 24px; height: 24px; flex-shrink: 0;
+  font-size: 12px; color: var(--muted);
+  background: transparent; border: 1px solid var(--line); border-radius: 5px; cursor: pointer;
+}
+.mixq-item-x:hover { color: #c8506a; border-color: #c8506a; }

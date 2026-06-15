@@ -421,6 +421,9 @@ export class MidiEngine {
     } else if (c.kind === "browse") {
       const delta = val - 64;
       if (delta !== 0) this.opts.onEvent({ type: "browse", delta });
+    } else if (c.kind === "zoom") {
+      const delta = val - 64;
+      if (delta !== 0) this.opts.onEvent({ type: "zoom", deck: b.deck, delta });
     }
   }
 

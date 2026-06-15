@@ -50,6 +50,74 @@ export async function fetchMeta(videoId: string, signal?: AbortSignal): Promise<
   return getJson(`/api/meta?v=${encodeURIComponent(videoId)}`, signal, await ytAuthHeaders());
 }
 
+/** Known BPM/key for a batch of videoIds from the shared analysis dataset — lets the
+ *  auto-mixer score/transition candidate tracks it hasn't decoded. Best-effort. */
+export async function fetchAnalysisBatch(
+  ids: string[],
+  signal?: AbortSignal,
+): Promise<Record<string, { bpm: number | null; key: string | null }>> {
+  const clean = ids.filter((id) => /^[\w-]{11}$/.test(id));
+  if (!clean.length) return {};
+  try {
+    const { analysis } = await getJson<{ analysis: Record<string, { bpm: number | null; key: string | null }> }>(
+      `/api/analysis?ids=${clean.map(encodeURIComponent).join(",")}`,
+      signal,
+    );
+    return analysis || {};
+  } catch {
+    return {}; // matching degrades to provider order — never break the queue
+  }
+}
+
+/** Key/BPM for a single track via its ISRC (free public DBs — MusicBrainz →
+ *  AcousticBrainz). Cheap (no decode); null when uncovered. `videoId` lets the
+ *  server cache the hit to the shared dataset. */
+export async function fetchFeaturesByIsrc(
+  isrc: string,
+  videoId?: string,
+  signal?: AbortSignal,
+): Promise<{ bpm: number | null; key: string | null } | null> {
+  try {
+    const params = new URLSearchParams({ isrc });
+    if (videoId) params.set("v", videoId);
+    const { features } = await getJson<{ features: { bpm: number | null; key: string | null } | null }>(
+      `/api/features?${params.toString()}`,
+      signal,
+    );
+    return features ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Identify a track from its Chromaprint fingerprint → canonical ISRC + clean
+ *  artist/title (AcoustID, globally cached server-side). Returns null when the
+ *  recording isn't in AcoustID (caller falls back to cleaned-title). */
+export interface TrackIdentity {
+  isrc: string | null;
+  mbid: string | null;
+  artist: string | null;
+  title: string | null;
+}
+export interface IdentifyResult {
+  identity: TrackIdentity | null;
+  needsFingerprint?: boolean; // cache miss + no fingerprint sent → caller should fingerprint
+}
+
+export async function identifyTrack(videoId: string, fingerprint: string | null, duration: number): Promise<IdentifyResult> {
+  try {
+    const res = await fetch("/api/identify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ videoId, fingerprint, duration }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { identity?: TrackIdentity | null; needsFingerprint?: boolean };
+    return { identity: body.identity ?? null, needsFingerprint: body.needsFingerprint };
+  } catch {
+    return { identity: null };
+  }
+}
+
 /** The shared community pool: tracks already cached in R2 (loadable instantly, no resolve). */
 export async function fetchCommunity(limit = 60, signal?: AbortSignal): Promise<TrackMeta[]> {
   const { tracks } = await getJson<{ tracks: TrackMeta[] }>(`/api/community?limit=${limit}`, signal);

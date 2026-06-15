@@ -1,0 +1,4 @@
+# Neural stem models are huge (>25 MiB/asset, over Cloudflare's hard limit) and are
+# NOT served as Worker assets — production strips them in deploy.sh. This makes
+# `wrangler dev` ignore them too, and survives rebuilds (vite copies this to dist/).
+models/

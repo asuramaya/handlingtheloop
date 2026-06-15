@@ -41,7 +41,8 @@ export type ControlSpec =
   | { kind: "shift" } // the SHIFT modifier button (momentary or a latching hardware toggle)
   | { kind: "encoderAction"; forward: string; backward: string } // relative encoder → fire an action per detent (step-jog like the arrow keys)
   | { kind: "focus"; deck: DeckId } // switch which deck the controller drives (pad-style boards)
-  | { kind: "browse" } // browse encoder rotation (relative)
+  | { kind: "browse" } // browse encoder rotation (relative) — scroll the library/playlist
+  | { kind: "zoom" } // encoder rotation (relative) → zoom the focused deck's waveform
   | { kind: "load" } // load-to-deck button
   | { kind: "selector" }; // browse-encoder PRESS — open/close the library + enter/exit
 
@@ -98,6 +99,7 @@ export type MidiEvent =
   | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean } // delta = signed ticks
   | { type: "jogBend"; deck: DeckId; delta: number } // outer-ring nudge → pitch-bend / paused search
   | { type: "browse"; delta: number }
+  | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform
   | { type: "load"; deck: DeckId }
   | { type: "selector" }; // browse-encoder press
 

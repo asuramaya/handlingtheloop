@@ -20,6 +20,7 @@ interface WaveformViewportProps {
   freqMid: string;
   freqHigh: string;
   vividness: number; // band-colour saturation (0 grey … 1 as-picked … 2 neon)
+  debrick: boolean; // re-expand local contrast on brick-walled masters (see debrick())
   glow: boolean; // neon bloom halo behind the waveform
   gridSize: number;
   // A replacement stem set is being computed (model switch / enhance), as a 0–100 %, or
@@ -28,6 +29,7 @@ interface WaveformViewportProps {
   separating: number | null;
   windowSec: number; // REAL seconds across the view (shared by both decks)
   onZoom: (nextWindowSec: number) => void;
+  wheelSeeks?: boolean; // plain wheel: false = zoom the view (default), true = seek the playhead
   onScrubStart: () => void;
   onScrub: (deltaSeconds: number) => void;
   onScrubEnd: () => void;
@@ -114,6 +116,27 @@ function envelope(
   if (lod) {
     const B = lod.bucket;
     const n = lod.min.length;
+    // Sub-bucket zoom with no finer LOD and no raw PCM to fall back on — i.e. a host's
+    // COARSE remote stem view on a guest (only the ~2048-sample envelope exists). The
+    // bucket-min/max loop below would paint each bucket as a flat block across the
+    // several pixels it spans, which reads as a "low-poly"/staircase stem. Interpolate
+    // the min/max between adjacent buckets instead, so the trace is a smooth curve.
+    if (spp < B) {
+      for (let x = 0; x < ow; x++) {
+        const c = ((rLeft + x * secPerPx) * chSr) / B; // fractional bucket coordinate
+        if (c < 0 || c >= n) {
+          loOut[x] = 0;
+          hiOut[x] = 0;
+          continue;
+        }
+        const b = Math.floor(c);
+        const f = c - b;
+        const b2 = b + 1 >= n ? b : b + 1;
+        loOut[x] = lod.min[b] + (lod.min[b2] - lod.min[b]) * f;
+        hiOut[x] = lod.max[b] + (lod.max[b2] - lod.max[b]) * f;
+      }
+      return;
+    }
     for (let x = 0; x < ow; x++) {
       const s0 = (rLeft + x * secPerPx) * chSr;
       let b0 = Math.floor(s0 / B);
@@ -261,6 +284,66 @@ function shape(v: number): number {
   return v < 0 ? -y : y;
 }
 
+// De-brickwall. A heavily limited ("brick wall") master peaks near full-scale in nearly
+// every column, so the min/max envelope flat-tops into a solid block and shape()'s lift
+// pins it to the rail. This re-expands LOCAL contrast: a slow bidirectional peak/valley
+// follower finds each section's loud ceiling + notch floor, and every column is remapped so
+// the local floor→`BASE` and local peak→`TOP·loudness` — stretching whatever micro-dynamics
+// exist (transient gaps, kicks) into visible contour, while the ceiling tracks the section's
+// macro loudness (×gPeak) so drops/breakdowns still dip. `ABS` mixes back a flat macro
+// pedestal so loud passages stay tall. Rewrites lo/hi IN PLACE before shape(); runs once per
+// lane at rasterise time (not per frame). Skipped at high zoom where columns resolve real
+// wave cycles (no brick to fix, and stretching would distort the true shape).
+const DB_BASE = 0.12; // height a section's notch floor maps to
+const DB_TOP = 0.9; // height a fully-loud section's peaks map to
+const DB_ABS = 0.4; // macro-pedestal blend: ↑ keeps loud/quiet contrast, ↓ flattens to pure texture
+const DB_TAU_SEC = 1.2; // follower time constant ≈ how long a "section" is
+function debrick(lo: Float32Array, hi: Float32Array, ow: number, secPerPx: number): void {
+  if (ow < 8) return;
+  const m = new Float32Array(ow);
+  let gPeak = 1e-4;
+  for (let x = 0; x < ow; x++) {
+    const a = -lo[x] > hi[x] ? -lo[x] : hi[x];
+    m[x] = a;
+    if (a > gPeak) gPeak = a;
+  }
+  const tau = Math.max(6, Math.min(ow * 0.5, DB_TAU_SEC / Math.max(secPerPx, 1e-6)));
+  const decay = Math.exp(-1 / tau);
+  const envHi = new Float32Array(ow);
+  const envLo = new Float32Array(ow);
+  // Forward peak/valley followers: instant attack to a new extreme, one-pole release back.
+  let pf = m[0];
+  let vf = m[0];
+  for (let x = 0; x < ow; x++) {
+    pf = m[x] > pf ? m[x] : pf * decay + m[x] * (1 - decay);
+    vf = m[x] < vf ? m[x] : vf * decay + m[x] * (1 - decay);
+    envHi[x] = pf;
+    envLo[x] = vf;
+  }
+  // Backward pass, combined → symmetric envelope (no lead/lag bias from the one-pole).
+  let pb = m[ow - 1];
+  let vb = m[ow - 1];
+  for (let x = ow - 1; x >= 0; x--) {
+    pb = m[x] > pb ? m[x] : pb * decay + m[x] * (1 - decay);
+    vb = m[x] < vb ? m[x] : vb * decay + m[x] * (1 - decay);
+    if (pb > envHi[x]) envHi[x] = pb;
+    if (vb < envLo[x]) envLo[x] = vb;
+  }
+  for (let x = 0; x < ow; x++) {
+    const a = m[x];
+    if (a < 1e-4) continue; // leave true silence alone
+    const span = envHi[x] - envLo[x];
+    let stretched = span > 1e-3 ? (a - envLo[x]) / span : 0.5; // local contrast 0..1
+    stretched = stretched < 0 ? 0 : stretched > 1 ? 1 : stretched;
+    const loud = envHi[x] / gPeak; // 0..1 macro loudness of this section
+    // floor=DB_BASE·(1-ABS) … ceiling=TOP·loud ; texture fills between, pedestal keeps it loud
+    const out = DB_BASE * (1 - DB_ABS) + DB_TOP * loud * (DB_ABS + (1 - DB_ABS) * stretched);
+    const scale = out / a; // scale both edges equally → keep the signed straddle, change height
+    hi[x] *= scale;
+    lo[x] *= scale;
+  }
+}
+
 // What the offscreen waveform layer currently holds — rebuilt only when one of
 // these changes (zoom/track/stems/mute/size/colour) or the view scrolls off it.
 interface WaveMeta {
@@ -281,6 +364,7 @@ interface WaveMeta {
   freq: boolean; // frequency-colour mode (toggle → re-rasterise)
   freqCols: string; // band hues joined — recolour → re-rasterise
   viv: number; // vividness (change → re-rasterise)
+  dbrk: boolean; // de-brickwall on/off (change → re-rasterise)
   glow: boolean; // glow on/off (change → re-rasterise)
   stemCols: string; // per-stem colour overrides, joined — recolour → re-rasterise
 }
@@ -372,10 +456,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
   useEffect(() => {
     measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, props.freqColors, props.freqLow, props.freqMid, props.freqHigh, props.vividness, props.glow, stemColsKey(props.stemColors)]);
+  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, props.freqColors, props.freqLow, props.freqMid, props.freqHigh, props.vividness, props.debrick, props.glow, stemColsKey(props.stemColors)]);
 
   const clampWin = (wsec: number) => {
-    const dur = deck.buffer?.duration ?? 1;
+    const dur = deck.duration || 1; // scalar — survives the mobile mix-buffer release
     return Math.max(0.003, Math.min(Math.max(1, dur) * 1.1, wsec));
   };
 
@@ -419,6 +503,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       if (raw) envelope(raw, raw1, srcSr, rLeft, secPerPx, ow, lo, hi, null);
       else if (lodPy) envelope(null, null, srcSr, rLeft, secPerPx, ow, lo, hi, pickLevel(lodPy, secPerPx * srcSr));
       else return false;
+      // De-brickwall only when each column aggregates many samples (envelope view). Zoomed in
+      // far enough to resolve individual wave cycles, lo/hi IS the real signed waveform and
+      // there's no brick to open up — remapping it would distort the trace.
+      if (p.debrick && secPerPx * srcSr >= 48) debrick(lo, hi, ow, secPerPx);
       return true;
     };
     const paintWave = (
@@ -539,12 +627,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
           paintWave(ssr, raw, null, py, yc, half, rgba(color, alpha));
         }
       }
-    } else if (deck.buffer && p.pyramid) {
+    } else if (p.pyramid) {
       // ONE collapsed waveform — no stems, or while a split's per-stem envelopes are
-      // still building. Full height.
-      const bsr = deck.buffer.sampleRate;
-      const raw = secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
-      const raw1 = raw && deck.buffer.numberOfChannels > 1 ? deck.buffer.getChannelData(1) : null;
+      // still building. Full height. Reads raw PCM when zoomed in, but falls back to the
+      // pyramid's sample rate + LOD-only render when the mix buffer has been released
+      // (mobile, stems active) — so the trace still draws from the LOD.
+      const bsr = deck.buffer?.sampleRate ?? p.pyramid.sampleRate;
+      const raw = deck.buffer && secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
+      const raw1 = raw && deck.buffer!.numberOfChannels > 1 ? deck.buffer!.getChannelData(1) : null;
       if (p.freqColors) {
         // rekordbox-style 3-band colour of the mix.
         paintBanded(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, 1);
@@ -586,7 +676,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (!wctx) return;
     wctx.clearRect(0, 0, ow, h);
     rasterize(wctx, waveLeft, colSec, ow, h);
-    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
@@ -710,6 +800,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       m0.freq !== p.freqColors ||
       m0.freqCols !== p.freqLow + p.freqMid + p.freqHigh ||
       m0.viv !== p.vividness ||
+      m0.dbrk !== p.debrick ||
       m0.glow !== p.glow ||
       m0.stemCols !== stemColsKey(p.stemColors);
     // GEOMETRY staleness is a ZOOM or a box-resize — NOT a tempo change. The layer maps track-
@@ -759,6 +850,15 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // the layer, or playback scrolled off it before the debounce fired) — rebuild NOW so
       // we never present a blank/partial frame.
       rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
+    } else if (deck.jogging) {
+      // ACTIVE SCRUB/SCRATCH: the platter sweeps the playhead fast, which the `jumped` test
+      // below misreads as a cue/seek discontinuity and FULL-rebuilds the 3×-wide layer EVERY
+      // frame — the desktop scrub frame-drops (worse on desktop: faster mouse travel + a
+      // bigger/higher-DPR canvas → costlier rebuilds). But the layer already spans ±1 viewport
+      // around its centre, so a scratch's back-and-forth is covered — just BLIT it at the new
+      // `srcX` offset (below). Only rebuild when the scrub actually leaves the layer's span,
+      // which re-centres it (and a contained scratch then never rebuilds at all).
+      if (!covers(m0)) rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
     } else if (m0 && (jumped || ratioOff || !shiftToCover(left, trackWindow, m0))) {
       // A discontinuous JUMP (cue/seek/loop — short-circuits before the shift), a tempo that
       // coarsened the layer (ratioOff), or a scroll past the shiftable range — rebuild fresh.
@@ -792,7 +892,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const beatgrid = deck.beatgrid;
     if (beatgrid) {
       const { firstBeat, interval, beats } = beatgrid;
-      const dur = deck.buffer.duration;
+      const dur = deck.duration; // scalar — survives the mobile mix-buffer release
       const right = left + trackWindow;
       const pxPerBeat = (interval / trackWindow) * w;
       const beatsPerBar = beatgrid.beatsPerBar ?? 4;
@@ -923,23 +1023,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
     ctx.fillStyle = p.selectorColor;
     ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
 
-    // "Separating new set" pill — drawn last (over everything) so the dimmed stems read
-    // as PENDING-an-upgrade, not loaded. The current stems still play + mix underneath.
-    if (dimStems) {
-      const txt = `⟳ Separating ${Math.round(sep as number)}% · new set`;
-      ctx.font = `bold ${12 * dpr}px ui-monospace, monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const tw = ctx.measureText(txt).width;
-      const cx = w / 2;
-      const cy = 16 * dpr;
-      ctx.fillStyle = "rgba(6,8,12,0.82)";
-      ctx.fillRect(cx - tw / 2 - 10 * dpr, cy - 11 * dpr, tw + 20 * dpr, 22 * dpr);
-      ctx.fillStyle = p.accent;
-      ctx.fillText(txt, cx, cy + dpr);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
-    }
+    // (The "separating" % is shown ONCE, in the deck header — the dim above is the only
+    // on-waveform cue that a replacement stem set is pending.)
   };
 
   // One perpetual rAF: composites while the deck plays/jogs or when something
@@ -991,6 +1076,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
             onNeedleDrop((e.deltaY / 700) * trackWindowNow());
           } else if (e.shiftKey) {
             onBend((e.deltaY / 700) * 0.2);
+          } else if (props.wheelSeeks) {
+            // Wheel-seek mode (Settings): a plain wheel scrubs the playhead instead of
+            // zooming; window-proportional so the feel is constant at any zoom. Hold
+            // Ctrl/⌘ to zoom on demand (the inverse of the default mode).
+            if (e.ctrlKey || e.metaKey) applyZoom(clampWin((localWin.current ?? props.windowSec) * (e.deltaY > 0 ? 1.25 : 0.8)));
+            else onNeedleDrop((e.deltaY / 700) * trackWindowNow());
           } else {
             applyZoom(clampWin((localWin.current ?? props.windowSec) * (e.deltaY > 0 ? 1.25 : 0.8)));
           }
@@ -1021,7 +1112,6 @@ export function WaveformViewport(props: WaveformViewportProps) {
           }
           const dr = drag.current;
           if (!dr) return;
-          const rect = e.currentTarget.getBoundingClientRect();
           if (!dr.started) {
             if (tap.current && Math.abs(e.clientX - tap.current.startX) <= MOVE_PX) return;
             dr.started = true;
@@ -1038,7 +1128,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
           const coalesced =
             typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
           const samples = coalesced.length ? coalesced : [native];
-          const w = rect.width;
+          // Cached CSS width (device px ÷ dpr) — avoids a forced layout reflow on every scrub
+          // move (getBoundingClientRect was the per-move reflow; size comes from the RO instead).
+          const w = sizeRef.current.w / sizeRef.current.dpr;
           const win = trackWindowNow();
           for (const s of samples) {
             const dxPx = s.clientX - dr.x;

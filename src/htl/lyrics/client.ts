@@ -143,7 +143,8 @@ function transcribeOnce(
       const vocals = await waitForNeuralVocals(deck, stale);
       if (!vocals) return null; // no neural vocals (Single mode / cancelled / timeout)
       const m = whisperModel(model);
-      onStatus?.(`Transcribing lyrics (${m.label})…`);
+      const code = m.label[0]; // Base→B, Small→S
+      onStatus?.(`whisper ${code} …`);
       // Take the shared GPU queue ONLY now — the heavy WebGPU transcription — AFTER vocals are
       // ready. Acquiring it earlier would deadlock: we'd hold the GPU while waiting on the
       // separation that needs it. waitForNeuralVocals already blocked until separation released
@@ -151,10 +152,10 @@ function transcribeOnce(
       const lines = await gpuRun(() => transcribe(vocals, sampleRate, m.repo, (phase, pct) =>
         onStatus?.(
           phase === "model"
-            ? `Loading ${m.label} model… ${pct}%`
+            ? `whisper ${code} ↓${pct}%`
             : phase === "align"
-              ? "Aligning words to vocals…"
-              : `Transcribing lyrics… ${pct}%`,
+              ? `whisper ${code} align…`
+              : `whisper ${code} ${pct}%`,
         ),
       ));
       if (lines.length) {
@@ -255,32 +256,46 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
     }
   }
 
-  // 2) YouTube as the instant placeholder / ultimate fallback — unless Whisper beats it.
-  let whisperDone = false;
-  void fetchCaptions(o.videoId).then((cues) => {
-    if (o.stale() || whisperDone || !cues.length) return;
-    o.onCues(cues, "youtube");
+  // 2) YouTube captions — the instant placeholder AND the guaranteed fallback. Kick the
+  // fetch off now so it overlaps the neural-vocals wait, but DON'T fire-and-forget the
+  // result: keep the promise so every path that ends WITHOUT Whisper lyrics can still
+  // surface YouTube. The old code lost this promise, so a Whisper skip/miss/error (and
+  // the long no-neural-vocals timeout) went silently blank instead of showing captions.
+  let whisperWon = false;
+  const youtube = fetchCaptions(o.videoId).catch(() => []);
+  void youtube.then((cues) => {
+    if (o.stale() || whisperWon || !cues.length) return;
+    o.onCues(cues, "youtube"); // show immediately; Whisper overrides it if it wins
   });
+
+  // The ONE place every "no Whisper lyrics" path funnels through: await the SAME caption
+  // fetch and show it, or surface a clear status when there's genuinely nothing anywhere.
+  const fallbackToYouTube = async (emptyMsg: string): Promise<void> => {
+    const cues = await youtube;
+    if (o.stale() || whisperWon) return;
+    if (cues.length) {
+      o.onCues(cues, "youtube");
+    } else {
+      o.onStatus?.(emptyMsg);
+      setTimeout(() => !o.stale() && o.onStatus?.(null), 4000);
+    }
+  };
 
   // 3) Fresh Whisper over the neural vocal stem (desktop Chromium + WebGPU only). The
   // single-flight job persists the result, so this branch runs at most once per track.
-  if (!o.enabled || !canTranscribe()) return;
+  // Whisper off, or this device can't decode → YouTube is the answer, not silence.
+  if (!o.enabled || !canTranscribe()) return fallbackToYouTube("No lyrics found");
   try {
     const lines = await transcribeOnce(o.videoId, o.deck, o.model, o.sampleRate, o.stale, o.onStatus);
     if (o.stale()) return;
-    if (lines == null) return o.onStatus?.(null); // no neural vocals / cancelled — silent
-    if (!lines.length) {
-      o.onStatus?.("No lyrics detected");
-      setTimeout(() => !o.stale() && o.onStatus?.(null), 4000);
-      return;
-    }
+    if (lines == null) return fallbackToYouTube("No lyrics found"); // no neural vocals / cancelled
+    if (!lines.length) return fallbackToYouTube("No lyrics detected"); // Whisper ran, found nothing
     o.onStatus?.(null);
-    whisperDone = true;
+    whisperWon = true;
     o.onCues(lines, "whisper"); // full lines incl. per-word timings
   } catch (err) {
-    // Worker / model load / WebGPU failed — surface it briefly instead of going silent.
+    // Worker / model load / WebGPU failed — fall back to YouTube, not a dead "unavailable".
     console.warn("[htl] lyric transcription failed:", err);
-    o.onStatus?.("Lyrics unavailable");
-    setTimeout(() => !o.stale() && o.onStatus?.(null), 4500);
+    await fallbackToYouTube("Lyrics unavailable");
   }
 }

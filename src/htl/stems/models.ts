@@ -32,6 +32,8 @@ export interface StemModel {
   note: string; // shown under the picker
   urls?: Record<StemName, string>; // per-target onnx (openunmix arch)
   url?: string; // single weights file (demucs arch): safetensors
+  refUrl?: string; // fp32 reference model (demucs-core fp16 self-check compares against this)
+  needsShaderF16?: boolean; // fp16 model: only offer it when the adapter exposes the shader-f16 feature
   wasmModel?: string; // (legacy demucs-rs model id — no longer used by any model)
   eps?: string[]; // ORT execution providers (demucs-core): GPU → default, CPU → ["wasm"]
 }
@@ -98,6 +100,26 @@ export const STEM_MODELS: StemModel[] = [
     note: "Neural · best quality · needs a WebGPU desktop GPU (phones use the cache)",
     url: `${UMX_HF}demucs/htdemucs-core.onnx`,
   },
+  {
+    // EXPERIMENTAL fp16 demucs core (86 MB, half of fp32). A past attempt saw the ORT-web
+    // WebGPU EP miscompute f16 → noisy stems, but that was never root-caused and ORT is now
+    // 1.22 (which already FIXED the 1.20 fp32 freq-branch miscompute — same bug class). The
+    // export is mixed-precision (explicit Cast around each InstanceNorm, the f16-sensitive op),
+    // so it's carefully built. fp16 is the one speedup that LOWERS GPU contention (half the
+    // compute → the compositor gets more paint windows → smoother UI, not worse), so it's worth
+    // re-verifying on 1.22 + a modern GPU. Non-default — pick it to A/B. On the first segment the
+    // worker self-checks fp16 vs the fp32 ref and logs the max error (open devtools console).
+    id: "htdemucs-onnx-f16",
+    label: "HT-Demucs fp16 (test)",
+    kind: "onnx",
+    arch: "demucs-core",
+    tier: "gpu",
+    sizeMB: 86,
+    note: "Experimental fp16 — faster IF WebGPU computes it right; self-checks vs fp32 (see console)",
+    url: `${UMX_HF}demucs/htdemucs-core-fp16.onnx`,
+    refUrl: `${UMX_HF}demucs/htdemucs-core.onnx`,
+    needsShaderF16: true, // hidden from the picker until the adapter exposes shader-f16 (else f16 shaders → noise)
+  },
   // (HT-Demucs CPU removed — demucs only runs on the GPU. The CPU/wasm path is too
   // memory-heavy for a phone, and on a desktop the GPU path is strictly better.
   // Lineup: Single (no stems) everywhere, Open-Unmix (CPU) desktop+mobile, HT-Demucs
@@ -123,12 +145,18 @@ export function getStemModel(id: string): StemModel {
 let gpuAdapterOk: boolean | null = null;
 let gpuProbe: Promise<boolean> | null = null;
 let gpuAdapterInfo: string | null = null;
+let gpuShaderF16 = false; // does the acquired adapter expose the WGSL `shader-f16` feature?
 
 // Human-readable description of the WebGPU adapter we acquired (vendor/arch/device),
 // once probed — so the UI can show WHICH GPU is in use (e.g. Intel iGPU vs NVIDIA).
 // Browsers often blank vendor/device for privacy; we show whatever is populated.
 export function webGpuAdapterInfo(): string | null {
   return gpuAdapterInfo;
+}
+// Does the acquired WebGPU adapter expose the WGSL `shader-f16` feature? (Gates the fp16
+// demucs model — without it, f16 shaders fail to compile → garbage stems, so we hide it.)
+export function webGpuShaderF16(): boolean {
+  return gpuShaderF16;
 }
 export function probeWebGPU(): Promise<boolean> {
   if (gpuProbe) return gpuProbe;
@@ -144,6 +172,11 @@ export function probeWebGPU(): Promise<boolean> {
       const adapter =
         (await gpu.requestAdapter({ powerPreference: "high-performance" })) || (await gpu.requestAdapter());
       if (!adapter) return (gpuAdapterOk = false);
+      // Whether f16 WGSL shaders can run at all (gates the fp16 demucs model's visibility).
+      // Brand-new on the Linux+NVIDIA WebGPU path (Chrome 147–148 enabled WebGPU there; the
+      // shader-f16 feature lags) — so this is false on that stack today, true on most macOS/
+      // Windows. The fp16 model auto-appears in the picker the day this flips true.
+      gpuShaderF16 = !!adapter.features?.has?.("shader-f16");
       // Record which GPU we got (so Settings can show Intel iGPU vs NVIDIA). `info`
       // is sync in current browsers; older ones expose requestAdapterInfo().
       try {
@@ -326,6 +359,29 @@ export function resetStemGuard(): void {
   } catch {
     /* ignore */
   }
+}
+
+// ─── Clean-unload disarm: a user REFRESH must not look like a crash ──────────────
+// Both guards above arm a localStorage flag right before the heavy job and disarm it
+// after (in a finally). A voluntary refresh/close unloads the page BEFORE that finally
+// runs, so the flag would survive and the next load would wrongly read it as "the tab
+// crashed mid-job" → block GPU / escalate the stem guard, even though nothing crashed.
+// KEY ASYMMETRY: a real GPU-induced renderer crash (the Aw-Snap this guard exists for)
+// does NOT fire pagehide, whereas a deliberate refresh/close DOES. So clearing the ARM
+// flags on pagehide makes ONLY a genuine crash leave them set — a refresh mid-separation
+// no longer disables GPU. (BLOCK/FAIL keys are untouched: a tab already auto-disabled
+// stays disabled until the user re-enables it.) The reload then just re-runs the
+// separation from scratch — the practical "resume", since the worker/GPU job state is
+// gone on unload and can't be continued mid-segment.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    try {
+      localStorage.removeItem(GPU_ARM_KEY);
+      localStorage.removeItem(STEM_ARM_KEY);
+    } catch {
+      /* no localStorage (private mode) — nothing to clear */
+    }
+  });
 }
 
 // Chromium family (Chrome / Edge / Brave / Opera / Chromium). This is the ONLY place

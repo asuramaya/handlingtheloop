@@ -41,6 +41,20 @@ function getWorker(): Worker {
     worker = new Worker(new URL("./separator.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;
+      if (type === "f16check") {
+        // One-off diagnostic (no job id): the fp16 self-check result vs the fp32 reference.
+        const d = e.data;
+        if (d.error) {
+          console.warn(`[htl-f16] self-check failed: ${d.error}`);
+        } else {
+          const rel = (d.relTime * 100).toFixed(2);
+          const verdict = d.relTime < 0.03 ? "✓ fp16 looks CORRECT" : d.relTime < 0.15 ? "~ fp16 marginal" : "✗ fp16 MISCOMPUTES (noisy)";
+          console.log(
+            `[htl-f16] ${verdict} — time_out maxErr=${d.maxErrTime.toExponential(2)} (${rel}% of peak ${d.peak.toFixed(3)}), rms=${d.rmsTime.toExponential(2)}; freq_out maxErr=${d.maxErrFreq.toExponential(2)}, rms=${d.rmsFreq.toExponential(2)}`,
+          );
+        }
+        return;
+      }
       const job = jobs.get(id);
       if (!job) return;
       if (type === "progress") job.onProgress?.(e.data.pct);
@@ -138,6 +152,10 @@ function runWorkerJob(
         type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length, arch: model.arch,
         urls: model.urls, url: model.url, eps: model.eps,
         quality: model.arch === "demucs-core" ? demucsQuality : undefined,
+        // fp16 A/B: the experimental fp16 core carries a fp32 refUrl → the worker runs ONE
+        // segment through both on WebGPU and logs the max error (is f16 correct on this GPU?).
+        selfCheck: model.arch === "demucs-core" && !!model.refUrl,
+        refUrl: model.refUrl,
         threads,
       },
       [L.buffer, R.buffer],

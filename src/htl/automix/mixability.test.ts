@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { TrackMeta } from "../library/types";
 import {
+  avgMixability,
   bpmRatioFolded,
   camelotDistance,
   mixability,
   pickTransition,
+  planTier,
   rankByMixability,
   smartSortChain,
+  songCore,
+  transitionLabel,
 } from "./mixability";
 
 function track(p: Partial<TrackMeta>): TrackMeta {
@@ -53,6 +57,50 @@ describe("mixability + pickTransition", () => {
     expect(pickTransition(seed, harmonic).style).toBe("blend");
     expect(pickTransition(seed, harmonic).bars).toBeGreaterThanOrEqual(12);
     expect(pickTransition(seed, clash).style).toBe("cut");
+  });
+});
+
+describe("honesty when unanalysed", () => {
+  const a = track({ videoId: "a".repeat(11) }); // no key/bpm
+  const b = track({ videoId: "b".repeat(11) });
+
+  it("does not claim 'Harmonic' for a pair with no key data", () => {
+    const plan = pickTransition(a, b);
+    expect(plan.confident).toBe(false);
+    expect(plan.keyKnown).toBe(false);
+    expect(transitionLabel(plan)).not.toContain("Harmonic");
+    expect(transitionLabel(plan)).toContain("?");
+    expect(planTier(plan)).toBe("unknown");
+  });
+
+  it("uses a real harmonic label once both keys are known + compatible", () => {
+    const x = track({ videoId: "x".repeat(11), key: "8A", bpm: 128 });
+    const y = track({ videoId: "y".repeat(11), key: "9A", bpm: 128 });
+    expect(transitionLabel(pickTransition(x, y))).toContain("Harmonic");
+  });
+});
+
+describe("avgMixability (both-deck fit)", () => {
+  it("rewards a candidate that fits both seeds over one that fits neither", () => {
+    const seedA = track({ videoId: "1".repeat(11), key: "8A", bpm: 128 });
+    const seedB = track({ videoId: "2".repeat(11), key: "9A", bpm: 128 });
+    const fits = track({ videoId: "3".repeat(11), key: "8A", bpm: 128 });
+    const clashes = track({ videoId: "4".repeat(11), key: "3B", bpm: 96 });
+    expect(avgMixability([seedA, seedB], fits)).toBeGreaterThan(avgMixability([seedA, seedB], clashes));
+  });
+});
+
+describe("songCore (song-level dedup)", () => {
+  it("collapses versions / remixes / mashups of the same song", () => {
+    const base = songCore("Danza Kuduro");
+    expect(base).toBe("danza kuduro");
+    expect(songCore("Danza Kuduro (Original Mix)")).toBe(base);
+    expect(songCore("Danza kuduro x Pepas")).toBe(base);
+    expect(songCore("Danza Kuduro (Official Video) ft. Lucenzo")).toBe(base);
+  });
+  it("keeps genuinely different songs distinct", () => {
+    expect(songCore("Vem Dancar Kuduro")).not.toBe(songCore("Danza Kuduro"));
+    expect(songCore("Vamos a la Playa")).not.toBe(songCore("Danza Kuduro"));
   });
 });
 

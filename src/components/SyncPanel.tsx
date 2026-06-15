@@ -11,6 +11,7 @@ import {
   type SourceTrack,
   fetchSpotifyPlaylists,
   fetchTidalPlaylists,
+  friendlySyncError as friendly,
   syncAdd,
   syncCreate,
   syncMatch,
@@ -25,23 +26,6 @@ const LABEL: Record<SyncSource, string> = { htl: "htl", youtube: "YouTube", spot
 const MATCH_SLICE = 15; // tracks matched per request (Worker subrequest budget)
 const COLLECTION_ID = "__collection__"; // sentinel: the whole htl Collection
 const fmtDur = (s: number) => (s > 0 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "");
-
-// Spotify's Web API returns a 403 "premium required for the owner of the app"
-// for many endpoints while the app sits in dev mode / the owner lapses. Surface
-// it as something a user can act on instead of a raw status line.
-function friendly(msg: string): string {
-  // A playlist that lists fine but won't read: Spotify blocks third-party API reads of
-  // playlists it owns (editorial/algorithmic — Discover Weekly, Daily Mix, Top…) and of
-  // some that were only shared with you. The list call succeeds; the items call 403/404s
-  // (tagged with the `/playlists/…/items` endpoint). Tell the user how to make it syncable.
-  if (/\[\/playlists\/.*\/items\]/.test(msg) && /\bspotify (403|404)\b/i.test(msg)) {
-    return "Spotify won't let apps read this playlist's tracks — it's one Spotify owns (Discover Weekly, Daily Mix, an editorial mix…) or one that was only shared with you. In the Spotify app, open it and tap ⋯ → Add to your own library (or duplicate it), then sync that copy.";
-  }
-  if (/premium/i.test(msg) || /\bspotify 403\b/i.test(msg)) {
-    return "Spotify is blocking this right now — its API currently needs the app owner to hold an active Premium subscription (a temporary Spotify limitation that can take a few hours to clear). Try again later, or sync to YouTube instead.";
-  }
-  return msg;
-}
 
 const CONF: Record<Confidence, { label: string; cls: string }> = {
   high: { label: "Match", cls: "c-high" },

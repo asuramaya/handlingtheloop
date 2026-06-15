@@ -39,6 +39,7 @@ export interface Library {
   linkSource: (id: string, sourceListId: string, sourceService?: string) => void;
   addToPlaylist: (playlistId: string, track: TrackMeta) => void;
   removeFromPlaylist: (playlistId: string, videoId: string) => void;
+  markSynced: (id: string, ts: number) => void;
 }
 
 export function useLibrary(): Library {
@@ -147,6 +148,14 @@ export function useLibrary(): Library {
     }));
   }, []);
 
+  // Stamp the last successful re-sync from the source provider.
+  const markSynced = useCallback((id: string, ts: number) => {
+    setData((d) => ({
+      ...d,
+      playlists: d.playlists.map((p) => (p.id === id ? { ...p, lastSynced: ts } : p)),
+    }));
+  }, []);
+
   return {
     collection: data.collection,
     playlists: data.playlists,
@@ -160,5 +169,6 @@ export function useLibrary(): Library {
     linkSource,
     addToPlaylist,
     removeFromPlaylist,
+    markSynced,
   };
 }

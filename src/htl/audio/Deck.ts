@@ -11,6 +11,7 @@ export interface StretchEngineConfig {
   transient?: boolean; // preserve attacks (copy 1:1, no WSOLA doubling / PV phase reset)
   aa?: boolean; // anti-aliased windowed-sinc resampling when pitching up
   tThresh?: number; // transient-detector flux/EMA threshold (lower = more sensitive)
+  reserve?: number; // pre-roll FIFO headroom (samples) the worklet keeps ahead; raised during stem separation
 }
 
 // Base (level-0) waveform envelope for one stem: per-256-sample-bucket min/max + the
@@ -18,6 +19,11 @@ export interface StretchEngineConfig {
 // that packs the stem to int16 (loadEnginePcm), so the raw float32 buffers can be freed
 // the instant stems are handed off — the LOD ladder downsamples from this, no PCM needed.
 const STEM_BASE_BUCKET = 256;
+// Cross-device contract (desktop side): the raw float32 stem AudioBuffers are ~92 MB/min and
+// held TWICE (deck originals + the worklet's transferred copy), so they only bite on LONG
+// tracks. Desktop keeps them for normal tracks (crisp deep-zoom + safe stretch-node reattach)
+// but releases them past this length to roughly double its headroom. (Mobile always releases.)
+const DESKTOP_FREE_STEMS_SECONDS = 480; // 8 min
 interface StemBaseLevel {
   min: Float32Array;
   max: Float32Array;
@@ -68,7 +74,7 @@ function buildLodPyramid(
   }
   return { sampleRate: sr, length, levels };
 }
-import { STEM_NAMES, type StemName, type Stems } from "../stems";
+import { STEM_NAMES, type StemName, type Stems, type PackedStems } from "../stems";
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
@@ -88,6 +94,9 @@ export const HOT_CUE_COUNT = 8;
 // ~70 KB/track. The remote rebuilds a full pyramid from it (deep zoom goes coarse —
 // fine, it has no local PCM anyway).
 export interface StemView {
+  videoId?: string; // the track these envelopes are FOR — a guest drops a view whose id
+  //   doesn't match the song currently on that deck (the slot-vs-song staleness fix).
+  //   Optional so an older peer that omits it still renders (best-effort, as before).
   length: number; // total samples (pyramid length)
   sampleRate: number;
   bucket: number; // sample bucket of the shipped level
@@ -185,6 +194,7 @@ export type SyncRole = "off" | "master" | "slave";
 
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
+  readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
   private readonly trimNode: GainNode;
   private readonly eq: Eq3;
   // Post-fader stereo meter: split L/R into two analysers (sinks). The UI reads
@@ -197,6 +207,7 @@ export class Deck {
   private readonly ctx: AudioContext;
   private _trim = 1;
   private _level = 1;
+  private _cueLevel = 0; // headphone-cue send level 0..1 (0 = not in the cue bus); local monitor only
   private _eqLow = 0;
   private _eqMid = 0;
   private _eqHigh = 0;
@@ -207,6 +218,11 @@ export class Deck {
   private _lp = 0; // low-pass amount 0..1
   private _fxOn = true; // FX master: when off the color filter is bypassed
   private _loudness: number | null = null; // cached integrated RMS of the track
+  // Scalars that outlive `this.buffer`: on mobile we RELEASE the ~92 MB float32 mix once stems
+  // are packed into the worklet (releaseMixBuffer) — the worklet is the audio source from then
+  // on, so duration + "a track is loaded" must come from these, not the (now null) buffer.
+  private _duration = 0;
+  private _loaded = false;
   skipBeats = 4; // per-deck jog skip / beat-jump resolution (beats; 4 = one bar)
 
   buffer: AudioBuffer | null = null;
@@ -254,6 +270,7 @@ export class Deck {
   lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
   get stretchAttached() { return this.stretchNode != null; } // TEMP diag: did the module load?
   private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
+  private scratchLoaded = false; // the scratch worklet holds this track's PCM (mobile loads it lazily)
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
@@ -323,6 +340,13 @@ export class Deck {
     this.output = ctx.createGain();
     this.eq.output.connect(this.trimNode);
     this.trimNode.connect(this.output);
+    // Pre-fader headphone cue (PFL) tap: a parallel send off the trim node (post-EQ,
+    // BEFORE the channel fader/crossfader) so a deck can be auditioned in the cue
+    // device even while faded out of the master mix. Starts silent (gain 0);
+    // AudioEngine connects cueSend to the cue bus — see setCueSinkId.
+    this.cueSend = ctx.createGain();
+    this.cueSend.gain.value = 0;
+    this.trimNode.connect(this.cueSend);
     // Post-fader meter tap: a channel splitter feeding two analyser sinks (no
     // onward connection) so the meter reads exactly what feeds the crossfader,
     // per channel, without altering the audio path.
@@ -353,7 +377,7 @@ export class Deck {
     return this._playing;
   }
   get duration() {
-    return this.buffer?.duration ?? 0;
+    return this._duration;
   }
   get tempo() {
     return this._tempo;
@@ -384,7 +408,7 @@ export class Deck {
       if (m?.type === "ended" && this.running) {
         this._playing = false;
         this.running = false;
-        this.startOffset = this.buffer?.duration ?? 0;
+        this.startOffset = this._duration;
         this.onEnded?.();
       }
     };
@@ -406,14 +430,17 @@ export class Deck {
   private loadEnginePcm() {
     const node = this.stretchNode;
     const buf = this.buffer;
-    if (!node || !buf) return;
+    const useStems = !!this.stems;
+    // Need a source: stems play from `this.stems`, the plain mix from `buf`. On mobile we
+    // release `buf` once stems are packed (releaseMixBuffer), so a stems pack must NOT be
+    // gated on `buf` — only the mix path requires it.
+    if (!node || (!useStems && !buf)) return;
     // Mobile packs INT16 (halves the audio-thread footprint so 4 stems × 2 decks fit a
     // phone). Desktop keeps raw FLOAT32 — RAM is plentiful and a `.slice` memcpy is far
     // cheaper than a per-sample pack loop on the load path (the pack froze the main
     // thread ~0.2 s per stem swap; the seamless re-seat below tolerates it, but desktop
     // shouldn't pay it at all).
     const packInt16 = isMobileDevice();
-    const useStems = !!this.stems;
     // On mobile + stems, FUSE the base waveform envelope (min/max + low/mid/high bands)
     // into the SAME pass that packs int16. That lets setStems free the raw ~460 MB
     // float32 stems the instant the handoff completes, instead of holding them across
@@ -496,9 +523,12 @@ export class Deck {
     // Mobile loads stems too — the iPhone silent-playback bug was the worklet's
     // AudioParams, not memory, so there's no reason to starve the phone of the mixer.
     if (useStems) for (const name of STEM_NAMES) pushGroup(this.stems![name], name);
-    else pushGroup(buf);
+    else pushGroup(buf!); // guard above guarantees buf when !useStems
     this.engineStems = useStems;
-    node.port.postMessage({ type: "loadPcm", gL, gR, length: buf.length, int16: packInt16 }, transfer);
+    // Track length comes from whichever source we packed — `buf` may be null (mobile, mix
+    // released after a stems pack), so read it from the first stem in that case.
+    const length = useStems ? this.stems![STEM_NAMES[0]].length : buf!.length;
+    node.port.postMessage({ type: "loadPcm", gL, gR, length, int16: packInt16 }, transfer);
   }
 
   /** Push WSOLA engine config (grain/search/stride + transient/AA toggles) to the worklet. */
@@ -516,11 +546,14 @@ export class Deck {
   attachScratchNode(node: AudioWorkletNode) {
     node.connect(this.eq.input);
     this.scratchNode = node;
-    if (this.buffer) this.sendScratchBuffer();
+    if (this.buffer && !isMobileDevice()) this.sendScratchBuffer();
   }
 
   // Hand the whole decoded track to the resampler (its own copies, so the
-  // AudioBuffer's backing store isn't detached by the transfer).
+  // AudioBuffer's backing store isn't detached by the transfer). This is a FULL
+  // float32 duplicate of the track per deck — desktop preloads it eagerly (RAM is
+  // plentiful), but on mobile it's a major slice of the two-deck iOS peak that crashed
+  // iPads mid-transition, so mobile loads it LAZILY (only on the first scratch).
   private sendScratchBuffer() {
     if (!this.scratchNode || !this.buffer) return;
     const b = this.buffer;
@@ -532,8 +565,10 @@ export class Deck {
       transfer.push(copy.buffer);
     }
     this.scratchNode.port.postMessage({ type: "load", channels, length: b.length }, transfer);
+    this.scratchLoaded = true;
   }
   private scratchStart() {
+    if (!this.scratchLoaded) this.sendScratchBuffer(); // mobile: lazy-load the PCM on first scratch
     this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
   }
   private scratchMove() {
@@ -596,6 +631,8 @@ export class Deck {
     this.stemGain = { vocals: 1, drums: 1, bass: 1, other: 1 };
     this.stemPyramids = null;
     this.buffer = buffer;
+    this._duration = buffer.duration;
+    this._loaded = true;
     this.beatgrid = beatgrid;
     this.key = null; // re-set by the caller from the track analysis
     this._pitchSemis = 0;
@@ -603,7 +640,24 @@ export class Deck {
     this._loudness = null; // recompute lazily for the new track
     this.loadEnginePcm(); // hand the mix PCM to the stretch engine
     for (const name of STEM_NAMES) this.rampStem(name); // reset engine stem gains to all-on
-    this.sendScratchBuffer();
+    // New track → the scratch worklet's old PCM is stale. Desktop re-sends now; mobile defers
+    // the (full float32) copy until the first scratch, to keep it out of the 2-deck iOS peak.
+    this.scratchLoaded = false;
+    if (!isMobileDevice()) this.sendScratchBuffer();
+  }
+
+  /** Release the decoded float32 mix buffer (~92 MB) — called on MOBILE once this deck's stems
+   *  are packed into the worklet, since the worklet stems are the audio source from then on and
+   *  the float32 mix is dead weight (the dominant steady-state cost of following a 2-deck session
+   *  with stems on a phone). Playback/seek/duration run off `_loaded`/`_duration`; loudness is
+   *  force-cached first; the waveform uses the LOD pyramid (no raw-PCM read on mobile). Cost:
+   *  scratch and a revert-to-plain-mix (setStems(null)) need a re-load until then — fine for a
+   *  phone following a stem session. The caller also drops the shared trackCache reference
+   *  (dropCachedBuffer) — BOTH must go for the buffer to actually free. No-op if already gone. */
+  releaseMixBuffer() {
+    if (!this.buffer) return;
+    void this.loudness; // force the lazy RMS scan to cache `_loudness` before the buffer drops
+    this.buffer = null;
   }
 
   // --- stems -----------------------------------------------------------------
@@ -612,6 +666,14 @@ export class Deck {
   // per-stem gains so any can be muted live; with all on the sum IS the mix.
   get hasStems(): boolean {
     return this.stemsLoaded;
+  }
+  /** The single invariant the whole session path keys on: this deck has its OWN local
+   *  stems (real buffers / pyramids), NOT a mirrored host view. Snapshots advertise this
+   *  (never remote-only stems), extractStemView only serialises this, and a guest only
+   *  mirrors when this is false — so reuse one getter instead of `hasStems && !remoteStems`
+   *  scattered at each site (where the two could drift). */
+  get ownStems(): boolean {
+    return this.stemsLoaded && !this.remoteStems;
   }
   /** Should the per-stem mixer cells render? For LOCAL stems (desktop split/neural/DSP)
    *  → yes the moment they're loaded. For a REMOTE-display deck (a mobile guest mirroring
@@ -638,11 +700,11 @@ export class Deck {
   }
   /** HOST: snapshot this deck's stem waveform envelopes for transmission to remotes.
    *  null until the neural pyramids are built. Coarse level → small payload. */
-  extractStemView(): StemView | null {
+  extractStemView(videoId?: string): StemView | null {
     // A remote-display deck holds the HOST's envelopes (rebuilt via setRemoteStemView),
     // not its own — it must never re-publish them, or a granted/clock remote would
     // overwrite the host's real stem view with a coarser re-derivation (feedback).
-    if (this.remoteStems) return null;
+    if (!this.ownStems) return null;
     const py = this.stemPyramids;
     // Stream whenever REAL local stem pyramids exist — neural OR DSP. (Previously
     // neural-only, which stranded a DSP-stem host: it advertised hasStems in the snapshot
@@ -661,11 +723,12 @@ export class Deck {
       if (!p || !p.levels.length) return null;
       length = p.length;
       sampleRate = p.sampleRate;
-      // Pick a level coarse enough to cap the BUCKET COUNT (~3000 max), so a long track's
-      // envelope stays small: ≥2048-sample buckets for resolution, but coarser still when
-      // the track is long enough that 2048 would blow past 3000 buckets. Keeps the 4-deck
-      // payload well under the session/DO limits (a long track previously made it huge).
-      const minBucket = Math.max(2048, Math.ceil(p.length / 3000));
+      // Pick a level coarse enough to cap the BUCKET COUNT, so a long track's envelope
+      // stays small: a 1024-sample floor (≈2× the old 2048 → visibly finer guest lanes),
+      // coarsened further once a long track would blow past ~4500 buckets. The byte
+      // ceiling stays bounded for the 4-deck payload; oversized still rides in-memory only
+      // (the DO 128 KiB cap — see server/room.ts), it just won't persist.
+      const minBucket = Math.max(1024, Math.ceil(p.length / 4500));
       const lvl = p.levels.find((l) => l.bucket >= minBucket) ?? p.levels[p.levels.length - 1];
       bucket = lvl.bucket;
       stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };
@@ -677,7 +740,7 @@ export class Deck {
         high: i8ToB64(quantizeI8(downsampleAvg(lvl.high, bb))),
       };
     }
-    return { length, sampleRate, bucket, stems, bands };
+    return { videoId, length, sampleRate, bucket, stems, bands };
   }
   /** REMOTE: rebuild the 4-lane stem display from a host's transmitted envelopes.
    *  No local PCM — marks remote stems present so the mixer cells light up too. */
@@ -877,11 +940,48 @@ export class Deck {
       // ~2× and jetsam-kill the tab (→ crash loop), release them now. hasStems and
       // the stem mixer keep working off `stemsLoaded` + the worklet; only the
       // deep-zoom true-signal stem render (stemChannel) falls back to LOD, which is
-      // an acceptable trade on a phone. Desktop keeps the buffers (headroom + sharper
-      // zoom + safe against a stretch-node reattach).
-      if (isMobileDevice()) this.stems = null;
+      // an acceptable trade. ALWAYS on a phone (the 2-deck OOM). On DESKTOP only past
+      // DESKTOP_FREE_STEMS_SECONDS — short tracks keep the buffers (crisp deep-zoom + safe
+      // against a stretch-node reattach), long tracks release them to ~2× the headroom
+      // (a reattach there re-packs the mix, losing stems until reload — fine on a long track).
+      if (isMobileDevice() || this._duration > DESKTOP_FREE_STEMS_SECONDS) this.stems = null;
     }
   }
+
+  /** Load PRE-PACKED int16 stems (from `dspStemsWindowedInt16`) with NO float32 intermediate —
+   *  the windowed build never held the full float32 set, so this is the OOM-safe path for LONG
+   *  tracks on mobile. Posts the int16 PCM straight to the worklet and builds the LOD pyramids
+   *  from the supplied envelopes (no PCM re-scan). `this.stems` stays null (deep-zoom stem render
+   *  → LOD only). Mirrors the tail of setStems' mobile branch, minus the float32 pack. */
+  loadPackedStems(packed: PackedStems, neural = false) {
+    this.stems = null;
+    this.stemsLoaded = true;
+    this.stemsNeural = neural;
+    this.remoteStems = false; // real local stems — no longer mirroring a host's remote view
+    this.engineStems = true;
+    this.stemPyramids = null;
+    const job = ++this.stemPyramidJob;
+    const transfer: ArrayBuffer[] = [];
+    for (let i = 0; i < packed.gL.length; i++)
+      transfer.push(packed.gL[i].buffer as ArrayBuffer, packed.gR[i].buffer as ArrayBuffer);
+    // int16 PCM straight to the worklet (it sets nG, scales by INV16, resets gains to 1).
+    this.stretchNode?.port.postMessage(
+      { type: "loadPcm", gL: packed.gL, gR: packed.gR, length: packed.length, int16: true },
+      transfer,
+    );
+    for (const name of STEM_NAMES) this.rampStem(name); // re-assert the current per-stem gains
+    if (this._playing) this.spawnSource(this.position());
+    if (job !== this.stemPyramidJob) return; // superseded mid-call
+    const out = {} as Record<StemName, Pyramid>;
+    for (const name of STEM_NAMES) {
+      const b = packed.base[name];
+      out[name] = buildLodPyramid(b.min, b.max, packed.length, packed.sampleRate, b.bucket, b.low, b.mid, b.high);
+    }
+    this.stemPyramids = out;
+    this.onStemPyramids?.();
+    this.onStemsReady?.();
+  }
+
   setStemMute(name: StemName, muted: boolean) {
     this.stemMuted[name] = muted;
     this.rampStem(name);
@@ -915,7 +1015,7 @@ export class Deck {
 
   /** Current playhead position in seconds (wraps inside an active loop). */
   position(): number {
-    if (!this.buffer) return 0;
+    if (!this._loaded) return 0;
     let pos = this._playing
       ? this.startOffset + (this.ctx.currentTime - this.startedAt) * this.effRate()
       : this.startOffset;
@@ -923,7 +1023,7 @@ export class Deck {
       const len = this.loop.end - this.loop.start;
       if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
     }
-    return Math.max(0, Math.min(this.buffer.duration, pos));
+    return Math.max(0, Math.min(this._duration, pos));
   }
 
   // --- follower visual clock ---
@@ -968,7 +1068,7 @@ export class Deck {
    *  the anchor tick (so the head glides at the display rate even when the local audio
    *  clock is frozen/suspended); everyone else draws their real local clock. */
   visualPosition(): number {
-    if (!this.followOn || this.jogging || !this.buffer) return this.position();
+    if (!this.followOn || this.jogging || !this._loaded) return this.position();
     // When our OWN audio clock is live (context running), it's the smoothest, most
     // accurate playhead AND it's exactly what we hear — draw it. The tick-extrapolated
     // clock is only a fallback for a SUSPENDED context (a mobile passenger), where
@@ -979,7 +1079,7 @@ export class Deck {
       const len = this.loop.end - this.loop.start;
       if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
     }
-    return Math.max(0, Math.min(this.buffer.duration, pos));
+    return Math.max(0, Math.min(this._duration, pos));
   }
   /** Is the DRAWN playhead advancing? (drives the viewport's rAF.) */
   get visualPlaying(): boolean {
@@ -990,7 +1090,7 @@ export class Deck {
   play() {
     this.cancelJog(); // a transport action wins over an in-flight platter coast
     this.clearBend();
-    if (!this.buffer || this._playing) return;
+    if (!this._loaded || this._playing) return;
     // iOS boots the AudioContext SUSPENDED (clock frozen) until a gesture resumes
     // it. Scrub/needle-drop already do this, but tapping Play first does not — so a
     // fresh load + Play (no prior scrub) rendered silence. Resume on the Play gesture.
@@ -1050,7 +1150,7 @@ export class Deck {
   }
 
   scrubBegin() {
-    if (!this.buffer) return;
+    if (!this._loaded) return;
     // iOS starts the AudioContext suspended (its clock frozen) until a gesture
     // resumes it. The jog physics tick off ctx.currentTime, so without this a
     // scrub before the first Play sees dt≈0 every frame and the platter never
@@ -1086,7 +1186,7 @@ export class Deck {
     if (this.jogPhase !== "grab") return;
     this.jogInputAt = this.ctx.currentTime;
     let p = this.handPos + deltaSec;
-    const dur = this.buffer ? this.buffer.duration : 0;
+    const dur = this._duration;
     if (p < 0) p = 0;
     else if (p > dur) p = dur;
     this.handPos = this.jogPos = p;
@@ -1305,7 +1405,7 @@ export class Deck {
   }
 
   private clampJog() {
-    const dur = this.buffer ? this.buffer.duration : 0;
+    const dur = this._duration;
     if (this.jogPos <= 0) {
       this.jogPos = 0;
       if (this.jogVel < 0) this.jogVel = 0;
@@ -1431,7 +1531,7 @@ export class Deck {
    *  so 1/2/4/8 changes the length in place instead of jumping the loop to the
    *  playhead. With no active loop, drop a fresh loop at the current position. */
   setBeatLoop(beats: number) {
-    if (!this.buffer) return;
+    if (!this._loaded) return;
     const g = this.beatgrid;
     const interval = g?.interval ?? 60 / 120;
     const start = this.loop?.active ? this.loop.start : g ? this.snap(this.position()) : this.position();
@@ -1695,6 +1795,18 @@ export class Deck {
     this._level = gain;
     this.output.gain.value = gain;
   }
+  get cueLevel() {
+    return this._cueLevel;
+  }
+  /** Headphone-cue (PFL) send level, 0..1. Local monitor only — never broadcast to a
+   *  session. A short ramp avoids zipper noise while the cue fader is dragged. */
+  setCueLevel(v: number) {
+    const g = Math.max(0, Math.min(1, v));
+    this._cueLevel = g;
+    const now = this.ctx.currentTime;
+    this.cueSend.gain.cancelScheduledValues(now);
+    this.cueSend.gain.setTargetAtTime(g, now, 0.01);
+  }
   get eqLow() {
     return this._eqLow;
   }
@@ -1903,7 +2015,7 @@ export class Deck {
   // hard-resets the FIFO at full gain → a click). Fresh play from stopped uses 'start'
   // (gain is already 0, so no click) and no stopSource is needed for the gapless path.
   private spawnSource(offset: number, gapless = false) {
-    if (!this.buffer || !this.stretchNode) return;
+    if (!this._loaded || !this.stretchNode) return;
     const t = this.ctx.currentTime;
     // With a loop active, fold the start point into [start, end) so playback
     // begins inside the loop (the engine wraps from there). The clock anchor

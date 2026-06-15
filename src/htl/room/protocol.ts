@@ -66,6 +66,25 @@ export type ControlParam =
 export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";
 export type StemName = "drums" | "bass" | "vocals" | "other";
 
+// A track carried whole inside a queue-mutation intent, so the queue authority (the
+// host running the auto-mixer) can enqueue a remote's pick with full metadata
+// (thumbnail/bpm/key) and re-broadcast it 1:1 in the automix stream. Structurally a
+// superset of TrackMeta's serializable fields — kept inline so this protocol file
+// stays import-free (the Worker only pulls ClientMsg/ServerMsg/Peer from here).
+export interface QueuedTrack {
+  videoId: string;
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnail: string | null;
+  views: number | null;
+  bpm?: number | null;
+  key?: string | null;
+  isrc?: string | null;
+  provider?: string;
+  providerId?: string | null;
+}
+
 export type Intent =
   | { kind: "crossfade"; value: number }
   | { kind: "tempoRange"; value: number } // global tempo-fader range (±%)
@@ -83,6 +102,15 @@ export type Intent =
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
   | { kind: "loop"; deck: DeckId; action: "in" | "out" | "exit" | "reloop" | "beat"; beats?: number }
   | { kind: "hotcue"; deck: DeckId; slot: number; action: "press" | "save" | "clear" }
+  | { kind: "automix"; action: "toggle" | "skip" | "mixnow" | "hold" } // remote drives the auto-DJ
+  // Queue is first-class, host-authoritative room state: a remote mutates it by intent,
+  // the host (queue authority) applies it to its single canonical queue, and the automix
+  // stream re-broadcasts the result so every device converges 1:1. `add`/`addNext` carry
+  // the whole track; `remove` keys by videoId (stable); `move` uses indices into the
+  // shared upcoming list (which is the host's queue verbatim, so they line up).
+  | { kind: "queue"; action: "add" | "addNext"; track: QueuedTrack }
+  | { kind: "queue"; action: "remove"; videoId: string }
+  | { kind: "queue"; action: "move"; from: number; to: number }
   | { kind: "load"; deck: DeckId; videoId: string; name?: string; artist?: string };
 
 export type ClientMsg =
@@ -97,6 +125,7 @@ export type ClientMsg =
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
+  | { t: "automix"; state: unknown } // host streams the auto-DJ queue + status → guests (opaque)
   | { t: "stemview"; deck: DeckId; view: unknown } // per-deck stem waveform envelopes (opaque; for remote display)
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host streams word-timed lyrics → guests
   | { t: "color"; color: string } // update this device's account accent (re-broadcast in presence)
@@ -110,6 +139,7 @@ export type ServerMsg =
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
+  | { t: "automix"; state: unknown } // host's auto-DJ queue + status, relayed to remotes
   | { t: "stemview"; deck: DeckId; view: unknown } // host's per-deck stem envelopes, relayed to remotes
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host's word-timed lyrics, relayed to remotes
   | { t: "settings"; settings: unknown; updatedAt: number } // a same-account device's colour/theme settings, relayed to the owner's OTHER devices

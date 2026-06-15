@@ -11,6 +11,7 @@ export type { TickDecks } from "./protocol";
 export interface RoomCallbacks {
   onIntent?: (intent: Intent, from: string) => void;
   onState?: (snapshot: unknown) => void;
+  onAutomix?: (state: unknown) => void;
   onTick?: (decks: TickDecks) => void;
   onStemView?: (deck: DeckId, view: unknown) => void;
   onLyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
@@ -54,6 +55,7 @@ export interface RoomState {
   sendTick: (decks: TickDecks) => void;
   publishState: (snapshot: unknown) => void;
   sendStemView: (deck: DeckId, view: unknown) => void;
+  sendAutomix: (state: unknown) => void;
   sendLyrics: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   sendSettings: (settings: unknown, updatedAt: number) => void; // broadcast my settings to my other devices
   requestState: () => void;
@@ -129,6 +131,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
       error: setError,
       intent: (i, from) => cbRef.current.onIntent?.(i, from),
       state: (s) => cbRef.current.onState?.(s),
+      automix: (s) => cbRef.current.onAutomix?.(s),
       tick: (d) => cbRef.current.onTick?.(d),
       stemview: (deck, view) => cbRef.current.onStemView?.(deck, view),
       lyrics: (deck, videoId, lines, source) => cbRef.current.onLyrics?.(deck, videoId, lines, source),
@@ -185,6 +188,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   const sendTick = useCallback((decks: TickDecks) => clientRef.current?.sendTick(decks), []);
   const publishState = useCallback((snapshot: unknown) => clientRef.current?.publishState(snapshot), []);
   const sendStemView = useCallback((deck: DeckId, view: unknown) => clientRef.current?.sendStemView(deck, view), []);
+  const sendAutomix = useCallback((state: unknown) => clientRef.current?.sendAutomix(state), []);
   const sendSettings = useCallback((settings: unknown, updatedAt: number) => clientRef.current?.sendSettings(settings, updatedAt), []);
   const sendLyrics = useCallback((deck: DeckId, videoId: string, lines: unknown, source: string) => clientRef.current?.sendLyrics(deck, videoId, lines, source), []);
   const requestState = useCallback(() => clientRef.current?.requestState(), []);
@@ -247,6 +251,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
     sendTick,
     publishState,
     sendStemView,
+    sendAutomix,
     sendSettings,
     sendLyrics,
     requestState,

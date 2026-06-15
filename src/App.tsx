@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
-import { MixQueuePanel } from "./components/MixQueuePanel";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
-import { useRoom, type Intent, type TickDecks, type DeckTick } from "@htl/room";
+import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack } from "@htl/room";
 import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
 import {
   AudioEngine,
@@ -21,6 +20,7 @@ import {
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
+  dropCachedBuffer,
   useLibrary,
   type TrackMeta,
   fetchYouTubeAudio,
@@ -59,6 +59,7 @@ import {
   loadStems,
   loadStemsLocal,
   dspStems,
+  dspStemsWindowedInt16,
   getStemModel,
   modelSupport,
   deviceSupportsModel,
@@ -75,8 +76,11 @@ import {
   type Stems,
   type StemModel,
   useMixQueue,
+  type MixQueue,
+  useQueuePrefetch,
   AutoMixer,
   type AutoMixStatus,
+  type AutoMixMirror,
 } from "@htl";
 import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 
@@ -213,8 +217,8 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     stemMutes: { drums: !deck.stemActive("drums"), bass: !deck.stemActive("bass"), vocals: !deck.stemActive("vocals"), other: !deck.stemActive("other") },
     // So a stem-less remote (mobile) lights up its mixer cells for this deck. Don't
     // advertise REMOTE-only stems back out — only this device's OWN stems count.
-    hasStems: deck.hasStems && !deck.remoteStems,
-    stemsNeural: deck.stemsNeural && !deck.remoteStems,
+    hasStems: deck.ownStems,
+    stemsNeural: deck.stemsNeural && deck.ownStems,
   };
 }
 
@@ -230,6 +234,21 @@ function colorSig(s: Settings): string {
 
 // Stem names in the fixed deck order — for snapshot apply.
 const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
+// Cross-device contract: the phone's on-device stem budget is AGGREGATE (combined length of
+// BOTH decks' stem'd tracks), NOT per-deck — so the time can be spent unevenly (one 10-min +
+// one 4-min, instead of forcing 6+6). Past this combined length, the deck that would push it
+// over stays mix-only. Tunable; the escalating crash-guard backstops the build PEAK (a single
+// very long track's float32 transient can still spike past this on an older phone). Desktop is
+// uncapped (the engine frees this.stems post-pyramid for long tracks instead).
+// Raised from 14→16 min now that the WINDOWED int16 path (dspStemsWindowedInt16) bounds the
+// build transient — without it a single long track OOMs at build; with it the limiter is the
+// resident int16 + mix input (~half the slope), so ~16 min combined fits a typical iPhone.
+// Per-track is anyway fetch-capped at 15 min (server MAX_TRACK_SECONDS), so one deck never
+// exceeds that; this aggregate just stops two long tracks from co-residing past budget.
+const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined
+// Past this single-track length, build stems via the WINDOWED int16 path (bounded transient)
+// instead of the proven full-track dspStems (which peaks ~138 MB/min and OOMs past ~6 min).
+const DSP_WINDOW_THRESHOLD_SEC = 300; // 5 min
 // The 8 beat-loop sizes, ascending — pad/key index → beats (shared by the keyboard
 // handlers and the MIDI pad dispatch so a loop pad can match the active loop's size).
 const LOOP_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8];
@@ -243,7 +262,7 @@ function applyDeckStems(deck: Deck, s: DeckSnapshot) {
   // Mirror the host's stems as a REMOTE display ONLY when this device has no real stems of its
   // own. A phone now derives a local DSP set (audible + synced) — authoritative — so don't stomp
   // it back to a remote mirror; the per-stem mixer state below still applies to the local stems.
-  if (isMobileDevice() && !(deck.hasStems && !deck.remoteStems)) deck.markRemoteStems(!!s.hasStems, !!s.stemsNeural);
+  if (isMobileDevice() && !deck.ownStems) deck.markRemoteStems(!!s.hasStems, !!s.stemsNeural);
   for (const name of STEM_KEYS) {
     if (s.stemGains && s.stemGains[name] != null) deck.setStemGain(name, s.stemGains[name]);
     if (s.stemMutes) deck.setStemMute(name, !!s.stemMutes[name]);
@@ -296,6 +315,9 @@ export function App() {
   const engine = engineRef.current;
 
   const library = useLibrary();
+
+  // The auto-DJ queue + status streamed from the session host (null when solo/host).
+  const [remoteAutomix, setRemoteAutomix] = useState<AutoMixMirror | null>(null);
 
   const [meta, setMeta] = useState<Record<DeckId, DeckMeta>>({ A: EMPTY_META, B: EMPTY_META });
   const [, setLoading] = useState<Record<DeckId, boolean>>({ A: false, B: false });
@@ -369,7 +391,6 @@ export function App() {
   // there, so it's a layout preference). On mobile they're full-screen modals, so we
   // always start closed regardless of what was stored.
   const [libOpen, setLibOpen] = useState(() => window.innerWidth >= 769 && localStorage.getItem("htl:libOpen") === "1");
-  const [searchOpen, setSearchOpen] = useState(() => window.innerWidth >= 769 && localStorage.getItem("htl:searchOpen") === "1");
   useEffect(() => {
     try {
       localStorage.setItem("htl:libOpen", libOpen ? "1" : "0");
@@ -377,25 +398,59 @@ export function App() {
       /* ignore */
     }
   }, [libOpen]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("htl:searchOpen", searchOpen ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  }, [searchOpen]);
-  // Chin launchers. On desktop the two docks share the row so both can be open at
-  // once; on a NARROW screen they're stacked full-screen modals, so opening one must
-  // close the other (else both show "active" and overlap — the mobile bug).
-  const toggleLib = () => {
-    const next = !libOpen;
-    setLibOpen(next);
-    if (next && window.matchMedia("(max-width: 768px)").matches) setSearchOpen(false);
+  // Chin launchers. Library is the LEFT dock; Settings / Profile / Session SHARE the
+  // RIGHT dock (one at a time — the old Search slot). On desktop the left + right docks
+  // can both be open; on a phone they're full-screen panels, so opening one closes the
+  // others (else they overlap — the mobile bug).
+  const onPhone = () => window.matchMedia("(max-width: 768px)").matches;
+  const closeRightDock = () => {
+    setSocialOpen(false);
+    setProfileOpen(false);
+    setSettingsOpen(false);
   };
-  const toggleSearch = () => {
-    const next = !searchOpen;
-    setSearchOpen(next);
-    if (next && window.matchMedia("(max-width: 768px)").matches) setLibOpen(false);
+  const toggleLib = () => {
+    // Functional update so the keyboard (Alt) and chin button never read a stale libOpen.
+    setLibOpen((v) => {
+      const next = !v;
+      if (next && onPhone()) closeRightDock();
+      return next;
+    });
+  };
+  // The right-dock launchers TOGGLE (press the chin button again to close — no explicit
+  // ✕). Opening one closes the other two; on a phone it also closes the full-screen
+  // Library. Settings / Profile / Session are the same panel, swapped by which you press.
+  const toggleSocial = () => {
+    setSocialOpen((v) => {
+      const next = !v;
+      if (next) {
+        setProfileOpen(false);
+        setSettingsOpen(false);
+        if (onPhone()) setLibOpen(false);
+      }
+      return next;
+    });
+  };
+  const toggleProfile = () => {
+    setProfileOpen((v) => {
+      const next = !v;
+      if (next) {
+        setSocialOpen(false);
+        setSettingsOpen(false);
+        if (onPhone()) setLibOpen(false);
+      }
+      return next;
+    });
+  };
+  const toggleSettings = () => {
+    setSettingsOpen((v) => {
+      const next = !v;
+      if (next) {
+        setSocialOpen(false);
+        setProfileOpen(false);
+        if (onPhone()) setLibOpen(false);
+      }
+      return next;
+    });
   };
   const [dockSwapped, setDockSwapped] = useState(false); // desktop: swap which side each dock sits on
   const [shiftLatched, setShiftLatched] = useState(false);
@@ -428,6 +483,11 @@ export function App() {
   // Per-deck timers that revert a remote's "Requesting…" chip if the host never delivers
   // (e.g. the host can't separate that model) — cleared when its stem view arrives.
   const stemReqTimers = useRef<Partial<Record<DeckId, ReturnType<typeof setTimeout>>>>({});
+  // Per-deck timers for the PASSIVE remote-stem path: a snapshot can light a deck's stem
+  // cells (hasStems) before — or without — the host's 4-lane envelopes arriving. If they
+  // never come, surface a clear tell instead of a silently-dead mixer (#3). Cleared the
+  // moment the view lands (onRoomStemView) or this device grows its own stems.
+  const stemViewWaitTimers = useRef<Partial<Record<DeckId, ReturnType<typeof setTimeout>>>>({});
   // Host-side: the (videoId:model) currently being separated for a remote request, so
   // duplicate requests don't kick off concurrent separations on the host.
   const reqSepGuard = useRef<Partial<Record<DeckId, string>>>({});
@@ -732,10 +792,14 @@ export function App() {
       // Never hijack typing or a modal that owns the screen.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      // Only a true centered modal (Settings) swallows the performance keys. The
-      // Library/Search DOCKS share the screen on desktop, so keys keep driving the
-      // decks while you browse — typing in the search box is already handled by the
-      // input-focus guard just above.
+      // Alt (on its own) toggles the Library dock — handled before the modifier guard.
+      if (e.key === "Alt" && !e.repeat) {
+        e.preventDefault();
+        toggleLib();
+        return;
+      }
+      // Settings still swallows the performance keys while open (it owns sliders/learn);
+      // the Library dock shares the screen so keys keep driving the decks while you browse.
       if (settingsOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // A watch-only participant (control revoked) can't drive the decks.
@@ -758,7 +822,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, settingsOpen, searchOpen, libOpen, settings.keyBindings]);
+  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, settingsOpen, libOpen, settings.keyBindings]);
 
   useEffect(() => {
     applySettings(settings);
@@ -780,6 +844,24 @@ export function App() {
   useEffect(() => {
     void engine.setSinkId(settings.audioOutputId);
   }, [engine, settings.audioOutputId]);
+
+  // Route the headphone-cue (PFL) bus to a separate device. "" = no separate cue
+  // (single output) — the CUE button stays a plain cue-point button.
+  useEffect(() => {
+    void engine.setCueSinkId(settings.audioCueOutputId);
+  }, [engine, settings.audioCueOutputId]);
+
+  // While a deck is SEPARATING stems on-device, the separator worker's per-segment CPU
+  // FFT bursts crowd the audio thread → the mid-split playback stutter. Raise the stretch
+  // worklet's pre-roll FIFO headroom (~64 ms) so a pressured render quantum outputs
+  // pre-built grains instead of running the WSOLA/PV search and overrunning its budget;
+  // drop it back to 0 the instant separation ends (zero tempo/jog latency the rest of the
+  // time). Both decks share one machine, so any deck separating bumps both. Only
+  // "separating" (real on-device compute) — cache downloads don't contend.
+  const separating = status.A?.phase === "separating" || status.B?.phase === "separating";
+  useEffect(() => {
+    engine.setStretchReserve(separating ? Math.round(engine.ctx.sampleRate * 0.064) : 0);
+  }, [engine, separating]);
 
   // Mirror settings to the account when signed in (last-write-wins by timestamp), so
   // theme/stem/keybind prefs follow the user across devices.
@@ -862,6 +944,10 @@ export function App() {
         if (stale?.()) return false;
         if (local) {
           engine.deck(id).setStems(local, true); // neural → per-stem lanes
+          // Stamp the dedup key with the PROMOTED model so selecting that model later
+          // sees "already separated" (deriveStems' hasStems guard) instead of re-running
+          // a separation over the stems we just promoted. (The bug: promote never set this.)
+          stemLoadedKey.current[id] = `${videoId}:${mid}`;
           refresh();
           setStatusFor(id, {
             phase: "promoted",
@@ -896,6 +982,7 @@ export function App() {
           const neural = await job;
           if (stale?.()) return false;
           engine.deck(id).setStems(neural, true); // neural → per-stem lanes
+          stemLoadedKey.current[id] = `${videoId}:${mid}`; // promoted set → don't re-separate it
           refresh();
           setStatusFor(id, {
             phase: "promoted",
@@ -940,7 +1027,18 @@ export function App() {
       // the plain no-stems mix.
       const sessionWantsStems =
         isMobileDevice() && snapFollowRef.current && !!lastSnapshotRef.current?.decks?.[id]?.hasStems;
-      if (model.id === "off" && !sessionWantsStems) {
+      // LAZY MOBILE-GUEST STEMS (the OOM fix): the deck holds per-stem gain/mute state
+      // buffer-free, so a phone session-follower only needs to MATERIALISE real stems once a
+      // stem control actually diverges from default (the host ducked/muted one, or a local
+      // touch). An idle "just listening" guest — the common case — stays mix-only and skips
+      // the ~370 MB resident + ~352 MB transition-transient DSP set that was jetsam-killing
+      // phones. `ensureGuestStems` re-invokes deriveStems the instant a value diverges, and
+      // this gate then falls through to the on-device DSP derive below. Desktop is unchanged
+      // (sessionWantsStems is mobile-only, so the second clause never fires there).
+      const stemDiverged = STEM_KEYS.some(
+        (n) => engine.deck(id).stemLevel(n) !== 1 || !engine.deck(id).stemActive(n),
+      );
+      if (model.id === "off" && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
         if (!isMobileDevice() && autoEnhanceRef.current) {
           await whenIdle();
           if (stale?.()) return;
@@ -988,14 +1086,47 @@ export function App() {
         if (stale?.()) return;
         try {
           // Serialise the heavy offline render ACROSS DECKS on mobile — two full-track
-          // separations at once is the memory spike that jetsam-killed the tab (the OOM that
-          // kept phones mix-only). One deck at a time keeps the transient bounded.
-          const run = mobileDeriveChain.then(() => dspStems(mix));
+          // separations at once is the memory spike that jetsam-killed the tab. One at a time.
+          // CROSS-DEVICE CONTRACT — AGGREGATE stem budget (combined length of BOTH decks' stem'd
+          // tracks), not a per-deck cap, so it can be spent unevenly (10+4, not forced 6+6). If
+          // this deck's stems would push the combined length past the budget, stay mix-only.
+          // Checked INSIDE the serialised chain so the OTHER deck's stems (if it built first) are
+          // already committed → first-come allocation, no race. A `null` return = over budget.
+          const run = mobileDeriveChain.then(async () => {
+            const otherId: DeckId = id === "A" ? "B" : "A";
+            const otherSec = engine.deck(otherId).hasStems ? engine.deck(otherId).duration : 0;
+            if (mix.duration + otherSec > MOBILE_MAX_COMBINED_STEM_SECONDS) return { kind: "over" as const };
+            // LONG track → WINDOWED int16 (bounds the float32 build transient so it doesn't OOM;
+            // the proven full-track dspStems peaks ~138 MB/min and tops out ~6 min). Short tracks
+            // keep the proven path, so the new windowed code can only HELP long tracks (mix-only
+            // today), never regress the common case.
+            if (mix.duration > DSP_WINDOW_THRESHOLD_SEC) {
+              return { kind: "packed" as const, packed: await dspStemsWindowedInt16(mix) };
+            }
+            return { kind: "dsp" as const, dsp: await dspStems(mix) };
+          });
           mobileDeriveChain = run.catch(() => undefined);
-          const dsp = await run;
+          const res = await run;
           if (stale?.()) return;
-          engine.deck(id).setStems(dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
+          if (!res || res.kind === "over") {
+            // Over the COMBINED budget (the other deck's stem'd track already spent it) → mix-only.
+            engine.deck(id).setStems(null);
+            refresh();
+            setStatusFor(id, {
+              phase: "unavailable",
+              detail: `Both tracks exceed the on-device stem budget (${Math.round(MOBILE_MAX_COMBINED_STEM_SECONDS / 60)} min combined) — this deck plays the mix.`,
+            });
+            setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
+            return;
+          }
+          if (res.kind === "packed") engine.deck(id).loadPackedStems(res.packed, false); // int16, no float32 held
+          else engine.deck(id).setStems(res.dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
           stemLoadedKey.current[id] = guardKey;
+          // The worklet now holds the int16 stems = the audio source. Release the ~92 MB float32
+          // mix from BOTH holders (the deck's ref + the shared trackCache) so it actually GCs —
+          // the dominant steady-state cost of following a 2-deck stem session on a phone.
+          engine.deck(id).releaseMixBuffer();
+          dropCachedBuffer(videoId);
           refresh();
           setStatusFor(id, { phase: "ready", detail: "On-device stems (DSP)." });
         } catch (e) {
@@ -1122,6 +1253,25 @@ export function App() {
     [engine, refresh, setStatusFor, promoteCachedStems, requestStemsFromHost],
   );
 
+  // LAZY MOBILE-GUEST STEMS trigger (pairs with the divergence gate in deriveStems above).
+  // When a stem control diverges from default on a phone guest that's currently mix-only,
+  // materialise its stems NOW so the divergence is audible. Idle guests never reach this and
+  // stay light (the OOM fix). Held in a ref so the session intent/snapshot handlers can call
+  // it without taking it as a dependency (keeps their closures — co-owned with the session
+  // agent — untouched). Self-guards: no-op on desktop, when stems already exist (or are a
+  // remote-display mirror), or when nothing has actually diverged.
+  const ensureGuestStemsRef = useRef<(id: DeckId) => void>(() => {});
+  ensureGuestStemsRef.current = (id: DeckId) => {
+    if (!isMobileDevice()) return;
+    const deck = engine.deck(id);
+    if (deck.hasStems || deck.remoteStems) return;
+    const vid = latest.current.loaded[id];
+    if (!vid || !deck.buffer) return;
+    if (!STEM_KEYS.some((n) => deck.stemLevel(n) !== 1 || !deck.stemActive(n))) return; // no divergence
+    deriveGuard.current[id] = ""; // allow a fresh derive even for the same (track, model)
+    void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
+  };
+
   // Latest UI state for snapshotting from intervals / unload without stale closures.
   const latest = useRef({ meta, loaded, crossfade, zoom, tempoRange: settings.tempoRange });
   latest.current = { meta, loaded, crossfade, zoom, tempoRange: settings.tempoRange };
@@ -1223,6 +1373,14 @@ export function App() {
           if (stale()) return;
           vid = playable.videoId;
         }
+        // No resolved id → BAIL. Everything downstream (audio/stem/analysis caches, setBuffer)
+        // keys off `vid`; an empty string collides across EVERY unresolved track, so a load
+        // would fetch the previous track's cached buffer while the new title shows ("plays the
+        // last song"). Fail cleanly instead of corrupting the cache under "".
+        if (!vid) {
+          setStatusFor(id, { phase: "failed", detail: "Couldn't find a playable source for this track." });
+          return;
+        }
         // Lyrics, Whisper-first: community pool → on-device Whisper over the neural vocal
         // stem (desktop GPU, then contributed back) → YouTube captions as the fallback /
         // instant placeholder. The resolver polls the deck for neural vocals on its own, so
@@ -1304,8 +1462,17 @@ export function App() {
         }));
         setStatusFor(id, null);
         refresh();
-        if (track.videoId && cached.analysis.bpm) library.setBpm(track.videoId, cached.analysis.bpm);
-        if (track.videoId && cached.analysis.key) library.setKey(track.videoId, cached.analysis.key.camelot);
+        // Persist the freshly-analysed BPM/key so the LIBRARY columns fill in (and survive a
+        // refresh), keyed by EVERY id this track is known under. The analysis cache + deck use
+        // the resolved `vid`, but a library row may key off the ORIGINAL `track.videoId` (e.g. a
+        // Spotify/Tidal row whose id resolved to a different YouTube `vid`) — so write to both,
+        // AND alias the analysis cache under track.videoId so `withCached` (which reads
+        // getCachedTrack(row.videoId)) backfills those rows too, not only the resolved id.
+        if (track.videoId && track.videoId !== vid) setCachedTrack(track.videoId, cached);
+        for (const aid of new Set([vid, track.videoId].filter(Boolean) as string[])) {
+          if (cached.analysis.bpm != null) library.setBpm(aid, cached.analysis.bpm);
+          if (cached.analysis.key) library.setKey(aid, cached.analysis.key.camelot);
+        }
         // Contribute this analysis to the shared dataset (BPM/key/grid — facts, no audio).
         if (track.videoId) {
           void postAnalysis({
@@ -1517,11 +1684,25 @@ export function App() {
       deck.loop = d.loop ? { ...d.loop } : null;
       deck.loopInPoint = d.loopInPoint;
       applyDeckStems(deck, d);
+      // #3 self-heal: the snapshot may have lit this deck's stem cells (markRemoteStems)
+      // without the host's 4-lane envelopes yet present. stemControlsReady already gates
+      // the cells so they can't drive nothing, but don't leave them silently waiting —
+      // arm a tell if the view still hasn't landed after a grace period (cleared in
+      // onRoomStemView the instant it arrives, or once this device grows its own stems).
+      if (isMobileDevice() && deck.remoteStems && !deck.stemPyramids) {
+        if (stemViewWaitTimers.current[id]) clearTimeout(stemViewWaitTimers.current[id]);
+        stemViewWaitTimers.current[id] = setTimeout(() => {
+          stemViewWaitTimers.current[id] = undefined;
+          const dk = engine.deck(id);
+          if (dk.ownStems || dk.stemPyramids) return; // arrived / own stems → all good
+          setStatusFor(id, { phase: "downloading", detail: "Waiting for the host's stems…" });
+        }, 7000);
+      }
       if (deck.fxOn !== (d.fxOn ?? true)) deck.setFx(d.fxOn ?? true);
       if (deck.keylock !== d.keylock) deck.setKeylock(d.keylock);
       if (deck.quantizing !== d.quantize) deck.setQuantize(d.quantize);
     },
-    [engine],
+    [engine, setStatusFor],
   );
 
   // Kick off a room-driven load with a SELF-HEALING dedupe guard. roomLoadTarget is set
@@ -1633,10 +1814,37 @@ export function App() {
     if (any) refresh();
   }, [engine, loaded, reconcileDeckState, refresh]);
 
+  // Drives the auto-mixer from a remote's "automix" intent — assigned where the mixer
+  // is set up (far below); a ref so applyIntent can reach it from up here.
+  const autoMixerControlRef = useRef<(action: "toggle" | "skip" | "mixnow" | "hold") => void>(() => {});
+  // The single canonical auto-mix queue + whether THIS device is a queue-mirroring remote
+  // (vs the authority that owns + broadcasts the queue). Refs so the high-up applyIntent
+  // can reach the queue (defined far below) and gate who mutates it.
+  const mixQueueRef = useRef<MixQueue | null>(null);
+  const autoIsRemoteRef = useRef(false);
+
   // Apply ONE control intent to the local engine — used for both inbound remote
   // intents and our own actions. Pure local effect, no network.
   const applyIntent = useCallback(
     (intent: Intent) => {
+      if (intent.kind === "automix") {
+        autoMixerControlRef.current(intent.action);
+        return;
+      }
+      if (intent.kind === "queue") {
+        // Only the queue AUTHORITY (the device running the auto-mixer + broadcasting the
+        // automix stream) mutates the canonical queue; it then re-streams so everyone
+        // converges 1:1. A mirroring remote ignores it — its local queue is unused, and
+        // applying here would fork a second copy. The seed/mode stay host-owned (radio
+        // engine); remotes only add/remove/move individual tracks.
+        const q = mixQueueRef.current;
+        if (autoIsRemoteRef.current || !q) return;
+        if (intent.action === "add") q.enqueue(intent.track as TrackMeta);
+        else if (intent.action === "addNext") q.enqueueNext(intent.track as TrackMeta);
+        else if (intent.action === "remove") q.remove(intent.videoId);
+        else if (intent.action === "move") q.reorder(intent.from, intent.to);
+        return;
+      }
       if (intent.kind === "crossfade") {
         setCrossfade(intent.value);
         engine.setCrossfade(intent.value);
@@ -1688,9 +1896,11 @@ export function App() {
           // Apply regardless of local stems — the deck holds gain/mute state buffer-
           // free, so a mix-only remote stays in sync and reflects it on its cells.
           deck.setStemGain(intent.stem, intent.value);
+          ensureGuestStemsRef.current(intent.deck); // phone guest: materialise stems if this diverged
           break;
         case "stem":
           deck.setStemMute(intent.stem, !intent.on);
+          ensureGuestStemsRef.current(intent.deck);
           break;
         case "transport":
           if (intent.action === "play") {
@@ -1797,10 +2007,16 @@ export function App() {
           followSeekAt.current[id] = now;
           flipped = true;
         } else if (deck.playing) {
-          // Steady audible playback → only fix a real desync, and NEVER back-to-back: a
-          // freshly-joined follower settles instead of skip/repeating. 1.2s grace after any
-          // seek lets the audio glide back into tolerance on its own.
-          if (drift > 0.6 && now - followSeekAt.current[id] > 1200) {
+          // Steady audible playback. The tick is a STALE snapshot of a moving clock and REAL
+          // rewinds arrive as seek INTENTS (see the transport handler) — so the tick must only
+          // ever pull a follower FORWARD, when it has genuinely fallen BEHIND (decoded late /
+          // drifted slow). A positive lead is just network latency, or an anchor whose audio
+          // clock is momentarily FROZEN (a suspended mobile master sends a non-advancing pos
+          // with playing:true); seeking BACKWARD to that stale pos — then replaying it every
+          // grace window — was the "loops a ~second forever, never catches up" bug. So correct
+          // only a real lag, never a lead. 1.2s grace prevents back-to-back catch-ups.
+          const behind = t.pos - deck.position(); // >0 = we're behind the already-stale tick
+          if (behind > 0.6 && now - followSeekAt.current[id] > 1200) {
             deck.seek(t.pos);
             followSeekAt.current[id] = now;
           }
@@ -1826,6 +2042,10 @@ export function App() {
               flipped = true;
             }
           });
+          // Phone guest: if the anchor's snapshot carries a diverged stem (e.g. it was already
+          // muted when we joined), materialise local stems so it's audible. No-op when nothing
+          // diverged (idle session stays mix-only → the OOM fix).
+          ensureGuestStemsRef.current(id);
         }
         // Feed the follower visual clock: the waveform glides at the display rate off a
         // wall-clock extrapolation of this tick, even when the local audio clock is
@@ -1846,13 +2066,24 @@ export function App() {
         // Local stems (the on-device DSP baseline) win over a streamed remote view — keep this
         // device's display and audio consistent instead of painting the host's envelopes over
         // stems we actually play. Without local stems, mirror the host's view as before.
-        if (d.hasStems && !d.remoteStems) return;
-        d.setRemoteStemView(view as StemView);
+        if (d.ownStems) return;
+        // Slot-vs-song guard: a stem view is keyed only by deck on the wire, so a view for
+        // the PREVIOUS track (a racing relay / stale DO catch-up) could paint over the song
+        // now loaded here. Drop it unless its videoId matches what's actually on this deck.
+        // (Older peers omit videoId → render best-effort, as before.)
+        const sv = view as StemView;
+        const here = latest.current.loaded[deck];
+        if (sv?.videoId && here && sv.videoId !== here) return;
+        d.setRemoteStemView(sv);
         // The host's stems are now displayed here — cancel any pending "couldn't deliver"
         // timer, clear the "Requesting…" chip, and show the view is live from the host.
         if (stemReqTimers.current[deck]) {
           clearTimeout(stemReqTimers.current[deck]);
           stemReqTimers.current[deck] = undefined;
+        }
+        if (stemViewWaitTimers.current[deck]) {
+          clearTimeout(stemViewWaitTimers.current[deck]);
+          stemViewWaitTimers.current[deck] = undefined;
         }
         setStatusFor(deck, { phase: "ready", src: "host", detail: "Stems from the session host." });
         refresh();
@@ -1944,6 +2175,7 @@ export function App() {
     {
       onState: applyRoomSnapshot,
       onIntent: onRoomIntent,
+      onAutomix: (s) => setRemoteAutomix(s as AutoMixMirror | null),
       onTick: onRoomTick,
       onStemView: onRoomStemView,
       onLyrics: onRoomLyrics,
@@ -2022,7 +2254,7 @@ export function App() {
       // (the clock OR any controller). extractStemView returns null unless this deck has
       // REAL local stems, so a stem-less remote can never publish here.
       if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
-      const v = engine.deck(id).extractStemView();
+      const v = engine.deck(id).extractStemView(latest.current.loaded[id] ?? undefined);
       if (v) r.sendStemView(id, v);
     },
     [engine],
@@ -2286,7 +2518,7 @@ export function App() {
             let cur01: number | null = null;
             if (t === "level") cur01 = deck.level / 2;
             else if (t === "trim") cur01 = deck.trim / 2;
-            else if (t === "pitch") cur01 = (deck.pitch + 12) / 24;
+            else if (t === "pitch") cur01 = (deck.pitch + settings.pitchRange) / (2 * settings.pitchRange);
             else if (t === "tempo") cur01 = deck.tempo / settings.tempoRange / 2 + 0.5;
             else if (t === "stemDrums") cur01 = deck.stemLevel("drums") / 1.5;
             else if (t === "stemBass") cur01 = deck.stemLevel("bass") / 1.5;
@@ -2343,7 +2575,10 @@ export function App() {
               ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
               break;
             case "pitch":
-              deck.setPitch(Math.round((ev.value - 0.5) * 24));
+              // Span the configured KEY range (±settings.pitchRange semitones), same as
+              // the on-screen KEY cell — was hardcoded ±12, which capped a board's pitch
+              // knob at ±12 even when the range was widened to ±24.
+              deck.setPitch(Math.round((ev.value - 0.5) * 2 * settings.pitchRange));
               ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
               break;
             case "stemDrums":
@@ -2389,10 +2624,11 @@ export function App() {
               break;
             }
             case "pitch": {
-              // Integer semitones: carry the fractional part across detents (±12 over a
-              // full sweep) so slow turns still resolve to whole-semitone steps.
+              // Integer semitones: carry the fractional part across detents (±pitchRange
+              // over a full sweep, matching the KEY range) so slow turns still resolve to
+              // whole-semitone steps. Was hardcoded ±12.
               const k = `${id}:pitch`;
-              const acc = (knobAcc.current[k] ?? 0) + d * 24;
+              const acc = (knobAcc.current[k] ?? 0) + d * 2 * settings.pitchRange;
               const step = Math.trunc(acc);
               knobAcc.current[k] = acc - step;
               if (step) {
@@ -2444,6 +2680,12 @@ export function App() {
           engine.deck(ev.deck).bend(ev.delta * SEC_PER_TICK);
           break;
         }
+        case "zoom": {
+          // Relative encoder → zoom the focused deck's waveform (in/out per detent).
+          const id = ev.deck ?? focused;
+          setZoomFor(id, latest.current.zoom[id] * (ev.delta > 0 ? 0.82 : 1.22));
+          break;
+        }
         case "selector":
           // Browse-encoder press → open/close the library panel.
           setLibOpen((v) => !v);
@@ -2454,7 +2696,7 @@ export function App() {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor],
   );
 
   const midi = useMidi({
@@ -2561,10 +2803,16 @@ export function App() {
         views: null,
         bpm: m.bpm ?? lib?.bpm ?? null,
         key: lib?.key ?? null,
+        isrc: lib?.isrc ?? null, // carries TIDAL radio seeding when known
+        provider: lib?.provider,
       };
     },
     [meta, library.collection],
   );
+
+  // Current crossfade behind a ref so the mixer can detect a manual fader grab.
+  const crossfadeRef = useRef(crossfade);
+  crossfadeRef.current = crossfade;
 
   // Latest callbacks behind a ref so the (stably-constructed) AutoMixer never holds
   // a stale closure.
@@ -2580,30 +2828,143 @@ export function App() {
       loadDeck: (id, t) => autoDeps.current.autoLoad(id, t),
       applyCrossfade: (x) => autoDeps.current.applyCrossfade(x),
       deckTrack: (id) => autoDeps.current.deckTrack(id),
+      getCrossfade: () => crossfadeRef.current,
+      now: () => performance.now(),
       onChange: (s) => setAutoStatus(s),
     });
   }
 
-  // Tick the state machine on a steady cadence while AUTO is on.
-  useEffect(() => {
-    if (!autoStatus.enabled) return;
-    const iv = setInterval(() => void mixerRef.current?.tick(), 150);
-    return () => clearInterval(iv);
-  }, [autoStatus.enabled]);
-
-  const [mixqOpen, setMixqOpen] = useState(false);
-  const toggleAuto = useCallback(() => {
+  // A remote's "automix" intent drives the host's mixer (assigned to the forward ref).
+  autoMixerControlRef.current = (action) => {
     const m = mixerRef.current;
     if (!m) return;
-    if (m.isEnabled()) m.disable();
-    else {
-      m.enable();
-      setMixqOpen(true); // surface the queue when the user turns auto-mix on
+    if (action === "toggle") m.isEnabled() ? m.disable() : m.enable();
+    else if (action === "skip") m.skip();
+    else if (action === "mixnow") m.mixNow();
+    else if (action === "hold") m.hold();
+  };
+
+  // In a session, only the audio host runs the auto-mixer; remotes mirror its state.
+  const autoIsRemote = room.enabled && !room.isAnchor;
+  // Keep the high-up applyIntent's view of the queue + our role current (it mutates the
+  // canonical queue only on the authority).
+  mixQueueRef.current = mixQueue;
+  autoIsRemoteRef.current = autoIsRemote;
+
+  // Tick the state machine on a steady cadence while AUTO is on (host/solo only).
+  useEffect(() => {
+    if (!autoStatus.enabled || autoIsRemote) return;
+    const iv = setInterval(() => void mixerRef.current?.tick(), 150);
+    return () => clearInterval(iv);
+  }, [autoStatus.enabled, autoIsRemote]);
+
+  // Host streams the auto-DJ queue + status to the room so remotes see what's coming.
+  useEffect(() => {
+    if (!room.enabled || !room.isAnchor) return;
+    room.sendAutomix({ status: autoStatus, mode: mixQueue.mode, current: mixQueue.current, upcoming: mixQueue.upcoming });
+  }, [room.enabled, room.isAnchor, room.sendAutomix, autoStatus, mixQueue.mode, mixQueue.current, mixQueue.upcoming]);
+
+  // Anchor handover continuity: when THIS device becomes the anchor (e.g. the desktop host
+  // refreshed and an iPad took over the clock), seed the local queue from the last mirror
+  // it received so the host→guest stream stays 1:1 instead of resetting to empty. One-shot
+  // on the transition, and only when our local queue is empty (don't stomp an active one).
+  const wasAnchorRef = useRef(false);
+  useEffect(() => {
+    const became = room.isAnchor && !wasAnchorRef.current;
+    wasAnchorRef.current = room.isAnchor;
+    if (became && remoteAutomix && remoteAutomix.upcoming.length > 0 && mixQueue.upcoming.length === 0) {
+      mixQueue.adopt(remoteAutomix.upcoming, remoteAutomix.current, remoteAutomix.mode);
     }
-  }, []);
-  const autoMixNow = useCallback(() => mixerRef.current?.mixNow(), []);
-  const autoSkip = useCallback(() => mixerRef.current?.skip(), []);
-  const autoHold = useCallback(() => mixerRef.current?.hold(), []);
+  }, [room.isAnchor, remoteAutomix, mixQueue]);
+
+  const [mixqOpen, setMixqOpen] = useState(false);
+  // Auto-mix controls: drive the local mixer (host/solo) or send an intent (remote).
+  const autoControl = useCallback(
+    (action: "toggle" | "skip" | "mixnow" | "hold") => {
+      if (autoIsRemote) {
+        if (room.controlling) room.sendIntent({ kind: "automix", action });
+        return;
+      }
+      autoMixerControlRef.current(action);
+    },
+    [autoIsRemote, room.controlling, room.sendIntent],
+  );
+  const toggleAuto = useCallback(() => {
+    autoControl("toggle");
+    setMixqOpen(true); // surface the queue
+  }, [autoControl]);
+  const autoMixNow = useCallback(() => autoControl("mixnow"), [autoControl]);
+  const autoSkip = useCallback(() => autoControl("skip"), [autoControl]);
+  const autoHold = useCallback(() => autoControl("hold"), [autoControl]);
+
+  // Queue editing routes through ONE authority: host/solo mutates its local queue
+  // directly; a controlling remote sends a queue intent → the host applies it → the
+  // automix stream re-broadcasts, so all devices converge 1:1 on the host's queue. A
+  // non-controlling remote can't edit (no-op). Seed/mode changes stay host-only (the
+  // radio engine), so remotes only add/remove/move individual tracks.
+  const toQueuedTrack = (t: TrackMeta): QueuedTrack => ({
+    videoId: t.videoId,
+    title: t.title,
+    artist: t.artist,
+    duration: t.duration,
+    thumbnail: t.thumbnail,
+    views: t.views,
+    bpm: t.bpm ?? null,
+    key: t.key ?? null,
+    isrc: t.isrc ?? null,
+    provider: t.provider,
+    providerId: t.providerId ?? null,
+  });
+  const queueCanEdit = !autoIsRemote || room.controlling;
+  const queueEdit = useMemo(
+    () => ({
+      add: (t: TrackMeta) => {
+        if (autoIsRemote) {
+          if (room.controlling) room.sendIntent({ kind: "queue", action: "add", track: toQueuedTrack(t) });
+        } else mixQueue.enqueue(t);
+      },
+      addNext: (t: TrackMeta) => {
+        if (autoIsRemote) {
+          if (room.controlling) room.sendIntent({ kind: "queue", action: "addNext", track: toQueuedTrack(t) });
+        } else mixQueue.enqueueNext(t);
+      },
+      remove: (videoId: string) => {
+        if (autoIsRemote) {
+          if (room.controlling) room.sendIntent({ kind: "queue", action: "remove", videoId });
+        } else mixQueue.remove(videoId);
+      },
+      move: (from: number, to: number) => {
+        if (autoIsRemote) {
+          if (room.controlling) room.sendIntent({ kind: "queue", action: "move", from, to });
+        } else mixQueue.reorder(from, to);
+      },
+    }),
+    [autoIsRemote, room.controlling, room.sendIntent, mixQueue],
+  );
+
+  // Background-precompute the next queued tracks' key/BPM (desktop only — a full
+  // decode is too heavy for phones, which stay on provider-order + honest badges).
+  // Runs during AUTO, and also when the queue panel is open off-AUTO so radio picks
+  // show real key/tempo while you're looking at them (the cheap ISRC/global-DB lookup
+  // fills known tracks without a decode; only novel ones decode, one at a time).
+  useQueuePrefetch(mixQueue, engine.ctx, (autoStatus.enabled || mixqOpen) && !isMobileDevice());
+
+  // Keep the queue aware of what's loaded on the decks even when AUTO is OFF, so the
+  // panel shows the loaded/playing track as "now playing" and Radio can build
+  // suggestions from both decks without the auto-mixer running. When AUTO is on the
+  // mixer owns `current`, so we step aside.
+  useEffect(() => {
+    if (autoStatus.enabled) return;
+    const a = deckTrack("A");
+    const b = deckTrack("B");
+    const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
+    const other = live === a ? b : a;
+    mixQueue.setCurrent(live);
+    // Seed primary = the LIVE deck (what's playing / loaded), so suggestions follow it;
+    // the seed-set signature in ensureNext means loading EITHER deck re-seeds.
+    if (live) void mixQueue.ensureNext([live, other].filter((t): t is TrackMeta => !!t));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, mixQueue.mode]);
 
   // The audio master publishes the authoritative set so a joiner (or a device that
   // just became master) mirrors it. EVENT-DRIVEN ONLY — on peer-join (someone new to
@@ -2631,6 +2992,21 @@ export function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView, sendHostLyrics]);
+
+  // The auto-mixer drives the host's decks DIRECTLY (play/seek/sync/key/EQ) — those
+  // don't emit the per-control intents the session relays, so a guest would see the
+  // wrong deck state during an auto-transition. Re-publish the full snapshot at each
+  // transition boundary (mix start / settle) so remotes resync the loaded + playing
+  // decks. Gated to mixing/armed (NOT preload) so we never abort an in-flight load.
+  useEffect(() => {
+    if (!room.isAnchor || room.status !== "online") return;
+    if (autoStatus.phase === "mixing" || autoStatus.phase === "armed") {
+      room.publishState(buildSnapshot());
+      sendHostStemView("A");
+      sendHostStemView("B");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStatus.phase, autoStatus.liveDeck, room.isAnchor, room.status]);
 
   // The MOMENT we join an existing session (and we're not the clock), pull the current
   // set so decks/waveforms/transport snap into place immediately. followRef is already
@@ -2840,7 +3216,7 @@ export function App() {
       return {
         title: `Deck ${id}`,
         rows: [
-          ["loaded", dk.buffer ? `${dk.buffer.duration.toFixed(1)}s` : "—"],
+          ["loaded", dk.duration ? `${dk.duration.toFixed(1)}s` : "—"],
           ["playing", String(dk.playing)],
           ["position", `${fmt(dk.position())} (vis ${fmt(dk.visualPosition())})`],
           ["tempo", `${dk.tempo.toFixed(2)}%  rate ${dk.rate.toFixed(3)}`],
@@ -2919,16 +3295,10 @@ export function App() {
 
   return (
     <div className={`app ${dockSwapped ? "dock-swapped" : ""}`}>
-      {/* Top chin: the three panel launchers, reserving their own row at the top
-          so they never overlap the board. */}
+      {/* Top chin: panel launchers, reserving their own row at the top so they never
+          overlap the board. The ⇄ swap sits top-LEFT; it flips which side the Library
+          dock and the Settings/Profile/Session dock sit on (and mirrors the chin). */}
       <nav className="chin">
-        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
-          <span className="chin-label">Library</span>
-        </button>
-        <button className={`chin-btn chin-search ${searchOpen ? "active" : ""}`} onClick={toggleSearch} aria-label="Search">
-          <span className="chin-label">Search</span>
-        </button>
-        {/* Swap which side the docks (and these two launchers) sit on. Desktop only. */}
         <button
           className="chin-btn chin-swap"
           onClick={() => setDockSwapped((v) => !v)}
@@ -2937,9 +3307,12 @@ export function App() {
         >
           <span className="chin-swap-i" aria-hidden="true">⇄</span>
         </button>
+        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
+          <span className="chin-label">Library</span>
+        </button>
         <button
           className={`chin-btn chin-settings ${settingsOpen ? "active" : ""}`}
-          onClick={() => setSettingsOpen(true)}
+          onClick={toggleSettings}
           aria-label="Settings"
           title="Settings"
         >
@@ -2948,13 +3321,13 @@ export function App() {
         </button>
         <button
           className={`chin-btn chin-profile ${profileOpen ? "active" : ""}`}
-          onClick={() => setProfileOpen(true)}
+          onClick={toggleProfile}
           aria-label="Profile"
           title="Your profile"
         >
           <span className="chin-globe" aria-hidden="true">🌐</span>
         </button>
-        <RoomBar room={room} onExpand={() => setSocialOpen(true)} />
+        <RoomBar room={room} onExpand={toggleSocial} />
       </nav>
 
       {/* Workspace: on desktop a flex ROW so the Library/Search docks SHARE the
@@ -2986,6 +3359,7 @@ export function App() {
               freqMid={settings.freqMidColor || FREQ_MID_DEFAULT}
               freqHigh={settings.freqHighColor || FREQ_HIGH_DEFAULT}
               vividness={settings.freqVividness}
+              debrick={settings.waveformDebrick}
               glow={settings.glow}
               stemColors={{ drums: settings.stemDrumsColor, bass: settings.stemBassColor, vocals: settings.stemVocalsColor, other: settings.stemOtherColor }}
               meta={meta[id]}
@@ -2999,6 +3373,7 @@ export function App() {
               onToggleExpand={() => setExpandedLane((e) => (e === id ? null : id))}
               windowSec={zoom[id]}
               onZoom={(next) => setZoomFor(id, next)}
+              wheelSeeks={settings.wheelSeeks}
               refresh={refresh}
               onLoadFile={(f) => onLoadFile(id, f)}
               onLoadTrack={(track) => loadAndShare(id, track)}
@@ -3014,24 +3389,6 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <div className="automix-bar">
-            <button
-              className={`automix-toggle ${autoStatus.enabled ? "on" : ""}`}
-              onClick={toggleAuto}
-              aria-pressed={autoStatus.enabled}
-              title="Auto-mix: beatmatch and blend each track into the next"
-            >
-              AUTO
-              {autoStatus.enabled && autoStatus.countdownSec != null && autoStatus.phase !== "idle" && (
-                <span className="automix-count">
-                  {autoStatus.phase === "mixing" ? "mixing" : `${Math.ceil(autoStatus.countdownSec)}s`}
-                </span>
-              )}
-            </button>
-            <button className="automix-queue-btn" onClick={() => setMixqOpen((v) => !v)} title="Auto-mix queue">
-              ☰ Queue{mixQueue.upcoming.length ? ` (${mixQueue.upcoming.length})` : ""}
-            </button>
-          </div>
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}
@@ -3064,6 +3421,7 @@ export function App() {
             onToggleShift={() => setShiftLatched((v) => !v)}
             onSync={() => { doSync("A"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
             onKey={() => { engine.toggleKey("A"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
+            cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -3091,6 +3449,7 @@ export function App() {
             onToggleShift={() => setShiftLatched((v) => !v)}
             onSync={() => { doSync("B"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
             onKey={() => { engine.toggleKey("B"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
+            cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -3105,14 +3464,30 @@ export function App() {
         library={library}
         onLoad={loadAndShare}
         loadedIds={loadedIds}
+        deckLoaded={loaded}
+        deckColors={ACCENT}
         open={libOpen}
         onOpenChange={setLibOpen}
-        searchOpen={searchOpen}
-        onSearchOpenChange={setSearchOpen}
+        auto={{
+          status: autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus,
+          queue: mixQueue,
+          queueCount: autoIsRemote && remoteAutomix ? remoteAutomix.upcoming.length : mixQueue.upcoming.length,
+          queueOpen: mixqOpen,
+          mirror: autoIsRemote ? remoteAutomix : null,
+          edit: queueEdit,
+          canEdit: queueCanEdit,
+          onToggle: toggleAuto,
+          onToggleQueue: () => setMixqOpen((v) => !v),
+          onMixNow: autoMixNow,
+          onSkip: autoSkip,
+          onHold: autoHold,
+        }}
       />
 
-      </div>
-
+      {/* Settings + Profile + Session share the RIGHT dock (the slot the old Search
+          panel left) — one open at a time. On desktop the dock shares the workspace row
+          with the board + library; on mobile dock-right makes it a full-screen panel
+          under the chin (no floating pane). */}
       {settingsOpen && (
         <SettingsPanel
           settings={settings}
@@ -3130,25 +3505,12 @@ export function App() {
           midi={midi}
         />
       )}
-
-      {profileOpen && <ProfileScreen onClose={() => setProfileOpen(false)} />}
-
       {socialOpen && (
         <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
       )}
+      {profileOpen && <ProfileScreen onClose={() => setProfileOpen(false)} />}
 
-      {mixqOpen && (
-        <MixQueuePanel
-          queue={mixQueue}
-          status={autoStatus}
-          library={library}
-          onToggleAuto={toggleAuto}
-          onMixNow={autoMixNow}
-          onSkip={autoSkip}
-          onHold={autoHold}
-          onClose={() => setMixqOpen(false)}
-        />
-      )}
+      </div>
 
       {kickedNotice && (
         <div className="kicked-toast" onClick={() => setKickedNotice(null)} role="status">

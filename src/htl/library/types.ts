@@ -18,10 +18,16 @@ export interface TrackMeta {
   providerId?: string | null; // the track's id within that provider
 }
 
+// Global length cap: a track longer than this is a mix/compilation/livestream, never
+// something to load on a deck. Mirrors server/innertube.ts MAX_TRACK_SECONDS; the
+// server filters lists, this blocks any long track that still reaches a load.
+export const MAX_TRACK_SECONDS = 15 * 60;
+
 export interface Playlist {
   id: string;
   name: string;
   trackIds: string[]; // videoIds, in order
   sourceListId?: string; // YouTube/Spotify playlist id this was imported from (dedup re-imports)
   sourceService?: string; // "youtube" | "spotify" | … — which service section it belongs to
+  lastSynced?: number; // epoch ms of the last re-sync from the source provider
 }

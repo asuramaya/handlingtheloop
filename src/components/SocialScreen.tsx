@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RoomState } from "@htl/room";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { QRCode } from "./QRCode";
+import { DockResizer } from "./DockResizer";
 
 // The expanded session "social screen" — the full-screen surface behind the chin
 // popup's Expand button. Everything social lives here: the live roster with roles +
@@ -69,8 +70,9 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
   };
 
   return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
-      <div className="social-screen" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
+      <DockResizer varName="--dock-w-right" measure="parent" />
+      <div className="panel social-screen" onPointerDown={(e) => e.stopPropagation()}>
         <div className="social-head">
           <span className="social-title">{room.isGuest ? "Guest session" : "Session"}</span>
           <span className="social-head-tools">
@@ -81,9 +83,6 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
               aria-label={revealed ? "Hide names" : "Reveal names"}
             >
               {revealed ? "🙈" : "👁"}
-            </button>
-            <button className="profile-x" onClick={onClose} aria-label="Close session screen">
-              ✕
             </button>
           </span>
         </div>

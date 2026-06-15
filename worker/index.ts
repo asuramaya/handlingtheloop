@@ -376,15 +376,17 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         return json(200, { candidates });
       }
       case "/api/tidal-probe": {
-        // TEMP DIAGNOSTIC — verify TIDAL track-radio works with your live token.
-        // Visit /api/tidal-probe?q=artist+title (or ?isrc=) while signed in + TIDAL linked.
+        // DIAGNOSTIC — verify TIDAL track-radio works with your live token. Gated to a
+        // signed-in account so it doesn't expose catalog internals (or burn the app
+        // token) to anonymous callers. Visit /api/tidal-probe?q=artist+title (or ?isrc=).
+        const user = await sessionUser(req, env);
+        if (!user) return json(401, { error: "sign in first" });
         const isrc = url.searchParams.get("isrc");
         const q = url.searchParams.get("q");
         if (!isrc && !q) return json(400, { error: "pass ?q=artist+title or ?isrc=" });
         // Prefer a linked user token; else fall back to a client-credentials app
         // token (catalog reads need no login — just TIDAL_CLIENT_ID/SECRET).
-        const user = await sessionUser(req, env);
-        let token = user ? await getValidToken(env, user.id, "tidal") : null;
+        let token = await getValidToken(env, user.id, "tidal");
         let tokenKind = token ? "user" : "";
         if (!token) {
           token = await tidalClientToken(tidalCreds(env));

@@ -74,6 +74,15 @@ export class AutoMixer {
   private barsSeconds = 0;
   private preloading = false;
   private nextTrack: TrackMeta | null = null;
+  // EAGER PRELOAD: the next track is loaded onto the idle deck the moment the current
+  // track starts playing — NOT at the ~30 s mix lead-in — so the (slow) stem separation
+  // has the whole current track to finish before the blend. `preloadedTrack`/`preloadedId`
+  // record which track is already sitting decoded on which deck; `eagerLoading` guards the
+  // async load against re-entry / a racing cue. Cue setup (seek/EQ/crossfade) still runs at
+  // mix time, off the already-loaded deck.
+  private preloadedId: DeckId | null = null;
+  private preloadedTrack: TrackMeta | null = null;
+  private eagerLoading = false;
   // The "session vibe" — the track the user last set as live. Radio seeds from this
   // PLUS the current track so suggestions stay tethered to the original vibe instead
   // of drifting track-to-track.
@@ -176,6 +185,14 @@ export class AutoMixer {
     this.plan = null;
     this.mixOutTime = null;
     this.nextTrack = null;
+    this.clearPreload();
+  }
+
+  // Forget the eagerly-preloaded track (the idle deck identity changed, or the queue/next
+  // moved) so the next idle deck gets freshly preloaded with the correct upcoming track.
+  private clearPreload(): void {
+    this.preloadedId = null;
+    this.preloadedTrack = null;
   }
 
   // Reset all transition DSP on a deck back to neutral (EQ3, stems, AND the filter —
@@ -390,6 +407,11 @@ export class AutoMixer {
       return;
     }
     if (!live.playing) return; // paused → just wait; never preload/mix off a paused deck
+    // AGGRESSIVE PRELOAD: get the next track decoded + (desktop) stem-separated onto the
+    // idle deck NOW, while the current track plays — buying the whole track's worth of time
+    // for separation instead of the ~30 s lead-in. Fire-and-forget; the cue still happens
+    // near mix-out, off the loaded deck. Runs every armed tick but latches once loaded.
+    void this.ensurePreload();
     if (this.mixOutTime == null) {
       this.barsSeconds = barsToSeconds(12, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
       this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
@@ -398,23 +420,62 @@ export class AutoMixer {
     if (live.position() >= (this.mixOutTime ?? Infinity) - lead) this.phase = "preload";
   }
 
+  // Eagerly load the next queued track onto the idle deck while the current one plays, so
+  // the desktop stem pipeline has the whole track to separate before the blend. No cue here
+  // (no seek/EQ/crossfade) — just decode + analysis + stems; the cue rides the loaded deck
+  // at mix time. Fire-and-forget from tickArmed; idempotent + re-entry-guarded.
+  private async ensurePreload(): Promise<void> {
+    if (this.eagerLoading || this.preloading || !this.liveId) return;
+    const idle = other(this.liveId);
+    if (this.deps.engine.deck(idle).playing) return; // user is on that deck — don't grab it
+    const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
+    const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
+    if (!next || !this.enabled || !this.liveId) return;
+    const tgt = other(this.liveId);
+    if (this.deps.engine.deck(tgt).playing) return;
+    // Already sitting on the idle deck (we loaded it, or it happens to be there)? Latch it
+    // as preloaded so we don't reload — its stems are already deriving.
+    if (this.deps.deckTrack(tgt)?.videoId === next.videoId) {
+      this.preloadedId = tgt;
+      this.preloadedTrack = next;
+      return;
+    }
+    this.eagerLoading = true;
+    try {
+      await this.deps.loadDeck(tgt, next); // decode + analysis + (desktop) neural stems — EARLY
+      if (this.enabled && this.liveId != null && !this.deps.engine.deck(tgt).playing) {
+        this.preloadedId = tgt;
+        this.preloadedTrack = next;
+      }
+    } catch {
+      /* transient — retry next tick */
+    } finally {
+      this.eagerLoading = false;
+    }
+  }
+
   private async tickPreload(): Promise<void> {
-    if (this.preloading || !this.liveId) return;
+    if (this.preloading || this.eagerLoading || !this.liveId) return; // wait out an in-flight eager load
     const idle = other(this.liveId);
     // Never grab a deck the user is playing (manual beatmix) — defer.
     if (this.deps.engine.deck(idle).playing) {
       this.phase = "armed";
       return;
     }
+    // Prefer the eagerly-preloaded track already decoded on the idle deck (its stems had the
+    // whole current track to derive); only load here as a fallback if the early preload
+    // hasn't landed yet.
+    const preloaded =
+      this.preloadedId === idle && !!this.preloadedTrack && this.deps.deckTrack(idle)?.videoId === this.preloadedTrack.videoId;
     const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
-    const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
+    const next = preloaded ? this.preloadedTrack! : await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
     if (!next) {
       this.phase = "armed"; // nothing queued yet — radio may fill, retry later
       return;
     }
     this.preloading = true;
     try {
-      await this.deps.loadDeck(idle, next);
+      if (!preloaded) await this.deps.loadDeck(idle, next);
       // Bail if the world changed under us during the async load.
       if (!this.enabled || this.liveId == null || this.deps.engine.deck(idle).playing) {
         this.phase = "armed";
@@ -684,6 +745,9 @@ export class AutoMixer {
     this.mixOutTime = null;
     this.mixStarted = false;
     this.mixElapsed = 0;
+    // The deck we just blended in is now live; the OUTGOING deck is the new idle. Forget the
+    // old preload so the next armed tick eagerly loads the next-next track onto it.
+    this.clearPreload();
     this.phase = "armed";
   }
 

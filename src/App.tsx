@@ -202,6 +202,7 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqBypass: deck.eqBypassed,
     filter: deck.filterValue,
     fxOn: deck.fxOn,
+    fx: deck.fxSnapshot(), // post-EQ effect chain (delay/reverb…) — EQ stays in the eq* fields
     keylock: deck.keylock,
     pitchSemis: deck.pitch,
     quantize: deck.quantizing,
@@ -290,6 +291,7 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqLpFreq != null) deck.setEqLpFreq(s.eqLpFreq);
   if (s.eqLpQ != null) deck.setEqLpQ(s.eqLpQ);
   deck.setEqBypass(!!s.eqBypass);
+  deck.applyFxSnapshot(s.fx ?? []); // post-EQ effect chain (reconciles add/remove/reorder + params)
   deck.setKeylock(s.keylock);
   deck.setPitch(s.pitchSemis ?? 0);
   deck.setQuantize(s.quantize);
@@ -916,6 +918,14 @@ export function App() {
   // re-creating (and so model changes don't churn the load path).
   const stemModelRef = useRef(settings.stemModel);
   stemModelRef.current = settings.stemModel;
+
+  // MOBILE: explicit per-deck Single↔Stems request. A phone defaults to the plain mix
+  // (Single, lightest) and only derives on-device stems when the user opts IN per deck —
+  // deriveStems' mix-only gate reads this ref, the per-deck STEMS/SINGLE button flips it
+  // (toggleMobileStems). Desktop ignores it (it follows the model/auto-enhance as before).
+  const [mobileStemReq, setMobileStemReq] = useState<Record<DeckId, boolean>>({ A: false, B: false });
+  const mobileStemReqRef = useRef(mobileStemReq);
+  mobileStemReqRef.current = mobileStemReq;
   // Auto-enhance (desktop): read fresh in the load callbacks without re-creating them.
   const autoEnhanceRef = useRef(settings.autoEnhance);
   autoEnhanceRef.current = settings.autoEnhance;
@@ -1050,7 +1060,10 @@ export function App() {
       const stemDiverged = STEM_KEYS.some(
         (n) => engine.deck(id).stemLevel(n) !== 1 || !engine.deck(id).stemActive(n),
       );
-      if (model.id === "off" && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
+      // The user explicitly asked THIS deck for stems on mobile (the SINGLE/STEMS button) →
+      // fall through to the on-device DSP / cached-neural path regardless of the mix-only gate.
+      const mobileWantStems = isMobileDevice() && mobileStemReqRef.current[id];
+      if (model.id === "off" && !mobileWantStems && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
         if (!isMobileDevice() && autoEnhanceRef.current) {
           await whenIdle();
           if (stale?.()) return;
@@ -1945,6 +1958,21 @@ export function App() {
           else if (intent.param === "keylock") deck.setKeylock(intent.value);
           else if (intent.param === "eqBypass") deck.setEqBypass(intent.value);
           else deck.setQuantize(intent.value);
+          break;
+        case "fxParam":
+          // A post-EQ effect knob moved on a controller — high-frequency live sync.
+          deck.setFxParam(intent.slot, intent.param, intent.value);
+          refresh();
+          break;
+        case "fxBypass":
+          deck.setFxBypass(intent.slot, intent.value);
+          refresh();
+          break;
+        case "fxRack":
+          // Add/remove/reorder the effect chain (or a late joiner catching up): reconcile
+          // the whole list — kinds + order rebuild, params + bypass re-applied.
+          deck.applyFxSnapshot(intent.rack);
+          refresh();
           break;
         case "stemGain":
           // Apply regardless of local stems — the deck holds gain/mute state buffer-
@@ -2864,6 +2892,29 @@ export function App() {
     [meta, library.collection],
   );
 
+  // MOBILE Single↔Stems toggle for one deck. → Stems: the deck is mix-only so its float32
+  // buffer is still resident — derive in place (position + playback preserved, no re-decode).
+  // → Single: stems loading RELEASED the mobile mix buffer (the OOM fix), so re-decode the
+  // track to restore the plain mix, carrying position/playback via a restore snapshot.
+  const toggleMobileStems = useCallback(
+    (id: DeckId) => {
+      const deck = engine.deck(id);
+      const track = deckTrack(id);
+      if (!track) return;
+      const want = !mobileStemReqRef.current[id];
+      mobileStemReqRef.current = { ...mobileStemReqRef.current, [id]: want };
+      setMobileStemReq((r) => ({ ...r, [id]: want }));
+      deriveGuard.current[id] = ""; // re-open the derive decision with the new request
+      if (want && deck.buffer) {
+        void deriveStems(id, track.videoId, deck.buffer, () => latest.current.loaded[id] !== track.videoId);
+      } else {
+        const snap = deckSnapshot(deck, latest.current.meta[id], track.videoId);
+        void loadTrackToDeck(id, track, snap);
+      }
+    },
+    [engine, deckTrack, deriveStems, loadTrackToDeck],
+  );
+
   // Current crossfade behind a ref so the mixer can detect a manual fader grab.
   const crossfadeRef = useRef(crossfade);
   crossfadeRef.current = crossfade;
@@ -3475,6 +3526,7 @@ export function App() {
             stemPending={stemLoading(status.A)}
             stemPendingPct={status.A?.pct ?? null}
             otherStemPending={stemLoading(status.B)}
+            onMobileStems={isMobileDevice() ? () => toggleMobileStems("A") : undefined}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.a}
@@ -3503,6 +3555,7 @@ export function App() {
             stemPending={stemLoading(status.B)}
             stemPendingPct={status.B?.pct ?? null}
             otherStemPending={stemLoading(status.A)}
+            onMobileStems={isMobileDevice() ? () => toggleMobileStems("B") : undefined}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.b}

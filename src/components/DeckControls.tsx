@@ -5,7 +5,7 @@ import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
 import { ValueCell } from "./ValueCell";
-import { EqCurve } from "./EqCurve";
+import { FxStrip } from "./FxStrip";
 import { LevelFader } from "./LevelFader";
 
 // Per-stem cells (under the PITCH foot). Each is a level knob AND the mute toggle:
@@ -492,7 +492,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             up/down = gain; mid wheel = bell width; right-click / double-click = reset).
             Further tabs are stacked effects (delay…); + adds one. */}
         <div className="eq-row">
-          <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} />
+          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via

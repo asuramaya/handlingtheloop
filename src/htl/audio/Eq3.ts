@@ -29,7 +29,10 @@ export const EQ_Q_MAX = 12;
 
 export type EqRoute = "normal" | "solo" | "bypass";
 
-export class Eq3 {
+import type { FxDevice } from "./Fx";
+
+export class Eq3 implements FxDevice {
+  readonly kind = "eq" as const;
   readonly input: GainNode;
   readonly output: GainNode;
   private readonly pre: GainNode; // routing branch point (input → pre → chain/solo/output)
@@ -216,6 +219,40 @@ export class Eq3 {
       band.getFrequencyResponse(f, this.mag, this.phase!);
       for (let i = 0; i < n; i++) outDb[i] += 20 * Math.log10(this.mag[i] || 1e-6);
     }
+  }
+
+  // --- FxDevice generic param bus ---------------------------------------------
+  // String-addressed view over the typed setters/getters above, so session-sync,
+  // automix, and MIDI can drive any device (EQ included) uniformly. Unknown ids are
+  // ignored — forward-compatible across versions.
+  private static readonly PARAMS: ReadonlyArray<{
+    id: string;
+    get: (e: Eq3) => number;
+    set: (e: Eq3, v: number) => void;
+  }> = [
+    { id: "low", get: (e) => e.low.gain.value, set: (e, v) => e.setLow(v) },
+    { id: "mid", get: (e) => e.mid.gain.value, set: (e, v) => e.setMid(v) },
+    { id: "high", get: (e) => e.high.gain.value, set: (e, v) => e.setHigh(v) },
+    { id: "lowFreq", get: (e) => e.lowFreq, set: (e, v) => e.setLowFreq(v) },
+    { id: "midFreq", get: (e) => e.midFreq, set: (e, v) => e.setMidFreq(v) },
+    { id: "highFreq", get: (e) => e.highFreq, set: (e, v) => e.setHighFreq(v) },
+    { id: "midQ", get: (e) => e.midQ, set: (e, v) => e.setMidQ(v) },
+    { id: "hpFreq", get: (e) => e.hpFreq, set: (e, v) => e.setHpFreq(v) },
+    { id: "hpQ", get: (e) => e.hpQ, set: (e, v) => e.setHpQ(v) },
+    { id: "lpFreq", get: (e) => e.lpFreq, set: (e, v) => e.setLpFreq(v) },
+    { id: "lpQ", get: (e) => e.lpQ, set: (e, v) => e.setLpQ(v) },
+  ];
+
+  setParam(id: string, value: number) {
+    Eq3.PARAMS.find((p) => p.id === id)?.set(this, value);
+  }
+  getParam(id: string): number {
+    return Eq3.PARAMS.find((p) => p.id === id)?.get(this) ?? 0;
+  }
+  snapshotParams(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const p of Eq3.PARAMS) out[p.id] = p.get(this);
+    return out;
   }
 }
 

@@ -40,6 +40,7 @@ interface Props {
   spotifyPlaylists: ServicePlaylist[];
   tidalPlaylists: ServicePlaylist[];
   onClose: () => void;
+  embedded?: boolean; // render inline in the library content area, not as a full-screen modal
 }
 
 const SVC_LABEL: Record<Service, string> = { youtube: "YouTube", spotify: "Spotify", tidal: "TIDAL" };
@@ -52,7 +53,7 @@ const candidateToTrack = (c: Candidate): TrackMeta => ({
   views: null,
 });
 
-export function SetupWizard({ me, library, ytPlaylists, spotifyPlaylists, tidalPlaylists, onClose }: Props) {
+export function SetupWizard({ me, library, ytPlaylists, spotifyPlaylists, tidalPlaylists, onClose, embedded = false }: Props) {
   const connections = me?.connections ?? [];
   const connected = (s: Service) => connections.includes(s === "youtube" ? "google" : s);
   const anyConnected = connected("youtube") || connected("spotify") || connected("tidal");
@@ -142,14 +143,20 @@ export function SetupWizard({ me, library, ytPlaylists, spotifyPlaylists, tidalP
     setStep("done");
   }
 
-  return (
-    <div className="modal-backdrop" onPointerDown={onClose}>
-      <div className="wizard" onPointerDown={(e) => e.stopPropagation()}>
+  const inner = (
+      <div
+        className={`wizard ${embedded ? "embedded" : ""}`}
+        onPointerDown={embedded ? undefined : (e) => e.stopPropagation()}
+      >
         <header className="wizard-head">
           <span className="wizard-title">Set up your library</span>
-          <button className="mini x" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          {/* Embedded = a library tab: you leave by opening another tab, so no redundant ✕
+              (the floating modal keeps one). */}
+          {!embedded && (
+            <button className="mini x" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          )}
         </header>
 
         {step === "connect" && (
@@ -266,6 +273,12 @@ export function SetupWizard({ me, library, ytPlaylists, spotifyPlaylists, tidalP
           </div>
         )}
       </div>
+  );
+  return embedded ? (
+    inner
+  ) : (
+    <div className="modal-backdrop" onPointerDown={onClose}>
+      {inner}
     </div>
   );
 }

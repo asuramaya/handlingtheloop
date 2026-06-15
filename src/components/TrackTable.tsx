@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TrackMeta } from "@htl/library";
 import { fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
@@ -61,7 +61,16 @@ const RESIZABLE: { id: SortKey; min: number; def: number }[] = [
   { id: "time", min: 48, def: 0.1 },
 ];
 const TITLE_MIN = 120; // px — Title never collapses below this; caps how wide the others grow
-const FIXED_PX = 36; // the # column (px); the thumb column is added live (it scales with row size)
+// The # column is a resizable PX width (its own value, like the thumb) — drag its header
+// border to widen it so 3-digit track numbers (100+) stop truncating to "1…".
+const NUM_W_KEY = "htl:ttNumW";
+const NUM_MIN = 28;
+const NUM_MAX = 90;
+const NUM_DEF = 36;
+function loadNumW(): number {
+  const n = Number(localStorage.getItem(NUM_W_KEY));
+  return n >= NUM_MIN && n <= NUM_MAX ? n : NUM_DEF;
+}
 const WIDTHS_KEY = "htl:ttCols"; // fractions (new key; the old px-based htl:ttWidths is ignored)
 const SCALE_KEY = "htl:ttScale";
 const SCALE_MIN = 0.8;
@@ -73,6 +82,12 @@ const THUMB_W_KEY = "htl:ttThumbW";
 const THUMB_MIN = 28;
 const THUMB_MAX = 160;
 const THUMB_DEF = 50;
+// Row windowing: big libraries (1000s of tracks) lag hard if every row is in the DOM, so
+// above this count we render only the visible rows (+overscan) and reserve the rest with
+// spacer rows. Small lists render whole (no measuring overhead, and reorder/drag is simpler).
+const VIRT_THRESHOLD = 80;
+const ROW_OVERSCAN = 10; // rows rendered beyond the viewport on each side (smooth fast scroll)
+const ROW_H_EST = 34; // first-paint row-height guess (px), corrected by measuring a real row
 function loadThumbW(): number {
   const n = Number(localStorage.getItem(THUMB_W_KEY));
   return n >= THUMB_MIN && n <= THUMB_MAX ? n : THUMB_DEF;
@@ -145,6 +160,7 @@ export function TrackTable({
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths());
   const [scale, setScale] = useState<number>(() => loadScale());
   const [thumbW, setThumbW] = useState<number>(() => loadThumbW());
+  const [numW, setNumW] = useState<number>(() => loadNumW());
   const [reorderOver, setReorderOver] = useState<number | null>(null); // queue: row being hovered for reorder
   useCacheStatus(); // re-render rows when the cached-pool manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
@@ -169,6 +185,64 @@ export function TrackTable({
     if (onReorder || sortKey === "index") return sortDir === 1 || onReorder ? filtered : [...filtered].reverse();
     return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
   }, [tracks, sortKey, sortDir, query, searchMode, onReorder]);
+
+  // ----- Row windowing (only render the visible slice of a large list) -----
+  // Reorder lists (the queue) are small and their drag math wants every index present, so
+  // they never virtualize. Everything else does past VIRT_THRESHOLD.
+  const virtualize = !onReorder && view.length > VIRT_THRESHOLD;
+  const [rowH, setRowH] = useState(ROW_H_EST);
+  const [range, setRange] = useState({ start: 0, end: VIRT_THRESHOLD });
+  const firstRowRef = useRef<HTMLTableRowElement>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  // The scroll container is the nearest scrollable ancestor (.lib-main in the library).
+  useEffect(() => {
+    let node = tableRef.current?.parentElement;
+    while (node) {
+      const oy = getComputedStyle(node).overflowY;
+      if (oy === "auto" || oy === "scroll") break;
+      node = node.parentElement;
+    }
+    scrollerRef.current = node ?? null;
+  }, [view.length, virtualize]);
+  // Measure a real row's height once it's painted (it scales with the row-size stepper), so
+  // the spacer math + window size track the actual layout instead of the estimate.
+  useLayoutEffect(() => {
+    const h = firstRowRef.current?.offsetHeight;
+    if (h && Math.abs(h - rowH) > 0.5) setRowH(h);
+  }, [scale, view.length, range.start, rowH]);
+  // Compute the visible window from the scroller's position. The table top tracks logical
+  // row 0 (the spacers preserve full height), so (scrollerTop − row0Top)/rowH = rows above.
+  const recompute = useCallback(() => {
+    const table = tableRef.current;
+    const sc = scrollerRef.current;
+    if (!table || !sc) return;
+    const scTop = sc.getBoundingClientRect().top;
+    const theadH = table.tHead?.offsetHeight ?? 0;
+    const row0 = table.getBoundingClientRect().top + theadH;
+    const above = (scTop - row0) / rowH;
+    const visible = sc.clientHeight / rowH;
+    const start = Math.max(0, Math.floor(above) - ROW_OVERSCAN);
+    const end = Math.min(view.length, Math.ceil(above + visible) + ROW_OVERSCAN);
+    setRange((r) => (r.start === start && r.end === end ? r : { start, end }));
+  }, [rowH, view.length]);
+  useEffect(() => {
+    if (!virtualize) {
+      setRange({ start: 0, end: view.length });
+      return;
+    }
+    const sc = scrollerRef.current;
+    if (!sc) return;
+    recompute();
+    sc.addEventListener("scroll", recompute, { passive: true });
+    window.addEventListener("resize", recompute);
+    return () => {
+      sc.removeEventListener("scroll", recompute);
+      window.removeEventListener("resize", recompute);
+    };
+  }, [virtualize, recompute, view.length]);
+  const vStart = virtualize ? Math.min(range.start, Math.max(0, view.length)) : 0;
+  const vEnd = virtualize ? Math.min(range.end, view.length) : view.length;
+  const colCount = 7 + (extraCol ? 1 : 0);
 
   // Close the menu on any escape hatch.
   useEffect(() => {
@@ -228,7 +302,7 @@ export function TrackTable({
         const others = RESIZABLE.reduce((s, c) => (c.id === target ? s : s + (start[c.id] ?? c.def)), 0);
         const thumbPx = thumbW;
         const minFrac = meta.min / tw;
-        const maxFrac = Math.max(minFrac, 1 - (TITLE_MIN + FIXED_PX + thumbPx) / tw - others);
+        const maxFrac = Math.max(minFrac, 1 - (TITLE_MIN + numW + thumbPx) / tw - others);
         const f = Math.max(minFrac, Math.min(maxFrac, (start[target] ?? meta.def) + dFrac * (invert ? -1 : 1)));
         setWidths((prev) => ({ ...prev, [target]: f }));
       }
@@ -245,6 +319,33 @@ export function TrackTable({
         }
         return prev;
       });
+    };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  // Drag the # column's header border to set its width (px) — wide enough for 3-digit
+  // track numbers when you want them. Mirrors the thumbnail resize.
+  function startNumResize(e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = numW;
+    let w = startW;
+    const onMove = (ev: PointerEvent) => {
+      w = Math.max(NUM_MIN, Math.min(NUM_MAX, startW + (ev.clientX - startX)));
+      setNumW(w);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      try {
+        localStorage.setItem(NUM_W_KEY, String(w));
+      } catch {
+        /* ignore */
+      }
     };
     document.body.style.cursor = "col-resize";
     window.addEventListener("pointermove", onMove);
@@ -338,11 +439,12 @@ export function TrackTable({
 
   // A clickable, sortable header cell with an asc/desc caret + (optionally) a
   // drag-to-resize border on its right edge.
-  const SortTh = ({ id, label, cls }: { id: SortKey; label: string; cls: string }) => {
+  const SortTh = ({ id, label, cls, pxResize }: { id: SortKey; label: string; cls: string; pxResize?: (e: React.PointerEvent) => void }) => {
     // Title gets a handle too (its right border = the Title|Artist divider); plus every
     // resizable data column. Title isn't in RESIZABLE — it's the flex absorber — so it's
-    // called out explicitly.
-    const hasHandle = id === "title" || RESIZABLE.some((c) => c.id === id);
+    // called out explicitly. A `pxResize` handler (the # column) drags a px width instead
+    // of trading fractions.
+    const hasHandle = !!pxResize || id === "title" || RESIZABLE.some((c) => c.id === id);
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
@@ -353,7 +455,9 @@ export function TrackTable({
           {label}
           {sortKey === id && <span className="tt-caret">{sortDir === 1 ? "▲" : "▼"}</span>}
         </span>
-        {hasHandle && <span className="col-resize" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => startResize(e, id)} />}
+        {hasHandle && (
+          <span className="col-resize" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => (pxResize ? pxResize(e) : startResize(e, id))} />
+        )}
       </th>
     );
   };
@@ -416,7 +520,7 @@ export function TrackTable({
               absorbs the rest. Dropping narrow columns is a container query on the
               .col-* classes (which sit on the cells), independent of these. */}
           <colgroup>
-            <col className="col-num" />
+            <col className="col-num" style={{ width: `${numW}px` }} />
             <col className="col-thumb" style={{ width: `${thumbW}px` }} />
             <col className="col-title" />
             <col className="col-artist" style={{ width: colWidth("artist") }} />
@@ -427,7 +531,7 @@ export function TrackTable({
           </colgroup>
           <thead>
             <tr>
-              <SortTh id="index" label="#" cls="col-num" />
+              <SortTh id="index" label="#" cls="col-num" pxResize={startNumResize} />
               <th className="col-thumb">
                 <span className="col-resize" onClick={(e) => e.stopPropagation()} onPointerDown={startThumbResize} />
               </th>
@@ -440,8 +544,17 @@ export function TrackTable({
             </tr>
           </thead>
           <tbody>
-            {view.map((t, i) => (
+            {/* Top spacer reserves the height of the rows scrolled above the window. */}
+            {vStart > 0 && (
+              <tr aria-hidden="true" className="tt-spacer">
+                <td colSpan={colCount} style={{ height: vStart * rowH, padding: 0, border: 0 }} />
+              </tr>
+            )}
+            {view.slice(vStart, vEnd).map((t, k) => {
+              const i = vStart + k; // true index into `view` (selection/menus/reorder use it)
+              return (
               <tr
+                ref={k === 0 ? firstRowRef : undefined}
                 key={`${t.videoId}:${i}`}
                 className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(t.videoId) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""}`}
                 draggable
@@ -528,7 +641,14 @@ export function TrackTable({
                 <td className="col-time">{fmtTime(t.duration)}</td>
                 {extraCol && <td className="col-extra">{extraCol.render(t, i)}</td>}
               </tr>
-            ))}
+              );
+            })}
+            {/* Bottom spacer reserves the height of the rows below the window. */}
+            {vEnd < view.length && (
+              <tr aria-hidden="true" className="tt-spacer">
+                <td colSpan={colCount} style={{ height: (view.length - vEnd) * rowH, padding: 0, border: 0 }} />
+              </tr>
+            )}
           </tbody>
         </table>
       )}

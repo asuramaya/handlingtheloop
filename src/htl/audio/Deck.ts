@@ -78,6 +78,8 @@ import { STEM_NAMES, type StemName, type Stems, type PackedStems } from "../stem
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
+import { FxRack, type FxDevice, type FxKind, type FxSlot } from "./Fx";
+import { DelayFx } from "./DelayFx";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -197,6 +199,7 @@ export class Deck {
   readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
   private readonly trimNode: GainNode;
   private readonly eq: Eq3;
+  readonly rack: FxRack; // the channel-strip device chain (EQ is dev0; effects splice in after)
   // Post-fader stereo meter: split L/R into two analysers (sinks). The UI reads
   // instantaneous peak per channel and applies its own ballistics, so any number
   // of readers a frame is fine (no shared smoothed state to fight over).
@@ -333,12 +336,19 @@ export class Deck {
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
+    // The FX rack is the deck's channel-strip device chain. The EQ is the first
+    // (pinned, but reorderable) device; new effects (delay/reverb/chorus) slot in
+    // after it. The deck keeps a direct `this.eq` reference so the EQ proxy methods
+    // (and the curve UI, automix, MIDI, the color filter) address it without going
+    // through the rack — the rack only owns ROUTING.
     this.eq = new Eq3(ctx);
-    // eq -> trim -> level(output) -> crossfader. The one-knob "filter" now drives the
-    // EQ's own HP/LP cut nodes (see applyFilter) — there's no separate color-filter node.
+    this.rack = new FxRack(ctx);
+    this.rack.add(this.eq);
+    // rack(eq → …) -> trim -> level(output) -> crossfader. The one-knob "filter" now drives
+    // the EQ's own HP/LP cut nodes (see applyFilter) — there's no separate color-filter node.
     this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
-    this.eq.output.connect(this.trimNode);
+    this.rack.output.connect(this.trimNode);
     this.trimNode.connect(this.output);
     // Pre-fader headphone cue (PFL) tap: a parallel send off the trim node (post-EQ,
     // BEFORE the channel fader/crossfader) so a deck can be auditioned in the cue
@@ -359,11 +369,11 @@ export class Deck {
     this.output.connect(split);
     split.connect(this.meterL, 0);
     split.connect(this.meterR, 1);
-    // Pre-EQ spectrum tap (raw track entering the channel) — a silent analyser sink
-    // on the EQ input, for the curve's PRE/POST spectrum toggle.
+    // Pre-rack spectrum tap (raw track entering the channel) — a silent analyser sink
+    // on the rack input, for the curve's PRE/POST spectrum toggle.
     this.meterPre = ctx.createAnalyser();
     this.meterPre.fftSize = 1024;
-    this.eq.input.connect(this.meterPre);
+    this.rack.input.connect(this.meterPre);
   }
 
   /** Instantaneous post-fader peak per channel in dBFS (−100 = silence … 0 = full
@@ -400,7 +410,7 @@ export class Deck {
         /* ignore */
       }
     }
-    node.connect(this.eq.input);
+    node.connect(this.rack.input);
     this.stretchNode = node;
     node.port.onmessage = (e: MessageEvent) => {
       const m = e.data as { type?: string };
@@ -544,7 +554,7 @@ export class Deck {
   /** Wire the scratch resampler in parallel with the source, into the EQ (raw
    *  pitch, bypassing key-lock — scrubbing should pitch like vinyl). */
   attachScratchNode(node: AudioWorkletNode) {
-    node.connect(this.eq.input);
+    node.connect(this.rack.input);
     this.scratchNode = node;
     if (this.buffer && !isMobileDevice()) this.sendScratchBuffer();
   }
@@ -1902,6 +1912,74 @@ export class Deck {
     this._eqLow = 0;
     this._eqMid = 0;
     this._eqHigh = 0;
+  }
+
+  // --- FX rack: effects AFTER the EQ (the EQ is the pinned rack dev0) -----------
+  // The UI / session address effects by EFFECT index (0 = first effect after the EQ);
+  // these methods hide the +1 rack offset. EQ stays addressed by the eq* proxies above.
+  // The effect kinds this build can construct (excludes "eq", the pinned dev0).
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["delay"]);
+  private makeFx(kind: string): FxDevice | null {
+    switch (kind) {
+      case "delay":
+        return new DelayFx(this.ctx);
+      // reverb / chorus land here as they're built
+      default:
+        return null; // unknown/eq → not a stackable effect
+    }
+  }
+  /** The post-EQ effects in chain order (EQ excluded). */
+  get fxEffects(): readonly FxDevice[] {
+    return this.rack.list.slice(1);
+  }
+  fxDeviceAt(i: number): FxDevice | undefined {
+    return this.rack.deviceAt(i + 1); // +1: skip the pinned EQ at dev0
+  }
+  /** Add an effect at effect-index `at` (default: end). Returns it, or null if unknown. */
+  addFx(kind: FxKind, at = this.fxEffects.length): FxDevice | null {
+    const d = this.makeFx(kind);
+    if (!d) return null;
+    this.rack.add(d, at + 1);
+    return d;
+  }
+  removeFxAt(i: number) {
+    this.rack.remove(i + 1);
+  }
+  moveFx(from: number, to: number) {
+    this.rack.move(from + 1, to + 1);
+  }
+  setFxParam(i: number, param: string, v: number) {
+    this.fxDeviceAt(i)?.setParam(param, v);
+  }
+  setFxBypass(i: number, on: boolean) {
+    this.fxDeviceAt(i)?.setBypass(on);
+  }
+  /** Serialize the effect chain (EQ excluded) for the session snapshot + profiles. */
+  fxSnapshot(): FxSlot[] {
+    return this.fxEffects.map((d) => ({ kind: d.kind, bypassed: d.bypassed, params: d.snapshotParams() }));
+  }
+  /** Reconcile the effect chain to `slots` (kind + order), then set each device's params
+   *  and bypass. If the shape (kinds/length) already matches, devices are kept (no audio
+   *  glitch) and only params update; otherwise the effects are rebuilt to match. The EQ at
+   *  dev0 is never touched. Unknown kinds are skipped (forward-compatible). */
+  applyFxSnapshot(slots: ReadonlyArray<{ kind: string; bypassed: boolean; params: Record<string, number> }>) {
+    const known = slots.filter((s) => Deck.FX_KINDS.has(s.kind));
+    const cur = this.fxEffects;
+    const sameShape = cur.length === known.length && cur.every((d, i) => d.kind === known[i].kind);
+    if (!sameShape) {
+      for (let i = cur.length - 1; i >= 0; i--) this.rack.remove(i + 1);
+      for (const s of known) {
+        const d = this.makeFx(s.kind as FxKind);
+        if (d) this.rack.add(d);
+      }
+    }
+    const now = this.fxEffects;
+    for (let i = 0; i < now.length && i < known.length; i++) {
+      const d = now[i];
+      const s = known[i];
+      for (const k in s.params) d.setParam(k, s.params[k]);
+      d.setBypass(s.bypassed);
+    }
   }
 
   /** Combined EQ magnitude (dB) at each frequency in `freqHz`, into `outDb` — the

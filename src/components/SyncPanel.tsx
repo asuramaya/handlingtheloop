@@ -276,9 +276,13 @@ export function SyncPanel({
               {LABEL[source]} → {dest ? LABEL[dest] : "—"}
             </span>
           </h2>
-          <button className="mini x" onClick={onClose} aria-label={embedded ? "Back to library" : "Close"}>
-            ✕
-          </button>
+          {/* Embedded = a library tab: leave by opening another tab, so no redundant ✕
+              (the floating modal keeps one). */}
+          {!embedded && (
+            <button className="mini x" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          )}
         </div>
 
         {connected.length === 0 ? (
@@ -288,33 +292,31 @@ export function SyncPanel({
           </p>
         ) : step === "pick" ? (
           <div className="sync-body">
-            <div className="sync-dir">
-              <label className="sync-from">
-                From
-                <select value={source} onChange={(e) => setSource(e.target.value as SyncSource)}>
+            <div className="sync-route">
+              <label className="sync-route-end">
+                <span className="sync-route-label">From</span>
+                <select className="sync-select" value={source} onChange={(e) => setSource(e.target.value as SyncSource)}>
                   <option value="htl">htl (Collection &amp; playlists)</option>
                   {hasYouTube && <option value="youtube">YouTube</option>}
                   {hasSpotify && <option value="spotify">Spotify</option>}
                   {hasTidal && <option value="tidal">TIDAL</option>}
                 </select>
               </label>
-              <span className="sync-arrow">→</span>
-              {destOptions.length > 1 ? (
-                <label className="sync-from">
-                  To
-                  <select value={dest} onChange={(e) => setDest(e.target.value as Service)}>
+              <span className="sync-route-arrow" aria-hidden="true">→</span>
+              <label className="sync-route-end">
+                <span className="sync-route-label">To</span>
+                {destOptions.length > 1 ? (
+                  <select className="sync-select" value={dest} onChange={(e) => setDest(e.target.value as Service)}>
                     {destOptions.map((s) => (
                       <option key={s} value={s}>
                         {LABEL[s]}
                       </option>
                     ))}
                   </select>
-                </label>
-              ) : (
-                <span className="sync-to">
-                  To <strong>{destOptions[0] ? LABEL[destOptions[0]] : "—"}</strong>
-                </span>
-              )}
+                ) : (
+                  <span className="sync-select sync-select-static">{destOptions[0] ? LABEL[destOptions[0]] : "—"}</span>
+                )}
+              </label>
             </div>
             {noDest ? (
               <p className="settings-hint">
@@ -343,7 +345,13 @@ export function SyncPanel({
                           setName(`${p.title} · via htl`);
                         }}
                       >
-                        {p.thumbnail && <img className="sync-pl-thumb" src={p.thumbnail} alt="" />}
+                        {p.thumbnail ? (
+                          <img className="sync-pl-thumb" src={p.thumbnail} alt="" />
+                        ) : (
+                          <span className="sync-pl-ico" aria-hidden="true">
+                            {p.id === COLLECTION_ID ? "💿" : "♪"}
+                          </span>
+                        )}
                         <span className="sync-pl-name">{p.title}</span>
                         {p.ownedByMe === false && (
                           <span
@@ -353,20 +361,20 @@ export function SyncPanel({
                             shared
                           </span>
                         )}
-                        {p.count > 0 && <span className="lib-count">{p.count}</span>}
+                        {p.count > 0 && <span className="sync-pl-count">{p.count}</span>}
                       </button>
                     ))}
                 </div>
                 {err && <p className="signin-err">{err}</p>}
                 <div className="sync-run">
                   <input
-                    className="yt-input"
+                    className="yt-input sync-name"
                     placeholder={`New ${LABEL[dest]} playlist name…`}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     disabled={!selected}
                   />
-                  <button className="hw-btn signin" onClick={findMatches} disabled={!selected}>
+                  <button className="sync-go" onClick={findMatches} disabled={!selected}>
                     Find matches →
                   </button>
                 </div>
@@ -413,7 +421,7 @@ export function SyncPanel({
               <span>
                 {includedCount} of {rows.length} will transfer — fix or skip any below.
               </span>
-              <button className="hw-btn signin" onClick={commit} disabled={includedCount === 0}>
+              <button className="sync-go" onClick={commit} disabled={includedCount === 0}>
                 Transfer {includedCount} →
               </button>
             </div>

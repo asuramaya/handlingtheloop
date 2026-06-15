@@ -66,6 +66,17 @@ export type ControlParam =
 export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";
 export type StemName = "drums" | "bass" | "vocals" | "other";
 
+// One channel-strip effect AFTER the EQ (delay/reverb/chorus…) — see src/htl/audio/Fx.ts.
+// The EQ is NOT here: it keeps its dedicated ControlParams above. Devices ride the wire
+// opaquely as {kind, bypassed, params}; a receiver reconstructs the kinds it knows and
+// ignores the rest (forward-compatible). `kind` is a string (not a closed union) on the
+// wire so a newer client's effect doesn't break an older one — it just stores the slot.
+export interface FxSlot {
+  kind: string; // "delay" | "reverb" | "chorus" … (matches FxKind in the audio engine)
+  bypassed: boolean;
+  params: Record<string, number>;
+}
+
 // A track carried whole inside a queue-mutation intent, so the queue authority (the
 // host running the auto-mixer) can enqueue a remote's pick with full metadata
 // (thumbnail/bpm/key) and re-broadcast it 1:1 in the automix stream. Structurally a
@@ -102,6 +113,12 @@ export type Intent =
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
   | { kind: "loop"; deck: DeckId; action: "in" | "out" | "exit" | "reloop" | "beat"; beats?: number }
   | { kind: "hotcue"; deck: DeckId; slot: number; action: "press" | "save" | "clear" }
+  // Channel-strip effects (post-EQ). `slot` indexes the EFFECT list (0 = first effect
+  // after the EQ), NOT the full rack. fxParam/fxBypass are the high-frequency live moves;
+  // fxRack carries the whole effect list (add/remove/reorder + late-joiner catch-up).
+  | { kind: "fxParam"; deck: DeckId; slot: number; param: string; value: number }
+  | { kind: "fxBypass"; deck: DeckId; slot: number; value: boolean }
+  | { kind: "fxRack"; deck: DeckId; rack: FxSlot[] }
   | { kind: "automix"; action: "toggle" | "skip" | "mixnow" | "hold" } // remote drives the auto-DJ
   // Queue is first-class, host-authoritative room state: a remote mutates it by intent,
   // the host (queue authority) applies it to its single canonical queue, and the automix

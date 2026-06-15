@@ -183,7 +183,11 @@ export function LibraryPanel({
     </div>
   );
   const [syncOpen, setSyncOpen] = useState(persistedView?.sync === true);
-  // Picking any library view (Collection / Community / a playlist) exits the Sync
+  // Import (the setup wizard) is an embedded tab too — it takes over the content area like
+  // Sync, not a floating modal. Not persisted: a wizard flow should start fresh, not
+  // auto-reopen on reload.
+  const [importOpen, setImportOpen] = useState(false);
+  // Picking any library view (Collection / Community / a playlist) exits the Sync/Import
   // subsection — they share the main content area. SKIP the mount run, or it would wipe
   // the Search/Sync tab we just restored from localStorage.
   const viewMounted = useRef(false);
@@ -194,6 +198,7 @@ export function LibraryPanel({
     }
     setSyncOpen(false);
     setSearchView(false);
+    setImportOpen(false);
   }, [view]);
   // Remember the open tab across reloads (view + which overlay, if any).
   useEffect(() => {
@@ -216,6 +221,7 @@ export function LibraryPanel({
     if (auto?.queueOpen) auto.onToggleQueue();
     setSearchView(false);
     setSyncOpen(false);
+    setImportOpen(false);
   };
 
   // htl account (server session) — its Google connection is what reaches the
@@ -226,15 +232,16 @@ export function LibraryPanel({
   const tidalConnected = !!me?.connections.includes("tidal");
 
   // Setup/import wizard: auto-launch once on first sign-in with an empty library;
-  // also openable any time from the sidebar.
-  const [wizardOpen, setWizardOpen] = useState(false);
+  // also openable any time from the sidebar. It's an embedded tab now (in .lib-main),
+  // so auto-launch opens the library dock and switches to the Import view.
   useEffect(() => {
     // Desktop only — a full-screen wizard auto-popping on a phone reads as a freeze.
     if (me?.user && !isMobileDevice() && library.playlists.length === 0 && !localStorage.getItem("htl:wizardSeen")) {
       localStorage.setItem("htl:wizardSeen", "1");
-      setWizardOpen(true);
+      onOpenChange(true);
+      setImportOpen(true);
     }
-  }, [me?.user, library.playlists.length]);
+  }, [me?.user, library.playlists.length, onOpenChange]);
 
   // Provider playlist LISTS via the smart cache: shown instantly from the last
   // result, only refetched when stale (5 min) or when ⟳ forces it — no redundant
@@ -732,9 +739,8 @@ export function LibraryPanel({
                   </button>
                 </div>
               )}
-              <button className="mini x" onClick={() => onOpenChange(false)} aria-label="Close">
-                ✕
-              </button>
+              {/* No ✕: the Library is a dock you close with its chin button (this matches
+                  Settings/Profile/Session + the embedded tabs — exit by opening another). */}
             </div>
             <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
@@ -750,6 +756,7 @@ export function LibraryPanel({
               if (!auto.queueOpen) {
                 setSearchView(false);
                 setSyncOpen(false);
+                setImportOpen(false);
               }
               auto.onToggleQueue();
             }}
@@ -772,7 +779,7 @@ export function LibraryPanel({
           <span className="lib-nav-ico">🔍</span> Search
         </button>
         <button
-          className={`lib-nav ${view === "collection" && !searchView && !auto?.queueOpen ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
+          className={`lib-nav ${view === "collection" && !searchView && !syncOpen && !importOpen && !auto?.queueOpen ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
           onClick={() => {
             closeQueue();
             setView("collection");
@@ -790,7 +797,7 @@ export function LibraryPanel({
           <span className="lib-count">{library.collection.length}</span>
         </button>
         <button
-          className={`lib-nav ${view === "community" && !auto?.queueOpen ? "active" : ""}`}
+          className={`lib-nav ${view === "community" && !searchView && !syncOpen && !importOpen && !auto?.queueOpen ? "active" : ""}`}
           onClick={() => {
             closeQueue();
             setView("community");
@@ -813,11 +820,12 @@ export function LibraryPanel({
           </button>
         )}
         <button
-          className="lib-nav"
+          className={`lib-nav ${importOpen ? "active" : ""}`}
           onClick={() => {
             closeQueue();
-            setWizardOpen(true);
+            setImportOpen(true);
           }}
+          aria-pressed={importOpen}
           title="Connect a service and import playlists"
         >
           <span className="lib-nav-ico">⤓</span> Import
@@ -981,6 +989,18 @@ export function LibraryPanel({
           // Sync is a SUBSECTION of the library — it takes over this content area
           // (embedded, no separate modal) so the top chin stays clean.
           <SyncPanel embedded me={me} library={library} onClose={() => setSyncOpen(false)} />
+        ) : importOpen ? (
+          // Import (the setup wizard) is embedded in the content area too — same as Sync,
+          // not a floating modal — so it reads as a library tab, not a takeover popup.
+          <SetupWizard
+            embedded
+            me={me}
+            library={library}
+            ytPlaylists={mine}
+            spotifyPlaylists={spotMine}
+            tidalPlaylists={tidalMine}
+            onClose={() => setImportOpen(false)}
+          />
         ) : (
         <>
         {view === "collection" && (
@@ -1043,17 +1063,6 @@ export function LibraryPanel({
           </div>
           </div>
         </div>
-      )}
-
-      {wizardOpen && (
-        <SetupWizard
-          me={me}
-          library={library}
-          ytPlaylists={mine}
-          spotifyPlaylists={spotMine}
-          tidalPlaylists={tidalMine}
-          onClose={() => setWizardOpen(false)}
-        />
       )}
 
       {plMenu && (

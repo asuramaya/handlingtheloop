@@ -1096,6 +1096,36 @@ export function App() {
             const otherId: DeckId = id === "A" ? "B" : "A";
             const otherSec = engine.deck(otherId).hasStems ? engine.deck(otherId).duration : 0;
             if (mix.duration + otherSec > MOBILE_MAX_COMBINED_STEM_SECONDS) return { kind: "over" as const };
+            // SHARED NEURAL CACHE FIRST (the "phone guest hears DSP not the host's demucs" fix).
+            // If anyone — the host, a past listener — already separated this track and shared it to
+            // R2, DOWNLOAD that set instead of deriving the coarse on-device DSP split. A downloaded
+            // set is the SAME int16 footprint (setStems packs it + frees the float32, like the DSP
+            // path) but it MATCHES what the host hears, so a phone following a demucs desktop now
+            // hears demucs. Best-quality-first probe, same order as desktop auto-promote. Gated to
+            // SHORT tracks: the full float32 decode transient is only safe under the windowed
+            // threshold (the download path has no windowed equivalent), so long tracks stay on the
+            // local windowed DSP below. Budget already reserved above, so a download counts the same.
+            if (mix.duration <= DSP_WINDOW_THRESHOLD_SEC) {
+              for (const mid of PROMOTE_ORDER) {
+                const man = await fetchStemManifest(videoId, mid).catch(() => null);
+                if (stale?.()) return { kind: "stale" as const };
+                if (!man?.complete) continue;
+                const m = getStemModel(mid);
+                const src = stemSrcLabel(mid);
+                setStatusFor(id, { phase: "downloading", src, detail: `Host's ${m.label} stems — downloading…` });
+                try {
+                  // manifest is complete → loadStems takes the R2 download branch (no separation).
+                  const stems = await loadStems(engine.ctx, videoId, mix, m, (pct) => {
+                    const p = Math.round(pct * 100);
+                    setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Downloading ${m.label} stems… ${p}%` });
+                  });
+                  return { kind: "neural" as const, stems, mid };
+                } catch {
+                  break; // download failed → fall through to the local DSP split
+                }
+              }
+              if (stale?.()) return { kind: "stale" as const };
+            }
             // LONG track → WINDOWED int16 (bounds the float32 build transient so it doesn't OOM;
             // the proven full-track dspStems peaks ~138 MB/min and tops out ~6 min). Short tracks
             // keep the proven path, so the new windowed code can only HELP long tracks (mix-only
@@ -1107,7 +1137,7 @@ export function App() {
           });
           mobileDeriveChain = run.catch(() => undefined);
           const res = await run;
-          if (stale?.()) return;
+          if (stale?.() || res?.kind === "stale") return;
           if (!res || res.kind === "over") {
             // Over the COMBINED budget (the other deck's stem'd track already spent it) → mix-only.
             engine.deck(id).setStems(null);
@@ -1119,16 +1149,28 @@ export function App() {
             setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
             return;
           }
-          if (res.kind === "packed") engine.deck(id).loadPackedStems(res.packed, false); // int16, no float32 held
-          else engine.deck(id).setStems(res.dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
-          stemLoadedKey.current[id] = guardKey;
+          if (res.kind === "neural") {
+            engine.deck(id).setStems(res.stems, true); // neural → per-stem lanes; mobile packs int16 + frees float32
+            stemLoadedKey.current[id] = `${videoId}:${res.mid}`; // downloaded set → don't re-separate it
+          } else if (res.kind === "packed") {
+            engine.deck(id).loadPackedStems(res.packed, false); // int16, no float32 held
+            stemLoadedKey.current[id] = guardKey;
+          } else {
+            engine.deck(id).setStems(res.dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
+            stemLoadedKey.current[id] = guardKey;
+          }
           // The worklet now holds the int16 stems = the audio source. Release the ~92 MB float32
           // mix from BOTH holders (the deck's ref + the shared trackCache) so it actually GCs —
           // the dominant steady-state cost of following a 2-deck stem session on a phone.
           engine.deck(id).releaseMixBuffer();
           dropCachedBuffer(videoId);
           refresh();
-          setStatusFor(id, { phase: "ready", detail: "On-device stems (DSP)." });
+          setStatusFor(
+            id,
+            res.kind === "neural"
+              ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems (downloaded).` }
+              : { phase: "ready", detail: "On-device stems (DSP)." },
+          );
         } catch (e) {
           console.warn("[htl] on-device DSP stems failed:", e);
           engine.deck(id).setStems(null);

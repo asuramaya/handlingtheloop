@@ -258,6 +258,28 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
   let ytPromise: ReturnType<InnertubeLike["create"]> | null = null;
   const client = () => (ytPromise ??= Innertube.create({ retrieve_player: false }));
 
+  // YouTube's anti-bot intermittently 403s the anonymous WEB innertube endpoints (search,
+  // watch-next) when our request egresses from a flagged Cloudflare datacenter IP / a
+  // flagged client session. It's flaky (~1 in 12), and the cached singleton keeps a
+  // poisoned session around, so: on failure drop the singleton and retry with a BRAND-NEW
+  // client — fresh visitorData and often a different egress path — which clears it almost
+  // every time. Only for the anonymous path; cookie-authed calls build a fresh client each
+  // request and are rarely blocked.
+  async function withRetry<T>(run: (yt: InnertubeInstance) => Promise<T>): Promise<T> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const yt = (await (attempt === 0 ? client() : Innertube.create({ retrieve_player: false }))) as InnertubeInstance;
+        return await run(yt);
+      } catch (e) {
+        lastErr = e;
+        ytPromise = null; // discard the flagged session; next call rebuilds fresh
+        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   // A fresh, cookie-authenticated client per request. youtubei.js authenticates
   // the WEB client with the cookie's SAPISIDHASH, so browse/getPlaylists work and
   // parse cleanly. (OAuth tokens go through the Data API instead — see ytdata.ts.)
@@ -281,8 +303,7 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
 
   return {
     async searchYouTube(query, limit = 25) {
-      const yt = await client();
-      const res = await yt.search(query, { type: "video" });
+      const res = await withRetry((yt) => yt.search(query, { type: "video" }));
       const out: TrackMeta[] = [];
       for (const r of res.results ?? []) {
         if ((r as { type?: string }).type !== "Video") continue;
@@ -331,13 +352,16 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       return out;
     },
     async getWatchNext(videoId, auth) {
-      // Cookie personalizes the feed (recently-played aware); otherwise anonymous.
-      const yt = auth?.cookie ? await cookieClient(auth.cookie) : await client();
-      if (!yt.actions?.execute) throw new Error("watch-next unavailable in this youtubei build");
+      // Cookie personalizes the feed (recently-played aware); otherwise anonymous (and
+      // retried through fresh clients, since the anon path catches the same 403 flakiness).
+      const exec = async (yt: InnertubeInstance): Promise<unknown> => {
+        if (!yt.actions?.execute) throw new Error("watch-next unavailable in this youtubei build");
+        const res = await yt.actions.execute("/next", { videoId, parse: false });
+        return res?.data ?? res;
+      };
       let data: unknown;
       try {
-        const res = await yt.actions.execute("/next", { videoId, parse: false });
-        data = res?.data ?? res;
+        data = auth?.cookie ? await exec(await cookieClient(auth.cookie)) : await withRetry(exec);
       } catch (e) {
         throw new Error(`watch-next failed: ${(e as Error).message}`);
       }

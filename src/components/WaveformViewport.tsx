@@ -752,7 +752,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
 
     ctx.fillStyle = bgRef.current;
     ctx.fillRect(0, 0, w, h);
-    if (!p.pyramid || !deck.buffer) return;
+    // Render from the LOD pyramid (mix) or the stem pyramids — NOT the raw float32 buffer.
+    // On mobile the buffer is RELEASED once stems pack into the worklet (releaseMixBuffer,
+    // the OOM fix), so gating draw on `deck.buffer` blanked the whole deck — waveform AND
+    // playhead — the instant stems loaded. The pyramids carry the visuals; the raw-PCM
+    // deep-zoom overlay is separately, null-safely guarded below.
+    if (!p.pyramid && !deck.stemPyramids) return;
 
     const pos = deck.visualPosition();
     const r = Math.max(deck.rate, 0.01);

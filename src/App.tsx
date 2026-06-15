@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
+import { SamplerStrip } from "./components/SamplerStrip";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -1190,11 +1191,15 @@ export function App() {
           engine.deck(id).releaseMixBuffer();
           dropCachedBuffer(videoId);
           refresh();
+          // DIAGNOSTIC: report how many stem-lane pyramids actually got built, so a
+          // "ready but no lanes" splits build-failure (0) from a render bug (4). Remove
+          // once the mobile no-stem-visuals issue is pinned.
+          const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
           setStatusFor(
             id,
             res.kind === "neural"
-              ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems (downloaded).` }
-              : { phase: "ready", detail: "On-device stems (DSP)." },
+              ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` }
+              : { phase: "ready", detail: `On-device stems (DSP) · ${lanes} lanes` },
           );
         } catch (e) {
           // SURFACE the failure (it used to clear silently → "no stems, no reason"). Also
@@ -3515,6 +3520,7 @@ export function App() {
             crossfade={crossfade}
             onCrossfade={applyCrossfade}
           />
+          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} />
           <div className="decks-row">
           <DeckControls
             id="A"

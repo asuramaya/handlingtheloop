@@ -388,13 +388,17 @@ export function TrackTable({
             {searching ? "…" : "Search"}
           </button>
         )}
-        <span className="tt-rows-label">Rows</span>
-        <button className="tt-step" title="Smaller rows" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
-          −
-        </button>
-        <button className="tt-step" title="Larger rows" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
-          ＋
-        </button>
+        {/* Rows-size stepper as ONE right-pinned unit — keeping − and ＋ together (they were
+            loose toolbar children, so space-between flung them to opposite ends). */}
+        <div className="tt-rows">
+          <span className="tt-rows-label">Rows</span>
+          <button className="tt-step" title="Smaller rows" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
+            −
+          </button>
+          <button className="tt-step" title="Larger rows" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
+            ＋
+          </button>
+        </div>
       </div>
 
       {topSlot}

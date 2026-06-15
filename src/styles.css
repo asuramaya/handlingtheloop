@@ -654,7 +654,7 @@ body {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  --tt-toolbar-h: 30px; /* toolbar height === header's sticky offset (no seam) */
+  --tt-toolbar-h: 36px; /* toolbar height === header's sticky offset (no seam) */
   /* Drop table columns based on the TABLE area's real width (not the sidebar-
      inclusive library width) — so a wide dock with a wide sidebar still trims the
      table when it's actually cramped. See the @container query below. */
@@ -832,30 +832,41 @@ body {
   top: 0;
   z-index: 3;
   box-sizing: border-box;
-  height: var(--tt-toolbar-h, 30px);
+  height: var(--tt-toolbar-h, 36px);
   display: flex;
   align-items: center;
-  justify-content: space-between; /* filter on the left, row-size stepper on the right */
   gap: 8px;
-  padding: 2px 8px;
+  padding: 0 10px; /* left edge aligns with the subheader title above */
   background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
-/* In-library filter: a substring search over the CURRENT view (title / artist). */
+/* Row-size stepper: one tight unit pinned to the right (the filter flex-fills the rest). */
+.tt-rows {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* In-library filter: a substring search over the CURRENT view (title / artist). Spans the
+   toolbar's free width (the row-size stepper holds the right) so it reads as a real search
+   bar, not a cramped chip. */
 .tt-filter {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 300px;
+  height: 26px;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0 8px;
+  border-radius: 7px;
+  padding: 0 9px;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 .tt-filter:focus-within {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .tt-filter-ico {
   font-size: 11px;
@@ -865,11 +876,12 @@ body {
 .tt-filter-input {
   flex: 1;
   min-width: 0;
+  height: 100%;
   background: transparent;
   border: none;
   color: var(--text);
-  font-size: 12px;
-  padding: 5px 0;
+  font-size: 13px;
+  padding: 0;
 }
 .tt-filter-input:focus {
   outline: none;
@@ -1007,10 +1019,20 @@ body {
 /* Optional trailing column (the Queue's per-pair transition badge). Fixed width so it
    doesn't eat the auto Title column; right-aligned to sit against the row edge. */
 .col-extra {
-  width: 94px;
+  width: 84px;
 }
 td.col-extra {
   text-align: right;
+  overflow: hidden; /* a long badge must clip to the cell, never spill past the table's right edge */
+}
+/* The transition badge must stay INSIDE its fixed cell — otherwise the nowrap text spills
+   past the table's right edge, which (in the overflow:auto .lib-main) opened a phantom
+   horizontal scrollbar that also dragged the footer's Hold button out of view. */
+td.col-extra .mixq-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 /* Search button living in the shared toolbar (Search context only). */
 .tt-search-btn {
@@ -4383,11 +4405,14 @@ body.no-glow .hw-btn.shift.on {
   justify-content: flex-end;
   margin-bottom: 0;
 }
-/* Library header shows the current view's name + source, with the close button right. */
+/* Library header shows the current view's name + source, with the AUTO/close button right.
+   Horizontal padding (10px) + the toggle's own 6px inset line the title up with the search
+   bar's left edge in the toolbar below, so the header → toolbar → table read as one stack. */
 .lib-panel .settings-head {
   justify-content: space-between;
   margin-bottom: 0;
-  padding: 12px 12px 10px;
+  padding: 10px 10px 9px;
+  gap: 8px;
 }
 /* No explicit ✕ on the library — the chin Library button toggles it open/closed on
    every platform (it was only hidden on desktop before, leaving a redundant ✕ on the
@@ -4446,7 +4471,8 @@ body.no-glow .hw-btn.shift.on {
   align-items: center; /* caret + title + "from" share a centre line */
   background: none;
   border: none;
-  padding: 4px 8px 4px 4px;
+  padding: 4px 8px 4px 6px;
+  margin-left: -6px; /* pull the caret to the band's edge so the title aligns with the toolbar */
   border-radius: 6px;
   cursor: pointer;
   text-align: left;
@@ -7708,6 +7734,7 @@ button.room-tog:hover {
 .mixq-title { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mixq-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mixq-badge {
+  display: inline-block;
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -7732,7 +7759,19 @@ button.room-tog:hover {
 }
 .mixq-item-actions button:disabled { opacity: 0.3; cursor: default; }
 .mixq-empty { padding: 16px 10px; text-align: center; color: var(--muted); font-size: 12px; }
-.mixq-controls { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); }
+/* Transport pinned to the bottom of the scrolling content (embedded in .lib-main, or the
+   floating dialog) so Mix-now/Skip/Hold are always reachable — they used to scroll off the
+   end of a long queue. Opaque background so rows don't bleed through the sticky bar. */
+.mixq-controls {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  z-index: 2;
+}
 .mixq-controls button {
   flex: 1;
   padding: 7px;

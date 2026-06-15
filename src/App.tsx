@@ -357,9 +357,21 @@ export function App() {
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [socialOpen, setSocialOpen] = useState(false);
+  // Which right-dock panel was open last reload — restored DESKTOP-ONLY (like libOpen
+  // below; on a phone the docks are full-screen modals that always start closed). The
+  // three share one slot, so one string captures it.
+  const initRightDock = window.innerWidth >= 769 ? localStorage.getItem("htl:rightDock") : null;
+  const [settingsOpen, setSettingsOpen] = useState(initRightDock === "settings");
+  const [profileOpen, setProfileOpen] = useState(initRightDock === "profile");
+  const [socialOpen, setSocialOpen] = useState(initRightDock === "social");
+  useEffect(() => {
+    const v = settingsOpen ? "settings" : profileOpen ? "profile" : socialOpen ? "social" : "";
+    try {
+      localStorage.setItem("htl:rightDock", v);
+    } catch {
+      /* ignore */
+    }
+  }, [settingsOpen, profileOpen, socialOpen]);
   const [me, setMe] = useState<Me | null>(null);
   const [kickedNotice, setKickedNotice] = useState<string | null>(null);
   // Read in loadTrackToDeck (defined above the room hook) to gate play-logging on sign-in.
@@ -2919,7 +2931,15 @@ export function App() {
     }
   }, [room.isAnchor, remoteAutomix, mixQueue]);
 
-  const [mixqOpen, setMixqOpen] = useState(false);
+  // Queue is one of the library tabs — remember whether it was the open one across reloads.
+  const [mixqOpen, setMixqOpen] = useState(() => localStorage.getItem("htl:mixqOpen") === "1");
+  useEffect(() => {
+    try {
+      localStorage.setItem("htl:mixqOpen", mixqOpen ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [mixqOpen]);
   // Auto-mix controls: drive the local mixer (host/solo) or send an intent (remote).
   const autoControl = useCallback(
     (action: "toggle" | "skip" | "mixnow" | "hold") => {

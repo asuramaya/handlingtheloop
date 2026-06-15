@@ -132,10 +132,12 @@ export function pickTransition(a: TrackMeta, b: TrackMeta): TransitionPlan {
 /** Short human label for a transition badge in the queue UI. Only claims "Harmonic"
  *  when the key relationship is actually known and compatible. */
 export function transitionLabel(p: TransitionPlan): string {
-  if (p.style === "stemswap") return `Stem swap · ${p.bars}`;
-  if (p.style === "cut") return "Quick cut";
-  if (p.style === "filter") return `Filter · ${p.bars} bar${p.confident ? "" : "?"}`;
-  return `${p.keyKnown && p.keyMatch ? "Harmonic" : "Blend"} · ${p.bars} bar`;
+  // Compact: these sit in a narrow fixed-width "Mix" column, so no "· N bar" tail
+  // (it spilled the cell). The full mixability % rides the badge's title tooltip.
+  if (p.style === "stemswap") return `Stems ${p.bars}`;
+  if (p.style === "cut") return "Cut";
+  if (p.style === "filter") return `Filter ${p.bars}${p.confident ? "" : "?"}`;
+  return `${p.keyKnown && p.keyMatch ? "Harmonic" : "Blend"} ${p.bars}`;
 }
 
 /** Rank candidate tracks by how well each mixes after `seed` (best first). Stable

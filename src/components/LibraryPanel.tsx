@@ -108,10 +108,30 @@ export function LibraryPanel({
   onOpenChange = () => {},
   auto,
 }: LibraryPanelProps) {
-  const [view, setView] = useState<View>("collection");
+  // The open library tab (Collection / Community / a playlist / Search / Sync) is
+  // remembered across reloads. One JSON blob holds all three so the right tab reopens.
+  // A persisted playlist that no longer exists falls back to Collection.
+  const persistedView = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("htl:libView") || "null") as
+        | { view?: unknown; search?: boolean; sync?: boolean }
+        | null;
+    } catch {
+      return null;
+    }
+  }, []);
+  const [view, setView] = useState<View>(() => {
+    const v = persistedView?.view;
+    if (v === "community") return "community";
+    if (v && typeof v === "object" && typeof (v as { playlistId?: unknown }).playlistId === "string") {
+      const id = (v as { playlistId: string }).playlistId;
+      if (library.playlists.some((p) => p.id === id)) return { playlistId: id };
+    }
+    return "collection";
+  });
   // Search is baked into the library now (no separate dock): selecting it shows the
   // Explorer (its own search bar + results) in the main content area, like Sync.
-  const [searchView, setSearchView] = useState(false);
+  const [searchView, setSearchView] = useState(persistedView?.search === true);
   // Sidebar (nav) collapse — toggled by the ☰ hamburger. Persisted; defaults open on
   // desktop and collapsed on a phone so the track table fills the full-screen panel.
   const [navOpen, setNavOpen] = useState(() => {
@@ -162,21 +182,40 @@ export function LibraryPanel({
       {action}
     </div>
   );
-  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(persistedView?.sync === true);
   // Picking any library view (Collection / Community / a playlist) exits the Sync
-  // subsection — they share the main content area.
+  // subsection — they share the main content area. SKIP the mount run, or it would wipe
+  // the Search/Sync tab we just restored from localStorage.
+  const viewMounted = useRef(false);
   useEffect(() => {
+    if (!viewMounted.current) {
+      viewMounted.current = true;
+      return;
+    }
     setSyncOpen(false);
     setSearchView(false);
   }, [view]);
+  // Remember the open tab across reloads (view + which overlay, if any).
+  useEffect(() => {
+    try {
+      localStorage.setItem("htl:libView", JSON.stringify({ view, search: searchView, sync: syncOpen }));
+    } catch {
+      /* ignore */
+    }
+  }, [view, searchView, syncOpen]);
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
   // Selecting any library section (Collection / Community / a playlist…) returns to the
-  // song list by closing the auto-mix queue view — the queue is just another tab now, so
-  // there's no explicit "← Songs" button.
+  // song list by leaving every overlay view — the queue, Search, and Sync are all just
+  // tabs now (no explicit "← Songs" button). We clear searchView/syncOpen HERE rather than
+  // leaning on the [view] effect, because clicking the view you're already on (e.g.
+  // Collection while Search overlays it) is a no-op setView → the effect never fires →
+  // Search/Sync stay stuck. Callers that WANT search/sync set their flag true afterwards.
   const closeQueue = () => {
     if (auto?.queueOpen) auto.onToggleQueue();
+    setSearchView(false);
+    setSyncOpen(false);
   };
 
   // htl account (server session) — its Google connection is what reaches the

@@ -40,6 +40,12 @@ export interface Beatgrid {
   // the grid and phrase-jump. Absent on short/structureless tracks.
   phrases?: Float32Array;
   phraseBars?: number;
+  // Loudness-trimmed CONTENT bounds (seconds): where real energy starts after a quiet
+  // intro and ends before a fade/dead tail — derived from the broadband loudness envelope.
+  // The auto-mixer anchors mix-in/out to these so it never blends into silence or sits on a
+  // dead intro. Absent on short/structureless tracks (fall back to 0 / duration).
+  firstSound?: number;
+  lastSound?: number;
 }
 
 export interface KeyInfo {

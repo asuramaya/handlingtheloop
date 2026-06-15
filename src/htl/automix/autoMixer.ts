@@ -302,7 +302,10 @@ export class AutoMixer {
     // Nothing playing. A natural END continues autoplay; a PAUSE just holds.
     if (this.liveId) {
       const live = e.deck(this.liveId);
-      const ended = live.duration > 0 && live.position() >= live.duration - 1.5;
+      // "Ended" = past the MUSICAL end (lastSound), so a long dead tail doesn't make autoplay
+      // sit through seconds of silence before continuing. Falls back to the file duration.
+      const musicalEnd = live.beatgrid?.lastSound && live.beatgrid.lastSound > 0 ? live.beatgrid.lastSound : live.duration;
+      const ended = musicalEnd > 0 && live.position() >= musicalEnd - 1.5;
       if (ended && !this.preloading) {
         void this.advanceToNext(); // track finished → hard-load the next (no mix happened)
       }
@@ -487,7 +490,7 @@ export class AutoMixer {
       this.plan = pickTransition(deckDescriptor(live, this.deps.queue.getCurrent()), deckDescriptor(inc, next));
       this.barsSeconds = barsToSeconds(this.plan.bars, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
       this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
-      inc.seek(this.computeMixIn(inc));
+      inc.seek(this.computeMixIn(inc, this.barsSeconds));
       inc.setEqLow(EQ_KILL);
       const sign = this.liveId === "A" ? -1 : 1;
       this.deps.applyCrossfade(sign);
@@ -760,17 +763,23 @@ export class AutoMixer {
   private computeMixOut(deck: Deck, barsSeconds: number): number {
     const dur = deck.duration;
     if (!dur) return 0;
-    let t = dur - barsSeconds - END_GUARD;
-    if (t < dur * 0.4) t = Math.max(dur * 0.4, dur - barsSeconds - 1);
     const grid = deck.beatgrid;
+    // Measure the mix-out back from the MUSICAL end (before any fade / dead tail), not the
+    // file length — otherwise the blend rides out into the silent tail. Guard against a
+    // bogus bound on a quiet track (lastSound must be in the back half to be trusted).
+    const end = grid?.lastSound && grid.lastSound > dur * 0.5 ? grid.lastSound : dur;
+    let t = end - barsSeconds - END_GUARD;
+    if (t < dur * 0.4) t = Math.max(dur * 0.4, end - barsSeconds - 1);
     if (!grid) return t;
     const phrases = grid.phrases;
     if (phrases && phrases.length) {
+      // Ride out on the last outro phrase whose blend still completes by the musical end;
+      // among those, take the one nearest the target t.
       let best: number | null = null;
       let bestD = Infinity;
       for (let i = 0; i < phrases.length; i++) {
         const ph = phrases[i];
-        if (ph > dur - barsSeconds * 0.5) continue;
+        if (ph > end - barsSeconds * 0.5) continue;
         const d = Math.abs(ph - t);
         if (d < bestD) {
           bestD = d;
@@ -782,13 +791,29 @@ export class AutoMixer {
     return nearestBeat(grid, t);
   }
 
-  private computeMixIn(deck: Deck): number {
+  // Where to drop the needle on the INCOMING track. Anchored so its first body phrase (the
+  // "drop", just past the loudness-trimmed intro) lands at the END of the blend — the intro
+  // rides UNDER the outgoing's outro. Short intro → plays through from "1"; long intro → cut
+  // so only the last blend-length sits under; no real intro → start on the downbeat.
+  private computeMixIn(deck: Deck, barsSeconds: number): number {
     const grid = deck.beatgrid;
     if (!grid) return 0;
-    if (grid.beats && grid.beats.length && grid.downbeat != null) {
-      return grid.beats[grid.downbeat] ?? grid.firstBeat ?? 0;
+    const firstBeat = grid.firstBeat ?? 0;
+    const baseDown =
+      grid.beats && grid.beats.length && grid.downbeat != null ? grid.beats[grid.downbeat] ?? firstBeat : firstBeat;
+    const fs = grid.firstSound ?? 0;
+    // The drop = first phrase boundary at/after the content start (else the content start).
+    let drop = fs;
+    if (grid.phrases && grid.phrases.length) {
+      for (let i = 0; i < grid.phrases.length; i++) {
+        if (grid.phrases[i] >= fs - 0.1) {
+          drop = grid.phrases[i];
+          break;
+        }
+      }
     }
-    return grid.firstBeat ?? 0;
+    if (drop <= baseDown + 0.2) return baseDown; // negligible intro → start at "1"
+    return Math.max(baseDown, nearestBeat(grid, drop - barsSeconds));
   }
 
   private emit(force: boolean): void {

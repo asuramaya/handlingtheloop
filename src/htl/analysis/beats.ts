@@ -421,6 +421,7 @@ export function detectBeats(buffer: AudioLike): Beatgrid | null {
   const beatsPerBar = 4;
   const downbeat = detectDownbeat(onset.lowEnv, frameBeats, beatsPerBar);
   const phrase = detectPhrases(onset.loudEnv, frameBeats, beats, downbeat, beatsPerBar);
+  const bounds = contentBounds(onset.loudEnv, onset.envRate);
   return {
     bpm,
     firstBeat,
@@ -430,7 +431,32 @@ export function detectBeats(buffer: AudioLike): Beatgrid | null {
     beatsPerBar,
     phrases: phrase?.phrases,
     phraseBars: phrase?.phraseBars,
+    firstSound: bounds?.firstSound,
+    lastSound: bounds?.lastSound,
   };
+}
+
+/** Content bounds from the broadband loudness envelope: the first / last time the track
+ *  is meaningfully loud, trimming a quiet intro and a fade-out / dead tail. Threshold is a
+ *  fraction of a ROBUST peak (90th-percentile loudness, so one spike doesn't set the bar),
+ *  and we keep a small guard before/after the crossing so we don't clip a soft pickup note.
+ *  Null when the envelope is too short or essentially flat (no usable structure). */
+function contentBounds(loud: Float32Array, rate: number): { firstSound: number; lastSound: number } | null {
+  const n = loud.length;
+  if (n < 8 || rate <= 0) return null;
+  const sorted = Float32Array.from(loud).sort();
+  const p90 = sorted[Math.min(n - 1, Math.floor(n * 0.9))] || sorted[n - 1] || 0;
+  if (p90 <= 0) return null;
+  const thr = p90 * 0.12; // ~ -18 dB of the body loudness counts as "sound"
+  let lo = 0;
+  while (lo < n && loud[lo] < thr) lo++;
+  let hi = n - 1;
+  while (hi > lo && loud[hi] < thr) hi--;
+  if (hi <= lo) return null; // flat / all-quiet → no usable bounds
+  const guard = Math.round(rate * 0.25); // 0.25 s leeway so a soft onset/decay isn't clipped
+  const firstSound = Math.max(0, lo - guard) / rate;
+  const lastSound = Math.min(n - 1, hi + guard) / rate;
+  return { firstSound, lastSound };
 }
 
 /** Uniform-grid fallback (matches the old detector's phase search) when DP can't

@@ -514,11 +514,39 @@ async function fetchRange(url: string, start: number, end: number, attempts = 3)
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export async function* audioChunks(url: string, contentLength: number): AsyncGenerator<Uint8Array> {
-  // If contentLength is unknown, fall back to a single streamed GET.
+// Stream the resolved audio as range chunks. `reresolve` (optional) mints a FRESH
+// stream URL: `fetchRange` already retries a flaky chunk, but a googlevideo URL can go
+// wholesale-dead — the session gets flagged, or the URL expires partway through a long
+// track — and then every retry hits the same dead URL identically (the stuck-"fail"
+// mode). On a range that fails all its retries we re-resolve ONCE and resume the SAME
+// byte range from the new URL. We only resume when the fresh format matches the original
+// itag, since byte offsets wouldn't line up across a different format (we'd corrupt the
+// stream) — a format switch just surfaces the original error.
+export async function* audioChunks(
+  resolved: Pick<ResolvedAudio, "url" | "contentLength" | "itag">,
+  reresolve?: () => Promise<ResolvedAudio>,
+): AsyncGenerator<Uint8Array> {
+  let { url } = resolved;
+  const { contentLength, itag } = resolved;
+  let reresolved = false;
+  // One-shot re-resolve guard shared by both the single-GET and ranged paths.
+  const freshUrl = async (origErr: unknown): Promise<string> => {
+    if (!reresolve || reresolved) throw origErr;
+    reresolved = true;
+    const fresh = await reresolve();
+    if (fresh.itag !== itag) throw origErr; // format changed → byte offsets won't align
+    return (url = fresh.url);
+  };
+
+  // If contentLength is unknown, fall back to a single streamed GET (re-resolved once if
+  // the initial GET is rejected outright).
   if (!contentLength) {
-    const r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS));
-    if (!r.ok || !r.body) throw new Error(`audio ${r.status}`);
+    let r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS));
+    if (!r.ok || !r.body) {
+      const u = await freshUrl(new Error(`audio ${r.status}`));
+      r = await fetch(u, withTimeout(CHUNK_TIMEOUT_MS));
+      if (!r.ok || !r.body) throw new Error(`audio ${r.status}`);
+    }
     const reader = r.body.getReader();
     for (;;) {
       const { done, value } = await reader.read();
@@ -530,6 +558,10 @@ export async function* audioChunks(url: string, contentLength: number): AsyncGen
   const chunkSize = Math.max(MIN_CHUNK, Math.ceil(contentLength / MAX_CHUNKS));
   for (let start = 0; start < contentLength; start += chunkSize) {
     const end = Math.min(contentLength - 1, start + chunkSize - 1);
-    yield await fetchRange(url, start, end);
+    try {
+      yield await fetchRange(url, start, end);
+    } catch (e) {
+      yield await fetchRange(await freshUrl(e), start, end);
+    }
   }
 }

@@ -267,7 +267,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           const stream = new ReadableStream<Uint8Array>({
             async start(controller) {
               try {
-                for await (const chunk of audioChunks(r.url, r.contentLength)) controller.enqueue(chunk);
+                for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) controller.enqueue(chunk);
                 controller.close();
               } catch (e) {
                 controller.error(e);
@@ -283,7 +283,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // background (waitUntil) so it doesn't delay playback.
         const parts: Uint8Array[] = [];
         let total = 0;
-        for await (const chunk of audioChunks(r.url, r.contentLength)) {
+        for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) {
           parts.push(chunk);
           total += chunk.byteLength;
         }

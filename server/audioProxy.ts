@@ -32,7 +32,7 @@ export async function streamAudio(
   let aborted = false;
   req.on("close", () => (aborted = true));
   try {
-    for await (const chunk of audioChunks(resolved.url, resolved.contentLength)) {
+    for await (const chunk of audioChunks(resolved, () => resolveAudio(videoId, auth))) {
       if (aborted) break;
       bytes += chunk.byteLength;
       res.write(Buffer.from(chunk));

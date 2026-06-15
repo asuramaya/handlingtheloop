@@ -48,15 +48,45 @@ export async function fetchYouTubeAudio(
   onProgress?: (p: FetchProgress) => void,
   signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
+  // One transient (server 5xx / dropped-stream) retry so a single flaky resolve doesn't
+  // wedge the deck in a stuck "fail" state. The edge already retries the player resolve
+  // and re-resolves a dead stream URL mid-flight; on its FIRST success it caches the
+  // track to R2, so this retry almost always lands on the warm cache. A user abort or a
+  // 4xx (genuinely unplayable) is NOT retried.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await fetchYouTubeAudioOnce(videoId, onProgress, signal);
+    } catch (e) {
+      lastErr = e;
+      if (signal?.aborted || (e as { name?: string })?.name === "AbortError") throw e;
+      if (e instanceof TransientAudioError && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// A retryable failure (server 5xx or a stream that broke mid-transfer). A 4xx is a
+// genuine "not playable" and stays fatal.
+class TransientAudioError extends Error {}
+
+async function fetchYouTubeAudioOnce(
+  videoId: string,
+  onProgress?: (p: FetchProgress) => void,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
   const res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
     signal,
     headers: await ytStreamHeaders(),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(
-      `Audio fetch failed (${res.status})${detail ? `: ${detail}` : ""}`,
-    );
+    const msg = `Audio fetch failed (${res.status})${detail ? `: ${detail}` : ""}`;
+    throw res.status >= 500 ? new TransientAudioError(msg) : new Error(msg);
   }
   if (!res.body) return res.arrayBuffer();
 
@@ -64,12 +94,19 @@ export async function fetchYouTubeAudio(
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let receivedBytes = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    receivedBytes += value.byteLength;
-    onProgress?.({ receivedBytes, totalBytes });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      receivedBytes += value.byteLength;
+      onProgress?.({ receivedBytes, totalBytes });
+    }
+  } catch (e) {
+    // The stream broke mid-transfer (edge re-resolve exhausted, or a network blip) — a
+    // retry of the whole fetch will pick up the now-cached track.
+    if (signal?.aborted || (e as { name?: string })?.name === "AbortError") throw e;
+    throw new TransientAudioError(`Audio stream interrupted: ${(e as Error).message}`);
   }
   const out = new Uint8Array(receivedBytes);
   let offset = 0;

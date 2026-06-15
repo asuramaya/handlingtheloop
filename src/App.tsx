@@ -1197,9 +1197,14 @@ export function App() {
               : { phase: "ready", detail: "On-device stems (DSP)." },
           );
         } catch (e) {
+          // SURFACE the failure (it used to clear silently → "no stems, no reason"). Also
+          // un-latch the derive guard so a re-tap of STEMS / a reload can retry instead of
+          // being stuck mix-only forever on one transient on-device DSP error.
           console.warn("[htl] on-device DSP stems failed:", e);
           engine.deck(id).setStems(null);
-          setStatusFor(id, null);
+          deriveGuard.current[id] = "";
+          setStatusFor(id, { phase: "unavailable", detail: `On-device stems failed (${(e as Error)?.message ?? "error"}) — playing the mix.` });
+          setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
         }
         return;
       }

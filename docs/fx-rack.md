@@ -58,6 +58,16 @@ HP/LP → `FREQ`·`RES`; LOW/MID/HIGH → `FREQ`·`GAIN`·`Q` plus a **SHAPE** *
   the rest of the band params — see Session sync below), so they persist + sync 1:1.
 - Deferred: **SLOPE** for the HP/LP cuts (12/24/48 dB-oct) — the one secondary param that needs
   cascaded biquads + curve-math changes, not just a `type` swap.
+- **Colour:** the band cells (FREQ/GAIN/Q) carry the **deck** accent; only the band **select
+  chip** (the `MID`/`LOW`/… label) carries the node's hue. The subrow sets `--band` (not
+  `--accent`) so the buttonoids read as the deck and the select indicator reads as the band.
+- **Sizing gotcha:** the subrow cells sit at the `.eq-subrow` height (≈38px), the deck's
+  foot-row `ValueCell`s at 50px. Because `FxStrip` is wrapped in `.eq-row`, the deck rule
+  `.eq-row .vcell{height:50px}` *leaks* onto these (and onto the delay's `.fx-knobs .vcell`)
+  via the descendant combinator — they overflow their row. Guard with the device's own
+  selector at higher specificity: `.eq-row .eq-subrow .vcell` / `.eq-row .fx-knobs .vcell`
+  `{height:100%}` (0,3,0 beats 0,2,0). Touch any per-band cell height through those, not the
+  shared rule.
 
 ### Delay (`DelayFx.ts` + `DelayPanel.tsx` + `DelayViz.tsx`)
 

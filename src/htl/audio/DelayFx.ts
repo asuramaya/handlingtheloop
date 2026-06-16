@@ -60,9 +60,13 @@ export class DelayFx extends BaseFxDevice {
   // Tier 3 — ducking: a pure-Web-Audio sidechain. The DRY input's envelope (rectify →
   // smooth → boost → clamp) is subtracted from a series gain on the wet, so loud input
   // pushes the echoes down and they bloom back in the gaps. No worklet, no main thread.
+  private readonly rect: WaveShaperNode; // envelope rectifier (follower head — lazily wired)
   private readonly duckEnv: GainNode; // boosted envelope tap point
   private readonly duckScale: GainNode; // × −amount → seriesDuck.gain
   private readonly seriesDuck: GainNode; // intrinsic 1; envelope subtracts (stays ≥ 0)
+  private _duckWired = false; // follower in-circuit only while duck > 0
+  private _duckGen = 0; // cancels a pending follower-unwire
+  private _duckAmt = 0; // user's duck setting
 
   // metadata / state the panel reads back
   private _sync = 1; // 1 = beat-locked, 0 = free ms
@@ -136,9 +140,12 @@ export class DelayFx extends BaseFxDevice {
     this.shaperR.connect(this.merge, 0, 1);
     this.shaperL.connect(this.fbL);
     this.shaperR.connect(this.fbR);
-    // ducking sidechain: dry input envelope → −amount → seriesDuck.gain (intrinsic 1).
-    const rect = ctx.createWaveShaper();
-    rect.curve = makeRectifyCurve(); // |x|
+    // ducking sidechain: dry input envelope → −amount → seriesDuck.gain (intrinsic 1). The
+    // follower's HEAD (input→rect) and TAIL (duckScale→seriesDuck.gain) are wired lazily by
+    // setDuck — at duck 0 it's severed at both ends so the engine prunes the whole follower
+    // (the per-feature counterpart to the rack's activation gate; reverb's duck copies this).
+    this.rect = ctx.createWaveShaper();
+    this.rect.curve = makeRectifyCurve(); // |x|
     const smooth = ctx.createBiquadFilter();
     smooth.type = "lowpass";
     smooth.frequency.value = 12; // envelope smoothing
@@ -150,13 +157,12 @@ export class DelayFx extends BaseFxDevice {
     this.duckScale.gain.value = 0; // −duck amount
     this.seriesDuck = ctx.createGain();
     this.seriesDuck.gain.value = 1;
-    this.input.connect(rect);
-    rect.connect(smooth);
+    this.rect.connect(smooth);
     smooth.connect(this.duckEnv);
     this.duckEnv.connect(clampShaper);
     clampShaper.connect(this.duckScale);
-    this.duckScale.connect(this.seriesDuck.gain); // gain = 1 + (−env·amount) ∈ [1−amount, 1]
-    // wet sum routes THROUGH the duck gain on the way out
+    // wet sum routes THROUGH the duck gain on the way out (seriesDuck stays in the path; only
+    // the follower feeding its gain is lazy). gain = 1 + (−env·amount) ∈ [1−amount, 1].
     this.merge.connect(this.seriesDuck);
     this.seriesDuck.connect(this.wet);
     // modulation: one LFO swings both delay times (added to the base time → vibrato).
@@ -185,7 +191,7 @@ export class DelayFx extends BaseFxDevice {
       { id: "modDepth", def: 0, get: () => this.modL.gain.value, set: (v) => this.setMod(clamp(v, 0, 0.012), undefined) },
       { id: "modRate", def: 0.5, get: () => this.lfo.frequency.value, set: (v) => this.setMod(undefined, clamp(v, 0.02, 8)) },
       // Tier 3 — ducking (repeats duck under the dry input)
-      { id: "duck", def: 0, get: () => -this.duckScale.gain.value, set: (v) => this.duckScale.gain.setTargetAtTime(-clamp(v, 0, 1), this.ctx.currentTime, 0.02) },
+      { id: "duck", def: 0, get: () => this._duckAmt, set: (v) => this.setDuck(clamp(v, 0, 1)) },
       { id: "spread", def: 0, get: () => this._spread, set: (v) => this.setSpread(clamp(v, 0, 1)) },
     );
   }
@@ -263,6 +269,41 @@ export class DelayFx extends BaseFxDevice {
       this.modR.gain.setTargetAtTime(depth, now, 0.02);
     }
     if (rate != null) this.lfo.frequency.setTargetAtTime(rate, now, 0.02);
+  }
+
+  // --- ducking: the dry-input envelope pushes the repeats down. Lazily wired — the
+  // follower (rectify → smooth → makeup → clamp → −amount) only exists in the graph while
+  // duck > 0, so an un-ducked delay pays nothing for it. Severing BOTH ends lets the audio
+  // thread prune the chain (its tail feeds an active node's gain param, so a head-only cut
+  // wouldn't be enough). ---
+  private setDuck(amt: number) {
+    this._duckAmt = amt;
+    const now = this.ctx.currentTime;
+    if (amt > 0 && !this._duckWired) {
+      this._duckGen++; // cancel any pending unwire
+      this.input.connect(this.rect); // follower head
+      this.duckScale.connect(this.seriesDuck.gain); // follower tail (subtracts from unity)
+      this._duckWired = true;
+    }
+    this.duckScale.gain.setTargetAtTime(-amt, now, 0.02);
+    if (amt <= 0 && this._duckWired) {
+      const gen = ++this._duckGen;
+      // let the envelope settle (seriesDuck.gain back to ~1) before pruning the follower.
+      setTimeout(() => {
+        if (gen !== this._duckGen || !this._duckWired) return;
+        try {
+          this.input.disconnect(this.rect);
+        } catch {
+          /* already gone */
+        }
+        try {
+          this.duckScale.disconnect(this.seriesDuck.gain);
+        } catch {
+          /* already gone */
+        }
+        this._duckWired = false;
+      }, 120);
+    }
   }
 
   // --- filters ---

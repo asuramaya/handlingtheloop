@@ -3,6 +3,7 @@ import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
+import { REVERB_WORKLET_SRC } from "./reverbWorklet";
 
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
@@ -124,6 +125,12 @@ export class AudioEngine {
     } catch (e) {
       console.warn("[htl] stretch engine unavailable:", e);
       this.workletError += "stretch:" + (e instanceof Error ? e.message : String(e)) + " ";
+    }
+    try {
+      await add(REVERB_WORKLET_SRC); // the FDN reverb tank (ReverbFx creates nodes on demand)
+    } catch (e) {
+      console.warn("[htl] reverb engine unavailable:", e);
+      this.workletError += "reverb:" + (e instanceof Error ? e.message : String(e)) + " ";
     }
   }
 

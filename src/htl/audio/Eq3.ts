@@ -93,22 +93,40 @@ export class Eq3 implements FxDevice {
     this.soloNode.type = "bandpass";
     this.soloNode.Q.value = 4;
 
-    // Series EQ chain into the output; the solo bandpass also feeds the output but
-    // only carries signal when the input is routed into it (see applyRoute).
+    // Build the series EQ chain; applyRoute() wires the ACTIVE path's tail into `output`
+    // (and severs the idle paths) so only one route is live — and rendered — at a time.
     this.hp.connect(this.low);
     this.low.connect(this.mid);
     this.mid.connect(this.high);
     this.high.connect(this.lp);
-    this.lp.connect(this.output);
-    this.soloNode.connect(this.output);
     this.applyRoute();
   }
 
+  // Re-route BOTH ends so only the active path reaches `output`. Severing the idle path's
+  // TAIL (not just its head) leaves it with no route to the destination, so the audio
+  // thread prunes it: a bypassed EQ doesn't run its five biquads, a non-solo EQ doesn't run
+  // the audition bandpass. (The in-series counterpart to BaseFxDevice's activation gate.)
   private applyRoute() {
     this.pre.disconnect();
-    if (this.route === "bypass") this.pre.connect(this.output);
-    else if (this.route === "solo") this.pre.connect(this.soloNode);
-    else this.pre.connect(this.hp);
+    try {
+      this.lp.disconnect();
+    } catch {
+      /* not wired yet */
+    }
+    try {
+      this.soloNode.disconnect();
+    } catch {
+      /* not wired yet */
+    }
+    if (this.route === "bypass") {
+      this.pre.connect(this.output);
+    } else if (this.route === "solo") {
+      this.pre.connect(this.soloNode);
+      this.soloNode.connect(this.output);
+    } else {
+      this.pre.connect(this.hp);
+      this.lp.connect(this.output);
+    }
   }
 
   get routeMode(): EqRoute {

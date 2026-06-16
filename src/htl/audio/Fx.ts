@@ -101,6 +101,11 @@ export class FxRack {
   }
 
   add(device: FxDevice, slot = this.devices.length): FxDevice {
+    // Never insert the same device INSTANCE twice — the EQ is a single shared instance
+    // (`deck.eq`) pulled in/out of the chain, so any path that re-adds it while it's already
+    // present would duplicate the tab/routing. New effects are fresh instances, so this only
+    // ever fires for the EQ. (Closes the "EQ added twice" bug at the routing layer.)
+    if (this.devices.includes(device)) return device;
     const at = Math.max(0, Math.min(slot, this.devices.length));
     this.devices.splice(at, 0, device);
     this.rebuild();
@@ -168,6 +173,12 @@ export abstract class BaseFxDevice implements FxDevice {
   protected readonly params: FxParam[] = [];
   private _bypassed = false;
   private _mix: number;
+  // Activation gate (see applyWet): `wet → output` is the ONLY edge from the subclass's
+  // processing graph to the destination. When the effect is off we cut it so the audio
+  // thread prunes the whole wet subgraph; a generation counter cancels a pending cut if
+  // the effect is reactivated first.
+  private _wetConnected = true;
+  private _wetGen = 0;
 
   constructor(ctx: AudioContext, defaultMix = 0.3) {
     this.ctx = ctx;
@@ -187,9 +198,38 @@ export abstract class BaseFxDevice implements FxDevice {
     this._mix = clamp01(v);
     this.applyWet();
   }
+  // The effect is "active" only when it's not bypassed AND its wet send is non-zero.
+  // Inactive → ramp the send to 0 and, once it has faded, disconnect `wet` from `output`.
+  // That leaves the subclass's wet graph (delay lines, filters, feedback, LFOs, sidechains)
+  // with NO path to the destination, so the engine prunes it entirely — an off effect costs
+  // nothing, not just silence. This is the pattern every wet/dry device inherits, so heavy
+  // effects (reverb's FDN, etc.) are free when bypassed or dialled out.
   private applyWet() {
-    const t = this._bypassed ? 0 : this._mix;
-    this.wet.gain.setTargetAtTime(t, this.ctx.currentTime, 0.01);
+    const active = !this._bypassed && this._mix > 0;
+    this.wet.gain.setTargetAtTime(active ? this._mix : 0, this.ctx.currentTime, 0.01);
+    if (active) this.connectWet();
+    else this.disconnectWetWhenIdle();
+  }
+  private connectWet() {
+    this._wetGen++; // cancel any pending disconnect
+    if (this._wetConnected) return;
+    this.wet.connect(this.output);
+    this._wetConnected = true;
+  }
+  private disconnectWetWhenIdle() {
+    if (!this._wetConnected) return;
+    const gen = ++this._wetGen;
+    // Let the send fade (~5τ ≈ 50 ms) before pruning so the tail rings out instead of being
+    // cut; the generation guard aborts if the effect was reactivated in the meantime.
+    setTimeout(() => {
+      if (gen !== this._wetGen || !this._wetConnected) return;
+      try {
+        this.wet.disconnect(this.output);
+      } catch {
+        /* already gone */
+      }
+      this._wetConnected = false;
+    }, 90);
   }
   /** Current wet amount (0..1) — for subclasses that briefly automate `wet` themselves
    *  (e.g. a Fade time-mode that dips the wet while it re-times). */
@@ -224,6 +264,7 @@ export abstract class BaseFxDevice implements FxDevice {
     this.setBypass(false);
   }
   dispose() {
+    this._wetGen++; // cancel any pending wet-disconnect timer
     try {
       this.input.disconnect();
     } catch {

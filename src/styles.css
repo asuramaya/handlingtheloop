@@ -6163,15 +6163,21 @@ body:not(.no-glow) .fx-tab.sel {
   border-left: 3px solid var(--accent);
   box-shadow: -2px 0 8px -2px color-mix(in srgb, var(--accent) 80%, transparent);
 }
-.fx-tab.fx-add {
-  padding: 3px 8px;
-  font-size: 13px;
+.fx-tab.fx-add,
+.fx-tab.fx-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 3px 0;
+  font-size: 14px;
   line-height: 1;
 }
 .fx-add-wrap {
   position: relative;
-  margin-left: auto; /* push + to the right end of the tab row */
+  margin-left: auto; /* push the −/+ group to the right end of the tab row */
   display: flex;
+  gap: 4px;
 }
 .fx-palette {
   position: absolute;
@@ -6202,6 +6208,79 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-palette-item:hover {
   color: #08111a;
   background: var(--accent);
+}
+/* The − (remove) sits beside the + in the tab row — same chip as a tab, tinted danger-red,
+   removes the selected effect. */
+.fx-tab.fx-remove {
+  color: #ff5470;
+  border-color: color-mix(in srgb, #ff5470 50%, var(--panel));
+}
+body:not(.no-glow) .fx-tab.fx-remove {
+  box-shadow: 0 0 9px -3px color-mix(in srgb, #ff5470 55%, transparent);
+}
+.fx-tab.fx-remove:hover {
+  color: #fff;
+  background: #ff5470;
+  border-color: #ff5470;
+}
+/* Preset menu — reuses the .fx-palette look, but fixed at the cursor (right-click a tab). */
+.fx-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.fx-preset-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 41;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.fx-preset-head {
+  padding: 3px 10px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+.fx-preset-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.fx-preset-save {
+  color: var(--accent);
+}
+/* A saved-preset row: the name applies on click; ✎ renames, ✕ removes. */
+.fx-preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.fx-preset-row .fx-preset-apply {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fx-preset-mini {
+  flex: 0 0 auto;
+  width: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.fx-preset-mini:hover {
+  color: #08111a;
+  background: var(--accent);
+}
+.fx-preset-mini.danger:hover {
+  color: #fff;
+  background: #ff5470;
 }
 /* The stage hosts ONE device surface; the EQ's .eq-pro (flex:1) fills it as before. */
 .fx-stage {
@@ -6236,6 +6315,30 @@ body:not(.no-glow) .fx-tab.sel {
   background: color-mix(in srgb, var(--surface) 80%, #000 8%);
 }
 .dly-viz canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Reverb v2 body — buttonoid grid LEFT, the round decay viz RIGHT (a square sized to the
+   panel height so the circle reads big). */
+.rv-body {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: 8px;
+}
+.rv-viz {
+  flex: 0 0 auto;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+  min-width: 0;
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+}
+.rv-viz canvas {
   display: block;
   width: 100%;
   height: 100%;
@@ -6276,6 +6379,27 @@ body:not(.no-glow) .fx-tab.sel {
      dot at the BOTTOM-centre and its glow bleeds ~7px below the cell. Reserve that much
      clearance inside the grid box so the bottom row's dots never spill onto the chip strip. */
   padding-bottom: 7px;
+}
+/* Reverb: 6 fixed columns → a balanced 6+6 split (core row SIZE·DECAY·PREDLY·MIX·BRIGHT·WIDTH
+   over the character/shaping row CHAR·RATE·DRIVE·DUCK·LO CUT·HI CUT), same shrink behaviour
+   as the delay so the two rows + the FREEZE chip always fit the shared --fx-body-h. */
+/* Reverb buttonoids: 4 rows × 3 columns, filling the left of the body beside the round viz. */
+.fx-reverb .rv-knobs {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(22px, 1fr);
+  column-gap: 7px;
+  row-gap: 6px;
+  padding-bottom: 7px;
+}
+/* MODE chip — reads as a value selector (accent), not a toggle, in the FRZ foot strip. */
+.fx-chip.fx-chip-mode {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
+  font-weight: 800;
 }
 .fx-knobs .vcell {
   height: 100%;
@@ -7835,6 +7959,219 @@ button.room-tog:hover {
   margin-top: 2px;
   opacity: 0.85;
 }
+
+/* Public @handle line + inline claim/rename editor (social layer, Epic A). */
+.profile-handle {
+  align-self: flex-start;
+  margin: 1px 0 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.profile-handle:hover {
+  text-decoration: underline;
+}
+.profile-handle.claim {
+  color: var(--muted);
+  font-weight: 500;
+}
+.profile-handle.claim:hover {
+  color: var(--accent);
+}
+/* Public profile: @handle is a label here, not a button. */
+span.profile-handle {
+  cursor: default;
+}
+span.profile-handle:hover {
+  text-decoration: none;
+}
+.profile-bio {
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  opacity: 0.9;
+}
+/* Own-profile public-fields block: bio + edit / view-public actions + the editor. */
+.profile-public {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profile-public .profile-bio {
+  margin: 0;
+}
+.profile-public-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.profile-edit-btn,
+.profile-view-public {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.profile-edit-btn:hover {
+  border-color: var(--accent);
+}
+.profile-view-public {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 5px 2px;
+}
+.profile-view-public:hover {
+  text-decoration: underline;
+}
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.profile-field-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.profile-bio-input {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+/* Social graph: follower counts + Follow / Block actions. */
+.profile-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.profile-counts {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.profile-counts b {
+  color: inherit;
+  font-weight: 700;
+}
+.profile-friend {
+  color: var(--accent);
+}
+.profile-graph-actions {
+  display: flex;
+  gap: 8px;
+}
+.follow-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #06121a;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.follow-btn.on {
+  background: transparent;
+  color: var(--accent);
+}
+.block-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.block-btn:hover {
+  color: #c8506a;
+  border-color: #c8506a;
+}
+.handle-editor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.handle-editor-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.handle-at {
+  color: var(--muted);
+  font-weight: 700;
+}
+.handle-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: inherit;
+  font-size: 14px;
+}
+.handle-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.handle-status {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.handle-status.ok {
+  color: #3ad29f;
+}
+.handle-status.bad {
+  color: #c8506a;
+}
+.handle-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+.handle-save,
+.handle-cancel {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.handle-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06121a;
+  font-weight: 600;
+}
+.handle-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.handle-cancel:hover {
+  border-color: var(--muted);
+}
+.handle-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .profile-conns {
   display: flex;
   flex-direction: column;

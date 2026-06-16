@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Deck, FxKind } from "@htl/audio";
+import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
+import { ReverbPanel } from "./ReverbPanel";
+import { PromptModal } from "./Dialog";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
 // the EQ curve keeps its full height) and a shared BYPASS / RESET / COPY toolbar that acts
@@ -17,6 +20,7 @@ const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "
 const ADDABLE: { kind: FxKind; label: string }[] = [
   { kind: "eq", label: "EQ" },
   { kind: "delay", label: "Delay" },
+  { kind: "reverb", label: "Reverb" },
 ];
 
 interface FxStripProps {
@@ -35,6 +39,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
   const [dragOver, setDragOver] = useState<number | null>(null); // tab the drag is over
+  const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu
+  const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
+  // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
+  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | null>(null);
 
   const devices = deck.fxDevices; // the whole chain, in order
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
@@ -65,6 +73,52 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     broadcastRack();
     setSel(Math.max(0, i - 1));
     refresh();
+  };
+
+  // --- presets (right-click an effect tab) ---
+  const menuDev = menu ? deck.fxDeviceAt(menu.slot) : null;
+  const menuPresets = useMemo(() => (menuDev ? loadFxPresets(menuDev.kind) : []), [menuDev, presetTick]);
+  const openPresetMenu = (e: React.MouseEvent, slot: number) => {
+    e.preventDefault();
+    setSel(slot);
+    setMenu({ slot, x: e.clientX, y: e.clientY });
+  };
+  // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
+  // device rides the fxRack snapshot (params + bypass).
+  const syncDevice = (d: { kind: FxKind }) => {
+    if (d.kind === "eq") emitControls(id);
+    else broadcastRack();
+  };
+  const applyPreset = (slot: number, params: Record<string, number>) => {
+    const d = deck.fxDeviceAt(slot);
+    if (!d) return;
+    for (const k in params) deck.setFxParam(slot, k, params[k]);
+    syncDevice(d);
+    setMenu(null);
+    refresh();
+  };
+  const applyDefault = (slot: number) => {
+    const d = deck.fxDeviceAt(slot);
+    if (!d) return;
+    deck.resetFxAt(slot);
+    if (d.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+    syncDevice(d);
+    setMenu(null);
+    refresh();
+  };
+  const saveCurrent = (slot: number) => {
+    const d = deck.fxDeviceAt(slot);
+    if (!d) return;
+    setMenu(null);
+    setDialog({ mode: "save", kind: d.kind, params: d.snapshotParams() });
+  };
+  const renamePreset = (kind: FxKind, name: string) => {
+    setMenu(null);
+    setDialog({ mode: "rename", kind, name });
+  };
+  const deletePreset = (kind: FxKind, name: string) => {
+    deleteFxPreset(kind, name);
+    setPresetTick((t) => t + 1); // keep the menu open, just drop the row
   };
 
   // --- shared toolbar (acts on the selected device) ---
@@ -109,10 +163,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             key={i}
             className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dragOver === i && dragFrom !== i ? "drag-over" : ""} ${dragFrom === i ? "dragging" : ""}`}
             onClick={() => setSel(i)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              removeAt(i);
-            }}
+            onContextMenu={(e) => openPresetMenu(e, i)}
             draggable
             onDragStart={(e) => {
               setDragFrom(i);
@@ -136,12 +187,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             }}
             role="tab"
             aria-selected={cur === i}
-            title="Drag to reorder · right-click to remove"
+            title="Drag to reorder · right-click for presets"
           >
             {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
           </button>
         ))}
         <div className="fx-add-wrap">
+          {selDev && (
+            <button className="fx-tab fx-remove" onClick={() => removeAt(cur)} title="Remove the selected effect" aria-label="Remove the selected effect">
+              −
+            </button>
+          )}
           <button className="fx-tab fx-add" onClick={() => setPaletteOpen((o) => !o)} title="Add an effect" aria-haspopup="menu" aria-expanded={paletteOpen}>
             +
           </button>
@@ -164,6 +220,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} />
         ) : selDev.kind === "delay" ? (
           <DelayPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+        ) : selDev.kind === "reverb" ? (
+          <ReverbPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
         ) : (
           <div className="fx-panel fx-unknown">This effect isn’t available in this build.</div>
         )}
@@ -182,6 +240,52 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             COPY
           </button>
         </div>
+      )}
+
+      {/* Preset menu — right-click an effect tab. For now: Default + saved snapshots + Save. */}
+      {menu && menuDev && (
+        <>
+          <div className="fx-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+          <div className="fx-palette fx-preset-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+            <div className="fx-preset-head">{KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} presets</div>
+            <button className="fx-palette-item" role="menuitem" onClick={() => applyDefault(menu.slot)}>
+              Default
+            </button>
+            {menuPresets.length > 0 && <div className="fx-preset-sep" />}
+            {menuPresets.map((p) => (
+              <div key={p.name} className="fx-preset-row">
+                <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply" onClick={() => applyPreset(menu.slot, p.params)}>
+                  {p.name}
+                </button>
+                <button className="fx-preset-mini" title="Rename" aria-label="Rename preset" onClick={() => renamePreset(menuDev.kind, p.name)}>
+                  ✎
+                </button>
+                <button className="fx-preset-mini danger" title="Remove" aria-label="Remove preset" onClick={() => deletePreset(menuDev.kind, p.name)}>
+                  ✕
+                </button>
+              </div>
+            ))}
+            <div className="fx-preset-sep" />
+            <button className="fx-palette-item fx-preset-save" role="menuitem" onClick={() => saveCurrent(menu.slot)}>
+              ＋ Save current…
+            </button>
+          </div>
+        </>
+      )}
+
+      {dialog && (
+        <PromptModal
+          title={dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
+          initial={dialog.mode === "rename" ? dialog.name : ""}
+          placeholder="Preset name"
+          submitLabel={dialog.mode === "save" ? "Save" : "Rename"}
+          onSubmit={(v) => {
+            if (dialog.mode === "save") saveFxPreset(dialog.kind, v, dialog.params);
+            else renameFxPreset(dialog.kind, dialog.name, v);
+            setPresetTick((t) => t + 1);
+          }}
+          onClose={() => setDialog(null)}
+        />
       )}
     </div>
   );

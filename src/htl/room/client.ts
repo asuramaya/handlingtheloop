@@ -18,6 +18,7 @@ export interface RoomHandlers {
   stemview?: (deck: DeckId, view: unknown) => void;
   lyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   settings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings landed
+  listeners?: (count: number, isPublic: boolean) => void; // broadcast-plane listener count + whether the room is public
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -26,6 +27,7 @@ export interface RoomOptions {
   name?: string; // friendly participant label (account name) — falls back to the device
   joinCode?: string; // invite code → the Worker routes us into that host's session
   color?: string; // this device's account accent (hex) — the room vibe is the host's
+  listenHandle?: string; // tune into a PUBLIC room by the host's @handle (read-only listener, no invite)
 }
 
 const DEVICE_KEY = "htl_device_id";
@@ -108,9 +110,14 @@ export class RoomClient {
   readonly kind = deviceName(); // device TYPE (iPhone / Mac / Linux …), separate from the label
   private joinCode: string | null;
   private color: string;
+  // When set, this client is a PUBLIC read-only listener tuned into someone's @handle —
+  // it never drives, never auto-engages the join/control switches.
+  private readonly listenHandle: string | null;
   anchorId: string | null = null;
   peers: Peer[] = [];
   status: RoomStatus = "offline";
+  listenerCount = 0; // broadcast-plane crowd size (from welcome/presence)
+  roomPublic = false; // whether the room is open to anon listeners
 
   private ws: WebSocket | null = null;
   private h: RoomHandlers = {};
@@ -127,6 +134,7 @@ export class RoomClient {
     this.name = opts.name || deviceName();
     this.joinCode = opts.joinCode ?? joinCodeFromUrl();
     this.color = opts.color ?? "";
+    this.listenHandle = opts.listenHandle ?? null;
     const e = loadEngage();
     this.wantJoined = e.joined;
     this.wantControl = e.control;
@@ -219,6 +227,10 @@ export class RoomClient {
   requestState(): void {
     this.send({ t: "request-state" });
   }
+  /** HOST only: open/close the room to anonymous read-only listeners (the broadcast plane). */
+  goPublic(on: boolean): void {
+    this.send({ t: "public", on });
+  }
   /** Update this device's account accent and broadcast it (the room vibe / roster swatch). */
   setColor(color: string): void {
     if (color === this.color) return;
@@ -229,7 +241,8 @@ export class RoomClient {
   private open(): void {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const params = new URLSearchParams({ device: this.you, name: this.name, kind: this.kind });
-    if (this.joinCode) params.set("join", this.joinCode);
+    if (this.listenHandle) params.set("room", this.listenHandle); // public read-only listener
+    else if (this.joinCode) params.set("join", this.joinCode);
     if (this.color) params.set("color", this.color);
     const url = `${proto}://${location.host}/api/room?${params.toString()}`;
     this.setStatus("connecting");
@@ -282,8 +295,17 @@ export class RoomClient {
       case "welcome":
         this.anchorId = msg.anchorId;
         this.peers = msg.peers;
+        this.listenerCount = msg.listeners ?? 0;
+        this.roomPublic = !!msg.public;
         this.h.presence?.(msg.peers);
         this.h.role?.(msg.anchorId);
+        this.h.listeners?.(this.listenerCount, this.roomPublic);
+        // A PUBLIC read-only listener is auto-joined server-side and never drives — skip the
+        // engage restore entirely (it has no switches to assert).
+        if (this.listenHandle) {
+          if (msg.anchorId) this.requestState();
+          break;
+        }
         // Auto-engage: restore the EXACT switch state we had (survives reconnect + page
         // refresh), or, for a fresh invite link, join HEARING the mix but not driving.
         // Capture the wants first since join()/control()/listen() mutate them.
@@ -304,7 +326,10 @@ export class RoomClient {
         break;
       case "presence":
         this.peers = msg.peers;
+        this.listenerCount = msg.listeners ?? this.listenerCount;
+        this.roomPublic = msg.public ?? this.roomPublic;
         this.h.presence?.(msg.peers);
+        this.h.listeners?.(this.listenerCount, this.roomPublic);
         break;
       case "role":
         this.anchorId = msg.anchorId;

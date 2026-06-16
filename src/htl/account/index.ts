@@ -9,6 +9,11 @@ export interface AccountUser {
   email: string | null;
   name: string | null;
   avatar: string | null;
+  // Public identity (server publicIdentity()). `handle` is null until claimed;
+  // displayName/avatar already fall back to the Google-mirror server-side.
+  handle?: string | null;
+  displayName?: string | null;
+  bio?: string | null;
 }
 export interface Me {
   user: AccountUser | null;
@@ -58,6 +63,7 @@ export interface Profile {
   user: AccountUser & { memberSince: number | null };
   connections: Provider[];
   topTracks: TopTrack[];
+  counts?: FollowCounts;
 }
 
 /** The signed-in user's full profile (identity, member-since, top songs). Null if signed out. */
@@ -65,6 +71,133 @@ export async function fetchProfile(signal?: AbortSignal): Promise<Profile | null
   const res = await fetch("/api/me/profile", { signal, credentials: "same-origin" });
   if (!res.ok) return null;
   return (await res.json()) as Profile;
+}
+
+// --- Public @handle + profile edits ----------------------------------------
+export interface HandleCheck {
+  available: boolean;
+  handle?: string; // the cleaned (case-preserved) form the server accepted
+  reason?: string; // when unavailable: "taken" or a validation message
+}
+
+/** Live availability/validity check for a candidate handle (sign-in gated). */
+export async function checkHandle(h: string, signal?: AbortSignal): Promise<HandleCheck> {
+  const res = await fetch(`/api/handle/check?h=${encodeURIComponent(h)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return { available: false, reason: "error" };
+  return (await res.json()) as HandleCheck;
+}
+
+/** Claim or rename the signed-in user's @handle. */
+export async function claimHandle(handle: string): Promise<{ ok: boolean; handle?: string; error?: string }> {
+  const res = await fetch("/api/me/handle", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  const j = (await res.json().catch(() => ({}))) as { handle?: string; error?: string };
+  return res.ok ? { ok: true, handle: j.handle } : { ok: false, error: j.error };
+}
+
+/** Update the user-owned public profile fields (display name / bio / avatar URL). */
+export async function saveProfile(p: { displayName?: string; bio?: string; avatarUrl?: string | null }): Promise<boolean> {
+  const res = await fetch("/api/me/profile", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  return res.ok;
+}
+
+// --- Social graph (follow / block) -----------------------------------------
+export interface FollowCounts {
+  followers: number;
+  following: number;
+}
+export interface Relationship {
+  following: boolean; // me → them
+  followedBy: boolean; // them → me
+  mutual: boolean; // friends
+  blocking: boolean; // I blocked them
+  blockedBy: boolean; // they blocked me
+}
+
+/** Anyone's PUBLIC profile by @handle (no email/connections). Null if no such handle. */
+export interface PublicProfile {
+  handle: string;
+  displayName: string | null;
+  avatar: string | null;
+  bio: string | null;
+  memberSince: number | null;
+  topTracks: TopTrack[];
+  counts: FollowCounts;
+  isSelf: boolean;
+  relationship: Relationship | null; // null when signed out or viewing self
+}
+export async function fetchPublicProfile(handle: string, signal?: AbortSignal): Promise<PublicProfile | null> {
+  const res = await fetch(`/api/u/${encodeURIComponent(handle)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return null;
+  return (await res.json()) as PublicProfile;
+}
+
+type GraphAction = "follow" | "unfollow" | "block" | "unblock";
+async function graphAction(
+  action: GraphAction,
+  handle: string,
+): Promise<{ relationship: Relationship; counts: FollowCounts } | null> {
+  const res = await fetch(`/api/${action}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  if (!res.ok) return null;
+  return (await res.json()) as { relationship: Relationship; counts: FollowCounts };
+}
+export const follow = (handle: string) => graphAction("follow", handle);
+export const unfollow = (handle: string) => graphAction("unfollow", handle);
+export const block = (handle: string) => graphAction("block", handle);
+export const unblock = (handle: string) => graphAction("unblock", handle);
+
+// --- Live room directory (Epic E1/E2) --------------------------------------
+export interface LiveRoom {
+  handle: string;
+  displayName: string | null;
+  avatar: string | null;
+  title: string | null;
+  genre: string | null;
+  listeners: number;
+  npTitle: string | null;
+  npArtist: string | null;
+  startedAt: number | null;
+}
+/** The live public-room directory ("on now"), busiest first. Public — no auth needed. */
+export async function fetchLiveRooms(signal?: AbortSignal): Promise<LiveRoom[]> {
+  const res = await fetch("/api/rooms/live", { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { rooms: LiveRoom[] }).rooms;
+}
+
+export interface RoomAnnounce {
+  title?: string;
+  genre?: string;
+  listeners?: number;
+  nowPlaying?: { title?: string; artist?: string; videoId?: string };
+}
+/** HOST: announce/heartbeat the live room into the directory (call on go-public + periodically). */
+export async function announceRoom(a: RoomAnnounce): Promise<boolean> {
+  const res = await fetch("/api/rooms/announce", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(a),
+  });
+  return res.ok;
+}
+/** HOST: drop the live room from the directory (stopped broadcasting). */
+export async function closeRoom(): Promise<void> {
+  await fetch("/api/rooms/close", { method: "POST", credentials: "same-origin" });
 }
 
 // Per-track de-dupe so reloads, rewinds, model/stem re-derives, and room-driven re-loads of

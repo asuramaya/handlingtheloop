@@ -152,11 +152,15 @@ export type ClientMsg =
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host streams word-timed lyrics → guests
   | { t: "color"; color: string } // update this device's account accent (re-broadcast in presence)
   | { t: "settings"; settings: unknown; updatedAt: number } // ACCOUNT-PRIVATE: my colour/theme settings → my OTHER signed-in devices (host-only relay)
+  | { t: "public"; on: boolean } // HOST opens/closes the room to anonymous read-only listeners (broadcast plane)
   | { t: "request-state" };
 
 export type ServerMsg =
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[] }
-  | { t: "presence"; peers: Peer[] }
+  // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
+  // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
+  // = whether the room is open to anon listeners (the host's broadcast toggle).
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean }
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean }
   | { t: "role"; anchorId: string | null } // the anchor (clock) moved
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }

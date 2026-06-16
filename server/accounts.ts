@@ -16,10 +16,24 @@ import {
   createSession,
   deleteConnection,
   deleteSession,
+  announceRoom,
+  blockUser,
+  closeRoom,
+  ensureGraphTables,
   ensureIdentityColumns,
+  ensureRoomsTable,
+  followCounts,
+  liveRooms,
+  followUser,
+  followersOf,
+  followingOf,
   getTopTracks,
   getUserSettings,
   handleTaken,
+  relationship,
+  unblockUser,
+  unfollowUser,
+  userByHandle,
   listConnections,
   logUserPlay,
   putUserSettings,
@@ -54,6 +68,10 @@ export interface AccountEnv {
   TIDAL_CLIENT_SECRET?: string;
   TIDAL_SCOPES?: string; // optional override of the requested TIDAL OAuth scopes
   TOKEN_ENC_KEY?: string;
+  // DEV-ONLY: when set (a .dev.vars secret, NEVER a production secret), enables the
+  // /api/auth/dev shortcut login so the DO/social features are testable under
+  // `pnpm worker` without the Google OAuth round-trip. Absent in prod → route 404s.
+  DEV_LOGIN?: string;
 }
 
 function json(status: number, body: unknown, headers?: HeadersInit): Response {
@@ -95,6 +113,37 @@ function requireEnv(env: AccountEnv): string {
 export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv): Promise<Response | null> {
   const path = url.pathname;
   const googleRedirectUri = `${url.origin}/api/auth/google/callback`;
+
+  // PUBLIC profile by handle — no auth, and PUBLIC fields only (never email or
+  // connections). Dynamic path, so it's matched before the exact-path switch.
+  if (path.startsWith("/api/u/")) {
+    if (!env.DB) return json(404, { error: "not found" });
+    await ensureIdentityColumns(env.DB);
+    await ensureGraphTables(env.DB);
+    const folded = foldHandle(decodeURIComponent(path.slice("/api/u/".length)));
+    const u = folded ? await userByHandle(env.DB, folded) : null;
+    if (!u || !u.handle) return json(404, { error: "no such handle" });
+    const viewer = await currentUser(env, req);
+    // A blocker can't see the blockee's profile (and vice-versa) — treat as absent.
+    if (viewer && (await relationship(env.DB, viewer.id, u.id)).blockedBy) {
+      return json(404, { error: "no such handle" });
+    }
+    const [topTracks, counts] = await Promise.all([getTopTracks(env.DB, u.id, 12), followCounts(env.DB, u.id)]);
+    const rel = viewer && viewer.id !== u.id ? await relationship(env.DB, viewer.id, u.id) : null;
+    return json(200, {
+      handle: u.handle,
+      // PUBLIC: never fall back to the Google legal name (B7). Unset display name →
+      // null, and the UI shows the @handle instead. Same for the Google avatar.
+      displayName: u.display_name ?? null,
+      avatar: u.avatar_url ?? null,
+      bio: u.bio ?? null,
+      memberSince: u.created_at,
+      topTracks,
+      counts,
+      isSelf: !!viewer && viewer.id === u.id,
+      relationship: rel, // null when signed out or viewing self
+    });
+  }
 
   switch (path) {
     // Kick off Google sign-in: set a CSRF state cookie, bounce to Google.
@@ -174,6 +223,97 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       return json(200, { handle: res.handle });
     }
 
+    // Social graph actions — follow / unfollow / block / unblock another user by
+    // handle. All sign-in gated, POST { handle }. Each returns the fresh viewer↔
+    // target relationship + the target's counts so the UI updates without a refetch.
+    case "/api/follow":
+    case "/api/unfollow":
+    case "/api/block":
+    case "/api/unblock": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureGraphTables(env.DB);
+      const b = (await req.json().catch(() => ({}))) as { handle?: string };
+      const target = await userByHandle(env.DB, foldHandle(String(b.handle ?? "")));
+      if (!target || !target.handle) return json(404, { error: "no such handle" });
+      if (target.id === user.id) return json(400, { error: "that's you" });
+      if (path === "/api/follow") {
+        const r = await followUser(env.DB, user.id, target.id);
+        if (!r.ok) return json(409, { error: r.reason });
+      } else if (path === "/api/unfollow") {
+        await unfollowUser(env.DB, user.id, target.id);
+      } else if (path === "/api/block") {
+        await blockUser(env.DB, user.id, target.id);
+      } else {
+        await unblockUser(env.DB, user.id, target.id);
+      }
+      const [rel, counts] = await Promise.all([
+        relationship(env.DB, user.id, target.id),
+        followCounts(env.DB, target.id),
+      ]);
+      return json(200, { ok: true, relationship: rel, counts });
+    }
+
+    // Followers / following lists for a handle (public cards; paginated ?offset=).
+    // NOT under /api/u/ — that prefix is the public-profile catch above.
+    case "/api/followers":
+    case "/api/following": {
+      if (!env.DB) return json(404, { error: "not found" });
+      await ensureGraphTables(env.DB);
+      const target = await userByHandle(env.DB, foldHandle(url.searchParams.get("h") ?? ""));
+      if (!target || !target.handle) return json(404, { error: "no such handle" });
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+      const list =
+        path === "/api/followers"
+          ? await followersOf(env.DB, target.id, 50, offset)
+          : await followingOf(env.DB, target.id, 50, offset);
+      return json(200, { list });
+    }
+
+    // The live public-room directory (E2). PUBLIC — anyone can browse what's on now.
+    case "/api/rooms/live": {
+      if (!env.DB) return json(200, { rooms: [] });
+      await ensureRoomsTable(env.DB);
+      return json(200, { rooms: await liveRooms(env.DB) });
+    }
+
+    // HOST announces / heartbeats their live room into the directory (E1). Requires a
+    // handle (the room's public address). Called on go-public + periodically while live.
+    case "/api/rooms/announce": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureIdentityColumns(env.DB);
+      if (!user.handle) return json(400, { error: "claim a handle before going public" });
+      await ensureRoomsTable(env.DB);
+      const b = (await req.json().catch(() => ({}))) as {
+        title?: string;
+        genre?: string;
+        listeners?: number;
+        nowPlaying?: { title?: string; artist?: string; videoId?: string };
+      };
+      await announceRoom(env.DB, user.id, {
+        title: cleanText(b.title ?? "", 80) || null,
+        genre: cleanText(b.genre ?? "", 32) || null,
+        listeners: Math.max(0, Math.min(1_000_000, Math.floor(Number(b.listeners) || 0))),
+        npTitle: cleanText(b.nowPlaying?.title ?? "", 200) || null,
+        npArtist: cleanText(b.nowPlaying?.artist ?? "", 120) || null,
+        npVideo: /^[\w-]{11}$/.test(b.nowPlaying?.videoId ?? "") ? b.nowPlaying!.videoId! : null,
+      });
+      return json(200, { ok: true });
+    }
+
+    // HOST closes their live room (stopped broadcasting).
+    case "/api/rooms/close": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureRoomsTable(env.DB);
+      await closeRoom(env.DB, user.id);
+      return json(200, { ok: true });
+    }
+
     // The signed-in user's full profile: identity + "member since" + top songs. Backs
     // the Profile screen. Own-profile only (peers are device-scoped in the room DO, never
     // linked to an account id, by design).
@@ -199,9 +339,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       }
       if (req.method !== "GET") return json(405, { error: "GET or PUT only" });
 
-      const [topTracks, connections] = await Promise.all([
+      await ensureGraphTables(env.DB);
+      const [topTracks, connections, counts] = await Promise.all([
         getTopTracks(env.DB, user.id, 12),
         listConnections(env.DB, user.id),
+        followCounts(env.DB, user.id),
       ]);
       return json(200, {
         user: {
@@ -213,6 +355,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         },
         connections,
         topTracks,
+        counts,
       });
     }
 
@@ -259,6 +402,25 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         return json(200, { ok: true, updatedAt: ts });
       }
       return json(405, { error: "GET or PUT only" });
+    }
+
+    // DEV-ONLY shortcut login. Active ONLY when env.DEV_LOGIN is set — a secret that
+    // lives in .dev.vars and is NEVER configured in production, so this route simply
+    // doesn't exist there (returns null → 404). Mints a REAL D1 user + session so rooms /
+    // graph / broadcast are testable under `pnpm worker` without Google OAuth. `?name=`
+    // picks the identity, so different browsers can be different real users (multi-user
+    // follow/block/room testing). See DEV.md.
+    case "/api/auth/dev": {
+      if (!env.DEV_LOGIN) return null; // not configured (incl. all of production) → not our route
+      if (!env.DB) return json(503, { error: "D1 not configured" });
+      const name = (url.searchParams.get("name") || "Dev").replace(/[^\w .-]/g, "").slice(0, 40) || "Dev";
+      const key = name.toLowerCase().replace(/\s+/g, "");
+      const user = await upsertGoogleUser(env.DB, { sub: `dev:${key}`, name, email: `${key}@dev.local` });
+      const sid = randomToken(32);
+      await createSession(env.DB, user.id, sid, SESSION_TTL_MS);
+      const headers = new Headers({ location: "/" });
+      headers.append("set-cookie", sessionCookie(sid));
+      return new Response(null, { status: 302, headers });
     }
 
     case "/api/auth/logout": {

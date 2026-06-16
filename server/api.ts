@@ -9,8 +9,25 @@ import { featuresByIsrc, isrcForMbid } from "./features";
 import { acoustidLookup } from "./acoustid";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
 import { fetchCaptions, fetchMeta, type YtAuth } from "./youtube";
-import { STEM_DOWNLOAD_CONTENT_TYPE, looksLikeAudioStem } from "./security";
+import {
+  STEM_DOWNLOAD_CONTENT_TYPE,
+  cleanText,
+  foldHandle,
+  looksLikeAudioStem,
+  sanitizeHttpUrl,
+  validateHandle,
+} from "./security";
 import * as devStore from "./devStore";
+
+// The PUBLIC face of the dev user (mirrors publicIdentity() in server/accounts.ts).
+function devPublicIdentity(u: devStore.DevUser) {
+  return {
+    handle: u.handle ?? null,
+    displayName: u.display_name ?? u.name ?? null,
+    avatar: u.avatar_url ?? u.avatar ?? null,
+    bio: u.bio ?? null,
+  };
+}
 
 // SECURITY: this Node handler is DEV-ONLY — it is mounted solely as Vite middleware
 // (see vite.config.ts) and intentionally sends `Access-Control-Allow-Origin: *` for
@@ -161,6 +178,83 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   }
 
   try {
+    // PUBLIC profile by handle (dynamic path, matched before the exact switch).
+    // Dev is single-user, so only the dev user's own handle resolves.
+    if (DEV_AUTH && path.startsWith("/api/u/")) {
+      const folded = foldHandle(decodeURIComponent(path.slice("/api/u/".length)));
+      const u = await devStore.devUser();
+      if (!u.handle || foldHandle(u.handle) !== folded) {
+        sendJson(res, 404, { error: "no such handle" });
+        return true;
+      }
+      sendJson(res, 200, {
+        handle: u.handle,
+        // PUBLIC: never leak the Google legal name / avatar (B7) — see accounts.ts.
+        displayName: u.display_name ?? null,
+        avatar: u.avatar_url ?? null,
+        bio: u.bio ?? null,
+        memberSince: u.created_at,
+        topTracks: await devStore.topTracks(12),
+        // Dev is single-user, so the only resolvable handle is the dev user's own.
+        counts: { followers: 0, following: 0 },
+        isSelf: true,
+        relationship: null,
+      });
+      return true;
+    }
+    // Graph actions + lists — dev is single-user, so following resolves to "that's
+    // you" or "no such handle"; lists are always empty. (Full graph needs the Worker.)
+    if (DEV_AUTH && (path === "/api/follow" || path === "/api/unfollow" || path === "/api/block" || path === "/api/unblock")) {
+      if (!signedIn(req)) {
+        sendJson(res, 401, { error: "sign in first" });
+        return true;
+      }
+      const b = (await readJsonBody(req)) as { handle?: string };
+      const u = await devUser();
+      const same = u.handle && foldHandle(u.handle) === foldHandle(String(b.handle ?? ""));
+      sendJson(res, same ? 400 : 404, { error: same ? "that's you" : "no such handle" });
+      return true;
+    }
+    if (DEV_AUTH && (path === "/api/followers" || path === "/api/following")) {
+      sendJson(res, 200, { list: [] });
+      return true;
+    }
+    // Room directory (E2) + host announce/close (E1) — single dev room.
+    if (DEV_AUTH && path === "/api/rooms/live") {
+      sendJson(res, 200, { rooms: await devStore.liveRooms() });
+      return true;
+    }
+    if (DEV_AUTH && (path === "/api/rooms/announce" || path === "/api/rooms/close")) {
+      if (!signedIn(req)) {
+        sendJson(res, 401, { error: "sign in first" });
+        return true;
+      }
+      const u = await devStore.devUser();
+      if (path === "/api/rooms/announce") {
+        if (!u.handle) {
+          sendJson(res, 400, { error: "claim a handle before going public" });
+          return true;
+        }
+        const b = (await readJsonBody(req)) as {
+          title?: string;
+          genre?: string;
+          listeners?: number;
+          nowPlaying?: { title?: string; artist?: string };
+        };
+        await devStore.announceRoom({
+          title: cleanText(b.title ?? "", 80) || null,
+          genre: cleanText(b.genre ?? "", 32) || null,
+          listeners: Math.max(0, Math.floor(Number(b.listeners) || 0)),
+          npTitle: cleanText(b.nowPlaying?.title ?? "", 200) || null,
+          npArtist: cleanText(b.nowPlaying?.artist ?? "", 120) || null,
+        });
+      } else {
+        await devStore.closeRoom();
+      }
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+
     switch (path) {
       case "/api/audio": {
         const v = url.searchParams.get("v");
@@ -389,7 +483,51 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           return true;
         }
         const u = await devStore.devUser();
-        sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, avatar: u.avatar }, connections: [] });
+        sendJson(res, 200, { user: { id: u.id, email: u.email, name: u.name, ...devPublicIdentity(u) }, connections: [] });
+        return true;
+      }
+      case "/api/handle/check": {
+        if (!DEV_AUTH) break;
+        if (!signedIn(req)) {
+          sendJson(res, 401, { error: "sign in first" });
+          return true;
+        }
+        const v = validateHandle(url.searchParams.get("h"));
+        if (!v.ok) {
+          sendJson(res, 200, { available: false, reason: v.reason });
+          return true;
+        }
+        const taken = await devStore.handleTaken(v.folded);
+        sendJson(res, 200, { available: !taken, handle: v.handle, reason: taken ? "taken" : undefined });
+        return true;
+      }
+      case "/api/me/handle": {
+        if (!DEV_AUTH) break;
+        if (req.method !== "POST") {
+          sendJson(res, 405, { error: "POST only" });
+          return true;
+        }
+        if (!signedIn(req)) {
+          sendJson(res, 401, { error: "sign in first" });
+          return true;
+        }
+        const b = (await readJsonBody(req)) as { handle?: string };
+        const v = validateHandle(b.handle);
+        if (!v.ok) {
+          sendJson(res, 400, { error: v.reason });
+          return true;
+        }
+        const u = await devStore.devUser();
+        if (u.handle && foldHandle(u.handle) === v.folded) {
+          sendJson(res, 200, { handle: u.handle });
+          return true;
+        }
+        const claim = await devStore.setHandle(v.handle, v.folded);
+        if (!claim.ok) {
+          sendJson(res, 409, { error: claim.reason });
+          return true;
+        }
+        sendJson(res, 200, { handle: v.handle });
         return true;
       }
       case "/api/me/profile": {
@@ -398,9 +536,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           sendJson(res, 401, { error: "sign in first" });
           return true;
         }
+        if (req.method === "PUT") {
+          const b = (await readJsonBody(req)) as { displayName?: string; bio?: string; avatarUrl?: string | null };
+          const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null } = {};
+          if (b.displayName !== undefined) patch.display_name = cleanText(b.displayName, 48) || null;
+          if (b.bio !== undefined) patch.bio = cleanText(b.bio, 300) || null;
+          if (b.avatarUrl !== undefined) patch.avatar_url = b.avatarUrl === null ? null : sanitizeHttpUrl(b.avatarUrl);
+          await devStore.updateProfile(patch);
+          sendJson(res, 200, { ok: true, ...patch });
+          return true;
+        }
         const u = await devStore.devUser();
         sendJson(res, 200, {
-          user: { id: u.id, email: u.email, name: u.name, avatar: u.avatar, memberSince: u.created_at },
+          user: { id: u.id, email: u.email, name: u.name, memberSince: u.created_at, ...devPublicIdentity(u) },
           connections: [],
           topTracks: await devStore.topTracks(12),
         });

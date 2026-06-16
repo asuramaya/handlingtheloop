@@ -7,6 +7,7 @@ import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
 import { ProfileScreen } from "./components/ProfileScreen";
+import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack } from "@htl/room";
@@ -385,6 +386,30 @@ export function App() {
       /* ignore */
     }
   }, [settingsOpen, profileOpen, socialOpen]);
+  // The public profile (/@handle) shares the right dock — mutually exclusive with the
+  // three above. URL-driven (not persisted): the path opens it, popstate follows it.
+  const [publicHandle, setPublicHandle] = useState<string | null>(handleFromPath);
+  useEffect(() => {
+    const onPop = () => setPublicHandle(handleFromPath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  useEffect(() => {
+    // Opening the public profile closes the own-account docks…
+    if (publicHandle) {
+      setSettingsOpen(false);
+      setProfileOpen(false);
+      setSocialOpen(false);
+    }
+  }, [publicHandle]);
+  useEffect(() => {
+    // …and opening any own-account dock leaves the public profile.
+    if (settingsOpen || profileOpen || socialOpen) setPublicHandle(null);
+  }, [settingsOpen, profileOpen, socialOpen]);
+  const closePublic = () => {
+    window.history.pushState(null, "", "/");
+    setPublicHandle(null);
+  };
   const [me, setMe] = useState<Me | null>(null);
   const [kickedNotice, setKickedNotice] = useState<string | null>(null);
   // Read in loadTrackToDeck (defined above the room hook) to gate play-logging on sign-in.
@@ -2302,6 +2327,12 @@ export function App() {
     settings.accentA, // our account accent → synced so the room can take the host's vibe
   );
 
+  // The Profile dock is where a handle gets claimed; on its close, refresh the room's
+  // account view so "Go live" un-gates (room.user.handle) without a page reload.
+  useEffect(() => {
+    if (!profileOpen) room.refreshUser();
+  }, [profileOpen, room.refreshUser]);
+
   // Contextual room colour: while CONNECTED to a session (and opted in), wear the HOST's
   // accent so the whole room shares a vibe. Gated on being connected (status online) rather
   // than fully joined, so a guest catches the vibe the moment they're in the room — even
@@ -3704,6 +3735,7 @@ export function App() {
         <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
       )}
       {profileOpen && <ProfileScreen onClose={() => setProfileOpen(false)} />}
+      {publicHandle && <PublicProfileScreen handle={publicHandle} onClose={closePublic} />}
 
       </div>
 

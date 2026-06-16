@@ -40,6 +40,7 @@ interface Attachment {
   listening: boolean; // rendering its own audio stream
   controlling: boolean; // allowed to drive the decks (shared); guests need a host grant
   pending: boolean; // a guest who knocked and is waiting on the host's approval (the handshake)
+  pub: boolean; // a PUBLIC anon read-only listener (broadcast plane): hears the mix, never drives, never anchors, not in the roster
   joinedAt: number; // epoch ms this device last became a participant (0 until joined) — for "joined Nm ago"
   color: string; // this device's account accent (hex) — the room "vibe" is the host's color
 }
@@ -54,6 +55,9 @@ const isMobileKind = (kind: string): boolean => MOBILE_KINDS.has(kind);
 export class DjRoom {
   private state: DurableObjectState;
   private anchorId: string | null = null;
+  // Whether the host has opened this room to anonymous read-only listeners (the
+  // broadcast plane). Off by default — a private session never admits the public.
+  private isPublic = false;
   private loaded = false;
   private seq = 0;
   private lastSnapshot: unknown;
@@ -98,6 +102,7 @@ export class DjRoom {
     this.lastLyrics = (await this.state.storage.get<Record<string, { videoId: string; lines: unknown; source: string }>>("lyrics")) ?? {};
     this.grants = new Set((await this.state.storage.get<string[]>("grants")) ?? []);
     this.approved = new Set((await this.state.storage.get<string[]>("approved")) ?? []);
+    this.isPublic = (await this.state.storage.get<boolean>("public")) ?? false;
     this.loaded = true;
   }
 
@@ -149,7 +154,13 @@ export class DjRoom {
     const name = (url.searchParams.get("name") || "Guest").slice(0, 48);
     const kind = (url.searchParams.get("kind") || "Device").slice(0, 24);
     const host = url.searchParams.get("host") === "1"; // set by the Worker from the authed identity
+    const pub = url.searchParams.get("pub") === "1"; // anon read-only listener (un-forgeable; the Worker sets it)
     const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
+
+    // A public listener may only enter an OPEN room, and only ever as read-only audio.
+    if (pub && !this.isPublic) {
+      return new Response("this room isn't public", { status: 403 });
+    }
 
     // A device reconnecting replaces its stale socket(s) — keep one per device.
     for (const old of this.state.getWebSockets(device)) old.close(1000, "replaced");
@@ -157,16 +168,30 @@ export class DjRoom {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    // Connect = PRESENT only, both switches off. Flipping either (or an invite/reconnect
-    // auto-engaging) puts the device in. A previously host-granted device keeps its drive
-    // right across a refresh (#10) — joined still requires its own auto-join on welcome.
+    // Non-pub connect = PRESENT only, both switches off; flipping either (or an invite/
+    // reconnect auto-engaging) puts the device in, and a host-granted device keeps its
+    // drive right across a refresh (#10). A PUBLIC listener skips the knock entirely:
+    // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
-    server.serializeAttachment({ device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, joinedAt: 0, color } satisfies Attachment);
+    const att: Attachment = pub
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, joinedAt: Date.now(), color }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, joinedAt: 0, color };
+    server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
     server.send(
-      JSON.stringify({ t: "welcome", you: device, anchorId: this.anchorId, peers: this.peers() } satisfies ServerMsg),
+      JSON.stringify({
+        t: "welcome",
+        you: device,
+        anchorId: this.anchorId,
+        peers: this.peers(),
+        listeners: this.listenerCount(),
+        public: this.isPublic,
+        ...(pub ? { pub: true } : {}),
+      } satisfies ServerMsg),
     );
+    // Hand a public listener the current board immediately so it can render without a round-trip.
+    if (pub) this.sendCatchUp(server);
     this.broadcastPresence();
 
     return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
@@ -183,6 +208,12 @@ export class DjRoom {
     }
     const self = this.deviceOf(ws);
     if (!self) return;
+
+    // Public listeners are strictly READ-ONLY: they may only ask for catch-up or leave.
+    // Drop any writer-ish message (join/control/intent/…) so an anon socket can never
+    // knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable `pub`.
+    const att = ws.deserializeAttachment() as Attachment | null;
+    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave") return;
 
     switch (msg.t) {
       case "join": {
@@ -290,7 +321,14 @@ export class DjRoom {
       }
       case "intent": {
         // ANY controller drives. Relay to everyone else (the sender already applied it).
-        if (this.isControlling(self)) this.relay(self, { t: "intent", from: self, seq: ++this.seq, intent: msg.intent });
+        // Digest curation for the broadcast crowd: a `jog` is gestural platter-scrub —
+        // the highest-frequency message during a scratch and NON-reconstructable for a
+        // read-only listener. Don't fan it to public listeners; they hold position from
+        // the tick and resync at the next anchor (the broadcast-plane resync contract).
+        // Writers + invited guests still get it (they may drive / mirror the platter).
+        if (this.isControlling(self)) {
+          this.relay(self, { t: "intent", from: self, seq: ++this.seq, intent: msg.intent }, msg.intent.kind === "jog");
+        }
         break;
       }
       case "tick": {
@@ -383,6 +421,27 @@ export class DjRoom {
         if (this.isHostDevice(self)) {
           this.relayToOwnDevices(self, { t: "settings", settings: msg.settings, updatedAt: msg.updatedAt });
         }
+        break;
+      }
+      case "public": {
+        // Only the HOST opens/closes the broadcast plane. Persisted so the room stays
+        // public across a cold restart. Closing it evicts the anonymous listeners.
+        if (!this.isHostDevice(self)) break;
+        this.isPublic = !!msg.on;
+        await this.state.storage.put("public", this.isPublic);
+        if (!this.isPublic) {
+          for (const w of this.state.getWebSockets()) {
+            const a = w.deserializeAttachment() as Attachment | null;
+            if (!a?.pub) continue;
+            try {
+              w.send(JSON.stringify({ t: "kicked", reason: "The host ended the public broadcast." } satisfies ServerMsg));
+            } catch {
+              /* socket already gone */
+            }
+            w.close(4002, "broadcast ended");
+          }
+        }
+        this.broadcastPresence();
         break;
       }
     }
@@ -496,7 +555,7 @@ export class DjRoom {
     for (const ws of this.state.getWebSockets()) {
       if (ws === exceptWs) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (!a || !a.joined || a.device === except) continue;
+      if (!a || !a.joined || a.device === except || a.pub) continue; // a public listener never anchors
       const mobile = isMobileKind(a.kind);
       if (a.controlling) {
         if (!mobile && !ctrlDesktop) ctrlDesktop = a.device;
@@ -558,12 +617,23 @@ export class DjRoom {
     }
   }
 
+  // Count of distinct anonymous read-only (public) listeners — the crowd surfaced as
+  // a number, never an individual roster entry (privacy + fan-out cost at scale).
+  private listenerCount(): number {
+    const seen = new Set<string>();
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.pub) seen.add(a.device);
+    }
+    return seen.size;
+  }
+
   private peers(except?: Ws): Peer[] {
     const out: Peer[] = [];
     for (const ws of this.state.getWebSockets()) {
       if (ws === except) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (a)
+      if (a && !a.pub) // public listeners are a count, not a roster row
         out.push({
           id: a.device,
           name: a.name,
@@ -594,10 +664,16 @@ export class DjRoom {
     this.broadcastPresence(except);
   }
 
-  private relay(from: string, msg: ServerMsg): void {
+  // Relay to everyone except the sender. `skipListeners` omits the anonymous read-only
+  // (public) crowd — used for gestural messages they can't reconstruct (see the jog case).
+  private relay(from: string, msg: ServerMsg, skipListeners = false): void {
     const json = JSON.stringify(msg);
     for (const ws of this.state.getWebSockets()) {
       if (this.deviceOf(ws) === from) continue;
+      if (skipListeners) {
+        const a = ws.deserializeAttachment() as Attachment | null;
+        if (a?.pub) continue;
+      }
       ws.send(json);
     }
   }
@@ -623,7 +699,7 @@ export class DjRoom {
 
   private broadcastPresence(except?: Ws): void {
     const peers = this.peers(except);
-    const json = JSON.stringify({ t: "presence", peers } satisfies ServerMsg);
+    const json = JSON.stringify({ t: "presence", peers, listeners: this.listenerCount(), public: this.isPublic } satisfies ServerMsg);
     for (const ws of this.state.getWebSockets()) {
       if (ws === except) continue;
       ws.send(json);

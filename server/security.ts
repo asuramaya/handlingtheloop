@@ -90,6 +90,10 @@ export function clampNum(v: unknown, min: number, max: number): number | null {
 // (Cyrillic `а` vs Latin `a`), which a single-script ascii rule sidesteps.
 export const HANDLE_MIN = 3;
 export const HANDLE_MAX = 20;
+// Minimum time between handle RENAMES (first claim is always free). Stops
+// flip-flopping to dodge blocks/links and frees the old handle slowly. Local dev
+// shares this; delete `.dev-data/user.json` to reset while testing.
+export const HANDLE_RENAME_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** Reserved handles: app route names (so a handle can't shadow /api, /room …),
  *  impersonation targets, and a small profanity seed. Checked against the FOLD. */

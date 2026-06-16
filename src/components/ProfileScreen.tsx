@@ -3,8 +3,11 @@ import {
   type Me,
   type Profile,
   type Provider,
+  checkHandle,
+  claimHandle,
   fetchMe,
   fetchProfile,
+  saveProfile,
   startGoogleSignIn,
   startSpotifyConnect,
   startTidalConnect,
@@ -26,10 +29,19 @@ function formatDate(ms: number): string {
   }
 }
 
+// Navigate to /@handle — App listens for popstate and opens the public-profile dock
+// (which is mutually exclusive with this own-Profile dock, so it takes over).
+function viewPublicProfile(handle: string): void {
+  window.history.pushState(null, "", `/@${handle}`);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function ProfileScreen({ onClose }: { onClose: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [editingHandle, setEditingHandle] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
   const revealed = usePrivacyRevealed();
 
   const load = useCallback(() => {
@@ -87,7 +99,19 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
                 </span>
               )}
               <div className="profile-id-text">
-                <div className="profile-name">{user?.name ? (revealed ? user.name : maskName(user.name)) : "Signed in"}</div>
+                <div className="profile-name">
+                  {user?.displayName || user?.name ? (revealed ? user?.displayName || user?.name : maskName(user?.displayName || user?.name || "")) : "Signed in"}
+                </div>
+                {/* The @handle is the PUBLIC identity — always shown (never masked). */}
+                {user?.handle ? (
+                  <button className="profile-handle" onClick={() => setEditingHandle(true)} title="Change your handle">
+                    @{user.handle}
+                  </button>
+                ) : (
+                  <button className="profile-handle claim" onClick={() => setEditingHandle(true)}>
+                    + Claim your @handle
+                  </button>
+                )}
                 {user?.email && <div className="profile-email">{revealed ? user.email : maskEmail(user.email)}</div>}
                 {memberSince && <div className="profile-since">Member since {formatDate(memberSince)}</div>}
               </div>
@@ -100,6 +124,55 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
                 {revealed ? "🙈" : "👁"}
               </button>
             </div>
+
+            {editingHandle && (
+              <HandleEditor
+                current={user?.handle ?? null}
+                onCancel={() => setEditingHandle(false)}
+                onDone={() => {
+                  setEditingHandle(false);
+                  load();
+                }}
+              />
+            )}
+
+            {/* Public profile — display name + bio are what others see at /@handle.
+                Distinct from the private account bits (email/connections) below. */}
+            {editingProfile ? (
+              <ProfileEditor
+                displayName={user?.displayName ?? ""}
+                bio={user?.bio ?? ""}
+                onCancel={() => setEditingProfile(false)}
+                onDone={() => {
+                  setEditingProfile(false);
+                  load();
+                }}
+              />
+            ) : (
+              <div className="profile-public">
+                {profile?.counts && (
+                  <div className="profile-counts">
+                    <span>
+                      <b>{profile.counts.followers}</b> follower{profile.counts.followers === 1 ? "" : "s"}
+                    </span>
+                    <span>
+                      <b>{profile.counts.following}</b> following
+                    </span>
+                  </div>
+                )}
+                {user?.bio && <p className="profile-bio">{user.bio}</p>}
+                <div className="profile-public-actions">
+                  <button className="profile-edit-btn" onClick={() => setEditingProfile(true)}>
+                    Edit profile
+                  </button>
+                  {user?.handle && (
+                    <button className="profile-view-public" onClick={() => viewPublicProfile(user.handle!)}>
+                      View public profile →
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="profile-conns">
               <ConnRow label="YouTube" sub="via Google" connected actionLabel="Disconnect" onAction={() => disconnect("google")} />
@@ -150,6 +223,143 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Inline claim/rename editor: an @-prefixed input that live-checks availability
+// (debounced) against /api/handle/check, then claims via /api/me/handle. The
+// server is the source of truth — this only mirrors its verdict for a fast hint.
+function HandleEditor({
+  current,
+  onCancel,
+  onDone,
+}: {
+  current: string | null;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [value, setValue] = useState(current ?? "");
+  const [status, setStatus] = useState<{ kind: "idle" | "checking" | "ok" | "bad"; msg?: string }>({ kind: "idle" });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const h = value.trim();
+    if (!h || h === current) return setStatus({ kind: "idle" });
+    setStatus({ kind: "checking" });
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      void checkHandle(h, ctl.signal)
+        .then((r) => setStatus(r.available ? { kind: "ok", msg: "available" } : { kind: "bad", msg: r.reason || "unavailable" }))
+        .catch(() => {
+          /* aborted */
+        });
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [value, current]);
+
+  const save = async () => {
+    setSaving(true);
+    const r = await claimHandle(value.trim());
+    setSaving(false);
+    if (r.ok) onDone();
+    else setStatus({ kind: "bad", msg: r.error || "couldn't save" });
+  };
+  const canSave = status.kind === "ok" && !saving;
+
+  return (
+    <div className="handle-editor">
+      <div className="handle-editor-field">
+        <span className="handle-at">@</span>
+        <input
+          className="handle-input"
+          autoFocus
+          value={value}
+          maxLength={20}
+          placeholder="yourname"
+          spellCheck={false}
+          autoCapitalize="none"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canSave) void save();
+            if (e.key === "Escape") onCancel();
+          }}
+        />
+        <span className={`handle-status ${status.kind}`}>
+          {status.kind === "checking" ? "…" : status.kind === "ok" ? "✓ available" : status.msg || ""}
+        </span>
+      </div>
+      <div className="handle-editor-actions">
+        <button className="handle-save" disabled={!canSave} onClick={() => void save()}>
+          {saving ? "Saving…" : current ? "Rename" : "Claim"}
+        </button>
+        <button className="handle-cancel" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <p className="handle-hint">Letters, numbers and _ · 3–20 chars · this is your public @name.</p>
+    </div>
+  );
+}
+
+// Edit the user-owned PUBLIC fields (display name + bio). Saves via PUT /api/me/profile;
+// these never touch the Google-mirror name/avatar (the stomp-safe split).
+function ProfileEditor({
+  displayName,
+  bio,
+  onCancel,
+  onDone,
+}: {
+  displayName: string;
+  bio: string;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState(displayName);
+  const [bioText, setBioText] = useState(bio);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    await saveProfile({ displayName: name, bio: bioText });
+    setSaving(false);
+    onDone();
+  };
+
+  return (
+    <div className="handle-editor profile-editor">
+      <label className="profile-field">
+        <span className="profile-field-label">Display name</span>
+        <input
+          className="handle-input"
+          value={name}
+          maxLength={48}
+          placeholder="Your name"
+          onChange={(e) => setName(e.target.value)}
+        />
+      </label>
+      <label className="profile-field">
+        <span className="profile-field-label">Bio</span>
+        <textarea
+          className="handle-input profile-bio-input"
+          value={bioText}
+          maxLength={300}
+          rows={3}
+          placeholder="A line about you"
+          onChange={(e) => setBioText(e.target.value)}
+        />
+      </label>
+      <div className="handle-editor-actions">
+        <button className="handle-save" disabled={saving} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button className="handle-cancel" onClick={onCancel}>
+          Cancel
+        </button>
       </div>
     </div>
   );

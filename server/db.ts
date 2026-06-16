@@ -1,6 +1,7 @@
 // D1 data layer for the SaaS account/sync features. A thin, typed wrapper — no
 // ORM. Service tokens are encrypted (crypto.ts) before they touch a column.
 import { decrypt, encrypt } from "./crypto";
+import { HANDLE_RENAME_COOLDOWN_MS } from "./security";
 
 // Minimal D1 surface (avoids a hard dep on @cloudflare/workers-types).
 export interface D1Result<T = unknown> {
@@ -153,6 +154,18 @@ export async function setUserHandle(
   handle: string,
   folded: string,
 ): Promise<ClaimResult> {
+  // Rename cooldown (first claim is free — only an existing handle is rate-limited).
+  const cur = await db
+    .prepare("SELECT handle, handle_set_at FROM users WHERE id=?")
+    .bind(userId)
+    .first<{ handle: string | null; handle_set_at: number | null }>();
+  if (cur?.handle && cur.handle_set_at) {
+    const remaining = HANDLE_RENAME_COOLDOWN_MS - (now() - cur.handle_set_at);
+    if (remaining > 0) {
+      const days = Math.ceil(remaining / 86_400_000);
+      return { ok: false, reason: `you can change your handle again in ${days} day${days === 1 ? "" : "s"}` };
+    }
+  }
   if (await handleTaken(db, folded, userId)) return { ok: false, reason: "taken" };
   try {
     await db
@@ -191,6 +204,206 @@ export async function userByHandle(db: D1Database, folded: string): Promise<User
     .bind(folded)
     .first<User>();
   return row ?? null;
+}
+
+// ── Social graph: follows + blocks (migration 0013) ──────────────────────────
+
+let graphReady = false;
+/** Create the graph tables/indexes on an older/local DB that predates 0013. */
+export async function ensureGraphTables(db: D1Database): Promise<void> {
+  if (graphReady) return;
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS follows (follower_id TEXT NOT NULL, followee_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (follower_id, followee_id))",
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_follows_followee ON follows(followee_id)").run();
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS blocks (blocker_id TEXT NOT NULL, blocked_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (blocker_id, blocked_id))",
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id)").run();
+  graphReady = true;
+}
+
+/** A minimal public card for follower/following lists. */
+export interface PublicCard {
+  handle: string | null;
+  displayName: string | null;
+  avatar: string | null;
+}
+
+/** True if EITHER user has blocked the other (the gate for following/interaction). */
+export async function blockedEither(db: D1Database, a: string, b: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR (blocker_id=? AND blocked_id=?) LIMIT 1")
+    .bind(a, b, b, a)
+    .first();
+  return !!row;
+}
+
+export type GraphResult = { ok: true } | { ok: false; reason: string };
+
+/** follower follows followee. Rejects self-follow and either-way blocks. Idempotent. */
+export async function followUser(db: D1Database, followerId: string, followeeId: string): Promise<GraphResult> {
+  if (followerId === followeeId) return { ok: false, reason: "can't follow yourself" };
+  if (await blockedEither(db, followerId, followeeId)) return { ok: false, reason: "unavailable" };
+  await db
+    .prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?,?,?)")
+    .bind(followerId, followeeId, now())
+    .run();
+  return { ok: true };
+}
+
+export async function unfollowUser(db: D1Database, followerId: string, followeeId: string): Promise<void> {
+  await db.prepare("DELETE FROM follows WHERE follower_id=? AND followee_id=?").bind(followerId, followeeId).run();
+}
+
+/** Block: record it AND drop any follow edge in BOTH directions. */
+export async function blockUser(db: D1Database, blockerId: string, blockedId: string): Promise<GraphResult> {
+  if (blockerId === blockedId) return { ok: false, reason: "can't block yourself" };
+  await db
+    .prepare("INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?,?,?)")
+    .bind(blockerId, blockedId, now())
+    .run();
+  await db
+    .prepare("DELETE FROM follows WHERE (follower_id=? AND followee_id=?) OR (follower_id=? AND followee_id=?)")
+    .bind(blockerId, blockedId, blockedId, blockerId)
+    .run();
+  return { ok: true };
+}
+
+export async function unblockUser(db: D1Database, blockerId: string, blockedId: string): Promise<void> {
+  await db.prepare("DELETE FROM blocks WHERE blocker_id=? AND blocked_id=?").bind(blockerId, blockedId).run();
+}
+
+/** Follower + following counts for a user. */
+export async function followCounts(db: D1Database, userId: string): Promise<{ followers: number; following: number }> {
+  const f = await db.prepare("SELECT COUNT(*) AS n FROM follows WHERE followee_id=?").bind(userId).first<{ n: number }>();
+  const g = await db.prepare("SELECT COUNT(*) AS n FROM follows WHERE follower_id=?").bind(userId).first<{ n: number }>();
+  return { followers: f?.n ?? 0, following: g?.n ?? 0 };
+}
+
+/** The viewer's relationship to a target (drives the profile's Follow/Blocked UI). */
+export interface Relationship {
+  following: boolean; // viewer → target
+  followedBy: boolean; // target → viewer
+  mutual: boolean; // friends
+  blocking: boolean; // viewer blocked target
+  blockedBy: boolean; // target blocked viewer
+}
+export async function relationship(db: D1Database, viewerId: string, targetId: string): Promise<Relationship> {
+  const one = async (sql: string, ...b: string[]) => !!(await db.prepare(sql).bind(...b).first());
+  const [following, followedBy, blocking, blockedBy] = await Promise.all([
+    one("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1", viewerId, targetId),
+    one("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1", targetId, viewerId),
+    one("SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=? LIMIT 1", viewerId, targetId),
+    one("SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=? LIMIT 1", targetId, viewerId),
+  ]);
+  return { following, followedBy, mutual: following && followedBy, blocking, blockedBy };
+}
+
+/** Followers of a user (most recent first), as public cards. */
+export async function followersOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
+  const r = await db
+    .prepare(
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+       FROM follows f JOIN users u ON u.id = f.follower_id
+       WHERE f.followee_id=? AND u.handle IS NOT NULL
+       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .bind(userId, limit, offset)
+    .all<PublicCard>();
+  return r.results ?? [];
+}
+
+/** Who a user follows (most recent first), as public cards. */
+export async function followingOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
+  const r = await db
+    .prepare(
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+       FROM follows f JOIN users u ON u.id = f.followee_id
+       WHERE f.follower_id=? AND u.handle IS NOT NULL
+       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .bind(userId, limit, offset)
+    .all<PublicCard>();
+  return r.results ?? [];
+}
+
+// ── Room registry: live public-room directory shadow (migration 0014) ────────
+
+let roomsReady = false;
+export async function ensureRoomsTable(db: D1Database): Promise<void> {
+  if (roomsReady) return;
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS rooms (host_id TEXT PRIMARY KEY, title TEXT, genre TEXT, live INTEGER NOT NULL DEFAULT 0, listeners INTEGER NOT NULL DEFAULT 0, np_title TEXT, np_artist TEXT, np_video TEXT, started_at INTEGER, last_seen INTEGER NOT NULL)",
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_rooms_live ON rooms(live, last_seen)").run();
+  roomsReady = true;
+}
+
+export interface RoomAnnounce {
+  title?: string | null;
+  genre?: string | null;
+  listeners?: number;
+  npTitle?: string | null;
+  npArtist?: string | null;
+  npVideo?: string | null;
+}
+
+/** Upsert the host's room as LIVE + bump the heartbeat. `started_at` is set only when a
+ *  room transitions dark→live, so it reads the broadcast's true start across heartbeats. */
+export async function announceRoom(db: D1Database, hostId: string, a: RoomAnnounce): Promise<void> {
+  const t = now();
+  await db
+    .prepare(
+      `INSERT INTO rooms (host_id, title, genre, live, listeners, np_title, np_artist, np_video, started_at, last_seen)
+       VALUES (?,?,?,1,?,?,?,?,?,?)
+       ON CONFLICT(host_id) DO UPDATE SET
+         title=excluded.title, genre=excluded.genre, live=1, listeners=excluded.listeners,
+         np_title=excluded.np_title, np_artist=excluded.np_artist, np_video=excluded.np_video,
+         started_at=COALESCE(rooms.started_at, excluded.started_at), last_seen=excluded.last_seen`,
+    )
+    .bind(hostId, a.title ?? null, a.genre ?? null, a.listeners ?? 0, a.npTitle ?? null, a.npArtist ?? null, a.npVideo ?? null, t, t)
+    .run();
+}
+
+/** Mark the host's room dark (host stopped broadcasting). */
+export async function closeRoom(db: D1Database, hostId: string): Promise<void> {
+  await db.prepare("UPDATE rooms SET live=0, started_at=NULL WHERE host_id=?").bind(hostId).run();
+}
+
+export interface LiveRoom {
+  handle: string;
+  displayName: string | null;
+  avatar: string | null;
+  title: string | null;
+  genre: string | null;
+  listeners: number;
+  npTitle: string | null;
+  npArtist: string | null;
+  startedAt: number | null;
+}
+
+/** The live public-room directory: rooms broadcasting + heartbeating within `freshMs`,
+ *  busiest first. Stale rooms (host vanished) age out by the freshness filter (E11). */
+export async function liveRooms(db: D1Database, limit = 100, freshMs = 90_000): Promise<LiveRoom[]> {
+  const cutoff = now() - freshMs;
+  const r = await db
+    .prepare(
+      `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+              r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
+       FROM rooms r JOIN users u ON u.id = r.host_id
+       WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
+       ORDER BY r.listeners DESC, r.started_at DESC LIMIT ?`,
+    )
+    .bind(cutoff, limit)
+    .all<LiveRoom>();
+  return r.results ?? [];
 }
 
 export async function deleteSession(db: D1Database, sessionId: string): Promise<void> {

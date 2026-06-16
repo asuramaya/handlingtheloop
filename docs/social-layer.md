@@ -94,8 +94,20 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 > `server/security.ts`, `server/accounts.ts`, `server/security.test.ts`; 38 tests
 > green, worker dry-run clean). Routes shipped: `GET /api/handle/check?h=`,
 > `POST /api/me/handle`, `PUT /api/me/profile`; `/api/me*` now return the public
-> identity via `publicIdentity()`. **Remaining = frontend** (A6 routing, A7 claim
-> UI) **+ policy follow-ups** (A8 placeholder decision below, A9/A10/A11).
+> identity via `publicIdentity()`.
+>
+> **Claim UI DONE 2026-06-16** (`src/htl/account/index.ts` +
+> `src/components/ProfileScreen.tsx` + `src/styles.css`): the Profile screen shows
+> the public `@handle` (or a "Claim your @handle" CTA) and an inline editor with
+> debounced live availability against `/api/handle/check`, claiming via
+> `/api/me/handle`. tsc 0 errors, 38 tests, build green.
+>
+> **A6 public `/@handle` page DONE 2026-06-16** (`server/accounts.ts` +
+> `server/api.ts` `GET /api/u/:handle`, `src/components/PublicProfileScreen.tsx`,
+> one-line `App.tsx` mount). **A11 satisfied by design. A9 rename cooldown
+> DONE** (7-day gate). Public profile **folds into the shared right dock** (mutually
+> exclusive w/ Settings/Profile/Session). **Only A10** (recycle/tombstone) remains —
+> blocked on M3 account-deletion, which doesn't exist yet.
 > Decision taken: handle is **NULL until claimed** (no stored placeholder) — an
 > un-claimed account is fully usable but not publicly addressable until it opts in.
 
@@ -112,45 +124,131 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       `[A-Za-z0-9_]`, len 3–20, NFKC+lowercase fold for uniqueness, case preserved.
 - [x] **A5. Reserved-handle seed list** (`RESERVED_HANDLES`): routes + impersonation
       targets + profanity seed, checked on the fold. *(Leetspeak evasion = later.)*
-- [ ] **A6. URL shape decision + routing** (`/@handle`) and reserved enforcement.
-      *(Backend reserves the names; frontend routing pending.)*
-- [~] **A7. Claim-handle flow.** API done (`/api/handle/check`, `/api/me/handle`);
-      **first-run claim UI + public-feature gating still to build (frontend).**
+- [x] **A6. URL shape + routing — `/@handle`.** Public read `GET /api/u/:handle`
+      (public fields only, never email/connections; Worker + dev parity); client
+      `fetchPublicProfile`; self-contained `PublicProfileRoute` (no app router — reads
+      `location.pathname`, follows popstate) mounted once in `App.tsx`; SPA fallback
+      serves direct navigations. Reserved names already enforced by `validateHandle`.
+- [x] **A7. Claim-handle flow.** API + Profile-screen claim/rename editor (debounced
+      availability) done. *(First-run forced gating + `/@handle` public page = later.)*
 - [x] **A8. Backfill** — handle is nullable + `ensureIdentityColumns()` adds the
       columns to older/local DBs. **Decision: no stored placeholder** — un-claimed
       rows stay handle-NULL (usable, not publicly addressable). Supersedes the
       original `user-ab12cd` idea; un-claimed users render a derived label client-side.
-- [ ] **A9. Rename policy:** `handle_set_at` is now recorded per claim; still TODO =
-      enforce a rename **cooldown** + don't instantly free the old handle
-      (impersonation). Store mentions/links by user `id`, render current handle.
+- [x] **A9. Rename cooldown** — 7-day gate between renames (`HANDLE_RENAME_COOLDOWN_MS`,
+      enforced in `setUserHandle` + dev `setHandle`; first claim free; message shows in
+      the editor). *(Still TODO when graphs land: don't instantly free the old handle;
+      store mentions/links by user `id` and render the current handle.)*
 - [ ] **A10. Recycle policy on deletion:** tombstone (don't recycle) or long
       quarantine. (See M3 deletion cascade.)
-- [ ] **A11. Multi-provider future-proofing:** handle on account, not provider;
-      document the account-link path for future "Sign in with X".
+- [x] **A11. Multi-provider future-proofing — satisfied by design.** The handle
+      lives on the `users` row (keyed by account `id`), independent of the
+      `connections` table, so it already survives any future provider link/merge.
+      Login stays Google-only; adding "Sign in with X" = an account-link step that
+      doesn't touch the handle. *(Revisit if a true account-merge flow is built.)*
 
 ## B. Public profile surface  *(P1)*
 
-- [ ] **B1. Separate "Account/Settings" (private) from "Public profile".** The
-      current Profile modal is settings — email, connections, Disconnect stay
-      private behind the owner-only eye toggle.
-- [ ] **B2. Public profile object:** handle, display name, avatar, bio.
-- [ ] **B3. Live status on profile** ("on the decks now → join").
-- [ ] **B4. Top songs** (reuse existing play counts) as the taste surface.
+> **Buildable slice DONE 2026-06-16** (`ProfileScreen.tsx` ProfileEditor +
+> public block, `server/accounts.ts`/`server/api.ts` B7 fix). tsc 0, 38 tests,
+> build green. B3/B5/B6 wait on later epics (rooms D / async G / graph C).
+
+- [x] **B1. Separate public vs private.** Own Profile now has a distinct **public**
+      block (display name + bio + "View public profile →" to `/@handle`); email +
+      connections stay the private account bits behind the owner-only eye toggle.
+- [x] **B2. Public profile object** — display name + bio editable via `ProfileEditor`
+      (PUT `/api/me/profile`, never touches the Google-mirror). *(Custom avatar
+      upload deferred — public avatar = letter fallback until set; needs R2.)*
+- [ ] **B3. Live status on profile** ("on the decks now → join"). *(Needs Epic E.)*
+- [x] **B4. Top songs** (existing play counts) — shown on own + public profile.
 - [ ] **B5. Past sets / venues hosted** list (depends on G).
-- [ ] **B6. Followers / following counts + lists** (depends on C).
-- [ ] **B7. Never fall back to email or Google legal name** for any public field.
+- [x] **B6. Follower / following counts** on own + public profile (Epic C).
+      *(List UI deferred — `/api/{followers,following}` endpoints exist.)*
+- [x] **B7. Never leak email or Google legal name publicly.** `/api/u/:handle` now
+      returns `display_name`-or-null (no `name` fallback) + `avatar_url`-or-null (no
+      Google avatar); the `/@handle` UI shows the @handle when display name is unset.
 
 ## C. Social graph  *(P1)*
 
-- [ ] **C1. Follow model** (asymmetric). Primitive that powers feed + go-live pings.
-- [ ] **C2. Friends** (mutual/accepted) as a second tier for private-session access.
-- [ ] **C3. Negative graph: block / mute.** Define enforcement (blocked user in
-      your public room? in the count? block == room ban?).
-- [ ] **C4. Celebrity hot-row handling** for follower lists (the 100k-follower DJ).
-- [ ] **C5. Discoverability opt-in:** lookup-by-handle always; by-email /
-      Spotify-graph matching is opt-in only.
+> **Graph core DONE 2026-06-16** — migration `0013_graph.sql` (`follows` + `blocks`);
+> `db.ts` follow/unfollow/block/unblock + `relationship`/`followCounts`/list fns;
+> `accounts.ts` `POST /api/{follow,unfollow,block,unblock}` + `/api/{followers,following}`
+> + counts/relationship/isSelf on `/api/u/:handle` + own counts on `/api/me/profile`;
+> Follow/Block UI + counts on the public profile, own counts on the Profile screen.
+> tsc 0, 38 tests, build + dry-run green. **Block hides the blocker from the blockee's
+> profile (404).** Multi-user follow needs the Worker (`pnpm worker`) — dev is single-user.
+
+- [x] **C1. Follow model** (asymmetric) — `follows(follower_id, followee_id)`, idempotent,
+      blocked-either-way rejected; counts + lists + Follow/Following/Follow-back button.
+- [x] **C2. Friends = mutual follow**, derived (`relationship.mutual`), shown on the profile.
+      *(The "accept" variant for private-session access stays an E-epic concern.)*
+- [x] **C3. Negative graph: block** — `blocks` table, block drops follows both ways,
+      blocked user can't follow you and can't see your profile (404). *(Mute = a chat
+      concept, deferred to F/L. Room-level block enforcement lands with E.)*
+- [~] **C4. Celebrity hot-row** — indexed `follows(followee_id)` + paginated lists now;
+      counts are `COUNT(*)` (fine at current scale). **TODO:** denormalize a per-user
+      counter column if any account's list grows large enough that COUNT(*) hurts.
+- [ ] **C5. Discoverability opt-in:** lookup-by-handle already works (public `/@handle`);
+      by-email / Spotify-graph matching deferred (opt-in only when built).
 
 ## D. Broadcast plane & deterministic reconstruction  *(P2, critical path)*
+
+> **Design settled 2026-06-16 (build approved).** Spine principles:
+>
+> - **One engine, two surfaces.** A room has WRITERS (`controlling`) and READERS
+>   (`listening`-only). Private session = mostly writers; public room = few writers
+>   + many readers + a shareable id + anon access. Every D upgrade lands on both;
+>   the writer path is **unchanged**, so private feel is preserved by construction.
+> - **Role picks the stream, `listening` only gates audio render.** `controlling`
+>   (±listening) → the full **writer stream** (intents + tick), exactly as today.
+>   `listening`-only → the curated **digest** (resolved state + sparse anchors).
+>   So **control+listen = today, byte-for-byte** — the digest never touches a
+>   controller. Stepping up/down the decks = a digest⇄writer-stream **subscription
+>   swap** (this is the seat/stage transition, made literal).
+> - **No new clock.** The session already runs local-playhead + periodic re-anchor
+>   ("desktop playhead real-clock"); the instant feel comes from *event* pushes over
+>   the WS, identical for listeners. "Loose" only meant absolute-position precision,
+>   which is invisible (listeners render independently, never hear each other).
+> - **Stem state is already resolved + authoritative in the tick** (`DeckTick.stems
+>   {g,m}`, self-heals a dropped intent) → listeners get the live stem mix from the
+>   digest, no raw intent needed. Stem mixing is pure-parameter (no gestures) → it
+>   reconstructs faithfully; it's the *showcase*, not the hard case.
+> - **Stems-from-R2, cache-only.** Listeners (mobile included) DOWNLOAD cached stems;
+>   never separate. The host decides stem availability and bears the separation cost
+>   to warm the cache; uncached → graceful full-track (non-stem) mix for everyone.
+> - **Room-id = handle→home.** DO stays keyed `home:${accountId}` (private unchanged).
+>   A public listener addresses a room by the host's `@handle` → resolve → join that
+>   `home:` DO as anon, read-only, no invite — gated by a host `public` flag.
+> - **Presence at scale = a count, not a list.** Public listeners are excluded from
+>   the roster + anchor eligibility; surfaced as `listeners: N`.
+>
+> **Build order:** D-1 server foundation (public flag + anon read-only listener by
+> handle + count) → digest curation/roll-up → stems-from-R2 (Deck.ts, *after* the FX
+> agent settles) → relay-tier seam → clock/late-join hardening.
+>
+> **D-1 SHIPPED 2026-06-16 (transport layer, build-green, uncommitted).** Files:
+> `protocol.ts` (`{t:"public"}` + `listeners`/`public` on welcome/presence),
+> `room.ts` (`pub` role: anon read-only admission gated on the host `public` flag,
+> excluded from roster + anchor, surfaced as `listenerCount()`, read-only message
+> guard, host `public` toggle that evicts on close), `worker/index.ts` (`?room=@handle`
+> → resolve → `home:${hostId}` as `pub=1`, anon-ok, un-forgeable), `client.ts`
+> (`listenHandle` read-only connect mode + `goPublic()` + `listeners` handler).
+> A listener tunes in by handle and receives the live board (catch-up snapshot + tick +
+> relayed state) → reconstructs the mix locally. **Functional for non-stem mixes now.**
+> **Deferred:** the UI (host "Go live" toggle + a listener tune-in entry — both live in
+> the FX-agent-contended `App.tsx`/components); digest curation (drop raw intents for
+> readers — currently they get the full relay, which works but isn't optimized);
+> stems-from-R2 (so stem mixes reconstruct on listeners — needs `Deck.ts`).
+>
+> **Curation note (2026-06-16):** snapshots are **catch-up-only** (`App.tsx:559`);
+> live board changes ride the *intents*, so readers genuinely need most intents today
+> — wholesale intent-dropping would break live reader rendering. Full "resolved-delta
+> digest" (roll up continuous sweeps into frequent resolved state) therefore needs the
+> publish cadence reworked in `App.tsx` (FX-agent-contended). Done now, the safe
+> pure-`room.ts` slice: **`jog` (gestural scrub) is no longer fanned to public
+> listeners** (`relay(..., skipListeners)`) — non-reconstructable for them, they resync
+> via the tick. Continuous `control`/`stemGain` sweeps still relay (readers need them
+> to hear the live mix) until the roll-up lands.
 
 - [ ] **D1. Broadcast digest protocol:** control room publishes now-playing,
       transport clock, deck/crossfader/EQ snapshot, cue events, presence, reactions,
@@ -173,12 +271,35 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## E. Rooms as first-class objects + lifecycle + seat UX  *(P2, critical path)*
 
-- [ ] **E1. Room object model:** persistent **venue** (identity, host, followers,
-      schedule, history) vs ephemeral **live instance** (roster, count, chat).
-      **Structural prerequisite:** today room identity == account identity (one
-      DjRoom per account). Decouple the room into its own addressable object before
-      a venue can be found/joined independent of the host's device-sync session.
-- [ ] **E2. Public room directory** ("live now," sorted by listeners / follows / genre).
+> **Directory spine DONE 2026-06-16 (data + API, build-green, uncommitted).** The
+> DjRoom DO has no D1 binding, so the **host client announces** its live room to a D1
+> shadow that the public directory queries. Files: `0014_rooms.sql` (per-host `rooms`
+> row), `db.ts` (`announceRoom`/`closeRoom`/`liveRooms` + `ensureRoomsTable`),
+> `accounts.ts` (`GET /api/rooms/live` public; `POST /api/rooms/{announce,close}` host,
+> handle-gated), dev parity, client `fetchLiveRooms`/`announceRoom`/`closeRoom`.
+> **UI SHIPPED 2026-06-16 (FX agent done).** `useRoom` exposes `goPublic`/`roomPublic`/
+> `listenerCount` + an announce **heartbeat** (~30s while live). `SocialScreen` gained a
+> host **"● Go live"** control (handle-gated; shows "Live at @handle · N listening") and
+> a **"● Live now" directory** (polls `fetchLiveRooms`, busiest-first, taps through to
+> `/@handle`). tsc 0, 38 tests, build green.
+>
+> **LISTENER TUNE-IN (Phase 2) SHIPPED 2026-06-16.** `useRoom.tuneIn(handle)`/`tuneOut()`/
+> `listeningTo` **swap the socket** to the host's room in `listenHandle` mode (anon-capable)
+> and derive the read-only listener role locally (a `pub` listener isn't in the roster →
+> `joined`/`listening` forced true, never controlling/host/anchor). The existing
+> guest-reconstruction handlers render the mix. `SocialScreen`: a **Live-now row taps to
+> tune in** (unlocks audio via `onActivate`), a **"🎧 Listening to @X · Stop"** banner,
+> own-session footer hidden while listening. **Non-stem mixes reconstruct now; stem mixes
+> still need stems-from-R2 (`Deck.ts`).** Also fixed `useRoom.refreshUser()` (Profile-close
+> → "Go live" un-gates post-claim, no reload) + the `DEV_LOGIN` shortcut login.
+> **Still next:** now-playing in the heartbeat, a "Listen" button on `/@handle` itself,
+> stems-from-R2; E3–E10/E12 (per-deck roles, seat UX, gate modes).
+
+- [~] **E1. Room object model** — registry/data layer done (per-host live `rooms`
+      row + heartbeat). Addressing already decoupled via D-1 (`?room=@handle` →
+      `home:${accountId}`). *(Persistent venue history/schedule = later.)*
+- [~] **E2. Public room directory** — `GET /api/rooms/live` (busiest-first, freshness-
+      filtered) + `fetchLiveRooms()` shipped. *(The "live now" screen UI is deferred.)*
 - [ ] **E3. Role ladder:** host → co-controller (write, small N) → listener (large
       N) → b2b/handoff. **Per-deck claim**, not per-room control.
 - [ ] **E4. Seat/stage UX:** floor ⇄ decks as the ONE prominent control; deck UI
@@ -197,7 +318,8 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [ ] **E8. DO-eviction rehydration** of room state (now-playing, roster, gate mode).
 - [ ] **E9. Co-controller disconnect mid-control** (deck freeze vs auto-release).
 - [ ] **E10. Max room-size cap** + at-cap failure mode (decision in Open Decisions).
-- [ ] **E11. Zombie/orphan room cleanup** (vanished host, empty rooms in directory).
+- [~] **E11. Zombie/orphan cleanup** — directory freshness filter (`last_seen > now-90s`)
+      ages out a vanished host now; physical row sweep = later (lazy).
 - [ ] **E12. Private→public room transition** permission model.
 
 ## F. Crowd → DJ interactivity channel  *(P3)*

@@ -31,6 +31,8 @@ import {
   upsertIdentity,
   getOrCreateInvite,
   inviteOwner,
+  ensureIdentityColumns,
+  userByHandle,
   getCachedCaptions,
   putCachedCaptions,
   getLyrics,
@@ -46,6 +48,7 @@ import {
   clampNum,
   cleanText,
   clientIp,
+  foldHandle,
   looksLikeAudioStem,
   sanitizeHttpUrl,
 } from "../server/security";
@@ -878,21 +881,35 @@ async function handleRoom(req: Request, env: Env): Promise<Response> {
   // but ONLY via a valid invite code (they can't own a session). The session key is
   // derived server-side, so a raw user id never appears in a URL.
   const url = new URL(req.url);
+  const roomHandle = (url.searchParams.get("room") || "").trim(); // public listen by @handle (broadcast plane)
   const code = (url.searchParams.get("join") || "").trim();
   let hostId: string | null = user ? user.id : null;
-  if (code && env.DB) {
+  // PUBLIC listen: resolve @handle → the host's home room. Anyone (incl. anonymous) may
+  // tune in; the DO admits them read-only only if the host opened the room (its `public`
+  // flag). The owner opening their OWN handle stays a normal host connection (full control).
+  let asPublic = false;
+  if (roomHandle && env.DB) {
+    await ensureIdentityColumns(env.DB);
+    const u = await userByHandle(env.DB, foldHandle(roomHandle));
+    if (!u || !u.handle) return json(404, { error: "no such room" });
+    hostId = u.id;
+    asPublic = !(user && user.id === u.id);
+  } else if (code && env.DB) {
     const owner = await inviteOwner(env.DB, code);
     if (owner) hostId = owner;
     else if (!user) return json(404, { error: "that invite link isn't valid" });
   }
   if (!hostId) return json(401, { error: "sign in, or open an invite link to join a session" });
 
-  // Mark whether THIS connection is the session owner (a host device) vs an invited guest.
-  // Authoritative + un-forgeable: we strip any client-supplied `host` and set it ourselves
-  // from the authenticated identity. Guests can't grant themselves control (see the DO).
-  const isHost = !!user && user.id === hostId;
+  // Mark whether THIS connection is the session owner (a host device) vs a guest, vs a
+  // public listener. Authoritative + un-forgeable: we strip any client-supplied `host`/`pub`
+  // and set them ourselves from the authenticated identity. Guests can't grant themselves
+  // control, and a public listener is read-only (see the DO).
+  const isHost = !!user && user.id === hostId && !asPublic;
   url.searchParams.delete("host");
+  url.searchParams.delete("pub");
   if (isHost) url.searchParams.set("host", "1");
+  if (asPublic) url.searchParams.set("pub", "1");
   const stub = env.ROOM.get(env.ROOM.idFromName(`home:${hostId}`));
   return stub.fetch(new Request(url.toString(), req));
 }

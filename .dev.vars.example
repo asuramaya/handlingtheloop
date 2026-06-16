@@ -11,6 +11,13 @@ GOOGLE_OAUTH_CLIENT_SECRET=
 # 32+ random chars — encrypts stored OAuth tokens at rest in D1.
 TOKEN_ENC_KEY=
 
+# DEV-ONLY shortcut login. Set to ANY non-empty value to enable GET /api/auth/dev?name=X,
+# which signs you in as a real local user WITHOUT the Google OAuth round-trip — so rooms /
+# broadcast / follow / block are testable under `pnpm worker` (use different ?name= values
+# in different browsers for multi-user testing). NEVER set this as a production secret:
+# absent in prod, the route doesn't exist (404). Leave blank to require real Google sign-in.
+DEV_LOGIN=
+
 # Optional — playlist sync from Spotify / TIDAL.
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=

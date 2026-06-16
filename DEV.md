@@ -46,8 +46,23 @@ http://localhost:8787/api/auth/google/callback
 missing `.dev.vars` or an unregistered localhost redirect URI is the usual reason
 "Sign in with Google" fails locally.)
 
+### Skip Google: the dev shortcut login
+
+To avoid the OAuth setup entirely, set `DEV_LOGIN=1` in `.dev.vars`, then visit:
+
+```
+http://localhost:8787/api/auth/dev?name=Hector   # signed in instantly as a real local user
+```
+
+It mints a real D1 user + session (no Google), so rooms / broadcast / follow / block
+all work. Use a **different `?name=`** in a second browser (or incognito) to be a
+**different real user** — the way to test multi-user follow/block and host↔listener.
+This route is gated on `DEV_LOGIN`, which is **never set in production**, so it 404s
+there. (A *public broadcast listener* needs no login at all — just open the room.)
+
 To test **shared sessions / social**: open two browser tabs against `:8787`, start a
-session in one, knock from the other.
+session in one, knock from the other. For the **broadcast plane**: dev-login, then
+**Session → ● Go live**, and open an incognito window as the anonymous listener.
 
 ## Production
 

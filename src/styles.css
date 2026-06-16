@@ -8919,3 +8919,143 @@ span.profile-handle:hover {
   background: transparent; border: 1px solid var(--line); border-radius: 5px; cursor: pointer;
 }
 .mixq-item-x:hover { color: #c8506a; border-color: #c8506a; }
+
+/* ── Broadcast plane: host "Go live" + the public "live now" directory ──────── */
+.social-broadcast {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.broadcast-btn {
+  padding: 8px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.broadcast-btn.on {
+  background: #c8506a;
+  border-color: #c8506a;
+  color: #fff;
+}
+.broadcast-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.broadcast-status b {
+  color: var(--accent);
+}
+.broadcast-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.live-now {
+  margin-bottom: 10px;
+}
+.live-now-head {
+  color: #c8506a;
+}
+.live-now-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.live-room {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.live-room:hover {
+  border-color: var(--accent);
+}
+.live-room-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.live-room-avatar.fallback {
+  display: grid;
+  place-items: center;
+  background: var(--line);
+  font-size: 13px;
+  font-weight: 700;
+}
+.live-room-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.live-room-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-room-you {
+  color: var(--muted);
+  font-weight: 400;
+}
+.live-room-np {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-room-count {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+/* Tuned-in listener: banner + the active room row in "live now". */
+.listening-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid #c8506a;
+  background: color-mix(in srgb, #c8506a 14%, var(--panel));
+  font-size: 13px;
+}
+.listening-what b {
+  color: #e87f97;
+}
+.listening-stop {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #c8506a;
+  background: transparent;
+  color: #e87f97;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.listening-stop:hover {
+  background: #c8506a;
+  color: #fff;
+}
+.live-room.tuned {
+  border-color: #c8506a;
+  background: color-mix(in srgb, #c8506a 10%, var(--panel-2));
+}

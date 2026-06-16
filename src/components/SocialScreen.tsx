@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RoomState } from "@htl/room";
+import { type LiveRoom, fetchLiveRooms } from "@htl/account";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { QRCode } from "./QRCode";
 import { DockResizer } from "./DockResizer";
+
+// Navigate to a public profile /@handle (App's PublicProfileRoute listens for popstate).
+function goToHandle(handle: string): void {
+  window.history.pushState(null, "", `/@${handle}`);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
 
 // The expanded session "social screen" — the full-screen surface behind the chin
 // popup's Expand button. Everything social lives here: the live roster with roles +
@@ -87,6 +94,26 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
           </span>
         </div>
 
+        {room.listeningTo && (
+          <div className="listening-banner">
+            <span className="listening-what">
+              🎧 Listening to <b>@{room.listeningTo}</b>
+            </span>
+            <button className="listening-stop" onClick={room.tuneOut}>
+              Stop
+            </button>
+          </div>
+        )}
+
+        <LiveNow
+          self={room.user?.handle ?? null}
+          tunedTo={room.listeningTo}
+          onListen={(h) => {
+            onActivate?.();
+            room.tuneIn(h);
+          }}
+        />
+
         {!inSession ? (
           <p className="social-hint">Sign in under Profile, or open an invite link, to join a shared session.</p>
         ) : (
@@ -126,7 +153,9 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
               )}
             </ul>
 
-            <div className="social-foot">
+            {/* Own-session management is hidden while tuned into someone else's broadcast
+                (you're a read-only listener there — the banner's Stop is the only action). */}
+            <div className="social-foot" style={room.listeningTo ? { display: "none" } : undefined}>
               {!room.joined ? (
                 !online ? (
                   <button className="room-cta" disabled>
@@ -143,6 +172,30 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                 )
               ) : (
                 <button className="room-unlink" onClick={room.leave}>Leave session</button>
+              )}
+
+              {/* Broadcast: the host opens the room to anonymous listeners (the public plane). */}
+              {!room.isGuest && room.signedIn && room.joined && (
+                <div className="social-broadcast">
+                  {room.user?.handle ? (
+                    <>
+                      <button
+                        className={`broadcast-btn ${room.roomPublic ? "on" : ""}`}
+                        onClick={() => room.goPublic(!room.roomPublic)}
+                        title={room.roomPublic ? "Stop broadcasting publicly" : "Open this set to anyone at your @handle"}
+                      >
+                        {room.roomPublic ? "■ End broadcast" : "● Go live"}
+                      </button>
+                      {room.roomPublic && (
+                        <span className="broadcast-status">
+                          Live at <b>@{room.user.handle}</b> · {room.listenerCount} listening
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="broadcast-hint">Claim a @handle (Profile) to broadcast publicly.</span>
+                  )}
+                </div>
               )}
 
               {!room.isGuest && room.signedIn && (
@@ -167,6 +220,68 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
 
         {room.error && <p className="room-err">{room.error}</p>}
       </div>
+    </div>
+  );
+}
+
+// The public "live now" directory — rooms broadcasting right now, busiest first.
+// Polls the live registry; a row taps through to that host's /@handle.
+function LiveNow({
+  self,
+  tunedTo,
+  onListen,
+}: {
+  self: string | null;
+  tunedTo: string | null;
+  onListen: (handle: string) => void;
+}) {
+  const [rooms, setRooms] = useState<LiveRoom[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetchLiveRooms()
+        .then((r) => alive && setRooms(r))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+  if (rooms.length === 0) return null;
+  // Tapping a room TUNES IN (read-only listen); your own room taps through to its profile.
+  const tap = (handle: string) => (handle === self ? goToHandle(handle) : onListen(handle));
+  return (
+    <div className="live-now">
+      <div className="social-section-head live-now-head">● Live now</div>
+      <ul className="live-now-list">
+        {rooms.map((r) => (
+          <li
+            key={r.handle}
+            className={`live-room ${r.handle === tunedTo ? "tuned" : ""}`}
+            onClick={() => tap(r.handle)}
+          >
+            {r.avatar ? (
+              <img className="live-room-avatar" src={r.avatar} alt="" loading="lazy" />
+            ) : (
+              <span className="live-room-avatar fallback" aria-hidden="true">
+                {(r.displayName || r.handle).slice(0, 1).toUpperCase()}
+              </span>
+            )}
+            <span className="live-room-main">
+              <span className="live-room-name">
+                {r.displayName || `@${r.handle}`}
+                {r.handle === self && <span className="live-room-you"> (you)</span>}
+              </span>
+              <span className="live-room-np">
+                {r.npTitle ? `${r.npArtist ? `${r.npArtist} — ` : ""}${r.npTitle}` : `@${r.handle}`}
+              </span>
+            </span>
+            <span className="live-room-count">{r.listeners} 🎧</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

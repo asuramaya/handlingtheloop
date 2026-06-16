@@ -619,11 +619,15 @@ export class AudioEngine {
     this.writeKeyRoles();
   }
 
-  /** position in [-1, 1]: -1 = full A, 0 = both, +1 = full B. */
+  /** position in [-1, 1]: -1 = full A, 0 = both, +1 = full B. Smoothed with a short time
+   *  constant so a stepped value stream (a broadcast LISTENER gets the crossfade coalesced
+   *  to ~20Hz — see the room digest roll-up) glides instead of zippering. 15ms is below the
+   *  perceptual threshold, so a local DJ's own fader feels instant. */
   setCrossfade(position: number) {
     const x = (Math.max(-1, Math.min(1, position)) + 1) / 2; // -> [0,1]
-    this.xfadeA.gain.value = Math.cos((x * Math.PI) / 2);
-    this.xfadeB.gain.value = Math.cos(((1 - x) * Math.PI) / 2);
+    const t = this.ctx.currentTime;
+    this.xfadeA.gain.setTargetAtTime(Math.cos((x * Math.PI) / 2), t, 0.015);
+    this.xfadeB.gain.setTargetAtTime(Math.cos(((1 - x) * Math.PI) / 2), t, 0.015);
   }
 
   setMaster(gain: number) {

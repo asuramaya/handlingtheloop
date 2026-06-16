@@ -11,7 +11,7 @@
 // The host's own devices land here by default; guests on OTHER accounts (incl. anonymous)
 // arrive via an invite code the Worker resolves to this same session. Uses the WebSocket
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
-import type { ClientMsg, ServerMsg, Peer } from "../src/htl/room/protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent } from "../src/htl/room/protocol";
 
 // --- Minimal Cloudflare runtime types (no @cloudflare/workers-types installed). ---
 interface Ws {
@@ -95,6 +95,14 @@ export class DjRoom {
   private static MAX_LISTENERS = 500;
   private static ANCHOR_GRACE_MS = 8000;
   private anchorGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Digest roll-up (D1): WRITERS get every intent immediately (instant mixing feel); the
+  // LISTENER crowd gets a curated stream — gestural jog dropped, continuous SWEEPS coalesced
+  // to ~20Hz (last value per control), discrete events passed straight through. As the FX
+  // rack grows, this stops each new param's sweep from multiplying listener fan-out.
+  private static COALESCE_KINDS: ReadonlySet<string> = new Set(["control", "crossfade", "stemGain", "fxParam"]);
+  private static DIGEST_FLUSH_MS = 50; // ~20 Hz
+  private digest = new Map<string, ServerMsg>();
+  private digestTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -333,15 +341,21 @@ export class DjRoom {
         break;
       }
       case "intent": {
-        // ANY controller drives. Relay to everyone else (the sender already applied it).
-        // Digest curation for the broadcast crowd: a `jog` is gestural platter-scrub —
-        // the highest-frequency message during a scratch and NON-reconstructable for a
-        // read-only listener. Don't fan it to public listeners; they hold position from
-        // the tick and resync at the next anchor (the broadcast-plane resync contract).
-        // Writers + invited guests still get it (they may drive / mirror the platter).
-        if (this.isControlling(self)) {
-          this.relay(self, { t: "intent", from: self, seq: ++this.seq, intent: msg.intent }, msg.intent.kind === "jog");
-        }
+        // ANY controller drives. The sender already applied it locally.
+        if (!this.isControlling(self)) break;
+        const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent } satisfies ServerMsg;
+        // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
+        // may be driving / mirroring the platter). skipListeners=true → non-pub only.
+        this.relay(self, out, true);
+        // The LISTENER crowd (digest roll-up): jog is gestural + non-reconstructable → drop
+        // (they hold position from the tick, resync at the next anchor). Continuous SWEEPS
+        // are coalesced (~20Hz, last value per control) so a rack of FX sweeps doesn't fan
+        // out at input rate. Everything else (load/cue/loop/transport/hotcue/sync/fxRack/…)
+        // passes straight through.
+        const kind = msg.intent.kind;
+        if (kind === "jog") break;
+        if (DjRoom.COALESCE_KINDS.has(kind)) this.queueDigest(msg.intent, out);
+        else this.relayToListeners(out);
         break;
       }
       case "tick": {
@@ -713,6 +727,41 @@ export class DjRoom {
       }
       ws.send(json);
     }
+  }
+
+  // Send ONLY to the anonymous read-only (public) listener crowd. The digest path uses this.
+  private relayToListeners(msg: ServerMsg): void {
+    const json = JSON.stringify(msg);
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (!a?.pub) continue;
+      try {
+        ws.send(json);
+      } catch {
+        /* socket gone */
+      }
+    }
+  }
+
+  // What makes a sweep "the same control" — so last-value-wins coalescing replaces, not
+  // queues: kind + deck + the param/stem/slot it targets.
+  private static digestKey(i: Intent): string {
+    const a = i as unknown as Record<string, unknown>;
+    return `${i.kind}:${a.deck ?? ""}:${a.param ?? a.stem ?? a.slot ?? ""}`;
+  }
+
+  // Buffer a continuous sweep for the listener crowd, keeping only the latest value per
+  // control, and flush the batch at ~DIGEST_FLUSH_MS. During an active sweep the DO is awake
+  // (it's processing the intents), so the timer fires; an idle room never queues anything.
+  private queueDigest(intent: Intent, msg: ServerMsg): void {
+    this.digest.set(DjRoom.digestKey(intent), msg);
+    if (this.digestTimer) return;
+    this.digestTimer = setTimeout(() => {
+      this.digestTimer = null;
+      const batch = [...this.digest.values()];
+      this.digest.clear();
+      for (const m of batch) this.relayToListeners(m);
+    }, DjRoom.DIGEST_FLUSH_MS);
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited

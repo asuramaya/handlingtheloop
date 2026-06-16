@@ -32,7 +32,6 @@ interface DeckControlsProps {
   stemPending: boolean; // this deck's stems are still loading (downloading/separating)
   stemPendingPct?: number | null; // load progress 0–100 for the placeholder label
   otherStemPending: boolean; // the OTHER deck's stems are loading (so reserve the row to stay aligned)
-  onMobileStems?: () => void; // MOBILE only: flip this deck between Single (mix) and on-device Stems
   tempoRange: number;
   pitchRange: number;
   levelGainDb: number; // post-crossfade attenuation for this deck's level meter
@@ -70,7 +69,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, onMobileStems, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, refresh, emit, emitControls }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -437,18 +436,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             session whose host streams its stem envelopes — but for a REMOTE deck only
             once those envelopes actually land (stemControlsReady), so the cells never sit
             above a single combined waveform while the host hasn't / can't stream them. */}
-        {/* MOBILE Single↔Stems: phones default to the plain mix; this opts THIS deck into
-            on-device stem separation (and back). Desktop never gets this prop. */}
-        {onMobileStems && (
-          <button
-            className={`stem-mode-btn ${deck.hasStems ? "on" : ""}`}
-            onClick={onMobileStems}
-            disabled={stemPending}
-            title={deck.hasStems ? "Switch back to the single mix" : "Split this track into stems on-device"}
-          >
-            {stemPending ? "Stems…" : deck.hasStems ? "◧ Stems" : "▭ Single"}
-          </button>
-        )}
+        {/* MOBILE stems are a global preference now (Settings ▸ Stems), not a per-deck button. */}
         {deck.stemControlsReady ? (
         <div className="stems-row">
           {STEM_CELLS.map((s) => (

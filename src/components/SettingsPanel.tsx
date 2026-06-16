@@ -793,9 +793,24 @@ export function SettingsPanel({
                   <span className="settings-label">{isMobileDevice() ? "Stems" : "Stem separation"}</span>
                 </div>
                 {isMobileDevice() ? (
+                  <>
+                  <div className="settings-row">
+                    <span className="settings-label">
+                      Split tracks into stems
+                      <span className="settings-sub muted"> · on-device · per-stem mixer + colours</span>
+                    </span>
+                    <button
+                      className={`toggle ${settings.mobileStems ? "on" : ""}`}
+                      onClick={() => set({ mobileStems: !settings.mobileStems })}
+                      role="switch"
+                      aria-checked={settings.mobileStems}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </div>
                   <div className="stem-mobile-note">
-                    Phones load stems from the shared cache when a desktop has already made them; otherwise the deck
-                    plays the plain mix.
+                    Off keeps the lightest plain mix. On splits every loaded deck on-device (or adopts the shared
+                    cache when a desktop already made them). Auto-DJ turns this on while it runs.
                     {stemFailLevel() > 0 && (
                       <>
                         {" "}
@@ -813,6 +828,7 @@ export function SettingsPanel({
                       </>
                     )}
                   </div>
+                  </>
                 ) : (
                   <div className="stem-models">
                     {STEM_MODELS

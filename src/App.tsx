@@ -932,13 +932,15 @@ export function App() {
   const stemModelRef = useRef(settings.stemModel);
   stemModelRef.current = settings.stemModel;
 
-  // MOBILE: explicit per-deck Single↔Stems request. A phone defaults to the plain mix
-  // (Single, lightest) and only derives on-device stems when the user opts IN per deck —
-  // deriveStems' mix-only gate reads this ref, the per-deck STEMS/SINGLE button flips it
-  // (toggleMobileStems). Desktop ignores it (it follows the model/auto-enhance as before).
-  const [mobileStemReq, setMobileStemReq] = useState<Record<DeckId, boolean>>({ A: false, B: false });
-  const mobileStemReqRef = useRef(mobileStemReq);
-  mobileStemReqRef.current = mobileStemReq;
+  // MOBILE: a single global "use stems on this device" preference (Settings ▸ Stems). A phone
+  // defaults to the plain mix (Single, lightest) and derives on-device stems for every loaded
+  // deck only when this is on. deriveStems' mix-only gate reads this ref; AUTO additionally
+  // forces stems (a stem transition needs both decks) via autoEnabledRef below. Desktop ignores
+  // both (it follows the model / auto-enhance as before).
+  const mobileStemsRef = useRef(settings.mobileStems);
+  mobileStemsRef.current = settings.mobileStems;
+  // AUTO on → force mobile stems regardless of the toggle (assigned where autoStatus exists).
+  const autoEnabledRef = useRef(false);
   // Auto-enhance (desktop): read fresh in the load callbacks without re-creating them.
   const autoEnhanceRef = useRef(settings.autoEnhance);
   autoEnhanceRef.current = settings.autoEnhance;
@@ -1073,9 +1075,10 @@ export function App() {
       const stemDiverged = STEM_KEYS.some(
         (n) => engine.deck(id).stemLevel(n) !== 1 || !engine.deck(id).stemActive(n),
       );
-      // The user explicitly asked THIS deck for stems on mobile (the SINGLE/STEMS button) →
-      // fall through to the on-device DSP / cached-neural path regardless of the mix-only gate.
-      const mobileWantStems = isMobileDevice() && mobileStemReqRef.current[id];
+      // Mobile wants stems when the global toggle is on (Settings ▸ Stems) OR AUTO is running
+      // (a stem transition needs both decks) → fall through to the on-device DSP / cached-neural
+      // path regardless of the mix-only gate.
+      const mobileWantStems = isMobileDevice() && (mobileStemsRef.current || autoEnabledRef.current);
       if (model.id === "off" && !mobileWantStems && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
         if (!isMobileDevice() && autoEnhanceRef.current) {
           await whenIdle();
@@ -2891,6 +2894,10 @@ export function App() {
     mixOutTime: null,
     countdownSec: null,
   });
+  // AUTO forces on-device stems on mobile (a stem transition needs both decks) regardless of
+  // the Settings ▸ Stems toggle; the gate in deriveStems reads this ref. (Declared up by the
+  // mobile-stems ref, assigned here where autoStatus is in scope.)
+  autoEnabledRef.current = autoStatus.enabled;
 
   // Apply a crossfade value through the one canonical path (engine + state + session).
   const applyCrossfade = useCallback(
@@ -2941,20 +2948,20 @@ export function App() {
     [meta, library.collection],
   );
 
-  // MOBILE Single↔Stems toggle for one deck. → Stems: the deck is mix-only so its float32
-  // buffer is still resident — derive in place (position + playback preserved, no re-decode).
-  // → Single: stems loading RELEASED the mobile mix buffer (the OOM fix), so re-decode the
-  // track to restore the plain mix, carrying position/playback via a restore snapshot.
-  const toggleMobileStems = useCallback(
-    (id: DeckId) => {
+  // MOBILE: bring one deck to the desired stem mode. → Stems (want): the deck is mix-only so
+  // its float32 buffer is still resident — derive in place (position + playback preserved, no
+  // re-decode). → Single (!want): stems loading RELEASED the mobile mix buffer (the OOM fix),
+  // so re-decode the track to restore the plain mix, carrying position/playback via a snapshot.
+  // No-op when the deck is already in the requested mode. Driven by the global Settings toggle
+  // (and AUTO) through reconcileMobileStems — there is no longer a per-deck button.
+  const applyMobileStemMode = useCallback(
+    (id: DeckId, want: boolean) => {
       const deck = engine.deck(id);
       const track = deckTrack(id);
-      if (!track) return;
-      const want = !mobileStemReqRef.current[id];
-      mobileStemReqRef.current = { ...mobileStemReqRef.current, [id]: want };
-      setMobileStemReq((r) => ({ ...r, [id]: want }));
+      if (!track || want === deck.hasStems) return;
       deriveGuard.current[id] = ""; // re-open the derive decision with the new request
-      if (want && deck.buffer) {
+      if (want) {
+        if (!deck.buffer) return; // no resident mix to split (shouldn't happen from Single)
         void deriveStems(id, track.videoId, deck.buffer, () => latest.current.loaded[id] !== track.videoId);
       } else {
         const snap = deckSnapshot(deck, latest.current.meta[id], track.videoId);
@@ -2962,6 +2969,10 @@ export function App() {
       }
     },
     [engine, deckTrack, deriveStems, loadTrackToDeck],
+  );
+  const reconcileMobileStems = useCallback(
+    (want: boolean) => (["A", "B"] as DeckId[]).forEach((id) => applyMobileStemMode(id, want)),
+    [applyMobileStemMode],
   );
 
   // Current crossfade behind a ref so the mixer can detect a manual fader grab.
@@ -3018,26 +3029,20 @@ export function App() {
     return () => clearInterval(iv);
   }, [autoStatus.enabled, autoIsRemote]);
 
-  // Mobile auto-DJ stems. A stem transition needs on-device stems on BOTH decks; the OOM
-  // that once barred this is resolved (int16 shared-offset WSOLA + aggregate stem budget),
-  // so when AUTO turns on for a mobile host/solo we opt both decks into stems — the same
-  // path the manual Single/Stems button drives — and derive for whatever is already loaded.
-  // Subsequent auto-loads inherit the request via mobileStemReqRef. Left ON when AUTO stops
-  // (the stems are already paid for; the per-deck button still flips back to Single).
+  // Mobile stem mode reconcile. The desired state for every loaded deck = the global toggle
+  // (Settings ▸ Stems) OR AUTO running (a stem transition needs both decks' stems; the OOM
+  // that once barred this is resolved — int16 shared-offset WSOLA + aggregate budget). When
+  // that desired value FLIPS, bring both already-loaded decks into line (derive, or restore
+  // the plain mix). New auto-loads inherit it via the deriveStems gate, so this only handles
+  // the transition. Guarded on the value so deckTrack churn can't re-fire it mid-derive.
+  const lastMobileWant = useRef<boolean | null>(null);
   useEffect(() => {
-    if (!isMobileDevice() || !autoStatus.enabled || autoIsRemote) return;
-    mobileStemReqRef.current = { A: true, B: true };
-    setMobileStemReq({ A: true, B: true });
-    (["A", "B"] as DeckId[]).forEach((id) => {
-      const vid = latest.current.meta[id]?.videoId;
-      const deck = engine.deck(id);
-      if (vid && deck.buffer && !deck.hasStems) {
-        deriveGuard.current[id] = "";
-        void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStatus.enabled, autoIsRemote, engine, deriveStems]);
+    if (!isMobileDevice()) return;
+    const want = settings.mobileStems || autoStatus.enabled;
+    if (lastMobileWant.current === want) return;
+    lastMobileWant.current = want;
+    reconcileMobileStems(want);
+  }, [settings.mobileStems, autoStatus.enabled, reconcileMobileStems]);
 
   // Host streams the auto-DJ queue + status to the room so remotes see what's coming.
   useEffect(() => {
@@ -3603,7 +3608,6 @@ export function App() {
             stemPending={stemLoading(status.A)}
             stemPendingPct={status.A?.pct ?? null}
             otherStemPending={stemLoading(status.B)}
-            onMobileStems={isMobileDevice() ? () => toggleMobileStems("A") : undefined}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.a}
@@ -3632,7 +3636,6 @@ export function App() {
             stemPending={stemLoading(status.B)}
             stemPendingPct={status.B?.pct ?? null}
             otherStemPending={stemLoading(status.A)}
-            onMobileStems={isMobileDevice() ? () => toggleMobileStems("B") : undefined}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.b}

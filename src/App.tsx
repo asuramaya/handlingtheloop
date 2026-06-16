@@ -1338,13 +1338,21 @@ export function App() {
   // materialise its stems NOW so the divergence is audible. Idle guests never reach this and
   // stay light (the OOM fix). Held in a ref so the session intent/snapshot handlers can call
   // it without taking it as a dependency (keeps their closures — co-owned with the session
-  // agent — untouched). Self-guards: no-op on desktop, when stems already exist (or are a
-  // remote-display mirror), or when nothing has actually diverged.
+  // agent — untouched). Self-guards: no-op on desktop, when this deck already has its OWN
+  // real stems, or when nothing has actually diverged.
+  //
+  // CRITICAL: skip on `ownStems`, NOT `hasStems || remoteStems`. When the host is mixing
+  // stems it streams the per-deck envelopes, and a phone follower calls markRemoteStems →
+  // `remoteStems = true` (a DISPLAY mirror, `stems` is still null). The old guard then
+  // bailed because `remoteStems` was set, so the listener showed the 4-lane viz but never
+  // downloaded the real stem AUDIO → the host's mute/duck did nothing and you heard the flat
+  // mix. Materialising real stems OVER the mirror (setStems clears remoteStems) makes the
+  // host's stem moves audible; an idle follower (no divergence) still stays light.
   const ensureGuestStemsRef = useRef<(id: DeckId) => void>(() => {});
   ensureGuestStemsRef.current = (id: DeckId) => {
     if (!isMobileDevice()) return;
     const deck = engine.deck(id);
-    if (deck.hasStems || deck.remoteStems) return;
+    if (deck.ownStems) return; // already have our OWN real stems (a remote-display mirror does NOT count)
     const vid = latest.current.loaded[id];
     if (!vid || !deck.buffer) return;
     if (!STEM_KEYS.some((n) => deck.stemLevel(n) !== 1 || !deck.stemActive(n))) return; // no divergence

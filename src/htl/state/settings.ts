@@ -183,7 +183,9 @@ export const DEFAULT_SETTINGS: Settings = {
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
-  waveformDebrick: true, // de-brickwall loud masters by default
+  waveformDebrick: false, // OFF by default: raw amplitude shows true contour. On normal-dynamics
+  // content the de-brick remap normalises every section to a uniform height band, which reads AS a
+  // brick wall — so it's opt-in, for genuinely limited masters that flat-top into a solid block.
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists

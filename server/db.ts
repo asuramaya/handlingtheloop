@@ -26,9 +26,14 @@ export interface User {
   id: string;
   google_sub: string | null;
   email: string | null;
-  name: string | null;
-  avatar: string | null;
+  name: string | null; // Google-mirrored display name — PRIVATE seed, refreshed every login. Never user-editable.
+  avatar: string | null; // Google-mirrored avatar — PRIVATE seed. Public surfaces prefer avatar_url ?? avatar.
   created_at: number | null; // epoch ms the account was created — "member since" on the profile
+  // Social identity (migration 0012). Optional so pre-handle code paths still build.
+  handle?: string | null; // public @handle, case-preserved; NULL until claimed
+  display_name?: string | null; // user-owned public name — overrides `name`
+  avatar_url?: string | null; // user-owned public avatar — overrides `avatar`
+  bio?: string | null; // user-owned public bio
 }
 
 export interface GoogleProfile {
@@ -46,10 +51,16 @@ export interface TokenSet {
   provider_user_id?: string;
 }
 
-/** Find-or-create a user by their Google identity; refresh profile + last_login. */
+/** Find-or-create a user by their Google identity; refresh profile + last_login.
+ *  IMPORTANT: this writes ONLY the Google-mirror fields (email/name/avatar) +
+ *  last_login. It must NEVER touch the user-owned identity (handle / display_name /
+ *  avatar_url / bio) — that is the whole point of the 0012 column split, and the
+ *  reason a re-login can no longer stomp a user's chosen public identity. */
 export async function upsertGoogleUser(db: D1Database, p: GoogleProfile): Promise<User> {
   const existing = await db
-    .prepare("SELECT id, google_sub, email, name, avatar, created_at FROM users WHERE google_sub = ?")
+    .prepare(
+      "SELECT id, google_sub, email, name, avatar, created_at, handle, display_name, avatar_url, bio FROM users WHERE google_sub = ?",
+    )
     .bind(p.sub)
     .first<User>();
   if (existing) {
@@ -78,11 +89,106 @@ export async function createSession(db: D1Database, userId: string, sessionId: s
 export async function userBySession(db: D1Database, sessionId: string): Promise<User | null> {
   const row = await db
     .prepare(
-      `SELECT u.id, u.google_sub, u.email, u.name, u.avatar, u.created_at
+      `SELECT u.id, u.google_sub, u.email, u.name, u.avatar, u.created_at,
+              u.handle, u.display_name, u.avatar_url, u.bio
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > ?`,
     )
     .bind(sessionId, now())
+    .first<User>();
+  return row ?? null;
+}
+
+// ── Public identity: handles + user-owned profile (migration 0012) ───────────
+
+let identityReady = false;
+const IDENTITY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["handle", "TEXT"],
+  ["handle_folded", "TEXT"],
+  ["display_name", "TEXT"],
+  ["avatar_url", "TEXT"],
+  ["bio", "TEXT"],
+  ["handle_set_at", "INTEGER"],
+];
+
+/** Add the 0012 identity columns + unique index to an older/local DB that predates
+ *  the migration (mirrors the migrations/0012 file). Idempotent — a re-ADD throws
+ *  "duplicate column", which we swallow. Runs at most once per worker instance. */
+export async function ensureIdentityColumns(db: D1Database): Promise<void> {
+  if (identityReady) return;
+  for (const [col, type] of IDENTITY_COLUMNS) {
+    try {
+      await db.prepare(`ALTER TABLE users ADD COLUMN ${col} ${type}`).run();
+    } catch {
+      /* column already exists */
+    }
+  }
+  try {
+    await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle_folded ON users(handle_folded)").run();
+  } catch {
+    /* index already exists */
+  }
+  identityReady = true;
+}
+
+/** True if any OTHER user already holds this folded handle. The DB UNIQUE index is
+ *  the real guard against races; this is for a friendly pre-check message. */
+export async function handleTaken(db: D1Database, folded: string, exceptUserId?: string): Promise<boolean> {
+  const sql = exceptUserId
+    ? "SELECT id FROM users WHERE handle_folded = ? AND id <> ?"
+    : "SELECT id FROM users WHERE handle_folded = ?";
+  const stmt = exceptUserId ? db.prepare(sql).bind(folded, exceptUserId) : db.prepare(sql).bind(folded);
+  return !!(await stmt.first());
+}
+
+export type ClaimResult = { ok: true; handle: string } | { ok: false; reason: string };
+
+/** Claim or rename a user's handle. `handle`/`folded` must already be validated
+ *  (server/security.ts validateHandle). Uniqueness is enforced by the DB index:
+ *  a conflict — whether caught by the pre-check or by the failing UPDATE — returns
+ *  ok:false "taken", the atomic, TOCTOU-free signal. */
+export async function setUserHandle(
+  db: D1Database,
+  userId: string,
+  handle: string,
+  folded: string,
+): Promise<ClaimResult> {
+  if (await handleTaken(db, folded, userId)) return { ok: false, reason: "taken" };
+  try {
+    await db
+      .prepare("UPDATE users SET handle=?, handle_folded=?, handle_set_at=? WHERE id=?")
+      .bind(handle, folded, now(), userId)
+      .run();
+    return { ok: true, handle };
+  } catch {
+    return { ok: false, reason: "taken" }; // lost the race to the UNIQUE index
+  }
+}
+
+/** Update the user-owned public profile fields. Undefined fields are left as-is;
+ *  pass null to clear one. Never touches the Google-mirror name/avatar. */
+export async function updateProfile(
+  db: D1Database,
+  userId: string,
+  f: { display_name?: string | null; bio?: string | null; avatar_url?: string | null },
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (f.display_name !== undefined) (sets.push("display_name=?"), vals.push(f.display_name));
+  if (f.bio !== undefined) (sets.push("bio=?"), vals.push(f.bio));
+  if (f.avatar_url !== undefined) (sets.push("avatar_url=?"), vals.push(f.avatar_url));
+  if (!sets.length) return;
+  vals.push(userId);
+  await db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id=?`).bind(...vals).run();
+}
+
+/** Look up a user by the folded form of their handle (for the public /@handle profile). */
+export async function userByHandle(db: D1Database, folded: string): Promise<User | null> {
+  const row = await db
+    .prepare(
+      "SELECT id, google_sub, email, name, avatar, created_at, handle, display_name, avatar_url, bio FROM users WHERE handle_folded = ?",
+    )
+    .bind(folded)
     .first<User>();
   return row ?? null;
 }

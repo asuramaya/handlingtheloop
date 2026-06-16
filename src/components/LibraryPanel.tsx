@@ -31,7 +31,6 @@ type CachedMeta = { title: string; artist: string; duration: number; thumbnail: 
 const communityMeta = new Store<Record<string, CachedMeta>>("community-meta", {}, 1);
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
-import { SetupWizard } from "./SetupWizard";
 import { TRACK_DND_MIME, TrackTable } from "./TrackTable";
 import { ConfirmModal, PromptModal } from "./Dialog";
 import { DockResizer } from "./DockResizer";
@@ -183,11 +182,7 @@ export function LibraryPanel({
     </div>
   );
   const [syncOpen, setSyncOpen] = useState(persistedView?.sync === true);
-  // Import (the setup wizard) is an embedded tab too — it takes over the content area like
-  // Sync, not a floating modal. Not persisted: a wizard flow should start fresh, not
-  // auto-reopen on reload.
-  const [importOpen, setImportOpen] = useState(false);
-  // Picking any library view (Collection / Community / a playlist) exits the Sync/Import
+  // Picking any library view (Collection / Community / a playlist) exits the Sync
   // subsection — they share the main content area. SKIP the mount run, or it would wipe
   // the Search/Sync tab we just restored from localStorage.
   const viewMounted = useRef(false);
@@ -198,7 +193,6 @@ export function LibraryPanel({
     }
     setSyncOpen(false);
     setSearchView(false);
-    setImportOpen(false);
   }, [view]);
   // Remember the open tab across reloads (view + which overlay, if any).
   useEffect(() => {
@@ -221,7 +215,6 @@ export function LibraryPanel({
     if (auto?.queueOpen) auto.onToggleQueue();
     setSearchView(false);
     setSyncOpen(false);
-    setImportOpen(false);
   };
 
   // htl account (server session) — its Google connection is what reaches the
@@ -231,15 +224,16 @@ export function LibraryPanel({
   const spotifyConnected = !!me?.connections.includes("spotify");
   const tidalConnected = !!me?.connections.includes("tidal");
 
-  // Setup/import wizard: auto-launch once on first sign-in with an empty library;
-  // also openable any time from the sidebar. It's an embedded tab now (in .lib-main),
-  // so auto-launch opens the library dock and switches to the Import view.
+  // First sign-in with an empty library: auto-open the Sync tab (import lives there now —
+  // pick a connected service as the source, Library as the destination). Openable any time
+  // from the sidebar's Sync entry.
   useEffect(() => {
-    // Desktop only — a full-screen wizard auto-popping on a phone reads as a freeze.
+    // Desktop only — a full-screen panel auto-popping on a phone reads as a freeze.
     if (me?.user && !isMobileDevice() && library.playlists.length === 0 && !localStorage.getItem("htl:wizardSeen")) {
       localStorage.setItem("htl:wizardSeen", "1");
       onOpenChange(true);
-      setImportOpen(true);
+      setSearchView(false);
+      setSyncOpen(true);
     }
   }, [me?.user, library.playlists.length, onOpenChange]);
 
@@ -756,7 +750,6 @@ export function LibraryPanel({
               if (!auto.queueOpen) {
                 setSearchView(false);
                 setSyncOpen(false);
-                setImportOpen(false);
               }
               auto.onToggleQueue();
             }}
@@ -779,7 +772,7 @@ export function LibraryPanel({
           <span className="lib-nav-ico">🔍</span> Search
         </button>
         <button
-          className={`lib-nav ${view === "collection" && !searchView && !syncOpen && !importOpen && !auto?.queueOpen ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
+          className={`lib-nav ${view === "collection" && !searchView && !syncOpen && !auto?.queueOpen ? "active" : ""} ${dragPl === "collection" ? "drag-over" : ""}`}
           onClick={() => {
             closeQueue();
             setView("collection");
@@ -797,7 +790,7 @@ export function LibraryPanel({
           <span className="lib-count">{library.collection.length}</span>
         </button>
         <button
-          className={`lib-nav ${view === "community" && !searchView && !syncOpen && !importOpen && !auto?.queueOpen ? "active" : ""}`}
+          className={`lib-nav ${view === "community" && !searchView && !syncOpen && !auto?.queueOpen ? "active" : ""}`}
           onClick={() => {
             closeQueue();
             setView("community");
@@ -814,22 +807,11 @@ export function LibraryPanel({
               closeQueue();
               setSyncOpen(true);
             }}
-            title="Sync playlists between YouTube and Spotify"
+            title="Sync &amp; import playlists — pull a service playlist into your Library, or push between services"
           >
             <span className="lib-nav-ico">⇄</span> Sync
           </button>
         )}
-        <button
-          className={`lib-nav ${importOpen ? "active" : ""}`}
-          onClick={() => {
-            closeQueue();
-            setImportOpen(true);
-          }}
-          aria-pressed={importOpen}
-          title="Connect a service and import playlists"
-        >
-          <span className="lib-nav-ico">⤓</span> Import
-        </button>
 
         {sectionHead(
           "local",
@@ -987,20 +969,9 @@ export function LibraryPanel({
           />
         ) : syncOpen && me?.user ? (
           // Sync is a SUBSECTION of the library — it takes over this content area
-          // (embedded, no separate modal) so the top chin stays clean.
+          // (embedded, no separate modal) so the top chin stays clean. Import lives here
+          // too: pick a connected service as the source and "Library" as the destination.
           <SyncPanel embedded me={me} library={library} onClose={() => setSyncOpen(false)} />
-        ) : importOpen ? (
-          // Import (the setup wizard) is embedded in the content area too — same as Sync,
-          // not a floating modal — so it reads as a library tab, not a takeover popup.
-          <SetupWizard
-            embedded
-            me={me}
-            library={library}
-            ytPlaylists={mine}
-            spotifyPlaylists={spotMine}
-            tidalPlaylists={tidalMine}
-            onClose={() => setImportOpen(false)}
-          />
         ) : (
         <>
         {view === "collection" && (

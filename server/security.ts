@@ -83,6 +83,53 @@ export function clampNum(v: unknown, min: number, max: number): number | null {
   return Math.min(max, Math.max(min, n));
 }
 
+// ── Public handles (the social layer's @identity) ───────────────────────────
+// v1: ascii [A-Za-z0-9_], 3-20 chars. Case is PRESERVED for display; uniqueness
+// is checked on the NFKC+lowercase FOLD (so `Hector` and `hector` collide).
+// Unicode handles are deliberately deferred — they invite homoglyph impersonation
+// (Cyrillic `а` vs Latin `a`), which a single-script ascii rule sidesteps.
+export const HANDLE_MIN = 3;
+export const HANDLE_MAX = 20;
+
+/** Reserved handles: app route names (so a handle can't shadow /api, /room …),
+ *  impersonation targets, and a small profanity seed. Checked against the FOLD. */
+export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
+  // routes / system
+  "api", "auth", "me", "room", "rooms", "admin", "login", "logout", "signin",
+  "signout", "settings", "about", "help", "support", "terms", "privacy", "legal",
+  "static", "assets", "public", "dist", "favicon", "robots", "sitemap", "ws",
+  "health", "status", "search", "explore", "live", "home", "app", "new",
+  // identity / impersonation
+  "official", "staff", "team", "mod", "mods", "moderator", "moderators", "system",
+  "htl", "handlingtheloop", "user", "users", "account", "accounts", "anonymous",
+  "anon", "guest", "everyone", "here", "all", "null", "undefined", "none",
+  // profanity seed (extend server-side as needed)
+  "fuck", "shit", "cunt", "nigger", "faggot", "rape",
+]);
+
+/** NFKC-normalize + lowercase — the canonical key a handle is unique on. */
+export function foldHandle(s: string): string {
+  return s.normalize("NFKC").toLowerCase();
+}
+
+export type HandleResult =
+  | { ok: true; handle: string; folded: string }
+  | { ok: false; reason: string };
+
+/** Validate a requested handle. Returns the cleaned (case-preserved) handle plus
+ *  its fold on success, or a user-facing reason on failure. The fold is what the
+ *  DB's UNIQUE index is enforced on; never check availability on the raw form. */
+export function validateHandle(raw: unknown): HandleResult {
+  const handle = String(raw ?? "").trim();
+  if (!handle) return { ok: false, reason: "handle required" };
+  if (handle.length < HANDLE_MIN) return { ok: false, reason: `at least ${HANDLE_MIN} characters` };
+  if (handle.length > HANDLE_MAX) return { ok: false, reason: `at most ${HANDLE_MAX} characters` };
+  if (!/^[A-Za-z0-9_]+$/.test(handle)) return { ok: false, reason: "letters, numbers and _ only" };
+  const folded = foldHandle(handle);
+  if (RESERVED_HANDLES.has(folded)) return { ok: false, reason: "that handle is reserved" };
+  return { ok: true, handle, folded };
+}
+
 /** Best-effort client IP for rate-limit keys (Cloudflare edge sets cf-connecting-ip). */
 export function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "anon";

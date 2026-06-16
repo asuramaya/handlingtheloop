@@ -22,7 +22,17 @@ import {
 // Source can be either connected service OR the in-app library ("htl"): your
 // Collection and htl playlists, pushed straight out to a streaming service.
 type SyncSource = "htl" | Service;
-const LABEL: Record<SyncSource, string> = { htl: "htl", youtube: "YouTube", spotify: "Spotify", tidal: "TIDAL" };
+const LABEL: Record<SyncSource, string> = { htl: "Library", youtube: "YouTube", spotify: "Spotify", tidal: "TIDAL" };
+// IMPORT (service → Library) reuses the sync match pipeline: a matched destination
+// Candidate becomes a library TrackMeta.
+const candidateToTrack = (c: Candidate): TrackMeta => ({
+  videoId: c.id,
+  title: c.title,
+  artist: c.artist,
+  duration: c.duration,
+  thumbnail: c.thumbnail,
+  views: null,
+});
 const MATCH_SLICE = 15; // tracks matched per request (Worker subrequest budget)
 const COLLECTION_ID = "__collection__"; // sentinel: the whole htl Collection
 const fmtDur = (s: number) => (s > 0 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "");
@@ -72,8 +82,17 @@ export function SyncPanel({
   // Default to pushing your own library out — that's the new capability and it's
   // always available; otherwise start from whichever service is connected.
   const [source, setSource] = useState<SyncSource>("htl");
-  const [dest, setDest] = useState<Service>(connected[0] ?? "youtube");
-  const destOptions = useMemo(() => connected.filter((s) => s !== source), [connected, source]);
+  // Destination is a streaming service OR the in-app Library ("htl" = IMPORT, service →
+  // your library). Picking a service source auto-targets the Library below, so import is
+  // just "sync into Library" — no separate tab, no connect step (accounts live in Settings).
+  const [dest, setDest] = useState<SyncSource>(connected[0] ?? "htl");
+  const destOptions = useMemo<SyncSource[]>(
+    () => (["htl", ...connected] as SyncSource[]).filter((s) => s !== source),
+    [connected, source],
+  );
+  // The service we actually MATCH against. A real service maps to itself; importing into
+  // the Library finds YouTube videos (the library's stream id).
+  const matchDest: Service = dest === "htl" ? "youtube" : dest;
 
   // Keep the destination valid as the source changes (can't sync into the source).
   useEffect(() => {
@@ -116,7 +135,7 @@ export function SyncPanel({
     if (!q) return;
     setSearchBusy(index);
     try {
-      const hits = await syncSearch(dest, q);
+      const hits = await syncSearch(matchDest, q);
       setSearchHits((h) => ({ ...h, [index]: hits }));
     } catch (e) {
       setErr(friendly((e as Error).message));
@@ -204,14 +223,14 @@ export function SyncPanel({
       const rowsOut: MatchRow[] = [];
       const pending: { track: SourceTrack; index: number }[] = [];
       srcTracks.forEach((t, i) => {
-        if (dest === "youtube" && t.videoId) rowsOut.push(directRow(i, t));
+        if (matchDest === "youtube" && t.videoId) rowsOut.push(directRow(i, t));
         else pending.push({ track: t, index: i });
       });
       setProgress({ done: rowsOut.length, total: srcTracks.length });
 
       for (let i = 0; i < pending.length; i += MATCH_SLICE) {
         const slice = pending.slice(i, i + MATCH_SLICE);
-        const r = await syncMatch(dest, slice.map((s) => s.track), 0);
+        const r = await syncMatch(matchDest, slice.map((s) => s.track), 0);
         r.forEach((row, k) => rowsOut.push({ ...row, index: slice[k].index }));
         setProgress({ done: rowsOut.length, total: srcTracks.length });
       }
@@ -233,19 +252,49 @@ export function SyncPanel({
   const setPick = (index: number, patch: Partial<Pick>) =>
     setPicks((p) => ({ ...p, [index]: { ...p[index], ...patch } }));
 
+  // Resolve the Candidate the user settled on for a row (a chosen alternative, or best).
+  const candidateFor = (r: MatchRow): Candidate | null => {
+    const id = picks[r.index]?.id;
+    if (!id) return null;
+    return r.alternatives.find((c) => c.id === id) ?? (r.best?.id === id ? r.best : null);
+  };
+
   async function commit() {
     setErr("");
     setWriteNeeded(false);
     setStep("committing");
+    const d = dest;
     try {
-      const ids = rows
-        .filter((r) => picks[r.index]?.include && picks[r.index]?.id)
-        .map((r) => picks[r.index].id as string);
-      const { playlistId, url } = await syncCreate(dest, name.trim() || `${selected?.title} · via htl`);
-      const chunk = dest === "youtube" ? 10 : 100;
+      const chosen = rows.filter((r) => picks[r.index]?.include && picks[r.index]?.id);
+
+      // IMPORT (dest = Library): write the matched tracks straight into the local library —
+      // find/create the playlist (deduped by source list id), no remote write, no quota.
+      if (d === "htl") {
+        const existing = selected ? library.playlists.find((p) => p.sourceListId === selected.id) : undefined;
+        const plId = existing
+          ? existing.id
+          : library.createPlaylist(name.trim() || selected?.title || "Imported playlist", selected?.id, source);
+        let added = 0;
+        for (const r of chosen) {
+          const cand = candidateFor(r);
+          if (cand && cand.kind === "video") {
+            library.addToPlaylist(plId, candidateToTrack(cand));
+            added += 1;
+          }
+        }
+        library.markSynced(plId, Date.now());
+        setReport({ url: "", added, total: rows.length });
+        setStep("done");
+        return;
+      }
+
+      // TRANSFER (dest = service): create the playlist on the service and add the ids.
+      const ids = chosen.map((r) => picks[r.index].id as string);
+      const { playlistId, url } = await syncCreate(d, name.trim() || `${selected?.title} · via htl`);
+      const chunk = d === "youtube" ? 10 : 100;
       let added = 0;
       for (let i = 0; i < ids.length; i += chunk) {
-        added += await syncAdd(dest, playlistId, ids.slice(i, i + chunk));
+        added += await syncAdd(d, playlistId, ids.slice(i, i + chunk));
         setProgress({ done: Math.min(i + chunk, ids.length), total: ids.length });
       }
       setReport({ url, added, total: rows.length });
@@ -296,7 +345,7 @@ export function SyncPanel({
               <label className="sync-route-end">
                 <span className="sync-route-label">From</span>
                 <select className="sync-select" value={source} onChange={(e) => setSource(e.target.value as SyncSource)}>
-                  <option value="htl">htl (Collection &amp; playlists)</option>
+                  <option value="htl">Library (Collection &amp; playlists)</option>
                   {hasYouTube && <option value="youtube">YouTube</option>}
                   {hasSpotify && <option value="spotify">Spotify</option>}
                   {hasTidal && <option value="tidal">TIDAL</option>}
@@ -306,7 +355,7 @@ export function SyncPanel({
               <label className="sync-route-end">
                 <span className="sync-route-label">To</span>
                 {destOptions.length > 1 ? (
-                  <select className="sync-select" value={dest} onChange={(e) => setDest(e.target.value as Service)}>
+                  <select className="sync-select" value={dest} onChange={(e) => setDest(e.target.value as SyncSource)}>
                     {destOptions.map((s) => (
                       <option key={s} value={s}>
                         {LABEL[s]}
@@ -383,7 +432,7 @@ export function SyncPanel({
           </div>
         ) : step === "matching" ? (
           <div className="sync-body sync-center">
-            <p>Matching tracks on {LABEL[dest]}…</p>
+            <p>Matching tracks on {LABEL[matchDest]}…</p>
             <div className="sync-progress">
               <div className="sync-progress-bar" style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} />
             </div>
@@ -404,12 +453,20 @@ export function SyncPanel({
         ) : step === "done" && report ? (
           <div className="sync-body sync-center">
             <div className="sync-done-check">✓</div>
-            <p>
-              Added <strong>{report.added}</strong> of {report.total} tracks to {LABEL[dest]}.
-            </p>
-            <a className="hw-btn signin" href={report.url} target="_blank" rel="noreferrer noopener">
-              Open in {LABEL[dest]}
-            </a>
+            {dest === "htl" ? (
+              <p>
+                Imported <strong>{report.added}</strong> of {report.total} tracks into your library.
+              </p>
+            ) : (
+              <>
+                <p>
+                  Added <strong>{report.added}</strong> of {report.total} tracks to {LABEL[dest]}.
+                </p>
+                <a className="hw-btn signin" href={report.url} target="_blank" rel="noreferrer noopener">
+                  Open in {LABEL[dest]}
+                </a>
+              </>
+            )}
             <button className="link-btn" onClick={onClose}>
               Done
             </button>
@@ -422,7 +479,7 @@ export function SyncPanel({
                 {includedCount} of {rows.length} will transfer — fix or skip any below.
               </span>
               <button className="sync-go" onClick={commit} disabled={includedCount === 0}>
-                Transfer {includedCount} →
+                {dest === "htl" ? "Import" : "Transfer"} {includedCount} →
               </button>
             </div>
             {writeNeeded && (
@@ -485,7 +542,7 @@ export function SyncPanel({
                             value={searchText[row.index] ?? `${row.source.artist} ${row.source.title}`}
                             onChange={(e) => setSearchText((s) => ({ ...s, [row.index]: e.target.value }))}
                             onKeyDown={(e) => e.key === "Enter" && reSearch(row.index)}
-                            placeholder={`Search ${LABEL[dest]}…`}
+                            placeholder={`Search ${LABEL[matchDest]}…`}
                           />
                           <button
                             className="hw-btn small"

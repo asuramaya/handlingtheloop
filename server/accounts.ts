@@ -12,18 +12,24 @@ import { getMySpotifyPlaylists } from "./spotifyData";
 import { getMyTidalPlaylists } from "./tidalData";
 import {
   type D1Database,
+  type User,
   createSession,
   deleteConnection,
   deleteSession,
+  ensureIdentityColumns,
   getTopTracks,
   getUserSettings,
+  handleTaken,
   listConnections,
   logUserPlay,
   putUserSettings,
   saveConnection,
+  setUserHandle,
+  updateProfile,
   upsertGoogleUser,
   userBySession,
 } from "./db";
+import { cleanText, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -63,6 +69,18 @@ async function currentUser(env: AccountEnv, req: Request) {
   if (!env.DB) return null;
   const sid = readSessionId(req);
   return sid ? userBySession(env.DB, sid) : null;
+}
+
+/** The PUBLIC face of an account: the user-owned handle/display fields, falling
+ *  back to the Google-mirror only as a private seed (never the email). Used for
+ *  any surface a peer could see. `handle` is null until the user claims one. */
+function publicIdentity(u: User) {
+  return {
+    handle: u.handle ?? null,
+    displayName: u.display_name ?? u.name ?? null,
+    avatar: u.avatar_url ?? u.avatar ?? null,
+    bio: u.bio ?? null,
+  };
 }
 
 function requireEnv(env: AccountEnv): string {
@@ -123,9 +141,37 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!user) return json(200, { user: null, connections: [] });
       const connections = await listConnections(env.DB, user.id);
       return json(200, {
-        user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar },
+        // email stays here (own-account view only); the public bits come via publicIdentity.
+        user: { id: user.id, email: user.email, name: user.name, ...publicIdentity(user) },
         connections,
       });
+    }
+
+    // Handle availability check (sign-in gated to bound enumeration). ?h=<handle>.
+    case "/api/handle/check": {
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureIdentityColumns(env.DB);
+      const v = validateHandle(url.searchParams.get("h"));
+      if (!v.ok) return json(200, { available: false, reason: v.reason });
+      const taken = await handleTaken(env.DB, v.folded, user.id);
+      return json(200, { available: !taken, handle: v.handle, reason: taken ? "taken" : undefined });
+    }
+
+    // Claim (or rename) the signed-in user's @handle.
+    case "/api/me/handle": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureIdentityColumns(env.DB);
+      const b = (await req.json().catch(() => ({}))) as { handle?: string };
+      const v = validateHandle(b.handle);
+      if (!v.ok) return json(400, { error: v.reason });
+      // No-op rename to the same handle the user already holds — succeed quietly.
+      if (user.handle && foldHandle(user.handle) === v.folded) return json(200, { handle: user.handle });
+      const res = await setUserHandle(env.DB, user.id, v.handle, v.folded);
+      if (!res.ok) return json(409, { error: res.reason === "taken" ? "that handle is taken" : res.reason });
+      return json(200, { handle: res.handle });
     }
 
     // The signed-in user's full profile: identity + "member since" + top songs. Backs
@@ -134,12 +180,37 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/me/profile": {
       const user = await currentUser(env, req);
       if (!user) return json(401, { error: "sign in first" });
+      await ensureIdentityColumns(env.DB);
+
+      // PUT edits the user-owned public fields (display name / bio / avatar URL).
+      // Cleaned + length-clamped; the Google-mirror name/avatar are never touched.
+      if (req.method === "PUT") {
+        const b = (await req.json().catch(() => ({}))) as {
+          displayName?: string;
+          bio?: string;
+          avatarUrl?: string | null;
+        };
+        const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null } = {};
+        if (b.displayName !== undefined) patch.display_name = cleanText(b.displayName, 48) || null;
+        if (b.bio !== undefined) patch.bio = cleanText(b.bio, 300) || null;
+        if (b.avatarUrl !== undefined) patch.avatar_url = b.avatarUrl === null ? null : sanitizeHttpUrl(b.avatarUrl);
+        await updateProfile(env.DB, user.id, patch);
+        return json(200, { ok: true, ...patch });
+      }
+      if (req.method !== "GET") return json(405, { error: "GET or PUT only" });
+
       const [topTracks, connections] = await Promise.all([
         getTopTracks(env.DB, user.id, 12),
         listConnections(env.DB, user.id),
       ]);
       return json(200, {
-        user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar, memberSince: user.created_at },
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          memberSince: user.created_at,
+          ...publicIdentity(user),
+        },
         connections,
         topTracks,
       });

@@ -31,6 +31,34 @@ rooms are cheap. Builds on `docs/shared-session.md` (the DjRoom control bus).
 
 A listener "stepping up to the decks" = moving from plane 2 → plane 1.
 
+## Review log — 2026-06-16 (plan re-validated, still good)
+
+Codebase swept; the day's commits (`1d182e0` EQ Pro-Q, `97d962b` FX rack+sampler,
+`39d3285` stem-aware automix, mobile fixes) all landed in FX/audio — identity and
+the room transport are untouched. Concrete deltas folded below:
+
+- **Migration numbering:** next free = **0012**. `0010_identity` is `track_identity`
+  (acoustic fingerprint), NOT user identity — don't reuse the name.
+- **A2 confirmed live:** `upsertGoogleUser` (`server/db.ts`) still
+  `UPDATE users SET email=?, name=?, avatar=?` on every login. Stomp bug is real.
+- **The two toggles E4/E5 replaces are named** `controlling` / `listening`
+  (`src/htl/room/protocol.ts`, patched in `server/room.ts`). The existing
+  **knock → approve/deny/kick** handshake is the seed of E6's request-to-play —
+  but it's built for PRIVATE rooms where even *listening* needs host approval.
+  **Public rooms invert that default:** listening is open (no knock); only
+  *taking the decks* knocks. (New task E6a below.)
+- **No listener/controller plane split exists yet:** every joined device is a full
+  WS peer in one DjRoom DO eating the entire relay. 300 listeners = 300 peers on
+  the control firehose. Epic D is exactly this fix — confirmed needed.
+- **Recipe-not-audio is already the implemented reality** (`listening` = each device
+  renders locally from ticks/snapshots). Epic D *scales* it, doesn't introduce it.
+- **NEW room state:** `7422bf3` made the auto-mix queue first-class
+  host-authoritative state streamed to guests (`queue` intents + `automix` msg).
+  D1 broadcast digest + D3 late-join snapshot must carry it (noted inline).
+- **Structural:** today **room identity == account identity** (one DjRoom per
+  account). E1's "findable venue" needs the room decoupled into its own
+  addressable object — a bigger lift than E1 first implied (noted inline).
+
 ## Open decisions to lock before building the dependent epic
 
 - **URL shape:** `/@handle` vs `/u/handle` (gates the reserved-handle list and
@@ -62,27 +90,39 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## A. Identity & handles  *(P0, foundational)*
 
-- [ ] **A1. Split user identity columns.** Add `display_name`, `avatar`
-      (user-owned) distinct from `google_name`, `google_avatar` (mirrored).
-- [ ] **A2. Fix the login-stomp bug.** `upsertUserFromGoogle` must update only
-      `google_*` + `email` + `last_login`, NEVER the user-owned fields.
-- [ ] **A3. `handles` table** (or `handle` + `handle_folded` columns) with a
-      **DB-level UNIQUE on the folded form**. Treat insert-conflict as "taken"
-      (don't app-check — TOCTOU race).
-- [ ] **A4. Handle validation:** charset `[a-z0-9_]`, len 3–20, NFKC + lowercase
-      fold for the uniqueness key, case-preserved for display.
-- [ ] **A5. Reserved-handle seed list:** route names (`api`, `room`, `login`,
-      `settings`, `admin`, `about`, `@`), impersonation targets (`official`,
-      `support`, `staff`, `mod`, `htl`), profanity blocklist (+ leetspeak).
+> **Backend slice DONE 2026-06-16** (migration `0012_handles.sql`, `server/db.ts`,
+> `server/security.ts`, `server/accounts.ts`, `server/security.test.ts`; 38 tests
+> green, worker dry-run clean). Routes shipped: `GET /api/handle/check?h=`,
+> `POST /api/me/handle`, `PUT /api/me/profile`; `/api/me*` now return the public
+> identity via `publicIdentity()`. **Remaining = frontend** (A6 routing, A7 claim
+> UI) **+ policy follow-ups** (A8 placeholder decision below, A9/A10/A11).
+> Decision taken: handle is **NULL until claimed** (no stored placeholder) — an
+> un-claimed account is fully usable but not publicly addressable until it opts in.
+
+- [x] **A1. Split user identity columns.** `display_name`/`avatar_url`/`bio`
+      (user-owned) added distinct from the Google-mirror `name`/`avatar`.
+      Public read = `display_name ?? name`, `avatar_url ?? avatar`.
+- [ ] **A2. Fix the login-stomp bug.** `upsertGoogleUser` (`server/db.ts`) must
+      update only `google_*` + `email` + `last_login`, NEVER the user-owned fields.
+      *(Confirmed still present 2026-06-16.)*
+- [x] **A3.** `handle` + `handle_folded` columns with **DB-level UNIQUE on the
+      fold** (`idx_users_handle_folded`); `setUserHandle` returns "taken" on the
+      atomic conflict (pre-check + failing-UPDATE catch), not an app-only check.
+- [x] **A4. Handle validation** (`validateHandle` in `security.ts`): charset
+      `[A-Za-z0-9_]`, len 3–20, NFKC+lowercase fold for uniqueness, case preserved.
+- [x] **A5. Reserved-handle seed list** (`RESERVED_HANDLES`): routes + impersonation
+      targets + profanity seed, checked on the fold. *(Leetspeak evasion = later.)*
 - [ ] **A6. URL shape decision + routing** (`/@handle`) and reserved enforcement.
-- [ ] **A7. Claim-handle first-run flow** in `accounts.ts`: gate public features
-      on having a handle; user can stay private without one.
-- [ ] **A8. Backfill migration:** nullable handle + **system-assigned placeholder**
-      (`user-ab12cd`) so existing rows are addressable. Do NOT derive from
-      email/name.
-- [ ] **A9. Rename policy:** rate-limit renames; old handle **cooldown/tombstone**
-      (don't instantly free → impersonation). Store mentions/links by user `id`,
-      render current handle.
+      *(Backend reserves the names; frontend routing pending.)*
+- [~] **A7. Claim-handle flow.** API done (`/api/handle/check`, `/api/me/handle`);
+      **first-run claim UI + public-feature gating still to build (frontend).**
+- [x] **A8. Backfill** — handle is nullable + `ensureIdentityColumns()` adds the
+      columns to older/local DBs. **Decision: no stored placeholder** — un-claimed
+      rows stay handle-NULL (usable, not publicly addressable). Supersedes the
+      original `user-ab12cd` idea; un-claimed users render a derived label client-side.
+- [ ] **A9. Rename policy:** `handle_set_at` is now recorded per claim; still TODO =
+      enforce a rename **cooldown** + don't instantly free the old handle
+      (impersonation). Store mentions/links by user `id`, render current handle.
 - [ ] **A10. Recycle policy on deletion:** tombstone (don't recycle) or long
       quarantine. (See M3 deletion cascade.)
 - [ ] **A11. Multi-provider future-proofing:** handle on account, not provider;
@@ -113,11 +153,14 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 ## D. Broadcast plane & deterministic reconstruction  *(P2, critical path)*
 
 - [ ] **D1. Broadcast digest protocol:** control room publishes now-playing,
-      transport clock, deck/crossfader/EQ snapshot, cue events, presence, reactions.
+      transport clock, deck/crossfader/EQ snapshot, cue events, presence, reactions,
+      **+ the host-authoritative auto-mix queue** (already streamed via `automix`/
+      `queue` msgs — fold into the digest rather than a separate channel).
 - [ ] **D2. Relay tier:** master publishes once → relay DOs fan out to listener
       shards. Design now even if one relay runs at first.
 - [ ] **D3. Late-join snapshot path:** full current-state snapshot to reconstruct
-      *now* (distinct from the steady event stream).
+      *now* — incl. the auto-mix queue (distinct from the steady event stream). The
+      existing `state` snapshot + per-guest queue stream is the seed of this.
 - [ ] **D4. Clock sync:** NTP-style offset/RTT estimation per client + resync cadence.
 - [ ] **D5. Engine-version pinning per room** + "client too old to join" handling.
 - [ ] **D6. Resync contract for non-deterministic gestures** (scratch/jog → snap
@@ -132,6 +175,9 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 - [ ] **E1. Room object model:** persistent **venue** (identity, host, followers,
       schedule, history) vs ephemeral **live instance** (roster, count, chat).
+      **Structural prerequisite:** today room identity == account identity (one
+      DjRoom per account). Decouple the room into its own addressable object before
+      a venue can be found/joined independent of the host's device-sync session.
 - [ ] **E2. Public room directory** ("live now," sorted by listeners / follows / genre).
 - [ ] **E3. Role ladder:** host → co-controller (write, small N) → listener (large
       N) → b2b/handoff. **Per-deck claim**, not per-room control.
@@ -141,7 +187,12 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       device-output routing → multi-device-only setting that defaults correctly.
 - [ ] **E6. Gate modes:** `open decks` / `request-to-play` (default public) /
       `invite-only`, with **raise-hand queue** + host approve UI + state feedback
-      (taken / gated / pending / invited-up).
+      (taken / gated / pending / invited-up). Generalizes the existing
+      knock/approve/deny/kick handshake (`server/room.ts`).
+- [ ] **E6a. Invert the listen default for public rooms.** Today every guest knocks
+      before even *listening* (private-room model). Public rooms: listening is open
+      (no knock); only *taking the decks* triggers the handshake. Keep the
+      knock-to-listen path for private/invite-only rooms.
 - [ ] **E7. Host-disconnect grace window** + rehydrate; optional host handoff.
 - [ ] **E8. DO-eviction rehydration** of room state (now-playing, roster, gate mode).
 - [ ] **E9. Co-controller disconnect mid-control** (deck freeze vs auto-release).

@@ -184,7 +184,7 @@ export class DjRoom {
         t: "welcome",
         you: device,
         anchorId: this.anchorId,
-        peers: this.peers(),
+        peers: pub ? [] : this.peers(), // the crowd doesn't need the roster
         listeners: this.listenerCount(),
         public: this.isPublic,
         ...(pub ? { pub: true } : {}),
@@ -697,12 +697,46 @@ export class DjRoom {
     }
   }
 
-  private broadcastPresence(except?: Ws): void {
-    const peers = this.peers(except);
-    const json = JSON.stringify({ t: "presence", peers, listeners: this.listenerCount(), public: this.isPublic } satisfies ServerMsg);
+  // Presence is the storm at scale: every join/leave is a "change", and fanning the full
+  // roster to every socket on each one is O(N²) on a join burst — the real ceiling well
+  // before the audio fan-out. Two fixes: (1) COALESCE (leading-edge throttle — a sparse
+  // change still flushes instantly, so a small session has no added latency; a burst
+  // collapses into one trailing flush), and (2) SPLIT (only PARTICIPANTS get the roster;
+  // the anonymous LISTENER crowd gets just the count — they're not in the roster anyway).
+  // `except` is now moot (the throttled flush reads live sockets), kept for call-site parity.
+  private static PRESENCE_COALESCE_MS = 1000;
+  private presenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private presencePending = false;
+
+  private broadcastPresence(_except?: Ws): void {
+    if (this.presenceTimer) {
+      this.presencePending = true; // a change arrived mid-window → flush once more at window end
+      return;
+    }
+    this.flushPresence();
+    this.presenceTimer = setTimeout(() => {
+      this.presenceTimer = null;
+      if (this.presencePending) {
+        this.presencePending = false;
+        this.broadcastPresence();
+      }
+    }, DjRoom.PRESENCE_COALESCE_MS);
+  }
+
+  private flushPresence(): void {
+    const peers = this.peers();
+    const listeners = this.listenerCount();
+    const full = JSON.stringify({ t: "presence", peers, listeners, public: this.isPublic } satisfies ServerMsg);
+    // The crowd isn't in the roster, so it gets the count only — half the payload, and the
+    // big list never fans to hundreds of listeners.
+    const lite = JSON.stringify({ t: "presence", peers: [], listeners, public: this.isPublic } satisfies ServerMsg);
     for (const ws of this.state.getWebSockets()) {
-      if (ws === except) continue;
-      ws.send(json);
+      const a = ws.deserializeAttachment() as Attachment | null;
+      try {
+        ws.send(a?.pub ? lite : full);
+      } catch {
+        /* socket gone — ignore */
+      }
     }
   }
 }

@@ -410,10 +410,23 @@ export function App() {
   // Read in loadTrackToDeck (defined above the room hook) to gate play-logging on sign-in.
   const signedInRef = useRef(false);
   signedInRef.current = !!me?.user;
-  // Refresh account state on mount + whenever the Profile screen closes (a sign-in/out
-  // there changes connections, which the Sync screen + chin gating read).
+  // Refresh account state on mount + whenever the Profile screen CLOSES (a sign-in/out
+  // there changes connections, which the Sync screen + chin gating read). Deliberately
+  // NOT on open: an open-time refetch resolved a beat after the dock had already shrunk
+  // the board, then `setMe` installed a fresh object ref and re-rendered the whole board
+  // a second time — the profile-only "double-jump" reflow. Skip the open edge, and dedupe
+  // the result so an unchanged payload keeps the same ref (React bails the re-render), so
+  // closing without any account change doesn't reflow the board either.
+  const profileWasOpen = useRef(profileOpen);
+  const didFetchMe = useRef(false);
   useEffect(() => {
-    fetchMe().then(setMe).catch(() => {});
+    const opening = profileOpen && !profileWasOpen.current;
+    profileWasOpen.current = profileOpen;
+    if (didFetchMe.current && opening) return; // dock opening → no refetch (avoids the double-jump)
+    didFetchMe.current = true;
+    fetchMe()
+      .then((m) => setMe((prev) => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m)))
+      .catch(() => {});
   }, [profileOpen]);
   // WebGPU crash-loop guard: if the last GPU separation took the tab down, disable
   // GPU separation and bounce the selected model back to a safe one so a reload

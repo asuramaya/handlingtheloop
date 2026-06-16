@@ -250,12 +250,47 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 > via the tick. Continuous `control`/`stemGain` sweeps still relay (readers need them
 > to hear the live mix) until the roll-up lands.
 
-- [ ] **D1. Broadcast digest protocol:** control room publishes now-playing,
-      transport clock, deck/crossfader/EQ snapshot, cue events, presence, reactions,
-      **+ the host-authoritative auto-mix queue** (already streamed via `automix`/
-      `queue` msgs — fold into the digest rather than a separate channel).
-- [ ] **D2. Relay tier:** master publishes once → relay DOs fan out to listener
-      shards. Design now even if one relay runs at first.
+> ## SCALE — status + the two big lifts (READY-TO-BUILD specs, demand-gated)
+>
+> **DONE (hundreds tier, committed):** Phase 1 `ab844d6` — presence **coalesce**
+> (leading-edge 1s throttle) + **split** (roster→participants, count→crowd), killing the
+> O(N²) join storm (the real ceiling). Phase 2 `b4f79b1` — host-disconnect **anchor grace**
+> (8s), **MAX_LISTENERS=500** cap (503 "full"), reconnect **jitter**. A single DjRoom is now
+> solid for a few hundred listeners. **DEFER the two below until a room actually nears 500**
+> — they're thousands-scale, and building them blind (no real load to validate) is the wrong
+> call. The seam already exists: Phase 1's `flushPresence` proves the publish-set is split
+> from the socket-set; a relay subscribes to the same per-listener output.
+>
+> ### D1 — Digest intent roll-up (build first; it's contained, room.ts-only)
+> Today listeners get the FULL intent relay (minus `jog`). Roll-up = the DO curates the
+> *listener* stream while WRITERS keep every intent (instant feel):
+> - **Drop** gestural (`jog` — already done).
+> - **Coalesce** continuous sweeps (`control`/`crossfade`/`stemGain`/`fxParam`) per
+>   `(kind,deck,param)` to a capped rate (~20–30 Hz) — last-value-wins, flushed on a timer.
+>   Split the relay: `relayToWriters` immediate, `relayToListeners` coalesced.
+> - **Pass through** discrete events (`load`/`cue`/`loop`/`transport`/`hotcue`/`fxRack`) to
+>   listeners immediately.
+> - **CAVEAT:** coalescing crossfade/EQ to ~20 Hz can zipper unless the reader RAMPS gains to
+>   the new value over the flush interval (engine change: `setCrossfade`/EQ `linearRampTo`).
+>   Without the ramp, keep the rate ≥30 Hz. This is why it's deferred — marginal fan-out win
+>   (presence was the real cost) for new audio-quality risk.
+>
+> ### D2 — Relay tier (the thousands-scale lift; build only on real demand)
+> One DjRoom is single-threaded → O(N) sends/message caps it ~hundreds. To shard:
+> - **New `RelayRoom` DO.** Holds a SHARD of listener WebSockets. Receives digest pushes
+>   from the master and fans out to its shard. Read-only (no writer messages).
+> - **Master publishes once → R relays.** The master (DjRoom) pushes each digest frame
+>   (tick/state/curated-intent/stemview/presence-count) to relay DOs by id
+>   (`relay:{roomId}:{0..R-1}`) via DO-to-DO fetch/RPC. Master fan-out is now O(R), not O(N).
+> - **Worker shards listeners.** On a `?room=@handle` pub connection, the Worker assigns a
+>   relay index (`hash(deviceId) % R` or least-loaded) and routes the WS to that RelayRoom
+>   instead of the master. Participants still hit the master directly.
+> - **Catch-up:** each relay caches the last snapshot/stemview it received so a late joiner
+>   gets it without round-tripping the master.
+> - **R sizing:** start R=1 (relay == a second DO) and grow; `MAX_LISTENERS` becomes per-relay.
+> - **Hard parts (why real load matters):** relay liveness/failover, the master discovering how
+>   many relays to push to, count aggregation across relays, and the extra hop's latency on the
+>   clock. Don't build these blind.
 - [ ] **D3. Late-join snapshot path:** full current-state snapshot to reconstruct
       *now* — incl. the auto-mix queue (distinct from the steady event stream). The
       existing `state` snapshot + per-guest queue stream is the seed of this.

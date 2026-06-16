@@ -3592,6 +3592,7 @@ export function App() {
               vividness={settings.freqVividness}
               debrick={settings.waveformDebrick}
               glow={settings.glow}
+              markerThickness={settings.markerThickness}
               stemColors={{ drums: settings.stemDrumsColor, bass: settings.stemBassColor, vocals: settings.stemVocalsColor, other: settings.stemOtherColor }}
               meta={meta[id]}
               status={terseStem(status[id])}

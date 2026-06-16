@@ -271,7 +271,11 @@ export class RoomClient {
 
   private scheduleReconnect(): void {
     if (this.closed || this.timer) return;
-    const delay = Math.min(1000 * 2 ** this.retry, 15000);
+    // Exponential backoff with JITTER (50–100% of the cap): when a DO eviction / deploy
+    // drops every listener at once, fixed delays would reconnect the whole crowd in
+    // lockstep and thundering-herd the room. Spreading them over the window smooths it.
+    const cap = Math.min(1000 * 2 ** this.retry, 15000);
+    const delay = cap / 2 + Math.random() * (cap / 2);
     this.retry++;
     this.timer = setTimeout(() => {
       this.timer = null;

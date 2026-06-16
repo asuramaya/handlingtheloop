@@ -57,6 +57,7 @@ export interface Settings {
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
   waveformDebrick: boolean; // re-expand local contrast on brick-walled (limited) masters so the waveform shows contour
+  markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars on the waveform (1–6)
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
@@ -186,6 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   waveformDebrick: false, // OFF by default: raw amplitude shows true contour. On normal-dynamics
   // content the de-brick remap normalises every section to a uniform height band, which reads AS a
   // brick wall — so it's opt-in, for genuinely limited masters that flat-top into a solid block.
+  markerThickness: 2, // default marker-bar width (px) — matches the old hard-coded cue/loop bar
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists

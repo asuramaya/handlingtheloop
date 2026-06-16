@@ -506,6 +506,16 @@ export function SettingsPanel({
                   </button>
                 </div>
 
+                <Slider
+                  label="Marker bars"
+                  hint={`${settings.markerThickness ?? 2}px`}
+                  value={settings.markerThickness ?? 2}
+                  onChange={(v) => set({ markerThickness: v })}
+                  min={1}
+                  max={6}
+                  step={1}
+                />
+
                 <div className="settings-row">
                   <span className="settings-label">
                     Room color

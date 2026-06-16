@@ -241,7 +241,11 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // the same userId, so it updates `user` WITHOUT tearing down + reopening the socket.
   const refreshUser = useCallback(() => {
     fetchMe()
-      .then((m) => setUser(m.user))
+      // Dedupe: this fires on every Profile-dock close (to catch a handle claim), but
+      // installing a fresh user object when nothing changed re-rendered the whole app a
+      // beat later — the board's "double-jump" reflow. Keep the same ref when unchanged so
+      // React bails the re-render (a real sign-in/out/claim still flows through).
+      .then((m) => setUser((prev) => (JSON.stringify(prev) === JSON.stringify(m.user) ? prev : m.user)))
       .catch(() => {});
   }, []);
   // HOST: open/close the broadcast plane. Tells the DO (admits anon listeners) AND the

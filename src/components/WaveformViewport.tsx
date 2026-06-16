@@ -22,6 +22,7 @@ interface WaveformViewportProps {
   vividness: number; // band-colour saturation (0 grey … 1 as-picked … 2 neon)
   debrick: boolean; // re-expand local contrast on brick-walled masters (see debrick())
   glow: boolean; // neon bloom halo behind the waveform
+  markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars
   gridSize: number;
   // A replacement stem set is being computed (model switch / enhance), as a 0–100 %, or
   // null when idle. Only dims/overlays when stems are ALREADY shown — the FIRST separation
@@ -993,20 +994,24 @@ export function WaveformViewport(props: WaveformViewportProps) {
           const t = phrases[i];
           if (t < left || t > right || t < 0 || t > dur) continue;
           const x = toX(t);
+          // Phrase boundary rides the same marker-thickness control, kept a hair bolder
+          // than a cue bar so the structural sections still stand out.
+          const pw = (Math.max(1, p.markerThickness || 2) + 1) * dpr;
           ctx.fillStyle = rgba(p.accent, 0.85);
-          ctx.fillRect(x - dpr, 0, 3 * dpr, h);
+          ctx.fillRect(x - pw / 2, 0, pw, h);
           ctx.fillText(`P${i + 1}`, x + 4 * dpr, 11 * dpr);
         }
       }
     }
 
     // Markers.
+    const mt = Math.max(1, p.markerThickness || 2); // user marker-bar width (px), centred on the point
     const flag = (t: number, color: string, label?: string) => {
       if (t < left || t > left + trackWindow) return;
       const x = toX(t);
       const tab = 13 * dpr;
       ctx.fillStyle = color;
-      ctx.fillRect(x - dpr, 0, 2 * dpr, h);
+      ctx.fillRect(x - (mt * dpr) / 2, 0, mt * dpr, h);
       ctx.fillRect(x, 0, tab, tab);
       if (label) {
         ctx.fillStyle = "#06080c";

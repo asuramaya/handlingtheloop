@@ -88,6 +88,13 @@ export class DjRoom {
   private snapAt = 0;
   private stemAt = 0;
   private lyricAt = 0;
+  // Public-room hardening. MAX_LISTENERS caps the anonymous crowd one DO admits (the
+  // single-threaded fan-out ceiling — beyond this a relay tier is needed). ANCHOR_GRACE_MS
+  // holds the clock through a host network blip instead of yanking it (→ a frozen room +
+  // anchor flap) when the host is the only controller and just dropped momentarily.
+  private static MAX_LISTENERS = 500;
+  private static ANCHOR_GRACE_MS = 8000;
+  private anchorGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -160,6 +167,12 @@ export class DjRoom {
     // A public listener may only enter an OPEN room, and only ever as read-only audio.
     if (pub && !this.isPublic) {
       return new Response("this room isn't public", { status: 403 });
+    }
+    // Capacity valve: one DO can only fan out to so many sockets before the relay tier is
+    // needed. Cap the anonymous CROWD (not participants — they're a small set). A reconnect
+    // of an already-counted device is exempt (it owns a slot already).
+    if (pub && this.listenerCount() >= DjRoom.MAX_LISTENERS && this.state.getWebSockets(device).length === 0) {
+      return new Response("this room is full", { status: 503 });
     }
 
     // A device reconnecting replaces its stale socket(s) — keep one per device.
@@ -453,9 +466,33 @@ export class DjRoom {
     // A reconnect REPLACES the old socket: if the device still has another live socket,
     // this close is just the stale one — ignore it (don't churn presence / the anchor).
     if (dev && this.hasOtherSocket(dev, ws)) return;
-    // Genuine departure: if the anchor dropped, move the clock; else refresh presence.
-    if (dev && dev === this.anchorId) await this.setAnchor(this.nextAnchor(dev, ws), ws);
-    else this.broadcastPresence(ws);
+    if (dev && dev === this.anchorId) {
+      const next = this.nextAnchor(dev, ws);
+      if (next) {
+        await this.setAnchor(next, ws); // another participant can hold the clock → hand over now
+      } else {
+        // No other eligible anchor (e.g. a public room whose ONLY controller is the host).
+        // Don't yank the clock on a momentary blip — that freezes the room AND flaps the
+        // anchor on every reconnect. Hold the anchor for a grace window; if the host comes
+        // back (same device id), it resumes ticking seamlessly. Only clear if it stays gone.
+        this.scheduleAnchorGrace(dev);
+      }
+    } else {
+      this.broadcastPresence(ws);
+    }
+  }
+
+  private scheduleAnchorGrace(droppedAnchor: string): void {
+    if (this.anchorGraceTimer) return;
+    this.anchorGraceTimer = setTimeout(async () => {
+      this.anchorGraceTimer = null;
+      await this.load();
+      // Host back + live + joined → its reconnect already re-anchored; leave it. Still gone
+      // → release the clock (nextAnchor is likely null here, which clears it for the crowd).
+      if (this.anchorId === droppedAnchor && !(this.isLive(droppedAnchor) && this.isJoined(droppedAnchor))) {
+        await this.setAnchor(this.nextAnchor(droppedAnchor));
+      }
+    }, DjRoom.ANCHOR_GRACE_MS);
   }
 
   async webSocketError(ws: Ws): Promise<void> {

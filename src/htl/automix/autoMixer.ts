@@ -281,9 +281,20 @@ export class AutoMixer {
   // Keep the queue full of suggestions that fit whatever is loaded right now.
   private async maybeFillRadio(): Promise<void> {
     const live = this.liveId ? this.deps.deckTrack(this.liveId) : null;
-    const otherTrack = this.liveId ? this.deps.deckTrack(other(this.liveId)) : null;
-    // Live deck + the session anchor (+ the other deck) → suggestions fit the current
-    // track AND the original vibe, so the set doesn't spiral away from where it started.
+    const idle = this.liveId ? other(this.liveId) : null;
+    const idleTrack = idle ? this.deps.deckTrack(idle) : null;
+    // CRITICAL: the idle deck now holds our OWN eagerly-preloaded NEXT track — which came
+    // FROM this very queue. Seeding radio from it feeds the queue back into itself: loading
+    // the preload reads as a deck/context change, which in dynamic radio BYPASSES the fill
+    // cooldown to refetch AND replace the tail → it evicts the preloaded track → the next
+    // preload grabs a different head → the seed changes again → refetch… an endless
+    // refetch→reload loop. So when the idle deck is holding our preload (or just the queue's
+    // own next track), DON'T seed from it — the live deck + session anchor are the real vibe.
+    const fedBack =
+      !!idle && (this.preloadedId === idle || (!!idleTrack && idleTrack.videoId === this.deps.queue.peekNext()?.videoId));
+    const otherTrack = fedBack ? null : idleTrack;
+    // Live deck + the session anchor (+ a genuinely user-loaded other deck) → suggestions fit
+    // the current context AND the original vibe, so the set doesn't spiral away from start.
     const seeds = [live, this.anchor, otherTrack].filter((t): t is TrackMeta => !!t?.videoId);
     if (!seeds.length) return;
     await this.deps.queue.ensureNext(seeds);

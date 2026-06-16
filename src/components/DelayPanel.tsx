@@ -101,7 +101,7 @@ export function DelayPanel({ deck, id, slot, accent, emit, refresh }: DelayPanel
 
   return (
     <div className="fx-panel fx-delay" style={{ ["--accent" as string]: accent }}>
-      <DelayViz time={get("time")} feedback={get("feedback")} mix={get("mix")} pingpong={stereo === 1} frozen={frozen} bpm={bpm} accent={accent} />
+      <DelayViz time={get("time")} feedback={get("feedback")} mix={get("mix")} pingpong={stereo === 1} frozen={frozen} bpm={bpm} accent={accent} hp={get("hp")} lp={get("lp")} modDepth={get("modDepth")} modRate={get("modRate")} drive={get("analog")} duck={get("duck")} width={get("spread")} />
       <div className="fx-knobs">
         {synced ? (
           <ValueCell label="TIME" value={divIdx} min={0} max={DIVISIONS.length - 1} step={1} reset={DEFAULT_DIV} onChange={setDiv} format={(v) => DIVISIONS[clamp(Math.round(v), 0, DIVISIONS.length - 1)].label} />
@@ -135,7 +135,7 @@ export function DelayPanel({ deck, id, slot, accent, emit, refresh }: DelayPanel
           ❄ FRZ
         </button>
         <button className={`fx-chip ${synced ? "on" : ""}`} onClick={() => toggle("sync")} title={synced ? "Beat-locked — tap for free ms" : "Free time — tap to beat-lock"}>
-          {synced ? "♩ SYNC" : "ms"}
+          {synced ? "SYNC" : "ms"}
         </button>
       </div>
     </div>

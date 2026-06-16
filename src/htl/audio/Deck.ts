@@ -1865,6 +1865,38 @@ export class Deck {
     this.eq.setMidQ(q);
   }
 
+  // --- per-band SHAPE (bell / lo-shelf / hi-shelf) + shelf Q (live in bell mode) ---
+  get eqLowShape() {
+    return this.eq.lowShape;
+  }
+  setEqLowShape(i: number) {
+    this.eq.setLowShape(i);
+  }
+  get eqMidShape() {
+    return this.eq.midShape;
+  }
+  setEqMidShape(i: number) {
+    this.eq.setMidShape(i);
+  }
+  get eqHighShape() {
+    return this.eq.highShape;
+  }
+  setEqHighShape(i: number) {
+    this.eq.setHighShape(i);
+  }
+  get eqLowQ() {
+    return this.eq.lowQ;
+  }
+  setEqLowQ(q: number) {
+    this.eq.setLowQ(q);
+  }
+  get eqHighQ() {
+    return this.eq.highQ;
+  }
+  setEqHighQ(q: number) {
+    this.eq.setHighQ(q);
+  }
+
   // --- HP / LP cut filters (cutoff + resonance) ---
   get eqHpFreq() {
     return this.eq.hpFreq;

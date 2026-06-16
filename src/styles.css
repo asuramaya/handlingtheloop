@@ -411,48 +411,60 @@ body {
   justify-content: center;
   gap: 1px;
   padding: 2px 3px;
-  border: 1px solid var(--line);
+  /* Styled like the deck control buttons: the RESTING border is the pad's own colour
+     muted toward the panel (deck accent for the A/B region pads via inline --smp-tint;
+     the global pads have no tint so they fall back to the theme --accent). Hover/active
+     brighten to the full colour. So every pad's border reads as its route at a glance. */
+  --smp-col: var(--smp-tint, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--smp-col) 55%, var(--panel));
   border-radius: 6px;
   background: var(--panel-2);
   color: var(--muted);
   cursor: pointer;
   overflow: hidden;
-  transition: border-color 0.1s, background 0.1s, box-shadow 0.1s;
+  transition: border-color 0.1s, background 0.1s, box-shadow 0.1s, color 0.1s;
 }
 /* A visible gap before the global block and before the B block. */
 .smp-pad.smp-divide {
   margin-left: 9px;
 }
-.smp-pad:not(:disabled):hover {
-  border-color: var(--smp-tint, var(--accent));
+/* Global (master) pads aren't tied to a deck — drive them off the INTERFACE border
+   colour (--line, the panel-line setting), not --accent (which resolves to deck A's hue
+   in this part of the tree). So they read as neutral/global rather than borrowing deck A. */
+.smp-pad.smp-master {
+  --smp-col: var(--line);
+  border-color: var(--line);
 }
+.smp-pad:not(:disabled):hover {
+  border-color: var(--smp-col);
+  color: var(--text);
+}
+/* No track on that deck yet → the region pad can't grab: recede to a neutral border. */
 .smp-pad:disabled {
-  opacity: 0.35;
+  opacity: 0.3;
+  border-color: var(--line);
   cursor: default;
 }
-/* Empty pads read as drop/grab targets (dashed); filled pads carry their route tint. */
+/* Empty (inactive) pads keep the muted route-coloured border from the base — a dashed
+   edge marks them as a free grab/drop slot without losing the colour cue. */
 .smp-pad.empty {
   border-style: dashed;
 }
-.smp-pad.set.smp-A,
-.smp-pad.set.smp-B {
+/* Filled pads: brighter route border + a faint route wash + full-strength label. */
+.smp-pad.set {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--smp-tint) 55%, var(--line));
-  background: color-mix(in srgb, var(--smp-tint) 12%, var(--panel-2));
-}
-.smp-pad.set.smp-master {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--smp-col) 70%, var(--line));
+  background: color-mix(in srgb, var(--smp-col) 12%, var(--panel-2));
 }
 .smp-pad.playing {
-  box-shadow: 0 0 12px color-mix(in srgb, var(--smp-tint, var(--accent)) 60%, transparent);
-  border-color: var(--smp-tint, var(--accent));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--smp-col) 60%, transparent);
+  border-color: var(--smp-col);
 }
 .smp-pad.drag-over {
   border-style: solid;
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border-color: var(--smp-col);
+  background: color-mix(in srgb, var(--smp-col) 16%, var(--panel-2));
 }
 .smp-pad.uploading {
   animation: smp-pulse 1s ease-in-out infinite;
@@ -2666,21 +2678,22 @@ body.no-glow .caption-word.cw-on .cw-label {
      selector here loses the cascade to them. The extra class (0,2,0 > 0,1,0) wins
      regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
      collapsed to just the crossfader, and left the bottom half an empty void. */
-  /* CONTROLS WIN. The control stack (square pad rows + pro-EQ curve + stem cells +
-     sync/tempo/pitch/key rack) must show in FULL — a `min-height` floor on the lanes
-     stole the space the EQ row needed and pushed it off the bottom (clipped), while
-     leaving a black void inside the lanes when a deck was empty. So `.decks-third`
-     takes its full NATURAL height (flex 0 0 auto — never shrinks, EQ always fits) and
-     the lanes take whatever's left (flex 1 1 0, no floor): they grow to fill a tall
-     narrow window (no gap under the foot) and shrink on a short phone (no clip). The
-     `.bank-main` scroll below stays as a safety net for the shortest phones. */
+  /* AUDIO VIEWPORT STAYS PUT ACROSS THE BREAKPOINT. The deck A/B waveforms must NOT
+     jump size when the window crosses 768px. The earlier "controls win" rule did exactly
+     that: it made `.decks-third` rigid (flex 0 0 auto) and dropped the lanes' min-height
+     to 0, so the instant you hit mobile the control stack stopped giving way and ate the
+     waveform height — a visible collapse at the threshold. Instead, mirror the DESKTOP
+     allocation exactly (same flex + same 140px lane floor) so the lanes get an identical
+     share on both sides of the line. The control stack gives way and SCROLLS internally
+     (`.bank-main { overflow-y:auto }` below) when it doesn't fit — controls scroll, the
+     audio viewport holds its size. */
   .stage .lanes {
     flex: 1 1 0;
-    min-height: 0;
+    min-height: 140px; /* identical to the desktop base — no jump at 768px */
     overflow: hidden;
   }
   .stage .decks-third {
-    flex: 0 0 auto;
+    flex: 0 1 auto; /* shrinkable like desktop → controls scroll, lanes keep their share */
     min-height: 0;
   }
   .stage .decks-row {
@@ -3260,11 +3273,27 @@ body.no-glow .caption-word.cw-on .cw-label {
   .vcell {
     height: 34px;
   }
-  /* The EQ curve is the single biggest strip; halving its slack reclaims the most.
-     It already adapts to a CSS height change (same mechanism the ≤768px path uses). */
+  /* The EQ curve is the single biggest strip; halving its slack reclaims the most. Drive
+     it through the SHARED --fx-body-h so every effect (delay…) shrinks in lock-step — the
+     EQ's height is the constant cap for the whole rack. Compact delay knobs keep the two
+     rows + chip strip inside it. */
+  .fx-strip {
+    --fx-body-h: 100px;
+  }
   .eq-curve {
-    height: 92px;
     min-height: 48px;
+  }
+  .fx-delay .fx-knobs {
+    grid-auto-rows: minmax(20px, 28px);
+    gap: 6px 7px;
+    padding-bottom: 4px;
+  }
+  .fx-foot {
+    gap: 3px;
+  }
+  .fx-chip {
+    padding: 4px 3px;
+    font-size: 8.5px;
   }
   .eq-tool {
     padding: 3px 2px;
@@ -5987,7 +6016,9 @@ body.no-glow .lane.focused::after {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 38px;
+  /* Match the real stem cells' height (.stems-row .vcell is 50px at every breakpoint)
+     so swapping the placeholder for the live buttonoids doesn't resize the deck stack. */
+  min-height: 50px;
   border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 5%, var(--bg));
@@ -6020,8 +6051,12 @@ body.no-glow .lane.focused::after {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  flex: 1;
+  /* .eq-pro now owns the shared --fx-body-h (= every device tab's height): the curve
+     fills the slack above a fixed band-edit subrow, so EQ + delay still align. */
+  flex: 0 1 auto;
+  height: var(--fx-body-h, 178px);
   min-height: 0;
+  overflow: hidden;
 }
 .eq-pro.bypassed .eq-curve {
   opacity: 0.6;
@@ -6185,12 +6220,14 @@ body:not(.no-glow) .fx-tab.sel {
   gap: 5px;
   flex: 0 1 auto;
   height: var(--fx-body-h, 178px);
-  min-height: 96px;
+  min-height: 0; /* the shared --fx-body-h is the only height authority (= the EQ) */
   overflow: hidden;
 }
-/* The viz absorbs the variable height (more on wide screens where the knobs are one row). */
+/* The viz is the pure surplus-absorber: basis 0 so it only appears when there's leftover
+   height after the knobs + chips, and collapses FIRST (before the knob rows shrink) when
+   the panel is squeezed. Big on a tall strip, gone on a short one. */
 .dly-viz {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   position: relative;
   border: 1px solid var(--line);
@@ -6208,16 +6245,37 @@ body:not(.no-glow) .fx-tab.sel {
    column count for a balanced, grouped layout. */
 .fx-knobs {
   flex: 0 0 auto;
+  /* Clip the grid box so a knob's arc/dot can't bleed DOWNWARD onto the chip toolbar
+     when the panel is squeezed short (viz collapsed). Without this the value-0 dots
+     (parked at the cell's bottom edge) spilled into the gaps BETWEEN the chips and read
+     as stray marks overlapping the button row. The delay's 7px padding-bottom keeps the
+     dot's normal glow inside the box, so this only trims the would-be overlap. */
+  overflow: hidden;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
-  grid-auto-rows: 44px;
+  grid-auto-rows: 40px;
   justify-content: center;
-  gap: 10px 12px; /* row col — enough that adjacent knob outlines don't visually collide */
+  gap: 8px 10px; /* row col — enough that adjacent knob outlines don't visually collide */
 }
-/* Delay: 5 fixed columns → a balanced 5+4 split, column-aligned (core row TIME·FBK·HP·LP·MIX
-   over the character row DEPTH·RATE·DRIVE·DUCK), no orphaned/left-hugging last row. */
+/* Delay: 5 fixed columns → a balanced 5+5 split, column-aligned (core row TIME·FBK·HP·LP·MIX
+   over the character row DEPTH·RATE·DRIVE·DUCK·WIDTH), no orphaned/left-hugging last row.
+   minmax(0,1fr) lets the cells shrink in a narrow dock without overflowing (grid gaps are
+   always preserved, so cells never collide); compact 34px rows so the two rows + the chip
+   strip always fit inside the shared --fx-body-h that the EQ sets, at any width. */
 .fx-delay .fx-knobs {
-  grid-template-columns: repeat(5, 1fr);
+  /* SHRINKABLE: the FX strip only gets the deck bank's leftover height, so the panel is
+     usually far shorter than --fx-body-h. Let the two rows compress (down to 22px) to fit
+     whatever height is available — rigid rows overflowed and the chip strip collided with
+     this row. The viz collapses first; then these rows shrink; the chips stay put. */
+  flex: 0 1 auto;
+  min-height: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(22px, 34px);
+  column-gap: 7px;
+  /* A cell's level marker (the dot) sits ON its border, so a min-value (0) knob parks its
+     dot at the BOTTOM-centre and its glow bleeds ~7px below the cell. Reserve that much
+     clearance inside the grid box so the bottom row's dots never spill onto the chip strip. */
+  padding-bottom: 7px;
 }
 .fx-knobs .vcell {
   height: 100%;
@@ -6225,18 +6283,33 @@ body:not(.no-glow) .fx-tab.sel {
   min-width: 0;
   max-width: none;
 }
+/* The FX panel lives INSIDE .eq-row (DeckControls wraps <FxStrip> in it), so the
+   `.eq-row .vcell { height: 50px }` foot-row rule (desktop AND mobile) was leaking onto
+   the delay's knob cells — forcing them to 50px inside their compact 22–34px grid rows,
+   so they overflowed and overlapped (and pushed up under the chin). The knob cells must
+   fill their GRID row, not the foot-row tile height. Higher specificity (0,3,0) so it
+   wins over `.eq-row .vcell` (0,2,0) regardless of source order, on every breakpoint. */
+.eq-row .fx-knobs .vcell {
+  height: 100%;
+}
 /* The chip toolbar — spreads to fill the width (like the EQ tools) so it reads as the
    same shell. Mode/toggle chips grow; the small ON / ✕ controls hold their size at the end. */
+/* The chip toolbar — ONE row that never wraps (a wrapped 2nd/3rd row would balloon the
+   panel past the shared height and collide with the device toolbar below). Chips share the
+   width and shrink together; labels clip rather than wrap. */
 .fx-foot {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   align-items: stretch;
   flex: 0 0 auto;
 }
 .fx-chip {
-  flex: 1 1 auto;
-  padding: 5px 8px;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  padding: 5px 5px;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -6295,12 +6368,11 @@ body:not(.no-glow) .fx-chip.on {
 }
 .eq-curve {
   position: relative;
-  /* Fixed-height strip (image #15): a consistent curve that only shrinks on short
-     windows so it never clips off the bottom. Height shared with the effect knob-grid
-     (--fx-body-h) so every device tab renders at the same height. */
-  flex: 0 1 auto;
-  height: var(--fx-body-h, 140px);
-  min-height: 56px;
+  /* The curve is the surplus-absorber inside .eq-pro (which owns --fx-body-h): it fills
+     whatever height is left after the band-edit subrow below. The nodes still control
+     freq/gain/Q by drag; the subrow is the Pro-Q-style numeric companion. */
+  flex: 1 1 0;
+  min-height: 48px;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -6311,6 +6383,79 @@ body:not(.no-glow) .fx-chip.on {
   position: absolute;
   inset: 0;
   display: block;
+}
+/* Pro-Q-style band-edit subrow: precise numeric cells for the SELECTED node's
+   secondary params (freq / gain / Q-or-resonance), coloured in the band's hue. A fixed
+   short row so the curve keeps the bulk of --fx-body-h. */
+.eq-subrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+  min-height: 0;
+  height: 38px;
+}
+.eq-subrow .vcell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The EQ's band-edit cells live inside .eq-row too, so the `.eq-row .vcell{height:50px}`
+   foot-row rule was inflating FREQ/GAIN/Q to 50px inside the 38px subrow — they spilled
+   DOWN over the BYPASS/RESET/COPY toolbar. Pin them to the subrow height so they match
+   the MID band chip (which just stretches to it). Higher specificity (0,3,0) beats the
+   50px rule (0,2,0) on every breakpoint. The curve (flex 1 1 0) yields the room. */
+.eq-row .eq-subrow .vcell {
+  height: 100%;
+}
+.eq-subrow-band {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border-radius: 6px;
+  color: var(--band);
+  border: 1px solid color-mix(in srgb, var(--band) 50%, transparent);
+  background: color-mix(in srgb, var(--band) 14%, transparent);
+}
+/* The currently-edited node reads as selected (a brighter ring) so the subrow's
+   band is unambiguous. */
+.eq-node.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--node) 70%, #fff 30%), 0 0 10px var(--node);
+}
+/* SHAPE is a SWITCH button (discrete: bell / lo-shelf / hi-shelf), not a buttonoid —
+   it cycles on tap. Sized to sit in the subrow next to the FREQ/GAIN/Q cells. */
+.eq-shape-btn {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 50px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 70%, #000 10%);
+  color: var(--text);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.eq-shape-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+.eq-shape-cap {
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+}
+.eq-shape-val {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent);
 }
 /* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
 .eq-node {
@@ -7493,8 +7638,10 @@ button.room-tog:hover {
 /* ── Cue / loop pad layout per breakpoint ────────────────────────────────────
    DESKTOP: the cue + loop pads WIDEN to fill their row (drop the square cap) so
    there's no empty space between them — wide pads, fixed height. MOBILE (≤768):
-   a chunkier 2×4 grid for bigger touch targets, shorter pads, and a more compact
-   EQ so both 2×4 blocks fit. Appended at EOF to win the source-order tie. */
+   ONE flat row of 8 per block (cue, loops) — a 2×4 grid spent two rows each (four
+   total) and ran the short deck stack out of HEIGHT before it ran out of width.
+   Single 1×8 rows of short pads halve that footprint. Appended at EOF to win the
+   source-order tie. */
 @media (min-width: 769px) {
   .loop-sizes .loop-btn,
   .hotcues .pad {
@@ -7507,25 +7654,66 @@ button.room-tog:hover {
 @media (max-width: 768px) {
   .loop-sizes,
   .hotcues {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr)); /* 1×8, not 2×4 — height is the scarce axis */
   }
+  /* CONTROL HEIGHTS = DESKTOP. The breakpoint must not shrink the control rows either
+     (it used to: pads 42→22, value cells 50→38, etc., so the whole bank read squashed
+     next to desktop). Now that the stack scrolls, restore the desktop heights so a deck
+     bank looks identical across 768px — only WIDTH-driven things (font-size, 1×8 grid)
+     stay compact for the narrow column. */
   .loop-sizes .loop-btn,
   .hotcues .pad {
     width: 100%;
     max-width: none;
     aspect-ratio: auto;
-    height: 22px;
+    height: 42px; /* same as the desktop ≥769 rule — no half-height pads at the line */
+    /* Drop the generic .loop-btn 20px floor — eight per row would total ~180px and
+       overflow a phone-width deck column. The 1×8 track (minmax(0,1fr)) shrinks them. */
+    min-width: 0;
   }
-  /* Mobile EQ = a compact fixed strip (the tallest single control row, so trimming
-     it claws back the most vertical space against the scroll). Low floor so very
-     short phones shrink it rather than clip the tools. */
+  /* Value cells (stem gains, EQ bands, pitch/key) match the desktop 50px foot-row tiles
+     instead of falling back to the 38px base. */
+  .pitch-row .vcell,
+  .stems-row .vcell,
+  .eq-row .vcell {
+    height: 50px;
+  }
+  /* Loop IN/OUT/EXIT back to the desktop button height (the generic mobile .loop-btn
+     trimmed the padding). Font stays compact for the narrow column. */
+  .loops .loop-btn {
+    padding: 7px 0;
+  }
+  /* Row gaps back to the desktop 6px (the phone board tightened them to 3px). */
+  .stage .decks-row .bank-main {
+    gap: 6px;
+  }
+  /* EQ strip keeps its place in the now-consistent stack; it scrolls with the rest. */
   .decks-row .bank-main > .eq-row {
     flex: 0 1 auto;
     min-height: 0;
   }
+  /* Phone EQ/effects height = the SAME as desktop (no half-height squash at the
+     breakpoint). The control stack now gives way and scrolls (`.decks-third` is
+     shrinkable + `.bank-main` overflow-y:auto), so a full-height rack no longer pushes
+     the foot off-screen — it just scrolls. --fx-body-h still caps the whole rack (EQ +
+     every effect) at one height so the delay can't out-grow the EQ. */
+  .fx-strip {
+    --fx-body-h: 192px;
+  }
   .eq-curve {
-    height: 84px;
-    min-height: 64px;
+    min-height: 0;
+  }
+  .fx-delay .fx-knobs {
+    grid-auto-rows: minmax(20px, 28px);
+    gap: 6px 7px;
+    padding-bottom: 4px;
+  }
+  .fx-foot {
+    gap: 3px;
+  }
+  .fx-chip {
+    padding: 4px 3px;
+    font-size: 8.5px;
   }
 }
 

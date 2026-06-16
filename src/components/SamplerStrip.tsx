@@ -51,6 +51,7 @@ export function SamplerStrip({
   // Pad press. Empty pads ASSIGN (region → capture from the deck; global → file picker);
   // filled pads TRIGGER (gate = hold; loop = toggle; one-shot = retrigger).
   const onPadDown = (e: PointerEvent, pad: SamplerPad) => {
+    if (e.button !== 0) return; // right / middle button → context menu only, never trigger
     if (suppressClick.current) return;
     if (pad.kind === "empty") return; // assign happens on click, below
     if (pad.mode === "gate") {

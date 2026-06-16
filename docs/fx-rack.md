@@ -36,7 +36,28 @@ A tab bar over one full-size device panel (so the EQ curve keeps its height), pl
 **BYPASS / RESET / COPY** toolbar that acts on the selected device (COPY mirrors it to the
 other deck, adding it there if missing). Add a device from the `+` palette, **remove by
 right-clicking its tab**, **drag a tab to reorder** the chain. Device bodies are
-height-anchored to a shared `--fx-body-h` so every tab and both decks stay aligned.
+height-anchored to a shared `--fx-body-h` so every tab and both decks stay aligned (the var
+lives on `.eq-pro` / `.fx-panel`; the EQ curve and the delay's `DelayViz` are the flexible
+surplus-absorbers inside it).
+
+### EQ — the parametric curve (`EqCurve.tsx` + `Eq3.ts`)
+
+Five nodes dragged in 2D over a live spectrum (HP-cut · LOW shelf · MID bell · HIGH shelf ·
+LP-cut). Drag = freq (X) + gain/Q (Y); shift-wheel = Q. Under the curve sits a **Pro-Q-style
+band-edit subrow** — a numeric companion for the **selected** node (click any node to select;
+it gets a brighter ring). The subrow shows that band's **buttonoids** (ValueCell scrollers):
+HP/LP → `FREQ`·`RES`; LOW/MID/HIGH → `FREQ`·`GAIN`·`Q` plus a **SHAPE** *switch button*.
+
+- **SHAPE** (a discrete cycler, not a scroller) flips each of LOW/MID/HIGH between **bell /
+  lo-shelf / hi-shelf / notch** — it just swaps the biquad `type`, so the curve renderer
+  (`getFrequencyResponse`) reflects it for free. Switching a shelf to bell/notch makes **Q
+  live** (Web-Audio honours Q only for `peaking`/`notch`; shelves ignore it), so LOW/HIGH gain
+  a real width control to match MID. Cells grey by shape: `Q` greys in shelf modes, `GAIN`
+  greys in notch.
+- Shapes ride the `eq*Shape` / `eqLowQ` / `eqHighQ` ControlParams (the same per-EQ sync path as
+  the rest of the band params — see Session sync below), so they persist + sync 1:1.
+- Deferred: **SLOPE** for the HP/LP cuts (12/24/48 dB-oct) — the one secondary param that needs
+  cascaded biquads + curve-math changes, not just a `type` swap.
 
 ### Delay (`DelayFx.ts` + `DelayPanel.tsx` + `DelayViz.tsx`)
 
@@ -46,8 +67,21 @@ A stereo dub/DJ delay modelled on the Waves H-Delay (character) and Arturia Dela
 feedback (HP+LP+LINK), analog **DRIVE** + **LoFi** bitcrush (worklet-free waveshapers),
 **modulation** (LFO → delay time), **ducking** (pure-Web-Audio sidechain), and **WIDTH**
 (L/R time offset for organic stereo). The panel is a 5×2 knob grid under an **echo-tap
-visualization** (predictive: taps decay by feedback over a beat-grid; ping-pong splits
-L/R; freeze holds).
+visualization** (`DelayViz.tsx`).
+
+`DelayViz` is **three layers sharing one viewport** (imperative canvas) so the otherwise-
+invisible character params can be seen:
+
+1. **HP/LP filter** — a full-height bandpass *hill* backdrop (the echoes' tone window on a
+   log-freq scale; flattens to full width when the cuts are parked open).
+2. **DEPTH/RATE** — a **live scrolling LFO sine** (amplitude ∝ depth, wavelength ∝ rate, phase
+   advances via `performance.now()` so it actually moves); the taps slide with it.
+3. **Echo taps** — the predictive timeline: dry hit at t=0, taps decaying by `feedback^n` over a
+   beat grid, ping-pong split L-up/R-down, **WIDTH** as an L/R x-split, **DUCK** as a sidechain
+   dip recovering over ~½ beat, **DRIVE** as a warm glow, **Freeze** holds every tap.
+
+It only runs an animation loop while the LFO is active (`depth>0 && rate>0`); otherwise it's a
+single static draw (no idle rAF), and the canvas re-allocates only on real resize.
 
 ### Session sync (`protocol.ts` + `App.tsx`)
 

@@ -20,7 +20,6 @@ import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/t
 import { audioChunks, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
-import { handleSampleRoute } from "../server/samples";
 import {
   type D1Database,
   userBySession,
@@ -87,7 +86,6 @@ interface R2Object {
 interface R2Bucket {
   get(key: string): Promise<R2ObjectBody | null>;
   head(key: string): Promise<{ size: number } | null>;
-  delete(key: string): Promise<void>;
   put(
     key: string,
     value: ArrayBuffer | Uint8Array,
@@ -235,10 +233,6 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
     const accountRes = await handleAccountRoute(url, req, env);
     if (accountRes) return accountRes;
 
-    // Sampler global-pad files (R2 + D1, account-gated; dynamic /api/samples/:id paths).
-    const sampleRes = await handleSampleRoute(url, req, env);
-    if (sampleRes) return sampleRes;
-
     switch (url.pathname) {
       case "/api/audio": {
         const v = url.searchParams.get("v");
@@ -273,7 +267,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           const stream = new ReadableStream<Uint8Array>({
             async start(controller) {
               try {
-                for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) controller.enqueue(chunk);
+                for await (const chunk of audioChunks(r.url, r.contentLength)) controller.enqueue(chunk);
                 controller.close();
               } catch (e) {
                 controller.error(e);
@@ -289,7 +283,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // background (waitUntil) so it doesn't delay playback.
         const parts: Uint8Array[] = [];
         let total = 0;
-        for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) {
+        for await (const chunk of audioChunks(r.url, r.contentLength)) {
           parts.push(chunk);
           total += chunk.byteLength;
         }
@@ -382,17 +376,15 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         return json(200, { candidates });
       }
       case "/api/tidal-probe": {
-        // DIAGNOSTIC — verify TIDAL track-radio works with your live token. Gated to a
-        // signed-in account so it doesn't expose catalog internals (or burn the app
-        // token) to anonymous callers. Visit /api/tidal-probe?q=artist+title (or ?isrc=).
-        const user = await sessionUser(req, env);
-        if (!user) return json(401, { error: "sign in first" });
+        // TEMP DIAGNOSTIC — verify TIDAL track-radio works with your live token.
+        // Visit /api/tidal-probe?q=artist+title (or ?isrc=) while signed in + TIDAL linked.
         const isrc = url.searchParams.get("isrc");
         const q = url.searchParams.get("q");
         if (!isrc && !q) return json(400, { error: "pass ?q=artist+title or ?isrc=" });
         // Prefer a linked user token; else fall back to a client-credentials app
         // token (catalog reads need no login — just TIDAL_CLIENT_ID/SECRET).
-        let token = await getValidToken(env, user.id, "tidal");
+        const user = await sessionUser(req, env);
+        let token = user ? await getValidToken(env, user.id, "tidal") : null;
         let tokenKind = token ? "user" : "";
         if (!token) {
           token = await tidalClientToken(tidalCreds(env));

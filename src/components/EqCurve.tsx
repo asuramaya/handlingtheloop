@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Deck } from "@htl/audio";
-import { EQ_MAX_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX } from "@htl/audio";
+import { EQ_MIN_DB, EQ_MAX_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
 import type { Intent } from "@htl/room";
+import { ValueCell } from "./ValueCell";
 
 // A pro parametric EQ surface — a simplified FabFilter Pro-Q built on the deck's real
 // biquad chain. Up to five nodes you drag in 2D over a live spectrum:
@@ -40,21 +41,31 @@ interface NodeDef {
   setGain: (d: Deck, db: number) => void;
   getQ: (d: Deck) => number;
   setQ: (d: Deck, q: number) => void;
+  // SHAPE (LOW/MID/HIGH only): the band's filter character (bell / lo-shelf / hi-shelf).
+  // Q is live only in bell mode, so the Q cell greys out otherwise.
+  getShape?: (d: Deck) => number;
+  setShape?: (d: Deck, i: number) => void;
+  sDefault?: number;
   // room-sync param ids
   fParam: "eqLowFreq" | "eqMidFreq" | "eqHighFreq" | "eqHpFreq" | "eqLpFreq";
   gParam?: "eqLow" | "eqMid" | "eqHigh";
-  qParam?: "eqMidQ" | "eqHpQ" | "eqLpQ";
+  qParam?: "eqMidQ" | "eqLowQ" | "eqHighQ" | "eqHpQ" | "eqLpQ";
+  sParam?: "eqLowShape" | "eqMidShape" | "eqHighShape";
 }
 
 const NODES: NodeDef[] = [
   { key: "hp", label: "HP", color: "#9aa7ff", vert: "q", fMin: EQ_HP.min, fMax: EQ_HP.max, fDefault: EQ_HP.freq, getFreq: (d) => d.eqHpFreq, setFreq: (d, v) => d.setEqHpFreq(v), getGain: () => 0, setGain: () => {}, getQ: (d) => d.eqHpQ, setQ: (d, v) => d.setEqHpQ(v), fParam: "eqHpFreq", qParam: "eqHpQ" },
-  { key: "low", label: "LOW", color: "#ff6b9d", vert: "gain", fMin: 40, fMax: 500, fDefault: 200, getFreq: (d) => d.eqLowFreq, setFreq: (d, v) => d.setEqLowFreq(v), getGain: (d) => d.eqLow, setGain: (d, v) => d.setEqLow(v), getQ: () => 1, setQ: () => {}, fParam: "eqLowFreq", gParam: "eqLow" },
-  { key: "mid", label: "MID", color: "#ffd250", vert: "gain", fMin: 200, fMax: 6000, fDefault: 1000, getFreq: (d) => d.eqMidFreq, setFreq: (d, v) => d.setEqMidFreq(v), getGain: (d) => d.eqMid, setGain: (d, v) => d.setEqMid(v), getQ: (d) => d.eqMidQ, setQ: (d, v) => d.setEqMidQ(v), fParam: "eqMidFreq", gParam: "eqMid", qParam: "eqMidQ" },
-  { key: "high", label: "HI", color: "#36c2ff", vert: "gain", fMin: 1500, fMax: 16000, fDefault: 3200, getFreq: (d) => d.eqHighFreq, setFreq: (d, v) => d.setEqHighFreq(v), getGain: (d) => d.eqHigh, setGain: (d, v) => d.setEqHigh(v), getQ: () => 1, setQ: () => {}, fParam: "eqHighFreq", gParam: "eqHigh" },
+  { key: "low", label: "LOW", color: "#ff6b9d", vert: "gain", fMin: 40, fMax: 500, fDefault: 200, getFreq: (d) => d.eqLowFreq, setFreq: (d, v) => d.setEqLowFreq(v), getGain: (d) => d.eqLow, setGain: (d, v) => d.setEqLow(v), getQ: (d) => d.eqLowQ, setQ: (d, v) => d.setEqLowQ(v), getShape: (d) => d.eqLowShape, setShape: (d, v) => d.setEqLowShape(v), sDefault: EQ_SHAPE_DEFAULT.low, fParam: "eqLowFreq", gParam: "eqLow", qParam: "eqLowQ", sParam: "eqLowShape" },
+  { key: "mid", label: "MID", color: "#ffd250", vert: "gain", fMin: 200, fMax: 6000, fDefault: 1000, getFreq: (d) => d.eqMidFreq, setFreq: (d, v) => d.setEqMidFreq(v), getGain: (d) => d.eqMid, setGain: (d, v) => d.setEqMid(v), getQ: (d) => d.eqMidQ, setQ: (d, v) => d.setEqMidQ(v), getShape: (d) => d.eqMidShape, setShape: (d, v) => d.setEqMidShape(v), sDefault: EQ_SHAPE_DEFAULT.mid, fParam: "eqMidFreq", gParam: "eqMid", qParam: "eqMidQ", sParam: "eqMidShape" },
+  { key: "high", label: "HI", color: "#36c2ff", vert: "gain", fMin: 1500, fMax: 16000, fDefault: 3200, getFreq: (d) => d.eqHighFreq, setFreq: (d, v) => d.setEqHighFreq(v), getGain: (d) => d.eqHigh, setGain: (d, v) => d.setEqHigh(v), getQ: (d) => d.eqHighQ, setQ: (d, v) => d.setEqHighQ(v), getShape: (d) => d.eqHighShape, setShape: (d, v) => d.setEqHighShape(v), sDefault: EQ_SHAPE_DEFAULT.high, fParam: "eqHighFreq", gParam: "eqHigh", qParam: "eqHighQ", sParam: "eqHighShape" },
   { key: "lp", label: "LP", color: "#7dffd6", vert: "q", fMin: EQ_LP.min, fMax: EQ_LP.max, fDefault: EQ_LP.freq, getFreq: (d) => d.eqLpFreq, setFreq: (d, v) => d.setEqLpFreq(v), getGain: () => 0, setGain: () => {}, getQ: (d) => d.eqLpQ, setQ: (d, v) => d.setEqLpQ(v), fParam: "eqLpFreq", qParam: "eqLpQ" },
 ];
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+// Subrow cell formatters (the Pro-Q-style numeric companion under the curve).
+const fmtHz = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1)}k` : `${Math.round(hz)}`);
+const fmtDb = (db: number) => `${db > 0 ? "+" : ""}${db.toFixed(1)}`;
+const fmtQ = (q: number) => q.toFixed(1);
 const xFromFreq = (hz: number, w: number) => (Math.log10(hz / F_MIN) / F_SPAN) * w;
 const freqFromX = (x: number, w: number) => F_MIN * Math.pow(10, (x / w) * F_SPAN);
 const yFromDb = (db: number, h: number) => ((DB_TOP - db) / (DB_TOP - DB_BOT)) * h;
@@ -90,6 +101,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCu
   const eqSig = useRef(0); // cheap signature of the EQ params → redraw when it changes (e.g. a MIDI knob while paused)
   // active gesture on a node: a drag (sweep).
   const drag = useRef<{ i: number } | null>(null);
+  const [sel, setSel] = useState(2); // band whose numeric subrow is shown (default MID)
   const [, bump] = useState(0);
 
   // (Re)size canvas + per-pixel buffers to the element box.
@@ -353,6 +365,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCu
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     drag.current = { i };
+    setSel(i); // touching a node selects its band for the numeric subrow
   };
   const endDrag = (e: React.PointerEvent) => {
     if (!drag.current) return;
@@ -401,7 +414,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCu
             ref={(el) => {
               handleRefs.current[i] = el;
             }}
-            className={`eq-node ${n.vert === "q" ? "cut" : ""}`}
+            className={`eq-node ${n.vert === "q" ? "cut" : ""} ${i === sel ? "selected" : ""}`}
             title={`${n.label} · ${Math.round(n.getFreq(deck))} Hz${n.vert === "gain" ? ` · ${n.getGain(deck) > 0 ? "+" : ""}${n.getGain(deck).toFixed(1)} dB` : ` · Q ${n.getQ(deck).toFixed(1)}`} — right-click to reset`}
             style={{ ["--node" as string]: n.color } as CSSProperties}
             onPointerDown={(e) => startDrag(i, e)}
@@ -413,6 +426,97 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCu
           />
         ))}
       </div>
+
+      {/* Pro-Q-style band-edit subrow: precise numeric cells for the SELECTED node's
+          secondary params. Freq/gain/Q are still drag-able on the curve; these give a
+          numeric companion (and harder kill / finer Q than the 2D drag allows). The cells
+          keep the DECK accent (don't override --accent); only the band chip carries the
+          node's hue via --band — so the select indicator reads as the band, the buttonoids
+          read as the deck. They emit the same `control` intents as the nodes so session-
+          sync + MIDI converge 1:1. */}
+      {(() => {
+        const n = NODES[clamp(sel, 0, NODES.length - 1)];
+        const commit = (param: NonNullable<NodeDef["fParam"] | NodeDef["gParam"] | NodeDef["qParam"] | NodeDef["sParam"]>, getNow: () => number) => {
+          emit({ kind: "control", deck: id, param, value: getNow() });
+          dirty.current = true;
+          bump((x) => x + 1);
+        };
+        const qReset = n.key === "mid" ? 0.9 : n.key === "hp" ? EQ_HP.q : n.key === "lp" ? EQ_LP.q : 1;
+        // Which cells are live depends on the shape: shelves ignore Q, a notch ignores
+        // gain. Grey the inert cell out rather than letting it look active.
+        const shapeType = n.getShape ? EQ_SHAPE_TYPES[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_TYPES.length - 1)] : null;
+        const qLive = shapeType == null || shapeType === "peaking" || shapeType === "notch";
+        const gainLive = shapeType == null || shapeType !== "notch";
+        return (
+          <div className="eq-subrow" style={{ ["--band" as string]: n.color } as CSSProperties}>
+            <span className="eq-subrow-band">{n.label}</span>
+            <ValueCell
+              label="FREQ"
+              value={n.getFreq(deck)}
+              min={n.fMin}
+              max={n.fMax}
+              step={1}
+              reset={n.fDefault}
+              format={fmtHz}
+              onChange={(v) => {
+                n.setFreq(deck, v);
+                commit(n.fParam, () => n.getFreq(deck));
+              }}
+            />
+            {n.gParam && (
+              <ValueCell
+                label="GAIN"
+                value={n.getGain(deck)}
+                min={EQ_MIN_DB}
+                max={EQ_MAX_DB}
+                step={0.5}
+                pivot={0}
+                format={fmtDb}
+                disabled={!gainLive}
+                onChange={(v) => {
+                  n.setGain(deck, v);
+                  commit(n.gParam!, () => n.getGain(deck));
+                }}
+              />
+            )}
+            {n.qParam && (
+              <ValueCell
+                label={n.sParam ? "Q" : "RES"}
+                value={n.getQ(deck)}
+                min={EQ_Q_MIN}
+                max={EQ_Q_MAX}
+                step={0.1}
+                reset={qReset}
+                format={fmtQ}
+                disabled={!qLive}
+                onChange={(v) => {
+                  n.setQ(deck, v);
+                  commit(n.qParam!, () => n.getQ(deck));
+                }}
+              />
+            )}
+            {n.sParam && n.getShape && n.setShape && (
+              <button
+                className="eq-shape-btn"
+                title="Band shape — tap to cycle bell / lo-shelf / hi-shelf · right-click resets"
+                onClick={() => {
+                  const next = (Math.round(n.getShape!(deck)) + 1) % EQ_SHAPE_TYPES.length;
+                  n.setShape!(deck, next);
+                  commit(n.sParam!, () => n.getShape!(deck));
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  n.setShape!(deck, n.sDefault ?? 0);
+                  commit(n.sParam!, () => n.getShape!(deck));
+                }}
+              >
+                <span className="eq-shape-cap">SHAPE</span>
+                <span className="eq-shape-val">{EQ_SHAPE_LABELS[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_LABELS.length - 1)]}</span>
+              </button>
+            )}
+          </div>
+        );
+      })()}
       {/* BYPASS / RESET / COPY now live in the shared FxStrip toolbar (every device gets them). */}
     </div>
   );

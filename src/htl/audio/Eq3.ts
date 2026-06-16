@@ -27,6 +27,14 @@ export const EQ_LP = { freq: 20000, min: 320, max: 20000, q: 0.7 } as const;
 export const EQ_Q_MIN = 0.3;
 export const EQ_Q_MAX = 12;
 
+// Per-band SHAPE — each of LOW/MID/HIGH can switch filter character, so the three bands
+// carry a consistent control. Web-Audio honours Q only for the "peaking" (bell) type;
+// the shelves ignore it, so the UI greys the Q cell out of bell mode. Index order is the
+// wire contract (shapes ride the eq*Shape ControlParams as the index).
+export const EQ_SHAPE_TYPES = ["peaking", "lowshelf", "highshelf", "notch"] as const;
+export const EQ_SHAPE_LABELS = ["BELL", "LO-SH", "HI-SH", "NOTCH"] as const;
+export const EQ_SHAPE_DEFAULT = { low: 1, mid: 0, high: 2 } as const; // lo-shelf / bell / hi-shelf
+
 export type EqRoute = "normal" | "solo" | "bypass";
 
 import type { FxDevice } from "./Fx";
@@ -43,6 +51,9 @@ export class Eq3 implements FxDevice {
   private readonly lp: BiquadFilterNode; // high-cut (low-pass)
   private readonly soloNode: BiquadFilterNode; // audition bandpass
   private route: EqRoute = "normal";
+  private lowShapeIdx: number = EQ_SHAPE_DEFAULT.low;
+  private midShapeIdx: number = EQ_SHAPE_DEFAULT.mid;
+  private highShapeIdx: number = EQ_SHAPE_DEFAULT.high;
   // Scratch buffers for getFrequencyResponse, grown to the query length.
   private mag?: Float32Array<ArrayBuffer>;
   private phase?: Float32Array<ArrayBuffer>;
@@ -163,6 +174,43 @@ export class Eq3 implements FxDevice {
     return this.mid.Q.value;
   }
 
+  // --- per-band SHAPE (bell / low-shelf / high-shelf) + the now-meaningful shelf Q.
+  // Switching a shelf to a bell makes its Q live (peaking biquads honour Q; shelves
+  // don't), so LOW/HIGH gain a real width control to match MID. ---
+  setLowShape(i: number) {
+    this.lowShapeIdx = clampShape(i);
+    this.low.type = EQ_SHAPE_TYPES[this.lowShapeIdx];
+  }
+  get lowShape() {
+    return this.lowShapeIdx;
+  }
+  setMidShape(i: number) {
+    this.midShapeIdx = clampShape(i);
+    this.mid.type = EQ_SHAPE_TYPES[this.midShapeIdx];
+  }
+  get midShape() {
+    return this.midShapeIdx;
+  }
+  setHighShape(i: number) {
+    this.highShapeIdx = clampShape(i);
+    this.high.type = EQ_SHAPE_TYPES[this.highShapeIdx];
+  }
+  get highShape() {
+    return this.highShapeIdx;
+  }
+  setLowQ(q: number) {
+    this.low.Q.value = clampQ(q);
+  }
+  get lowQ() {
+    return this.low.Q.value;
+  }
+  setHighQ(q: number) {
+    this.high.Q.value = clampQ(q);
+  }
+  get highQ() {
+    return this.high.Q.value;
+  }
+
   // --- HP / LP cut filters (cutoff + resonance) ---
   setHpFreq(hz: number) {
     this.hp.frequency.value = clampHz(hz, EQ_HP);
@@ -202,6 +250,11 @@ export class Eq3 implements FxDevice {
     this.hp.Q.value = EQ_HP.q;
     this.lp.frequency.value = EQ_LP.freq;
     this.lp.Q.value = EQ_LP.q;
+    this.setLowShape(EQ_SHAPE_DEFAULT.low);
+    this.setMidShape(EQ_SHAPE_DEFAULT.mid);
+    this.setHighShape(EQ_SHAPE_DEFAULT.high);
+    this.low.Q.value = 1;
+    this.high.Q.value = 1;
     this.setBypass(false);
   }
 
@@ -241,6 +294,11 @@ export class Eq3 implements FxDevice {
     { id: "hpQ", get: (e) => e.hpQ, set: (e, v) => e.setHpQ(v) },
     { id: "lpFreq", get: (e) => e.lpFreq, set: (e, v) => e.setLpFreq(v) },
     { id: "lpQ", get: (e) => e.lpQ, set: (e, v) => e.setLpQ(v) },
+    { id: "lowShape", get: (e) => e.lowShape, set: (e, v) => e.setLowShape(v) },
+    { id: "midShape", get: (e) => e.midShape, set: (e, v) => e.setMidShape(v) },
+    { id: "highShape", get: (e) => e.highShape, set: (e, v) => e.setHighShape(v) },
+    { id: "lowQ", get: (e) => e.lowQ, set: (e, v) => e.setLowQ(v) },
+    { id: "highQ", get: (e) => e.highQ, set: (e, v) => e.setHighQ(v) },
   ];
 
   setParam(id: string, value: number) {
@@ -264,4 +322,7 @@ function clampHz(hz: number, band: { min: number; max: number }): number {
 }
 function clampQ(q: number): number {
   return Math.max(EQ_Q_MIN, Math.min(EQ_Q_MAX, q));
+}
+function clampShape(i: number): number {
+  return Math.max(0, Math.min(EQ_SHAPE_TYPES.length - 1, Math.round(i)));
 }

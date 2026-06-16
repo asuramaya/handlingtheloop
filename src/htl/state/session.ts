@@ -31,6 +31,13 @@ export interface DeckSnapshot {
   eqMidFreq?: number;
   eqHighFreq?: number;
   eqMidQ?: number;
+  eqLowQ?: number; // shelf/bell width — live when the band is in bell SHAPE
+  eqHighQ?: number;
+  // Per-band SHAPE index (0 bell / 1 lo-shelf / 2 hi-shelf). Optional → old snapshots
+  // fall back to the default shapes (lo-shelf / bell / hi-shelf).
+  eqLowShape?: number;
+  eqMidShape?: number;
+  eqHighShape?: number;
   eqHpFreq?: number; // low-cut cutoff (Hz)
   eqHpQ?: number;
   eqLpFreq?: number; // high-cut cutoff (Hz)

@@ -196,6 +196,11 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqMidFreq: deck.eqMidFreq,
     eqHighFreq: deck.eqHighFreq,
     eqMidQ: deck.eqMidQ,
+    eqLowQ: deck.eqLowQ,
+    eqHighQ: deck.eqHighQ,
+    eqLowShape: deck.eqLowShape,
+    eqMidShape: deck.eqMidShape,
+    eqHighShape: deck.eqHighShape,
     eqHpFreq: deck.eqHpFreq,
     eqHpQ: deck.eqHpQ,
     eqLpFreq: deck.eqLpFreq,
@@ -283,6 +288,11 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqMidFreq != null) deck.setEqMidFreq(s.eqMidFreq);
   if (s.eqHighFreq != null) deck.setEqHighFreq(s.eqHighFreq);
   if (s.eqMidQ != null) deck.setEqMidQ(s.eqMidQ);
+  if (s.eqLowShape != null) deck.setEqLowShape(s.eqLowShape);
+  if (s.eqMidShape != null) deck.setEqMidShape(s.eqMidShape);
+  if (s.eqHighShape != null) deck.setEqHighShape(s.eqHighShape);
+  if (s.eqLowQ != null) deck.setEqLowQ(s.eqLowQ);
+  if (s.eqHighQ != null) deck.setEqHighQ(s.eqHighQ);
   // Filter drives the EQ HP/LP nodes, so apply it BEFORE the explicit HP/LP positions
   // — otherwise a centred filter would reset manually-dragged cut handles.
   deck.setFilter(s.filter ?? 0);
@@ -813,9 +823,11 @@ export function App() {
         toggleLib();
         return;
       }
-      // Settings still swallows the performance keys while open (it owns sliders/learn);
-      // the Library dock shares the screen so keys keep driving the decks while you browse.
-      if (settingsOpen) return;
+      // Every dock (Settings / Profile / Session / Library) SHARES the screen — keys keep
+      // driving the decks while a panel is open. The cases that genuinely need the keyboard
+      // guard themselves: a focused slider/input is caught by the tagName check above, and
+      // the keybind-rebind chip captures in the CAPTURE phase + stopPropagation (KeyHelp),
+      // so the next key lands on the binding, not the deck. No blanket panel guard needed.
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // A watch-only participant (control revoked) can't drive the decks.
       if (lockedRef.current) return;
@@ -837,7 +849,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, settingsOpen, libOpen, settings.keyBindings]);
+  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, libOpen, settings.keyBindings]);
 
   useEffect(() => {
     applySettings(settings);
@@ -1747,6 +1759,11 @@ export function App() {
       if (d.eqMidFreq != null) deck.setEqMidFreq(d.eqMidFreq);
       if (d.eqHighFreq != null) deck.setEqHighFreq(d.eqHighFreq);
       if (d.eqMidQ != null) deck.setEqMidQ(d.eqMidQ);
+      if (d.eqLowShape != null) deck.setEqLowShape(d.eqLowShape);
+      if (d.eqMidShape != null) deck.setEqMidShape(d.eqMidShape);
+      if (d.eqHighShape != null) deck.setEqHighShape(d.eqHighShape);
+      if (d.eqLowQ != null) deck.setEqLowQ(d.eqLowQ);
+      if (d.eqHighQ != null) deck.setEqHighQ(d.eqHighQ);
       deck.setFilter(d.filter ?? 0);
       if (d.eqHpFreq != null) deck.setEqHpFreq(d.eqHpFreq);
       if (d.eqHpQ != null) deck.setEqHpQ(d.eqHpQ);
@@ -1956,6 +1973,11 @@ export function App() {
           else if (intent.param === "eqMidFreq") deck.setEqMidFreq(intent.value);
           else if (intent.param === "eqHighFreq") deck.setEqHighFreq(intent.value);
           else if (intent.param === "eqMidQ") deck.setEqMidQ(intent.value);
+          else if (intent.param === "eqLowQ") deck.setEqLowQ(intent.value);
+          else if (intent.param === "eqHighQ") deck.setEqHighQ(intent.value);
+          else if (intent.param === "eqLowShape") deck.setEqLowShape(intent.value);
+          else if (intent.param === "eqMidShape") deck.setEqMidShape(intent.value);
+          else if (intent.param === "eqHighShape") deck.setEqHighShape(intent.value);
           else if (intent.param === "eqHpFreq") deck.setEqHpFreq(intent.value);
           else if (intent.param === "eqHpQ") deck.setEqHpQ(intent.value);
           else if (intent.param === "eqLpFreq") deck.setEqLpFreq(intent.value);
@@ -2457,6 +2479,11 @@ export function App() {
       emit({ kind: "control", deck: id, param: "eqMidFreq", value: d.eqMidFreq });
       emit({ kind: "control", deck: id, param: "eqHighFreq", value: d.eqHighFreq });
       emit({ kind: "control", deck: id, param: "eqMidQ", value: d.eqMidQ });
+      emit({ kind: "control", deck: id, param: "eqLowQ", value: d.eqLowQ });
+      emit({ kind: "control", deck: id, param: "eqHighQ", value: d.eqHighQ });
+      emit({ kind: "control", deck: id, param: "eqLowShape", value: d.eqLowShape });
+      emit({ kind: "control", deck: id, param: "eqMidShape", value: d.eqMidShape });
+      emit({ kind: "control", deck: id, param: "eqHighShape", value: d.eqHighShape });
       emit({ kind: "control", deck: id, param: "eqHpFreq", value: d.eqHpFreq });
       emit({ kind: "control", deck: id, param: "eqHpQ", value: d.eqHpQ });
       emit({ kind: "control", deck: id, param: "eqLpFreq", value: d.eqLpFreq });
@@ -3551,6 +3578,7 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
+          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} ctlRef={samplerCtl} />
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}
@@ -3559,7 +3587,6 @@ export function App() {
             crossfade={crossfade}
             onCrossfade={applyCrossfade}
           />
-          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} ctlRef={samplerCtl} />
           <div className="decks-row">
           <DeckControls
             id="A"

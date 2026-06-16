@@ -178,6 +178,11 @@ export async function closeRoom(): Promise<void> {
   const prev = await readJson<DevRoom | null>(ROOM_FILE, null);
   if (prev) await writeJson(ROOM_FILE, { ...prev, live: false, startedAt: null });
 }
+export async function roomLive(): Promise<{ live: boolean; listeners: number }> {
+  const r = await readJson<DevRoom | null>(ROOM_FILE, null);
+  const live = !!r && r.live && Date.now() - r.lastSeen < 90_000;
+  return { live, listeners: live ? r!.listeners : 0 };
+}
 export async function liveRooms(): Promise<unknown[]> {
   const r = await readJson<DevRoom | null>(ROOM_FILE, null);
   const u = await devUser();

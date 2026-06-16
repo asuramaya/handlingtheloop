@@ -6328,15 +6328,18 @@ body:not(.no-glow) .fx-tab.fx-remove {
   gap: 8px;
 }
 .rv-viz {
-  flex: 0 0 auto;
+  /* The dome is now the primary control surface — let it absorb the body width; the polar
+     draw centres on min(w,h) so the circle stays round at any aspect. The companion rail
+     (MIX·DUCK) holds its fixed width on the right. */
+  flex: 1 1 0;
   height: 100%;
-  aspect-ratio: 1 / 1;
   min-width: 0;
   position: relative;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
   background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+  cursor: pointer; /* grips are draggable; the canvas reads as interactive */
 }
 .rv-viz canvas {
   display: block;
@@ -6380,19 +6383,19 @@ body:not(.no-glow) .fx-tab.fx-remove {
      clearance inside the grid box so the bottom row's dots never spill onto the chip strip. */
   padding-bottom: 7px;
 }
-/* Reverb: 6 fixed columns → a balanced 6+6 split (core row SIZE·DECAY·PREDLY·MIX·BRIGHT·WIDTH
-   over the character/shaping row CHAR·RATE·DRIVE·DUCK·LO CUT·HI CUT), same shrink behaviour
-   as the delay so the two rows + the FREEZE chip always fit the shared --fx-body-h. */
-/* Reverb buttonoids: 4 rows × 3 columns, filling the left of the body beside the round viz. */
+/* Reverb v3: the dome is the control surface (drag-handles for every spatial param), so the
+   only cells left are the two NON-spatial knobs — MIX · DUCK — stacked in a narrow companion
+   column beside the round viz. A fixed-width pair (not a 12-cell grid) is what un-busts the
+   mobile deck column: square dome + a thin 2-cell rail always fit, at any width. */
 .fx-reverb .rv-knobs {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  width: clamp(58px, 24%, 92px);
   min-width: 0;
   min-height: 0;
   height: 100%;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: minmax(22px, 1fr);
-  column-gap: 7px;
-  row-gap: 6px;
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(28px, 1fr);
+  row-gap: 8px;
   padding-bottom: 7px;
 }
 /* MODE chip — reads as a value selector (accent), not a toggle, in the FRZ foot strip. */
@@ -9064,4 +9067,22 @@ span.profile-handle:hover {
 .live-room.tuned {
   border-color: #c8506a;
   background: color-mix(in srgb, #c8506a 10%, var(--panel-2));
+}
+
+/* "Listen live" button on a public /@handle profile when the host is broadcasting. */
+.listen-live-btn {
+  display: block;
+  width: 100%;
+  margin: 4px 0 4px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #c8506a;
+  background: #c8506a;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.listen-live-btn:hover {
+  filter: brightness(1.08);
 }

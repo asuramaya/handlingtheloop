@@ -81,7 +81,13 @@ function guestName(): string {
   return `Guest ${tail}`;
 }
 
-export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
+export interface NowPlaying {
+  title: string;
+  artist: string;
+  videoId: string;
+}
+
+export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: NowPlaying | null): RoomState {
   const you = deviceId();
   // This device's account accent — sent at connect + on change (via the effect below) so
   // the room vibe + roster swatches sync instantly. Read through a ref at connect time.
@@ -108,6 +114,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
   // (which is derived below) and re-fire on every presence tick.
   const hostRef = useRef(false);
+  // Current track (for the directory card), read through a ref so the heartbeat doesn't
+  // re-fire on every render — a dedicated effect re-announces when the videoId changes.
+  const nowPlayingRef = useRef(nowPlaying);
+  nowPlayingRef.current = nowPlaying;
   // When set, we've TUNED INTO someone else's public room by @handle as a read-only
   // listener (instead of our own session). Anon-capable. null = our own session.
   const [listenHandle, setListenHandle] = useState<string | null>(null);
@@ -236,11 +246,18 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   }, []);
   // HOST: open/close the broadcast plane. Tells the DO (admits anon listeners) AND the
   // D1 directory shadow (so the room shows in "live now") — kept in sync here.
-  const goPublic = useCallback((on: boolean) => {
-    clientRef.current?.goPublic(on);
-    if (on) void announceRoom({ listeners: listenerCountRef.current });
-    else void closeRoom();
-  }, []);
+  const announce = useCallback(
+    () => announceRoom({ listeners: listenerCountRef.current, nowPlaying: nowPlayingRef.current ?? undefined }),
+    [],
+  );
+  const goPublic = useCallback(
+    (on: boolean) => {
+      clientRef.current?.goPublic(on);
+      if (on) void announce();
+      else void closeRoom();
+    },
+    [announce],
+  );
   // Tune into a public room by @handle as a read-only listener (swaps our connection),
   // or tune back out to our own session. Accepts a bare or @-prefixed handle.
   const tuneIn = useCallback((handle: string) => setListenHandle(handle.replace(/^@/, "") || null), []);
@@ -249,10 +266,15 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
     if (!roomPublic || !hostRef.current) return; // ONLY the host announces — never a listener/guest
-    void announceRoom({ listeners: listenerCountRef.current });
-    const t = setInterval(() => void announceRoom({ listeners: listenerCountRef.current }), 30_000);
+    void announce();
+    const t = setInterval(() => void announce(), 30_000);
     return () => clearInterval(t);
-  }, [roomPublic]);
+  }, [roomPublic, announce]);
+  // Re-announce immediately when the now-playing track changes (so "Live now" cards keep up
+  // between heartbeats). Keyed on the videoId so an unchanged object ref never re-fires.
+  useEffect(() => {
+    if (roomPublic && hostRef.current) void announce();
+  }, [nowPlaying?.videoId, roomPublic, announce]);
   // Re-broadcast the accent whenever it changes (the user re-themed) so peers re-vibe live.
   useEffect(() => {
     if (color) clientRef.current?.setColor(color);

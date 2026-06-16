@@ -187,7 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
-  lyricsModel: "base", // fast tier by default; "small" is better on sung lyrics
+  lyricsModel: "youtube", // DEFAULT = YouTube captions (instant, no GPU); pick a Whisper tier (base/small) to transcribe from the vocal stem
 };
 
 // Dark base-colour presets for the background picker (varied dark hues).

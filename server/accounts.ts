@@ -24,6 +24,7 @@ import {
   ensureRoomsTable,
   followCounts,
   liveRooms,
+  liveRoomStatus,
   followUser,
   followersOf,
   followingOf,
@@ -128,7 +129,12 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     if (viewer && (await relationship(env.DB, viewer.id, u.id)).blockedBy) {
       return json(404, { error: "no such handle" });
     }
-    const [topTracks, counts] = await Promise.all([getTopTracks(env.DB, u.id, 12), followCounts(env.DB, u.id)]);
+    await ensureRoomsTable(env.DB);
+    const [topTracks, counts, live] = await Promise.all([
+      getTopTracks(env.DB, u.id, 12),
+      followCounts(env.DB, u.id),
+      liveRoomStatus(env.DB, u.id),
+    ]);
     const rel = viewer && viewer.id !== u.id ? await relationship(env.DB, viewer.id, u.id) : null;
     return json(200, {
       handle: u.handle,
@@ -140,6 +146,8 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       memberSince: u.created_at,
       topTracks,
       counts,
+      live: live.live, // broadcasting right now?
+      liveListeners: live.listeners,
       isSelf: !!viewer && viewer.id === u.id,
       relationship: rel, // null when signed out or viewing self
     });

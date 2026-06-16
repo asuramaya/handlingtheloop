@@ -132,6 +132,8 @@ export interface PublicProfile {
   memberSince: number | null;
   topTracks: TopTrack[];
   counts: FollowCounts;
+  live: boolean; // broadcasting a public room right now?
+  liveListeners: number;
   isSelf: boolean;
   relationship: Relationship | null; // null when signed out or viewing self
 }

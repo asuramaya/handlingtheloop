@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 
-// Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim.
-// Distinct from the delay's linear echo timeline on purpose: reverb is a space, not a
-// sequence of events. Read it from the centre out:
+// Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim,
+// AND a direct-control surface (like the EQ curve): the dome's grips ARE the knobs. Read it
+// from the centre out:
 //   • CENTRE = the source (a warm DRIVE glow); a dark inner disc = the PREDELAY gap.
 //   • RADIUS outward = time → the diffuse fog dissipates as the tail decays; DECAY sets how
 //     far it reaches, SIZE the circle's footprint, FREEZE halts it, MIX its presence.
@@ -10,7 +10,15 @@ import { useEffect, useRef } from "react";
 //     rim CURVE's reach at each angle = how long that band rings: BRIGHTNESS pulls the high
 //     side in, LO/HI CUT flatten the curve at the band edges, WIDTH lifts the mids.
 //   • CHARACTER ripples the rim; DUCK makes the whole bloom breathe; DRIVE warms + swells the
-//     core. (v2: drag the rim to set a band's decay.) Animates only when something moves.
+//     core. Animates only when something moves.
+//
+// DIRECT CONTROL (WYSIWYG, the EQ pattern): drag a grip to set its param.
+//   rim LOW grip  → DECAY   (shift-wheel → CHARACTER)
+//   rim MID grip  → WIDTH   (shift-wheel → RATE)
+//   rim HIGH grip → BRIGHT
+//   disc edge     → PREDLY     boundary ring → SIZE     core → DRIVE
+//   LO/HI band-edge grips (drag AROUND the rim) → LO CUT / HI CUT
+//   wheel over a grip nudges it; dbl-click / right-click resets it. MIX·DUCK stay as cells.
 
 interface ReverbVizProps {
   size: number; // 0..1 footprint
@@ -27,18 +35,71 @@ interface ReverbVizProps {
   modRate: number; // Hz
   frozen: boolean;
   accent: string;
+  onParam: (param: string, value: number) => void; // direct-control callback (drag/wheel)
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
 const f2n = (hz: number) => clamp01(Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000)); // 20‥20k → 0..1 log
+const n2f = (n: number) => 20 * Math.pow(1000, clamp01(n)); // inverse of f2n
 const TWO_PI = Math.PI * 2;
 const WARM = "255,150,70"; // DRIVE glow colour
 
-export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent }: ReverbVizProps) {
+// Pixels of radial drag that span a grip's whole range (matches ValueCell's feel).
+const DRAG_SPAN_PX = 130;
+const GRAB_PX = 16; // pointer-to-grip hit radius
+
+// A grip's static meta. Radial grips map drag DISTANCE-from-centre → param; angular grips
+// (the band-edge cuts) map drag ANGLE-around-the-rim → param. Some carry a shift-wheel
+// secondary, exactly like the EQ node's shift-wheel = Q.
+interface Grip {
+  id: string;
+  param: string;
+  label: string;
+  kind: "radial" | "angular";
+  min: number;
+  max: number;
+  def: number;
+  fmt: (v: number) => string;
+  sec?: { param: string; min: number; max: number };
+}
+const pct = (v: number) => `${Math.round(v * 100)}`;
+const hz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
+const ms = (v: number) => `${Math.round(v * 1000)}ms`;
+const GRIPS: Grip[] = [
+  { id: "decay", param: "decay", label: "DECAY", kind: "radial", min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
+  { id: "width", param: "width", label: "WIDTH", kind: "radial", min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
+  { id: "bright", param: "brightness", label: "BRIGHT", kind: "radial", min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "predelay", param: "predelay", label: "PREDLY", kind: "radial", min: 0, max: 0.2, def: 0.012, fmt: ms },
+  { id: "size", param: "size", label: "SIZE", kind: "radial", min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "drive", param: "drive", label: "DRIVE", kind: "radial", min: 0, max: 1, def: 0, fmt: pct },
+  { id: "lowCut", param: "lowCut", label: "LO CUT", kind: "angular", min: 20, max: 2000, def: 20, fmt: hz },
+  { id: "highCut", param: "highCut", label: "HI CUT", kind: "angular", min: 1000, max: 20000, def: 18000, fmt: hz },
+];
+
+interface Placed extends Grip {
+  x: number;
+  y: number;
+}
+
+export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Live state the pointer/wheel handlers read (kept off the effect's closure so the listeners
+  // can be attached once yet always see fresh values).
+  const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate });
+  params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
+  const onParamRef = useRef(onParam);
+  onParamRef.current = onParam;
+  const center = useRef({ cx: 0, cy: 0 }); // canvas centre, for radius/angle of a pointer
+  const placed = useRef<Placed[]>([]); // grips at their current screen positions (hit-testing)
+  const hover = useRef<string | null>(null);
+  const drag = useRef<{ grip: Grip; startVal: number; startR: number; startAngN: number } | null>(null);
+  const lastTap = useRef(0);
+  const drawRef = useRef<(now: number) => void>(() => {});
+  const nowRef = useRef(0);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -67,6 +128,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
     const angOf = (fNorm: number) => -Math.PI / 2 + fNorm * TWO_PI; // top = low, clockwise
 
     const draw = (now: number) => {
+      nowRef.current = now;
       const { w, h, dpr } = sizeCanvas();
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
@@ -75,6 +137,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
 
       const cx = w / 2;
       const cy = h / 2;
+      center.current = { cx, cy };
       const sizeScale = 0.6 + clamp01(size) * 0.4;
       const R = Math.min(w, h) * 0.46 * sizeScale;
       const r0frac = 0.1 + clamp01(predelay / 0.2) * 0.22; // predelay gap (fraction of R)
@@ -181,12 +244,64 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       ctx.fill();
       ctx.restore();
 
-      // labels
-      ctx.fillStyle = "rgba(255,255,255,0.28)";
-      ctx.font = "8px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("LOW", cx, 9);
-      ctx.textAlign = "left";
+      // === place + draw the interactive GRIPS (the dome's "knobs") ===
+      // Rim grips ride the curve at fixed band angles (kept inside the live cut window so they
+      // never collapse onto the centre); disc/boundary/core grips sit at fixed visual angles;
+      // the cut grips ride the rim at their own cutoff angle (drag them AROUND to sweep).
+      const rimAng = (fNorm: number) => {
+        const r = r0 + reachAt(fNorm) * span;
+        const a = angOf(fNorm);
+        return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
+      };
+      const at = (a: number, rad: number) => ({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
+      const fLow = clamp(loN + 0.1, 0.06, 0.32);
+      const fMid = clamp((loN + hiN) / 2, 0.34, 0.66);
+      const fHigh = clamp(hiN - 0.1, 0.68, 0.94);
+      const posFor = (id: string): { x: number; y: number } => {
+        switch (id) {
+          case "decay": return rimAng(fLow);
+          case "width": return rimAng(fMid);
+          case "bright": return rimAng(fHigh);
+          case "predelay": return at(angOf(0.875), r0); // up-left, on the disc edge
+          case "size": return at(angOf(0.125), R); // up-right, on the boundary ring
+          case "drive": return at(Math.PI / 2, Math.max(coreR, R * 0.16)); // straight down, off the core
+          case "lowCut": return at(angOf(loN), R * 0.92);
+          case "highCut": return at(angOf(hiN), R * 0.92);
+          default: return { x: cx, y: cy };
+        }
+      };
+      placed.current = GRIPS.map((g) => ({ ...g, ...posFor(g.id) }));
+
+      for (const g of placed.current) {
+        const active = drag.current?.grip.id === g.id;
+        const hot = active || hover.current === g.id;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, hot ? 6 : 4.5, 0, TWO_PI);
+        ctx.fillStyle = hot ? "#fff" : withAlpha(accent, 0.92);
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = hot ? 10 : 4;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = withAlpha(accent, hot ? 1 : 0.5);
+        ctx.stroke();
+      }
+
+      // active grip readout — its label + value, top-left (mirrors the EQ band-edit chip).
+      const act = drag.current;
+      if (act) {
+        const v = (params.current as Record<string, number>)[act.grip.param];
+        ctx.fillStyle = accent;
+        ctx.font = "700 9px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(`${act.grip.label} ${act.grip.fmt(v)}`, 6, 11);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.28)";
+        ctx.font = "8px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("LOW", cx, 9);
+        ctx.textAlign = "left";
+      }
       if (frozen) {
         ctx.fillStyle = accent;
         ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(elapsed * 3));
@@ -194,6 +309,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         ctx.globalAlpha = 1;
       }
     };
+    drawRef.current = draw;
 
     const animated = (character > 0 && modRate > 0) || frozen || duck > 0;
     let raf = 0;
@@ -206,7 +322,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
     } else {
       draw(start);
     }
-    const ro = new ResizeObserver(() => draw(window.performance.now()));
+    const ro = new ResizeObserver(() => draw(nowRef.current || start));
     ro.observe(wrap);
     return () => {
       window.cancelAnimationFrame(raf);
@@ -214,8 +330,117 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
     };
   }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent]);
 
+  // --- direct control: hit-test grips, map drag → param (no audio nodes; just onParam) ---
+  const localPt = (e: { clientX: number; clientY: number }) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
+  };
+  const angN = (x: number, y: number) => {
+    const { cx, cy } = center.current;
+    return (Math.atan2(y - cy, x - cx) / TWO_PI + 1.25) % 1; // 0 at top, clockwise (matches fNorm)
+  };
+  const radOf = (x: number, y: number) => {
+    const { cx, cy } = center.current;
+    return Math.hypot(x - cx, y - cy);
+  };
+  const nearest = (x: number, y: number): Grip | null => {
+    let best: Grip | null = null;
+    let bestD = GRAB_PX;
+    for (const g of placed.current) {
+      const d = Math.hypot(x - g.x, y - g.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    return best;
+  };
+  const redraw = () => drawRef.current(nowRef.current || window.performance.now());
+
+  // Native, non-passive wheel — nudge the hovered grip (shift = its secondary), like ValueCell.
+  useEffect(() => {
+    const node = canvasRef.current;
+    if (!node) return;
+    const onWheel = (e: WheelEvent) => {
+      const pt = localPt(e);
+      const g = nearest(pt.x, pt.y) ?? (hover.current ? placed.current.find((p) => p.id === hover.current) ?? null : null);
+      if (!g) return;
+      e.preventDefault();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      const tgt = e.shiftKey && g.sec ? g.sec : { param: g.param, min: g.min, max: g.max };
+      const cur = (params.current as Record<string, number>)[tgt.param];
+      const unit = (tgt.max - tgt.min) / 40;
+      onParamRef.current(tgt.param, clamp(cur + dir * unit, tgt.min, tgt.max));
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
-    <div className="rv-viz" ref={wrapRef}>
+    <div
+      className="rv-viz"
+      ref={wrapRef}
+      style={{ touchAction: "none" }}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return; // right-button resets via onContextMenu
+        const pt = localPt(e);
+        const g = nearest(pt.x, pt.y);
+        if (!g) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        // Double-tap a grip resets it to its default.
+        if (e.timeStamp - lastTap.current < 320 && hover.current === g.id) {
+          onParam(g.param, g.def);
+          lastTap.current = 0;
+          drag.current = null;
+          redraw();
+          return;
+        }
+        lastTap.current = e.timeStamp;
+        const startVal = (params.current as Record<string, number>)[g.param];
+        drag.current = { grip: g, startVal, startR: radOf(pt.x, pt.y), startAngN: angN(pt.x, pt.y) };
+        hover.current = g.id;
+        redraw();
+      }}
+      onPointerMove={(e) => {
+        const pt = localPt(e);
+        const d = drag.current;
+        if (d) {
+          const g = d.grip;
+          if (g.kind === "radial") {
+            const delta = radOf(pt.x, pt.y) - d.startR; // outward = increase
+            onParam(g.param, clamp(d.startVal + (delta / DRAG_SPAN_PX) * (g.max - g.min), g.min, g.max));
+          } else {
+            let dN = angN(pt.x, pt.y) - d.startAngN; // clockwise = up
+            dN = ((dN + 0.5) % 1 + 1) % 1 - 0.5; // shortest signed wrap
+            onParam(g.param, clamp(n2f(f2n(d.startVal) + dN), g.min, g.max));
+          }
+          return;
+        }
+        // hover highlight
+        const g = nearest(pt.x, pt.y);
+        const id = g?.id ?? null;
+        if (id !== hover.current) {
+          hover.current = id;
+          redraw();
+        }
+      }}
+      onPointerUp={(e) => {
+        if (drag.current) {
+          drag.current = null;
+          redraw();
+        }
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onContextMenu={(e) => {
+        const pt = localPt(e);
+        const g = nearest(pt.x, pt.y);
+        if (g) {
+          e.preventDefault();
+          onParam(g.param, g.def);
+          redraw();
+        }
+      }}
+    >
       <canvas ref={canvasRef} />
     </div>
   );

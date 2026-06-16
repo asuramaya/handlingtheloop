@@ -10,7 +10,7 @@ import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
-import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack } from "@htl/room";
+import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
 import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
 import {
   AudioEngine,
@@ -2276,6 +2276,16 @@ export function App() {
     [engine],
   );
 
+  // What the broadcast directory shows as "now playing": the loaded deck the crossfader
+  // favours (so a mid-mix reads as the incoming track). Fed to the host's announce heartbeat.
+  const nowPlaying = useMemo<NowPlaying | null>(() => {
+    const pick: DeckId | null =
+      crossfade > 0 && meta.B.videoId ? "B" : meta.A.videoId ? "A" : meta.B.videoId ? "B" : null;
+    if (!pick) return null;
+    const m = meta[pick];
+    return m.videoId ? { title: m.name || "", artist: m.artist || "", videoId: m.videoId } : null;
+  }, [meta, crossfade]);
+
   const room = useRoom(
     {
       onState: applyRoomSnapshot,
@@ -2288,6 +2298,7 @@ export function App() {
       onKicked: (reason) => setKickedNotice(reason || "You left the session."),
     },
     settings.accentA, // our account accent → synced so the room can take the host's vibe
+    nowPlaying,
   );
 
   // The Profile dock is where a handle gets claimed; on its close, refresh the room's
@@ -3709,7 +3720,17 @@ export function App() {
         <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
       )}
       {profileOpen && <ProfileScreen onClose={() => setProfileOpen(false)} />}
-      {publicHandle && <PublicProfileScreen handle={publicHandle} onClose={closePublic} />}
+      {publicHandle && (
+        <PublicProfileScreen
+          handle={publicHandle}
+          onClose={closePublic}
+          onListen={(h) => {
+            engine.unlock(); // tune-in is a user gesture → prime iOS audio
+            room.tuneIn(h);
+            closePublic(); // hand off to the Session dock's "Listening to @X" banner
+          }}
+        />
+      )}
 
       </div>
 

@@ -377,6 +377,21 @@ export async function closeRoom(db: D1Database, hostId: string): Promise<void> {
   await db.prepare("UPDATE rooms SET live=0, started_at=NULL WHERE host_id=?").bind(hostId).run();
 }
 
+/** Is a specific host broadcasting right now (live + heartbeating within freshMs)? For the
+ *  /@handle profile's "Listen live" affordance. */
+export async function liveRoomStatus(
+  db: D1Database,
+  hostId: string,
+  freshMs = 90_000,
+): Promise<{ live: boolean; listeners: number }> {
+  const r = await db
+    .prepare("SELECT live, listeners, last_seen FROM rooms WHERE host_id=?")
+    .bind(hostId)
+    .first<{ live: number; listeners: number; last_seen: number }>();
+  const live = !!r && r.live === 1 && now() - r.last_seen < freshMs;
+  return { live, listeners: live ? r!.listeners : 0 };
+}
+
 export interface LiveRoom {
   handle: string;
   displayName: string | null;

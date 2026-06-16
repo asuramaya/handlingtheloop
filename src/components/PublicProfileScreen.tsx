@@ -21,7 +21,15 @@ const HANDLE_PATH = /^\/@([A-Za-z0-9_]{1,20})$/;
 export const handleFromPath = (): string | null =>
   typeof window === "undefined" ? null : (window.location.pathname.match(HANDLE_PATH)?.[1] ?? null);
 
-export function PublicProfileScreen({ handle, onClose }: { handle: string; onClose: () => void }) {
+export function PublicProfileScreen({
+  handle,
+  onClose,
+  onListen,
+}: {
+  handle: string;
+  onClose: () => void;
+  onListen?: (handle: string) => void;
+}) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -79,6 +87,12 @@ export function PublicProfileScreen({ handle, onClose }: { handle: string; onClo
                 {profile.memberSince && <div className="profile-since">Member since {formatDate(profile.memberSince)}</div>}
               </div>
             </div>
+
+            {profile.live && !profile.isSelf && onListen && (
+              <button className="listen-live-btn" onClick={() => onListen(profile.handle)}>
+                ● Listen live · {profile.liveListeners} tuned in
+              </button>
+            )}
 
             <div className="profile-graph">
               <div className="profile-counts">

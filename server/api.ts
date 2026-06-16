@@ -187,6 +187,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         sendJson(res, 404, { error: "no such handle" });
         return true;
       }
+      const devLive = await devStore.roomLive();
       sendJson(res, 200, {
         handle: u.handle,
         // PUBLIC: never leak the Google legal name / avatar (B7) — see accounts.ts.
@@ -197,6 +198,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         topTracks: await devStore.topTracks(12),
         // Dev is single-user, so the only resolvable handle is the dev user's own.
         counts: { followers: 0, following: 0 },
+        live: devLive.live,
+        liveListeners: devLive.listeners,
         isSelf: true,
         relationship: null,
       });

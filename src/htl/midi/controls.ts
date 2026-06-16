@@ -66,9 +66,12 @@ export const LEARN_CONTROLS: LearnControl[] = [
   ...perDeck("focus", "Focus deck", "Modifier", (deck) => ({ kind: "focus", deck })),
   // Hot cues 1..8
   ...Array.from({ length: 8 }, (_, i) => i + 1).flatMap((n) => perDeck(`hotcue${n}`, `Hot cue ${n}`, "Hot cues", () => action(`hotcue${n}`))),
+  // Sampler strip pads 1..12 — GLOBAL (not per-deck): the strip routes each by position
+  // (1-4 → deck A, 5-8 → master, 9-12 → deck B), so a pad is one learnable action.
+  ...Array.from({ length: 12 }, (_, i) => ({ id: `sampler${i}`, label: `Sampler pad ${i + 1}`, group: "Sampler", control: action(`sampler${i}`) })),
 ];
 
-export const LEARN_GROUPS = ["Transport", "Loop", "Mixer", "Stems", "Jog", "Modifier", "Hot cues"];
+export const LEARN_GROUPS = ["Transport", "Loop", "Mixer", "Stems", "Jog", "Modifier", "Hot cues", "Sampler"];
 
 export function learnControl(id: string): LearnControl | undefined {
   return LEARN_CONTROLS.find((c) => c.id === id);

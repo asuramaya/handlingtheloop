@@ -111,12 +111,11 @@ export class FxRack {
     const d = this.devices[slot];
     if (!d) return undefined;
     this.devices.splice(slot, 1);
-    // Fully detach the removed device so it can't keep feeding the old next-node.
-    try {
-      d.input.disconnect();
-    } catch {
-      /* ignore */
-    }
+    // Sever the removed device's OUTPUT so it can't keep feeding the old next-node. We do
+    // NOT touch its input: rebuild() disconnects the prev node's output (severing the link
+    // INTO this device), and a reusable device (the EQ) has internal input→… routing that a
+    // blanket input.disconnect() would destroy. dispose() handles full teardown for devices
+    // that are truly going away (effects); the EQ has no dispose(), so it survives removal.
     try {
       d.output.disconnect();
     } catch {

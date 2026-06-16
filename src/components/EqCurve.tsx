@@ -73,11 +73,9 @@ interface EqCurveProps {
   otherDeck: Deck;
   otherAccent: string;
   emit: (intent: Intent) => void;
-  emitControls: (id: "A" | "B") => void;
-  refresh: () => void;
 }
 
-export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh }: EqCurveProps) {
+export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCurveProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
@@ -93,8 +91,6 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   // active gesture on a node: a drag (sweep).
   const drag = useRef<{ i: number } | null>(null);
   const [, bump] = useState(0);
-
-  const otherId = id === "A" ? "B" : "A";
 
   // (Re)size canvas + per-pixel buffers to the element box.
   useEffect(() => {
@@ -387,36 +383,6 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     bump((x) => x + 1);
   };
 
-  // --- toolbar actions ---
-  const toggleBypass = () => {
-    deck.setEqBypass(!deck.eqBypassed);
-    emit({ kind: "toggle", deck: id, param: "eqBypass", value: deck.eqBypassed });
-    dirty.current = true;
-    bump((x) => x + 1);
-  };
-  const flat = () => {
-    deck.resetEq();
-    emitControls(id);
-    emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
-    dirty.current = true;
-    refresh();
-  };
-  const copyToOther = () => {
-    otherDeck.setEqLow(deck.eqLow);
-    otherDeck.setEqMid(deck.eqMid);
-    otherDeck.setEqHigh(deck.eqHigh);
-    otherDeck.setEqLowFreq(deck.eqLowFreq);
-    otherDeck.setEqMidFreq(deck.eqMidFreq);
-    otherDeck.setEqHighFreq(deck.eqHighFreq);
-    otherDeck.setEqMidQ(deck.eqMidQ);
-    otherDeck.setEqHpFreq(deck.eqHpFreq);
-    otherDeck.setEqHpQ(deck.eqHpQ);
-    otherDeck.setEqLpFreq(deck.eqLpFreq);
-    otherDeck.setEqLpQ(deck.eqLpQ);
-    emitControls(otherId);
-    refresh();
-  };
-
   return (
     <div className={`eq-pro ${deck.eqBypassed ? "bypassed" : ""}`}>
       <div
@@ -447,12 +413,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           />
         ))}
       </div>
-      {/* Controls sit UNDER the curve. */}
-      <div className="eq-tools">
-        <button className={`eq-tool bypass ${deck.eqBypassed ? "on" : ""}`} title="Bypass the EQ (A/B)" onClick={toggleBypass}>BYPASS</button>
-        <button className="eq-tool reset" title="Reset the EQ to flat" onClick={flat}>RESET</button>
-        <button className="eq-tool copy" title={`Copy this EQ to deck ${otherId}`} onClick={copyToOther}>COPY</button>
-      </div>
+      {/* BYPASS / RESET / COPY now live in the shared FxStrip toolbar (every device gets them). */}
     </div>
   );
 }

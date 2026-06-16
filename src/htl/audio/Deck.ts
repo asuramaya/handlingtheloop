@@ -1914,71 +1914,107 @@ export class Deck {
     this._eqHigh = 0;
   }
 
-  // --- FX rack: effects AFTER the EQ (the EQ is the pinned rack dev0) -----------
-  // The UI / session address effects by EFFECT index (0 = first effect after the EQ);
-  // these methods hide the +1 rack offset. EQ stays addressed by the eq* proxies above.
-  // The effect kinds this build can construct (excludes "eq", the pinned dev0).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["delay"]);
+  // --- FX rack: the channel-strip device chain. Every device — the EQ included — is a
+  // first-class, addable/removable member. Slots index the FULL rack. The EQ is a SINGLE
+  // persistent instance (`this.eq`): it can be pulled out of and pushed back into the chain
+  // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
+  // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
+  // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay"]);
   private makeFx(kind: string): FxDevice | null {
     switch (kind) {
+      case "eq":
+        return this.rack.list.includes(this.eq) ? null : this.eq; // single EQ instance
       case "delay":
         return new DelayFx(this.ctx);
       // reverb / chorus land here as they're built
       default:
-        return null; // unknown/eq → not a stackable effect
+        return null;
     }
   }
-  /** The post-EQ effects in chain order (EQ excluded). */
-  get fxEffects(): readonly FxDevice[] {
-    return this.rack.list.slice(1);
+  /** The whole device chain in order (EQ included, wherever it sits). */
+  get fxDevices(): readonly FxDevice[] {
+    return this.rack.list;
   }
   fxDeviceAt(i: number): FxDevice | undefined {
-    return this.rack.deviceAt(i + 1); // +1: skip the pinned EQ at dev0
+    return this.rack.deviceAt(i);
   }
-  /** Add an effect at effect-index `at` (default: end). Returns it, or null if unknown. */
-  addFx(kind: FxKind, at = this.fxEffects.length): FxDevice | null {
+  hasFxKind(kind: FxKind): boolean {
+    return this.rack.list.some((d) => d.kind === kind);
+  }
+  /** Add a device at rack index `at` (default: end). Null if unknown / the single EQ is
+   *  already present. */
+  addFx(kind: FxKind, at = this.rack.list.length): FxDevice | null {
     const d = this.makeFx(kind);
     if (!d) return null;
-    this.rack.add(d, at + 1);
+    this.rack.add(d, at);
     return d;
   }
   removeFxAt(i: number) {
-    this.rack.remove(i + 1);
+    this.rack.remove(i); // the EQ has no dispose() → it survives, ready to re-add
   }
   moveFx(from: number, to: number) {
-    this.rack.move(from + 1, to + 1);
+    this.rack.move(from, to);
   }
   setFxParam(i: number, param: string, v: number) {
-    this.fxDeviceAt(i)?.setParam(param, v);
+    this.rack.deviceAt(i)?.setParam(param, v);
   }
   setFxBypass(i: number, on: boolean) {
-    this.fxDeviceAt(i)?.setBypass(on);
+    this.rack.deviceAt(i)?.setBypass(on);
   }
-  /** Serialize the effect chain (EQ excluded) for the session snapshot + profiles. */
+  resetFxAt(i: number) {
+    this.rack.deviceAt(i)?.reset();
+  }
+  /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
+   *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
+   *  missing). Returns the destination rack index on `other`, or −1. */
+  copyFxTo(other: Deck, i: number): number {
+    const src = this.rack.deviceAt(i);
+    if (!src) return -1;
+    let dstIdx = other.rack.list.findIndex((d) => d.kind === src.kind);
+    if (dstIdx < 0) {
+      const added = other.addFx(src.kind);
+      if (!added) return -1;
+      dstIdx = other.rack.list.indexOf(added);
+    }
+    const dst = other.rack.deviceAt(dstIdx);
+    if (!dst) return -1;
+    const p = src.snapshotParams();
+    for (const k in p) dst.setParam(k, p[k]);
+    dst.setBypass(src.bypassed);
+    return dstIdx;
+  }
+  /** Serialize the WHOLE chain (order + presence) for the session snapshot + profiles. The
+   *  EQ carries no params here — those ride the eq* ControlParams — just its slot/position. */
   fxSnapshot(): FxSlot[] {
-    return this.fxEffects.map((d) => ({ kind: d.kind, bypassed: d.bypassed, params: d.snapshotParams() }));
+    return this.rack.list.map((d) => ({
+      kind: d.kind,
+      bypassed: d.bypassed,
+      params: d.kind === "eq" ? {} : d.snapshotParams(),
+    }));
   }
-  /** Reconcile the effect chain to `slots` (kind + order), then set each device's params
-   *  and bypass. If the shape (kinds/length) already matches, devices are kept (no audio
-   *  glitch) and only params update; otherwise the effects are rebuilt to match. The EQ at
-   *  dev0 is never touched. Unknown kinds are skipped (forward-compatible). */
-  applyFxSnapshot(slots: ReadonlyArray<{ kind: string; bypassed: boolean; params: Record<string, number> }>) {
+  /** Reconcile the chain to `slots` (kinds + order); keep devices when the shape already
+   *  matches (no glitch, just retune), else rebuild. The EQ slot reuses `this.eq` (never
+   *  re-created) and its params come from the eq* path. `undefined` slots = an older
+   *  snapshot with no FX info → keep the default rack (do NOT wipe the EQ). Unknown skipped. */
+  applyFxSnapshot(slots: ReadonlyArray<{ kind: string; bypassed: boolean; params: Record<string, number> }> | undefined) {
+    if (!slots) return;
     const known = slots.filter((s) => Deck.FX_KINDS.has(s.kind));
-    const cur = this.fxEffects;
+    const cur = this.rack.list;
     const sameShape = cur.length === known.length && cur.every((d, i) => d.kind === known[i].kind);
     if (!sameShape) {
-      for (let i = cur.length - 1; i >= 0; i--) this.rack.remove(i + 1);
+      for (let i = cur.length - 1; i >= 0; i--) this.rack.remove(i);
       for (const s of known) {
         const d = this.makeFx(s.kind as FxKind);
         if (d) this.rack.add(d);
       }
     }
-    const now = this.fxEffects;
+    const now = this.rack.list;
     for (let i = 0; i < now.length && i < known.length; i++) {
       const d = now[i];
-      const s = known[i];
-      for (const k in s.params) d.setParam(k, s.params[k]);
-      d.setBypass(s.bypassed);
+      if (d.kind === "eq") continue; // EQ params come from the eq* ControlParams
+      for (const k in known[i].params) d.setParam(k, known[i].params[k]);
+      d.setBypass(known[i].bypassed);
     }
   }
 

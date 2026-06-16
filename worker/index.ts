@@ -20,6 +20,7 @@ import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/t
 import { audioChunks, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
+import { handleSampleRoute } from "../server/samples";
 import {
   type D1Database,
   userBySession,
@@ -86,6 +87,7 @@ interface R2Object {
 interface R2Bucket {
   get(key: string): Promise<R2ObjectBody | null>;
   head(key: string): Promise<{ size: number } | null>;
+  delete(key: string): Promise<void>;
   put(
     key: string,
     value: ArrayBuffer | Uint8Array,
@@ -232,6 +234,10 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
     // SaaS account / connected-service routes (D1-backed) get first refusal.
     const accountRes = await handleAccountRoute(url, req, env);
     if (accountRes) return accountRes;
+
+    // Sampler global-pad files (R2 + D1, account-gated; dynamic /api/samples/:id paths).
+    const sampleRes = await handleSampleRoute(url, req, env);
+    if (sampleRes) return sampleRes;
 
     switch (url.pathname) {
       case "/api/audio": {

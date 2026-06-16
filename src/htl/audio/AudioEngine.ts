@@ -1,5 +1,6 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
+import { Sampler } from "./Sampler";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 
@@ -19,6 +20,10 @@ export class AudioEngine {
   readonly ctx: AudioContext;
   readonly deckA: Deck;
   readonly deckB: Deck;
+  // Sampler strip: pads route by position — A-region pads into deck A's channel input
+  // (EQ/filter/fader/crossfader apply), global pads to master (cut through), B-region
+  // pads into deck B's channel. Built after the decks so their channel inputs exist.
+  readonly sampler: Sampler;
 
   private readonly xfadeA: GainNode;
   private readonly xfadeB: GainNode;
@@ -73,6 +78,9 @@ export class AudioEngine {
     this.deckB = new Deck(this.ctx);
     this.deckA.output.connect(this.xfadeA);
     this.deckB.output.connect(this.xfadeB);
+    // Sampler routes: region pads inject at each deck's channel input (rack.input → EQ →
+    // fader → crossfader); global pads at master (pre-limiter, post-crossfade).
+    this.sampler = new Sampler(this.ctx, { A: this.deckA.rack.input, master: this.master, B: this.deckB.rack.input });
     // Cue bus: both decks' pre-fader sends mix into cueMaster (unity). Its downstream
     // (the second device sink) is built on demand in setCueSinkId — until then this is
     // a dangling sub-mix with no output, so it costs nothing and makes no sound.

@@ -2,172 +2,140 @@ import { useEffect } from "react";
 import type { Deck } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
+import { DelayViz } from "./DelayViz";
 
-// The Delay device surface — the first stackable channel-strip effect. Mirrors the EQ's
-// interaction contract: mutate the deck's effect directly, then `emit` the matching FX
-// intent so a shared session converges, then `refresh`. Knobs reuse ValueCell (same as
-// TEMPO/TRIM). TIME is beat-locked by default: it shows a note-division stepper and the
-// real delay seconds are computed from the deck's live BPM (so echoes ride the grid even
-// as the tempo fader moves); SYNC off turns TIME into a free millisecond control.
+// The Delay device surface (H-Delay × Eternity). Mirrors the EQ contract: mutate the
+// deck's effect directly, `emit` the matching FX intent so a session converges, then
+// `refresh`. Knobs reuse ValueCell. TIME is beat-locked by default (a note-division
+// stepper; real seconds computed from the deck BPM, so echoes ride the grid as the tempo
+// moves); chips switch time-mode (Repitch/Digital/Fade), stereo (Mono/Ping-Pong), LINK
+// (sweep HP+LP together), FREEZE (infinite hold) and SYNC (beat-lock).
 
-// Beat-locked note divisions. 1 beat = a quarter note, so `beats` is the multiplier on
-// the beat period (60 / bpm). Index 2 ("1/8") is the device default (see DelayFx._div).
 const DIVISIONS: { label: string; beats: number }[] = [
   { label: "1/16", beats: 0.25 },
   { label: "1/8T", beats: 1 / 3 },
   { label: "1/8", beats: 0.5 },
-  { label: "3/16", beats: 0.75 }, // dotted 1/8
+  { label: "3/16", beats: 0.75 },
   { label: "1/4", beats: 1 },
-  { label: "1/4.", beats: 1.5 }, // dotted 1/4
+  { label: "1/4.", beats: 1.5 },
   { label: "1/2", beats: 2 },
   { label: "3/4", beats: 3 },
   { label: "1 bar", beats: 4 },
 ];
 const DEFAULT_DIV = 2;
+const TIME_MODES = ["RPT", "DIG", "FADE"]; // Repitch / Digital / Fade
+const STEREO_MODES = ["MONO", "PING"]; // Single / Ping-Pong
 
 const fmtMs = (s: number) => (s >= 1 ? `${s.toFixed(2)}s` : `${Math.round(s * 1000)}`);
 const fmtHz = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`);
 const fmtPct = (v: number) => `${Math.round(v * 100)}`;
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 interface DelayPanelProps {
   deck: Deck;
   id: "A" | "B";
-  slot: number; // effect index (0 = first effect after the EQ)
+  slot: number; // rack index of this delay device
   accent: string;
   emit: (intent: Intent) => void;
   refresh: () => void;
-  onRemove: () => void;
 }
 
-export function DelayPanel({ deck, id, slot, accent, emit, refresh, onRemove }: DelayPanelProps) {
+export function DelayPanel({ deck, id, slot, accent, emit, refresh }: DelayPanelProps) {
   const dev = deck.fxDeviceAt(slot);
   if (!dev) return null;
 
-  const synced = dev.getParam("sync") >= 0.5;
-  const divIdx = Math.max(0, Math.min(DIVISIONS.length - 1, Math.round(dev.getParam("div")) || DEFAULT_DIV));
+  const get = (p: string) => dev.getParam(p);
+  const synced = get("sync") >= 0.5;
+  const linked = get("link") >= 0.5;
+  const frozen = get("freeze") >= 0.5;
+  const timeMode = Math.round(get("timeMode"));
+  const stereo = Math.round(get("stereo"));
+  const divIdx = Math.max(0, Math.min(DIVISIONS.length - 1, Math.round(get("div")) || DEFAULT_DIV));
   const bpm = deck.effectiveBpm;
 
-  // Set one device param locally + broadcast it. `emit` is a no-op when solo.
+  // Set one device param locally + broadcast it (emit is a no-op when solo).
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     emit({ kind: "fxParam", deck: id, slot, param, value });
   };
+  const tweak = (param: string, value: number) => {
+    setParam(param, value);
+    refresh();
+  };
 
-  // Beat-locked time = the division's beats × the beat period. Keep the audio in step with
-  // the grid as the division or tempo changes — in an EFFECT, never during render (an emit
-  // in render would spam the session). DeckControls re-renders on tempo moves, so `bpm`
-  // (deck.effectiveBpm) stays live and re-fires this when it changes.
-  const timeForDiv = (idx: number): number | null => (bpm ? (60 / bpm) * DIVISIONS[idx].beats : null);
+  // Beat-locked time = the division × the beat period. Pushed from an EFFECT (never during
+  // render — an emit in render would spam the session); re-fires when the division or tempo
+  // changes (DeckControls re-renders on tempo moves, so `bpm` stays live).
   useEffect(() => {
     if (!synced || bpm == null) return;
     const want = (60 / bpm) * DIVISIONS[divIdx].beats;
-    if (Math.abs(want - dev.getParam("time")) > 1e-4) {
-      deck.setFxParam(slot, "time", want);
-      emit({ kind: "fxParam", deck: id, slot, param: "time", value: want });
-    }
+    if (Math.abs(want - get("time")) > 1e-4) setParam("time", want);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [synced, divIdx, bpm, slot, id]);
 
   const setDiv = (idx: number) => {
     const i = Math.max(0, Math.min(DIVISIONS.length - 1, Math.round(idx)));
     setParam("div", i);
-    const t = timeForDiv(i);
-    if (t != null) setParam("time", t);
+    if (bpm != null) setParam("time", (60 / bpm) * DIVISIONS[i].beats);
     refresh();
   };
-  const toggleSync = () => {
-    setParam("sync", synced ? 0 : 1);
+  // HP/LP: when LINK is on, sweeping one drags the other by the same Hz ratio (band sweep).
+  const setFilter = (which: "hp" | "lp", v: number) => {
+    if (linked) {
+      const cur = get(which);
+      const ratio = cur > 0 ? v / cur : 1;
+      const other = which === "hp" ? "lp" : "hp";
+      setParam(other, clamp(get(other) * ratio, which === "hp" ? 200 : 20, 18000));
+    }
+    setParam(which, v);
     refresh();
   };
-  const toggleBypass = () => {
-    deck.setFxBypass(slot, !dev.bypassed);
-    emit({ kind: "fxBypass", deck: id, slot, value: dev.bypassed });
+  const cycle = (param: string, count: number) => {
+    setParam(param, (Math.round(get(param)) + 1) % count);
+    refresh();
+  };
+  const toggle = (param: string) => {
+    setParam(param, get(param) >= 0.5 ? 0 : 1);
     refresh();
   };
 
   return (
     <div className="fx-panel fx-delay" style={{ ["--accent" as string]: accent }}>
+      <DelayViz time={get("time")} feedback={get("feedback")} mix={get("mix")} pingpong={stereo === 1} frozen={frozen} bpm={bpm} accent={accent} />
       <div className="fx-knobs">
         {synced ? (
-          <ValueCell
-            label="TIME"
-            value={divIdx}
-            min={0}
-            max={DIVISIONS.length - 1}
-            step={1}
-            reset={DEFAULT_DIV}
-            onChange={setDiv}
-            format={(v) => DIVISIONS[Math.max(0, Math.min(DIVISIONS.length - 1, Math.round(v)))].label}
-            kbd=""
-          />
+          <ValueCell label="TIME" value={divIdx} min={0} max={DIVISIONS.length - 1} step={1} reset={DEFAULT_DIV} onChange={setDiv} format={(v) => DIVISIONS[clamp(Math.round(v), 0, DIVISIONS.length - 1)].label} />
         ) : (
-          <ValueCell
-            label="TIME"
-            value={dev.getParam("time")}
-            min={0.02}
-            max={2}
-            step={0.001}
-            reset={0.375}
-            onChange={(v) => {
-              setParam("time", v);
-              refresh();
-            }}
-            format={fmtMs}
-          />
+          <ValueCell label="TIME" value={get("time")} min={0.02} max={2} step={0.001} reset={0.375} onChange={(v) => tweak("time", v)} format={fmtMs} />
         )}
-        <ValueCell
-          label="FBK"
-          value={dev.getParam("feedback")}
-          min={0}
-          max={0.92}
-          step={0.01}
-          reset={0.38}
-          onChange={(v) => {
-            setParam("feedback", v);
-            refresh();
-          }}
-          format={fmtPct}
-        />
-        <ValueCell
-          label="TONE"
-          value={dev.getParam("tone")}
-          min={200}
-          max={18000}
-          step={50}
-          reset={6500}
-          onChange={(v) => {
-            setParam("tone", v);
-            refresh();
-          }}
-          format={fmtHz}
-        />
-        <ValueCell
-          label="MIX"
-          value={dev.getParam("mix")}
-          min={0}
-          max={1}
-          step={0.01}
-          reset={0.28}
-          onChange={(v) => {
-            setParam("mix", v);
-            refresh();
-          }}
-          format={fmtPct}
-        />
+        <ValueCell label="FBK" value={get("feedback")} min={0} max={0.95} step={0.01} reset={0.38} onChange={(v) => tweak("feedback", v)} format={fmtPct} />
+        <ValueCell label="HP" value={get("hp")} min={20} max={18000} step={20} reset={120} onChange={(v) => setFilter("hp", v)} format={fmtHz} />
+        <ValueCell label="LP" value={get("lp")} min={200} max={18000} step={50} reset={6500} onChange={(v) => setFilter("lp", v)} format={fmtHz} />
+        <ValueCell label="MIX" value={get("mix")} min={0} max={1} step={0.01} reset={0.28} onChange={(v) => tweak("mix", v)} format={fmtPct} />
+        <ValueCell label="DEPTH" value={get("modDepth")} min={0} max={0.012} step={0.0002} reset={0} onChange={(v) => tweak("modDepth", v)} format={(v) => `${Math.round((v / 0.012) * 100)}`} />
+        <ValueCell label="RATE" value={get("modRate")} min={0.02} max={8} step={0.02} reset={0.5} onChange={(v) => tweak("modRate", v)} format={(v) => `${v.toFixed(2)}`} />
+        <ValueCell label="DRIVE" value={get("analog")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("analog", v)} format={fmtPct} />
+        <ValueCell label="DUCK" value={get("duck")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("duck", v)} format={fmtPct} />
+        <ValueCell label="WIDTH" value={get("spread")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("spread", v)} format={fmtPct} />
       </div>
       <div className="fx-foot">
-        <button
-          className={`fx-chip ${synced ? "on" : ""}`}
-          onClick={toggleSync}
-          title={synced ? "Beat-locked — tap for free time (ms)" : "Free time — tap to beat-lock"}
-        >
+        <button className="fx-chip" onClick={() => cycle("timeMode", TIME_MODES.length)} title="Time-change behaviour: Repitch (pitch slur) / Digital / Fade">
+          {TIME_MODES[timeMode] ?? "RPT"}
+        </button>
+        <button className="fx-chip" onClick={() => cycle("stereo", STEREO_MODES.length)} title="Stereo: Mono (independent) / Ping-Pong (bounce L↔R)">
+          {STEREO_MODES[stereo] ?? "MONO"}
+        </button>
+        <button className={`fx-chip ${linked ? "on" : ""}`} onClick={() => toggle("link")} title="Link HP+LP — sweep the band together">
+          LINK
+        </button>
+        <button className={`fx-chip ${get("lofi") >= 0.5 ? "on" : ""}`} onClick={() => toggle("lofi")} title="LoFi — old-digital-delay bitcrush + bandwidth loss">
+          LOFI
+        </button>
+        <button className={`fx-chip ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")} title="Freeze — infinite hold of the current tail">
+          ❄ FRZ
+        </button>
+        <button className={`fx-chip ${synced ? "on" : ""}`} onClick={() => toggle("sync")} title={synced ? "Beat-locked — tap for free ms" : "Free time — tap to beat-lock"}>
           {synced ? "♩ SYNC" : "ms"}
-        </button>
-        <button className={`fx-chip ${dev.bypassed ? "" : "on"}`} onClick={toggleBypass} title="Bypass this effect">
-          {dev.bypassed ? "OFF" : "ON"}
-        </button>
-        <button className="fx-chip fx-remove" onClick={onRemove} title="Remove delay">
-          ✕
         </button>
       </div>
     </div>

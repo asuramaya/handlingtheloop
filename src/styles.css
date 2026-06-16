@@ -389,6 +389,142 @@ body {
   width: min(560px, 80%);
 }
 
+/* ---- Sampler strip (over the A/B crossfader) -------------------------------- */
+/* 12 pads: [A A A A | G G G G | B B B B]. Position encodes the route — left four
+   into deck A's channel, middle four to master (global files), right four into
+   deck B's channel. A relative wrapper anchors the error toast + context menu. */
+.sampler-strip {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%; /* fill the middle third's width — pads (flex 1) spread evenly */
+  margin: 6px 0 2px;
+}
+.smp-pad {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 2px 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.1s, background 0.1s, box-shadow 0.1s;
+}
+/* A visible gap before the global block and before the B block. */
+.smp-pad.smp-divide {
+  margin-left: 9px;
+}
+.smp-pad:not(:disabled):hover {
+  border-color: var(--smp-tint, var(--accent));
+}
+.smp-pad:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* Empty pads read as drop/grab targets (dashed); filled pads carry their route tint. */
+.smp-pad.empty {
+  border-style: dashed;
+}
+.smp-pad.set.smp-A,
+.smp-pad.set.smp-B {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--smp-tint) 55%, var(--line));
+  background: color-mix(in srgb, var(--smp-tint) 12%, var(--panel-2));
+}
+.smp-pad.set.smp-master {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+}
+.smp-pad.playing {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--smp-tint, var(--accent)) 60%, transparent);
+  border-color: var(--smp-tint, var(--accent));
+}
+.smp-pad.drag-over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+}
+.smp-pad.uploading {
+  animation: smp-pulse 1s ease-in-out infinite;
+}
+@keyframes smp-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+.smp-name {
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.1;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.smp-mode {
+  font-size: 8px;
+  opacity: 0.7;
+}
+.smp-hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+/* Inline error/notice toast under the strip. */
+.smp-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  z-index: 5;
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: color-mix(in srgb, #c0334e 22%, var(--panel));
+  border: 1px solid #c0334e;
+  color: var(--text);
+  cursor: pointer;
+}
+.smp-error-x {
+  float: right;
+  opacity: 0.7;
+}
+/* Pad context menu (reuses .ctx-menu): mode picker + level + clear. */
+.smp-menu .smp-modes {
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px 6px;
+}
+.smp-menu .smp-modes button {
+  flex: 1;
+  padding: 5px 4px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.smp-menu .smp-modes button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+}
+.smp-menu .smp-gain {
+  width: calc(100% - 16px);
+  margin: 2px 8px 8px;
+  accent-color: var(--accent);
+}
+
 /* Crossfader — glowing cap over a cyan→magenta (A↔B) track */
 .crossfader input {
   flex: 1;
@@ -652,6 +788,12 @@ body {
   flex: 1;
   min-width: 0;
   overflow: auto;
+  /* Reserve the scrollbar's lane so it never floats over the content's right edge.
+     Without this, the sticky toolbar lays out at full width and its right-pinned
+     controls (the Rows −/＋ stepper) sit UNDER the overlay scrollbar / pane border
+     and get clipped. Stable gutter = the scroll lane is always carved out, so flush-
+     right controls keep their breathing room whether or not the bar is showing. */
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   --tt-toolbar-h: 36px; /* toolbar height === header's sticky offset (no seam) */
@@ -3179,12 +3321,16 @@ body.no-glow .caption-word.cw-on .cw-label {
   }
 }
 
-/* Library window — the collection/table fills the shared centered panel. */
+/* Library window — the collection/table fills the shared centered panel. The panel
+   now has ZERO padding (.lib-panel{padding:0}), so the library sits edge-to-edge on
+   its own. The old `margin: 0 -16px` (a bleed-out for when the panel had 16px padding)
+   would now push the library 16px PAST the panel on each side, where panel{overflow:
+   hidden} clips it — eating the toolbar's right-pinned −/＋ stepper. Keep margins at 0. */
 .lib-panel .library {
   flex: 1;
   min-height: 0;
   border-top: none;
-  margin: 0 -16px -14px; /* let the table reach the panel edges */
+  margin: 0;
 }
 .channels {
   display: flex;
@@ -4248,6 +4394,9 @@ body.no-glow .hw-btn.shift.on {
   overflow-y: auto;
   margin: 0 -18px;
   padding: 0 18px;
+  /* Same as .lib-main: carve out the scroll lane so right-edge controls in the
+     shared right dock (Settings/Profile/Session) aren't clipped by the scrollbar. */
+  scrollbar-gutter: stable;
 }
 .settings-info h3 {
   margin: 4px 0 8px;
@@ -5927,6 +6076,10 @@ body:not(.no-glow) .eq-tool.on {
   gap: 5px;
   flex: 1;
   min-height: 0;
+  /* The shared device-body height: the EQ curve AND the effect body (viz + knobs + chips)
+     both use it, so every tab renders at the SAME height and the two decks' strips stay
+     aligned. Tall enough for the delay's viz-over-knobs-over-chips stack. */
+  --fx-body-h: 192px;
 }
 .fx-tabs {
   display: flex;
@@ -5963,6 +6116,17 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-tab.bypassed {
   opacity: 0.5;
   text-decoration: line-through;
+}
+.fx-tab[draggable] {
+  cursor: grab;
+}
+.fx-tab.dragging {
+  opacity: 0.4;
+}
+/* Drop indicator — a bright left edge where the dragged tab will land. */
+.fx-tab.drag-over {
+  border-left: 3px solid var(--accent);
+  box-shadow: -2px 0 8px -2px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 .fx-tab.fx-add {
   padding: 3px 8px;
@@ -6011,33 +6175,69 @@ body:not(.no-glow) .fx-tab.sel {
   flex: 1;
   min-height: 0;
 }
-/* A generic effect surface (delay…): knob row above a chip foot. */
+/* An effect surface (delay…): the device BODY (fixed height = the EQ curve so switching
+   tabs never resizes the strip) stacks a VISUALIZATION (fills the slack) over a knob row
+   over the effect's mode chips. BYPASS/RESET/COPY are NOT here — that's the shared FxStrip
+   toolbar below, identical for every device. */
 .fx-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  min-height: 0;
-  justify-content: center;
+  gap: 5px;
+  flex: 0 1 auto;
+  height: var(--fx-body-h, 178px);
+  min-height: 96px;
+  overflow: hidden;
 }
+/* The viz absorbs the variable height (more on wide screens where the knobs are one row). */
+.dly-viz {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+}
+.dly-viz canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Knob grid (the device body's control row). Pinned height so it doesn't steal the viz's
+   space. Default: auto-fit spread (for future effects); per-effect overrides set a fixed
+   column count for a balanced, grouped layout. */
 .fx-knobs {
-  display: flex;
-  gap: 8px;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  grid-auto-rows: 44px;
   justify-content: center;
+  gap: 10px 12px; /* row col — enough that adjacent knob outlines don't visually collide */
+}
+/* Delay: 5 fixed columns → a balanced 5+4 split, column-aligned (core row TIME·FBK·HP·LP·MIX
+   over the character row DEPTH·RATE·DRIVE·DUCK), no orphaned/left-hugging last row. */
+.fx-delay .fx-knobs {
+  grid-template-columns: repeat(5, 1fr);
 }
 .fx-knobs .vcell {
-  flex: 1 1 0;
-  max-width: 92px;
-  min-height: 52px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  max-width: none;
 }
+/* The chip toolbar — spreads to fill the width (like the EQ tools) so it reads as the
+   same shell. Mode/toggle chips grow; the small ON / ✕ controls hold their size at the end. */
 .fx-foot {
   display: flex;
-  gap: 5px;
-  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: stretch;
+  flex: 0 0 auto;
 }
 .fx-chip {
-  padding: 4px 12px;
-  font-size: 9.5px;
+  flex: 1 1 auto;
+  padding: 5px 8px;
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.06em;
   color: var(--accent);
@@ -6045,6 +6245,7 @@ body:not(.no-glow) .fx-tab.sel {
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel));
   border-radius: 6px;
   cursor: pointer;
+  white-space: nowrap;
   transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
 }
 .fx-chip:hover {
@@ -6060,9 +6261,9 @@ body:not(.no-glow) .fx-chip.on {
   box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 .fx-chip.fx-remove {
+  flex: 0 0 auto; /* the ✕ holds its size; the mode chips do the spreading */
   color: var(--muted);
   border-color: var(--line);
-  margin-left: 4px;
 }
 .fx-chip.fx-remove:hover {
   color: #fff;
@@ -6094,10 +6295,11 @@ body:not(.no-glow) .fx-chip.on {
 }
 .eq-curve {
   position: relative;
-  /* Fixed-height strip (image #15): a consistent ~140px curve that only shrinks on
-     short windows so it never clips off the bottom. */
+  /* Fixed-height strip (image #15): a consistent curve that only shrinks on short
+     windows so it never clips off the bottom. Height shared with the effect knob-grid
+     (--fx-body-h) so every device tab renders at the same height. */
   flex: 0 1 auto;
-  height: 140px;
+  height: var(--fx-body-h, 140px);
   min-height: 56px;
   border: 1px solid var(--line);
   border-radius: 8px;

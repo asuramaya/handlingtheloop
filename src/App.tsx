@@ -581,6 +581,13 @@ export function App() {
   const scrubbing = useRef<Record<DeckId, boolean>>({ A: false, B: false });
   const jogDelta = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const jogRaf = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // FLX4 jog mode, latched from the controller's own CC stream: the hardware VINYL
+  // button switches the top-plate CC (0x22 scratch / 0x23 bend), so the arriving tick
+  // tells us the mode. Gates whether a touch grabs the platter (vinyl) or is inert
+  // (non-vinyl, where the top plate just bends). Default true = scratch (rekordbox's
+  // FLX4 default); flips to false the first time a bend-stream tick arrives.
+  const jogVinyl = useRef<Record<DeckId, boolean>>({ A: true, B: true });
+  const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
   // The videoId we've already kicked off a room-driven load for (per deck), so a
   // repeated snapshot never aborts + restarts an in-flight decode.
   const roomLoadTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
@@ -2811,26 +2818,51 @@ export function App() {
           break;
         }
         case "jogTouch": {
+          // Touching the top plate only GRABS the platter (stops the deck dead, vinyl
+          // feel) when the unit is in vinyl/scratch mode. In non-vinyl mode the touch
+          // is inert — the top plate just bends (jogTurn scratch:false handles motion),
+          // so resting a finger to nudge no longer halts playback.
           const deck = engine.deck(ev.deck);
+          jogTouched.current[ev.deck] = ev.down;
           if (ev.down) {
-            deck.scrubBegin();
-            onJogStart(ev.deck);
-          } else {
+            if (jogVinyl.current[ev.deck]) {
+              deck.scrubBegin();
+              onJogStart(ev.deck);
+            }
+          } else if (deck.scrubbing) {
             deck.scrubEnd();
             onJogEnd(ev.deck);
           }
           break;
         }
         case "jogTurn": {
-          // The gripped top of the platter SCRATCHES (position); turning it without a
-          // grip (or a board with no touch sensor) BENDS the tempo — deck.bend self-
-          // routes to a frame-search when paused. One decision, shared with the ring.
+          // Two top-plate streams, distinguished by ev.scratch (the FLX4 hardware VINYL
+          // button picks which CC it sends): the SCRATCH stream moves the platter
+          // (position); the BEND stream nudges the tempo (deck.bend self-routes to a
+          // frame-search when paused). Latch the mode from whichever arrives.
           const deck = engine.deck(ev.deck);
           const sec = ev.delta * SEC_PER_TICK;
-          if (deck.scrubbing) {
-            deck.scrubMove(sec);
-            emitJog(ev.deck, sec);
+          if (ev.scratch) {
+            jogVinyl.current[ev.deck] = true;
+            // Grab lazily if the touch landed before we knew it was vinyl mode.
+            if (!deck.scrubbing && jogTouched.current[ev.deck]) {
+              deck.scrubBegin();
+              onJogStart(ev.deck);
+            }
+            if (deck.scrubbing) {
+              deck.scrubMove(sec);
+              emitJog(ev.deck, sec);
+            } else {
+              deck.bend(sec); // touch released mid-stream → fall back to a bend
+            }
           } else {
+            // Non-vinyl top plate → bend. If we wrongly grabbed (mode just flipped),
+            // let the platter go first.
+            jogVinyl.current[ev.deck] = false;
+            if (deck.scrubbing) {
+              deck.scrubEnd();
+              onJogEnd(ev.deck);
+            }
             deck.bend(sec);
           }
           break;

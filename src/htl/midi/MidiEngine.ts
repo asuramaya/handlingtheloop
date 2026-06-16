@@ -411,9 +411,11 @@ export class MidiEngine {
       if (c.relative) this.emitKnob(c, b.deck, addr(status, cc), val);
       else this.emitFader(c, b.deck, val / 127, c.pickup);
     } else if (c.kind === "jogTurn" && b.deck) {
-      // Relative tick centred on 64; sign = direction, magnitude = speed.
+      // Relative tick centred on 64; sign = direction, magnitude = speed. `scratch`
+      // tells App which stream this is: the dedicated SCRATCH CC (vinyl mode) vs the
+      // top-plate BEND CC (non-vinyl). App latches vinyl-mode + gates the grab off it.
       const delta = val - 64;
-      if (delta !== 0) this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: false });
+      if (delta !== 0) this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: c.scratch ?? false });
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
       const delta = val - 64;

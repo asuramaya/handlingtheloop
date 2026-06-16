@@ -35,7 +35,7 @@ export type ControlSpec =
   | { kind: "action"; action: string } // button → HANDLERS[action]
   | { kind: "beatjump"; beats: number } // pad → deck.beatJump(beats)
   | { kind: "fader"; target: FaderTarget; invert?: boolean; relative?: boolean; pickup?: boolean } // knob/fader. relative = delta-track an endless encoder; pickup = absolute encoder with soft-takeover (no jump until the knob sweeps through the current value — see App)
-  | { kind: "jogTurn" } // platter rotation (relative, centred on 64) — scratch while gripped
+  | { kind: "jogTurn"; scratch?: boolean } // platter rotation (relative, centred on 64). scratch:true = the dedicated SCRATCH stream (vinyl mode, FLX4 CC 0x22); scratch:false/omit = the top-plate BEND stream (non-vinyl, FLX4 CC 0x23) or a generic single-CC wheel
   | { kind: "jogBend" } // outer-ring / un-gripped rotation (relative) — momentary tempo bend
   | { kind: "jogTouch" } // platter top-sensor touch (note)
   | { kind: "shift" } // the SHIFT modifier button (momentary or a latching hardware toggle)

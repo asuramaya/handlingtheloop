@@ -140,14 +140,21 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "filter" }, deck: "B", status: CC_MIX, data: 0x18, type: "cc14" },
     // Crossfader (mixer-global, 14-bit)
     { control: { kind: "fader", target: "crossfader" }, status: CC_MIX, data: 0x1f, type: "cc14" },
-    // Jog wheels — three layers: TOUCH (top capacitive sensor, note 0x36) arms the
-    // platter; TURN of the gripped top (CC 0x22) scratches; the OUTER RING (CC 0x21)
-    // is never touched, so it sends a separate stream that bends the tempo (beat-match
-    // nudge) instead of scratching. The app routes each by whether the platter is held.
+    // Jog wheels — the FLX4 top plate is capacitive and the hardware VINYL button
+    // decides scratch-vs-bend by switching which CC the top emits (verified against the
+    // Mixxx mapping). Four streams:
+    //   TOUCH (top capacitive sensor, note 0x36) — grab; only meaningful in vinyl mode.
+    //   TOP TURN, Vinyl ON  → CC 0x22 → SCRATCH (jogTurn scratch:true).
+    //   TOP TURN, Vinyl OFF → CC 0x23 → BEND   (jogTurn scratch:false) — was UNMAPPED.
+    //   OUTER RING (never touched) → CC 0x21 → BEND (jogBend), always.
+    // App latches vinyl-mode from whether 0x22 or 0x23 is arriving and gates the grab
+    // (so a touch in non-vinyl mode no longer stops the deck dead).
     { control: { kind: "jogTouch" }, deck: "A", status: NOTE_A, data: 0x36, type: "note" },
     { control: { kind: "jogTouch" }, deck: "B", status: NOTE_B, data: 0x36, type: "note" },
-    { control: { kind: "jogTurn" }, deck: "A", status: CC_A, data: 0x22, type: "cc" },
-    { control: { kind: "jogTurn" }, deck: "B", status: CC_B, data: 0x22, type: "cc" },
+    { control: { kind: "jogTurn", scratch: true }, deck: "A", status: CC_A, data: 0x22, type: "cc" },
+    { control: { kind: "jogTurn", scratch: true }, deck: "B", status: CC_B, data: 0x22, type: "cc" },
+    { control: { kind: "jogTurn", scratch: false }, deck: "A", status: CC_A, data: 0x23, type: "cc" },
+    { control: { kind: "jogTurn", scratch: false }, deck: "B", status: CC_B, data: 0x23, type: "cc" },
     { control: { kind: "jogBend" }, deck: "A", status: CC_A, data: 0x21, type: "cc" },
     { control: { kind: "jogBend" }, deck: "B", status: CC_B, data: 0x21, type: "cc" },
     // Browse encoder: rotate (relative) + PRESS (the selector) + load buttons

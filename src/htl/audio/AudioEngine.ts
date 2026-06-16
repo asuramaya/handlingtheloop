@@ -94,6 +94,13 @@ export class AudioEngine {
     // Key-lock follow/release: any pitch change routes through the KEY machine.
     this.deckA.onPitchChange = () => this.onDeckPitch("A");
     this.deckB.onPitchChange = () => this.onDeckPitch("B");
+    // Continuous beat-sync phase-lock: tempo-match keeps the average tempo equal but the
+    // beat phase still slides (rounded best-fit BPM + wavering dynamic grids), so poll the
+    // slave→master phase error and ride a tiny rate trim to hold it. No-ops whenever
+    // nothing is synced, so it's effectively free when unused.
+    if (typeof setInterval !== "undefined") {
+      this.syncCorrectTimer = setInterval(() => this.phaseCorrect(), AudioEngine.SYNC_TICK_MS);
+    }
 
     this.setCrossfade(0);
     void this.ensureWorklets();
@@ -295,6 +302,15 @@ export class AudioEngine {
 
   /** Disconnect + remove the cue bridge, reverting to single-output. Safe to call when
    *  nothing is built. cueMaster stays (dangling/silent) for the next time around. */
+  /** Stop the engine's background timers (the sync phase-lock poll). For teardown /
+   *  hot-reload so the interval doesn't leak. */
+  dispose(): void {
+    if (this.syncCorrectTimer != null) {
+      clearInterval(this.syncCorrectTimer);
+      this.syncCorrectTimer = null;
+    }
+  }
+
   private teardownCueBus(): void {
     if (this.cueStreamDest) {
       try {
@@ -402,6 +418,9 @@ export class AudioEngine {
   // slave's own tempo releases the lock.
   private slaveId: DeckId | null = null;
   private propagating = false; // guards the master→slave tempo echo from recursing
+  private syncCorrectTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
+  private static readonly SYNC_PHASE_K = 0.06; // P-gain: rate trim per beat of phase error (gentle, ~8 s time constant)
 
   private get masterId(): DeckId | null {
     return this.slaveId == null ? null : other(this.slaveId);
@@ -419,6 +438,40 @@ export class AudioEngine {
   private writeRoles() {
     this.deckA.syncRole = this.syncRole("A");
     this.deckB.syncRole = this.syncRole("B");
+    // Releasing sync (or losing a grid) must drop any residual phase-lock trim so the
+    // freed deck returns to its exact set tempo.
+    if (this.slaveId == null) {
+      this.deckA.setSyncTrim(0);
+      this.deckB.setSyncTrim(0);
+    }
+  }
+
+  // Continuous phase-lock for the SYNC pair. matchSlaveTempo keeps the AVERAGE tempos
+  // equal, but the best-fit BPM is rounded (0.01) and dynamic beatgrids waver, so the
+  // beat phase slides over minutes — the decks drift apart. Each tick we measure the
+  // slave→master beat-phase error and ride a tiny rate trim (a first-order loop) that
+  // eases it to zero, so they stay locked indefinitely. Skipped whenever the user owns
+  // the slave's motion (jog / ear-bend) or a loop is deliberately offsetting the phase.
+  private phaseCorrect() {
+    const sid = this.slaveId;
+    if (sid == null) return;
+    const slave = this.deck(sid);
+    const master = this.deck(other(sid));
+    const sg = slave.beatgrid;
+    const mg = master.beatgrid;
+    if (!sg || !mg) return;
+    if (!slave.playing || !master.playing) {
+      slave.setSyncTrim(0); // nothing to lock to while stopped
+      return;
+    }
+    if (slave.jogging || master.jogging || slave.bending || master.bending) return;
+    if (slave.loop?.active || master.loop?.active) return; // a loop intentionally breaks phase
+    // Beat-phase error in [−0.5, 0.5) beats (positive = slave is ahead of master).
+    let err = beatPhase(sg, slave.position()) - beatPhase(mg, master.position());
+    if (err > 0.5) err -= 1;
+    else if (err < -0.5) err += 1;
+    // First-order correction: ahead → trim slower (negative), behind → trim faster.
+    slave.setSyncTrim(-err * AudioEngine.SYNC_PHASE_K);
   }
 
   /** Which deck is the SYNC slave (null = off) — the absolute setpoint to send over a
@@ -483,6 +536,7 @@ export class AudioEngine {
     const mg = master.beatgrid;
     if (!sg || !mg || !slave.buffer) return;
     this.matchSlaveTempo();
+    slave.setSyncTrim(0); // start the lock from zero; the corrector takes over from here
 
     // Phase align: bar-level when both downbeats are known (the two "1"s land
     // together — a phrase-tight mix), else per-beat. Minimal move (wrap to nearest).

@@ -310,6 +310,14 @@ export class Deck {
   private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
   private static readonly BEND_MAX = 0.6; // cap the push at ±60% of the set tempo
   private static readonly BEND_SEARCH = 6; // paused: scale a bend nudge into a frame-search seek
+  // --- continuous beat-sync phase-lock (driven by AudioEngine.phaseCorrect) ---
+  // A tiny rate trim the SYNC slave rides to null residual beat-phase drift. Tempo-match
+  // alone can't hold phase forever (the best-fit BPM is rounded to 0.01 and dynamic
+  // beatgrids waver), so beats slowly slide; this folds into effRate exactly like _bend,
+  // so the clock + audio stay together and the slave imperceptibly speeds/slows to stay
+  // locked. 0 whenever the deck isn't following.
+  private _syncTrim = 0;
+  private static readonly SYNC_TRIM_MAX = 0.02; // ±2 % — enough to pull a sub-beat slip in seconds, inaudible
   cuePoint = 0;
   hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
   hotLoops: (Loop | null)[] = new Array(HOT_CUE_COUNT).fill(null); // saved loops per pad
@@ -428,7 +436,7 @@ export class Deck {
     // (Re)load the current PCM in case a track was set before the node attached, and
     // re-assert the current tempo/pitch (now port messages, so they must be re-sent).
     this.loadEnginePcm();
-    this.stretchNode?.port.postMessage({ type: "speed", value: this._rate });
+    this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
     this.updatePitch();
   }
 
@@ -632,6 +640,7 @@ export class Deck {
     this.stopSource();
     this._playing = false;
     this.startOffset = 0;
+    this._syncTrim = 0; // a new track invalidates any inherited phase-lock trim
     this.cuePoint = 0;
     this.hotCues = new Array(HOT_CUE_COUNT).fill(null);
     this.hotLoops = new Array(HOT_CUE_COUNT).fill(null);
@@ -1023,7 +1032,7 @@ export class Deck {
    *  Everything that advances the playhead reads THIS, not the raw tempo, so a bend
    *  speeds/slows the audio + clock together and stays drift-free. */
   private effRate(): number {
-    return this._rate * (1 + this._bend);
+    return this._rate * (1 + this._bend) * (1 + this._syncTrim);
   }
 
   /** Current playhead position in seconds (wraps inside an active loop). */
@@ -1165,6 +1174,22 @@ export class Deck {
   /** True while the platter is being dragged OR still coasting after release. */
   get jogging() {
     return this.jogPhase !== "off";
+  }
+  /** True while a momentary pitch-bend is decaying — pauses the sync phase-lock so the
+   *  corrector doesn't chase a transient ear-nudge. */
+  get bending() {
+    return this._bend !== 0;
+  }
+
+  /** Apply the SYNC phase-lock rate trim (AudioEngine drives this each correction tick).
+   *  Folds into effRate like a bend, so the math clock and the audio glide together and
+   *  the slave imperceptibly speeds/slows to hold beat phase. No-op when unchanged. */
+  setSyncTrim(trim: number) {
+    const t = Math.max(-Deck.SYNC_TRIM_MAX, Math.min(Deck.SYNC_TRIM_MAX, trim));
+    if (t === this._syncTrim) return;
+    this.reanchorClock(); // freeze position() at the OLD rate before it changes (continuity)
+    this._syncTrim = t;
+    this.pushRate();
   }
 
   scrubBegin() {
@@ -1444,8 +1469,9 @@ export class Deck {
     this._rate = rate;
     // Glide the engine's speed so fader moves bend tempo smoothly instead of
     // stepping. Stems are one engine voice, so they stay sample-locked for free.
+    // effRate() (not raw rate) so a SYNC slave's phase-lock trim survives a tempo follow.
     // Port message, not an AudioParam — the worklet de-zippers it (see stretchWorklet).
-    this.stretchNode?.port.postMessage({ type: "speed", value: rate });
+    this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
     this.updatePitch(); // vinyl mode (key-lock off) tracks the new tempo
     this.onTempoChange?.(); // AudioEngine sync hook: master→slave follow / release
   }

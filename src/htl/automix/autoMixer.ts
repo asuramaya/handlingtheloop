@@ -20,6 +20,8 @@ const EQ_KILL = -26; // dB — the engine's low-shelf floor (a full bass cut)
 const END_GUARD = 4; // s — never mix out closer than this to the track end
 const BEATS_PER_BAR = 4;
 const XFADE_GRAB = 0.06; // crossfade delta that means "the user took the fader"
+const STEM_WAIT_MAX = 8; // s — at mix-out, hold this long for the incoming deck's stems to
+//                          finish separating before falling back to an EQ blend.
 
 export interface AutoMixStatus {
   enabled: boolean;
@@ -47,6 +49,10 @@ export interface AutoMixerDeps {
   applyCrossfade: (x: number) => void;
   getCrossfade: () => number;
   now: () => number; // monotonic ms (performance.now) — for wall-clock mix progress
+  // True while a deck's stems are still being fetched/separated (not yet loaded). Lets the
+  // mixer hold briefly at mix-out for an in-flight separation so the stem swap fires instead
+  // of falling back to EQ. Optional — without it the mixer never waits (uses stems if ready).
+  stemsPending?: (id: DeckId) => boolean;
   onChange: (s: AutoMixStatus) => void;
 }
 
@@ -520,7 +526,28 @@ export class AutoMixer {
       this.phase = "armed";
       return;
     }
-    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.05) this.startMix();
+    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.05) {
+      // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
+      // stems, hold a moment (bounded) rather than drop to an EQ blend.
+      if (this.shouldHoldForStems(live, idle)) return;
+      this.startMix();
+    }
+  }
+
+  // At mix-out, should we wait for the incoming deck's stems to finish? Only when the
+  // outgoing already has stems (a swap is possible), the incoming's are actively separating,
+  // and there's both time budget (STEM_WAIT_MAX) and runway left before the outgoing's
+  // musical end — so a slow/stuck separation can never ride the blend into the dead tail.
+  private shouldHoldForStems(live: Deck, idle: DeckId): boolean {
+    const inc = this.deps.engine.deck(idle);
+    if (inc.hasStems || !live.hasStems) return false; // ready, or no swap possible → go
+    if (!this.deps.stemsPending?.(idle)) return false; // nothing coming → don't wait
+    const waited = live.position() - (this.mixOutTime ?? live.position());
+    if (waited > STEM_WAIT_MAX) return false;
+    const grid = live.beatgrid;
+    const end = grid?.lastSound && grid.lastSound > live.duration * 0.5 ? grid.lastSound : live.duration;
+    if (end && live.position() > end - this.barsSeconds - 1) return false; // protect the tail
+    return true;
   }
 
   private startMix(): void {
@@ -532,9 +559,13 @@ export class AutoMixer {
     this.useStems = live.hasStems && inc.hasStems;
     if (this.useStems) {
       this.plan.style = "stemswap";
+      // The incoming enters as DRUMS + BASS only — its melody (other) and vocal come in
+      // LATER in the blend (beats → melody → vocal), so nothing stacks on the way in.
       inc.setEqLow(0);
       inc.setStemGain("bass", 0);
       inc.setStemGain("drums", 0);
+      inc.setStemGain("other", 0);
+      inc.setStemGain("vocals", 0);
     } else if (this.plan.style === "filter") {
       inc.setFilter(-0.85); // start muffled (low-pass) — opens across the mix
     }
@@ -634,12 +665,26 @@ export class AutoMixer {
     const swapSpan = 1 / Math.max(1, this.plan.bars);
     const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
     if (this.useStems) {
-      // Stem swap: trade kick+bass between decks, duck the outgoing vocal.
+      // Arrangement-aware stem swap — not just a bass trade:
+      //  • DRUMS + BASS swap decks around bassSwapBar (`s`) — only one low end at a time.
+      //  • VOCALS hand off with a GAP: the outgoing vocal ducks out by mid-blend, the
+      //    incoming vocal drops in late — the two lead vocals never sit at full together
+      //    (clash avoidance / acapella-style handoff).
+      //  • OTHER (melody/harmony) crossfades between the decks: a long blend when the pair
+      //    is key-matched, a tight swap when it isn't (don't stack two dissonant melodies).
+      const km = this.plan.keyMatch;
       live.setStemGain("bass", lerp(1, 0, s));
       live.setStemGain("drums", lerp(1, 0, s));
       inc.setStemGain("bass", lerp(0, 1, s));
       inc.setStemGain("drums", lerp(0, 1, s));
-      live.setStemGain("vocals", lerp(1, 0, p));
+      // Disjoint vocal windows: outgoing out over [0, 0.45], incoming in over [0.6, 1].
+      live.setStemGain("vocals", lerp(1, 0, clamp(p / 0.45, 0, 1)));
+      inc.setStemGain("vocals", lerp(0, 1, clamp((p - 0.6) / 0.4, 0, 1)));
+      // Melody/harmony handoff (rhythm leads, melody follows, vocal lands last).
+      const incOther = km ? clamp((p - 0.4) / 0.5, 0, 1) : clamp((p - 0.45) / 0.2, 0, 1);
+      const liveOther = km ? clamp((p - 0.55) / 0.45, 0, 1) : clamp((p - 0.5) / 0.2, 0, 1);
+      inc.setStemGain("other", incOther);
+      live.setStemGain("other", lerp(1, 0, liveOther));
     } else if (this.plan.style === "filter") {
       // Cheap one-knob filter sweep: incoming opens from a low-pass; the outgoing
       // leaves through a high-pass in the back half. Bass still swaps so lows don't

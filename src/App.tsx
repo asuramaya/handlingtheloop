@@ -292,7 +292,7 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqLpFreq != null) deck.setEqLpFreq(s.eqLpFreq);
   if (s.eqLpQ != null) deck.setEqLpQ(s.eqLpQ);
   deck.setEqBypass(!!s.eqBypass);
-  deck.applyFxSnapshot(s.fx ?? []); // post-EQ effect chain (reconciles add/remove/reorder + params)
+  deck.applyFxSnapshot(s.fx); // FX chain (undefined = old snapshot → keep default; [] = explicitly empty)
   deck.setKeylock(s.keylock);
   deck.setPitch(s.pitchSemis ?? 0);
   deck.setQuantize(s.quantize);
@@ -2529,6 +2529,9 @@ export function App() {
   // never jumps. Reset on focus change so re-grabbing the new deck re-catches (no jump).
   const knobPickup = useRef<Record<string, { caught: boolean; last: number }>>({});
   useEffect(() => void (knobPickup.current = {}), [focused]);
+  // Bridge to the sampler strip's trigger/release (set by SamplerStrip) so MIDI-learned
+  // pad buttons can fire the 12 sampler pads without lifting the strip's state into App.
+  const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
   // A decoded MidiEvent is fanned out to the SAME handlers the keyboard/buttons use,
   // so a hardware board has full feature + session-sync parity. value is 0..1; we
   // scale it to each control's real range here (where the live tempo range lives).
@@ -2561,6 +2564,15 @@ export function App() {
           // Deck omitted (focus-model board) → drive the focused deck. The effective
           // shift folds in HTL's shift state so e.g. the Starrypad PLAY honours the
           // record-latch (shift) → reset, even though its CC carries no shift bit.
+          // Sampler pads are global (route by position), not a deck handler — fire the
+          // strip directly. pressed=false releases (gate mode).
+          const smp = /^sampler(\d+)$/.exec(ev.action);
+          if (smp) {
+            const idx = Number(smp[1]);
+            if (ev.pressed) samplerCtl.current?.trigger(idx);
+            else samplerCtl.current?.release(idx);
+            break;
+          }
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
           const sh = ev.shift || midiShift[id] || (focused === id && (focusShift || shiftLatched || shiftHeld));
@@ -2929,6 +2941,11 @@ export function App() {
   const crossfadeRef = useRef(crossfade);
   crossfadeRef.current = crossfade;
 
+  // Current stem-load status behind a ref so the mixer can tell when a deck's stems are
+  // still separating (and hold the blend a beat for the stem swap, see stemsPending below).
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
   // Latest callbacks behind a ref so the (stably-constructed) AutoMixer never holds
   // a stale closure.
   const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack });
@@ -2945,6 +2962,7 @@ export function App() {
       deckTrack: (id) => autoDeps.current.deckTrack(id),
       getCrossfade: () => crossfadeRef.current,
       now: () => performance.now(),
+      stemsPending: (id) => stemLoading(statusRef.current[id]),
       onChange: (s) => setAutoStatus(s),
     });
   }
@@ -2972,6 +2990,27 @@ export function App() {
     const iv = setInterval(() => void mixerRef.current?.tick(), 150);
     return () => clearInterval(iv);
   }, [autoStatus.enabled, autoIsRemote]);
+
+  // Mobile auto-DJ stems. A stem transition needs on-device stems on BOTH decks; the OOM
+  // that once barred this is resolved (int16 shared-offset WSOLA + aggregate stem budget),
+  // so when AUTO turns on for a mobile host/solo we opt both decks into stems — the same
+  // path the manual Single/Stems button drives — and derive for whatever is already loaded.
+  // Subsequent auto-loads inherit the request via mobileStemReqRef. Left ON when AUTO stops
+  // (the stems are already paid for; the per-deck button still flips back to Single).
+  useEffect(() => {
+    if (!isMobileDevice() || !autoStatus.enabled || autoIsRemote) return;
+    mobileStemReqRef.current = { A: true, B: true };
+    setMobileStemReq({ A: true, B: true });
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      const vid = latest.current.meta[id]?.videoId;
+      const deck = engine.deck(id);
+      if (vid && deck.buffer && !deck.hasStems) {
+        deriveGuard.current[id] = "";
+        void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStatus.enabled, autoIsRemote, engine, deriveStems]);
 
   // Host streams the auto-DJ queue + status to the room so remotes see what's coming.
   useEffect(() => {
@@ -3520,7 +3559,7 @@ export function App() {
             crossfade={crossfade}
             onCrossfade={applyCrossfade}
           />
-          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} />
+          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} ctlRef={samplerCtl} />
           <div className="decks-row">
           <DeckControls
             id="A"

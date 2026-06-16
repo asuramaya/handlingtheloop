@@ -289,8 +289,17 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 > `joined`/`listening` forced true, never controlling/host/anchor). The existing
 > guest-reconstruction handlers render the mix. `SocialScreen`: a **Live-now row taps to
 > tune in** (unlocks audio via `onActivate`), a **"🎧 Listening to @X · Stop"** banner,
-> own-session footer hidden while listening. **Non-stem mixes reconstruct now; stem mixes
-> still need stems-from-R2 (`Deck.ts`).** Also fixed `useRoom.refreshUser()` (Profile-close
+> own-session footer hidden while listening. **STEMS-FROM-R2 already covered** (corrected
+> 2026-06-16): a `pub` listener IS a follower (`followRef`/`snapFollowRef` true), so the
+> existing follower-stem path fires — incl. the mobile **R2 download of the host's cached
+> neural set** (`App.tsx:1174` `PROMOTE_ORDER` probe), lazily materialized on stem
+> divergence (the iPhone-OOM design). **Desktop is covered too:** model="off" hits the
+> `autoEnhance` path (default ON, `App.tsx:1108`) → `promoteCachedStems` probes the shared
+> R2 cache (`1022-1059`) → downloads the host's set. So mobile + desktop both pull the
+> host's stems from R2 by default, just gated differently (mobile: forced for followers;
+> desktop: auto-enhance). Only non-stem case = a desktop user who EXPLICITLY disabled
+> auto-enhance (a deliberate "stay on my model" opt-out — correct, not a bug). No fix
+> needed. Also fixed `refreshUser()` (Profile-close
 > → "Go live" un-gates post-claim, no reload) + the `DEV_LOGIN` shortcut login.
 > **Still next:** now-playing in the heartbeat, a "Listen" button on `/@handle` itself,
 > stems-from-R2; E3–E10/E12 (per-deck roles, seat UX, gate modes).

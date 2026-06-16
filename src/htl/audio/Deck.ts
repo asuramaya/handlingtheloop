@@ -272,8 +272,9 @@ export class Deck {
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
   lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
-  get stretchAttached() { return this.stretchNode != null; } // TEMP diag: did the module load?
+  get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
   private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
+  get scratchAttached() { return this.scratchNode != null; } // did the scrub worklet attach?
   private scratchLoaded = false; // the scratch worklet holds this track's PCM (mobile loads it lazily)
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and

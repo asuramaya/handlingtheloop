@@ -6518,6 +6518,12 @@ body:not(.no-glow) .fx-chip.on {
   gap: 7px;
   min-height: 0;
   height: 38px;
+  /* Each cell's ValueCell knob-dot rides on the cell's BOTTOM edge (KnobBorder traces
+     from bottom-centre; dot r=4 + glow ≈ 6px below the box). The subrow is the last
+     child of .eq-pro, which clips at a fixed --fx-body-h (overflow:hidden) — so the
+     dot's lower half was shaved off against the BYPASS/RESET/COPY toolbar. Lift the
+     row off the clip edge so the dot clears (the curve, flex:1, yields the room). */
+  margin-bottom: 6px;
 }
 .eq-subrow .vcell {
   flex: 1 1 0;

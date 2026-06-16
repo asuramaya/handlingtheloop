@@ -64,6 +64,21 @@ To test **shared sessions / social**: open two browser tabs against `:8787`, sta
 session in one, knock from the other. For the **broadcast plane**: dev-login, then
 **Session → ● Go live**, and open an incognito window as the anonymous listener.
 
+### Join from a phone on the LAN
+
+```
+pnpm worker:lan       # wrangler dev --ip 0.0.0.0 → reachable on your LAN IP:8787
+```
+
+On the phone (same Wi-Fi), open `http://<your-lan-ip>:8787` (e.g. `http://172.20.20.20:8787`;
+find yours with `ip route get 1.1.1.1`). Sign in with the dev login —
+`http://<lan-ip>:8787/api/auth/dev?name=Phone` — or just tune into a live room (anon).
+The app is origin-relative (WebSocket uses `location.host`), so nothing is hardcoded to
+localhost. **Cross-origin isolation is OFF over plain-HTTP LAN** (it needs HTTPS/localhost),
+but that only disables threaded stem *separation* — which phones never do anyway — so
+listening, playback, and R2 stem *download* all work. If the page can't load, allow inbound
+TCP 8787 through the laptop's firewall.
+
 ## Production
 
 `pnpm deploy` (`vite build && wrangler deploy`). Secrets are set with

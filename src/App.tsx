@@ -60,8 +60,6 @@ import {
   putAudio,
   loadStems,
   loadStemsLocal,
-  dspStems,
-  dspStemsWindowedInt16,
   getStemModel,
   modelSupport,
   deviceSupportsModel,
@@ -253,10 +251,7 @@ const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
 // resident int16 + mix input (~half the slope), so ~16 min combined fits a typical iPhone.
 // Per-track is anyway fetch-capped at 15 min (server MAX_TRACK_SECONDS), so one deck never
 // exceeds that; this aggregate just stops two long tracks from co-residing past budget.
-const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined
-// Past this single-track length, build stems via the WINDOWED int16 path (bounded transient)
-// instead of the proven full-track dspStems (which peaks ~138 MB/min and OOMs past ~6 min).
-const DSP_WINDOW_THRESHOLD_SEC = 300; // 5 min
+const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined — aggregate budget for DOWNLOADED int16 sets
 // The 8 beat-loop sizes, ascending — pad/key index → beats (shared by the keyboard
 // handlers and the MIDI pad dispatch so a loop pad can match the active loop's size).
 const LOOP_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8];
@@ -1147,109 +1142,77 @@ export function App() {
       // the per-stem mixer works and its mute/gain INTENTS sync per device, zero extra bandwidth.
       // Neural stays a desktop/upgrade quality tier that swaps in seamlessly via setStems().
       if (mobile) {
-        setStatusFor(id, { phase: "separating", detail: "Splitting stems on-device…" });
+        // MOBILE = FETCH + RENDER ONLY. Phones NEVER run on-device separation (neural or the
+        // DSP split): that heavy offline render competes with the audio thread and — once it
+        // packs int16 + frees the mix — can leave the deck silent if anything in the pack
+        // path hiccups. Instead: if a neural set is cached in R2 (the host warmed it, or a
+        // past listener), DOWNLOAD + render it; otherwise stay on the PLAIN MIX, which is
+        // already in the worklet from setBuffer (so we KEEP the buffer — never releaseMixBuffer
+        // on this path — and the deck just keeps playing the mix).
+        setStatusFor(id, { phase: "downloading", detail: "Checking for shared stems…" });
         await whenIdle();
         if (stale?.()) return;
         try {
-          // Serialise the heavy offline render ACROSS DECKS on mobile — two full-track
-          // separations at once is the memory spike that jetsam-killed the tab. One at a time.
-          // CROSS-DEVICE CONTRACT — AGGREGATE stem budget (combined length of BOTH decks' stem'd
-          // tracks), not a per-deck cap, so it can be spent unevenly (10+4, not forced 6+6). If
-          // this deck's stems would push the combined length past the budget, stay mix-only.
-          // Checked INSIDE the serialised chain so the OTHER deck's stems (if it built first) are
-          // already committed → first-come allocation, no race. A `null` return = over budget.
+          // Serialise across decks (one download/decode at a time) + the AGGREGATE stem budget,
+          // same as before — a 2-deck cached set is the same int16 footprint as a derived one.
           const run = mobileDeriveChain.then(async () => {
             const otherId: DeckId = id === "A" ? "B" : "A";
             const otherSec = engine.deck(otherId).hasStems ? engine.deck(otherId).duration : 0;
             if (mix.duration + otherSec > MOBILE_MAX_COMBINED_STEM_SECONDS) return { kind: "over" as const };
-            // SHARED NEURAL CACHE FIRST (the "phone guest hears DSP not the host's demucs" fix).
-            // If anyone — the host, a past listener — already separated this track and shared it to
-            // R2, DOWNLOAD that set instead of deriving the coarse on-device DSP split. A downloaded
-            // set is the SAME int16 footprint (setStems packs it + frees the float32, like the DSP
-            // path) but it MATCHES what the host hears, so a phone following a demucs desktop now
-            // hears demucs. Best-quality-first probe, same order as desktop auto-promote. Gated to
-            // SHORT tracks: the full float32 decode transient is only safe under the windowed
-            // threshold (the download path has no windowed equivalent), so long tracks stay on the
-            // local windowed DSP below. Budget already reserved above, so a download counts the same.
-            if (mix.duration <= DSP_WINDOW_THRESHOLD_SEC) {
-              for (const mid of PROMOTE_ORDER) {
-                const man = await fetchStemManifest(videoId, mid).catch(() => null);
-                if (stale?.()) return { kind: "stale" as const };
-                if (!man?.complete) continue;
-                const m = getStemModel(mid);
-                const src = stemSrcLabel(mid);
-                setStatusFor(id, { phase: "downloading", src, detail: `Host's ${m.label} stems — downloading…` });
-                try {
-                  // manifest is complete → loadStems takes the R2 download branch (no separation).
-                  const stems = await loadStems(engine.ctx, videoId, mix, m, (pct) => {
-                    const p = Math.round(pct * 100);
-                    setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Downloading ${m.label} stems… ${p}%` });
-                  });
-                  return { kind: "neural" as const, stems, mid };
-                } catch {
-                  break; // download failed → fall through to the local DSP split
-                }
-              }
+            // SHARED NEURAL CACHE ONLY. Probe R2 best-first; the first complete set wins and is
+            // DOWNLOADED (loadStems takes the no-separation branch on a complete manifest).
+            for (const mid of PROMOTE_ORDER) {
+              const man = await fetchStemManifest(videoId, mid).catch(() => null);
               if (stale?.()) return { kind: "stale" as const };
+              if (!man?.complete) continue;
+              const m = getStemModel(mid);
+              const src = stemSrcLabel(mid);
+              setStatusFor(id, { phase: "downloading", src, detail: `Host's ${m.label} stems — downloading…` });
+              try {
+                const stems = await loadStems(engine.ctx, videoId, mix, m, (pct) => {
+                  const p = Math.round(pct * 100);
+                  setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Downloading ${m.label} stems… ${p}%` });
+                });
+                return { kind: "neural" as const, stems, mid };
+              } catch {
+                break; // download failed → plain mix
+              }
             }
-            // LONG track → WINDOWED int16 (bounds the float32 build transient so it doesn't OOM;
-            // the proven full-track dspStems peaks ~138 MB/min and tops out ~6 min). Short tracks
-            // keep the proven path, so the new windowed code can only HELP long tracks (mix-only
-            // today), never regress the common case.
-            if (mix.duration > DSP_WINDOW_THRESHOLD_SEC) {
-              return { kind: "packed" as const, packed: await dspStemsWindowedInt16(mix) };
-            }
-            return { kind: "dsp" as const, dsp: await dspStems(mix) };
+            return { kind: "none" as const }; // nothing cached → plain mix (NO on-device separation)
           });
           mobileDeriveChain = run.catch(() => undefined);
           const res = await run;
           if (stale?.() || res?.kind === "stale") return;
-          if (!res || res.kind === "over") {
-            // Over the COMBINED budget (the other deck's stem'd track already spent it) → mix-only.
+          if (res?.kind === "neural") {
+            engine.deck(id).setStems(res.stems, true); // packs int16 + builds lanes + frees float32
+            stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
+            // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
+            engine.deck(id).releaseMixBuffer();
+            dropCachedBuffer(videoId);
+            refresh();
+            const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
+            setStatusFor(id, { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` });
+          } else {
+            // No cached stems (or over budget) → PLAIN MIX. The worklet already holds it from
+            // setBuffer; KEEP the buffer (do NOT releaseMixBuffer) so playback never goes silent.
             engine.deck(id).setStems(null);
+            stemLoadedKey.current[id] = guardKey;
             refresh();
             setStatusFor(id, {
               phase: "unavailable",
-              detail: `Both tracks exceed the on-device stem budget (${Math.round(MOBILE_MAX_COMBINED_STEM_SECONDS / 60)} min combined) — this deck plays the mix.`,
+              detail:
+                res?.kind === "over"
+                  ? "Both tracks exceed the on-device stem budget — this deck plays the mix."
+                  : "No shared stems for this track yet — playing the mix.",
             });
-            setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
-            return;
+            setTimeout(() => !stale?.() && setStatusFor(id, null), 5000);
           }
-          if (res.kind === "neural") {
-            engine.deck(id).setStems(res.stems, true); // neural → per-stem lanes; mobile packs int16 + frees float32
-            stemLoadedKey.current[id] = `${videoId}:${res.mid}`; // downloaded set → don't re-separate it
-          } else if (res.kind === "packed") {
-            engine.deck(id).loadPackedStems(res.packed, false); // int16, no float32 held
-            stemLoadedKey.current[id] = guardKey;
-          } else {
-            engine.deck(id).setStems(res.dsp, false); // DSP split → 4-lane mixer (coarse, but synced + audible)
-            stemLoadedKey.current[id] = guardKey;
-          }
-          // The worklet now holds the int16 stems = the audio source. Release the ~92 MB float32
-          // mix from BOTH holders (the deck's ref + the shared trackCache) so it actually GCs —
-          // the dominant steady-state cost of following a 2-deck stem session on a phone.
-          engine.deck(id).releaseMixBuffer();
-          dropCachedBuffer(videoId);
-          refresh();
-          // DIAGNOSTIC: report how many stem-lane pyramids actually got built, so a
-          // "ready but no lanes" splits build-failure (0) from a render bug (4). Remove
-          // once the mobile no-stem-visuals issue is pinned.
-          const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
-          setStatusFor(
-            id,
-            res.kind === "neural"
-              ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` }
-              : { phase: "ready", detail: `On-device stems (DSP) · ${lanes} lanes` },
-          );
         } catch (e) {
-          // SURFACE the failure (it used to clear silently → "no stems, no reason"). Also
-          // un-latch the derive guard so a re-tap of STEMS / a reload can retry instead of
-          // being stuck mix-only forever on one transient on-device DSP error.
-          console.warn("[htl] on-device DSP stems failed:", e);
-          engine.deck(id).setStems(null);
+          console.warn("[htl] mobile stem fetch failed:", e);
+          engine.deck(id).setStems(null); // plain mix; un-latch so a re-tap / reload can retry
           deriveGuard.current[id] = "";
-          setStatusFor(id, { phase: "unavailable", detail: `On-device stems failed (${(e as Error)?.message ?? "error"}) — playing the mix.` });
-          setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
+          setStatusFor(id, { phase: "unavailable", detail: "Couldn't load shared stems — playing the mix." });
+          setTimeout(() => !stale?.() && setStatusFor(id, null), 5000);
         }
         return;
       }
@@ -3350,23 +3313,34 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Browsers start the audio context suspended; UNLOCK it on the first gesture (a
+  // Browsers start the audio context suspended; UNLOCK it on a user gesture (a
   // silent-buffer primer, not just resume) so iOS opens the output route. Critical for
   // LISTEN mode, where the first real sound starts later from a network tick — never
   // from a tap — so without an in-gesture primer iOS keeps the listener silent.
+  //
+  // RETRY-UNTIL-RUNNING (the "silent until a few refreshes" fix): `ctx.resume()` is
+  // async and iOS can ignore the FIRST gesture (the race), so a once-and-done listener
+  // gets consumed before the context actually starts → silent forever. Instead we retry
+  // on EVERY gesture (idempotent: the primer + bg-bridge self-guard) and only detach once
+  // the output is confirmed `running`. One tap is enough for sound; cleanup just waits for
+  // the resume to land. Covers solo + session + broadcast-listen uniformly.
   useEffect(() => {
+    if (engine.running) return;
+    const evs = ["pointerdown", "touchend", "keydown"] as const;
+    const detach = () => evs.forEach((e) => window.removeEventListener(e, unlock));
     const unlock = () => {
       engine.unlock();
-      // iOS: from this gesture, bridge output through a media element so playback
-      // survives lock / app-switch / Bluetooth / CarPlay handoffs (see AudioEngine).
+      // Re-attach any worklet that lost the init race at construction (iOS "scrub works,
+      // Play silent"): now the context is running, so the stretch node attaches reliably and
+      // reloads the current track's PCM. Idempotent — only re-creates missing nodes.
+      void engine.ensureWorklets();
+      // iOS: bridge output through a media element so playback survives lock / app-switch
+      // / Bluetooth / CarPlay handoffs (see AudioEngine). Idempotent + self-reverting.
       if (isIOSDevice()) engine.enableBackgroundAudio();
+      if (engine.running) detach(); // confirmed flowing → stop retrying
     };
-    window.addEventListener("pointerdown", unlock, { once: true });
-    window.addEventListener("keydown", unlock, { once: true });
-    return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
+    evs.forEach((e) => window.addEventListener(e, unlock));
+    return detach;
   }, [engine]);
 
   // Keep the sound alive across handoffs. (1) RESUME the output whenever we return to

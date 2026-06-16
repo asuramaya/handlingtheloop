@@ -103,6 +103,11 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   const [listenerCount, setListenerCount] = useState(0);
   const listenerCountRef = useRef(0);
   listenerCountRef.current = listenerCount;
+  // Only the session OWNER (a host device) announces the room to the directory — a
+  // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
+  // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
+  // (which is derived below) and re-fire on every presence tick.
+  const hostRef = useRef(false);
   // When set, we've TUNED INTO someone else's public room by @handle as a read-only
   // listener (instead of our own session). Anon-capable. null = our own session.
   const [listenHandle, setListenHandle] = useState<string | null>(null);
@@ -243,7 +248,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
-    if (!roomPublic) return;
+    if (!roomPublic || !hostRef.current) return; // ONLY the host announces — never a listener/guest
     void announceRoom({ listeners: listenerCountRef.current });
     const t = setInterval(() => void announceRoom({ listeners: listenerCountRef.current }), 30_000);
     return () => clearInterval(t);
@@ -270,6 +275,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string): RoomState {
   const listening = isPublicListener || (me?.listening ?? false); // muted-by-default model: no audio until 🔊
   const controlling = isPublicListener ? false : (me?.controlling ?? false);
   const host = isPublicListener ? false : (me?.host ?? false);
+  hostRef.current = host; // gate the directory-announce heartbeat (above) to host devices only
   const isAnchor = !isPublicListener && anchorId !== null && anchorId === you;
   // The room's vibe colour = the host's accent. Prefer the anchor if it's a host device,
   // else any host peer with a colour set (the session owner's account colour).

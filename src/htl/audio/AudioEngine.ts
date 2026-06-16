@@ -96,47 +96,86 @@ export class AudioEngine {
     this.deckB.onPitchChange = () => this.onDeckPitch("B");
 
     this.setCrossfade(0);
-    void this.initWorklets();
+    void this.ensureWorklets();
   }
 
-  // Load the per-deck worklets (Blob URLs → bundler-agnostic): the scratch
-  // resampler and the unified time-stretch engine (tempo + key + playback). If a
-  // module fails to load the decks degrade gracefully (no scrub / no playback).
-  private async initWorklets() {
-    const add = async (src: string) => {
+  // Modules we've successfully addModule()'d — so a re-run never double-registers (which
+  // throws), but still re-creates any NODE that failed to attach.
+  private modulesAdded = new Set<string>();
+  private ensuring = false;
+
+  /** addModule() a worklet source exactly once. Records the failure (surfaced in Settings ▸
+   *  Debug) and returns false so the caller skips node creation this round. */
+  private async addModuleOnce(name: string, src: string): Promise<boolean> {
+    if (this.modulesAdded.has(name)) return true;
+    try {
       const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
       await this.ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
-    };
-    try {
-      await add(SCRATCH_WORKLET_SRC);
-      this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
-      this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+      this.modulesAdded.add(name);
+      return true;
     } catch (e) {
-      console.warn("[htl] scratch resampler unavailable:", e);
-      this.workletError += "scratch:" + (e instanceof Error ? e.message : String(e)) + " ";
+      console.warn(`[htl] ${name} worklet addModule failed:`, e);
+      return false;
     }
+  }
+
+  /** Load + attach the per-deck worklets (scratch resampler, time-stretch playback engine,
+   *  FDN reverb tank). IDEMPOTENT + RE-RUNNABLE: iOS Safari intermittently drops a worklet on
+   *  the first try at construction (the context is suspended) — the "scrub works, Play silent"
+   *  race, because the SCRATCH node attached but the STRETCH (playback) node didn't. So we run
+   *  this again from the unlock gesture (context running = the reliable moment): each module is
+   *  added once, and only the MISSING nodes are re-created (attachStretchNode reloads the
+   *  current track's PCM, so a late attach still plays). `workletError` is recomputed from the
+   *  live attach state so the debug overlay reflects reality, not a stale first-run failure. */
+  async ensureWorklets(): Promise<void> {
+    if (this.ensuring) return;
+    this.ensuring = true;
     try {
-      await add(STRETCH_WORKLET_SRC);
-      this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
-      this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
-      this.deckA.configureStretch(this.stretchCfg); // apply any quality picked before init finished
-      this.deckB.configureStretch(this.stretchCfg);
-    } catch (e) {
-      console.warn("[htl] stretch engine unavailable:", e);
-      this.workletError += "stretch:" + (e instanceof Error ? e.message : String(e)) + " ";
+      if (await this.addModuleOnce("scratch", SCRATCH_WORKLET_SRC)) {
+        try {
+          if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+          if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+        } catch (e) {
+          console.warn("[htl] scratch node attach failed (will retry):", e);
+        }
+      }
+      if (await this.addModuleOnce("stretch", STRETCH_WORKLET_SRC)) {
+        try {
+          if (!this.deckA.stretchAttached) {
+            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+            this.deckA.configureStretch(this.stretchCfg);
+          }
+          if (!this.deckB.stretchAttached) {
+            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+            this.deckB.configureStretch(this.stretchCfg);
+          }
+        } catch (e) {
+          console.warn("[htl] stretch node attach failed (will retry on next gesture):", e);
+        }
+      }
+      await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
+    } finally {
+      this.ensuring = false;
     }
-    try {
-      await add(REVERB_WORKLET_SRC); // the FDN reverb tank (ReverbFx creates nodes on demand)
-    } catch (e) {
-      console.warn("[htl] reverb engine unavailable:", e);
-      this.workletError += "reverb:" + (e instanceof Error ? e.message : String(e)) + " ";
-    }
+    // Recompute the diagnostic from the live state (a later re-attach clears a stale failure).
+    const miss: string[] = [];
+    if (!this.deckA.stretchAttached || !this.deckB.stretchAttached) miss.push("stretch");
+    if (!this.deckA.scratchAttached || !this.deckB.scratchAttached) miss.push("scratch");
+    this.workletError = miss.length ? `not attached: ${miss.join(", ")} (retries on next tap)` : "";
   }
 
   /** Browsers start the context suspended until a user gesture. */
   resume() {
     if (this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
+  /** True once the output is actually flowing. iOS `resume()` is async and can ignore
+   *  the first gesture, so the unlock loop polls this to know when to STOP retrying
+   *  (rather than firing once and giving up — the cause of the "silent until refresh"
+   *  flakiness on mobile, solo + listen alike). */
+  get running(): boolean {
+    return this.ctx.state === "running";
   }
 
   // iOS Safari only UNLOCKS audio output when an actual node is started inside a user

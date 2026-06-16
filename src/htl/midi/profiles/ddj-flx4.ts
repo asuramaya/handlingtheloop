@@ -157,6 +157,11 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "jogTurn", scratch: false }, deck: "B", status: CC_B, data: 0x23, type: "cc" },
     { control: { kind: "jogBend" }, deck: "A", status: CC_A, data: 0x21, type: "cc" },
     { control: { kind: "jogBend" }, deck: "B", status: CC_B, data: 0x21, type: "cc" },
+    // SHIFT + top turn → fast search/scan. The FLX4 sends this on its own CC (0x29),
+    // already shift-resolved in hardware, so no software shift gate is needed (same as
+    // the shifted loop buttons). App routes it to a fast seek through the track.
+    { control: { kind: "jogSearch" }, deck: "A", status: CC_A, data: 0x29, type: "cc" },
+    { control: { kind: "jogSearch" }, deck: "B", status: CC_B, data: 0x29, type: "cc" },
     // Browse encoder: rotate (relative) + PRESS (the selector) + load buttons
     { control: { kind: "browse" }, status: CC_MIX, data: 0x40, type: "cc" },
     { control: { kind: "selector" }, status: 0x96, data: 0x41, type: "note" },

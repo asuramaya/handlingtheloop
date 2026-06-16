@@ -297,7 +297,7 @@ export class MidiEngine {
     const deck = entry.binding.deck ? ` ${entry.binding.deck}` : "";
     const tag = entry.shiftOverride === true ? " ⇧" : entry.shiftOverride === false ? " ·no⇧" : "";
     const name =
-      c.kind === "action" ? c.action : c.kind === "fader" ? c.target : c.kind === "beatjump" ? `beatjump ${c.beats}` : c.kind === "jogTurn" ? "jog turn" : c.kind === "jogBend" ? "jog bend" : c.kind === "jogTouch" ? "jog touch" : c.kind === "shift" ? "SHIFT" : c.kind === "focus" ? `focus ${c.deck}` : c.kind === "encoderAction" ? `step ${c.forward}` : c.kind;
+      c.kind === "action" ? c.action : c.kind === "fader" ? c.target : c.kind === "beatjump" ? `beatjump ${c.beats}` : c.kind === "jogTurn" ? "jog turn" : c.kind === "jogBend" ? "jog bend" : c.kind === "jogSearch" ? "jog search" : c.kind === "jogTouch" ? "jog touch" : c.kind === "shift" ? "SHIFT" : c.kind === "focus" ? `focus ${c.deck}` : c.kind === "encoderAction" ? `step ${c.forward}` : c.kind;
     return `${name}${deck}${tag}`;
   }
 
@@ -420,6 +420,10 @@ export class MidiEngine {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
       const delta = val - 64;
       if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
+    } else if (c.kind === "jogSearch" && b.deck) {
+      // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
+      const delta = val - 64;
+      if (delta !== 0) this.opts.onEvent({ type: "jogSearch", deck: b.deck, delta });
     } else if (c.kind === "browse") {
       const delta = val - 64;
       if (delta !== 0) this.opts.onEvent({ type: "browse", delta });

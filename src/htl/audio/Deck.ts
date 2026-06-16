@@ -298,6 +298,7 @@ export class Deck {
   private jogReturnToPlay = false; // release should spin back up to play, not rest
   private _jogWeight = 0.4; // 0 = featherweight/snappy … 1 = heavy flywheel
   private _jogDrag = 0.4; // 0 = frictionless glide … 1 = quick brake
+  private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
   // --- pitch-bend (jog outer-ring / un-gripped turn / scroll while playing) ---
   // A momentary tempo push for beat-matching: `_bend` is a fractional offset folded
   // into the sounding rate (effRate = _rate·(1+_bend)). Each nudge adds to it and it
@@ -1153,6 +1154,11 @@ export class Deck {
     this._jogDrag = Math.max(0, Math.min(1, drag));
   }
 
+  /** Scale how hard a pitch-bend nudge pushes the tempo (0.25..2, 1 = default). */
+  setBendStrength(mult: number) {
+    this._bendScale = Math.max(0.1, Math.min(4, mult));
+  }
+
   get scrubbing() {
     return this.jogPhase !== "off";
   }
@@ -1246,7 +1252,7 @@ export class Deck {
     }
     // Convert the roll distance into a push relative to the set tempo (so it feels the
     // same at any pitch-fader setting), accumulate, and clamp.
-    const push = (deltaSec / Math.max(0.05, this._rate)) * Deck.BEND_GAIN;
+    const push = (deltaSec / Math.max(0.05, this._rate)) * Deck.BEND_GAIN * this._bendScale;
     this.reanchorClock(); // freeze position() at the OLD rate before the rate changes
     this._bend = Math.max(-Deck.BEND_MAX, Math.min(Deck.BEND_MAX, this._bend + push));
     this.pushRate();

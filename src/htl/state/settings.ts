@@ -31,6 +31,9 @@ export interface Settings {
   jumpBeats: number; // beat-jump / loop-move "skip" resolution, in beats
   jogWeight: number; // platter inertia, 0 = featherweight/snappy … 1 = heavy flywheel
   jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
+  jogSensitivity: number; // MIDI jog scratch/search scale (0.25..4, 1 = 33⅓ rpm vinyl default)
+  jogBendStrength: number; // MIDI jog pitch-bend push scale (0.25..2, 1 = default)
+  jogVinylDefault: boolean; // FLX4 jog starting mode before the unit's CC reveals it: true = scratch (vinyl), false = bend (CDJ)
   wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
   stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
@@ -159,6 +162,9 @@ export const DEFAULT_SETTINGS: Settings = {
   jumpBeats: 4,
   jogWeight: 0.4,
   jogDrag: 0.4,
+  jogSensitivity: 1,
+  jogBendStrength: 1,
+  jogVinylDefault: true,
   wheelSeeks: false,
   stemModel: "off", // "Single" (plain mix, no stems) until the user picks a neural engine; DSP split was dropped
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free

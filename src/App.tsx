@@ -584,9 +584,10 @@ export function App() {
   // FLX4 jog mode, latched from the controller's own CC stream: the hardware VINYL
   // button switches the top-plate CC (0x22 scratch / 0x23 bend), so the arriving tick
   // tells us the mode. Gates whether a touch grabs the platter (vinyl) or is inert
-  // (non-vinyl, where the top plate just bends). Default true = scratch (rekordbox's
-  // FLX4 default); flips to false the first time a bend-stream tick arrives.
-  const jogVinyl = useRef<Record<DeckId, boolean>>({ A: true, B: true });
+  // (non-vinyl, where the top plate just bends). Seeded from settings.jogVinylDefault
+  // (the saved starting mode); flips the first time a scratch/bend-stream tick reveals
+  // the unit's real mode. Kept in sync by the settings effect below.
+  const jogVinyl = useRef<Record<DeckId, boolean>>({ A: settings.jogVinylDefault, B: settings.jogVinylDefault });
   const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
   // The videoId we've already kicked off a room-driven load for (per deck), so a
   // repeated snapshot never aborts + restarts an in-flight decode.
@@ -896,6 +897,11 @@ export function App() {
     saveSettings(settings);
     engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
     engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
+    engine.deckA.setBendStrength(settings.jogBendStrength);
+    engine.deckB.setBendStrength(settings.jogBendStrength);
+    // Re-seed the FLX4 jog-mode latch from the saved default (the CC stream re-latches
+    // it on the next turn; this just sets the starting mode before the first tick).
+    jogVinyl.current.A = jogVinyl.current.B = settings.jogVinylDefault;
     engine.setStretchConfig({
       ...stretchConfig(settings.stretchQuality),
       engine: settings.stretchEngine,
@@ -2603,7 +2609,11 @@ export function App() {
       if (lockedRef.current) return; // a watch-only participant can't drive the decks
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
-      const SEC_PER_TICK = 0.0025; // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s)
+      // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
+      const SEC_PER_TICK = 0.0025 * settings.jogSensitivity;
+      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
+      // track to find a cue (Mixxx uses ~×150 vs scratch; we ride sensitivity too).
+      const SEARCH_SEC_PER_TICK = 0.05 * settings.jogSensitivity;
       switch (ev.type) {
         case "shift": {
           // A per-deck controller SHIFT (FLX4) → that deck's shift. A DECKLESS shift
@@ -2872,6 +2882,16 @@ export function App() {
           engine.deck(ev.deck).bend(ev.delta * SEC_PER_TICK);
           break;
         }
+        case "jogSearch": {
+          // SHIFT + jog → fast scan through the track (works playing or paused). A
+          // coarse needle-drop, coalesced/streamed to session peers like a scrub seek.
+          const deck = engine.deck(ev.deck);
+          const sec = ev.delta * SEARCH_SEC_PER_TICK;
+          deck.needleDrop(sec);
+          emitSeekTo(ev.deck, deck.position());
+          refresh();
+          break;
+        }
         case "zoom": {
           // Relative encoder → zoom the focused deck's waveform (in/out per detent).
           const id = ev.deck ?? focused;
@@ -2888,7 +2908,7 @@ export function App() {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor],
   );
 
   const midi = useMidi({

@@ -37,6 +37,7 @@ export type ControlSpec =
   | { kind: "fader"; target: FaderTarget; invert?: boolean; relative?: boolean; pickup?: boolean } // knob/fader. relative = delta-track an endless encoder; pickup = absolute encoder with soft-takeover (no jump until the knob sweeps through the current value — see App)
   | { kind: "jogTurn"; scratch?: boolean } // platter rotation (relative, centred on 64). scratch:true = the dedicated SCRATCH stream (vinyl mode, FLX4 CC 0x22); scratch:false/omit = the top-plate BEND stream (non-vinyl, FLX4 CC 0x23) or a generic single-CC wheel
   | { kind: "jogBend" } // outer-ring / un-gripped rotation (relative) — momentary tempo bend
+  | { kind: "jogSearch" } // SHIFT + platter rotation (relative) — fast seek/scan through the track
   | { kind: "jogTouch" } // platter top-sensor touch (note)
   | { kind: "shift" } // the SHIFT modifier button (momentary or a latching hardware toggle)
   | { kind: "encoderAction"; forward: string; backward: string } // relative encoder → fire an action per detent (step-jog like the arrow keys)
@@ -98,6 +99,7 @@ export type MidiEvent =
   | { type: "jogTouch"; deck: DeckId; down: boolean }
   | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean } // delta = signed ticks
   | { type: "jogBend"; deck: DeckId; delta: number } // outer-ring nudge → pitch-bend / paused search
+  | { type: "jogSearch"; deck: DeckId; delta: number } // SHIFT + jog → fast seek through the track
   | { type: "browse"; delta: number }
   | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform
   | { type: "load"; deck: DeckId }

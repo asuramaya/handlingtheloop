@@ -543,7 +543,7 @@ export function SettingsPanel({
               <div className="settings-section">
                 <div className="settings-section-head">
                   <span className="settings-label">Jog feel</span>
-                  <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4 })}>
+                  <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4, jogSensitivity: 1, jogBendStrength: 1, jogVinylDefault: true })}>
                     reset
                   </button>
                 </div>
@@ -559,6 +559,36 @@ export function SettingsPanel({
                   value={settings.jogDrag}
                   onChange={(v) => set({ jogDrag: v })}
                 />
+                <Slider
+                  label="Sensitivity"
+                  hint={settings.jogSensitivity < 0.95 ? "fine" : settings.jogSensitivity > 1.05 ? "fast" : "vinyl"}
+                  value={settings.jogSensitivity}
+                  onChange={(v) => set({ jogSensitivity: v })}
+                  min={0.25}
+                  max={4}
+                  step={0.05}
+                />
+                <Slider
+                  label="Bend strength"
+                  hint={settings.jogBendStrength < 0.95 ? "gentle" : settings.jogBendStrength > 1.05 ? "strong" : "default"}
+                  value={settings.jogBendStrength}
+                  onChange={(v) => set({ jogBendStrength: v })}
+                  min={0.25}
+                  max={2}
+                  step={0.05}
+                />
+                <div className="settings-row">
+                  <span className="settings-label">Jog default mode</span>
+                  <button
+                    className={`toggle ${settings.jogVinylDefault ? "on" : ""}`}
+                    onClick={() => set({ jogVinylDefault: !settings.jogVinylDefault })}
+                    role="switch"
+                    aria-checked={settings.jogVinylDefault}
+                    title="Starting mode for a controller jog before its VINYL state is known: ON = scratch (vinyl), OFF = bend (CDJ). The wheel re-detects the real mode as soon as you turn it."
+                  >
+                    {settings.jogVinylDefault ? "scratch" : "bend"}
+                  </button>
+                </div>
                 <div className="settings-row">
                   <span className="settings-label">Wheel seeks (else zooms)</span>
                   <button

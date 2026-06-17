@@ -81,6 +81,24 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     emit({ kind: "loop", deck: id, action: "exit" });
     refresh();
   };
+  // Hot-cue HOLD: pressing a set hot cue and holding (past TAP_MS) previews from it (plays
+  // from the cue, slip-aware return on release); a quick tap is the normal jump. The timer
+  // arms the hold; `padSuppress` swallows the trailing click so a hold doesn't also jump.
+  const HOLD_MS = 220;
+  const padHold = useRef<{ held: boolean; tmr: number } | null>(null);
+  const padSuppress = useRef(false);
+  const endPadHold = () => {
+    const rec = padHold.current;
+    padHold.current = null;
+    if (!rec) return;
+    clearTimeout(rec.tmr);
+    if (rec.held) {
+      deck.previewRelease(); // slip → snap to shadow; else return to where we were
+      padSuppress.current = true; // a hold consumed the gesture — don't also jump on click
+      refresh();
+    }
+    // a quick tap (timer never fired) falls through to onClick = the normal jump
+  };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
   const nudge = (dir: number) => {
@@ -288,8 +306,24 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 key={i}
                 className={`pad ${set ? "set" : ""} ${isLoop ? "loop" : ""}`}
                 data-cue={i + 1}
-                title={shift ? (deck.loop && !set ? "Save loop here" : "Clear") : isLoop ? "Recall loop" : "Hot cue"}
+                title={shift ? (deck.loop && !set ? "Save loop here" : "Clear") : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to roll"}
+                onPointerDown={(e) => {
+                  // Set hot-cue (not a loop, no shift): hold = momentary roll/preview.
+                  if (shift || e.shiftKey || !set || isLoop) return;
+                  const cuePos = deck.hotCues[i];
+                  if (cuePos == null) return;
+                  const rec = { held: false, tmr: 0 };
+                  rec.tmr = window.setTimeout(() => {
+                    rec.held = true;
+                    deck.previewHold(cuePos); // play from the cue while held
+                    refresh();
+                  }, HOLD_MS);
+                  padHold.current = rec;
+                }}
+                onPointerUp={endPadHold}
+                onPointerLeave={endPadHold}
                 onClick={(e) => {
+                  if (padSuppress.current) { padSuppress.current = false; return; } // a hold already handled it
                   const shiftNow = shift || e.shiftKey;
                   if (shiftNow) {
                     if (deck.loop && !set) {

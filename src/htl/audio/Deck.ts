@@ -1425,6 +1425,34 @@ export class Deck {
     this.jog.reverseStop();
   }
 
+  // --- momentary preview (hot-cue-hold / cue-preview) ---
+  private previewAnchor: { pos: number; t: number; wasPlaying: boolean } | null = null;
+  get previewing() {
+    return this.previewAnchor != null;
+  }
+  /** Momentary play-from-`pos` with return on release (hold a hot cue). Remembers where we
+   *  are + the play state, jumps to `pos`, and ensures playback. */
+  previewHold(pos: number) {
+    if (!this._loaded) return;
+    this.previewAnchor = { pos: this.position(), t: this.ctx.currentTime, wasPlaying: this._playing };
+    this.seek(Math.max(0, Math.min(this._duration, pos)));
+    if (!this._playing) this.play();
+  }
+  /** Release a preview hold: SLIP on (and we were playing) → snap to the shadow and keep
+   *  playing (the hold was a non-destructive roll); else return to the pre-press position
+   *  and restore the prior play state (classic cue-preview). */
+  previewRelease() {
+    const a = this.previewAnchor;
+    this.previewAnchor = null;
+    if (!a) return;
+    if (this.slipEnabled && a.wasPlaying) {
+      this.seek(this.shadowOf(a.pos, a.t));
+    } else {
+      this.seek(a.pos);
+      if (!a.wasPlaying) this.pause();
+    }
+  }
+
   /** Jump by N beats from the current position, landing on the real grid beat. */
   beatJump(beats: number) {
     const g = this.beatgrid;

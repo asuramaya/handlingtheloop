@@ -563,6 +563,10 @@ export function App() {
   // local controls. (Audio is separate again: see the mute effect.)
   const followRef = useRef(false);
   const lockedRef = useRef(false);
+  // Per-deck drive permission for the keyboard/MIDI guards (E3/E4 seat model): a full
+  // controller drives both decks, a stepped-up listener only their one deck. Read through a
+  // ref so the input handlers see the live value without re-subscribing.
+  const canDriveDeckRef = useRef<(id: DeckId) => boolean>(() => true);
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -849,6 +853,9 @@ export function App() {
         deck.phraseJump(1);
         emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
       },
+      spinback: (deck) => {
+        deck.spinback(); // back-spin then catch to play (local audio effect)
+      },
     };
     for (let i = 0; i < 8; i++) HANDLERS[`hotcue${i + 1}`] = (deck, id, s) => hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
@@ -881,6 +888,9 @@ export function App() {
         return;
       }
       const id = focused;
+      // A stepped-up listener may only key their OWN deck (focus-toggle above still works,
+      // so they can still look at the other one). A full controller drives both.
+      if (!canDriveDeckRef.current(id)) return;
       const deck = engine.deck(id);
       // Read Shift off the event too: a fast Shift+key combo can fire before the
       // on-screen latch state commits; `shift` folds that latch in.
@@ -899,6 +909,10 @@ export function App() {
     engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
     engine.deckA.setBendStrength(settings.jogBendStrength);
     engine.deckB.setBendStrength(settings.jogBendStrength);
+    for (const d of [engine.deckA, engine.deckB]) {
+      d.setVinylSpeed(settings.vinylSpeed, settings.vinylBrakeTime, settings.vinylStartTime);
+      d.setBackSpinLength(settings.backSpinLength);
+    }
     // Re-seed the FLX4 jog-mode latch from the saved default (the CC stream re-latches
     // it on the next turn; this just sets the starting mode before the first tick).
     jogVinyl.current.A = jogVinyl.current.B = settings.jogVinylDefault;
@@ -2549,6 +2563,15 @@ export function App() {
   snapFollowRef.current = room.enabled && !room.isAnchor;
   // Locked out of driving (a watch-only listener) → block the keys + show the overlay.
   lockedRef.current = room.enabled && !room.controlling;
+  // Per-deck drive permission (E3/E4 seat model). A full controller/host (myDeck null) drives
+  // both decks; a stepped-up listener drives ONLY their one deck; a pure follower/listener
+  // drives neither. A LOCKED deck blocks control (jog/seek/bend + the whole button bank) but
+  // never the purely visual zoom + expand — a listener can still inspect either waveform.
+  const canDriveDeck = (id: DeckId) => room.controlling && (room.myDeck === null || room.myDeck === id);
+  const deckLocked = (id: DeckId) => room.enabled && !canDriveDeck(id);
+  // A whole-board move (the crossfader) needs FULL control — locked for a stage DJ and any follower.
+  const boardLocked = room.enabled && !(room.controlling && room.myDeck === null);
+  canDriveDeckRef.current = canDriveDeck;
   // Defer decode while we're a pure muted passenger — enabled but rendering no audio and
   // holding no authority. The moment any of those change (🔊 on, granted control, became
   // the clock) we render audio, so we decode the stashed session tracks (flush effect).
@@ -2607,6 +2630,10 @@ export function App() {
   const onMidiEvent = useCallback(
     (ev: MidiEvent) => {
       if (lockedRef.current) return; // a watch-only participant can't drive the decks
+      // A stepped-up listener may drive ONLY their own deck — block control aimed at the
+      // other one (navigation/zoom stay free). A deck-less control event targets `focused`.
+      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector";
+      if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
       // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
@@ -3658,6 +3685,7 @@ export function App() {
               windowSec={zoom[id]}
               onZoom={(next) => setZoomFor(id, next)}
               wheelSeeks={settings.wheelSeeks}
+              locked={deckLocked(id)}
               refresh={refresh}
               onLoadFile={(f) => onLoadFile(id, f)}
               onLoadTrack={(track) => loadAndShare(id, track)}
@@ -3681,6 +3709,7 @@ export function App() {
             accentB={ACCENT.B}
             crossfade={crossfade}
             onCrossfade={applyCrossfade}
+            locked={boardLocked}
           />
           <div className="decks-row">
           <DeckControls
@@ -3707,6 +3736,7 @@ export function App() {
             onSync={() => { doSync("A"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
             onKey={() => { engine.toggleKey("A"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
+            locked={deckLocked("A")}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
@@ -3735,6 +3765,7 @@ export function App() {
             onSync={() => { doSync("B"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
             onKey={() => { engine.toggleKey("B"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
+            locked={deckLocked("B")}
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}

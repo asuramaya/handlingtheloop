@@ -299,6 +299,19 @@ export class Deck {
   private _jogWeight = 0.4; // 0 = featherweight/snappy … 1 = heavy flywheel
   private _jogDrag = 0.4; // 0 = frictionless glide … 1 = quick brake
   private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
+  // --- Vinyl Speed Adjust: turntable motor brake / soft-start ramps + spinback ---
+  // rekordbox's "vinyl feel": PAUSE decelerates to a stop (Touch/Brake), PLAY spins up
+  // from rest (Release/Start), touching the platter glides down instead of cutting dead,
+  // and spinback() throws it backward then catches it. All four reuse the jog COAST
+  // physics (stepCoast) — a motor ramp is just a coast with a start velocity and a time
+  // set by these knobs (not the jog weight/drag). Off → instant transport, as before.
+  private _vinylSpeed = true; // master enable
+  private _vinylBrake = 0.22; // 0..1 → pause-brake + touch-decel time
+  private _vinylStart = 0.18; // 0..1 → play soft-start time
+  private _backSpin = 0.5; // 0..1 → spinback length + strength
+  private _ramping: "start" | "brake" | "spinback" | null = null; // a motor ramp is in flight
+  private _coastTau = 0; // >0 overrides the jog-physics coast tau (= a motor ramp time)
+  private _touchGlide = false; // grab seeded with play momentum, decelerating until the finger moves
   // --- pitch-bend (jog outer-ring / un-gripped turn / scroll while playing) ---
   // A momentary tempo push for beat-matching: `_bend` is a fractional offset folded
   // into the sounding rate (effRate = _rate·(1+_bend)). Each nudge adds to it and it
@@ -395,7 +408,10 @@ export class Deck {
   }
 
   get playing() {
-    return this._playing;
+    // During a soft-start ramp the audio is spinning up but the transport INTENT is
+    // "playing", so the UI / emit / session see play immediately (a brake reads paused —
+    // _playing is already false there). Internal logic uses the _playing field directly.
+    return this._playing || this._ramping === "start";
   }
   get duration() {
     return this._duration;
@@ -1129,7 +1145,18 @@ export class Deck {
     this._playing = false;
   }
   togglePlay() {
-    this._playing ? this.pause() : this.play();
+    this.playing ? this.requestPause() : this.requestPlay();
+  }
+  /** User-initiated play (button / key / MIDI): soft-start when Vinyl Speed is on, else
+   *  instant. Session-follow / cue-drop paths keep calling play() directly for no ramp. */
+  requestPlay() {
+    if (this._vinylSpeed && this._vinylStart > 0 && this._loaded && !this._playing) this.softStart();
+    else this.play();
+  }
+  /** User-initiated pause: brake when Vinyl Speed is on, else instant. */
+  requestPause() {
+    if (this._vinylSpeed && this._vinylBrake > 0 && this._playing) this.brakeStop();
+    else this.pause();
   }
 
   seek(seconds: number) {
@@ -1168,6 +1195,31 @@ export class Deck {
     this._bendScale = Math.max(0.1, Math.min(4, mult));
   }
 
+  /** Vinyl Speed Adjust — the turntable motor feel. enabled=false restores instant
+   *  play/pause + a dead platter stop. brake/start are 0..1 (→ stop / spin-up times). */
+  setVinylSpeed(enabled: boolean, brake: number, start: number) {
+    this._vinylSpeed = enabled;
+    this._vinylBrake = Math.max(0, Math.min(1, brake));
+    this._vinylStart = Math.max(0, Math.min(1, start));
+  }
+  /** Spinback length + strength, 0..1 (Short … Long). */
+  setBackSpinLength(v: number) {
+    this._backSpin = Math.max(0, Math.min(1, v));
+  }
+  // Motor ramp time-constants / strength from the 0..1 knobs.
+  private brakeTau() {
+    return lerp(0.02, 0.5, this._vinylBrake);
+  }
+  private startTau() {
+    return lerp(0.02, 0.45, this._vinylStart);
+  }
+  private backSpinTau() {
+    return lerp(0.12, 0.6, this._backSpin);
+  }
+  private backSpinStrength() {
+    return lerp(4, 14, this._backSpin);
+  }
+
   get scrubbing() {
     return this.jogPhase !== "off";
   }
@@ -1200,9 +1252,8 @@ export class Deck {
     // moves. Resuming on the grab gesture unlocks it.
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.clearBend(); // a grab takes over the clock — drop any decaying bend first
-    // Gripping the platter stops it dead (like a hand on vinyl) — it then follows
-    // the finger from rest, so there's no forward lurch/creep when you take hold.
     this.jogReturnToPlay = this._playing || (this.jogPhase === "coast" && this.jogReturnToPlay);
+    const wasPlaying = this._playing;
     this.jogPos = this.position();
     if (this._playing) {
       this.startOffset = this.jogPos;
@@ -1210,7 +1261,15 @@ export class Deck {
       this._playing = false;
     }
     this.handPos = this.handLast = this.jogPos;
-    this.jogVel = 0;
+    // Touch-decel (Vinyl Speed Adjust on the platter): rather than cutting the platter
+    // dead, carry the play momentum and glide it down over the brake time until the
+    // finger actually moves (then the finger takes over). Off / Vinyl-Speed-disabled →
+    // jogVel 0 = the old instant dead stop.
+    const touchDecel = wasPlaying && this._vinylSpeed && this._vinylBrake > 0;
+    this.jogVel = touchDecel ? this.effRate() : 0;
+    this._touchGlide = touchDecel;
+    this._coastTau = touchDecel ? this.brakeTau() : 0;
+    this._ramping = null;
     this.handVel = 0;
     this.jogInputAt = this.ctx.currentTime;
     this.jogLast = this.ctx.currentTime;
@@ -1228,6 +1287,7 @@ export class Deck {
   scrubMove(deltaSec: number) {
     if (this.jogPhase !== "grab") return;
     this.jogInputAt = this.ctx.currentTime;
+    if (deltaSec !== 0) this._touchGlide = false; // the finger took over the platter
     let p = this.handPos + deltaSec;
     const dur = this._duration;
     if (p < 0) p = 0;
@@ -1247,6 +1307,68 @@ export class Deck {
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
     this.startJogLoop();
+  }
+
+  // --- Vinyl Speed Adjust: transport motor ramps (brake / soft-start / spinback) ---
+  // Each hands the audio to the scratch resampler and drives it through stepCoast at a
+  // MOTOR time (not the jog weight/drag), so the playhead + pitch glide like a deck
+  // powering down or up. The coast machinery already knows how to ramp toward play speed
+  // (resumePlay) or down to a stop; these just seed it from a transport action.
+
+  /** Seed the coast from `initialVel`, heading either UP to play (resumePlay) or DOWN to
+   *  a stop, over `tau`, voiced on the resampler. Shared by brake/softStart/spinback. */
+  private enterMotorCoast(initialVel: number, resumePlay: boolean, tau: number, kind: "start" | "brake" | "spinback") {
+    if (!this._loaded) return;
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.clearBend();
+    this.jogPos = this._playing ? this.position() : this.startOffset;
+    if (this._playing) {
+      this.startOffset = this.jogPos;
+      this.stopSource(); // hand the audio to the scratch resampler
+      this._playing = false;
+    }
+    this.handPos = this.handLast = this.jogPos;
+    this.handVel = 0;
+    this.jogVel = initialVel;
+    this.jogReturnToPlay = resumePlay;
+    this._coastTau = tau;
+    this._ramping = kind;
+    this._touchGlide = false;
+    this.jogInputAt = this.ctx.currentTime;
+    this.jogLast = this.ctx.currentTime;
+    this.jogPhase = "coast";
+    this.scratchStart();
+    this.startJogLoop();
+  }
+
+  /** Pause with a turntable power-down: decelerate the audio to a stop over the brake
+   *  time, then settle paused. Falls back to instant pause() when Vinyl Speed is off. */
+  brakeStop() {
+    if (this._ramping === "brake") return;
+    if (!this._playing || !this._vinylSpeed || this._vinylBrake <= 0) {
+      this.pause();
+      return;
+    }
+    this.enterMotorCoast(this.effRate(), false, this.brakeTau(), "brake");
+  }
+
+  /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
+   *  time, then hand to normal playback. Falls back to instant play() when off. */
+  softStart() {
+    if (this._playing || this._ramping === "start") return;
+    if (!this._loaded || !this._vinylSpeed || this._vinylStart <= 0) {
+      this.play();
+      return;
+    }
+    this.enterMotorCoast(0, true, this.startTau(), "start");
+  }
+
+  /** Spin the platter backward then let the motor catch it back to play — a triggerable
+   *  back-spin (key / pad / FX), independent of a physical jog flick. */
+  spinback(strength?: number) {
+    if (!this._loaded) return;
+    const s = strength != null ? Math.abs(strength) : this.backSpinStrength();
+    this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback");
   }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.
@@ -1376,6 +1498,9 @@ export class Deck {
     }
     this.jogVel = 0;
     this.handVel = 0;
+    this._ramping = null;
+    this._coastTau = 0;
+    this._touchGlide = false;
     this.scratchStop();
   }
 
@@ -1401,24 +1526,43 @@ export class Deck {
   private grabTick(dt: number) {
     const moved = this.handPos - this.handLast;
     this.handLast = this.handPos;
+    const stale = this.ctx.currentTime - this.jogInputAt > 0.006;
+    if (this._touchGlide && stale && moved === 0) {
+      // Touch-decel: finger resting, hasn't moved yet → coast the captured play momentum
+      // down to a stop over the brake time (a vinyl platter slowing under a still hand),
+      // instead of cutting dead. The first finger motion clears _touchGlide (scrubMove).
+      const tau = this._coastTau > 0 ? this._coastTau : 0.1;
+      this.jogVel *= Math.exp(-dt / tau);
+      this.jogPos += this.jogVel * dt;
+      this.clampJog();
+      this.handPos = this.handLast = this.jogPos;
+      this.startOffset = this.jogPos;
+      this.scratchMove();
+      if (Math.abs(this.jogVel) < 0.02) {
+        this.jogVel = 0;
+        this._touchGlide = false; // fully stopped → behave like a normal held grab
+      }
+      return;
+    }
     const inst = moved / dt;
     const hk = 1 - Math.exp(-dt / 0.03); // light smoothing → clean release-fling velocity
     this.handVel += (inst - this.handVel) * hk;
     this.jogVel = this.handVel;
-    if (this.ctx.currentTime - this.jogInputAt > 0.006) {
+    if (stale) {
       // no fresh input: settle the worklet to the held position (else it would drift)
       this.startOffset = this.jogPos;
       this.scratchMove();
     }
   }
 
-  // COAST step: no finger. Either spin back up to play speed, or rub to a stop.
+  // COAST step: no finger. Either spin back up to play speed, or rub to a stop. A motor
+  // ramp (brake / soft-start / spinback) is the same machinery with _coastTau set, so the
+  // time comes from the Vinyl Speed knob instead of the jog weight/drag.
   private stepCoast(dt: number) {
     if (this.jogReturnToPlay) {
-      // Releasing a scrub during playback: catch back to 1× quickly and locally,
-      // so the audio glides back to speed where you let go instead of the platter
-      // throwing the playhead forward through the track. Weight lengthens it a bit.
-      const tau = lerp(0.025, 0.12, this._jogWeight);
+      // Catch back up to play speed (jog release, soft-start, or a spinback's recovery):
+      // glide the rate toward 1× locally, then hand back to normal playback.
+      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.025, 0.12, this._jogWeight);
       this.jogVel += (this._rate - this.jogVel) * (1 - Math.exp(-dt / tau));
       this.jogPos += this.jogVel * dt;
       this.clampJog();
@@ -1426,20 +1570,24 @@ export class Deck {
         // Hand the platter back to normal playback, continuing seamlessly: fade
         // the resampler out as the buffer source fades in (both declick).
         this.jogPhase = "off";
+        this._ramping = null;
+        this._coastTau = 0;
         this.scratchStop();
         this.startOffset = this.jogPos;
         this.spawnSource(this.jogPos);
         this._playing = true;
       }
     } else {
-      // Friction glide: drag sets the brake strength, weight lengthens the coast.
+      // Friction glide / brake: drag sets the strength, or _coastTau the motor brake time.
       // Kept short (sub-second) so a flick eases off instead of spinning away.
-      const tau = lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
+      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
       this.jogVel *= Math.exp(-dt / tau);
       this.jogPos += this.jogVel * dt;
       this.clampJog();
       if (Math.abs(this.jogVel) < 0.02) {
         this.jogPhase = "off";
+        this._ramping = null;
+        this._coastTau = 0;
         this.jogVel = 0;
         this.startOffset = this.jogPos; // settle, paused, where it stopped
         this.scratchStop();

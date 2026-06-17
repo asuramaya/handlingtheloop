@@ -55,6 +55,7 @@ export const LEARN_CONTROLS: LearnControl[] = [
   ...perDeck("jogTurn", "Jog turn (scratch)", "Jog", () => ({ kind: "jogTurn" })),
   ...perDeck("jogBend", "Jog bend (outer ring)", "Jog", () => ({ kind: "jogBend" })),
   ...perDeck("jogSearch", "Jog search (shift+jog)", "Jog", () => ({ kind: "jogSearch" })),
+  ...perDeck("spinback", "Spinback (back-spin)", "Jog", () => action("spinback")),
   ...perDeck("jogBack", "Nudge back (grid)", "Jog", () => action("jogBack")),
   ...perDeck("jogFwd", "Nudge forward (grid)", "Jog", () => action("jogFwd")),
   // Browse / zoom encoders (relative)

@@ -34,6 +34,10 @@ export interface Settings {
   jogSensitivity: number; // MIDI jog scratch/search scale (0.25..4, 1 = 33⅓ rpm vinyl default)
   jogBendStrength: number; // MIDI jog pitch-bend push scale (0.25..2, 1 = default)
   jogVinylDefault: boolean; // FLX4 jog starting mode before the unit's CC reveals it: true = scratch (vinyl), false = bend (CDJ)
+  vinylSpeed: boolean; // Vinyl Speed Adjust: motor brake/soft-start ramps on play/pause + touch (off = instant)
+  vinylBrakeTime: number; // 0..1 — pause-brake + platter-touch decel time (rekordbox Touch/Brake)
+  vinylStartTime: number; // 0..1 — play soft-start spin-up time (rekordbox Release/Start)
+  backSpinLength: number; // 0..1 — spinback length + strength (Short … Long)
   wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
   stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
@@ -165,6 +169,10 @@ export const DEFAULT_SETTINGS: Settings = {
   jogSensitivity: 1,
   jogBendStrength: 1,
   jogVinylDefault: true,
+  vinylSpeed: true,
+  vinylBrakeTime: 0.22,
+  vinylStartTime: 0.18,
+  backSpinLength: 0.5,
   wheelSeeks: false,
   stemModel: "off", // "Single" (plain mix, no stems) until the user picks a neural engine; DSP split was dropped
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free

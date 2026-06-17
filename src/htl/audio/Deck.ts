@@ -1,5 +1,7 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
-import { beatTimeOffset, nearestBeat, shiftKey } from "../analysis/analyze";
+import { beatTimeOffset, shiftKey } from "../analysis/analyze";
+import { LoopEngine } from "./LoopEngine";
+export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 
 // WSOLA stretch-engine config posted to the worklet. The preset numbers (frame/
 // search/stride) plus the optional quality toggles wired from the Audio settings tab.
@@ -89,8 +91,6 @@ import { ReverbFx } from "./ReverbFx";
 // owns tempo (so Sync can drive it and the UI reflects it), 8 hot cues, and a
 // beat-based loop implemented with the source node's native loopStart/loopEnd.
 
-export const HOT_CUE_COUNT = 8;
-
 // Serializable per-deck stem waveform envelopes — the host ships these over the
 // session so a stem-less remote (a phone) can render the 4-lane display. A COARSE
 // LOD level (≈2048-sample buckets), min/max quantized to int8 + base64, keeps it
@@ -169,10 +169,6 @@ function upsampleTo(src: Float32Array, n: number): Float32Array {
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-// Unlocked (grid magnet off) loop-boundary nudge granularity, as a fraction of a
-// beat — one arrow press / scroll tick moves a 1/16-beat for surgical trimming.
-const ADJUST_FINE_BEATS = 1 / 16;
-
 // Peak amplitude of an analyser's current time-domain frame, in dBFS.
 function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
   an.getFloatTimeDomainData(buf);
@@ -182,13 +178,6 @@ function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
     if (a > peak) peak = a;
   }
   return peak > 1e-5 ? 20 * Math.log10(peak) : -100;
-}
-
-export interface Loop {
-  active: boolean;
-  start: number;
-  end: number;
-  beats: number;
 }
 
 // Beat-sync role of a deck. "master" is the tempo reference; "slave" follows it.
@@ -331,15 +320,25 @@ export class Deck {
   // locked. 0 whenever the deck isn't following.
   private _syncTrim = 0;
   private static readonly SYNC_TRIM_MAX = 0.02; // ±2 % — enough to pull a sub-beat slip in seconds, inaudible
-  cuePoint = 0;
-  hotCues: (number | null)[] = new Array(HOT_CUE_COUNT).fill(null);
-  hotLoops: (Loop | null)[] = new Array(HOT_CUE_COUNT).fill(null); // saved loops per pad
-  loop: Loop | null = null;
-  loopInPoint: number | null = null; // pending manual loop-in (FLX4 style)
-  // Loop-boundary fine-adjust: when set, waveform drag / scroll / arrow keys move
-  // this boundary (the loop's start or end) instead of the playhead. Toggled by
-  // Shift-IN / Shift-OUT. null = normal (playhead) interaction.
-  adjusting: "in" | "out" | null = null;
+  // Loop / cue / hot-cue subsystem (state + editing logic), constructed in the ctor.
+  // Deck forwards `deck.loop` / `deck.cuePoint` etc. to it (getters below) and delegates
+  // the public methods, so every existing reader/caller is unchanged. See LoopEngine.ts.
+  readonly loops: LoopEngine;
+  get loop() { return this.loops.loop; }
+  set loop(v) { this.loops.loop = v; }
+  get cuePoint() { return this.loops.cuePoint; }
+  set cuePoint(v) { this.loops.cuePoint = v; }
+  get hotCues() { return this.loops.hotCues; }
+  set hotCues(v) { this.loops.hotCues = v; }
+  get hotLoops() { return this.loops.hotLoops; }
+  set hotLoops(v) { this.loops.hotLoops = v; }
+  get loopInPoint() { return this.loops.loopInPoint; }
+  set loopInPoint(v) { this.loops.loopInPoint = v; }
+  get adjusting() { return this.loops.adjusting; }
+  /** Fired after a loop BOUNDARY edit (fine-adjust / move) so the App can broadcast the
+   *  absolute region to a session (in/out/exit emit their own intents; this covers the
+   *  nudge/drag/move paths those don't). Not fired for plain in/out/exit/beat loops. */
+  onLoopEdit?: () => void;
 
   // --- follower visual clock (shared session) ---
   // A co-DJ mirrors the anchor's ~12 Hz playhead tick. Reading the LOCAL audio clock
@@ -360,6 +359,22 @@ export class Deck {
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
+    // Wire the loop/cue subsystem to this deck's transport via bound callbacks, so
+    // its clock/worklet internals stay private (mirrors the eq/rack composition).
+    this.loops = new LoopEngine({
+      position: () => this.position(),
+      seek: (t) => this.seek(t),
+      reanchorClock: () => this.reanchorClock(),
+      rebaseClock: () => this.rebaseClock(),
+      rawOffset: () => this.startOffset + (this.ctx.currentTime - this.startedAt) * this.effRate(),
+      postLoop: (active, start, end) => this.stretchNode?.port.postMessage({ type: "loop", active, start, end }),
+      beatgrid: () => this.beatgrid,
+      duration: () => this.duration,
+      playing: () => this._playing,
+      loaded: () => this._loaded,
+      quantize: () => this.quantizeOn,
+      onLoopEdit: () => this.onLoopEdit?.(),
+    });
     // The FX rack is the deck's channel-strip device chain. The EQ is the first
     // (pinned, but reorderable) device; new effects (delay/reverb/chorus) slot in
     // after it. The deck keeps a direct `this.eq` reference so the EQ proxy methods
@@ -657,11 +672,7 @@ export class Deck {
     this._playing = false;
     this.startOffset = 0;
     this._syncTrim = 0; // a new track invalidates any inherited phase-lock trim
-    this.cuePoint = 0;
-    this.hotCues = new Array(HOT_CUE_COUNT).fill(null);
-    this.hotLoops = new Array(HOT_CUE_COUNT).fill(null);
-    this.loop = null;
-    this.loopInPoint = null;
+    this.loops.reset();
     this.stopJog();
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.stemsLoaded = false;
@@ -1619,14 +1630,6 @@ export class Deck {
   setQuantize(on: boolean) {
     this.quantizeOn = on;
   }
-  private snap(t: number): number {
-    const g = this.beatgrid;
-    if (!g) return t;
-    return nearestBeat(g, t); // dynamic grid aware (falls back to the uniform comb)
-  }
-  private maybeSnap(t: number): number {
-    return this.quantizeOn ? this.snap(t) : t;
-  }
 
   /** Jump by N beats from the current position, landing on the real grid beat. */
   beatJump(beats: number) {
@@ -1663,280 +1666,29 @@ export class Deck {
     this.seek(beatTimeOffset(g, pos, dir * bars * bpb));
   }
 
-  // --- cue ---
-  setCue() {
-    this.cuePoint = this.maybeSnap(this.position());
-  }
-  jumpToCue() {
-    this.seek(this.cuePoint);
-  }
-
-  // --- hot cues: tap empty pad to set, tap set pad to jump ---
-  hotCue(i: number) {
-    // A saved loop on this pad takes priority: recall + activate it.
-    if (this.hotLoops[i]) {
-      this.recallLoop(i);
-      return;
-    }
-    const cur = this.hotCues[i];
-    if (cur == null) this.hotCues[i] = this.maybeSnap(this.position());
-    else this.seek(cur);
-  }
-  clearHotCue(i: number) {
-    this.hotCues[i] = null;
-    this.hotLoops[i] = null;
-  }
-  slotIsSet(i: number): boolean {
-    return this.hotCues[i] != null || this.hotLoops[i] != null;
-  }
-
-  /** Save the current loop to pad `i` (so it can be recalled later). */
-  saveLoop(i: number): boolean {
-    if (!this.loop) return false;
-    this.hotLoops[i] = { ...this.loop, active: false };
-    this.hotCues[i] = null;
-    return true;
-  }
-  /** Recall + activate the loop saved on pad `i`. */
-  recallLoop(i: number) {
-    const l = this.hotLoops[i];
-    if (!l) return;
-    this.loop = { ...l, active: true };
-    this.applyLoop();
-    this.seek(l.start);
-  }
-
-  // --- loops ---
-  /** Set + enable a loop of `beats` length, snapped to the beatgrid.
-   *  Resizing an ACTIVE loop keeps its in-point anchored (rekordbox behaviour),
-   *  so 1/2/4/8 changes the length in place instead of jumping the loop to the
-   *  playhead. With no active loop, drop a fresh loop at the current position. */
-  setBeatLoop(beats: number) {
-    if (!this._loaded) return;
-    const g = this.beatgrid;
-    const interval = g?.interval ?? 60 / 120;
-    const start = this.loop?.active ? this.loop.start : g ? this.snap(this.position()) : this.position();
-    // End on the beat `beats` away on the actual grid (exact even if tempo drifts),
-    // not start + beats·interval which only holds for a perfectly constant tempo.
-    // `beats` can be sub-1 (1/2 … 1/16); beatTimeOffset interpolates the fraction.
-    const rawEnd = g ? beatTimeOffset(g, start, beats) : start + beats * interval;
-    // Never let the loop collapse to a degenerate/NaN window — a sub-quantum or NaN
-    // loopEnd hangs/crackles the source node. Floor it at ~5 ms (well below any
-    // musical 1/16-beat loop, which is ≥~20 ms) and fall back to the interval math.
-    const MIN_LOOP = 0.005;
-    let end = Math.min(this.duration, rawEnd);
-    if (!(end > start + MIN_LOOP)) end = Math.min(this.duration, start + Math.max(MIN_LOOP, beats * interval));
-    this.reanchorClock(); // collapse the loop-phase accumulator before the bounds change
-    this.loop = { active: true, start, end, beats };
-    this.applyLoop();
-    // Keep the playhead inside the (possibly shrunk) region so a live source
-    // doesn't run past the new loopEnd before wrapping.
-    if (this._playing) {
-      const pos = this.position();
-      if (pos < start || pos > end) this.seek(start);
-    }
-  }
-
-  // FLX4-style manual loop. With no active loop: tap IN to drop the entry point,
-  // tap OUT to set the exit and start looping. With a loop already running, IN
-  // and OUT nudge that loop's in/out boundaries so it can be fine-tuned.
-  loopIn() {
-    const t = this.maybeSnap(this.position());
-    if (this.loop?.active) {
-      this.reanchorClock(); // phase-lock the playhead across the in-point nudge
-      this.loop.start = Math.min(t, this.loop.end - 1e-3);
-      this.loop.beats = this.loopBeats(this.loop);
-      this.applyLoop();
-      if (this._playing && this.position() < this.loop.start) this.seek(this.loop.start);
-    } else {
-      this.loopInPoint = t;
-    }
-  }
-  loopOut() {
-    const t = this.maybeSnap(this.position());
-    if (this.loop?.active) {
-      if (t > this.loop.start) {
-        this.reanchorClock(); // phase-lock the playhead across the out-point nudge
-        this.loop.end = t;
-        this.loop.beats = this.loopBeats(this.loop);
-        this.applyLoop();
-      }
-      return;
-    }
-    if (this.loopInPoint == null) return;
-    const start = this.loopInPoint;
-    const end = t;
-    this.loopInPoint = null;
-    if (end <= start) return;
-    this.loop = { active: true, start, end, beats: 0 };
-    this.loop.beats = this.loopBeats(this.loop);
-    this.applyLoop();
-  }
-
-  private loopBeats(loop: Loop): number {
-    const interval = this.beatgrid?.interval ?? 60 / 120;
-    return Math.max(1, Math.round((loop.end - loop.start) / interval));
-  }
-
-  // Fired after a loop BOUNDARY edit (fine-adjust / move) so the App can broadcast the
-  // absolute region to a session (in/out/exit emit their own intents; this covers the
-  // nudge/drag/move paths those don't). Not fired for plain in/out/exit/beat loops.
-  onLoopEdit?: () => void;
-  /** Current loop region (absolute), or null — the setpoint sent over a session. */
-  loopRegion(): { start: number; end: number; active: boolean } | null {
-    return this.loop ? { start: this.loop.start, end: this.loop.end, active: this.loop.active } : null;
-  }
-  /** Apply an absolute loop region from a session peer (fine-adjust / move sync). */
-  applyLoopRegion(start: number, end: number, active: boolean) {
-    if (end <= start) return;
-    this.reanchorClock(); // phase-lock the playhead across a peer's loop reshape
-    this.loop = { active, start, end, beats: this.loopBeats({ active, start, end, beats: 0 }) };
-    this.applyLoop();
-  }
-
-  /** Shift the whole loop by `beats` (keeping its length), grid-locked. Positive
-   *  = forward. Used to move a loop a bar/beat at a time without resizing it. */
-  moveLoop(beats: number) {
-    if (!this.loop) return;
-    const interval = this.beatgrid?.interval ?? 60 / 120;
-    const len = this.loop.end - this.loop.start;
-    let start = this.loop.start + beats * interval;
-    if (start < 0) start = 0;
-    if (start + len > this.duration) start = Math.max(0, this.duration - len);
-    this.reanchorClock(); // phase-lock the playhead across the loop move
-    this.loop = { ...this.loop, start, end: start + len };
-    this.applyLoop();
-    if (this._playing && this.loop.active) {
-      const pos = this.position();
-      if (pos < start || pos > start + len) this.seek(start);
-    }
-    this.onLoopEdit?.();
-  }
-  reloop() {
-    if (!this.loop) return;
-    this.loop.active = true;
-    this.applyLoop();
-    this.seek(this.loop.start);
-  }
-
-  toggleLoop() {
-    if (!this.loop) return;
-    if (this.loop.active) this.rebaseClock(); // turning OFF: anchor before unwrapping
-    this.loop.active = !this.loop.active;
-    this.applyLoop();
-  }
-  exitLoop() {
-    if (!this.loop) return;
-    this.rebaseClock();
-    this.loop.active = false;
-    this.adjusting = null; // leaving the loop ends any boundary edit (no stuck highlight)
-    this.applyLoop();
-  }
-
-  /** Exit an active loop as a "loop roll": instead of staying put (exitLoop), jump
-   *  to where the track WOULD be had it never looped — the un-wrapped clock — so the
-   *  music snaps back on-beat after the momentary stutter. Pair with setBeatLoop()
-   *  on press / rollOut() on release for a hold-to-roll pad. */
-  rollOut() {
-    if (!this.loop?.active) return;
-    this.loop.active = false;
-    if (this._playing) {
-      // Raw (un-wrapped) offset = where playback would have reached with no loop.
-      const raw = this.startOffset + (this.ctx.currentTime - this.startedAt) * this.effRate();
-      this.applyLoop();
-      this.seek(Math.max(0, Math.min(this.duration, raw)));
-    } else {
-      this.applyLoop();
-    }
-  }
-
-  /** Wipe the loop entirely (region + any pending in-point), so the deck plays
-   *  straight through. Shift-RELOOP / Shift-EXIT. */
-  clearLoop() {
-    if (this.loop?.active) this.rebaseClock(); // anchor before the region disappears
-    this.loop = null;
-    this.loopInPoint = null;
-    this.adjusting = null;
-    this.applyLoop();
-  }
-
-  // --- loop-boundary fine-adjust (Shift-IN / Shift-OUT) ---
-  /** Toggle fine-adjust of a loop boundary. "in" targets the active loop's start
-   *  (or a pending manual loop-in point); "out" targets the loop's end. Re-toggling
-   *  the same side, or a side with nothing to move, turns it off. Returns the mode. */
-  /** Toggle loop-boundary fine-adjust (the IN/OUT "head editor"). A small state
-   *  machine so the IN/OUT button highlights contextually and every press does
-   *  something useful regardless of loop state:
-   *    - same boundary already armed → disarm (toggle off)
-   *    - IN → arm "in"; if there's no loop or in-point yet, drop one at the playhead
-   *    - OUT → arm "out"; if only an in-point exists, close the loop here first so
-   *      there's an end to nudge; with nothing at all, stay off (nothing to adjust) */
-  toggleAdjust(which: "in" | "out"): "in" | "out" | null {
-    if (this.adjusting === which) {
-      this.adjusting = null;
-      return null;
-    }
-    if (which === "in") {
-      if (!this.loop && this.loopInPoint == null) this.loopInPoint = this.maybeSnap(this.position());
-      this.adjusting = "in";
-    } else {
-      if (!this.loop && this.loopInPoint != null) this.loopOut(); // close in→here, then adjust the end
-      this.adjusting = this.loop ? "out" : null;
-    }
-    return this.adjusting;
-  }
-  endAdjust() {
-    this.adjusting = null;
-  }
-  /** Position of the boundary currently under adjustment, or null. */
-  private adjustAnchor(): number | null {
-    if (this.adjusting === "in") return this.loop ? this.loop.start : this.loopInPoint;
-    if (this.adjusting === "out") return this.loop ? this.loop.end : null;
-    return null;
-  }
-  /** Place the boundary under adjustment at `pos` (clamped to the track, in kept
-   *  before out), keeping the loop live + audible. Shared by drag / scroll / keys. */
-  private setAdjustPos(pos: number) {
-    pos = Math.max(0, Math.min(this.duration, pos));
-    if (this.loop?.active) this.reanchorClock(); // phase-lock the playhead before reshaping the live loop
-    if (this.adjusting === "in") {
-      if (this.loop) {
-        this.loop.start = Math.min(pos, this.loop.end - 1e-3);
-        this.loop.beats = this.loopBeats(this.loop);
-        this.applyLoop();
-        if (this._playing && this.position() < this.loop.start) this.seek(this.loop.start);
-      } else {
-        this.loopInPoint = pos;
-      }
-    } else if (this.adjusting === "out" && this.loop) {
-      this.loop.end = Math.max(pos, this.loop.start + 1e-3);
-      this.loop.beats = this.loopBeats(this.loop);
-      this.applyLoop();
-    }
-    if (this.loop) this.onLoopEdit?.(); // broadcast the new region to a session
-  }
-  /** Continuous nudge of the adjusted boundary by `deltaSec` (waveform drag). The
-   *  lock follows the grid magnet: quantize on → the boundary snaps to the nearest
-   *  grid beat as you drag; off → it moves freely for surgical sub-beat placement. */
-  adjustBy(deltaSec: number) {
-    const cur = this.adjustAnchor();
-    if (cur == null) return;
-    this.setAdjustPos(this.maybeSnap(cur + deltaSec));
-  }
-  /** Discrete step of the adjusted boundary by `units` (arrow keys / scroll ticks).
-   *  Quantize on → move `units` whole beats along the real grid (lands on a beat);
-   *  off → move a fine fraction of a beat so unlocked edits stay surgical. */
-  adjustStep(units: number) {
-    const cur = this.adjustAnchor();
-    if (cur == null) return;
-    const g = this.beatgrid;
-    if (this.quantizeOn && g) {
-      this.setAdjustPos(beatTimeOffset(g, cur, units));
-    } else {
-      const interval = g?.interval ?? 60 / 120;
-      this.setAdjustPos(cur + units * interval * ADJUST_FINE_BEATS);
-    }
-  }
+  // --- cue / loop / hot-cue: state + logic live in this.loops (LoopEngine); delegated. ---
+  setCue() { this.loops.setCue(); }
+  jumpToCue() { this.loops.jumpToCue(); }
+  hotCue(i: number) { this.loops.hotCue(i); }
+  clearHotCue(i: number) { this.loops.clearHotCue(i); }
+  slotIsSet(i: number): boolean { return this.loops.slotIsSet(i); }
+  saveLoop(i: number): boolean { return this.loops.saveLoop(i); }
+  recallLoop(i: number) { this.loops.recallLoop(i); }
+  setBeatLoop(beats: number) { this.loops.setBeatLoop(beats); }
+  loopIn() { this.loops.loopIn(); }
+  loopOut() { this.loops.loopOut(); }
+  loopRegion() { return this.loops.loopRegion(); }
+  applyLoopRegion(start: number, end: number, active: boolean) { this.loops.applyLoopRegion(start, end, active); }
+  moveLoop(beats: number) { this.loops.moveLoop(beats); }
+  reloop() { this.loops.reloop(); }
+  toggleLoop() { this.loops.toggleLoop(); }
+  exitLoop() { this.loops.exitLoop(); }
+  rollOut() { this.loops.rollOut(); }
+  clearLoop() { this.loops.clearLoop(); }
+  toggleAdjust(which: "in" | "out"): "in" | "out" | null { return this.loops.toggleAdjust(which); }
+  endAdjust() { this.loops.endAdjust(); }
+  adjustBy(deltaSec: number) { this.loops.adjustBy(deltaSec); }
+  adjustStep(units: number) { this.loops.adjustStep(units); }
 
   // Re-anchor the playback clock to the CURRENT (wrapped) position. While a loop
   // is active, position() folds the ever-growing raw offset back into the loop
@@ -1948,18 +1700,6 @@ export class Deck {
     this.startedAt = this.ctx.currentTime;
   }
 
-  private applyLoop() {
-    const l = this.loop;
-    // Only loop on a finite, non-degenerate window — a NaN/inverted loopEnd would
-    // hang the engine's playhead wrap, so any bad value just falls back to no loop.
-    const valid = !!l && l.active && Number.isFinite(l.start) && Number.isFinite(l.end) && l.end > l.start;
-    this.stretchNode?.port.postMessage({
-      type: "loop",
-      active: valid,
-      start: valid ? l!.start : 0,
-      end: valid ? l!.end : 0,
-    });
-  }
 
   // --- EQ / trim ---
   get trim() {
@@ -2352,7 +2092,7 @@ export class Deck {
         startAt = start + ((startAt - start) % len);
       }
     }
-    this.applyLoop();
+    this.loops.applyLoop();
     for (const name of STEM_NAMES) this.rampStem(name);
     this.stretchNode.port.postMessage({ type: gapless ? "seek" : "start", offset: startAt });
     this.running = true;

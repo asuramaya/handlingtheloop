@@ -579,6 +579,14 @@ export function App() {
   // 🔊 on (or otherwise needs audio: gains control / becomes the anchor).
   const deferDecodeRef = useRef(false);
   const pendingRoomLoad = useRef<Record<DeckId, { videoId: string; track: TrackMeta; restore?: DeckSnapshot } | null>>({ A: null, B: null });
+  // The videoId a deck is CURRENTLY decoding (set the moment the id resolves, before the
+  // async decode). `latest.current.loaded` only updates a render AFTER the load lands, so a
+  // room snapshot arriving mid-decode would see the deck as "empty" and fire a SECOND,
+  // competing load — re-running applyFxSnapshot with a different chain → the effects
+  // load-then-unload flicker. applyRoomSnapshot dedupes against this too, so a load already
+  // in flight for a track is never doubled. Cleared only on a genuine failure (so a retry
+  // can proceed); on success it stays = the loaded id, which is exactly the right dedupe key.
+  const loadingVid = useRef<Record<DeckId, string>>({ A: "", B: "" });
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
@@ -855,6 +863,9 @@ export function App() {
       },
       spinback: (deck) => {
         deck.spinback(); // back-spin then catch to play (local audio effect)
+      },
+      slip: (deck) => {
+        deck.toggleSlip(); // SLIP mode toggle (local performance mode; release snaps to shadow)
       },
     };
     for (let i = 0; i < 8; i++) HANDLERS[`hotcue${i + 1}`] = (deck, id, s) => hotcue(deck, id, s, i);
@@ -1467,6 +1478,8 @@ export function App() {
       loadAbort.current[id] = ctrl;
       const seq = (loadSeq.current[id] += 1);
       const stale = () => seq !== loadSeq.current[id];
+      let landed = false; // set once the track is on the deck → keep the loadingVid claim
+      let claimedVid = ""; // the id this load claimed in loadingVid (try-scoped vid isn't visible in finally)
       setStatusFor(id, null);
       // Free the OUTGOING track's stem set (~300–424 MB) up front, BEFORE we decode
       // the new track and build its stems. Otherwise the old set + the new mix + the
@@ -1509,6 +1522,9 @@ export function App() {
           setStatusFor(id, { phase: "failed", detail: "Couldn't find a playable source for this track." });
           return;
         }
+        // Claim this deck's in-flight load so a concurrent room snapshot won't double-load it.
+        loadingVid.current[id] = vid;
+        claimedVid = vid;
         // Lyrics, Whisper-first: community pool → on-device Whisper over the neural vocal
         // stem (desktop GPU, then contributed back) → YouTube captions as the fallback /
         // instant placeholder. The resolver polls the deck for neural vocals on its own, so
@@ -1570,6 +1586,7 @@ export function App() {
         if (restore) applyDeckControls(engine.deck(id), restore);
         engine.reassertSync(id); // re-lock if this deck is in a sync pair
         engine.reassertKey(id);
+        landed = true; // the track is on the deck — keep the loadingVid claim as the dedupe key
         setLoaded((l) => ({ ...l, [id]: vid }));
         // Feed the profile's top-songs stats — genuine user/session loads only, never a
         // page-refresh restore (which would inflate counts on every reload).
@@ -1621,7 +1638,12 @@ export function App() {
         if ((e as Error).name === "AbortError" || stale()) return;
         setStatusFor(id, { phase: "failed", detail: (e as Error).message ?? String(e) });
       } finally {
-        if (!stale()) setLoading((l) => ({ ...l, [id]: false }));
+        if (!stale()) {
+          setLoading((l) => ({ ...l, [id]: false }));
+          // This load is the current one but never landed (failed) → release the in-flight
+          // claim so a room snapshot / retry can load this track. On success keep it.
+          if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
+        }
       }
     },
     [engine, library, setStatusFor, refresh, deriveStems],
@@ -1881,7 +1903,7 @@ export function App() {
         const d = snap.decks[id];
         if (!d) return;
         const loadedId = latest.current.loaded[id];
-        if (d.videoId && d.videoId !== loadedId && d.videoId !== roomLoadTarget.current[id]) {
+        if (d.videoId && d.videoId !== loadedId && d.videoId !== roomLoadTarget.current[id] && d.videoId !== loadingVid.current[id]) {
           // New track for this deck → load it ONCE (self-healing dedupe). Both decks load
           // concurrently so neither waits on the other; each is guarded so a failed decode
           // can't crash the tree. (Stem sets, not base decodes, are the iOS memory hog and

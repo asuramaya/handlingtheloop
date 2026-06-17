@@ -160,6 +160,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           )}
           <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward a beat` : shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
           <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
+          <button
+            className={`jog-btn slip ${deck.slipping ? "on" : ""}`}
+            title="Slip mode — scratch or hold over the track without losing your place; release snaps back on-beat"
+            onClick={act(() => deck.toggleSlip())}
+          >
+            ⟲<span className="kbd">Z</span>
+          </button>
         </div>
 
         {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes

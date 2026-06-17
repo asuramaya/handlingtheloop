@@ -264,6 +264,14 @@ export class Deck {
   get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
   get scratchAttached() { return this.jog.attached; } // did the scrub worklet attach?
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
+  // --- Slip mode (the shadow-playhead primitive) ---
+  // rekordbox SLIP: while a scratch / hold / loop-roll overrides the audio, the track
+  // keeps advancing SILENTLY underneath; on release, playback snaps to where it would be
+  // had the override never happened (back on-beat). Generalises the loop-roll's analytic
+  // un-wrap (rollOut) to any platter action via an explicit anchor (pos + ctx time) taken
+  // when the action begins; slipShadow() reads the elapsed·rate offset off it on release.
+  slipEnabled = false; // the SLIP toggle (live per-deck mode, like quantize; default off)
+  private slipAnchor: { pos: number; t: number } | null = null;
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
   syncRole: SyncRole = "off";
@@ -410,6 +418,8 @@ export class Deck {
       clearBend: () => this.clearBend(),
       scratchBuffer: () => this.buffer,
       connectScratch: (node) => { node.connect(this.rack.input); },
+      slipArm: () => this.slipArm(),
+      slipReleasePos: () => this.slipReleasePos(),
     });
   }
 
@@ -1352,6 +1362,38 @@ export class Deck {
   }
   setQuantize(on: boolean) {
     this.quantizeOn = on;
+  }
+
+  // --- Slip mode ---
+  get slipping() {
+    return this.slipEnabled;
+  }
+  setSlip(on: boolean) {
+    this.slipEnabled = on;
+    if (!on) this.slipAnchor = null; // dropping the mode forgets any in-flight shadow
+  }
+  toggleSlip() {
+    this.setSlip(!this.slipEnabled);
+  }
+  /** Begin a slip overlay: anchor the shadow playhead at the live position + clock so it
+   *  keeps advancing at the play rate while a scratch/hold overrides the audio. No-op
+   *  unless SLIP is on AND the deck was playing (nothing advances under a paused deck).
+   *  Called by JogEngine at the start of a grab (before the source stops). */
+  slipArm() {
+    this.slipAnchor = this.slipEnabled && this._playing ? { pos: this.position(), t: this.ctx.currentTime } : null;
+  }
+  /** End a slip overlay: the shadow position (where the track would be now), consumed.
+   *  Returns null when slip isn't armed → the caller does its normal (coast) release. */
+  slipReleasePos(): number | null {
+    const a = this.slipAnchor;
+    this.slipAnchor = null;
+    if (!this.slipEnabled || !a) return null;
+    let pos = a.pos + (this.ctx.currentTime - a.t) * this.effRate();
+    if (this.loop?.active) {
+      const len = this.loop.end - this.loop.start;
+      if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
+    }
+    return Math.max(0, Math.min(this._duration, pos));
   }
 
   /** Jump by N beats from the current position, landing on the real grid beat. */

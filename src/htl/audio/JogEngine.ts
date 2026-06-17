@@ -22,6 +22,8 @@ export interface JogHost {
   clearBend(): void; // a grab/ramp takes over the clock — drop any decaying bend
   scratchBuffer(): AudioBuffer | null; // decoded PCM for the resampler (lazy on mobile)
   connectScratch(node: AudioWorkletNode): void; // node.connect(deck channel input)
+  slipArm(): void; // SLIP: anchor the shadow playhead at grab (no-op unless slip on + playing)
+  slipReleasePos(): number | null; // SLIP: where the track would be now, or null (normal release)
 }
 
 // rekordbox-style jog / platter physics: the scratch resampler driver + the weighted-
@@ -164,6 +166,7 @@ export class JogEngine {
     // first Play sees dt≈0 every frame and the platter never moves.
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.host.clearBend(); // a grab takes over the clock — drop any decaying bend first
+    this.host.slipArm(); // SLIP: anchor the shadow before the source stops (while still playing)
     this.jogReturnToPlay = this.host.playing() || (this.jogPhase === "coast" && this.jogReturnToPlay);
     // Gripping the platter STOPS IT DEAD (like a hand on vinyl) — it then follows the
     // finger from rest, so a scratch grab locks instantly with no forward creep. (The
@@ -204,6 +207,21 @@ export class JogEngine {
 
   scrubEnd() {
     if (this.jogPhase !== "grab") return;
+    // SLIP: if armed, the track kept advancing underneath — snap straight to that shadow
+    // playhead and resume (no coast, no spinback), so the scratch was a non-destructive
+    // overlay and the music lands back on-beat.
+    const slipPos = this.host.slipReleasePos();
+    if (slipPos != null) {
+      this.jogPhase = "off";
+      this._ramping = null;
+      this._coastTau = 0;
+      this.jogVel = 0;
+      this.scratchStop();
+      this.host.setStartOffset(slipPos);
+      this.host.spawnSource(slipPos);
+      this.host.setPlaying(true);
+      return;
+    }
     // Motion was applied per input sample in scrubMove(); just hand the platter its
     // release spin — the finger's last smoothed velocity, capped so a violent flick
     // can't launch it across the whole track.

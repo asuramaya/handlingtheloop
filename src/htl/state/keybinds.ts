@@ -59,6 +59,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "phraseBack", label: "Jump back a phrase", group: "Jog", defaultKey: "BracketLeft" },
   { id: "phraseFwd", label: "Jump forward a phrase", group: "Jog", defaultKey: "BracketRight" },
   { id: "spinback", label: "Spinback (back-spin)", group: "Jog", defaultKey: "KeyX" },
+  { id: "slip", label: "Slip mode (toggle)", group: "Jog", defaultKey: "KeyZ" },
 
   ...Array.from({ length: 8 }, (_, i) => ({
     id: `hotcue${i + 1}`,

@@ -11,4 +11,5 @@ export * from "./db/community";
 export * from "./db/transcripts";
 export * from "./db/analysis";
 export * from "./db/admin";
+export * from "./db/reports";
 export * from "./db/userdata";

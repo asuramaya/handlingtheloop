@@ -227,6 +227,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       sendJson(res, 200, { rooms: await devStore.liveRooms() });
       return true;
     }
+    // Reports (L2) aren't backed in the file-based dev store — accept + log so the UI flow works.
+    if (DEV_AUTH && path === "/api/report") {
+      const b = (await readJsonBody(req)) as { kind?: string };
+      if (b.kind !== "room" && b.kind !== "chat" && b.kind !== "user") {
+        sendJson(res, 400, { error: "bad report kind" });
+        return true;
+      }
+      console.log("[dev] moderation report:", b);
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
     if (DEV_AUTH && (path === "/api/rooms/announce" || path === "/api/rooms/close")) {
       if (!signedIn(req)) {
         sendJson(res, 401, { error: "sign in first" });

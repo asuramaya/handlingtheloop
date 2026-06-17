@@ -472,7 +472,11 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [~] **L1. Host/mod roles:** kick (guests, existing) + **mute** (per-device chat block, from a
       chat message) + **ban** (evict + session re-entry block via a `banned` device set) DONE for
       chat moderation. *(Room-wide ban persistence + a mod-role grant to co-hosts = later.)*
-- [ ] **L2. Report flow → existing admin worker** (moderation queue / DMCA muscle).
+- [x] **L2. Report flow → admin worker DONE.** End-to-end: `POST /api/report` (anon-ok,
+      ≤20/reporter/hr) → `reports` D1 table (migration `0015`, `server/db/reports.ts`) → the
+      admin worker's `GET /api/reports` + `POST /api/report/resolve` + a **Reports** tab in the
+      admin page (resolve from the moderation queue). Client `fileReport` + a ⚑ report button on
+      others' chat lines (the host moderates directly instead). Migration `0015` applies at deploy.
 - [~] **L3. Handle + chat blocklists.** Handle side via A5 (`RESERVED_HANDLES`). **Chat side DONE:**
       `cleanChat` (security.ts) masks a `CHAT_BLOCKLIST` of severe slurs — whole-token match with
       leetspeak fold + plural, Scunthorpe-safe (grape/therapy untouched), applied in the `Chat`

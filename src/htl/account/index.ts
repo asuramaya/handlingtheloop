@@ -202,6 +202,21 @@ export async function closeRoom(): Promise<void> {
   await fetch("/api/rooms/close", { method: "POST", credentials: "same-origin" });
 }
 
+/** File a moderation report (L2) — a room, a chat line, or a user. Lands in the admin queue. */
+export async function fileReport(r: { kind: "room" | "chat" | "user"; room?: string; dev?: string; text?: string; reason?: string }): Promise<boolean> {
+  try {
+    const res = await fetch("/api/report", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(r),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Per-track de-dupe so reloads, rewinds, model/stem re-derives, and room-driven re-loads of
 // the SAME track don't each fire a D1 write. logPlay used to POST on every track load — a
 // careless write (each one is a D1 UPSERT). One play per track per window is plenty for stats.

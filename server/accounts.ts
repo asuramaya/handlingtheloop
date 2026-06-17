@@ -22,7 +22,10 @@ import {
   closeRoom,
   ensureGraphTables,
   ensureIdentityColumns,
+  ensureReportsTable,
   ensureRoomsTable,
+  fileReport,
+  recentReportCount,
   followCounts,
   liveRooms,
   liveRoomStatus,
@@ -45,7 +48,7 @@ import {
   upsertGoogleUser,
   userBySession,
 } from "./db";
-import { cleanText, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
+import { cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -311,6 +314,30 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!user) return json(401, { error: "sign in first" });
       await ensureRoomsTable(env.DB);
       await closeRoom(env.DB, user.id);
+      return json(200, { ok: true });
+    }
+
+    // File a moderation report (L2) — anyone present (incl. anon listeners) can flag a room or
+    // a chat message; it lands in the queue the admin worker reads. Anti-flood: ≤20/reporter/hr.
+    case "/api/report": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      await ensureReportsTable(env.DB);
+      const b = (await req.json().catch(() => ({}))) as { kind?: string; room?: string; dev?: string; text?: string; reason?: string };
+      const kind = b.kind === "room" || b.kind === "chat" || b.kind === "user" ? b.kind : null;
+      if (!kind) return json(400, { error: "bad report kind" });
+      const user = await currentUser(env, req);
+      const reporter = user?.id ?? `anon:${clientIp(req)}`;
+      if ((await recentReportCount(env.DB, reporter, Date.now() - 3_600_000)) >= 20) {
+        return json(429, { error: "too many reports — try again later" });
+      }
+      await fileReport(env.DB, {
+        kind,
+        room: cleanText(b.room ?? "", 32) || null,
+        targetDev: cleanText(b.dev ?? "", 64) || null,
+        targetText: cleanText(b.text ?? "", 300) || null,
+        reporter,
+        reason: cleanText(b.reason ?? "", 200) || null,
+      });
       return json(200, { ok: true });
     }
 

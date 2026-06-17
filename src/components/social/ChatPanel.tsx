@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { RoomState } from "@htl/room";
 import { maskName } from "@htl/privacy";
+import { fileReport } from "@htl/account";
 
 // Chat (F5) + host moderation (L1). A scrolling log + composer; the host gets a slow-mode
 // selector (incl. Off) and per-message mute / remove. A muted device's composer locks; chat-off
@@ -14,7 +15,12 @@ const SLOW_OPTS = [
 
 export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boolean }) {
   const [text, setText] = useState("");
+  const [reported, setReported] = useState<Set<string>>(new Set());
   const endRef = useRef<HTMLDivElement>(null);
+  const report = (m: { id: string; dev: string; text: string }) => {
+    void fileReport({ kind: "chat", room: room.listeningTo ?? undefined, dev: m.dev, text: m.text });
+    setReported((s) => new Set(s).add(m.id)); // optimistic — flag stays marked
+  };
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "nearest" });
   }, [room.chatLog.length]);
@@ -66,6 +72,20 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
                     <button className="chat-mute" onClick={() => room.muteDevice(m.dev, true)} title="Mute this person" aria-label="Mute">🔇</button>
                   )}
                   <button className="chat-ban" onClick={() => room.banDevice(m.dev)} title="Remove from the room" aria-label="Remove">⛔</button>
+                </span>
+              )}
+              {/* Non-hosts can report a message to moderation (the host moderates directly). */}
+              {!room.host && !self && (
+                <span className="chat-mod">
+                  <button
+                    className="chat-ban"
+                    onClick={() => report(m)}
+                    disabled={reported.has(m.id)}
+                    title={reported.has(m.id) ? "Reported" : "Report to moderators"}
+                    aria-label="Report"
+                  >
+                    {reported.has(m.id) ? "✓" : "⚑"}
+                  </button>
                 </span>
               )}
             </div>

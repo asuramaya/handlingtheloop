@@ -16,6 +16,9 @@ import {
   listTakedowns,
   listUsers,
   deleteUser,
+  ensureReportsTable,
+  listReports,
+  resolveReport,
 } from "./db";
 import { type AccessEnv, verifyAccess } from "./access";
 import { json } from "./http";
@@ -206,6 +209,17 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
   if (req.method === "GET" && p === "/api/takedowns") {
     return json(200, { takedowns: await listTakedowns(env.DB, 200) });
   }
+  if (req.method === "GET" && p === "/api/reports") {
+    await ensureReportsTable(env.DB);
+    return json(200, { reports: await listReports(env.DB, url.searchParams.get("all") === "1", 300) });
+  }
+  if (req.method === "POST" && p === "/api/report/resolve") {
+    await ensureReportsTable(env.DB);
+    const b = (await req.json().catch(() => ({}))) as { id?: number };
+    if (!b.id) return json(400, { error: "missing id" });
+    await resolveReport(env.DB, Number(b.id), admin.email);
+    return json(200, { ok: true });
+  }
   if (req.method === "GET" && p === "/api/users") {
     return json(200, { users: await listUsers(env.DB, 500) });
   }
@@ -268,6 +282,7 @@ button.danger{border-color:#5a2630;color:var(--danger)}button.act:hover{backgrou
 <div class=tabs>
   <button class=on data-t=community>Community</button>
   <button data-t=takedowns>Takedowns</button>
+  <button data-t=reports>Reports</button>
   <button data-t=users>Accounts</button>
 </div>
 <main>
@@ -287,6 +302,7 @@ button.danger{border-color:#5a2630;color:var(--danger)}button.act:hover{backgrou
     <table><thead><tr><th></th><th>Title</th><th>Artist</th><th>Video id</th><th></th></tr></thead><tbody id=ctbody></tbody></table>
   </section>
   <section id=takedowns class=hide><table><thead><tr><th>When</th><th>Video id</th><th>Reason</th><th>By</th><th>Purged</th></tr></thead><tbody id=ttbody></tbody></table></section>
+  <section id=reports class=hide><table><thead><tr><th>When</th><th>Kind</th><th>Room</th><th>Reported</th><th>Reporter</th><th></th></tr></thead><tbody id=rtbody></tbody></table></section>
   <section id=users class=hide><table><thead><tr><th>Email</th><th>Name</th><th>Services</th><th>Last login</th><th></th></tr></thead><tbody id=utbody></tbody></table></section>
 </main>
 <script nonce="${nonce}">
@@ -317,6 +333,11 @@ async function loadCommunity(){const q=$('#q').value.trim();const {tracks}=await
 async function loadTakedowns(){const {takedowns}=await api('/api/takedowns');const tb=$('#ttbody');clear(tb);
   if(!takedowns.length){tb.appendChild(emptyRow('None.'));return;}
   for(const t of takedowns){const tr=document.createElement('tr');tr.appendChild(cell(fmt(t.ts)));tr.appendChild(cell(t.video_id,'id'));tr.appendChild(cell(t.reason||''));tr.appendChild(cell(t.by_email,'muted'));tr.appendChild(cell(t.purged?'yes':'no'));tb.appendChild(tr);}}
+async function loadReports(){const {reports}=await api('/api/reports');const tb=$('#rtbody');clear(tb);
+  if(!reports.length){tb.appendChild(emptyRow('No open reports.'));return;}
+  for(const r of reports){const tr=document.createElement('tr');tr.appendChild(cell(fmt(r.ts)));tr.appendChild(cell(r.kind));tr.appendChild(cell(r.room||'','muted'));tr.appendChild(cell(r.target_text||r.target_dev||''));tr.appendChild(cell(r.reporter,'muted'));
+    const tda=document.createElement('td');tda.appendChild(btn('Resolve','act',()=>resolveR(r.id)));tr.appendChild(tda);tb.appendChild(tr);}}
+async function resolveR(id){const r=await api('/api/report/resolve',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id})});if(r.ok)loadReports();else alert('Failed: '+(r.error||''));}
 async function loadUsers(){const {users}=await api('/api/users');const tb=$('#utbody');clear(tb);
   if(!users.length){tb.appendChild(emptyRow('No accounts.'));return;}
   for(const u of users){const tr=document.createElement('tr');tr.appendChild(cell(u.email||'—'));tr.appendChild(cell(u.name||''));tr.appendChild(cell(u.providers||'','muted'));tr.appendChild(cell(fmt(u.last_login),'muted'));
@@ -327,8 +348,8 @@ const fmtMB=b=>(b/1048576).toFixed(1)+' MB';
 async function loadStorage(){$('#storageout').textContent='Loading…';const s=await api('/api/storage');const tot=s.audio.bytes+s.meta.bytes+s.stems.bytes;
   $('#storageout').innerHTML='R2: <b>'+fmtMB(tot)+'</b> total — audio '+s.audio.count+' ('+fmtMB(s.audio.bytes)+'), stems '+s.stems.count+' ('+fmtMB(s.stems.bytes)+'), meta '+s.meta.count;}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
-  ['community','takedowns','users'].forEach(s=>$('#'+s).classList.toggle('hide',s!==b.dataset.t));
-  if(b.dataset.t==='takedowns')loadTakedowns();if(b.dataset.t==='users')loadUsers();});
+  ['community','takedowns','reports','users'].forEach(s=>$('#'+s).classList.toggle('hide',s!==b.dataset.t));
+  if(b.dataset.t==='takedowns')loadTakedowns();if(b.dataset.t==='reports')loadReports();if(b.dataset.t==='users')loadUsers();});
 $('#q').oninput=()=>{clearTimeout(window._t);window._t=setTimeout(loadCommunity,250);};
 $('#reindex').onclick=async()=>{$('#reindex').textContent='Reindexing…';const r=await api('/api/reindex',{method:'POST'});$('#reindex').textContent='Reindex from R2';alert('Indexed '+r.indexed+' tracks');loadCommunity();stats();};
 $('#storagebtn').onclick=loadStorage;

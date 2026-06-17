@@ -1,6 +1,7 @@
 // User customization, persisted via the @htl Store and applied as CSS variables
 // / body classes so the whole UI re-themes without prop drilling.
 import { Store, migrateLegacyKey } from "../persistence";
+import { byteToHex, hexToRgb } from "../../util/color";
 import { getStemModel } from "../stems/models";
 import type { KeyBindings } from "./keybinds";
 import type { MidiLearnMap, MidiMap } from "../midi/types";
@@ -290,22 +291,11 @@ export function saveSettings(s: Settings) {
   store.set(s);
 }
 
-function clampByte(n: number): number {
-  return Math.max(0, Math.min(255, Math.round(n)));
-}
-function hexToRgb(hex: string): [number, number, number] {
-  let h = hex.replace("#", "").trim();
-  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-  const n = parseInt(h, 16);
-  if (h.length !== 6 || Number.isNaN(n)) return [5, 5, 7];
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
 // Shift each channel of a hex colour (used to derive the panel/line shades from
 // the chosen background, keeping the subtle blue tint of the default theme).
 function shift(hex: string, dr: number, dg: number, db: number): string {
   const [r, g, b] = hexToRgb(hex);
-  const h2 = (x: number) => clampByte(x).toString(16).padStart(2, "0");
-  return `#${h2(r + dr)}${h2(g + dg)}${h2(b + db)}`;
+  return `#${byteToHex(r + dr)}${byteToHex(g + dg)}${byteToHex(b + db)}`;
 }
 // How far the panel/surface fills lift OFF the base, scaled by the contrast knob:
 // 0 → 1.55× (soft, washed grey), 1 → 0.3× (inky — fills hug the base for maximum
@@ -329,8 +319,7 @@ export function surfaceColor(bg: string, contrast: number = DEFAULT_CONTRAST): s
 function blend(a: string, b: string, t: number): string {
   const [r1, g1, b1] = hexToRgb(a);
   const [r2, g2, b2] = hexToRgb(b);
-  const h2 = (x: number) => clampByte(x).toString(16).padStart(2, "0");
-  return `#${h2(r1 + (r2 - r1) * t)}${h2(g1 + (g2 - g1) * t)}${h2(b1 + (b2 - b1) * t)}`;
+  return `#${byteToHex(r1 + (r2 - r1) * t)}${byteToHex(g1 + (g2 - g1) * t)}${byteToHex(b1 + (b2 - b1) * t)}`;
 }
 
 // WCAG relative-luminance contrast ratio between two hex colours (1 … 21). Used

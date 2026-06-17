@@ -11,8 +11,8 @@
 // The host's own devices land here by default; guests on OTHER accounts (incl. anonymous)
 // arrive via an invite code the Worker resolves to this same session. Uses the WebSocket
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
-import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate, SongRequest } from "../src/htl/room/protocol";
-import { canDriveIntent, isReaction } from "../src/htl/room/protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
+import { canDriveIntent } from "../src/htl/room/protocol";
 import {
   type Attachment,
   type Ws,
@@ -24,6 +24,7 @@ import {
   welcomeFor,
   presenceFor,
 } from "./roomState";
+import { Reactions, Requests } from "./roomCrowd";
 
 // The DjRoom Durable Object: socket lifecycle, membership transitions, the anchor (clock),
 // relay/presence fan-out, and persistence. The PURE state model (Attachment, roles, the pub
@@ -85,28 +86,11 @@ export class DjRoom {
   private static DIGEST_FLUSH_MS = 50; // ~20 Hz
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
-  // Crowd reactions (F4) + hype (F2). Taps accumulate in a window and flush ONCE per
-  // REACT_FLUSH_MS as one aggregated frame (per-emoji counts) — never per tap, so a big room
-  // can't storm the fan-out. `hype` is a decaying 0..1 energy level (EMA of the window total)
-  // the DJ reads as crowd vibe; the flush keeps ticking (even with no new taps) until hype
-  // settles back to ~0, then idles. Per-device token bucket caps a single spammer.
-  private static REACT_FLUSH_MS = 1000;
-  private static HYPE_DECAY = 0.82; // per flush; ~settles over ~15s after a burst
-  private static HYPE_GAIN = 0.14; // window-total → hype contribution
-  private static REACT_RATE_MAX = 10; // taps per REACT_RATE_WINDOW per device
-  private static REACT_RATE_WINDOW = 2000;
-  private reactWindow: Record<string, number> = {};
-  private hype = 0;
-  private reactFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  private reactRate: Record<string, { t: number; n: number }> = {};
-  // Song requests (F1): an in-memory list the crowd feeds and the DJ reads (never persisted —
-  // it's live + ephemeral, like the knock list). Capped, deduped, one-per-device-per-window.
-  private static MAX_REQUESTS = 30;
-  private static REQUEST_RATE_MS = 15_000; // one request per device per 15s
-  private static REQUEST_MAXLEN = 120;
-  private requests: SongRequest[] = [];
-  private reqSeq = 0;
-  private requestRate: Record<string, number> = {};
+  // The crowd→DJ side-channels (reactions/hype + song requests) — self-contained units that
+  // own their own windows/timers/rate buckets (see roomCrowd.ts). Reactions broadcasts each
+  // aggregated frame via the DO's fan-out.
+  private reactions = new Reactions((m) => this.broadcast(m));
+  private songRequests = new Requests();
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -205,7 +189,7 @@ export class DjRoom {
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
-    server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.requests)));
+    server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.songRequests.list)));
     // Hand a public listener the current board immediately so it can render without a round-trip.
     if (pub) this.sendCatchUp(server);
     this.broadcastPresence();
@@ -380,57 +364,28 @@ export class DjRoom {
         break;
       }
       case "react": {
-        // A crowd reaction (F4). Validate against the fixed emoji set, rate-limit per device
-        // (a token bucket), accumulate into the window, and schedule the aggregated flush.
-        if (!isReaction(msg.emoji)) break;
-        const now = Date.now();
-        const rl = this.reactRate[self];
-        if (!rl || now - rl.t >= DjRoom.REACT_RATE_WINDOW) {
-          this.reactRate[self] = { t: now, n: 1 };
-        } else {
-          if (rl.n >= DjRoom.REACT_RATE_MAX) break; // over budget → drop silently (reactions are fire-and-forget)
-          rl.n++;
-        }
-        this.reactWindow[msg.emoji] = (this.reactWindow[msg.emoji] ?? 0) + 1;
-        this.scheduleReactFlush();
+        // A crowd reaction (F4) — the Reactions unit validates the emoji, rate-limits per
+        // device, accumulates, and flushes the aggregated frame. Fire-and-forget.
+        this.reactions.tap(self, msg.emoji);
         break;
       }
       case "request": {
-        // A song request (F1). Anti-flood: one per device per window. Trim + cap length, dedupe
-        // identical pending text, cap the list, then push it to the PARTICIPANTS (the DJ reads it).
-        const text = (msg.text || "").trim().slice(0, DjRoom.REQUEST_MAXLEN);
-        if (!text) break;
-        const now = Date.now();
-        if (now - (this.requestRate[self] ?? 0) < DjRoom.REQUEST_RATE_MS) {
-          ws.send(JSON.stringify({ t: "error", message: "One request at a time — give it a moment." } satisfies ServerMsg));
-          break;
-        }
-        const att2 = ws.deserializeAttachment() as Attachment | null;
-        const name = att2?.name || "Someone";
-        const dupe = this.requests.some((r) => r.text.toLowerCase() === text.toLowerCase());
-        if (dupe) {
-          ws.send(JSON.stringify({ t: "error", message: "Already in the queue 👍" } satisfies ServerMsg));
-          break;
-        }
-        this.requestRate[self] = now;
-        this.requests.push({ id: `q${++this.reqSeq}`, name, text });
-        if (this.requests.length > DjRoom.MAX_REQUESTS) this.requests.shift();
-        this.relayRequests();
+        // A song request (F1). The Requests unit trims/caps/dedupes + rate-limits; on success
+        // we push the new list to participants, else surface the reason to the asker.
+        const a = ws.deserializeAttachment() as Attachment | null;
+        const r = this.songRequests.add(self, a?.name || "Someone", msg.text);
+        if (r.ok) this.relayRequests();
+        else if (r.error) ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
         break;
       }
       case "request-dismiss": {
         if (!this.isHostDevice(self)) break;
-        const before = this.requests.length;
-        this.requests = this.requests.filter((r) => r.id !== msg.id);
-        if (this.requests.length !== before) this.relayRequests();
+        if (this.songRequests.dismiss(msg.id)) this.relayRequests();
         break;
       }
       case "request-clear": {
         if (!this.isHostDevice(self)) break;
-        if (this.requests.length) {
-          this.requests = [];
-          this.relayRequests();
-        }
+        if (this.songRequests.clear()) this.relayRequests();
         break;
       }
       case "stageGate": {
@@ -981,30 +936,10 @@ export class DjRoom {
     }, DjRoom.DIGEST_FLUSH_MS);
   }
 
-  // Crowd reactions: flush the accumulated window ONCE per tick as a single aggregated frame
-  // (counts + the updated hype level), to EVERYONE. The timer keeps ticking — decaying hype
-  // even with no new taps — until energy settles, then idles (no taps + hype≈0 → stop). This
-  // is the F4/F2 spine: O(N) fan-out per SECOND, never per tap.
-  private scheduleReactFlush(): void {
-    if (this.reactFlushTimer) return;
-    this.reactFlushTimer = setTimeout(() => {
-      this.reactFlushTimer = null;
-      const counts = this.reactWindow;
-      this.reactWindow = {};
-      const total = Object.values(counts).reduce((s, n) => s + n, 0);
-      // EMA: decay the standing energy, add this window's contribution, clamp to [0,1].
-      this.hype = Math.min(1, this.hype * DjRoom.HYPE_DECAY + total * DjRoom.HYPE_GAIN);
-      if (this.hype < 0.01) this.hype = 0;
-      this.broadcast({ t: "reactions", counts, hype: this.hype });
-      // Keep ticking while there's energy to decay or fresh taps arrived; else go idle.
-      if (this.hype > 0) this.scheduleReactFlush();
-    }, DjRoom.REACT_FLUSH_MS);
-  }
-
   // Push the current song-request list to PARTICIPANTS only (the DJ + co-DJs act on it). The
   // anonymous crowd never receives the list — they only contribute to it.
   private relayRequests(): void {
-    this.sendTo((a) => !!a && !a.pub, { t: "requests", list: this.requests });
+    this.sendTo((a) => !!a && !a.pub, { t: "requests", list: this.songRequests.list });
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited

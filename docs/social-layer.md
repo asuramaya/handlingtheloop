@@ -31,6 +31,76 @@ rooms are cheap. Builds on `docs/shared-session.md` (the DjRoom control bus).
 
 A listener "stepping up to the decks" = moving from plane 2 → plane 1.
 
+## Surface architecture (UI) — 3 surfaces + the set lifecycle
+
+> **Settled 2026-06-17.** The "Session" right-dock panel had grown to ~12 stacked
+> jobs (discovery + room setup + crowd channel + roster/mod) and was the dumping
+> ground every new social feature landed in. The fix is **not tabs inside Session** —
+> it's recognizing there are **two axes plus a bridge**, and giving each its own surface
+> so future epics (G sets, J feed, I notifications) have an obvious home that is NOT
+> the room panel.
+
+**Two axes:**
+- **PERSON** (persistent, account-scoped) — handle/profile/bio, the follow graph,
+  top songs, recorded sets, live status. A profile is an *account*.
+- **ROOM** (ephemeral, device-scoped) — the live session: roster, crowd channel,
+  seat/stage UX, share/go-live/gate. A roster row is a *device*, never linked to an
+  account id (`ProfileScreen.tsx` design note) — that's why person ≠ room object.
+
+**Three surfaces:**
+
+| Surface | What it is | Live/Set role |
+|---------|-----------|---------------|
+| **① Discover** | The browse-what's-out-there experience, its OWN surface (not part of a profile, not part of the room). Two facets of one browse UX: **Live now** (sessions happening now) + **Sets** (newly-published / popular recordings). | The *list* — rooms/sets you don't know yet |
+| **② Profile** (own + `/@handle`) | The person. **Tabbed: Public display \| Configuration.** Public tab = identity/bio/top-songs/**sets history**/follow-counts + a **live badge & "● Listen live"** when on the decks (already wired, `PublicProfileScreen.tsx:91`); this tab IS the `/@handle` render (own + public share one component). Config tab = the account plumbing (connections/OAuth, handle claim/rename, edit display+bio, privacy, sign-out). | A *badge* — is THIS person live; their set *history* |
+| **③ Session** | Shrinks to just the room you're in/hosting: setup/share/go-live/gate, roster, seat UX, crowd channel (hype/chat/requests/reactions), **+ recording controls** (see lifecycle). `LiveNow` moves OUT to Discover. | The room you're *currently in*; the tape being recorded |
+
+**One signal, three reads:** Discover lists who's live, Profile badges whether *this*
+handle is live, Session *is* one live entry — all off the same `liveRooms` signal.
+Sets parallel it exactly: Discover ranks published sets, Profile shows *this person's*
+history. **Every "enter a session" routes through `tuneIn(handle)`** regardless of entry
+point (Discover row / profile Listen-live / shared link); every "watch a set" through one
+replay path.
+
+**The live → recorded → published lifecycle (the Session↔Sets seam):**
+
+```
+LIVE ──(auto-buffer the digest)──▶ ENDED ──▶ DRAFT ──(publish)──▶ PUBLISHED
+                                     │         (private,           (public:
+                                     └─discard  Profile history)    Profile + Discover)
+```
+
+- **A recording IS the broadcast digest, persisted.** Not a new capture system —
+  the broadcast plane already publishes the recipe stream (clock + deck params +
+  now-playing) to listeners; G1 tees that exact stream to R2/D1. A live broadcast is
+  a recording-in-flight; *save* = keep the tape. Replay = play the timestamped log
+  back into the same handlers a live listener uses.
+- **Commands-only, re-rendered on device.** Stored = track *references* (source IDs)
+  + transport + deck params/intents/cue/loop/fx/stem events. **No audio.** Replay
+  resolves each track ID → fetch/decode source PCM via the edge proxy → run the
+  bit-exact engine → apply recorded commands at recorded timestamps → identical mix.
+  This is **also the right legal posture** (same ToS lane as live: host's device
+  re-fetches from source; we never store/redistribute audio → no DMCA/licensing drag).
+- **Capture-by-default, curate-after** (decided over explicit opt-in): recipes are
+  tiny, the "wish I'd recorded that" problem is real, and privacy is fully handled by
+  *private-draft-until-publish*. Retention: keep-all (cheap); DVR-style auto-expire of
+  unpublished drafts only if it nags.
+- **Replay fidelity caveats (why D5→D6 gate G):** "re-renders identically" holds GIVEN
+  same source decode + **pinned engine version (D5)** + auto-derived values
+  (detected beatgrid/key a `sync`/`key` leaned on) reproducing or **baked into the
+  recipe (D6)**. A dead/geo-blocked source ID = a graceful gap, not a crash. Stems
+  follow the live R2-cache-only model (fallback to full-track).
+- **Surface mapping:** Session owns the **record toggle + post-set Save/Publish/Discard
+  card**; Profile owns **sets history** (drafts+published); Discover owns **published
+  browse**. Co-DJ/stage-guest sets → **host-owns, co-DJs credited** (default, G5).
+
+**Build order:** the Discover/Profile restructure is independent of G and lands FIRST
+(decongests Session immediately — mostly relocating already-modular leaves + the Profile
+tab split, where the public tab reuses the `/@handle` render). The Sets facets then slot
+into the already-defined Discover-ranking + Profile-history holes when **G1** lands
+(which D5→D6 gate). Affected epics annotated below: **B3** (live badge — substantially
+shipped), **E2/J1** (Discover surface), **G1–G5** (sets), **B5** (profile sets history).
+
 ## Review log — 2026-06-16 (plan re-validated, still good)
 
 Codebase swept; the day's commits (`1d182e0` EQ Pro-Q, `97d962b` FX rack+sampler,
@@ -434,8 +504,16 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## G. Async layer (persistent surface when nothing's live)  *(P4)*
 
-- [ ] **G1. Recorded sets** as first-class objects — record the recipe stream,
-      replay deterministically. Cheap; respects D5 engine-version pinning.
+> **Surfaces decided 2026-06-17** — see "Surface architecture (UI)" above. Sets are
+> the **persistent twin of live**: a recording = the broadcast digest persisted
+> (commands-only, re-rendered on device at replay), captured-by-default as a private
+> draft, published to Profile-history + Discover. Session owns record + Save/Publish/
+> Discard; Profile owns history (B5); Discover owns the published browse. D5→D6 gate
+> deterministic replay.
+
+- [ ] **G1. Recorded sets** as first-class objects — tee the broadcast digest to R2/D1,
+      replay deterministically (commands-only; device re-renders from source). Cheap;
+      respects D5 engine-version pinning + D6 baked-gesture contract.
 - [ ] **G2. Auto-generated tracklists** (from track metadata + play history) as
       the shareable set artifact.
 - [ ] **G3. Clips / moments:** capture a drop/transition.

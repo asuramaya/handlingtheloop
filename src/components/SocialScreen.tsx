@@ -3,7 +3,6 @@ import type { RoomState } from "@htl/room";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { QRCode } from "./QRCode";
 import { DockResizer } from "./DockResizer";
-import { LiveNow } from "./social/LiveNow";
 import { StageBar } from "./social/StageBar";
 import { CrowdPanel } from "./social/CrowdPanel";
 import { SocialCard } from "./social/SocialCard";
@@ -11,10 +10,11 @@ import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
 import { deviceIcon } from "./social/util";
 
-// The expanded session "social screen" — the full-screen surface behind the chin popup's
-// Expand button. This is the ORCHESTRATOR: it lays out the live directory, the listening +
-// stage banners, the host's knock / stage-request / song-request lists, the roster, and the
-// share modes. The leaf pieces (LiveNow / StageBar / CrowdPanel / SocialCard) live in ./social/.
+// The Session "social screen" — the room you're in/hosting (the live-rooms DIRECTORY moved
+// out to DiscoverScreen; this is purely the room now). ORCHESTRATOR: the listening + stage
+// banners, the host's knock / stage-request / song-request lists, the crowd channel, the
+// roster, and the share modes. The leaf pieces (StageBar / CrowdPanel / SocialCard / RequestList
+// / ChatPanel) live in ./social/. See docs/social-layer.md → "Surface architecture (UI)".
 
 export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; onClose: () => void; onActivate?: () => void }) {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -93,15 +93,6 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
             <StageBar room={room} />
           </>
         )}
-
-        <LiveNow
-          self={room.user?.handle ?? null}
-          tunedTo={room.listeningTo}
-          onListen={(h) => {
-            onActivate?.();
-            room.tuneIn(h);
-          }}
-        />
 
         {/* Crowd reactions + hype — wherever a broadcast is happening (you host one, or you've
             tuned into one). Everyone present can tap; the DJ reads the energy. */}

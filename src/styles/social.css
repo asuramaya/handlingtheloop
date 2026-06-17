@@ -4,7 +4,8 @@
 
 /* --- Shared full-screen shell --- */
 .profile-screen,
-.social-screen {
+.social-screen,
+.discover-screen {
   position: relative;
   width: min(560px, 94vw);
   max-height: min(86dvh, 860px);
@@ -20,7 +21,8 @@
   animation: panel-in 0.16s ease-out;
 }
 .profile-head,
-.social-head {
+.social-head,
+.discover-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -28,10 +30,25 @@
   top: 0;
 }
 .profile-head-title,
-.social-title {
+.social-title,
+.discover-title {
   font-weight: 800;
   font-size: 16px;
   letter-spacing: 0.2px;
+}
+
+/* --- Discover surface (live-now directory; Sets facet lands with Epic G) --- */
+.discover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.discover-empty {
+  margin: 0;
+  padding: 14px 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 .social-head-tools {
   display: flex;
@@ -1160,7 +1177,8 @@ span.profile-handle:hover {
 @media (max-width: 768px) {
   /* Full-bleed the screens on phones, like the other modals. */
   .profile-screen,
-  .social-screen {
+  .social-screen,
+  .discover-screen {
     width: 100vw;
     height: 100dvh;
     max-height: none;
@@ -1177,6 +1195,17 @@ span.profile-handle:hover {
   width: 42px;
 }
 .chin-globe {
+  font-size: 16px;
+  line-height: 1;
+}
+/* Discover = the 🧭 directory button, between Profile (9) and the session bar (10);
+   the order-9 tie resolves to DOM order, so it lands just right of Profile. */
+.chin-btn.chin-discover {
+  order: 9;
+  flex: 0 0 auto;
+  width: 42px;
+}
+.chin-discover-i {
   font-size: 16px;
   line-height: 1;
 }

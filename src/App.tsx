@@ -9,6 +9,7 @@ import { RoomBar } from "./components/RoomBar";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
+import { DiscoverScreen } from "./components/DiscoverScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
 import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
@@ -373,14 +374,15 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(initRightDock === "settings");
   const [profileOpen, setProfileOpen] = useState(initRightDock === "profile");
   const [socialOpen, setSocialOpen] = useState(initRightDock === "social");
+  const [discoverOpen, setDiscoverOpen] = useState(initRightDock === "discover");
   useEffect(() => {
-    const v = settingsOpen ? "settings" : profileOpen ? "profile" : socialOpen ? "social" : "";
+    const v = settingsOpen ? "settings" : profileOpen ? "profile" : socialOpen ? "social" : discoverOpen ? "discover" : "";
     try {
       localStorage.setItem("htl:rightDock", v);
     } catch {
       /* ignore */
     }
-  }, [settingsOpen, profileOpen, socialOpen]);
+  }, [settingsOpen, profileOpen, socialOpen, discoverOpen]);
   // The public profile (/@handle) shares the right dock — mutually exclusive with the
   // three above. URL-driven (not persisted): the path opens it, popstate follows it.
   const [publicHandle, setPublicHandle] = useState<string | null>(handleFromPath);
@@ -395,12 +397,13 @@ export function App() {
       setSettingsOpen(false);
       setProfileOpen(false);
       setSocialOpen(false);
+      setDiscoverOpen(false);
     }
   }, [publicHandle]);
   useEffect(() => {
     // …and opening any own-account dock leaves the public profile.
-    if (settingsOpen || profileOpen || socialOpen) setPublicHandle(null);
-  }, [settingsOpen, profileOpen, socialOpen]);
+    if (settingsOpen || profileOpen || socialOpen || discoverOpen) setPublicHandle(null);
+  }, [settingsOpen, profileOpen, socialOpen, discoverOpen]);
   const closePublic = () => {
     window.history.pushState(null, "", "/");
     setPublicHandle(null);
@@ -465,6 +468,7 @@ export function App() {
     setSocialOpen(false);
     setProfileOpen(false);
     setSettingsOpen(false);
+    setDiscoverOpen(false);
   };
   const toggleLib = () => {
     // Functional update so the keyboard (Alt) and chin button never read a stale libOpen.
@@ -483,6 +487,19 @@ export function App() {
       if (next) {
         setProfileOpen(false);
         setSettingsOpen(false);
+        setDiscoverOpen(false);
+        if (onPhone()) setLibOpen(false);
+      }
+      return next;
+    });
+  };
+  const toggleDiscover = () => {
+    setDiscoverOpen((v) => {
+      const next = !v;
+      if (next) {
+        setSocialOpen(false);
+        setProfileOpen(false);
+        setSettingsOpen(false);
         if (onPhone()) setLibOpen(false);
       }
       return next;
@@ -494,6 +511,7 @@ export function App() {
       if (next) {
         setSocialOpen(false);
         setSettingsOpen(false);
+        setDiscoverOpen(false);
         if (onPhone()) setLibOpen(false);
       }
       return next;
@@ -505,6 +523,7 @@ export function App() {
       if (next) {
         setSocialOpen(false);
         setProfileOpen(false);
+        setDiscoverOpen(false);
         if (onPhone()) setLibOpen(false);
       }
       return next;
@@ -3659,6 +3678,14 @@ export function App() {
         >
           <span className="chin-globe" aria-hidden="true">🌐</span>
         </button>
+        <button
+          className={`chin-btn chin-discover ${discoverOpen ? "active" : ""}`}
+          onClick={toggleDiscover}
+          aria-label="Discover"
+          title="Discover — who's live now"
+        >
+          <span className="chin-discover-i" aria-hidden="true">🧭</span>
+        </button>
         <RoomBar room={room} onExpand={toggleSocial} />
       </nav>
 
@@ -3845,6 +3872,18 @@ export function App() {
       )}
       {socialOpen && (
         <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
+      )}
+      {discoverOpen && (
+        <DiscoverScreen
+          self={room.user?.handle ?? null}
+          tunedTo={room.listeningTo}
+          onClose={() => setDiscoverOpen(false)}
+          onListen={(h) => {
+            engine.unlock(); // tune-in is a user gesture → prime iOS audio
+            room.tuneIn(h);
+            setDiscoverOpen(false); // hand off to the Session dock's "Listening to @X" banner
+          }}
+        />
       )}
       {profileOpen && <ProfileScreen onClose={() => setProfileOpen(false)} />}
       {publicHandle && (

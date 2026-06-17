@@ -27,6 +27,7 @@ export interface UseMidi {
   info: () => { error: string; permMidi: string; permSysex: string; crossOriginIsolated: boolean | string };
   monitor: () => MonMsg[];
   describe: (status: number, d1: number) => string | null;
+  jogCadence: () => { rate: number; count: number; medMs: number; p95Ms: number; maxGapMs: number; burst: number; avgTick: number };
   // Output side — for the debug panel's LED / RGB feedback prober.
   send: (bytes: number[]) => void; // raw MIDI out (notes, CC, SysEx)
   outMonitor: () => OutMsg[]; // recent outgoing messages
@@ -113,9 +114,10 @@ export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs)
   const info = useCallback(() => engineRef.current!.info(), []);
   const monitor = useCallback(() => engineRef.current!.monitor(), []);
   const describe = useCallback((status: number, d1: number) => engineRef.current!.describe(status, d1), []);
+  const jogCadence = useCallback(() => engineRef.current?.jogCadence() ?? { rate: 0, count: 0, medMs: 0, p95Ms: 0, maxGapMs: 0, burst: 0, avgTick: 0 }, []);
   const send = useCallback((bytes: number[]) => engineRef.current?.sendRaw(bytes), []);
   const outMonitor = useCallback(() => engineRef.current?.outMonitor() ?? [], []);
   const outputs = useCallback(() => engineRef.current?.outputNames() ?? [], []);
 
-  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback, info, monitor, describe, send, outMonitor, outputs };
+  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback, info, monitor, describe, jogCadence, send, outMonitor, outputs };
 }

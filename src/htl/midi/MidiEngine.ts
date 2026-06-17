@@ -87,6 +87,9 @@ export class MidiEngine {
   // monitor, so the debug panel can reverse-engineer a board's LED / RGB protocol.
   private outMon: OutMsg[] = [];
   private outSeq = 0;
+  // Jog-tick cadence log (scratch CC arrival times + signed ticks) — instrumentation to
+  // measure how bursty/sparse the hardware jog stream is vs a steady mouse (see jogCadence).
+  private jogLog: { t: number; d: number }[] = [];
   // Last raw value per relative-encoder address → relative delta (see emitKnob).
   private lastAbs = new Map<number, number>();
   // Sub-step carry per encoder-action address → one action per detent (see dispatchCC).
@@ -278,6 +281,34 @@ export class MidiEngine {
     return this.outMon.slice();
   }
 
+  /** Jog-scratch cadence over the last `windowMs` — instrumentation for the scratch
+   *  velocity model. A steady mouse reports ~1–8 ms apart; a hardware jog tends to be
+   *  sparse + BURSTY (sub-1ms clusters then gaps), which a measured-interval velocity
+   *  mis-reads. `burst` = fraction of inter-tick gaps under 1 ms, `maxGapMs` = the worst
+   *  silence; both high = the case the alpha-beta filter is meant to smooth. */
+  jogCadence(windowMs = 1500): { rate: number; count: number; medMs: number; p95Ms: number; maxGapMs: number; burst: number; avgTick: number } {
+    const now = typeof performance !== "undefined" ? performance.now() : 0;
+    const recent = this.jogLog.filter((e) => now - e.t <= windowMs);
+    const n = recent.length;
+    if (n < 2) return { rate: n, count: n, medMs: 0, p95Ms: 0, maxGapMs: 0, burst: 0, avgTick: n ? Math.abs(recent[0].d) : 0 };
+    const gaps: number[] = [];
+    let tickSum = 0;
+    for (let i = 1; i < n; i++) gaps.push(recent[i].t - recent[i - 1].t);
+    for (const e of recent) tickSum += Math.abs(e.d);
+    const sorted = gaps.slice().sort((a, b) => a - b);
+    const span = (recent[n - 1].t - recent[0].t) / 1000;
+    const sub1 = gaps.filter((g) => g < 1).length;
+    return {
+      rate: span > 0 ? (n - 1) / span : 0,
+      count: n,
+      medMs: sorted[sorted.length >> 1],
+      p95Ms: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))],
+      maxGapMs: sorted[sorted.length - 1],
+      burst: gaps.length ? sub1 / gaps.length : 0,
+      avgTick: tickSum / n,
+    };
+  }
+
   /** Names of the connected output ports we send to (empty = nothing to drive). */
   outputNames(): string[] {
     return this.outputs.map((o) => o.name ?? "output");
@@ -415,7 +446,13 @@ export class MidiEngine {
       // tells App which stream this is: the dedicated SCRATCH CC (vinyl mode) vs the
       // top-plate BEND CC (non-vinyl). App latches vinyl-mode + gates the grab off it.
       const delta = val - 64;
-      if (delta !== 0) this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: c.scratch ?? false });
+      if (delta !== 0) {
+        if (typeof performance !== "undefined") {
+          this.jogLog.push({ t: performance.now(), d: delta });
+          if (this.jogLog.length > 600) this.jogLog.shift();
+        }
+        this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: c.scratch ?? false });
+      }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
       const delta = val - 64;

@@ -35,12 +35,14 @@ function parseBytes(s: string): number[] | null {
 export function MidiDebug({ midi }: { midi: UseMidi }) {
   const [inMon, setInMon] = useState<MonMsg[]>([]);
   const [outMon, setOutMon] = useState<OutMsg[]>([]);
+  const [jog, setJog] = useState(() => midi.jogCadence());
   const [raw, setRaw] = useState("");
   // Both rings are filled by the engine continuously — just mirror them on a timer.
   useEffect(() => {
     const iv = setInterval(() => {
       setInMon(midi.monitor());
       setOutMon(midi.outMonitor());
+      setJog(midi.jogCadence());
     }, 120);
     return () => clearInterval(iv);
   }, [midi]);
@@ -53,6 +55,30 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
 
   return (
     <>
+      {/* JOG CADENCE — instrumentation for the scratch velocity model. Spin the platter
+          and read: a steady mouse is ~1–8 ms/tick with ~0 burst; a bursty/sparse hardware
+          jog shows a high burst% (sub-1ms clusters) + big max-gap — the case the alpha-beta
+          filter smooths. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Jog scratch cadence</span>
+          <span className="settings-hint" style={{ margin: 0 }}>
+            scratch the jog to measure
+          </span>
+        </div>
+        <div className="midi-monitor-row" style={{ flexWrap: "wrap", gap: "10px 16px" }}>
+          <span className="midi-monitor-meta">{jog.rate.toFixed(0)} ticks/s</span>
+          <span className="midi-monitor-meta">med {jog.medMs.toFixed(1)} ms</span>
+          <span className="midi-monitor-meta">p95 {jog.p95Ms.toFixed(1)} ms</span>
+          <span className="midi-monitor-meta">maxgap {jog.maxGapMs.toFixed(0)} ms</span>
+          <span className="midi-monitor-meta" style={{ color: jog.burst > 0.25 ? "var(--accent, #e66)" : undefined }}>
+            burst {(jog.burst * 100).toFixed(0)}%
+          </span>
+          <span className="midi-monitor-meta">avg |tick| {jog.avgTick.toFixed(1)}</span>
+          <span className="midi-monitor-meta">n {jog.count}</span>
+        </div>
+      </div>
+
       {/* INPUT — the live monitor (the map-building surface) */}
       <div className="settings-section">
         <div className="settings-section-head">

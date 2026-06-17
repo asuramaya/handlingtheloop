@@ -358,10 +358,10 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 > cases + `canDrive`/`isStage`/`returnToFloor`/`stageReqs` + presence surfacing to
 > participants only), `SocialScreen.tsx` + `styles.css` (`StageBar` + host request list +
 > stage card). **All over the EXISTING public socket — no Worker/migration change.**
-> **Follow-up:** client-side deck-LOCK for a stage DJ (today the server drops their
-> out-of-lane intents and the next host snapshot self-heals the cosmetic local desync, but
-> the off-deck UI isn't dimmed yet) → E4's "deck UI locked/dimmed off your seat". E6 gate
-> modes (open/request/invite) + E6a's knock-to-listen for PRIVATE rooms still open.
+> **Follow-up DONE `d0d63fa`:** the client-side per-deck LOCK (off-deck dim + control gate,
+> zoom/expand kept live) — E4's "deck UI locked/dimmed off your seat" is now shipped, closing
+> the local-desync gap (a stage DJ can no longer even touch their off-deck). E6 gate modes
+> (open/request/invite) + E6a's knock-to-listen for PRIVATE rooms still open.
 
 - [~] **E1. Room object model** — registry/data layer done (per-host live `rooms`
       row + heartbeat). Addressing already decoupled via D-1 (`?room=@handle` →
@@ -372,9 +372,13 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       listener (one deck, `stage`)** → listener → floor. **Per-deck claim landed** as the
       `decks` permission + `canDriveIntent` gate (a stage DJ drives exactly their deck).
       *(b2b handoff / co-controller deck-split UI = later.)*
-- [~] **E4. Seat/stage UX:** floor ⇄ decks transition shipped — "✋ Request the decks /
-      Step down" on the listener, "Bring up / ⬇ floor" on the host; a floor listener's board
-      is already locked (`lockedRef`). *(Off-deck deck-DIMMING for a stage DJ = the follow-up.)*
+- [x] **E4. Seat/stage UX:** floor ⇄ decks transition shipped — "✋ Request the decks /
+      Step down" on the listener, "Bring up / ⬇ floor" on the host. **Per-deck on-screen LOCK
+      done** (`d0d63fa`): a deck the device can't drive (a stage DJ's OTHER deck; both for a
+      pure follower) goes non-interactive + dimmed (button bank + crossfader `pointer-events:
+      none`, waveform jog/seek/bend gated in DeckLane) — but **zoom + expand stay live** so a
+      listener can still inspect either waveform. Keyboard/MIDI gate per-deck via
+      `canDriveDeckRef`. *(b2b deck-split co-controller UI still later — E3.)*
 - [ ] **E5. Demote the two old toggles:** mute → trivial player mute (not a mode);
       device-output routing → multi-device-only setting that defaults correctly.
 - [~] **E6. Gate modes:** the **request-to-play** path is live (raise-hand → host

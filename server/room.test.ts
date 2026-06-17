@@ -266,6 +266,16 @@ describe("DjRoom crowd guard + requests", () => {
     expect(rejoin.status).toBe(403);
   });
 
+  it("a ban survives a DO eviction (reconstruct over the same storage)", async () => {
+    const host = await liveHost();
+    await h.connect({ device: "A", pub: true });
+    await h.send(host, { t: "ban", to: "A" });
+    // Rebuild the DO over the SAME persisted storage, as the runtime would after an idle evict.
+    const room2 = new DjRoom(h.state as unknown as ConstructorParameters<typeof DjRoom>[0]);
+    const req = new Request("https://x/api/room?device=A&name=A&kind=Mac&pub=1", { headers: { Upgrade: "websocket" } });
+    expect((await room2.fetch(req)).status).toBe(403); // still banned
+  });
+
   it("chat off (slow=-1) refuses everyone", async () => {
     const host = await liveHost();
     const a = (await h.connect({ device: "A", pub: true })).ws!;

@@ -72,6 +72,7 @@ export interface RoomState {
   chatLog: ChatMsg[]; // the running chat (history + live)
   chatSlow: number; // slow-mode: <0 chat off, 0 normal, >0 N-second gate
   iAmMuted: boolean; // the host muted THIS device
+  mutedDevices: Set<string>; // HOST: device ids currently muted (to flip the row mute⇄unmute)
   sendChat: (text: string) => void; // post a chat line
   setChatSlow: (seconds: number) => void; // HOST: set slow-mode / turn chat off
   muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
@@ -152,6 +153,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
   const [chatSlow, setChatSlowState] = useState(0);
   const [iAmMuted, setIAmMuted] = useState(false);
+  const [mutedDevices, setMutedDevices] = useState<Set<string>>(new Set());
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -238,6 +240,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       chatHistory: (list) => setChatLog(list),
       chatSlow: (s) => setChatSlowState(s),
       muted: (on) => setIAmMuted(on),
+      mutedList: (ids) => setMutedDevices(new Set(ids)),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -274,6 +277,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setChatLog([]);
       setChatSlowState(0);
       setIAmMuted(false);
+      setMutedDevices(new Set());
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -468,6 +472,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     chatLog,
     chatSlow,
     iAmMuted,
+    mutedDevices,
     sendChat,
     setChatSlow,
     muteDevice,

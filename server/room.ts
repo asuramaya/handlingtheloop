@@ -114,11 +114,23 @@ export class DjRoom {
     this.isPublic = (await this.state.storage.get<boolean>("public")) ?? false;
     this.stageGate = (await this.state.storage.get<StageGate>("stageGate")) ?? "request";
     this.chatSlow = (await this.state.storage.get<number>("chatSlow")) ?? 0;
+    // Moderation (L1) survives a DO eviction — a ban that evaporated when the room idled wasn't
+    // a ban. Mute persists too so a re-muted spammer stays muted across a cold restart.
+    this.muted = new Set((await this.state.storage.get<string[]>("muted")) ?? []);
+    this.banned = new Set((await this.state.storage.get<string[]>("banned")) ?? []);
     this.loaded = true;
   }
 
   private async saveGrants(): Promise<void> {
     await this.state.storage.put("grants", [...this.grants]);
+  }
+
+  private async saveMuted(): Promise<void> {
+    await this.state.storage.put("muted", [...this.muted]);
+  }
+
+  private async saveBanned(): Promise<void> {
+    await this.state.storage.put("banned", [...this.banned]);
   }
 
   private async saveApproved(): Promise<void> {
@@ -441,6 +453,7 @@ export class DjRoom {
         if (!to || this.isHostDevice(to)) break;
         if (msg.on) this.muted.add(to);
         else this.muted.delete(to);
+        await this.saveMuted();
         for (const w of this.state.getWebSockets(to)) {
           try {
             w.send(JSON.stringify({ t: "muted", on: !!msg.on } satisfies ServerMsg));
@@ -448,6 +461,7 @@ export class DjRoom {
             /* socket gone */
           }
         }
+        this.broadcastPresence(); // refresh the host's muted list so the row flips mute⇄unmute
         break;
       }
       case "ban": {
@@ -456,7 +470,8 @@ export class DjRoom {
         const to = (msg.to || "").slice(0, 64);
         if (!to || to === self || this.isHostDevice(to)) break;
         this.banned.add(to);
-        this.muted.delete(to);
+        await this.saveBanned();
+        if (this.muted.delete(to)) await this.saveMuted();
         this.evict(to, "You were removed by the host.");
         break;
       }
@@ -952,6 +967,7 @@ export class DjRoom {
       stageGate: this.stageGate,
       stage: this.stageReqs(),
       chatSlow: this.chatSlow,
+      muted: [...this.muted],
     };
   }
 

@@ -218,13 +218,13 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number }
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number; muted?: string[] }
   // The live song-request list (F1), sent to PARTICIPANTS (the DJ acts on them).
   | { t: "requests"; list: SongRequest[] }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
   // `stageGate`/`chatSlow` ride BOTH payloads — a listener needs them to step up / chat.
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number }
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number; muted?: string[] }
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }

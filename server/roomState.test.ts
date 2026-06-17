@@ -60,6 +60,7 @@ describe("welcomeFor / presenceFor", () => {
     stageGate: "open",
     stage: [{ id: "x", name: "X", deck: "A" }],
     chatSlow: 0,
+    muted: [],
   };
 
   it("gives a participant the roster + hand-raises + requests; the crowd gets none of it", () => {

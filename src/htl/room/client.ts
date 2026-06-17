@@ -28,6 +28,7 @@ export interface RoomHandlers {
   chatHistory?: (list: ChatMsg[]) => void; // recent chat backlog on join
   chatSlow?: (seconds: number) => void; // slow-mode interval (<0 off, 0 normal, >0 N-sec)
   muted?: (on: boolean) => void; // the host muted/unmuted THIS device
+  mutedList?: (ids: string[]) => void; // HOST: the set of muted device ids (drives the unmute toggle)
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -375,6 +376,7 @@ export class RoomClient {
         this.h.stageGate?.(this.stageGate);
         if (msg.requests) this.h.requests?.(msg.requests);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
+        if (msg.muted) this.h.mutedList?.(msg.muted);
         // A PUBLIC read-only listener is auto-joined server-side and never drives — skip the
         // engage restore entirely (it has no switches to assert).
         if (this.listenHandle) {
@@ -410,6 +412,7 @@ export class RoomClient {
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
+        if (msg.muted) this.h.mutedList?.(msg.muted);
         break;
       case "role":
         this.anchorId = msg.anchorId;

@@ -108,6 +108,7 @@ export interface RoomView {
   stageGate: StageGate;
   stage: StageReq[]; // pending hand-raises (participants only)
   chatSlow: number; // chat slow-mode: <0 off, 0 normal, >0 N-second gate
+  muted: string[]; // device ids the host has muted (participants only — drives the unmute toggle)
 }
 
 // The welcome frame for a joining socket. A participant sees the roster + pending hand-raises;
@@ -117,14 +118,14 @@ export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: 
   const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, requests } as const;
   return pub
     ? { t: "welcome", ...base, peers: [], pub: true }
-    : { t: "welcome", ...base, peers: view.peers, stage: view.stage };
+    : { t: "welcome", ...base, peers: view.peers, stage: view.stage, muted: view.muted };
 }
 
 // The two presence payloads: the FULL roster (+ hand-raises) for participants, and the LITE
 // count-only frame for the crowd (so the big roster never fans out to hundreds of listeners).
 export function presenceFor(view: RoomView): { full: ServerMsg; lite: ServerMsg } {
   return {
-    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow },
+    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow, muted: view.muted },
     lite: { t: "presence", peers: [], listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow },
   };
 }

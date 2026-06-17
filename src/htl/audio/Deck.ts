@@ -2,6 +2,7 @@ import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analy
 import { beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
+import { JogEngine } from "./JogEngine";
 
 // WSOLA stretch-engine config posted to the worklet. The preset numbers (frame/
 // search/stride) plus the optional quality toggles wired from the Audio settings tab.
@@ -168,7 +169,6 @@ function upsampleTo(src: Float32Array, n: number): Float32Array {
   return out;
 }
 
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 // Peak amplitude of an analyser's current time-domain frame, in dBFS.
 function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
   an.getFloatTimeDomainData(buf);
@@ -262,9 +262,7 @@ export class Deck {
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
   lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
   get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
-  private scratchNode: AudioWorkletNode | null = null; // continuous scrub resampler
-  get scratchAttached() { return this.scratchNode != null; } // did the scrub worklet attach?
-  private scratchLoaded = false; // the scratch worklet holds this track's PCM (mobile loads it lazily)
+  get scratchAttached() { return this.jog.attached; } // did the scrub worklet attach?
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Beat-sync role, OWNED by AudioEngine (the 2-deck relationship lives there) and
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
@@ -273,34 +271,12 @@ export class Deck {
   keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
   onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
 
-  // --- jog/platter physics (see scrubBegin / jogTick) ---
-  private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
-  private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
-  private jogPhase: "off" | "grab" | "coast" = "off";
-  private jogPos = 0; // platter position (track sec) — authoritative while jogging
-  private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
-  private handPos = 0; // where the finger says the platter is (accumulated)
-  private handLast = 0; // handPos at the previous frame tick (for frame-rate fling velocity)
-  private handVel = 0; // smoothed finger velocity, drives pitch + release fling
-  private jogInputAt = 0; // ctx time of the last pointer sample (for per-input motion)
-  private jogLast = 0; // ctx time of the last tick
-  private jogRaf = 0; // requestAnimationFrame handle (0 = loop idle)
-  private jogReturnToPlay = false; // release should spin back up to play, not rest
-  private _jogWeight = 0.4; // 0 = featherweight/snappy … 1 = heavy flywheel
-  private _jogDrag = 0.4; // 0 = frictionless glide … 1 = quick brake
-  private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
-  // --- Vinyl Speed Adjust: turntable motor brake / soft-start ramps + spinback ---
-  // rekordbox's "vinyl feel": PAUSE decelerates to a stop (Touch/Brake), PLAY spins up
-  // from rest (Release/Start), touching the platter glides down instead of cutting dead,
-  // and spinback() throws it backward then catches it. All four reuse the jog COAST
-  // physics (stepCoast) — a motor ramp is just a coast with a start velocity and a time
-  // set by these knobs (not the jog weight/drag). Off → instant transport, as before.
-  private _vinylSpeed = false; // master enable (turntable motor feel; opt-in so scratch stays instant)
-  private _vinylBrake = 0.22; // 0..1 → pause-brake + touch-decel time
-  private _vinylStart = 0.18; // 0..1 → play soft-start time
-  private _backSpin = 0.5; // 0..1 → spinback length + strength
-  private _ramping: "start" | "brake" | "spinback" | null = null; // a motor ramp is in flight
-  private _coastTau = 0; // >0 overrides the jog-physics coast tau (= a motor ramp time)
+  // --- jog/platter physics + scratch resampler (state + driver) ---
+  // Extracted into JogEngine (grab/coast + Vinyl Speed Adjust motor ramps/spinback + the
+  // scratch worklet node), wired to this deck's transport via the host callbacks built in
+  // the ctor. Deck forwards the public surface (scrubBegin/Move/End, spinback,
+  // setJogPhysics/setVinylSpeed/…) to it; bend/sync-trim/clock stay native below.
+  readonly jog: JogEngine;
   // --- pitch-bend (jog outer-ring / un-gripped turn / scroll while playing) ---
   // A momentary tempo push for beat-matching: `_bend` is a fractional offset folded
   // into the sounding rate (effRate = _rate·(1+_bend)). Each nudge adds to it and it
@@ -308,6 +284,7 @@ export class Deck {
   // eases home to the set tempo. NEVER a re-seek (that would glitch at the tick rate).
   private _bend = 0;
   private bendRaf = 0;
+  private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
   private static readonly BEND_GAIN = 6; // ticks→push: how hard a turn bends the tempo
   private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
   private static readonly BEND_MAX = 0.6; // cap the push at ±60% of the set tempo
@@ -413,6 +390,27 @@ export class Deck {
     this.meterPre = ctx.createAnalyser();
     this.meterPre.fftSize = 1024;
     this.rack.input.connect(this.meterPre);
+    // The jog/scratch/motor physics, wired to this deck's transport via bound callbacks
+    // (its platter state + the scratch worklet stay private; mirrors the loops/eq/rack
+    // composition). Deck's bend/clock read its phase via `this.jog.jogging`.
+    this.jog = new JogEngine(ctx, {
+      position: () => this.position(),
+      startOffset: () => this.startOffset,
+      setStartOffset: (v) => { this.startOffset = v; },
+      playing: () => this._playing,
+      setPlaying: (v) => { this._playing = v; },
+      loaded: () => this._loaded,
+      duration: () => this._duration,
+      rate: () => this._rate,
+      effRate: () => this.effRate(),
+      play: () => this.play(),
+      pause: () => this.pause(),
+      spawnSource: (at) => this.spawnSource(at),
+      stopSource: () => this.stopSource(),
+      clearBend: () => this.clearBend(),
+      scratchBuffer: () => this.buffer,
+      connectScratch: (node) => { node.connect(this.rack.input); },
+    });
   }
 
   /** Instantaneous post-fader peak per channel in dBFS (−100 = silence … 0 = full
@@ -426,7 +424,7 @@ export class Deck {
     // During a soft-start ramp the audio is spinning up but the transport INTENT is
     // "playing", so the UI / emit / session see play immediately (a brake reads paused —
     // _playing is already false there). Internal logic uses the _playing field directly.
-    return this._playing || this._ramping === "start";
+    return this._playing || this.jog.ramping === "start";
   }
   get duration() {
     return this._duration;
@@ -593,43 +591,10 @@ export class Deck {
     this.updatePitch();
   }
 
-  /** Wire the scratch resampler in parallel with the source, into the EQ (raw
-   *  pitch, bypassing key-lock — scrubbing should pitch like vinyl). */
+  /** Wire the scratch resampler in parallel with the source (into the channel input, raw
+   *  pitch — scrubbing should pitch like vinyl). The JogEngine owns the node + its PCM. */
   attachScratchNode(node: AudioWorkletNode) {
-    node.connect(this.rack.input);
-    this.scratchNode = node;
-    if (this.buffer && !isMobileDevice()) this.sendScratchBuffer();
-  }
-
-  // Hand the whole decoded track to the resampler (its own copies, so the
-  // AudioBuffer's backing store isn't detached by the transfer). This is a FULL
-  // float32 duplicate of the track per deck — desktop preloads it eagerly (RAM is
-  // plentiful), but on mobile it's a major slice of the two-deck iOS peak that crashed
-  // iPads mid-transition, so mobile loads it LAZILY (only on the first scratch).
-  private sendScratchBuffer() {
-    if (!this.scratchNode || !this.buffer) return;
-    const b = this.buffer;
-    const channels: Float32Array[] = [];
-    const transfer: ArrayBuffer[] = [];
-    for (let c = 0; c < b.numberOfChannels; c++) {
-      const copy = b.getChannelData(c).slice();
-      channels.push(copy);
-      transfer.push(copy.buffer);
-    }
-    this.scratchNode.port.postMessage({ type: "load", channels, length: b.length }, transfer);
-    this.scratchLoaded = true;
-  }
-  private scratchStart() {
-    if (!this.scratchLoaded) this.sendScratchBuffer(); // mobile: lazy-load the PCM on first scratch
-    this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
-  }
-  private scratchMove() {
-    // Position only — the worklet reconstructs smooth motion from the position
-    // stream itself; feeding it our noisy per-frame velocity made it garbled.
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate });
-  }
-  private scratchStop() {
-    this.scratchNode?.port.postMessage({ type: "stop" });
+    this.jog.attachNode(node);
   }
 
   // De-tangled pitch: the stretch engine takes a `pitch` factor INDEPENDENT of
@@ -673,7 +638,13 @@ export class Deck {
     this.startOffset = 0;
     this._syncTrim = 0; // a new track invalidates any inherited phase-lock trim
     this.loops.reset();
-    this.stopJog();
+    this.jog.reset(); // cancel any platter coast + stale the scratch PCM
+    // Drop any decaying pitch-bend (the platter reset above handled the jog half).
+    if (this.bendRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
+      this.bendRaf = 0;
+    }
+    this._bend = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.stemsLoaded = false;
     this.stemMuted = { vocals: false, drums: false, bass: false, other: false };
@@ -689,10 +660,10 @@ export class Deck {
     this._loudness = null; // recompute lazily for the new track
     this.loadEnginePcm(); // hand the mix PCM to the stretch engine
     for (const name of STEM_NAMES) this.rampStem(name); // reset engine stem gains to all-on
-    // New track → the scratch worklet's old PCM is stale. Desktop re-sends now; mobile defers
-    // the (full float32) copy until the first scratch, to keep it out of the 2-deck iOS peak.
-    this.scratchLoaded = false;
-    if (!isMobileDevice()) this.sendScratchBuffer();
+    // New track → the scratch worklet's old PCM is stale (jog.reset() above cleared the
+    // loaded flag). Desktop re-sends now; mobile defers the (full float32) copy until the
+    // first scratch, to keep it out of the 2-deck iOS peak.
+    if (!isMobileDevice()) this.jog.sendBuffer();
   }
 
   /** Release the decoded float32 mix buffer (~92 MB) — called on MOBILE once this deck's stems
@@ -1137,7 +1108,7 @@ export class Deck {
   }
 
   play() {
-    this.cancelJog(); // a transport action wins over an in-flight platter coast
+    this.jog.cancelJog(); // a transport action wins over an in-flight platter coast
     this.clearBend();
     if (!this._loaded || this._playing) return;
     // iOS boots the AudioContext SUSPENDED (clock frozen) until a gesture resumes
@@ -1148,7 +1119,7 @@ export class Deck {
     this._playing = true;
   }
   pause() {
-    this.cancelJog();
+    this.jog.cancelJog();
     this.clearBend();
     if (!this._playing) return;
     this.startOffset = this.position();
@@ -1159,19 +1130,19 @@ export class Deck {
     this.playing ? this.requestPause() : this.requestPlay();
   }
   /** User-initiated play (button / key / MIDI): soft-start when Vinyl Speed is on, else
-   *  instant. Session-follow / cue-drop paths keep calling play() directly for no ramp. */
+   *  instant. Session-follow / cue-drop paths keep calling play() directly for no ramp.
+   *  softStart() falls back to play() when the motor feel is off. */
   requestPlay() {
-    if (this._vinylSpeed && this._vinylStart > 0 && this._loaded && !this._playing) this.softStart();
-    else this.play();
+    this.jog.softStart();
   }
-  /** User-initiated pause: brake when Vinyl Speed is on, else instant. */
+  /** User-initiated pause: brake when Vinyl Speed is on, else instant (brakeStop falls
+   *  back to pause() when off). */
   requestPause() {
-    if (this._vinylSpeed && this._vinylBrake > 0 && this._playing) this.brakeStop();
-    else this.pause();
+    this.jog.brakeStop();
   }
 
   seek(seconds: number) {
-    this.cancelJog();
+    this.jog.cancelJog();
     this.clearBend();
     const target = Math.max(0, Math.min(this.duration, seconds));
     if (this._playing) {
@@ -1197,8 +1168,7 @@ export class Deck {
 
   /** Tune the platter feel. Both 0..1. weight = inertia, drag = coast friction. */
   setJogPhysics(weight: number, drag: number) {
-    this._jogWeight = Math.max(0, Math.min(1, weight));
-    this._jogDrag = Math.max(0, Math.min(1, drag));
+    this.jog.setJogPhysics(weight, drag);
   }
 
   /** Scale how hard a pitch-bend nudge pushes the tempo (0.25..2, 1 = default). */
@@ -1209,34 +1179,19 @@ export class Deck {
   /** Vinyl Speed Adjust — the turntable motor feel. enabled=false restores instant
    *  play/pause + a dead platter stop. brake/start are 0..1 (→ stop / spin-up times). */
   setVinylSpeed(enabled: boolean, brake: number, start: number) {
-    this._vinylSpeed = enabled;
-    this._vinylBrake = Math.max(0, Math.min(1, brake));
-    this._vinylStart = Math.max(0, Math.min(1, start));
+    this.jog.setVinylSpeed(enabled, brake, start);
   }
   /** Spinback length + strength, 0..1 (Short … Long). */
   setBackSpinLength(v: number) {
-    this._backSpin = Math.max(0, Math.min(1, v));
-  }
-  // Motor ramp time-constants / strength from the 0..1 knobs.
-  private brakeTau() {
-    return lerp(0.02, 0.5, this._vinylBrake);
-  }
-  private startTau() {
-    return lerp(0.02, 0.45, this._vinylStart);
-  }
-  private backSpinTau() {
-    return lerp(0.12, 0.6, this._backSpin);
-  }
-  private backSpinStrength() {
-    return lerp(4, 14, this._backSpin);
+    this.jog.setBackSpinLength(v);
   }
 
   get scrubbing() {
-    return this.jogPhase !== "off";
+    return this.jog.scrubbing;
   }
   /** True while the platter is being dragged OR still coasting after release. */
   get jogging() {
-    return this.jogPhase !== "off";
+    return this.jog.jogging;
   }
   /** True while a momentary pitch-bend is decaying — pauses the sync phase-lock so the
    *  corrector doesn't chase a transient ear-nudge. */
@@ -1255,77 +1210,21 @@ export class Deck {
     this.pushRate();
   }
 
+  /** Grip the platter (pointer/jog down) — stops it dead, then it follows the finger. */
   scrubBegin() {
-    if (!this._loaded) return;
-    // iOS starts the AudioContext suspended (its clock frozen) until a gesture
-    // resumes it. The jog physics tick off ctx.currentTime, so without this a
-    // scrub before the first Play sees dt≈0 every frame and the platter never
-    // moves. Resuming on the grab gesture unlocks it.
-    if (this.ctx.state === "suspended") void this.ctx.resume();
-    this.clearBend(); // a grab takes over the clock — drop any decaying bend first
-    this.jogReturnToPlay = this._playing || (this.jogPhase === "coast" && this.jogReturnToPlay);
-    // Gripping the platter STOPS IT DEAD (like a hand on vinyl) — it then follows the
-    // finger from rest, so a scratch grab locks instantly with no forward creep. (The
-    // turntable touch/brake feel lives on the PAUSE button, not the scratch grab.)
-    this.jogPos = this.position();
-    if (this._playing) {
-      this.startOffset = this.jogPos;
-      this.stopSource();
-      this._playing = false;
-    }
-    this.handPos = this.handLast = this.jogPos;
-    this.jogVel = 0;
-    this._coastTau = 0;
-    this._ramping = null;
-    this.handVel = 0;
-    this.jogInputAt = this.ctx.currentTime;
-    this.jogLast = this.ctx.currentTime;
-    this.jogPhase = "grab";
-    this.scratchStart();
-    this.startJogLoop();
+    this.jog.scrubBegin();
   }
 
-  /** One (coalesced) pointer sample of finger motion, in track seconds. Applied
-   *  straight to the platter and voiced on the worklet immediately — so scratch
-   *  resolution tracks the mouse's true report rate (125–1000 Hz), not the display
-   *  refresh. Position only: the release-fling VELOCITY is derived at frame rate in
-   *  grabTick() (the AudioContext clock doesn't advance within a frame, so it can't
-   *  time individual samples — but the worklet gets full-rate position regardless). */
+  /** One (coalesced) pointer sample of finger motion, in track seconds — applied straight
+   *  to the platter and voiced on the worklet immediately (tracks the mouse's true report
+   *  rate, not the display refresh). */
   scrubMove(deltaSec: number) {
-    if (this.jogPhase !== "grab") return;
-    this.jogInputAt = this.ctx.currentTime;
-    let p = this.handPos + deltaSec;
-    const dur = this._duration;
-    if (p < 0) p = 0;
-    else if (p > dur) p = dur;
-    this.handPos = this.jogPos = p;
-    this.startOffset = p;
-    this.scratchMove(); // per-input-sample worklet push
+    this.jog.scrubMove(deltaSec);
   }
 
+  /** Release the platter — hands it its fling velocity to coast (or a back-spin). */
   scrubEnd() {
-    if (this.jogPhase !== "grab") return;
-    // Motion was applied per input sample in scrubMove(); just hand the platter its
-    // release spin — the finger's last smoothed velocity, capped so a violent flick
-    // can't launch it across the whole track.
-    const max = Deck.MAX_COAST;
-    this.jogVel = Math.max(-max, Math.min(max, this.handVel));
-    // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the
-    // native gesture is a hard BACKWARD flick of the jog. When the release is a strong
-    // back-fling during playback, give it the dramatic, tunable back-spin-and-catch curve
-    // (backSpinTau) instead of the quick jog-physics coast. Always available (it's a
-    // gesture, not the motor brake). Otherwise reset _coastTau so a normal release uses
-    // the jog weight/drag.
-    if (this.jogReturnToPlay && this.jogVel < -Deck.SPINBACK_FLICK) {
-      this._coastTau = this.backSpinTau();
-      this._ramping = "spinback";
-    } else {
-      this._coastTau = 0;
-      this._ramping = null;
-    }
-    this.jogLast = this.ctx.currentTime;
-    this.jogPhase = "coast";
-    this.startJogLoop();
+    this.jog.scrubEnd();
   }
 
   // --- Vinyl Speed Adjust: transport motor ramps (brake / soft-start / spinback) ---
@@ -1334,59 +1233,10 @@ export class Deck {
   // powering down or up. The coast machinery already knows how to ramp toward play speed
   // (resumePlay) or down to a stop; these just seed it from a transport action.
 
-  /** Seed the coast from `initialVel`, heading either UP to play (resumePlay) or DOWN to
-   *  a stop, over `tau`, voiced on the resampler. Shared by brake/softStart/spinback. */
-  private enterMotorCoast(initialVel: number, resumePlay: boolean, tau: number, kind: "start" | "brake" | "spinback") {
-    if (!this._loaded) return;
-    if (this.ctx.state === "suspended") void this.ctx.resume();
-    this.clearBend();
-    this.jogPos = this._playing ? this.position() : this.startOffset;
-    if (this._playing) {
-      this.startOffset = this.jogPos;
-      this.stopSource(); // hand the audio to the scratch resampler
-      this._playing = false;
-    }
-    this.handPos = this.handLast = this.jogPos;
-    this.handVel = 0;
-    this.jogVel = initialVel;
-    this.jogReturnToPlay = resumePlay;
-    this._coastTau = tau;
-    this._ramping = kind;
-    this.jogInputAt = this.ctx.currentTime;
-    this.jogLast = this.ctx.currentTime;
-    this.jogPhase = "coast";
-    this.scratchStart();
-    this.startJogLoop();
-  }
-
-  /** Pause with a turntable power-down: decelerate the audio to a stop over the brake
-   *  time, then settle paused. Falls back to instant pause() when Vinyl Speed is off. */
-  brakeStop() {
-    if (this._ramping === "brake") return;
-    if (!this._playing || !this._vinylSpeed || this._vinylBrake <= 0) {
-      this.pause();
-      return;
-    }
-    this.enterMotorCoast(this.effRate(), false, this.brakeTau(), "brake");
-  }
-
-  /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
-   *  time, then hand to normal playback. Falls back to instant play() when off. */
-  softStart() {
-    if (this._playing || this._ramping === "start") return;
-    if (!this._loaded || !this._vinylSpeed || this._vinylStart <= 0) {
-      this.play();
-      return;
-    }
-    this.enterMotorCoast(0, true, this.startTau(), "start");
-  }
-
   /** Spin the platter backward then let the motor catch it back to play — a triggerable
    *  back-spin (key / pad / FX), independent of a physical jog flick. */
   spinback(strength?: number) {
-    if (!this._loaded) return;
-    const s = strength != null ? Math.abs(strength) : this.backSpinStrength();
-    this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback");
+    this.jog.spinback(strength);
   }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.
@@ -1409,7 +1259,7 @@ export class Deck {
   /** One relative bend nudge. `deltaSec` = how far the platter rolled (sign = direction).
    *  Playing → bends the tempo and auto-reverts; paused → needle-searches. */
   bend(deltaSec: number) {
-    if (this.jogPhase !== "off") return; // a gripped / coasting platter owns the motion
+    if (this.jog.jogging) return; // a gripped / coasting platter owns the motion
     if (this.ctx.state === "suspended") void this.ctx.resume();
     if (!this._playing) {
       this.needleDrop(deltaSec * Deck.BEND_SEARCH);
@@ -1452,14 +1302,14 @@ export class Deck {
       const now = this.ctx.currentTime;
       const dt = Math.min(0.05, Math.max(0, now - last));
       last = now;
-      const live = this._bend !== 0 && this._playing && this.jogPhase === "off";
+      const live = this._bend !== 0 && this._playing && !this.jog.jogging;
       if (live) {
         this.reanchorClock();
         this._bend *= Math.exp(-dt / Deck.BEND_DECAY);
         if (Math.abs(this._bend) < 1e-3) this._bend = 0;
         this.pushRate();
       }
-      if (this._bend !== 0 && this._playing && this.jogPhase === "off") {
+      if (this._bend !== 0 && this._playing && !this.jog.jogging) {
         this.bendRaf = requestAnimationFrame(tick);
       }
     };
@@ -1476,133 +1326,6 @@ export class Deck {
       this.reanchorClock();
       this._bend = 0;
       this.pushRate();
-    }
-  }
-
-  private startJogLoop() {
-    if (this.jogRaf || typeof requestAnimationFrame === "undefined") return;
-    this.jogLast = this.ctx.currentTime;
-    const tick = () => {
-      this.jogRaf = 0;
-      const phase = this.jogPhase;
-      if (phase === "off") return;
-      const now = this.ctx.currentTime;
-      let dt = now - this.jogLast;
-      this.jogLast = now;
-      if (dt > 0) {
-        dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
-        if (phase === "grab") {
-          this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
-        } else {
-          this.stepCoast(dt); // may settle the platter to "off"
-          this.startOffset = this.jogPos;
-          if (this.jogPhase !== "off") this.scratchMove(); // voice the coast motion
-        }
-      }
-      if (this.jogPhase !== "off") this.jogRaf = requestAnimationFrame(tick);
-    };
-    this.jogRaf = requestAnimationFrame(tick);
-  }
-
-  // Abort an in-flight jog (drag or coast) WITHOUT moving the playhead — the
-  // current platter position is already mirrored into startOffset each tick, so a
-  // transport action (play/pause/seek/cue) simply takes over from where it is.
-  private cancelJog() {
-    if (this.jogPhase === "off") return;
-    this.jogPhase = "off";
-    if (this.jogRaf) {
-      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.jogRaf);
-      this.jogRaf = 0;
-    }
-    this.jogVel = 0;
-    this.handVel = 0;
-    this._ramping = null;
-    this._coastTau = 0;
-    this.scratchStop();
-  }
-
-  // Full reset on track load: cancel the jog and zero the platter.
-  private stopJog() {
-    this.cancelJog();
-    if (this.bendRaf) {
-      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
-      this.bendRaf = 0;
-    }
-    this._bend = 0;
-    this.jogPos = 0;
-    this.handPos = 0;
-    this.jogReturnToPlay = false;
-  }
-
-  // GRAB tick (frame rate): the platter IS the finger while gripped — each pointer
-  // sample is applied + voiced directly in scrubMove() at full input rate (1:1, no
-  // spring lag, sharp scratches). Here we only (a) track the release-fling velocity
-  // from the net hand motion this frame (the AudioContext clock can't time individual
-  // sub-frame samples), and (b) when the finger is HELD STILL / between input batches,
-  // feed the worklet the held position so it settles to zero speed.
-  private grabTick(dt: number) {
-    const moved = this.handPos - this.handLast;
-    this.handLast = this.handPos;
-    const stale = this.ctx.currentTime - this.jogInputAt > 0.006;
-    const inst = moved / dt;
-    const hk = 1 - Math.exp(-dt / 0.03); // light smoothing → clean release-fling velocity
-    this.handVel += (inst - this.handVel) * hk;
-    this.jogVel = this.handVel;
-    if (stale) {
-      // no fresh input: settle the worklet to the held position (else it would drift)
-      this.startOffset = this.jogPos;
-      this.scratchMove();
-    }
-  }
-
-  // COAST step: no finger. Either spin back up to play speed, or rub to a stop. A motor
-  // ramp (brake / soft-start / spinback) is the same machinery with _coastTau set, so the
-  // time comes from the Vinyl Speed knob instead of the jog weight/drag.
-  private stepCoast(dt: number) {
-    if (this.jogReturnToPlay) {
-      // Catch back up to play speed (jog release, soft-start, or a spinback's recovery):
-      // glide the rate toward 1× locally, then hand back to normal playback.
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.025, 0.12, this._jogWeight);
-      this.jogVel += (this._rate - this.jogVel) * (1 - Math.exp(-dt / tau));
-      this.jogPos += this.jogVel * dt;
-      this.clampJog();
-      if (Math.abs(this.jogVel - this._rate) < 0.03) {
-        // Hand the platter back to normal playback, continuing seamlessly: fade
-        // the resampler out as the buffer source fades in (both declick).
-        this.jogPhase = "off";
-        this._ramping = null;
-        this._coastTau = 0;
-        this.scratchStop();
-        this.startOffset = this.jogPos;
-        this.spawnSource(this.jogPos);
-        this._playing = true;
-      }
-    } else {
-      // Friction glide / brake: drag sets the strength, or _coastTau the motor brake time.
-      // Kept short (sub-second) so a flick eases off instead of spinning away.
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
-      this.jogVel *= Math.exp(-dt / tau);
-      this.jogPos += this.jogVel * dt;
-      this.clampJog();
-      if (Math.abs(this.jogVel) < 0.02) {
-        this.jogPhase = "off";
-        this._ramping = null;
-        this._coastTau = 0;
-        this.jogVel = 0;
-        this.startOffset = this.jogPos; // settle, paused, where it stopped
-        this.scratchStop();
-      }
-    }
-  }
-
-  private clampJog() {
-    const dur = this._duration;
-    if (this.jogPos <= 0) {
-      this.jogPos = 0;
-      if (this.jogVel < 0) this.jogVel = 0;
-    } else if (this.jogPos >= dur) {
-      this.jogPos = dur;
-      if (this.jogVel > 0) this.jogVel = 0;
     }
   }
 

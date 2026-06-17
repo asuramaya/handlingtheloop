@@ -22,6 +22,7 @@ export interface RoomHandlers {
   stage?: (reqs: StageReq[]) => void; // HOST: listeners raising a hand to step up to the decks
   stageGate?: (mode: StageGate) => void; // how the crowd reaches the decks (request/open/closed)
   stageSelf?: (status: "declined") => void; // LISTENER: the host declined my step-up request
+  reactions?: (counts: Record<string, number>, hype: number) => void; // aggregated crowd reactions + hype level
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -256,6 +257,10 @@ export class RoomClient {
   setStageGate(mode: StageGate): void {
     this.send({ t: "stageGate", mode });
   }
+  /** Tap a crowd reaction (F4). Fire-and-forget; the server aggregates + rate-limits. */
+  react(emoji: string): void {
+    this.send({ t: "react", emoji });
+  }
   /** Update this device's account accent and broadcast it (the room vibe / roster swatch). */
   setColor(color: string): void {
     if (color === this.color) return;
@@ -396,6 +401,9 @@ export class RoomClient {
         break;
       case "stage-self":
         this.h.stageSelf?.(msg.status);
+        break;
+      case "reactions":
+        this.h.reactions?.(msg.counts, msg.hype);
         break;
       case "kicked":
         // Denied entry or removed by the host. Forget our intent to be in (and the invite

@@ -12,7 +12,7 @@
 // arrive via an invite code the Worker resolves to this same session. Uses the WebSocket
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
 import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
-import { canDriveIntent } from "../src/htl/room/protocol";
+import { canDriveIntent, isReaction } from "../src/htl/room/protocol";
 
 // --- Minimal Cloudflare runtime types (no @cloudflare/workers-types installed). ---
 interface Ws {
@@ -110,6 +110,20 @@ export class DjRoom {
   private static DIGEST_FLUSH_MS = 50; // ~20 Hz
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
+  // Crowd reactions (F4) + hype (F2). Taps accumulate in a window and flush ONCE per
+  // REACT_FLUSH_MS as one aggregated frame (per-emoji counts) — never per tap, so a big room
+  // can't storm the fan-out. `hype` is a decaying 0..1 energy level (EMA of the window total)
+  // the DJ reads as crowd vibe; the flush keeps ticking (even with no new taps) until hype
+  // settles back to ~0, then idles. Per-device token bucket caps a single spammer.
+  private static REACT_FLUSH_MS = 1000;
+  private static HYPE_DECAY = 0.82; // per flush; ~settles over ~15s after a burst
+  private static HYPE_GAIN = 0.14; // window-total → hype contribution
+  private static REACT_RATE_MAX = 10; // taps per REACT_RATE_WINDOW per device
+  private static REACT_RATE_WINDOW = 2000;
+  private reactWindow: Record<string, number> = {};
+  private hype = 0;
+  private reactFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private reactRate: Record<string, { t: number; n: number }> = {};
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -244,7 +258,7 @@ export class DjRoom {
     // can never knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable
     // `pub`. The hand-raise is the one sanctioned floor→stage door; the host still gates it.
     const att = ws.deserializeAttachment() as Attachment | null;
-    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage") return;
+    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage" && msg.t !== "react") return;
 
     switch (msg.t) {
       case "join": {
@@ -391,6 +405,22 @@ export class DjRoom {
         if (!target || target === self || this.isHostDevice(target)) break;
         for (const t of this.state.getWebSockets(target)) this.refuseStage(t, "The host didn't bring you up.");
         this.returnToFloor(target);
+        break;
+      }
+      case "react": {
+        // A crowd reaction (F4). Validate against the fixed emoji set, rate-limit per device
+        // (a token bucket), accumulate into the window, and schedule the aggregated flush.
+        if (!isReaction(msg.emoji)) break;
+        const now = Date.now();
+        const rl = this.reactRate[self];
+        if (!rl || now - rl.t >= DjRoom.REACT_RATE_WINDOW) {
+          this.reactRate[self] = { t: now, n: 1 };
+        } else {
+          if (rl.n >= DjRoom.REACT_RATE_MAX) break; // over budget → drop silently (reactions are fire-and-forget)
+          rl.n++;
+        }
+        this.reactWindow[msg.emoji] = (this.reactWindow[msg.emoji] ?? 0) + 1;
+        this.scheduleReactFlush();
         break;
       }
       case "stageGate": {
@@ -941,6 +971,26 @@ export class DjRoom {
       this.digest.clear();
       for (const m of batch) this.relayToListeners(m);
     }, DjRoom.DIGEST_FLUSH_MS);
+  }
+
+  // Crowd reactions: flush the accumulated window ONCE per tick as a single aggregated frame
+  // (counts + the updated hype level), to EVERYONE. The timer keeps ticking — decaying hype
+  // even with no new taps — until energy settles, then idles (no taps + hype≈0 → stop). This
+  // is the F4/F2 spine: O(N) fan-out per SECOND, never per tap.
+  private scheduleReactFlush(): void {
+    if (this.reactFlushTimer) return;
+    this.reactFlushTimer = setTimeout(() => {
+      this.reactFlushTimer = null;
+      const counts = this.reactWindow;
+      this.reactWindow = {};
+      const total = Object.values(counts).reduce((s, n) => s + n, 0);
+      // EMA: decay the standing energy, add this window's contribution, clamp to [0,1].
+      this.hype = Math.min(1, this.hype * DjRoom.HYPE_DECAY + total * DjRoom.HYPE_GAIN);
+      if (this.hype < 0.01) this.hype = 0;
+      this.broadcast({ t: "reactions", counts, hype: this.hype });
+      // Keep ticking while there's energy to decay or fresh taps arrived; else go idle.
+      if (this.hype > 0) this.scheduleReactFlush();
+    }, DjRoom.REACT_FLUSH_MS);
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited

@@ -18,6 +18,15 @@
 
 export type DeckId = "A" | "B";
 
+// Crowd reactions (F4) + hype (F2). A listener taps one of a FIXED set of emojis; the DO
+// AGGREGATES them (never fans out each tap — a 500-person room would storm) into a periodic
+// frame of per-emoji counts plus a decaying HYPE level (0..1) the DJ reads as crowd energy.
+export const REACTIONS = ["🔥", "🙌", "🎶", "❤️", "😮", "💀"] as const;
+export type Reaction = (typeof REACTIONS)[number];
+export function isReaction(s: unknown): s is Reaction {
+  return typeof s === "string" && (REACTIONS as readonly string[]).includes(s);
+}
+
 export interface Peer {
   id: string;
   name: string;
@@ -167,6 +176,7 @@ export type ClientMsg =
   | { t: "stage-approve"; to: string; deck: DeckId } // HOST brings a listener up onto a deck
   | { t: "stage-deny"; to: string } // HOST declines a request, or sends a stage DJ back to the floor
   | { t: "stageGate"; mode: StageGate } // HOST sets how the crowd reaches the decks (request/open/closed)
+  | { t: "react"; emoji: string } // a listener/participant taps a reaction (F4) — server-aggregated, rate-limited
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
@@ -190,6 +200,10 @@ export type ServerMsg =
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }
+  // Aggregated reactions (F4) + hype level (F2), flushed to EVERYONE on a ~1 Hz timer:
+  // `counts` = per-emoji taps in the window (drives the floating burst), `hype` = the
+  // decaying crowd-energy level 0..1 (drives the meter).
+  | { t: "reactions"; counts: Record<string, number>; hype: number }
   | { t: "role"; anchorId: string | null } // the anchor (clock) moved
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }

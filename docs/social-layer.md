@@ -406,9 +406,16 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 - [ ] **F1. Song requests:** crowd feeds a queue the DJ can pull from (maps onto
       the library/match engine). Anti-flood rate limit per listener.
-- [ ] **F2. Live hype/energy meter:** aggregate reactions into a signal the DJ sees.
+- [x] **F2. Live hype/energy meter DONE.** The DO keeps a decaying 0..1 `hype` EMA (per-flush
+      decay + window-total gain), flushed with the reaction frame; the SocialScreen renders it
+      as a filling bar (throbs when hot) + a floating-emoji burst. The flush keeps ticking to
+      decay hype even with no new taps, then idles.
 - [ ] **F3. Vote-the-next-track** / crowd setlists.
-- [ ] **F4. Reactions:** server-side aggregation + rate limit; NEVER fan out each emoji.
+- [x] **F4. Reactions DONE.** Fixed emoji set (`REACTIONS`, validated by `isReaction`); the DO
+      AGGREGATES taps in a window and flushes ONE frame per `REACT_FLUSH_MS` (~1 Hz) to everyone
+      — never per tap — with a per-device token bucket (`REACT_RATE_MAX`/window) capping a
+      spammer. Pub listeners may `react` (guard carve-out). `react-bar` in SocialScreen; shown
+      wherever a broadcast is happening (you host one or you've tuned in).
 - [ ] **F5. Chat at scale:** slow-mode, follower-only option, rate limit, mention
       controls (`@everyone` guard), moderation hooks.
 

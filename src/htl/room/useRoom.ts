@@ -57,6 +57,10 @@ export interface RoomState {
   denyStage: (to: string) => void; // HOST: decline a request / send a stage DJ to the floor
   stageGate: StageGate; // how the crowd reaches the decks (request/open/closed)
   setStageGate: (mode: StageGate) => void; // HOST: set the gate mode
+  // Crowd reactions (F4) + hype (F2).
+  hype: number; // decaying crowd-energy level 0..1 (the meter)
+  reactionTick: { counts: Record<string, number>; id: number }; // latest aggregated burst (id bumps on each non-empty frame → animate)
+  react: (emoji: string) => void; // tap a reaction
   error: string | null;
   client: RoomClient | null;
   join: () => void; // establish sync (listen on, control off) — guests knock first
@@ -126,6 +130,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [stageRequests, setStageRequests] = useState<StageReq[]>([]);
   const [myStageDeck, setMyStageDeck] = useState<DeckId | null>(null);
   const [stageGate, setStageGateState] = useState<StageGate>("request");
+  const [hype, setHype] = useState(0);
+  const [reactionTick, setReactionTick] = useState<{ counts: Record<string, number>; id: number }>({ counts: {}, id: 0 });
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -200,6 +206,13 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       // A step-up didn't go through (declined / deck taken / closed) — clear the optimistic
       // pending deck. The human reason rides a separate `error` the server sends alongside.
       stageSelf: () => setMyStageDeck(null),
+      reactions: (counts, h) => {
+        setHype(h);
+        // Only bump the burst id on a non-empty frame, so the UI animates real taps — not the
+        // empty decay frames the server keeps sending while hype falls back to zero.
+        const total = Object.values(counts).reduce((s, n) => s + n, 0);
+        if (total > 0) setReactionTick((t) => ({ counts, id: t.id + 1 }));
+      },
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -229,6 +242,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setStageRequests([]);
       setMyStageDeck(null);
       setStageGateState("request");
+      setHype(0);
+      setReactionTick({ counts: {}, id: 0 });
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -311,6 +326,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     clientRef.current?.setStageGate(mode);
     setStageGateState(mode); // optimistic — the presence echo confirms
   }, []);
+  const react = useCallback((emoji: string) => clientRef.current?.react(emoji), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
@@ -399,6 +415,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     denyStage,
     stageGate,
     setStageGate,
+    hype,
+    reactionTick,
+    react,
     error,
     client: clientRef.current,
     join,

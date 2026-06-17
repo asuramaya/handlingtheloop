@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RoomState } from "@htl/room";
+import { REACTIONS } from "@htl/room";
 import { type LiveRoom, fetchLiveRooms } from "@htl/account";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { QRCode } from "./QRCode";
@@ -116,6 +117,10 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
             room.tuneIn(h);
           }}
         />
+
+        {/* Crowd reactions + hype — wherever a broadcast is happening (you host one, or you've
+            tuned into one). Everyone present can tap; the DJ reads the energy. */}
+        {(room.roomPublic || room.listeningTo) && <CrowdPanel room={room} />}
 
         {!inSession ? (
           <p className="social-hint">Sign in under Profile, or open an invite link, to join a shared session.</p>
@@ -409,6 +414,55 @@ function StageBar({ room }: { room: RoomState }) {
           {open ? "Take B" : "Deck B"}
         </button>
       </span>
+    </div>
+  );
+}
+
+// Crowd reactions (F4) + hype meter (F2). Everyone present taps the emoji row; the DO
+// aggregates and flushes a hype level + per-emoji counts, which we render as a filling bar
+// plus a short burst of floating emojis. The DJ reads the bar as live crowd energy.
+function CrowdPanel({ room }: { room: RoomState }) {
+  const [sprites, setSprites] = useState<{ id: number; emoji: string; x: number }[]>([]);
+  const seen = useRef(0);
+  const { id, counts } = room.reactionTick;
+  useEffect(() => {
+    if (id === seen.current) return;
+    seen.current = id;
+    const add: { id: number; emoji: string; x: number }[] = [];
+    let k = 0;
+    for (const [emoji, n] of Object.entries(counts)) {
+      for (let i = 0; i < Math.min(n, 6); i++) {
+        add.push({ id: id * 1000 + k++, emoji, x: 6 + Math.floor(Math.random() * 86) });
+      }
+    }
+    if (!add.length) return;
+    setSprites((s) => [...s.slice(-40), ...add]);
+    const ids = new Set(add.map((a) => a.id));
+    const t = setTimeout(() => setSprites((s) => s.filter((sp) => !ids.has(sp.id))), 1500);
+    return () => clearTimeout(t);
+  }, [id, counts]);
+
+  const pct = Math.round(room.hype * 100);
+  return (
+    <div className="crowd-panel">
+      <div className="hype-row">
+        <span className="hype-label">Hype</span>
+        <div className={`hype-bar ${pct >= 70 ? "hot" : ""}`}>
+          <div className="hype-fill" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="hype-sprites" aria-hidden="true">
+          {sprites.map((s) => (
+            <span key={s.id} className="hype-sprite" style={{ left: `${s.x}%` }}>{s.emoji}</span>
+          ))}
+        </div>
+      </div>
+      <div className="react-bar">
+        {REACTIONS.map((e) => (
+          <button key={e} className="react-btn" onClick={() => room.react(e)} aria-label={`React ${e}`}>
+            {e}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

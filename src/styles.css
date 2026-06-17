@@ -8600,6 +8600,95 @@ span.profile-handle:hover {
   color: #fff;
 }
 
+/* Crowd reactions (F4) + hype meter (F2). */
+.crowd-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: var(--panel-2);
+}
+.hype-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.hype-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  flex: none;
+}
+.hype-bar {
+  position: relative;
+  flex: 1 1 auto;
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  overflow: hidden;
+}
+.hype-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #ffb13c);
+  transition: width 0.9s linear;
+}
+.hype-bar.hot .hype-fill {
+  background: linear-gradient(90deg, #ffb13c, #ff5d73);
+  animation: hype-throb 0.8s ease-in-out infinite;
+}
+@keyframes hype-throb {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
+}
+/* Floating emoji burst rising over the bar. */
+.hype-sprites {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.hype-sprite {
+  position: absolute;
+  bottom: 0;
+  font-size: 15px;
+  animation: hype-rise 1.5s ease-out forwards;
+}
+@keyframes hype-rise {
+  0% { transform: translateY(4px) scale(0.6); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translateY(-34px) scale(1.15); opacity: 0; }
+}
+.react-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.react-btn {
+  flex: 1 1 0;
+  min-width: 40px;
+  padding: 7px 0;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.08s ease, border-color 0.12s ease;
+}
+.react-btn:hover {
+  border-color: var(--accent);
+}
+.react-btn:active {
+  transform: scale(0.86);
+}
+
 /* --- Chin + popup additions --- */
 .room-expand {
   width: 26px;

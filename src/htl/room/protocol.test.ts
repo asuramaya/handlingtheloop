@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canDriveIntent, type Intent } from "./protocol";
+import { canDriveIntent, isReaction, REACTIONS, type Intent } from "./protocol";
 
 // The per-deck drive gate (E3): a stepped-up listener may push exactly their one deck;
 // the host/granted ("AB") drive everything; a deck-less move needs full control.
@@ -37,6 +37,18 @@ describe("canDriveIntent", () => {
   it("full control drives every deck and every whole-board move", () => {
     for (const i of [deckA, deckB, stemB, loadA, crossfade, tempoRange, automix, queue]) {
       expect(canDriveIntent("AB", i)).toBe(true);
+    }
+  });
+});
+
+// Reaction validation (F4): only the fixed emoji set is accepted off the wire.
+describe("isReaction", () => {
+  it("accepts every reaction in the set", () => {
+    for (const e of REACTIONS) expect(isReaction(e)).toBe(true);
+  });
+  it("rejects anything else", () => {
+    for (const x of ["", "x", "👍", "<script>", 1, null, undefined, {}]) {
+      expect(isReaction(x)).toBe(false);
     }
   });
 });

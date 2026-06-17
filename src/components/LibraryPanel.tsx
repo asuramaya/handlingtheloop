@@ -1,67 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Library, Playlist } from "@htl/library";
-import type { TrackMeta } from "@htl/library";
-import { getCachedMeta } from "@htl/audio";
-import {
-  fetchPlaylist,
-  fetchMyPlaylists,
-  fetchCommunity,
-  fetchMeta,
-  putCommunityMeta,
-  type MyPlaylist,
-} from "@htl/media";
+import type { Library, Playlist, TrackMeta } from "@htl/library";
+import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
   fetchMe,
   fetchSpotifyPlaylists,
   fetchTidalPlaylists,
-  friendlySyncError,
-  syncReadSource,
-  syncMatch,
   usePlaylistSource,
   type Me,
   type ServicePlaylist,
 } from "@htl/account";
-import { Store } from "@htl/persistence";
 import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type MixQueue } from "@htl";
 import { MixQueuePanel } from "./MixQueuePanel";
-
-// Backfilled metadata for community (legacy-cached) tracks, persisted so titles
-// survive reloads and we don't re-hit /api/meta on every library open.
-type CachedMeta = { title: string; artist: string; duration: number; thumbnail: string | null };
-const communityMeta = new Store<Record<string, CachedMeta>>("community-meta", {}, 1);
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
 import { TRACK_DND_MIME, TrackTable } from "./TrackTable";
 import { ConfirmModal, PromptModal } from "./Dialog";
 import { DockResizer } from "./DockResizer";
+import { cleanPlaylistName, withCached } from "./lib/libraryUtils";
+import { useCommunityPool } from "./lib/useCommunityPool";
+import { useLibraryImport } from "./lib/useLibraryImport";
 
 // In-app dialog state (replaces window.prompt / window.confirm).
 type DialogState =
   | { kind: "prompt"; title: string; initial: string; submitLabel: string; onSubmit: (v: string) => void }
   | { kind: "confirm"; title: string; message: string; confirmLabel: string; onConfirm: () => void }
   | null;
-
-// Strip the "· via htl" marker htl appends to playlists it syncs out to a service,
-// so the same playlist reads the same on either side and dedups by name.
-function cleanPlaylistName(title: string): string {
-  return title.replace(/\s*·\s*via htl\s*$/i, "").trim();
-}
-
-// Show tempo + key for any track analyzed this session, even if it was saved
-// before it was first loaded to a deck (persisted values win once they exist).
-function withCached(t: TrackMeta): TrackMeta {
-  if (t.bpm != null && t.key != null) return t;
-  // Read the LIGHT bpm/key cache, not getCachedTrack — the heavy decoded-buffer cache is now
-  // LRU-bounded (mobile OOM fix), so its entry may have been evicted, but the scalar bpm/key
-  // is kept for the whole session so the columns stay filled.
-  const m = getCachedMeta(t.videoId);
-  if (!m) return t;
-  return {
-    ...t,
-    bpm: t.bpm ?? m.bpm ?? null,
-    key: t.key ?? m.key ?? null,
-  };
-}
 
 interface LibraryPanelProps {
   library: Library;
@@ -202,8 +165,9 @@ export function LibraryPanel({
       /* ignore */
     }
   }, [view, searchView, syncOpen]);
-  const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<string | null>(null);
+  // Playlist import / re-sync engine (owns the importing/importMsg status).
+  const { importing, importMsg, importServicePlaylist, resyncPlaylist, ingestPlaylist, importPlaylistId } =
+    useLibraryImport(library, setView);
 
   // Selecting any library section (Collection / Community / a playlist…) returns to the
   // song list by leaving every overlay view — the queue, Search, and Sync are all just
@@ -255,106 +219,11 @@ export function LibraryPanel({
   const loadTidal = tidalSrc.refresh;
 
   // The shared community pool (tracks already cached — load instantly, no resolve).
-  const [community, setCommunity] = useState<TrackMeta[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    fetchCommunity(120)
-      .then((tracks) => {
-        if (cancelled) return;
-        // Apply any titles we backfilled on a previous visit straight away.
-        const cache = communityMeta.get();
-        const seeded = tracks.map((t) => (t.title ? t : { ...t, ...(cache[t.videoId] ?? {}) }));
-        setCommunity(seeded);
-        // Legacy tracks (cached before metadata was stored) still have no title —
-        // backfill from /api/meta with a small concurrency pool, persisting each so
-        // it's instant next time and we never re-hammer the resolver.
-        const missing = seeded.filter((t) => !t.title).slice(0, 80);
-        let idx = 0;
-        const worker = async () => {
-          while (!cancelled && idx < missing.length) {
-            const t = missing[idx++];
-            try {
-              const m = await fetchMeta(t.videoId);
-              if (cancelled) return;
-              communityMeta.set({
-                ...communityMeta.get(),
-                [t.videoId]: { title: m.title, artist: m.artist, duration: m.duration, thumbnail: m.thumbnail },
-              });
-              // Persist it to the shared pool so every future visitor gets it too.
-              void putCommunityMeta({
-                videoId: t.videoId,
-                title: m.title,
-                artist: m.artist,
-                duration: m.duration,
-                thumbnail: m.thumbnail,
-              });
-              setCommunity((cur) => cur.map((x) => (x.videoId === t.videoId ? { ...x, ...m } : x)));
-            } catch {
-              /* leave the thumbnail-only row */
-            }
-          }
-        };
-        void Promise.all(Array.from({ length: Math.min(5, missing.length) }, worker));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const community = useCommunityPool();
 
   useEffect(() => {
     fetchMe().then(setMe);
   }, []);
-
-  // Import a streaming-service playlist INTO the library: read its tracks, match
-  // each to a playable YouTube video (paged to stay under the Worker subrequest
-  // cap), then file the best matches into a local playlist tagged with the source
-  // service so it lives under MY SPOTIFY / MY TIDAL. Auto-picks the top match (use
-  // Sync for review/fixups). Provider-agnostic — Spotify and TIDAL share it.
-  async function importServicePlaylist(service: "spotify" | "tidal", sp: ServicePlaylist) {
-    const label = service === "tidal" ? "TIDAL" : "Spotify";
-    setImporting(true);
-    setImportMsg(`Reading “${sp.title}” from ${label}…`);
-    try {
-      const { name, tracks } = await syncReadSource(service, sp.id);
-      if (!tracks.length) throw new Error("empty playlist");
-      const matched: TrackMeta[] = [];
-      // Match in slices: each track is one YouTube search subrequest, and the Worker
-      // caps a single /api/sync/match call (a whole playlist in one call 413s and was
-      // the "stuck / can't import" bug). Paging also gives real per-slice progress.
-      const SLICE = 15;
-      for (let i = 0; i < tracks.length; i += SLICE) {
-        const rows = await syncMatch("youtube", tracks.slice(i, i + SLICE), i);
-        for (const r of rows) {
-          if (r.best && r.best.kind === "video") {
-            matched.push({
-              videoId: r.best.id,
-              title: r.best.title,
-              artist: r.best.artist,
-              duration: r.best.duration,
-              thumbnail: r.best.thumbnail,
-              views: null,
-            });
-          }
-        }
-        setImportMsg(`Matching ${Math.min(i + SLICE, tracks.length)}/${tracks.length} from ${label}…`);
-      }
-      if (!matched.length) throw new Error("no YouTube matches found");
-      const cleanTitle = cleanPlaylistName(name || sp.title);
-      const existing =
-        library.playlists.find((p) => p.sourceListId === sp.id) ??
-        library.playlists.find((p) => p.sourceService === service && cleanPlaylistName(p.name) === cleanTitle);
-      const id = existing?.id ?? library.createPlaylist(cleanTitle, sp.id, service);
-      if (existing && !existing.sourceListId) library.linkSource(existing.id, sp.id, service);
-      for (const t of matched) library.addToPlaylist(id, t);
-      setView({ playlistId: id });
-      setImportMsg(null);
-    } catch (e) {
-      setImportMsg(`${label} import failed — ${friendlySyncError((e as Error).message)}`);
-    } finally {
-      setImporting(false);
-    }
-  }
 
   // The not-yet-imported service playlists, split so the main list stays clean: ones you
   // OWN (importable) show inline; ones only SHARED with you (ownedByMe === false) — which
@@ -397,63 +266,6 @@ export function LibraryPanel({
     );
   };
 
-  // Match provider source-tracks to playable YouTube videos (paged to stay under the
-  // Worker subrequest cap). Shared by import + re-sync.
-  async function matchTracksToYouTube(
-    tracks: Parameters<typeof syncMatch>[1],
-    onProgress?: (done: number, total: number) => void,
-  ): Promise<TrackMeta[]> {
-    const matched: TrackMeta[] = [];
-    const SLICE = 15;
-    for (let i = 0; i < tracks.length; i += SLICE) {
-      const rows = await syncMatch("youtube", tracks.slice(i, i + SLICE), i);
-      for (const r of rows) {
-        if (r.best && r.best.kind === "video") {
-          matched.push({ videoId: r.best.id, title: r.best.title, artist: r.best.artist, duration: r.best.duration, thumbnail: r.best.thumbnail, views: null });
-        }
-      }
-      onProgress?.(Math.min(i + SLICE, tracks.length), tracks.length);
-    }
-    return matched;
-  }
-
-  // Re-sync an already-imported playlist: re-read the provider's CURRENT tracks and
-  // merge any new ones into the local copy (provider playlists have no change hooks).
-  // Removed tracks are pruned only for exact-id YouTube sources — matched (Spotify/
-  // TIDAL) playlists can re-match to a different video, so we never prune those.
-  async function resyncPlaylist(pl: Playlist) {
-    if (!pl.sourceListId || !pl.sourceService || importing) return;
-    const service = pl.sourceService;
-    setImporting(true);
-    setImportMsg(`Re-syncing “${cleanPlaylistName(pl.name)}”…`);
-    try {
-      let fresh: TrackMeta[];
-      if (service === "youtube") {
-        fresh = (await fetchPlaylist(pl.sourceListId)).tracks;
-      } else if (service === "spotify" || service === "tidal") {
-        const { tracks } = await syncReadSource(service, pl.sourceListId);
-        fresh = await matchTracksToYouTube(tracks, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
-      } else {
-        return;
-      }
-      const have = new Set(pl.trackIds);
-      let added = 0;
-      for (const t of fresh) if (!have.has(t.videoId)) { library.addToPlaylist(pl.id, t); added++; }
-      let removed = 0;
-      if (service === "youtube") {
-        const freshIds = new Set(fresh.map((t) => t.videoId));
-        for (const vid of pl.trackIds) if (!freshIds.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
-      }
-      library.markSynced(pl.id, Date.now());
-      setImportMsg(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date");
-      window.setTimeout(() => setImportMsg((m) => (m && m.startsWith("Synced") || m === "Already up to date" ? null : m)), 2500);
-    } catch (e) {
-      setImportMsg(`Re-sync failed: ${(e as Error).message}`);
-    } finally {
-      setImporting(false);
-    }
-  }
-
   const byId = useMemo(() => {
     const m = new Map<string, TrackMeta>();
     for (const t of library.collection) m.set(t.videoId, t);
@@ -464,40 +276,6 @@ export function LibraryPanel({
 
   const isPlaylist = typeof view === "object";
   const activePlaylistId = isPlaylist ? view.playlistId : null;
-
-  // Pull a YouTube playlist into the library. Re-importing the same source list does
-  // NOT duplicate it: we reuse the existing playlist (matched by its sourceListId OR
-  // by normalized name) and merge in any new tracks (addToPlaylist already dedups).
-  // The "· via htl" suffix htl stamps onto playlists it syncs OUT to a service is
-  // stripped here, so a playlist synced out as "X · via htl" merges back into the
-  // local "X" instead of forking a copy — and that local playlist gets linked to the
-  // source so subsequent clicks match directly. Throws on failure so callers can
-  // surface it (Search modal inline; MY YOUTUBE sidebar toast).
-  async function ingestPlaylist(listId: string, fallbackTitle: string): Promise<void> {
-    const { title, tracks } = await fetchPlaylist(listId);
-    if (tracks.length === 0) throw new Error("no tracks found");
-    const cleanTitle = cleanPlaylistName(title || fallbackTitle);
-    const existing =
-      library.playlists.find((p) => p.sourceListId === listId) ??
-      library.playlists.find((p) => cleanPlaylistName(p.name) === cleanTitle);
-    const id = existing?.id ?? library.createPlaylist(cleanTitle, listId, "youtube");
-    if (existing && !existing.sourceListId) library.linkSource(existing.id, listId, "youtube");
-    for (const t of tracks) library.addToPlaylist(id, t);
-    setView({ playlistId: id });
-  }
-
-  async function importPlaylistId(listId: string, fallbackTitle: string) {
-    setImporting(true);
-    setImportMsg(`Importing “${fallbackTitle}”…`);
-    try {
-      await ingestPlaylist(listId, fallbackTitle);
-      setImportMsg(null);
-    } catch (e) {
-      setImportMsg(`Import failed: ${(e as Error).message}`);
-    } finally {
-      setImporting(false);
-    }
-  }
 
   const [dialog, setDialog] = useState<DialogState>(null);
 

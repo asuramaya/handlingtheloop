@@ -36,13 +36,6 @@ class Scratch extends AudioWorkletProcessor {
     this.nominal = Math.round(sampleRate / 60); // expected samples per UI frame
     this.kStep = 1 - Math.exp(-1 / (0.005 * sampleRate)); // ~5 ms pitch smoothing
     this.kGain = 1 - Math.exp(-1 / (0.004 * sampleRate)); // ~4 ms declick
-    // Alpha-beta (g-h) tracker gains for the continuous/vinyl velocity. Velocity comes
-    // from the POSITION residual + its own momentum instead of a measured inter-tick
-    // interval, so a sparse/bursty hardware-jog stream bridges smoothly (the prediction
-    // step carries motion through the gaps) instead of the coast-and-snap a noisy interval
-    // produces. Critically damped (beta = alpha^2/2), ~3 ms — snappy reversals, no overshoot.
-    this.abAlpha = 0.025;
-    this.abBeta = this.abAlpha * this.abAlpha * 0.5;
     // GRANULAR fast-scrub: a continuous resampler can only walk through every sample,
     // so a fast/zoomed-out drag (the finger covering minutes of audio) rate-limits to
     // a multi-second 32× "spin" that LAGS the finger. The fix every pro scrubber uses:
@@ -189,16 +182,19 @@ class Scratch extends AudioWorkletProcessor {
         this.phaseA = pa + 1;
         continue;
       }
-      // Continuous resampler (vinyl): walk the pointer, area-aware read + anti-alias.
-      // Velocity (curStep) is an ALPHA-BETA tracker toward the platter target — it predicts
-      // (momentum) then corrects from the position residual, so it doesn't depend on the
-      // measured inter-tick interval and stays smooth across the jog's bursty MIDI cadence.
-      const p0 = this.pos;
-      this.pos += this.curStep; // predict at current velocity — bridges sparse-tick gaps
-      const r = this.target - this.pos;
-      this.pos += this.abAlpha * r; // position correction
-      this.curStep += this.abBeta * r; // velocity correction (the momentum that bridges gaps)
+      // Continuous resampler (vinyl): GLIDE the read pointer at the platter's MEASURED
+      // velocity (curStep eased toward the per-interval step = Δposition / Δtime). This
+      // fills the whole gap between sparse position updates, so it never parks. A position-
+      // TRACKING filter instead (the old alpha-beta, or a feed-forward + position trim)
+      // sees the full inter-update advance as error and rushes the pointer to the target in
+      // ~1 ms, then stalls for the rest of the gap — at 60-125 Hz (touch / many mice) that
+      // stall is the stutter / DC-buzz that distorted the scrub. Pure feed-forward needs no
+      // position correction: each 'move' recomputes step from the ACTUAL current pos, so
+      // any drift self-nulls within one update with no built-in convergence stall.
+      this.curStep += (this.step - this.curStep) * this.kStep; // ease toward target velocity
       if (this.curStep > 32) this.curStep = 32; else if (this.curStep < -32) this.curStep = -32;
+      const p0 = this.pos;
+      this.pos += this.curStep; // feed-forward glide (fills the inter-update gap, no parking)
       if (this.pos < 0) { this.pos = 0; if (this.curStep < 0) this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; if (this.curStep > 0) this.curStep = 0; }
       const sp = this.curStep < 0 ? -this.curStep : this.curStep;

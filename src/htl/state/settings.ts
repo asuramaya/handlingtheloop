@@ -169,7 +169,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jogSensitivity: 1,
   jogBendStrength: 1,
   jogVinylDefault: true,
-  vinylSpeed: true,
+  vinylSpeed: false,
   vinylBrakeTime: 0.22,
   vinylStartTime: 0.18,
   backSpinLength: 0.5,

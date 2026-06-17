@@ -306,13 +306,12 @@ export class Deck {
   // and spinback() throws it backward then catches it. All four reuse the jog COAST
   // physics (stepCoast) — a motor ramp is just a coast with a start velocity and a time
   // set by these knobs (not the jog weight/drag). Off → instant transport, as before.
-  private _vinylSpeed = true; // master enable
+  private _vinylSpeed = false; // master enable (turntable motor feel; opt-in so scratch stays instant)
   private _vinylBrake = 0.22; // 0..1 → pause-brake + touch-decel time
   private _vinylStart = 0.18; // 0..1 → play soft-start time
   private _backSpin = 0.5; // 0..1 → spinback length + strength
   private _ramping: "start" | "brake" | "spinback" | null = null; // a motor ramp is in flight
   private _coastTau = 0; // >0 overrides the jog-physics coast tau (= a motor ramp time)
-  private _touchGlide = false; // grab seeded with play momentum, decelerating until the finger moves
   // --- pitch-bend (jog outer-ring / un-gripped turn / scroll while playing) ---
   // A momentary tempo push for beat-matching: `_bend` is a fractional offset folded
   // into the sounding rate (effRate = _rate·(1+_bend)). Each nudge adds to it and it
@@ -1254,7 +1253,9 @@ export class Deck {
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.clearBend(); // a grab takes over the clock — drop any decaying bend first
     this.jogReturnToPlay = this._playing || (this.jogPhase === "coast" && this.jogReturnToPlay);
-    const wasPlaying = this._playing;
+    // Gripping the platter STOPS IT DEAD (like a hand on vinyl) — it then follows the
+    // finger from rest, so a scratch grab locks instantly with no forward creep. (The
+    // turntable touch/brake feel lives on the PAUSE button, not the scratch grab.)
     this.jogPos = this.position();
     if (this._playing) {
       this.startOffset = this.jogPos;
@@ -1262,14 +1263,8 @@ export class Deck {
       this._playing = false;
     }
     this.handPos = this.handLast = this.jogPos;
-    // Touch-decel (Vinyl Speed Adjust on the platter): rather than cutting the platter
-    // dead, carry the play momentum and glide it down over the brake time until the
-    // finger actually moves (then the finger takes over). Off / Vinyl-Speed-disabled →
-    // jogVel 0 = the old instant dead stop.
-    const touchDecel = wasPlaying && this._vinylSpeed && this._vinylBrake > 0;
-    this.jogVel = touchDecel ? this.effRate() : 0;
-    this._touchGlide = touchDecel;
-    this._coastTau = touchDecel ? this.brakeTau() : 0;
+    this.jogVel = 0;
+    this._coastTau = 0;
     this._ramping = null;
     this.handVel = 0;
     this.jogInputAt = this.ctx.currentTime;
@@ -1288,7 +1283,6 @@ export class Deck {
   scrubMove(deltaSec: number) {
     if (this.jogPhase !== "grab") return;
     this.jogInputAt = this.ctx.currentTime;
-    if (deltaSec !== 0) this._touchGlide = false; // the finger took over the platter
     let p = this.handPos + deltaSec;
     const dur = this._duration;
     if (p < 0) p = 0;
@@ -1305,13 +1299,13 @@ export class Deck {
     // can't launch it across the whole track.
     const max = Deck.MAX_COAST;
     this.jogVel = Math.max(-max, Math.min(max, this.handVel));
-    this._touchGlide = false;
     // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the
     // native gesture is a hard BACKWARD flick of the jog. When the release is a strong
     // back-fling during playback, give it the dramatic, tunable back-spin-and-catch curve
-    // (backSpinTau) instead of the quick jog-physics coast. Otherwise reset _coastTau so
-    // a normal release uses the jog weight/drag (NOT a leftover touch-decel brake time).
-    if (this._vinylSpeed && this.jogReturnToPlay && this.jogVel < -Deck.SPINBACK_FLICK) {
+    // (backSpinTau) instead of the quick jog-physics coast. Always available (it's a
+    // gesture, not the motor brake). Otherwise reset _coastTau so a normal release uses
+    // the jog weight/drag.
+    if (this.jogReturnToPlay && this.jogVel < -Deck.SPINBACK_FLICK) {
       this._coastTau = this.backSpinTau();
       this._ramping = "spinback";
     } else {
@@ -1347,7 +1341,6 @@ export class Deck {
     this.jogReturnToPlay = resumePlay;
     this._coastTau = tau;
     this._ramping = kind;
-    this._touchGlide = false;
     this.jogInputAt = this.ctx.currentTime;
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
@@ -1514,7 +1507,6 @@ export class Deck {
     this.handVel = 0;
     this._ramping = null;
     this._coastTau = 0;
-    this._touchGlide = false;
     this.scratchStop();
   }
 
@@ -1541,23 +1533,6 @@ export class Deck {
     const moved = this.handPos - this.handLast;
     this.handLast = this.handPos;
     const stale = this.ctx.currentTime - this.jogInputAt > 0.006;
-    if (this._touchGlide && stale && moved === 0) {
-      // Touch-decel: finger resting, hasn't moved yet → coast the captured play momentum
-      // down to a stop over the brake time (a vinyl platter slowing under a still hand),
-      // instead of cutting dead. The first finger motion clears _touchGlide (scrubMove).
-      const tau = this._coastTau > 0 ? this._coastTau : 0.1;
-      this.jogVel *= Math.exp(-dt / tau);
-      this.jogPos += this.jogVel * dt;
-      this.clampJog();
-      this.handPos = this.handLast = this.jogPos;
-      this.startOffset = this.jogPos;
-      this.scratchMove();
-      if (Math.abs(this.jogVel) < 0.02) {
-        this.jogVel = 0;
-        this._touchGlide = false; // fully stopped → behave like a normal held grab
-      }
-      return;
-    }
     const inst = moved / dt;
     const hk = 1 - Math.exp(-dt / 0.03); // light smoothing → clean release-fling velocity
     this.handVel += (inst - this.handVel) * hk;

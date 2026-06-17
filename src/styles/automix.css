@@ -1,0 +1,253 @@
+/* ---- Auto-mix (auto-DJ) ------------------------------------------------------ */
+.automix-bar {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  margin-bottom: 6px;
+}
+.automix-toggle {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.automix-toggle.on {
+  color: #061018;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.automix-count {
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+.automix-queue-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.automix-queue-btn:hover { border-color: var(--accent); }
+
+/* The queue panel — a docked overlay on the right. */
+.mixq {
+  position: fixed;
+  top: 64px;
+  right: 12px;
+  bottom: 12px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+/* Drag a track in from the library / search / a deck → append to the queue. */
+.mixq.drop-active { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.mixq.embedded.drop-active { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.mixq-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mixq-auto {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mixq-auto.on { color: #061018; background: var(--accent); border-color: var(--accent); }
+.mixq-mode { display: flex; gap: 0; margin-left: auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.mixq-mode button {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.mixq-mode button[aria-selected="true"] { color: var(--text); background: var(--panel-2); }
+.mixq-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.mixq-seed {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mixq-seed select {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.mixq-smart { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.mixq-now {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.mixq-countdown { font-size: 11px; color: var(--accent); white-space: nowrap; }
+.mixq-list { flex: 1; overflow-y: auto; margin: 0; padding: 4px; list-style: none; border-radius: 6px; }
+/* A library track is hovering the queue → highlight the whole list as a drop target. */
+.mixq-list.drop-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.mixq-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-top: 2px solid transparent; /* reserved for the drag-over insertion marker */
+  border-radius: 4px;
+}
+.mixq-item[draggable="true"] {
+  cursor: grab;
+}
+.mixq-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+.mixq-item:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+/* Drag-over: a bright top rule marks where the dragged row will drop. */
+.mixq-item.drag-over {
+  border-top-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.mixq-track { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.mixq-track img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+.mixq-track-text { display: flex; flex-direction: column; min-width: 0; }
+.mixq-title { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixq-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixq-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mixq-badge.tier-high { color: #061810; background: #3ddc84; }
+.mixq-badge.tier-mid { color: #1a1405; background: #e8b84b; }
+.mixq-badge.tier-low { color: #fff; background: #c8506a; }
+.mixq-item-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.mixq-item-actions button {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.mixq-item-actions button:disabled { opacity: 0.3; cursor: default; }
+.mixq-empty { padding: 16px 10px; text-align: center; color: var(--muted); font-size: 12px; }
+/* Transport pinned to the bottom of the scrolling content (embedded in .lib-main, or the
+   floating dialog) so Mix-now/Skip/Hold are always reachable — they used to scroll off the
+   end of a long queue. Opaque background so rows don't bleed through the sticky bar. */
+.mixq-controls {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+.mixq-controls button {
+  flex: 1 1 0;
+  min-width: 0; /* shrink below text on a narrow dock instead of pushing "Hold" off the edge */
+  padding: 7px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mixq-controls button:disabled { opacity: 0.4; cursor: default; }
+.mixq-controls button:not(:disabled):hover { border-color: var(--accent); }
+
+/* Auto-mix controls when hosted in the library header (compact, inline). */
+.settings-head .automix-bar { margin: 0; flex: 0 0 auto; align-items: center; }
+.settings-head .automix-toggle { flex: 0 0 auto; padding: 5px 12px; }
+
+.mixq-badge.tier-unknown { color: var(--text); background: var(--line); }
+.mixq-augment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Embedded in the library content area (takes over the song list, not a floater).
+   `display: contents` dissolves the .mixq wrapper so the shared TrackTable it renders
+   (toolbar + now-playing/seed + table + controls) lays out directly in .lib-main —
+   identical scroll/sticky behaviour to the library + search views. */
+.mixq.embedded {
+  display: contents;
+}
+.mixq.embedded .mixq-close {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* Re-sync affordance on imported playlists. */
+.lib-pl-src { cursor: pointer; opacity: 0.6; transition: opacity 0.12s, color 0.12s; }
+.lib-pl-src:hover { opacity: 1; color: var(--accent); }
+

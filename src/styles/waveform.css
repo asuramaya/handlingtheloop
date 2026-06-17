@@ -1,0 +1,89 @@
+/* ===================== Zoomable waveform viewport ========================== */
+.wv-wrap {
+  position: relative;
+}
+.waveform {
+  cursor: grab;
+}
+.waveform:active {
+  cursor: grabbing;
+}
+/* Bottom-right so they never collide with the lane-info (time / BPM) up top */
+.wv-zoom {
+  position: absolute;
+  bottom: 5px;
+  right: 5px;
+  display: flex;
+  gap: 4px;
+  z-index: 3;
+}
+.wv-zoom button {
+  width: 24px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: rgba(8, 9, 13, 0.55);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wv-zoom button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* On phones the lanes are short and the buttons crowd the boundary — pinch to
+   zoom instead. */
+@media (max-width: 768px) {
+  .wv-zoom {
+    display: none;
+  }
+}
+
+.loops {
+  flex-wrap: nowrap;
+}
+.loop-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.loop-btn.armed {
+  border-color: var(--shift);
+  color: var(--shift);
+}
+/* Every beat-loop size at once, half-width: fractions 1/2…1/16 then whole 1…8 */
+.loop-sizes {
+  display: grid;
+  /* minmax(0,1fr) lets the square tracks shrink to exactly 1/8 (no spill right);
+     align-items:start stops the grid stretching the pads flat — aspect-ratio then
+     drives a true square off the column width; justify-items:center keeps capped
+     pads centred in their track on wide banks. Identical to .hotcues below. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-items: start;
+  justify-items: center;
+  gap: 5px;
+}
+/* Loop pads = square, identical to the hot-cue pads (one uniform 1×8 block). The
+   max-width caps the square so a WIDE desktop bank doesn't blow it up to a giant
+   square that destabilises the row heights (the layout collapse on resize). */
+.loop-sizes .loop-btn {
+  min-width: 0;
+  width: 100%;
+  max-width: 64px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.deck-hint {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

@@ -1,0 +1,107 @@
+/* ============================ Cues / Loops / Sync =========================== */
+
+.btn.sync {
+  background: var(--panel-2);
+  color: var(--accent);
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.btn.sync:hover {
+  border-color: var(--accent);
+}
+
+.pads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hotcues {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  align-items: start;
+  justify-items: center;
+  gap: 5px;
+}
+.pad {
+  position: relative;
+  aspect-ratio: 1 / 1; /* square — uniform with the loop pads (1×8) */
+  border: 1px solid var(--btn-border, var(--line));
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+.pad.set {
+  background: color-mix(in srgb, var(--accent) 30%, var(--panel));
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.pad-clear {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1;
+}
+.pad-clear:hover {
+  color: #fff;
+}
+
+.loops {
+  display: flex;
+  gap: 5px;
+}
+.loop-btn {
+  flex: 1;
+  border: 1px solid var(--btn-border, var(--line));
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.loop-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.loop-btn.on {
+  background: rgba(110, 231, 168, 0.18);
+  border-color: #6ee7a8;
+  color: #6ee7a8;
+}
+/* IN/OUT pad armed for boundary fine-adjust (Shift-IN / Shift-OUT): a live amber
+   glow says "the wave + arrow keys now move this edge". */
+.loop-btn.adjust {
+  background: color-mix(in srgb, var(--shift) 22%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 28%, transparent), 0 0 8px color-mix(in srgb, var(--shift) 35%, transparent);
+}
+.loop-btn.toggle {
+  flex: 1.4;
+  letter-spacing: 1px;
+}
+.loop-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  /* Cue + loop pads stay a uniform square 1×8 (see the shared rule below) — just
+     trim the type on small screens. */
+  .pad,
+  .loop-btn {
+    font-size: 12px;
+  }
+}
+

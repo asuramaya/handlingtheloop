@@ -1,0 +1,205 @@
+/* ===================== Glow ON — UX-wide neon edges ===================== */
+/* Default (glow on): bordered SURFACES and CONTROLS carry a soft neon edge so the
+   whole interface reads luminous — not just a handful of accent highlights. Each
+   glow is tinted by the element's own --accent (deck colour inside a bank, the
+   global accent elsewhere), so it follows the theme. `body.no-glow` (below) gates
+   it all off via the :not() selector → instant flat mode, no per-rule overrides. */
+body:not(.no-glow) .bank,
+body:not(.no-glow) .lane,
+body:not(.no-glow) .chan,
+body:not(.no-glow) .mixer-box,
+body:not(.no-glow) .lane-info,
+body:not(.no-glow) .decks-third,
+body:not(.no-glow) .topbar {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+body:not(.no-glow) .jog-btn,
+body:not(.no-glow) .loop-btn,
+body:not(.no-glow) .pad,
+body:not(.no-glow) .pitch-step,
+body:not(.no-glow) .grid-btn,
+body:not(.no-glow) .stem-btn {
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+/* The SHIFT-mode tinted rows glow in the shift accent instead of the deck accent. */
+body:not(.no-glow) .bank.shifted .jog-btn,
+body:not(.no-glow) .bank.shifted .pitch-step,
+body:not(.no-glow) .bank.adjusting .jog-btn {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--shift) 22%, transparent);
+}
+
+/* ===================== Glow off ===================== */
+body.no-glow .logo,
+body.no-glow .chan-id,
+body.no-glow .xf-end,
+body.no-glow .lane-id,
+body.no-glow .lane-bpm {
+  text-shadow: none;
+}
+body.no-glow .hw-btn.play,
+body.no-glow .hw-btn:hover,
+body.no-glow .fader-thumb,
+body.no-glow .fader-thumb::after,
+body.no-glow .fader-fill,
+body.no-glow .knob-pointer,
+body.no-glow .pad.set,
+body.no-glow .hotcues .pad.set,
+body.no-glow .top-btn:hover {
+  box-shadow: none;
+}
+body.no-glow .knob-ring-fill {
+  filter: none;
+}
+/* Flat mode: keep the focus ring, drop its soft glow. */
+body.no-glow .bank.focused {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+body.no-glow .lane.focused::after {
+  box-shadow: none;
+}
+
+/* Graceful narrow desktop: between the phone breakpoint and a comfortable width, two
+   button banks share the row and get cramped. Tighten spacing (and the short labels
+   above) so buttons shrink to fit instead of clipping into the neighbouring deck. */
+@media (min-width: 769px) and (max-width: 1099px) {
+  .bank {
+    gap: 6px;
+    padding: 10px 8px;
+  }
+  .bank-main {
+    gap: 5px;
+  }
+  .pitch-step {
+    padding: 5px 2px;
+    font-size: 12px;
+  }
+}
+/* PITCH (− TEMPO KEY +) and STEMS (DRUM/BASS/VOICE/INST) feet in the deck-controls
+   bank — four equal columns across the bank width. */
+.pitch-row,
+.stems-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr); /* tracks may shrink → no right-edge overflow */
+  gap: 6px;
+  align-items: stretch;
+}
+/* MOBILE Single↔Stems toggle: a compact pill above the stem foot. Off = plain mix
+   (the light default); on = on-device stems active (accent-lit). */
+.stem-mode-btn {
+  width: 100%;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.stem-mode-btn.on { color: #061018; background: var(--accent); border-color: var(--accent); }
+.stem-mode-btn:disabled { opacity: 0.55; cursor: default; }
+/* Let the cells/steppers shrink with their track on narrow widths (their 44px
+   min-width would otherwise overflow the row off the right). */
+.pitch-row > *,
+.stems-row > * {
+  min-width: 0;
+}
+/* Placeholder shown in the stem-row slot when this deck's stems aren't ready yet but
+   the other deck's are — reserves the row's height (matching .vcell) so both decks'
+   EQ + foot buttons stay aligned instead of the gap collapsing to the bottom. */
+.stems-row.stems-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* Match the real stem cells' height (.stems-row .vcell is 50px at every breakpoint)
+     so swapping the placeholder for the live buttonoids doesn't resize the deck stack. */
+  min-height: 50px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+.stems-pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: stem-pending-pulse 1s ease-in-out infinite;
+}
+@keyframes stem-pending-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+/* EQ foot (bottom third): a single full-width Pro-Q curve, not a row of cells. It
+   grows to absorb the bank's leftover height, so it's a flex column that hands that
+   height down to the curve. */
+.eq-row {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* --- Pro parametric EQ (Pro-Q-style response curve + toolbar) --- */
+.eq-pro {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  /* .eq-pro now owns the shared --fx-body-h (= every device tab's height): the curve
+     fills the slack above a fixed band-edit subrow, so EQ + delay still align. */
+  flex: 0 1 auto;
+  height: var(--fx-body-h, 178px);
+  min-height: 0;
+  overflow: hidden;
+}
+.eq-pro.bypassed .eq-curve {
+  opacity: 0.6;
+}
+.eq-tools {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+}
+/* Bottom EQ tools — neon, glowing in the DECK's colour (--accent). The glow gates on
+   the global no-glow toggle like the rest of the neon UI. */
+.eq-tool {
+  flex: 1 1 0;
+  padding: 4px 2px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--tool, var(--accent));
+  background: color-mix(in srgb, var(--tool, var(--accent)) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--tool, var(--accent)) 55%, var(--panel));
+  border-radius: 6px;
+  cursor: pointer;
+  text-shadow: 0 0 7px color-mix(in srgb, var(--tool, var(--accent)) 65%, transparent);
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+body:not(.no-glow) .eq-tool {
+  box-shadow: 0 0 9px -2px color-mix(in srgb, var(--tool, var(--accent)) 60%, transparent),
+    inset 0 0 8px color-mix(in srgb, var(--tool, var(--accent)) 15%, transparent);
+}
+.eq-tool:hover {
+  color: #fff;
+  border-color: var(--tool, var(--accent));
+  background: color-mix(in srgb, var(--tool, var(--accent)) 26%, var(--surface));
+}
+body:not(.no-glow) .eq-tool:hover {
+  box-shadow: 0 0 16px color-mix(in srgb, var(--tool, var(--accent)) 80%, transparent),
+    inset 0 0 12px color-mix(in srgb, var(--tool, var(--accent)) 24%, transparent);
+}
+.eq-tool.on {
+  color: #08111a;
+  background: var(--tool, var(--accent));
+  border-color: var(--tool, var(--accent));
+  text-shadow: none;
+}
+body:not(.no-glow) .eq-tool.on {
+  box-shadow: 0 0 20px color-mix(in srgb, var(--tool, var(--accent)) 90%, transparent);
+}

@@ -1,0 +1,849 @@
+/* ============================ Library / Explorer ============================ */
+
+.deck-artist {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* Section 3 (bottom): the explorer / library. */
+.library {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 110px;
+  overflow: hidden;
+  display: flex;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+
+.lib-sidebar {
+  width: var(--lib-side-w, 200px);
+  flex: none;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.lib-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.lib-nav:hover {
+  background: var(--panel-2);
+}
+.lib-nav.active {
+  background: color-mix(in srgb, var(--accent, #36c2ff) 22%, transparent);
+  color: #cfeaff;
+}
+/* Don't leave a chunky browser focus ring after a mouse click; keep a subtle one
+   for keyboard navigation only. */
+.lib-nav:focus {
+  outline: none;
+}
+.lib-nav:focus-visible {
+  outline: 2px solid var(--accent, #36c2ff);
+  outline-offset: -2px;
+}
+.lib-nav.small {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+.lib-nav-ico {
+  font-size: 13px;
+  flex: none;
+}
+.lib-pl-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+/* "Synced with a service" marker on a linked local playlist. */
+.lib-pl-src {
+  margin-left: 6px;
+  color: var(--accent, #36c2ff);
+  font-size: 11px;
+  opacity: 0.8;
+}
+.lib-del {
+  margin-left: 6px;
+  color: var(--muted);
+  opacity: 0;
+  font-size: 11px;
+}
+.lib-nav:hover .lib-del {
+  opacity: 0.7;
+}
+.lib-del:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.lib-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 6px 2px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+/* The section label doubles as a collapse toggle (caret + name), filling the row so the
+   whole header is the hit target; the ＋/⟳ action button stays on the right. */
+.lib-section-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.lib-section-toggle:hover {
+  color: var(--text);
+}
+.lib-section-caret {
+  font-size: 8px;
+  width: 8px;
+  flex: none;
+}
+.lib-add {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.lib-add:hover {
+  color: var(--text);
+}
+.lib-playlists {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lib-import-msg {
+  margin-top: auto; /* pin the import toast to the bottom of the sidebar */
+  padding-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lib-mine-msg {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lib-mine-err {
+  color: var(--neon-pink, #ff5c8a);
+  word-break: break-word;
+}
+/* Collapsed "shared with you" disclosure: tucks away non-owned (un-importable) service
+   playlists so they don't clutter the main import list. */
+.lib-shared {
+  margin-top: 2px;
+}
+.lib-shared > summary {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.lib-shared > summary::-webkit-details-marker {
+  display: none;
+}
+.lib-shared > summary::before {
+  content: "▸ ";
+}
+.lib-shared[open] > summary::before {
+  content: "▾ ";
+}
+.lib-shared-note {
+  padding: 2px 10px 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.lib-main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  /* Reserve the scrollbar's lane so it never floats over the content's right edge.
+     Without this, the sticky toolbar lays out at full width and its right-pinned
+     controls (the Rows −/＋ stepper) sit UNDER the overlay scrollbar / pane border
+     and get clipped. Stable gutter = the scroll lane is always carved out, so flush-
+     right controls keep their breathing room whether or not the bar is showing. */
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  --tt-toolbar-h: 36px; /* toolbar height === header's sticky offset (no seam) */
+  /* Drop table columns based on the TABLE area's real width (not the sidebar-
+     inclusive library width) — so a wide dock with a wide sidebar still trims the
+     table when it's actually cramped. See the @container query below. */
+  container-type: inline-size;
+}
+
+.lib-empty {
+  padding: 28px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.lib-empty.error {
+  color: #ff8a99;
+}
+
+/* Explorer search */
+.explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.search-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.search-input {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent, #36c2ff);
+}
+
+.result-list {
+  display: flex;
+  flex-direction: column;
+}
+.result-row {
+  display: grid;
+  grid-template-columns: 124px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1a1c24;
+  cursor: pointer; /* click opens the actions menu */
+}
+.result-row:hover {
+  background: var(--panel);
+}
+.thumb {
+  position: relative;
+  width: 124px;
+  height: 70px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--panel);
+  flex: none;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumb-time {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.result-meta {
+  min-width: 0;
+}
+.result-title {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-sub .dot {
+  margin: 0 6px;
+}
+.result-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Mini action buttons (A / B / + / x) */
+.mini {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.mini:hover {
+  border-color: var(--text);
+}
+.mini:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mini.a {
+  color: var(--neon-cyan);
+}
+.mini.b {
+  color: var(--neon-pink);
+}
+.mini.add {
+  color: var(--neon-lime);
+}
+.mini.x:hover {
+  color: #ff8a99;
+  border-color: #ff8a99;
+}
+
+/* rekordbox-style track table. table-layout:fixed so column widths are honoured
+   (resizable via the header borders) and Title — the only auto-width column —
+   absorbs the leftover, keeping the table flush with its container (no dead space). */
+.track-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+.track-table thead th {
+  position: sticky;
+  /* Pinned exactly below the (also-sticky) toolbar. Driven by the SAME variable as
+     the toolbar's height so the two can never drift apart and leak rows through a
+     seam. */
+  top: var(--tt-toolbar-h, 30px);
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+/* Row-size stepper bar, pinned above the (also-sticky) header. Its box-sized height
+   is fixed so the header's sticky offset (--tt-toolbar-h) lines up to the pixel. */
+.tt-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  height: var(--tt-toolbar-h, 36px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px; /* left edge aligns with the subheader title above */
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+/* Row-size stepper: one tight unit pinned to the right (the filter flex-fills the rest). */
+.tt-rows {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+/* In-library filter: a substring search over the CURRENT view (title / artist). Spans the
+   toolbar's free width (the row-size stepper holds the right) so it reads as a real search
+   bar, not a cramped chip. */
+.tt-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 9px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.tt-filter:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.tt-filter-ico {
+  font-size: 11px;
+  opacity: 0.6;
+  flex: none;
+}
+.tt-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 0;
+}
+.tt-filter-input:focus {
+  outline: none;
+}
+.tt-filter-input::placeholder {
+  color: var(--muted);
+}
+.tt-filter-input::-webkit-search-cancel-button {
+  display: none;
+}
+.tt-filter-clear {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px;
+}
+.tt-filter-clear:hover {
+  color: var(--text);
+}
+.tt-rows-label {
+  flex: none;
+}
+.tt-rows-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.tt-step {
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.tt-step:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.tt-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Sortable header: click to sort (caret shows direction); a drag handle on the
+   right border resizes the column. */
+.tt-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.tt-sortable.sorted {
+  color: var(--text);
+}
+.tt-th-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tt-caret {
+  font-size: 8px;
+}
+/* Column resize handle: a slim grab zone on the cell's right edge, sitting just
+   INSIDE so the last column's handle never overflows the table (no stray h-scroll).
+   A faint persistent hairline marks every adjustable column; it lights up on hover
+   and while dragging so the gesture is discoverable. */
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none; /* let pointer-drag own the gesture on touch */
+}
+/* The persistent column divider is the uniform cell border below; the handle's own
+   hairline stays transparent until hover/drag, when it lights up accent — so a
+   resizable column shows ONE line (the divider), brightening where it's grabbable. */
+.col-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.col-resize:hover::after,
+.col-resize:active::after {
+  background: color-mix(in srgb, var(--accent, #36c2ff) 70%, transparent);
+}
+/* Vertical grid markers between EVERY column (rekordbox-style), so Num·Thumb·Title
+   read as separated as the resizable columns do — not just the ones with a handle.
+   Right border on all but the last cell; the sticky header keeps its own (it already
+   carries the bottom border fine). */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 1px solid var(--line);
+}
+.track-table tbody tr {
+  border-bottom: 1px solid #16181f;
+  cursor: default;
+}
+.track-table tbody tr:hover {
+  background: var(--panel);
+}
+/* Virtualization spacers: invisible height-reservers above/below the rendered window —
+   no border, no hover, not interactive. */
+.track-table tbody tr.tt-spacer,
+.track-table tbody tr.tt-spacer:hover {
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.track-table tbody tr.tt-spacer td {
+  padding: 0;
+  border: 0;
+}
+.track-table tbody tr.loaded {
+  color: #6ee7a8;
+}
+.track-table td {
+  padding: var(--tt-row-pad, 7px) 10px; /* row height scales with the −/＋ stepper */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-num {
+  width: 36px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.col-thumb {
+  width: 3.8em; /* scales with the row-size stepper so the artwork column fits */
+}
+/* Optional trailing column (the Queue's per-pair transition badge). Fixed width so it
+   doesn't eat the auto Title column; right-aligned to sit against the row edge. */
+.col-extra {
+  width: 84px;
+}
+td.col-extra {
+  text-align: right;
+  overflow: hidden; /* a long badge must clip to the cell, never spill past the table's right edge */
+}
+/* The transition badge must stay INSIDE its fixed cell — otherwise the nowrap text spills
+   past the table's right edge, which (in the overflow:auto .lib-main) opened a phantom
+   horizontal scrollbar that also dragged the footer's Hold button out of view. */
+td.col-extra .mixq-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+/* Search button living in the shared toolbar (Search context only). */
+.tt-search-btn {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  font-size: 12px;
+}
+/* Queue toolbar has no filter (curated order) — a label fills the left instead. It must
+   be able to shrink (min-width:0) so it doesn't shove the Rows stepper off a narrow dock. */
+.tt-queue-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Drag-reorder (Queue): mark the row the dragged item would drop onto. */
+.track-table tr.reorder-over td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.col-thumb img {
+  /* Fill the (resizable, px-width) artwork column so the thumbnail is CENTRED, not a
+     fixed-width image floating left in a wider cell (the off-centre bug). Height stays
+     em-based so it still scales with the row-size stepper. */
+  width: 100%;
+  height: 2.1em;
+  object-fit: cover;
+  border-radius: 3px;
+  display: block;
+}
+/* Centre the artwork in its cell + give the header th a positioning context for the
+   drag-to-resize handle (the empty thumb header carries one now). */
+td.col-thumb {
+  text-align: center;
+  padding: var(--tt-row-pad, 7px) 4px;
+}
+th.col-thumb {
+  position: relative;
+}
+.col-title {
+  width: auto; /* the flex column — absorbs all leftover width */
+}
+/* Cache status pips: a green dot when the song is pooled (instant load), a blue dot
+   when its stems are cached too. Shared by the Library table + Search result rows;
+   absent entirely when nothing is cached, so they only flag what's special. */
+.cache-pips {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.cache-pips .pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.cache-pips .pip-song {
+  background: #3ddc84; /* cached audio — loads instantly */
+}
+.cache-pips .pip-stems {
+  background: var(--accent, #36c2ff); /* stems cached too */
+}
+.col-artist {
+  color: var(--muted);
+}
+.col-bpm,
+.col-key,
+.col-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* Row actions now live in the click/right-click menu (no inline buttons), so the
+   table ends flush at the Time column — no reserved action width, no dead space. */
+.track-table tbody tr {
+  cursor: pointer;
+}
+.mini.plus {
+  color: var(--neon-lime);
+}
+
+/* Multi-selected rows */
+.track-table tbody tr.selected {
+  background: rgba(0, 229, 255, 0.12);
+}
+.track-table tbody tr.selected.loaded {
+  background: rgba(93, 255, 158, 0.14);
+}
+.track-table tbody tr {
+  user-select: none;
+}
+
+/* NARROW docked Library (desktop side panel, ≤520px): the full 8-column table is
+   too wide, crushing Title/Artist to nothing ("can't read it"). So shrink the
+   sidebar and DROP the secondary columns (#, thumb, BPM, Key), giving the text the
+   room. The complete table still renders in the wide mobile/centered modal. */
+/* When the TABLE AREA is narrow, drop the secondary columns (#, thumb, BPM, Key) and
+   give the text the room. Keyed to .lib-main's real width via a container query, so
+   resizing the dock (or its sidebar) wider brings the full table back. */
+@container (max-width: 440px) {
+  .track-table .col-num,
+  .track-table .col-thumb,
+  .track-table .col-bpm,
+  .track-table .col-key,
+  /* The Queue's fixed-px "Mix" badge column is ADDED on top of the %-based columns, so on
+     a phone it pushes the table ~94px past the edge (the right-side cutoff). Drop it in the
+     cramped view — the queue order + titles still read; the transition badge is desktop-only. */
+  .track-table .col-extra {
+    display: none;
+  }
+  .track-table .col-title {
+    width: 58%;
+  }
+  .track-table .col-artist {
+    width: 30%;
+  }
+  /* No column-resize handles in the cramped view: the columns are auto-proportioned
+     here and a thin drag target only fights tap-to-sort on touch. */
+  .track-table .col-resize {
+    display: none;
+  }
+  /* Reclaim toolbar width on a narrow dock: drop the "Rows" word (the −/＋ steppers still
+     read on their own) so it can't shove the stepper off the right edge. */
+  .tt-rows-label {
+    display: none;
+  }
+}
+
+/* Sidebar playlist as a drag drop-target */
+.lib-nav.drag-over {
+  border-color: var(--neon-lime);
+  background: rgba(93, 255, 158, 0.14);
+  box-shadow: inset 0 0 0 1px var(--neon-lime);
+}
+
+/* Right-click / long-press context menu */
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.ctx-menu {
+  position: fixed;
+  z-index: 61;
+  min-width: 190px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+}
+/* Keep every row at its natural height: with a long playlist list past max-height, a flex
+   column will otherwise SHRINK each child below its line-height (rows overlap) instead of
+   scrolling. flex-shrink:0 forces the overflow to scroll, which is what we want. */
+.ctx-menu > * {
+  flex-shrink: 0;
+}
+.ctx-menu button {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-menu button:hover {
+  background: var(--panel-2);
+}
+.ctx-count {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 10px 6px;
+}
+.ctx-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 10px 2px;
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 3px 0;
+}
+.ctx-new {
+  color: var(--neon-lime) !important;
+}
+.ctx-danger {
+  color: var(--neon-pink) !important;
+}
+
+/* Styled prompt/confirm dialogs (replace browser confirm/prompt) */
+.dialog {
+  width: min(400px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.7);
+}
+.dialog-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+.dialog-msg {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.dialog-input {
+  width: 100%;
+  font-size: 14px;
+  padding: 9px 11px;
+  margin-bottom: 16px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dialog-ok {
+  background: var(--accent) !important;
+  color: #06080c !important;
+  border-color: var(--accent) !important;
+  font-weight: 700;
+}
+.dialog-danger {
+  background: var(--neon-pink) !important;
+  color: #11030a !important;
+  border-color: var(--neon-pink) !important;
+  font-weight: 700;
+}
+

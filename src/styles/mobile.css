@@ -1,0 +1,156 @@
+/* ============================ Mobile-first (≤768px) ========================= */
+/* Phone layout: the page scrolls naturally (no fixed-height inner panels),
+   decks stack, the library sidebar becomes a horizontal tab strip, and row
+   actions are always visible (no hover on touch). Scales back up to the
+   two-column desktop layout above this breakpoint. */
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    height: auto;
+  }
+  .app {
+    height: 100dvh; /* HARD cap to the viewport — never grow past it (iOS bottom spill) */
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .topbar {
+    padding: 12px 14px;
+  }
+  .tagline {
+    display: none; /* keep the header clean on small screens */
+  }
+
+  /* Decks stack vertically */
+  .decks {
+    grid-template-columns: 1fr;
+  }
+  .deck {
+    padding: 14px;
+    gap: 10px;
+  }
+  .waveform {
+    height: 88px;
+  }
+
+  /* Roomier touch targets */
+  .btn.play,
+  .btn.cue {
+    padding: 14px 18px;
+    font-size: 17px;
+  }
+  .mini {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+  .knob-dial {
+    width: 40px;
+    height: 40px;
+  }
+  .pitch-fader {
+    height: 140px;
+    width: 30px;
+  }
+
+  .crossfader {
+    width: 100%;
+  }
+
+  /* Library on mobile now mirrors desktop: a full-screen panel under the constant
+     chin (see the .modal-backdrop.dock rules below) with a VERTICAL sidebar you
+     reveal with the ☰ hamburger. Collapsed by default → the track table fills the
+     phone screen. When opened, the sidebar is a fixed-width drawer beside the list. */
+  .library {
+    flex-direction: row;
+    min-height: 0;
+  }
+  .lib-sidebar {
+    width: min(232px, 70vw);
+    flex: none;
+  }
+  /* Delete is a small target on touch — keep it desktop-only. */
+  .lib-del {
+    display: none;
+  }
+  .lib-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  /* The in-library filter input: ≥16px so iOS doesn't zoom on focus. */
+  .tt-filter-input {
+    font-size: 16px;
+  }
+
+  /* Fullscreen sync modal: fill the screen, stack each review row */
+  .sync-full {
+    width: 100vw;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+    padding: 14px;
+  }
+  .sync-row {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "check src badge"
+      "check dst change";
+    gap: 4px 8px;
+    row-gap: 2px;
+  }
+  .sync-row > input[type="checkbox"] {
+    grid-area: check;
+  }
+  .sync-src {
+    grid-area: src;
+  }
+  .sync-dst {
+    grid-area: dst;
+  }
+  .sync-badge {
+    grid-area: badge;
+    justify-self: end;
+  }
+  .sync-change {
+    grid-area: change;
+    justify-self: end;
+  }
+  .sync-arrow2 {
+    display: none; /* the stacked src-over-dst layout makes the arrow redundant */
+  }
+  .sync-review-head {
+    flex-wrap: wrap;
+  }
+
+  /* Sticky search bar follows the scroll on mobile */
+  .search-bar {
+    position: static;
+  }
+  .search-input {
+    font-size: 16px; /* ≥16px stops iOS zooming in on focus */
+  }
+  .yt-input {
+    font-size: 16px;
+  }
+
+  /* Explorer rows: smaller artwork */
+  .result-row {
+    grid-template-columns: 92px 1fr;
+    gap: 8px 10px;
+  }
+  .thumb {
+    width: 92px;
+    height: 52px;
+  }
+
+  /* Track table responsive column-dropping is handled by the container query on
+     .library (keyed to its real width), so no mobile-specific overrides needed —
+     a phone-width library trims to Title / Artist / Time automatically. */
+}
+

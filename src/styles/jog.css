@@ -1,0 +1,66 @@
+/* ===================== Key lock / jog / quantize ========================== */
+.btn.keylock {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.btn.keylock.on {
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+}
+
+.jog {
+  display: flex;
+  gap: 6px;
+}
+.jog-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--btn-border, var(--line));
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s, transform 0.04s;
+}
+.jog-btn:active {
+  transform: translateY(1px);
+  background: var(--panel);
+}
+.jog-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.jog-btn.mag {
+  letter-spacing: 1px;
+}
+.jog-btn.mag.on {
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+}
+/* In SHIFT the ⌗ becomes the skip-size selector — keep its label inside the
+   same flex:1 cell (no widening, no wrap) so the jog row stays even at any size. */
+.jog-btn.mag.skip {
+  font-size: 11px;
+  letter-spacing: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .jog-btn {
+    padding: 10px 0;
+    font-size: 13px;
+  }
+}
+

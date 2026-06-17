@@ -1,0 +1,1746 @@
+/* --- FX strip (channel-strip device rack) — tabs over one full-size device panel --- */
+.fx-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-height: 0;
+  /* The shared device-body height: the EQ curve AND the effect body (viz + knobs + chips)
+     both use it, so every tab renders at the SAME height and the two decks' strips stay
+     aligned. Tall enough for the delay's viz-over-knobs-over-chips stack. */
+  --fx-body-h: 192px;
+}
+.fx-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+/* A tab chip — same neon language as .eq-tool, but only the SELECTED one is filled. */
+.fx-tab {
+  padding: 3px 9px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--panel));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.fx-tab:hover {
+  color: #fff;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+.fx-tab.sel {
+  color: #08111a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+body:not(.no-glow) .fx-tab.sel {
+  box-shadow: 0 0 16px -2px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.fx-tab.bypassed {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.fx-tab[draggable] {
+  cursor: grab;
+}
+.fx-tab.dragging {
+  opacity: 0.4;
+}
+/* Drop indicator — a bright left edge where the dragged tab will land. */
+.fx-tab.drag-over {
+  border-left: 3px solid var(--accent);
+  box-shadow: -2px 0 8px -2px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.fx-tab.fx-add,
+.fx-tab.fx-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 3px 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.fx-add-wrap {
+  position: relative;
+  margin-left: auto; /* push the −/+ group to the right end of the tab row */
+  display: flex;
+  gap: 4px;
+}
+.fx-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 7px;
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.7);
+  min-width: 110px;
+}
+.fx-palette-item {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.fx-palette-item:hover {
+  color: #08111a;
+  background: var(--accent);
+}
+/* The − (remove) sits beside the + in the tab row — same chip as a tab, tinted danger-red,
+   removes the selected effect. */
+.fx-tab.fx-remove {
+  color: #ff5470;
+  border-color: color-mix(in srgb, #ff5470 50%, var(--panel));
+}
+body:not(.no-glow) .fx-tab.fx-remove {
+  box-shadow: 0 0 9px -3px color-mix(in srgb, #ff5470 55%, transparent);
+}
+.fx-tab.fx-remove:hover {
+  color: #fff;
+  background: #ff5470;
+  border-color: #ff5470;
+}
+/* Preset menu — reuses the .fx-palette look, but fixed at the cursor (right-click a tab). */
+.fx-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.fx-preset-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 41;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.fx-preset-head {
+  padding: 3px 10px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+.fx-preset-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.fx-preset-save {
+  color: var(--accent);
+}
+/* A saved-preset row: the name applies on click; ✎ renames, ✕ removes. */
+.fx-preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.fx-preset-row .fx-preset-apply {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fx-preset-mini {
+  flex: 0 0 auto;
+  width: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+.fx-preset-mini:hover {
+  color: #08111a;
+  background: var(--accent);
+}
+.fx-preset-mini.danger:hover {
+  color: #fff;
+  background: #ff5470;
+}
+/* The stage hosts ONE device surface; the EQ's .eq-pro (flex:1) fills it as before. */
+.fx-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* An effect surface (delay…): the device BODY (fixed height = the EQ curve so switching
+   tabs never resizes the strip) stacks a VISUALIZATION (fills the slack) over a knob row
+   over the effect's mode chips. BYPASS/RESET/COPY are NOT here — that's the shared FxStrip
+   toolbar below, identical for every device. */
+.fx-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 1 auto;
+  height: var(--fx-body-h, 178px);
+  min-height: 0; /* the shared --fx-body-h is the only height authority (= the EQ) */
+  overflow: hidden;
+}
+/* The viz is the pure surplus-absorber: basis 0 so it only appears when there's leftover
+   height after the knobs + chips, and collapses FIRST (before the knob rows shrink) when
+   the panel is squeezed. Big on a tall strip, gone on a short one. */
+.dly-viz {
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+}
+.dly-viz canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Reverb v2 body — buttonoid grid LEFT, the round decay viz RIGHT (a square sized to the
+   panel height so the circle reads big). */
+.rv-body {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: 8px;
+}
+.rv-viz {
+  /* The dome is now the primary control surface — let it absorb the body width; the polar
+     draw centres on min(w,h) so the circle stays round at any aspect. The companion rail
+     (MIX·DUCK) holds its fixed width on the right. */
+  flex: 1 1 0;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+  cursor: pointer; /* grips are draggable; the canvas reads as interactive */
+}
+.rv-viz canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Knob grid (the device body's control row). Pinned height so it doesn't steal the viz's
+   space. Default: auto-fit spread (for future effects); per-effect overrides set a fixed
+   column count for a balanced, grouped layout. */
+.fx-knobs {
+  flex: 0 0 auto;
+  /* Clip the grid box so a knob's arc/dot can't bleed DOWNWARD onto the chip toolbar
+     when the panel is squeezed short (viz collapsed). Without this the value-0 dots
+     (parked at the cell's bottom edge) spilled into the gaps BETWEEN the chips and read
+     as stray marks overlapping the button row. The delay's 7px padding-bottom keeps the
+     dot's normal glow inside the box, so this only trims the would-be overlap. */
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  grid-auto-rows: 40px;
+  justify-content: center;
+  gap: 8px 10px; /* row col — enough that adjacent knob outlines don't visually collide */
+}
+/* Delay: 5 fixed columns → a balanced 5+5 split, column-aligned (core row TIME·FBK·HP·LP·MIX
+   over the character row DEPTH·RATE·DRIVE·DUCK·WIDTH), no orphaned/left-hugging last row.
+   minmax(0,1fr) lets the cells shrink in a narrow dock without overflowing (grid gaps are
+   always preserved, so cells never collide); compact 34px rows so the two rows + the chip
+   strip always fit inside the shared --fx-body-h that the EQ sets, at any width. */
+.fx-delay .fx-knobs {
+  /* SHRINKABLE: the FX strip only gets the deck bank's leftover height, so the panel is
+     usually far shorter than --fx-body-h. Let the two rows compress (down to 22px) to fit
+     whatever height is available — rigid rows overflowed and the chip strip collided with
+     this row. The viz collapses first; then these rows shrink; the chips stay put. */
+  flex: 0 1 auto;
+  min-height: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: minmax(22px, 34px);
+  column-gap: 7px;
+  /* A cell's level marker (the dot) sits ON its border, so a min-value (0) knob parks its
+     dot at the BOTTOM-centre and its glow bleeds ~7px below the cell. Reserve that much
+     clearance inside the grid box so the bottom row's dots never spill onto the chip strip. */
+  padding-bottom: 7px;
+}
+/* Reverb v3: the dome is the control surface (drag-handles for every spatial param), so the
+   only cells left are the two NON-spatial knobs — MIX · DUCK — stacked in a narrow companion
+   column beside the round viz. A fixed-width pair (not a 12-cell grid) is what un-busts the
+   mobile deck column: square dome + a thin 2-cell rail always fit, at any width. */
+.fx-reverb .rv-knobs {
+  flex: 0 0 auto;
+  width: clamp(58px, 24%, 92px);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(28px, 1fr);
+  row-gap: 8px;
+  padding-bottom: 7px;
+}
+/* MODE chip — reads as a value selector (accent), not a toggle, in the FRZ foot strip. */
+.fx-chip.fx-chip-mode {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
+  font-weight: 800;
+}
+.fx-knobs .vcell {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  max-width: none;
+}
+/* The FX panel lives INSIDE .eq-row (DeckControls wraps <FxStrip> in it), so the
+   `.eq-row .vcell { height: 50px }` foot-row rule (desktop AND mobile) was leaking onto
+   the delay's knob cells — forcing them to 50px inside their compact 22–34px grid rows,
+   so they overflowed and overlapped (and pushed up under the chin). The knob cells must
+   fill their GRID row, not the foot-row tile height. Higher specificity (0,3,0) so it
+   wins over `.eq-row .vcell` (0,2,0) regardless of source order, on every breakpoint. */
+.eq-row .fx-knobs .vcell {
+  height: 100%;
+}
+/* The chip toolbar — spreads to fill the width (like the EQ tools) so it reads as the
+   same shell. Mode/toggle chips grow; the small ON / ✕ controls hold their size at the end. */
+/* The chip toolbar — ONE row that never wraps (a wrapped 2nd/3rd row would balloon the
+   panel past the shared height and collide with the device toolbar below). Chips share the
+   width and shrink together; labels clip rather than wrap. */
+.fx-foot {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+.fx-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  padding: 5px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel));
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.fx-chip:hover {
+  color: #fff;
+  border-color: var(--accent);
+}
+.fx-chip.on {
+  color: #08111a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+body:not(.no-glow) .fx-chip.on {
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.fx-chip.fx-remove {
+  flex: 0 0 auto; /* the ✕ holds its size; the mode chips do the spreading */
+  color: var(--muted);
+  border-color: var(--line);
+}
+.fx-chip.fx-remove:hover {
+  color: #fff;
+  border-color: #e0556a;
+  background: color-mix(in srgb, #e0556a 22%, var(--surface));
+}
+.fx-unknown {
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.eq-readout {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: color-mix(in srgb, #000 55%, transparent);
+  border-radius: 5px;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 0.1s;
+  z-index: 3;
+}
+.eq-curve {
+  position: relative;
+  /* The curve is the surplus-absorber inside .eq-pro (which owns --fx-body-h): it fills
+     whatever height is left after the band-edit subrow below. The nodes still control
+     freq/gain/Q by drag; the subrow is the Pro-Q-style numeric companion. */
+  flex: 1 1 0;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+  touch-action: none; /* nodes own the drag */
+}
+.eq-curve-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* Pro-Q-style band-edit subrow: precise numeric cells for the SELECTED node's
+   secondary params (freq / gain / Q-or-resonance), coloured in the band's hue. A fixed
+   short row so the curve keeps the bulk of --fx-body-h. */
+.eq-subrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+  min-height: 0;
+  height: 38px;
+  /* Each cell's ValueCell knob-dot rides on the cell's BOTTOM edge (KnobBorder traces
+     from bottom-centre; dot r=4 + glow ≈ 6px below the box). The subrow is the last
+     child of .eq-pro, which clips at a fixed --fx-body-h (overflow:hidden) — so the
+     dot's lower half was shaved off against the BYPASS/RESET/COPY toolbar. Lift the
+     row off the clip edge so the dot clears (the curve, flex:1, yields the room). */
+  margin-bottom: 6px;
+}
+.eq-subrow .vcell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The EQ's band-edit cells live inside .eq-row too, so the `.eq-row .vcell{height:50px}`
+   foot-row rule was inflating FREQ/GAIN/Q to 50px inside the 38px subrow — they spilled
+   DOWN over the BYPASS/RESET/COPY toolbar. Pin them to the subrow height so they match
+   the MID band chip (which just stretches to it). Higher specificity (0,3,0) beats the
+   50px rule (0,2,0) on every breakpoint. The curve (flex 1 1 0) yields the room. */
+.eq-row .eq-subrow .vcell {
+  height: 100%;
+}
+.eq-subrow-band {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border-radius: 6px;
+  color: var(--band);
+  border: 1px solid color-mix(in srgb, var(--band) 50%, transparent);
+  background: color-mix(in srgb, var(--band) 14%, transparent);
+}
+/* The currently-edited node reads as selected (a brighter ring) so the subrow's
+   band is unambiguous. */
+.eq-node.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--node) 70%, #fff 30%), 0 0 10px var(--node);
+}
+/* SHAPE is a SWITCH button (discrete: bell / lo-shelf / hi-shelf), not a buttonoid —
+   it cycles on tap. Sized to sit in the subrow next to the FREQ/GAIN/Q cells. */
+.eq-shape-btn {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 50px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 70%, #000 10%);
+  color: var(--text);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.eq-shape-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+.eq-shape-cap {
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+}
+.eq-shape-val {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent);
+}
+/* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
+.eq-node {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--node);
+  background: color-mix(in srgb, var(--node) 35%, #000 40%);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--node) 60%, transparent), inset 0 0 4px color-mix(in srgb, var(--node) 50%, transparent);
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
+}
+.eq-node:hover {
+  background: var(--node);
+}
+.eq-node:active {
+  cursor: grabbing;
+}
+/* Cut nodes (HP / LP) read as squares to distinguish from the round band nodes. */
+.eq-node.cut {
+  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+}
+/* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
+@media (min-width: 769px) {
+  .pitch-row .vcell,
+  .stems-row .vcell,
+  .eq-row .vcell {
+    height: 50px;
+  }
+}
+/* Re-order the bank: volume slider on top, then CUE/PLAY/SHIFT as the first button
+   row; the rest keep their DOM order beneath. */
+.bank-main > .lfader {
+  order: -2;
+}
+.bank-main > .bank-load {
+  order: -1;
+}
+.pitch-step {
+  display: grid;
+  place-items: center;
+  /* Solid fill (not transparent) so the steppers read as real buttons flush next
+     to the cells; mixes off the theme surface so it follows light/dark themes. */
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--panel));
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.pitch-step:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pitch-step:active {
+  transform: translateY(1px);
+}
+.stem-btn {
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8a94a6;
+  background: #161a22;
+  border: 1px solid #2a3140;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, box-shadow 0.12s, border-color 0.12s;
+}
+.stem-btn:hover:not(:disabled) {
+  border-color: var(--accent, #36d1ff);
+}
+.stem-btn.on {
+  color: #0a0d12;
+  background: var(--accent, #36d1ff);
+  border-color: var(--accent, #36d1ff);
+  box-shadow: 0 0 10px -2px var(--accent, #36d1ff);
+}
+.stem-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+body.no-glow .stem-btn.on {
+  box-shadow: none;
+}
+
+/* Settings stem-model picker: a stacked list of selectable backends. */
+.stem-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stem-model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--surface, #12141c);
+  border: 1px solid var(--line, #2a3140);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.stem-model:hover {
+  border-color: var(--neon-cyan, #36d1ff);
+}
+.stem-model.on {
+  border-color: var(--neon-cyan, #36d1ff);
+  box-shadow: inset 0 0 0 1px var(--neon-cyan, #36d1ff);
+}
+.stem-model-label {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text, #ecedfb);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stem-model-note {
+  font-size: 11px;
+  color: var(--muted, #8a94a6);
+}
+/* Per-model status pills: device capability + whether the loaded track is cached. */
+.stem-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.stem-badge.ok {
+  color: #6ee7a8;
+}
+.stem-badge.warn {
+  color: #ffcf6e;
+}
+.stem-badge.cached {
+  color: #06080c;
+  background: #6ee7a8;
+  border-color: #6ee7a8;
+}
+
+/* Per-deck stem status / error lines (Settings ▸ Stems). The full sentence lives
+   here; the deck lane shows only the terse percentage. */
+.stem-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.stem-status-row + .stem-status-row {
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+.stem-status-deck {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-color, #e8edf4);
+}
+.stem-status-detail {
+  flex: 1 1 auto;
+}
+.stem-reanalyze {
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.stem-reanalyze:hover:not(:disabled) {
+  border-color: var(--neon-cyan, #00e5ff);
+}
+.stem-reanalyze:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Active-device indicator for the selected stem model (GPU vs CPU). */
+.stem-trace {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  color: var(--muted);
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Live diagnostics (Debug tab): a responsive grid of labelled key/value blocks. */
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+.debug-block {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+.debug-block-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.debug-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.debug-key {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.debug-val {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.stem-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.stem-device-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.stem-device-text {
+  flex: 1 1 auto;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stem-device.gpu .stem-device-tag {
+  color: #7cc7ff;
+}
+.stem-device.cpu .stem-device-tag {
+  color: #6ee7a8;
+}
+.stem-device.none .stem-device-tag {
+  color: #ffcf6e;
+}
+
+/* Crash-guard banner: GPU separation auto-disabled after a tab crash. */
+.stem-blocked-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #ffcf6e;
+  background: rgba(255, 207, 110, 0.1);
+  border: 1px solid rgba(255, 207, 110, 0.35);
+}
+.stem-blocked-banner .link-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Phone-only "stems are download/upgrade-only here" explainer. */
+.stem-mobile-note {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, #9aa);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.stem-mobile-note strong {
+  color: var(--text, #e8e8ea);
+  font-weight: 600;
+}
+
+/* A GPU model disabled after a crash — not selectable. */
+.stem-model.blocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.stem-model.blocked:hover {
+  background: inherit;
+}
+/* A GPU model untested on this browser — dimmed, but still clickable. */
+.stem-model.untested:not(.on) {
+  opacity: 0.72;
+}
+.stem-status-row.separating .stem-status-detail {
+  color: var(--shift); /* on-device processing — yellow */
+}
+.stem-status-row.cached .stem-status-detail,
+.stem-status-row.downloading .stem-status-detail,
+.stem-status-row.ready .stem-status-detail,
+.stem-status-row.promoted .stem-status-detail {
+  color: #6ee7a8; /* cache fetch / done / auto-enhanced — green */
+}
+.stem-status-row.failed .stem-status-detail {
+  color: #ff7a7a;
+}
+.stem-status-row.unavailable .stem-status-detail {
+  color: #ffcf6e;
+}
+
+/* ── Narrow / mobile mixer: pin the crossfader, scroll each side outward ──────────
+   The all-fader console is wider than a narrow viewport. Instead of clipping, keep
+   the A↔B crossfader as a fixed centre spine and let each channel scroll
+   horizontally OUTWARD from it. Each deck's OUT (LEVEL) fader stays anchored beside
+   the crossfader (the default view = OUT │ A/B │ OUT, exactly the live-mix spine);
+   scroll a side to reach its PITCH · FX · EQ · STEMS banks.
+   Anchoring uses the RTL-scroll trick: a horizontal scroll container shows its
+   right edge first when `direction: rtl`. Deck A (banks EQ…OUT, OUT on the right)
+   gets rtl so OUT sits against the crossfader; its inner row is reset to ltr so the
+   banks keep their order. Deck B is mirrored (OUT already on the left), so plain
+   ltr already anchors OUT against the crossfader. Appended at EOF so these win the
+   source-order tie over the desktop base rules. */
+@media (max-width: 1080px) {
+  .mixer-box {
+    width: 100%;
+    max-width: 100%;
+  }
+  .mix-row .channels {
+    flex: 1 1 auto;
+    width: 100%;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .channels .chan {
+    flex: 1 1 0;
+    min-width: 0;
+    align-items: flex-start; /* hug the cross-start edge (right in rtl, left in ltr) */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none; /* hide the scrollbar — still swipe-scrollable */
+    -ms-overflow-style: none;
+  }
+  .channels .chan:not(.mirror) {
+    direction: rtl; /* anchor scroll + content to the RIGHT (inner) edge */
+  }
+  .channels .chan:not(.mirror) .chan-row {
+    direction: ltr; /* keep the banks EQ … OUT left-to-right */
+  }
+  .channels .crossfader.vertical {
+    flex: 0 0 auto; /* the pinned centre spine — never shrinks or scrolls */
+    align-self: center;
+  }
+  .channels .chan::-webkit-scrollbar {
+    display: none; /* hide the scrollbar (WebKit/Blink) */
+  }
+}
+
+/* --- Shared DJ session ("Sync") chin control + device popover -------------- */
+.room {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  order: 10; /* far right of the chin, where the ⓘ help square used to sit */
+}
+/* Square icon button, matching the Settings gear square (icon only, no label). */
+.chin-room {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+}
+/* The ⇅ sync glyph carries the connection status via its colour:
+   idle (muted), connecting (amber pulse), online (green glow), error (red). */
+.chin-room-i {
+  font-size: 17px;
+  line-height: 1;
+  transition: color 0.12s, text-shadow 0.12s;
+}
+.chin-room-i.online {
+  color: #38e08a;
+  text-shadow: 0 0 7px #38e08a;
+}
+.chin-room-i.connecting {
+  color: #f5c451;
+  animation: room-pulse 1s ease-in-out infinite;
+}
+.chin-room-i.error {
+  color: #ff5a6a;
+}
+@keyframes room-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+/* Peer-count badge (how many devices are in the room), top-right corner. */
+.room-count {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #08111a;
+  font-size: 9px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.room-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.room-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 41;
+  width: 280px;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, #000);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.room-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.room-title {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.room-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.room-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.room-tap-hint {
+  margin: 0 0 2px;
+}
+/* Device pills — the whole control surface: tap one to make it the audio output. */
+.room-pills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.room-pill {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+.room-pill:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+.room-pill.out {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+/* A pill row = the tappable device pill + (for your own tied device) a ✕ to leave. */
+.room-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-pill-row .room-pill {
+  flex: 1 1 auto;
+}
+/* In-session (tied, following the output) devices get a small accent edge. */
+.room-pill.tied:not(.out) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.room-leave {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.room-leave:hover {
+  color: #ff8a96;
+  border-color: #ff8a96;
+}
+.room-pill-ico {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+.room-pill-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.room-pill-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+.room-pill.out .room-pill-tag {
+  color: var(--accent);
+}
+.room-status {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.room-status.ok {
+  color: #38e08a;
+}
+.room-status.wait {
+  color: #f5c451;
+}
+.room-err {
+  font-size: 12px;
+  color: #ff8a96;
+}
+.room-warn {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #ffcf6b;
+  background: color-mix(in srgb, #ffcf6b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #ffcf6b 30%, transparent);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+.room-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+  padding: 2px 4px;
+}
+.room-note strong {
+  color: var(--text);
+}
+.room-peer-ico {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+}
+.room-peers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.room-peer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.room-peer.master {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.room-peer.empty {
+  color: var(--muted);
+  justify-content: center;
+}
+.room-peer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-you {
+  color: var(--muted);
+  font-size: 11px;
+}
+.room-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+}
+.room-act {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+}
+.room-act:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-actions {
+  display: flex;
+}
+.room-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.room-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+}
+.room-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Session lobby header (phase narration: Solo / Connecting / Live / No output) --- */
+.room-sesh {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.room-sesh-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.room-sesh-title {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.room-sesh-sub {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.room-status.idle {
+  color: var(--muted);
+}
+.room-status.warn {
+  color: #ffcf6b;
+}
+/* Header tools cluster: the 👁 streaming-privacy reveal + the status chip. */
+.room-sesh-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.room-eye {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+.room-eye:hover,
+.room-eye.on {
+  opacity: 1;
+}
+/* A masked avatar is blurred until revealed (faces are PII on stream). */
+.acct-avatar.private {
+  filter: blur(7px);
+}
+/* --- Device bridge: two device-sessions linked by a shared control plane --- */
+.room-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* Each device = its own session card. */
+.room-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+}
+/* The one device currently making sound. */
+.room-dev.output {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.room-dev-ico {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+.room-dev-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.room-dev-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-dev-you {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.room-dev-role {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+.room-dev.output .room-dev-role {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+.room-dev-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+}
+.room-dev-act {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.room-dev-act:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+/* The bridge between the cards — shows whether controls are shared. */
+.room-link-bridge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.room-link-bridge::before,
+.room-link-bridge::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.room-link-bridge.linked {
+  color: var(--accent);
+}
+.room-link-bridge.linked::before,
+.room-link-bridge.linked::after {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.bridge-glyph {
+  font-size: 12px;
+  line-height: 1;
+}
+/* Placeholder when there's no second device yet. */
+.room-ghost {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* Drop this device out of the shared control plane. */
+.room-unlink {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.room-unlink:hover {
+  color: #ff8a96;
+  border-color: #ff8a96;
+}
+
+/* --- Session lobby: participant roster (scales to N) --- */
+.room-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* A taller card per device: prominent device glyph on the left, identity + role on top,
+   switches / status underneath. NO accent chrome on your own card — role is conveyed by
+   the host/guest tag, not a colored border. */
+.room-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  min-height: 58px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+/* A present-but-not-joined OTHER device is faded; your own card stays full so its
+   switches read as tappable. */
+.room-card:not(.in):not(.self) {
+  opacity: 0.55;
+}
+.room-card.in {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.room-card-ico {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  line-height: 1;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.room-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.room-card-id {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.room-card-foot {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+}
+.room-card .room-dev-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* Discovery / waiting status on a row when switches aren't shown yet. */
+.room-row-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+/* The two per-device switches: 🎛️ drive + 🔊 sound. Dim/grey when off, lit when on. */
+.room-row-tog {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-tog {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  filter: grayscale(1) opacity(0.4);
+  transition: filter 0.12s, border-color 0.12s, background 0.12s;
+}
+button.room-tog:hover {
+  border-color: var(--accent);
+  filter: grayscale(0.3) opacity(0.85);
+}
+.room-tog.on {
+  filter: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.room-tog.static {
+  cursor: default;
+  width: 28px;
+  height: 26px;
+  font-size: 13px;
+}
+/* A guest's own drive switch is locked until the host grants control. */
+.room-tog.locked {
+  cursor: not-allowed;
+  border-style: dashed;
+  filter: grayscale(1) opacity(0.28);
+}
+/* Guests are called out clearly + never name-masked. */
+.room-guest-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9fd0ff;
+  background: color-mix(in srgb, #7fb6ff 16%, transparent);
+  border: 1px solid color-mix(in srgb, #7fb6ff 38%, transparent);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.room-card.guest {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, #7fb6ff 55%, transparent);
+}
+/* Host = every device on the session-owner's account (an account-wide property, not the
+   anchor). Green, to read clearly distinct from the guest blue. */
+.room-host-tag {
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9be9c0;
+  background: color-mix(in srgb, #6bdc9e 15%, transparent);
+  border: 1px solid color-mix(in srgb, #6bdc9e 36%, transparent);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.room-row-acts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-act {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.room-act:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-act.primary {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  color: var(--accent);
+}
+.room-act.primary:hover {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+/* Footer: join/leave + invite. */
+.room-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.room-cta {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  transition: filter 0.12s;
+}
+.room-cta:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.room-cta:disabled {
+  opacity: 0.5;
+  cursor: default;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+}
+.room-invite {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.room-invite:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-invite:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.room-invite-share {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.room-invite-link {
+  width: 100%;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.room-invite-link:hover,
+.room-invite-link:active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.room-invite-qr {
+  display: block;
+  border-radius: 9px;
+  padding: 8px;
+  background: #fff; /* quiet zone — keep the code high-contrast for any camera */
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+}
+.room-invite-scan {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+}
+
+/* --- "Take control" lock over the stage for a listening guest --- */
+.stage {
+  position: relative;
+}
+/* Invisible input shield: the deck stays fully visible, taps just don't reach it. */
+.stage-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: transparent;
+  cursor: not-allowed;
+}
+
+/* ── Cue / loop pad layout per breakpoint ────────────────────────────────────
+   DESKTOP: the cue + loop pads WIDEN to fill their row (drop the square cap) so
+   there's no empty space between them — wide pads, fixed height. MOBILE (≤768):
+   ONE flat row of 8 per block (cue, loops) — a 2×4 grid spent two rows each (four
+   total) and ran the short deck stack out of HEIGHT before it ran out of width.
+   Single 1×8 rows of short pads halve that footprint. Appended at EOF to win the
+   source-order tie. */
+@media (min-width: 769px) {
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    width: 100%;
+    max-width: none;
+    aspect-ratio: auto;
+    height: 42px; /* shorter wide pads → the fixed EQ strip keeps its full height */
+  }
+}
+@media (max-width: 768px) {
+  .loop-sizes,
+  .hotcues {
+    grid-template-columns: repeat(8, minmax(0, 1fr)); /* 1×8, not 2×4 — height is the scarce axis */
+  }
+  /* CONTROL HEIGHTS = DESKTOP. The breakpoint must not shrink the control rows either
+     (it used to: pads 42→22, value cells 50→38, etc., so the whole bank read squashed
+     next to desktop). Now that the stack scrolls, restore the desktop heights so a deck
+     bank looks identical across 768px — only WIDTH-driven things (font-size, 1×8 grid)
+     stay compact for the narrow column. */
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    width: 100%;
+    max-width: none;
+    aspect-ratio: auto;
+    height: 42px; /* same as the desktop ≥769 rule — no half-height pads at the line */
+    /* Drop the generic .loop-btn 20px floor — eight per row would total ~180px and
+       overflow a phone-width deck column. The 1×8 track (minmax(0,1fr)) shrinks them. */
+    min-width: 0;
+  }
+  /* Value cells (stem gains, EQ bands, pitch/key) match the desktop 50px foot-row tiles
+     instead of falling back to the 38px base. */
+  .pitch-row .vcell,
+  .stems-row .vcell,
+  .eq-row .vcell {
+    height: 50px;
+  }
+  /* Loop IN/OUT/EXIT back to the desktop button height (the generic mobile .loop-btn
+     trimmed the padding). Font stays compact for the narrow column. */
+  .loops .loop-btn {
+    padding: 7px 0;
+  }
+  /* Row gaps back to the desktop 6px (the phone board tightened them to 3px). */
+  .stage .decks-row .bank-main {
+    gap: 6px;
+  }
+  /* EQ strip keeps its place in the now-consistent stack; it scrolls with the rest. */
+  .decks-row .bank-main > .eq-row {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+  /* Phone EQ/effects height = the SAME as desktop (no half-height squash at the
+     breakpoint). The control stack now gives way and scrolls (`.decks-third` is
+     shrinkable + `.bank-main` overflow-y:auto), so a full-height rack no longer pushes
+     the foot off-screen — it just scrolls. --fx-body-h still caps the whole rack (EQ +
+     every effect) at one height so the delay can't out-grow the EQ. */
+  .fx-strip {
+    --fx-body-h: 192px;
+  }
+  .eq-curve {
+    min-height: 0;
+  }
+  .fx-delay .fx-knobs {
+    grid-auto-rows: minmax(20px, 28px);
+    gap: 6px 7px;
+    padding-bottom: 4px;
+  }
+  .fx-foot {
+    gap: 3px;
+  }
+  .fx-chip {
+    padding: 4px 3px;
+    font-size: 8.5px;
+  }
+}
+

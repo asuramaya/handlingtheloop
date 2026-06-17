@@ -1,0 +1,2010 @@
+/* ============================ DDJ-FLX board ================================ */
+/* Section 1 (top third): stacked waveform lanes — grids line up vertically and
+   the canvases fill the available height (redrawn via ResizeObserver). */
+.lanes {
+  flex: 1 1 0; /* waveforms FILL the space the natural-height controls leave (basis 0 so they don't squeeze the EQ) */
+  min-height: 140px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--line);
+}
+.lane {
+  position: relative;
+  background: var(--surface);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Single-deck view: the tapped lane fills the whole lanes area, the other hides. */
+.lane.collapsed {
+  display: none;
+}
+/* Dragging a track row over a lane → "drop here to load" cue: an inset accent ring
+   and a faint tint so it's obvious which deck the track will land on. The `.lanes`
+   prefix lifts specificity so this wins the shared ::after over `.lane.focused`. */
+.lanes .lane.drop-target::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 24px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.lane.expanded {
+  flex: 1 1 0;
+}
+
+/* Stem separation/fetch overlay — a centred pill over the waveform so a deck still
+   on the single mix waveform clearly reads as "stems incoming" (transitioning),
+   not stuck. Yellow = on-device PROCESS, green = cache FETCH. */
+.stem-busy {
+  position: absolute;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  backdrop-filter: blur(3px);
+  animation: stem-busy-pulse 1.5s ease-in-out infinite;
+}
+.stem-busy.process {
+  border-color: #ffd64a;
+  box-shadow: 0 0 16px color-mix(in srgb, #ffd64a 38%, transparent);
+}
+.stem-busy.fetch {
+  border-color: #5dff9e;
+  box-shadow: 0 0 16px color-mix(in srgb, #5dff9e 38%, transparent);
+}
+.stem-busy-spin {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  animation: stem-busy-rot 0.8s linear infinite;
+}
+.stem-busy.process .stem-busy-spin {
+  color: #ffd64a;
+  border-top-color: #ffd64a;
+}
+.stem-busy.fetch .stem-busy-spin {
+  color: #5dff9e;
+  border-top-color: #5dff9e;
+}
+.stem-busy-bar {
+  width: 84px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  overflow: hidden;
+}
+.stem-busy-bar > span {
+  display: block;
+  height: 100%;
+  transition: width 0.2s ease;
+}
+.stem-busy.process .stem-busy-bar > span {
+  background: #ffd64a;
+}
+.stem-busy.fetch .stem-busy-bar > span {
+  background: #5dff9e;
+}
+@keyframes stem-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.94;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+@keyframes stem-busy-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Keyboard-focused deck: an accent ring overlaying the whole lane (a pseudo so it
+   paints above the absolutely-pinned canvas). Toggled with Tab. */
+.lane.focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 26%, transparent);
+  pointer-events: none;
+  z-index: 6;
+}
+/* The wrapper takes the lane's spare height via flex; the canvas is absolutely
+   pinned to fill it exactly. Absolute inset (not height:100%) avoids the iOS
+   Safari quirk where the canvas renders taller than its box and the bottom of
+   the waveform gets clipped by the lane. */
+.lane .wv-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.lane .waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 0;
+  border: none;
+}
+/* The header is its OWN row above the waveform (not an overlay), so the audio
+   form below it stays fully visible. */
+.lane-info {
+  flex: 0 0 auto;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  font-size: 12px;
+  pointer-events: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+/* DECK id — a button that toggles single-deck (maximized) view. The parent
+   .lane-info is pointer-events:none (click-through to the waveform), so the button
+   must opt back IN to receive taps. */
+.lane-id {
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--accent);
+  font-size: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.1s, border-color 0.1s;
+}
+.lane-id:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.lane-id.on {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+/* DECK id + title group (so the title gets its own full-width row on mobile). */
+.lane-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* When a catalog track is loaded the header becomes a drag SOURCE (drop onto a
+   library playlist to file it). The parent .lane-info is pointer-events:none for
+   waveform click-through, so the draggable header must opt back in to start a drag. */
+.lane-head.draggable {
+  pointer-events: auto;
+  cursor: grab;
+}
+.lane-head.draggable:active {
+  cursor: grabbing;
+}
+/* The ⠿ grip — a small affordance that the header can be dragged to a playlist. */
+.lane-drag {
+  flex: none;
+  pointer-events: auto;
+  cursor: grab;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.55;
+  transition: color 0.1s, opacity 0.1s;
+}
+.lane-head.draggable:hover .lane-drag {
+  opacity: 1;
+  color: var(--accent);
+}
+/* Title = a clipping box; the inner text truncates with an ellipsis when it fits,
+   or auto-scrolls (ticker) when it's longer than the box (`.ticker`, set by JS). */
+.lane-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.lane-title-inner {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.lane-title.ticker .lane-title-inner {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  animation: lane-ticker var(--ticker-dur, 8s) linear infinite alternate;
+}
+@keyframes lane-ticker {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(calc(-1 * var(--scroll, 0px)));
+  }
+}
+.lane-id {
+  white-space: nowrap;
+}
+.lane-artist {
+  color: var(--muted);
+}
+/* On phones the header is too narrow for the title to share the row with the
+   time/BPM/key/grid — so the DECK id + title get their OWN full-width row, and the
+   rest wrap beneath. (Desktop keeps everything on one line.) */
+@media (max-width: 768px) {
+  .lane-info {
+    flex-wrap: wrap;
+    row-gap: 1px;
+    column-gap: 10px;
+  }
+  .lane-head {
+    flex-basis: 100%;
+  }
+  .lane-bpm {
+    white-space: nowrap;
+  }
+}
+.lane-time {
+  font-variant-numeric: tabular-nums;
+}
+.lane-bpm {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+.lane-key {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.lane-status {
+  color: var(--shift);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Cache FETCH (instant disk hit or R2 download) reads green; on-device PROCESSING
+   reads yellow — so an already-done song is obvious vs one still being crunched. */
+.lane-status.tone-fetch {
+  color: #46e08a;
+}
+.lane-status.tone-process {
+  color: var(--shift);
+}
+.lane-status.tone-ok {
+  color: #46e08a;
+}
+.lane-status.tone-fail {
+  color: #ff6b6b;
+}
+.lane-status.tone-idle {
+  color: var(--muted);
+}
+/* GPU-job tell in the header (stem separation/fetch %, then lyric transcription %) — plain text
+   + a small spinner dot, NO floating bubble. Sits on the same row as BPM/key/grid. */
+.lane-proc {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+.lane-proc-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: caption-spin 0.8s linear infinite;
+}
+/* Beat-grid size control in the header (− value +). lane-info is click-through,
+   so this re-enables pointer events for the buttons. */
+.lane-grid {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.grid-btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.grid-btn:hover {
+  border-color: var(--accent);
+}
+.grid-val {
+  min-width: 50px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Section 2 (middle third): the DJ board — deck A | mixer | deck B, mirrored
+   around the center like a real controller. */
+.board {
+  flex: 0 0 auto;
+  overflow: visible;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+}
+.bank {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  min-width: 0;
+  /* Deck control buttons (.btn/.pad/.jog-btn/.loop-btn) take their RESTING border
+     from the deck's OWN accent — never --line (that's for non-deck chrome). Muted
+     toward the dark panel so resting reads dimmer than the full-accent hover/active. */
+  --btn-border: color-mix(in srgb, var(--accent) 55%, var(--panel));
+}
+.bank.mirror {
+  flex-direction: row-reverse;
+}
+/* Keyboard-focused deck's control bank: brighter accent top rail + an accent ring
+   and faint inner glow so it's obvious which deck the keys are driving. */
+.bank.focused {
+  border-top-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.decks-row .bank:not(.focused) {
+  opacity: 0.86; /* recede the unfocused deck a touch */
+}
+/* Single-deck (solo) mode — driven by EXPAND, not focus. The expand button in a
+   deck's header (the DECK A / DECK B text) expands that deck's waveform lane and
+   collapses the other's; carry the same through to the control banks so the whole
+   deck goes full-width. Works on desktop AND mobile. When nothing is expanded,
+   neither class is set, both banks fall back to the base `flex:1` 2-deck row. */
+.decks-row .bank.expanded {
+  flex: 1 1 100%;
+}
+.decks-row .bank.collapsed {
+  display: none;
+}
+
+/* Per-button keyboard-shortcut letter, bottom-right. Hidden by default; shown only
+   on desktop when Settings ▸ Keyboard hints is on (body.show-keys). The buttons
+   are position:relative so the badge anchors to each. */
+.jog-btn,
+.loop-btn,
+.hw-btn,
+.stem-btn {
+  position: relative;
+}
+.kbd {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font: 700 8px/1 ui-monospace, monospace;
+  color: var(--muted);
+  opacity: 0.55;
+  pointer-events: none;
+  display: none;
+}
+@media (min-width: 769px) {
+  body.show-keys .kbd {
+    display: block;
+  }
+}
+.bank-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Center mixer: two full channel strips (TEMPO fader + knobs + LEVEL fader) over
+   a foot with the tempo-range button and the crossfader. */
+.mixer-center {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 14px 8px;
+  background: var(--panel-2);
+  border-top: 2px solid var(--neon-purple);
+}
+
+/* ===== Floating redesign: three equal thirds + floating library/search ===== */
+
+/* Middle third — the two decks' button banks side by side. */
+/* Middle third — equal 1/3 with the others; scrolls internally if its content
+   (jog … stems) is taller than the third, so it never overlaps the mixer. */
+.decks-row {
+  flex: 0 1 auto; /* natural height, but may shrink (→ EQ trims) on very short windows */
+  min-height: 0;
+  display: flex;
+  gap: 1px;
+  background: var(--line);
+}
+.decks-row .bank {
+  align-items: stretch;
+  overflow: hidden;
+}
+.decks-row .bank-main {
+  /* Pack every control row at its NATURAL height from the top (square pads stay
+     square, cells stay their cell height) — no airy gaps spread between rows. The
+     EQ row alone grows to absorb whatever height the third has left over, so there's
+     never dead space at the bottom either (it just gives the EQ more room). */
+  justify-content: flex-start;
+}
+.decks-row .bank-main > .eq-row {
+  /* A fixed-height EQ strip (height on .eq-curve). It does NOT grow to fill slack;
+     it only SHRINKS when a short window would otherwise clip it off the bottom. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+/* Bottom third — the two channel mixers side by side, crossfader beneath. */
+.mix-row {
+  /* Only the EQ strips live here now, so hug their height and hand the freed space
+     back to the waveform lanes + deck banks (which then aren't cramped). */
+  flex: 0 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  overflow-y: auto;
+  /* Fader length scales with the viewport so the mixer fills its third. The tall
+     faders (TEMPO/KEY/LEVEL) use --fader-h; the short bank faders use --fader-sm. */
+  --fader-h: clamp(140px, 21vh, 250px);
+  --fader-sm: clamp(78px, 12vh, 138px);
+  /* Stacked EQ-over-stems faders: ~half a tall fader so the pair matches its height. */
+  --fader-half: clamp(58px, 8.5vh, 100px);
+}
+/* MOBILE: give the waveform lanes more height (taller tracks) by taking a slice off
+   the middle deck-controls third. Only the flex-GROW changes (still `1 1 0` base),
+   so the ratio shifts ~ lanes 42% / controls 26% / mixer 32%. The controls third
+   scrolls internally, so the tighter height just means a little scroll if needed. */
+/* The mixer (both strips + crossfader) is bounded to its own natural width, so
+   the crossfader matches the channels instead of sprawling across the third. */
+.mixer-box {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+}
+.mix-row .channels {
+  flex: 0 0 auto;
+  width: 100%;
+}
+.mixer-box .crossfader {
+  width: 100%;
+}
+
+/* Phone board layout. MUST live here — AFTER the desktop base rules above —
+   because @media doesn't add specificity: a same-specificity rule later in the
+   file wins regardless of the query, so the earlier mobile block (near .waveform)
+   was dead.
+   Goal: a SINGLE-SCREEN DJ board that fits the viewport with NO page scroll (a
+   phone Safari toolbar would otherwise clip the mixer). The control bank takes
+   its natural height so the stem-pad foot is never clipped; the mixer is compact
+   (shorter faders); the waveforms flex to absorb whatever vertical space is left. */
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .app {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden; /* fit to screen — no page scroll */
+  }
+  /* Pin the waveforms to ~half the viewport (the control stack — square pad rows +
+     the pro-EQ curve + stem cells + sync/tempo/pitch/key rack — is tall enough that
+     letting it take its natural height squeezed the waveforms to a sliver). The
+     control half (`.decks-third` = crossfader + the two banks) takes the rest; each
+     deck bank SCROLLS internally if its rows don't fit, so the foot (EQ / BYPASS·
+     RESET·COPY) stays reachable instead of spilling off the bottom.
+     `.stage`-PREFIXED on purpose: the base `.lanes` / `.decks-third` rules appear
+     LATER in the file, and @media adds no specificity, so an unprefixed (equal)
+     selector here loses the cascade to them. The extra class (0,2,0 > 0,1,0) wins
+     regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
+     collapsed to just the crossfader, and left the bottom half an empty void. */
+  /* AUDIO VIEWPORT STAYS PUT ACROSS THE BREAKPOINT. The deck A/B waveforms must NOT
+     jump size when the window crosses 768px. The earlier "controls win" rule did exactly
+     that: it made `.decks-third` rigid (flex 0 0 auto) and dropped the lanes' min-height
+     to 0, so the instant you hit mobile the control stack stopped giving way and ate the
+     waveform height — a visible collapse at the threshold. Instead, mirror the DESKTOP
+     allocation exactly (same flex + same 140px lane floor) so the lanes get an identical
+     share on both sides of the line. The control stack gives way and SCROLLS internally
+     (`.bank-main { overflow-y:auto }` below) when it doesn't fit — controls scroll, the
+     audio viewport holds its size. */
+  .stage .lanes {
+    flex: 1 1 0;
+    min-height: 140px; /* identical to the desktop base — no jump at 768px */
+    overflow: hidden;
+  }
+  .stage .decks-third {
+    flex: 0 1 auto; /* shrinkable like desktop → controls scroll, lanes keep their share */
+    min-height: 0;
+  }
+  .stage .decks-row {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
+     (not the base `center`) makes `.bank-main` fill the bank height and align to the
+     TOP — without it the overflow is centered, which clips both ends and can't be
+     scrolled to. `.bank-main` is the scroll container (definite height + min-height:0
+     + overflow-y:auto). On a tall window there's no overflow, so no scrollbar shows. */
+  .stage .decks-row .bank {
+    align-items: stretch;
+    overflow: hidden;
+    padding: 5px 8px;
+    gap: 8px;
+  }
+  .stage .decks-row .bank-main {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    min-height: 0;
+  }
+  /* Every row keeps its NATURAL height — nothing grows to fill, so the transport /
+     jog / loop rows can't balloon into giant buttons. The block stacks from the top;
+     any leftover space sits at the bottom rather than inflating the controls. */
+  .decks-row .bank-main {
+    gap: 3px;
+    justify-content: flex-start;
+  }
+  .decks-row .bank-main > * {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+}
+
+/* Crossfader bar across the top, then the deck banks — natural height (the
+   waveforms above flex to fill the rest of the screen), shrink-allowed so a very
+   short window trims the EQ instead of clipping it. */
+.decks-third {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The A↔B crossfader as a HORIZONTAL bar at the top of the middle section — the
+   track spans the full width (no side gaps) and sits flush at the bottom. */
+.xfader-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 5px 0 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.xbar-track {
+  position: relative;
+  flex: 1;
+  height: 30px;
+  background: color-mix(in srgb, var(--text) 6%, var(--bg));
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+}
+/* Bipolar meter: deck A fills the left half growing OUT from the centre datum, deck
+   B fills the right half growing out to the right. */
+.xbip {
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+}
+.xbip .smeter {
+  position: absolute;
+  inset: auto;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+}
+.xbip .smeter.xb-a { left: 0; }
+.xbip .smeter.xb-b { right: 0; }
+.xbip .smeter.xb-a .smeter-fill { right: 0; left: auto; }
+.xbip .smeter.xb-b .smeter-fill { left: 0; right: auto; }
+.xbar-track::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--text) 32%, transparent);
+  pointer-events: none;
+}
+.xbar-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  z-index: 2;
+  cursor: ew-resize;
+}
+.xbar-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.xbar-input::-moz-range-track { background: transparent; }
+.xbar-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 38px; /* wide enough to carry the A↔B position number */
+  height: 24px;
+  border-radius: 4px;
+  /* Pure colour of the side it landed on (--xpct snaps 0%→A, 100%→B). */
+  background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
+  cursor: ew-resize;
+}
+.xbar-input::-moz-range-thumb {
+  width: 38px;
+  height: 24px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
+  cursor: ew-resize;
+}
+
+/* Stereo meter — vertical (v) bars by default, horizontal (h) for the level
+   faders. Two L/R sub-bars; fills driven by the component each frame. */
+.smeter {
+  position: absolute;
+  inset: 4px 3px;
+  display: flex;
+  gap: 2px;
+  z-index: 0;
+}
+.smeter.h {
+  flex-direction: column;
+}
+.smeter-bar {
+  position: relative;
+  flex: 1;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg));
+  overflow: hidden;
+}
+.smeter-fill {
+  position: absolute;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.smeter.v .smeter-fill { left: 0; right: 0; height: 0%; }
+.smeter.v.up .smeter-fill { bottom: 0; }
+.smeter.v.down .smeter-fill { top: 0; }
+.smeter.h .smeter-fill { top: 0; bottom: 0; left: 0; width: 0%; }
+/* Near full-scale — warn red so clipping is obvious at a glance. */
+.smeter-fill.hot { background: #ff5d5d; box-shadow: 0 0 6px #ff5d5d; }
+
+
+/* Channel volume — a HORIZONTAL fader across the foot of each deck bank, riding
+   over its deck's live L/R meter. Full bank width (so it matches that half of the
+   middle section); colour + side say which deck, no label needed. */
+.lfader {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+/* Deck A: flip the fader so its 0 origin sits at the centre (both decks' faders
+   then grow OUTWARD from the middle). Flips the track, meter and handle together. */
+.lfader.mirror {
+  transform: scaleX(-1);
+}
+.lfader-track {
+  position: relative;
+  flex: 1;
+  height: 26px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.lfader-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  z-index: 2;
+  cursor: ew-resize;
+}
+.lfader-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.lfader-input::-moz-range-track { background: transparent; }
+.lfader-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 38px; /* wide enough to carry the deck letter + level % */
+  height: 20px; /* fits inside the 26px track */
+  border-radius: 4px;
+  background: var(--accent); /* the deck's colour */
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  /* Tight glow only — a big halo bled vertically and made the handle read as too tall. */
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
+  cursor: ew-resize;
+}
+.lfader-input::-moz-range-thumb {
+  width: 38px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--accent);
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
+  cursor: ew-resize;
+}
+/* Value printed over the handle — tracks the thumb centre, never eats pointer events. */
+.lfader-val {
+  position: absolute;
+  top: 50%;
+  /* Sized to the 38×20 handle and centred so the number sits dead-centre and fills
+     it (not a small glyph floating in the square). */
+  width: 38px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 3;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  color: var(--text); /* follow the theme's text colour, not hard white */
+  text-shadow: 0 1px 3px color-mix(in srgb, var(--bg) 92%, transparent), 0 0 2px var(--bg);
+  white-space: nowrap;
+}
+.lfader.mirror .lfader-val span {
+  display: inline-block;
+  transform: scaleX(-1); /* counter deck A's mirrored track so the text reads normally */
+}
+/* The crossfader handle is a touch taller (24px) — match it so the number fills it. */
+.xbar-val {
+  height: 24px;
+}
+
+/* Top chin: a thin full-width bar with the three panel launchers. It's the first
+   flex child of .app (not floating), so it reserves its row and never overlaps
+   the board. The app's top safe-area inset keeps it clear of the notch. */
+.chin {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 1px;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+  z-index: 45;
+}
+.chin-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--panel);
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 11px 4px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 0.12s, background 0.12s;
+}
+.chin-btn:hover {
+  color: var(--text);
+}
+.chin-btn.active {
+  color: var(--text);
+  background: var(--panel-2);
+}
+.chin-ico {
+  font-size: 17px;
+  line-height: 1;
+}
+/* The ⓘ keyboard-help launcher — a fixed-width square at the right end of the
+   chin (doesn't flex like the three main launchers). */
+.chin-btn.chin-info {
+  flex: 0 0 auto;
+  width: 42px;
+}
+.chin-info-i {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+}
+
+/* Settings launcher: a text chin button on mobile, a compact gear SQUARE pinned to
+   the top-left corner on desktop (CSS `order:-1` moves it ahead of Library/Search). */
+/* Settings is a compact gear SQUARE (icon only) on ALL platforms — mobile included. */
+.chin-gear {
+  display: block;
+  font-size: 17px;
+  line-height: 1;
+}
+.chin-btn.chin-settings {
+  flex: 0 0 auto;
+  width: 42px;
+}
+.chin-btn.chin-settings .chin-label {
+  display: none;
+}
+
+/* Dock width: a bit NARROWER than a third so the middle board keeps more width
+   (stays closer to a desktop layout), and CAPPED so a 4K/ultrawide screen doesn't
+   give the list panels an absurd width. Floored so they stay usable on small laptops. */
+:root {
+  --dock-w: clamp(280px, 28vw, 520px);
+}
+
+/* DESKTOP: the Library/Search docks SHARE the row with the board — they're in-flow
+   flex children of `.workspace` that take `--dock-w` and SQUEEZE `.stage`, rather
+   than overlaying it. `order` puts Library left + Search right (flipped by the swap
+   button). Below 769px these rules don't apply: the docks stay centered modals. */
+@media (min-width: 769px) {
+  .workspace {
+    flex-direction: row;
+    position: relative; /* anchors the centered swap button */
+  }
+  .modal-backdrop.dock-left,
+  .modal-backdrop.dock-right {
+    position: relative; /* in the flow, not a fixed overlay; also anchors the resizer */
+    inset: auto;
+    z-index: auto;
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+    animation: none;
+  }
+  /* Per-side resizable width (drag handle writes these on <html>); falls back to the
+     shared default until the user resizes that side. min-width:0 + max-width PIN the
+     dock to exactly that width: otherwise a panel with wide, hard-to-shrink content
+     (e.g. Profile's long song titles) raises the flex item's automatic minimum size
+     above the basis and the dock balloons. The panel clips/ellipsises inside. */
+  .modal-backdrop.dock-left {
+    flex-basis: var(--dock-w-left, var(--dock-w));
+    /* Cap at the stored width OR whatever leaves the board ≥160px, whichever is SMALLER —
+       so a dock resized wide on a big screen doesn't run off the right edge (cutting its
+       own content) when the window is later narrower. */
+    max-width: min(var(--dock-w-left, var(--dock-w)), calc(100vw - 160px));
+    min-width: 0;
+  }
+  .modal-backdrop.dock-right {
+    flex-basis: var(--dock-w-right, var(--dock-w));
+    max-width: min(var(--dock-w-right, var(--dock-w)), calc(100vw - 160px));
+    min-width: 0;
+  }
+  .modal-backdrop.dock-left {
+    order: -1;
+  } /* Library on the left… */
+  .modal-backdrop.dock-right {
+    order: 1;
+  } /* …Search on the right */
+  .app.dock-swapped .modal-backdrop.dock-left {
+    order: 1;
+  } /* swap flips both panels… */
+  .app.dock-swapped .modal-backdrop.dock-right {
+    order: -1;
+  }
+  .modal-backdrop.dock-left > .panel,
+  .modal-backdrop.dock-right > .panel {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    border-top: none;
+    border-bottom: none;
+    box-shadow: none; /* in-flow dock, not a floater — no drop-shadow band on the board edge */
+  }
+  .modal-backdrop.dock-left > .panel {
+    animation: dock-in-left 0.16s ease-out;
+  }
+  .modal-backdrop.dock-right > .panel {
+    animation: dock-in-right 0.16s ease-out;
+  }
+  /* No dedicated close button on desktop — pressing the chin button again closes. */
+  .lib-panel .settings-head .mini.x,
+  .search-panel .settings-head .mini.x {
+    display: none;
+  }
+
+  /* Drag-to-resize handles (desktop only). Edge handles sit on the inner border of a
+     dock; the inline handle is an in-flow bar between the library sidebar and list. */
+  .dock-resizer {
+    z-index: 6;
+    touch-action: none;
+  }
+  .dock-resizer-edge {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: col-resize;
+  }
+  .modal-backdrop.dock-left .dock-resizer-edge {
+    right: -3px;
+    left: auto;
+  }
+  .modal-backdrop.dock-right .dock-resizer-edge {
+    left: -3px;
+    right: auto;
+  }
+  /* After a side-swap the docks trade places, so each one's INNER edge (the one
+     facing the board) flips. Move the grab handle to that inner edge; the resizer
+     itself derives the grow direction from the handle's geometry, so this is all it
+     takes to keep resize working when swapped. */
+  .app.dock-swapped .modal-backdrop.dock-left .dock-resizer-edge {
+    right: auto;
+    left: -3px;
+  }
+  .app.dock-swapped .modal-backdrop.dock-right .dock-resizer-edge {
+    left: auto;
+    right: -3px;
+  }
+  /* A side-swap moves the Library (.dock-left) to the screen's RIGHT edge. Mirror its
+     internals so the sidebar — and the ☰ that toggles it — sit against the outer edge,
+     like a natural right-docked panel; otherwise the nav/hamburger read as "on the
+     wrong side". The inner sidebar resizer derives its grow direction from geometry,
+     so reversing the row keeps sidebar-resize working with no other change. */
+  .app.dock-swapped .modal-backdrop.dock-left .library {
+    flex-direction: row-reverse;
+  }
+  .app.dock-swapped .modal-backdrop.dock-left .lib-sidebar {
+    border-right: none;
+    border-left: 1px solid var(--line);
+  }
+  .app.dock-swapped .modal-backdrop.dock-left .lib-burger {
+    order: 1; /* move ☰ to the head's right end, above the now-right-side sidebar */
+    margin-right: 0;
+    margin-left: 8px;
+  }
+  /* A subtle line that lights up on hover/drag so the grab target is discoverable. */
+  .dock-resizer-edge::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .dock-resizer-edge:hover::after {
+    background: var(--accent, #36c2ff);
+  }
+  .dock-resizer-inline {
+    flex: 0 0 5px;
+    align-self: stretch;
+    cursor: col-resize;
+    /* Transparent until hover — the sidebar's own border-right is the divider, so a solid
+       fill here just read as an ugly grey bar beside it. Lights accent on hover/drag. */
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .dock-resizer-inline:hover {
+    background: var(--accent, #36c2ff);
+  }
+}
+
+/* TABLET PORTRAIT (iPad &c.) edge case — desktop layout, but too narrow for both
+   list docks AND a usable board. The docks floor at 280px each (560px), so below
+   ~980px the stage is squeezed under ~420px: two decks side-by-side become unusable
+   ("too small to open"). When BOTH docks are open in that band, drop the board and
+   let Library + Search split the width 50/50 — the user's intended fallback. Tightly
+   gated so it CANNOT regress: needs desktop layout (≥769px), a genuinely cramped
+   width (≤980px), and — via :has() — both docks actually open. One dock open keeps
+   the board (W−280 ≥ 489px, still fine). The decks stay mounted (display:none, audio
+   uninterrupted); closing either dock restores the board instantly. */
+@media (min-width: 769px) and (max-width: 980px) {
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
+    display: none;
+  }
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+  /* The board's gone, so the drag-to-resize handle on each dock's inner edge has
+     nothing to push against — hide it; the 50/50 split owns the width here. */
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .dock-resizer-edge {
+    display: none;
+  }
+}
+
+/* TABLET LANDSCAPE (iPad &c., above the collapse band) — there's room for the board,
+   but two 28vw docks (~56% together) squeeze it to ~44%, reading like a third. On a
+   touch tablet rebalance to a desktop-like split: the BOARD keeps ~half and the two
+   docks share the other half (≈25% each, still ≥270px — wide enough for the list).
+   Coarse-pointer + width-banded so laptops/desktops keep the default 28vw docks. The
+   ratio only re-flows when BOTH docks are open; one open keeps the board-heavy default
+   (board already gets ~72%). flex-basis here overrides the per-side --dock-w. */
+@media (min-width: 981px) and (max-width: 1366px) and (pointer: coarse) {
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
+    flex: 1 1 50%;
+    min-width: 0;
+  }
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
+  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
+    flex: 1 1 25%;
+    min-width: 0;
+  }
+}
+
+/* Touch tablets in the desktop layout render the dock content a touch large for the
+   physical panel (retina iPad). Tighten the search-result density a notch — scoped to
+   a COARSE primary pointer so laptops/desktops (fine pointer, even retina) are never
+   touched. The library table already self-adjusts via its @container column-drop. */
+@media (min-width: 769px) and (pointer: coarse) {
+  .result-row {
+    grid-template-columns: 92px 1fr;
+    gap: 10px;
+    padding: 7px 10px;
+  }
+  .thumb {
+    width: 92px;
+    height: 52px;
+  }
+  .result-title {
+    font-size: 13px;
+  }
+
+  /* DECK BANK — touch tablets (iPad &c.) keep the desktop layout but have far less
+     height, so the tall control stack (jog → loops → cues → tempo/key → stems → EQ)
+     clips at the foot. Compact the VERTICAL footprint: trim the slack between and
+     inside rows and cap the square pads, so the whole stack — through the EQ curve —
+     fits without clipping. Touch targets stay comfortable: pads ~48px, buttons ≥28px;
+     nothing here changes on a fine-pointer laptop (this whole block is coarse-only). */
+  .decks-row .bank-main {
+    gap: 4px;
+  }
+  .hw-btn {
+    padding: 6px 8px;
+  }
+  .jog-btn {
+    height: 28px;
+  }
+  .loops .loop-btn {
+    padding: 5px 0;
+  }
+  .loop-sizes,
+  .hotcues {
+    gap: 4px;
+  }
+  /* Cap the square pads smaller than the desktop 64px so two 8-pad rows don't eat the
+     viewport (aspect-ratio keeps them square at the capped width). */
+  .loop-sizes .loop-btn,
+  .hotcues .pad {
+    max-width: 48px;
+  }
+  .pitch-row,
+  .stems-row {
+    gap: 4px;
+  }
+  .vcell {
+    height: 34px;
+  }
+  /* The EQ curve is the single biggest strip; halving its slack reclaims the most. Drive
+     it through the SHARED --fx-body-h so every effect (delay…) shrinks in lock-step — the
+     EQ's height is the constant cap for the whole rack. Compact delay knobs keep the two
+     rows + chip strip inside it. */
+  .fx-strip {
+    --fx-body-h: 100px;
+  }
+  .eq-curve {
+    min-height: 48px;
+  }
+  .fx-delay .fx-knobs {
+    grid-auto-rows: minmax(20px, 28px);
+    gap: 6px 7px;
+    padding-bottom: 4px;
+  }
+  .fx-foot {
+    gap: 3px;
+  }
+  .fx-chip {
+    padding: 4px 3px;
+    font-size: 8.5px;
+  }
+  .eq-tool {
+    padding: 3px 2px;
+  }
+}
+
+/* Mobile: docks are centered modals, not resizable — hide every handle. (A
+   non-overlapping max-width query so it never fights the desktop rules above.) */
+@media (max-width: 768px) {
+  .dock-resizer {
+    display: none;
+  }
+}
+/* Swap-sides launcher: a persistent square in the chin, just right of the gear. It
+   flips which side the Library dock and the Profile/Session dock sit on. Desktop
+   only — on mobile the docks are full-screen panels with no left/right. Placement is
+   plain DOM order now (Library · ⚙ · ⇄ · 🌐 · ⇅), no flex-order juggling. */
+.chin-btn.chin-swap {
+  display: none; /* swap shown on DESKTOP only (mobile docks are full-screen) */
+}
+.chin-swap-i {
+  font-size: 16px;
+  line-height: 1;
+}
+@media (min-width: 769px) {
+  .chin-btn.chin-swap {
+    display: flex;
+    flex: 0 0 auto;
+    width: 42px;
+  }
+  /* Swapping the dock sides mirrors the whole chin: the ⇄ moves to the right, the
+     Library launcher follows the left dock, and the Settings/Profile/Session cluster
+     follows the right dock — a left-to-right flip via row-reverse. */
+  .app.dock-swapped .chin {
+    flex-direction: row-reverse;
+  }
+}
+@keyframes dock-in-left {
+  from {
+    opacity: 0.4;
+    transform: translateX(-12px);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes dock-in-right {
+  from {
+    opacity: 0.4;
+    transform: translateX(12px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* Library window — the collection/table fills the shared centered panel. The panel
+   now has ZERO padding (.lib-panel{padding:0}), so the library sits edge-to-edge on
+   its own. The old `margin: 0 -16px` (a bleed-out for when the panel had 16px padding)
+   would now push the library 16px PAST the panel on each side, where panel{overflow:
+   hidden} clips it — eating the toolbar's right-pinned −/＋ stepper. Keep margins at 0. */
+.lib-panel .library {
+  flex: 1;
+  min-height: 0;
+  border-top: none;
+  margin: 0;
+}
+.channels {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  align-items: center;
+}
+/* The two strips grow to fill the third (like the centre deck-controls bank); the
+   centre fader cluster keeps its natural width between them. */
+.chan {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 460px; /* but don't let cells sprawl on an ultra-wide screen */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.chan-id {
+  font-weight: 800;
+  color: var(--accent);
+  font-size: 12px;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+/* Each channel is a vertical stack of unlabelled cell BANKS (EQ · STEMS · FX ·
+   PITCH) packed tight, so the strip reads as one dense grid like the centre
+   deck-controls bank. Deck B mirrors (edge cues flip to the inner side). */
+.chan-grid {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+/* A bank is a 1fr grid: 4-cell banks (EQ/STEMS) split into four equal tiles;
+   1-cell banks (FX) let their single tile span the whole strip width, so the
+   columns line up across every bank. */
+.cbank {
+  position: relative;
+  width: 100%; /* fill the strip so the 1fr columns line up across every bank */
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 5px;
+}
+/* TEMPO-range + SKIP-size buttons (moved out of Settings into the center) */
+.mixer-btns {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+/* The tempo-range button lives under each TEMPO fader */
+.chan-pitch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.tempo-width.mini {
+  width: 32px;
+  padding: 2px 1px;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+/* Blank placeholder foot under FILTER — matches the ±range button's footprint so
+   the FILTER column lines up with TEMPO, but is empty + inert for now. */
+.tempo-width.mini.ph {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+.tempo-width {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  /* Fixed width so changing the value (±8 → ±50, 1 bar → 4 bars) doesn't resize
+     the pill and shove the surrounding panels. */
+  width: 96px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 4px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tempo-width:hover {
+  border-color: var(--neon-cyan);
+  color: var(--text);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon-cyan) 35%, transparent);
+}
+.mixer-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Hardware buttons */
+.hw-btn {
+  background: var(--panel);
+  border: 1px solid var(--btn-border, var(--line));
+  color: var(--text);
+  border-radius: 6px;
+  padding: 9px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
+}
+.hw-btn:hover {
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.hw-btn:active {
+  transform: translateY(1px);
+}
+.hw-btn.play {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06080c;
+  font-size: 16px;
+  /* No glow halo — it bled above/below the box and made PLAY read as taller than
+     the un-glowed CUE/SHIFT. The accent fill already marks it as primary. */
+  box-shadow: none;
+}
+.hw-btn.play:hover {
+  color: #06080c;
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+.hw-btn.cue {
+  color: var(--accent);
+}
+.hw-btn.sync,
+.hw-btn.key,
+.hw-btn.fx,
+.hw-btn.range {
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.hw-btn.key,
+.hw-btn.fx {
+  color: var(--muted);
+}
+.hw-btn.key.on {
+  background: color-mix(in srgb, var(--shift) 18%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+}
+/* FX master — lit when the color filter is engaged, dim when bypassed. */
+.hw-btn.fx.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+/* The merged FX button doubles as the filter-sweep knob: it carries the same
+   knob-border indicator as the cells (`.vcell-knob`), so the dot rides on the
+   border (overflow visible) and the label/kbd sit above the trace. */
+.hw-btn.fx {
+  overflow: visible;
+}
+.hw-btn.fx .fx-label,
+.hw-btn.fx .kbd {
+  position: relative;
+  z-index: 1;
+}
+/* Tempo-range cycle (Shift = dB gain-match). */
+.hw-btn.range {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* FX button wrapper holds the pop-up effect menu (Shift-click). */
+.fx-wrap {
+  position: relative;
+  display: flex;
+}
+.fx-wrap .hw-btn {
+  flex: 1;
+}
+.fx-menu-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.fx-menu {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.fx-menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 7px 8px;
+  cursor: pointer;
+  text-align: center;
+}
+.fx-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.fx-menu-item.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* SHIFT modifier button (replaces Load file). Latches the shift remap. */
+.hw-btn.shift {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  font-weight: 800;
+}
+.hw-btn.shift.on {
+  background: color-mix(in srgb, var(--shift) 20%, transparent);
+  border-color: var(--shift);
+  color: var(--shift);
+  /* Heavy neon halo when glow is on (the button reads lit, not stubby/flat). */
+  box-shadow:
+    0 0 22px color-mix(in srgb, var(--shift) 60%, transparent),
+    0 0 7px color-mix(in srgb, var(--shift) 75%, transparent),
+    inset 0 0 11px color-mix(in srgb, var(--shift) 24%, transparent);
+  text-shadow: 0 0 9px color-mix(in srgb, var(--shift) 75%, transparent);
+}
+/* Glow off → keep it flat/subtle. */
+body.no-glow .hw-btn.shift.on {
+  box-shadow: 0 0 6px color-mix(in srgb, var(--shift) 25%, transparent);
+  text-shadow: none;
+}
+/* While shifted, the jog row signals it's in loop-move mode */
+.bank.shifted .jog-btn {
+  border-color: color-mix(in srgb, var(--shift) 45%, var(--line));
+  color: var(--shift);
+}
+/* Loop-boundary adjust mode (Shift-IN / Shift-OUT armed) hijacks the jog row to
+   nudge the armed edge instead of moving the loop — give it the same amber glow as
+   the armed IN/OUT pad so the remap is obvious (and overrides the plain shift tint). */
+.bank.adjusting .jog-btn {
+  border-color: var(--shift);
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 22%, transparent);
+}
+/* …and the two remapped pad rows light up so their alt mode is obvious: loop-size
+   pads → loop ROLL (cyan), hot-cue pads → SAVE-LOOP (green). A pad mid-roll (.on)
+   or already-set (.set) keeps its own lit colour, so the tint only marks the
+   "available" pads in that mode. */
+.bank.shifted .loop-sizes .loop-btn:not(.on) {
+  border-color: color-mix(in srgb, #36c2ff 65%, var(--line));
+  color: #36c2ff;
+  box-shadow: inset 0 0 9px color-mix(in srgb, #36c2ff 20%, transparent);
+}
+.bank.shifted .loop-sizes .loop-btn:not(.on):hover {
+  background: color-mix(in srgb, #36c2ff 16%, transparent);
+}
+.bank.shifted .hotcues .pad:not(.set) {
+  border-color: color-mix(in srgb, #6ee7a8 65%, var(--line));
+  color: #6ee7a8;
+  box-shadow: inset 0 0 9px color-mix(in srgb, #6ee7a8 20%, transparent);
+}
+/* The pitch ∓ steppers and the IN / OUT / EXIT loop buttons keep their label when
+   shifted (unlike CUE→START / PLAY→RESET), so they'd give no hint of their alt mode.
+   Mark them with the same yellow shift tint as the jog row — ∓ → tempo nudge, IN/OUT
+   → arm fine-adjust, EXIT → clear. A button already in its active state (armed /
+   adjusting / loop-on) keeps that colour, so the tint only flags the available ones. */
+.bank.shifted .pitch-step,
+.bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled) {
+  border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
+}
+.bank.shifted .pitch-step:hover,
+.bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled):hover {
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
+}
+.hw-btn.small {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.transport {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)); /* tracks may shrink → no overflow */
+  gap: 6px;
+}
+.transport > * {
+  min-width: 0; /* let the buttons shrink with their track on narrow widths */
+}
+.bank-load {
+  display: flex;
+  gap: 6px;
+}
+.bank-load .hw-btn,
+.bank-load .skip-btn,
+.bank-load .vcell {
+  flex: 1;
+  width: auto; /* override the tempo-width fixed 96px so they share the row */
+}
+/* PLAY is a ValueCell (button-knob for TRIM): a TRIM/RESET label with the trim %
+   below. No transport glyph — the GLOW is the play/pause indicator: a bright accent
+   ring + halo while playing, dark when paused. */
+.bank-load .vcell.play .vcell-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.bank-load .vcell.play.playing {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.bank-load .vcell.play.playing .vcell-value {
+  color: var(--accent);
+}
+/* CUE as a headphone-level fader (shown only when a separate cue device is picked).
+   Reads like the TRIM cell; lights an accent ring while this deck is in the cue bus
+   (level > 0) — the DJ-board "this channel is in my headphones" tell. */
+.bank-load .vcell.cue-fader .vcell-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.bank-load .vcell.cue-fader.cue-on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 10px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.bank-load .vcell.cue-fader.cue-on .vcell-value {
+  color: var(--accent);
+}
+
+/* Knobs — flat inky disc with an SVG value-arc + glowing pointer */
+.knob-dial {
+  width: 38px;
+  height: 38px;
+  position: relative;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line);
+  border: none;
+}
+.chan .knob-dial {
+  width: 26px;
+  height: 26px;
+}
+.chan {
+  gap: 3px;
+}
+.knob-ring {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  fill: none;
+}
+.knob-ring-track {
+  stroke: #1d1d2b;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.knob-ring-fill {
+  stroke-width: 3;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px var(--accent));
+}
+.knob-pointer {
+  position: absolute;
+  left: 50%;
+  top: 5px;
+  width: 2px;
+  height: 11px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: 50% 14px;
+  box-shadow: 0 0 5px var(--accent);
+}
+.chan .knob {
+  flex-direction: column;
+  gap: 0;
+}
+.chan .knob-label {
+  width: auto;
+  text-align: center;
+  font-size: 8px;
+  line-height: 1.1;
+}
+/* Show the dB / value readout under each knob (mixer detail) */
+.chan .knob-value {
+  display: block;
+  width: auto;
+  text-align: center;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Faders — flat neon: a thin pill RAIL that charges up with a glowing accent
+   FILL, capped by a single bright thumb line. No bevels, no rubber caps. */
+/* A number cell — the digital control tile. Tap selects (focus ring), the number
+   is the hero, a thin accent cue on the inner edge shows the value's place in
+   range. Flat, accent-tinted, no skeuomorphic rail. */
+.vcell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 44px;
+  height: 38px;
+  padding: 3px 5px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  /* Transparent border (kept 1px for layout) — the KnobBorder trace IS the cell's
+     outline, so the old CSS border drew a SECOND rounded-rect behind it (the ghost).
+     Hover/focus brighten the trace itself instead. */
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: ns-resize;
+  outline: none;
+  user-select: none;
+  touch-action: none;
+  transition: box-shadow 0.1s;
+}
+.vcell:hover .vcell-knob-track {
+  stroke: color-mix(in srgb, var(--accent) 36%, transparent);
+}
+/* Selected (tapped/clicked) — a ring + bright trace. */
+.vcell:focus .vcell-knob-track {
+  stroke: var(--accent);
+}
+.vcell:focus {
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.vcell.off {
+  opacity: 0.4;
+}
+.vcell.disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+/* Muted stem cell (tapped off) — dim and grey the accent so OFF reads at a glance. */
+.vcell.muted {
+  opacity: 0.5;
+}
+.vcell.muted .vcell-value,
+.vcell.muted .vcell-knob {
+  filter: grayscale(1) brightness(0.8);
+}
+/* Knob-style level indicator: an accent trace around the cell border (up the left,
+   across the top, down the right — the bottom is the open gap) charging from min to
+   the current value, capped by a circle marker. Drawn in real px (viewBox = cell
+   size) so it never distorts. */
+.vcell-knob {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.vcell-knob-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 16%, transparent);
+  stroke-width: 2;
+}
+.vcell-knob-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+.vcell-knob-dot {
+  fill: var(--accent);
+  stroke: #06080c;
+  stroke-width: 1;
+  filter: drop-shadow(0 0 3px var(--accent));
+}
+.vcell-label {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
+.vcell-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* Pads — rubbery, light up in their cue color */
+.hotcues {
+  grid-template-columns: repeat(8, minmax(0, 1fr)); /* no spill; square from width */
+  align-items: start;
+  justify-items: center;
+}
+.pad {
+  background: var(--panel);
+  border: 1px solid var(--btn-border, var(--line));
+  color: var(--muted);
+  transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
+}
+.bank .pad:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.hotcues .pad:nth-child(1).set { background: #ff5d73; color: #06080c; box-shadow: 0 0 10px #ff5d73; }
+.hotcues .pad:nth-child(2).set { background: #ffb13c; color: #06080c; box-shadow: 0 0 10px #ffb13c; }
+.hotcues .pad:nth-child(3).set { background: #ffe24a; color: #06080c; box-shadow: 0 0 10px #ffe24a; }
+.hotcues .pad:nth-child(4).set { background: #6ee7a8; color: #06080c; box-shadow: 0 0 10px #6ee7a8; }
+.hotcues .pad:nth-child(5).set { background: #36c2ff; color: #06080c; box-shadow: 0 0 10px #36c2ff; }
+.hotcues .pad:nth-child(6).set { background: #7b9cff; color: #06080c; box-shadow: 0 0 10px #7b9cff; }
+.hotcues .pad:nth-child(7).set { background: #c77bff; color: #06080c; box-shadow: 0 0 10px #c77bff; }
+.hotcues .pad:nth-child(8).set { background: #ff7bd0; color: #06080c; box-shadow: 0 0 10px #ff7bd0; }
+
+.crossfader {
+  width: 100%;
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* Mobile: keep the SAME deck A | mixer | deck B board, simplified to fit a phone
+   width. The two mixer channels stack (A over B) and each channel's knobs sit in
+   a row so the center column stays narrow; jog + file-load are dropped. */
+@media (max-width: 768px) {
+  .tagline {
+    display: none;
+  }
+  .board {
+    gap: 1px;
+  }
+  .bank,
+  .bank.mirror {
+    padding: 6px 5px;
+    gap: 5px;
+  }
+  .bank-main {
+    gap: 4px;
+  }
+  .hw-btn {
+    padding: 6px 1px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+  .transport {
+    grid-template-columns: repeat(4, minmax(0, 1fr)); /* one row, quarter-width — like the pitch row */
+    gap: 3px;
+  }
+  .jog {
+    gap: 2px;
+  }
+  .jog-btn {
+    padding: 4px 0;
+    font-size: 10px;
+  }
+  .hotcues {
+    grid-template-columns: repeat(8, minmax(0, 1fr)); /* square 1×8, same as loops */
+    gap: 3px;
+  }
+  .bank .pad {
+    font-size: 10px;
+  }
+  .loops {
+    gap: 3px;
+  }
+  .loop-sep {
+    display: none;
+  }
+  .loop-btn {
+    min-width: 20px;
+    padding: 4px 0;
+    font-size: 10px;
+  }
+  .fader-label,
+  .fader-value {
+    font-size: 8px;
+  }
+
+  /* Mixer center: full channel strips (tempo + knobs + level) scaled down. The
+     deck banks lost their tempo faders, so the center has room. */
+  /* Scaled up to fill the center column — the banks lost their tempo faders so
+     there's room. */
+  .mixer-center {
+    padding: 8px 8px 10px;
+    gap: 8px;
+    justify-content: center;
+  }
+  .channels {
+    gap: 10px;
+  }
+  .chan {
+    gap: 5px;
+  }
+  .chan-id {
+    font-size: 12px;
+  }
+  /* Clear gap so the two faders read as separate from the knob column */
+  .chan-row {
+    gap: 4px;
+    align-items: center;
+  }
+  .chan-knobs {
+    gap: 5px;
+  }
+  .chan .knob-dial,
+  .knob-dial {
+    width: 20px;
+    height: 20px;
+  }
+  /* Stem level knobs are secondary — a touch smaller than the EQ knobs, and the
+     widest column at the screen edge, so trim its label too (it was clipping the
+     INST/VOICE knobs side-to-side). */
+  .chan-stems .knob-dial {
+    width: 18px;
+    height: 18px;
+  }
+  .chan-stems {
+    gap: 3px;
+  }
+  .chan-stems .knob-label {
+    font-size: 6.5px;
+  }
+  /* Keep the knob labels (TRIM/HI/MID/LOW/FILTER); drop the fader name but keep
+     its value (% / tempo) for detail. */
+  .chan-row .fader-label {
+    display: none;
+  }
+  .chan-row .fader-value {
+    font-size: 7px;
+    min-width: 16px; /* don't let the value label widen the fader column */
+  }
+  /* Per-deck key-shift column: keep it narrow so it doesn't push the strip wide.
+     The "KEY ±n" label is the widest piece — shrink it and the ± step buttons. */
+  .chan-keyshift {
+    gap: 1px;
+  }
+  .chan-keyshift .key-name {
+    font-size: 6.5px;
+    white-space: nowrap;
+  }
+  .chan-keyshift .key-step {
+    width: 18px;
+    height: 16px;
+    font-size: 11px;
+    padding: 0;
+  }
+  .chan .knob-label {
+    font-size: 7.5px;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .chan .knob-value {
+    font-size: 7px;
+  }
+  .chan-row .fader.pitch .fader-track,
+  .chan-row .fader.level .fader-track,
+  .chan-row .fader.filter .fader-track,
+  .chan-row .fader.keyfader .fader-track {
+    height: 132px;
+    width: 12px;
+  }
+  /* Thumb matches the track width so it doesn't bleed into the knobs */
+  .chan-row .fader-thumb {
+    width: 15px;
+  }
+  /* Vertical crossfader matches the shorter mobile faders. */
+  .crossfader.vertical .xf-rot {
+    height: 132px;
+  }
+  .crossfader.vertical .xf-rot input {
+    width: 132px;
+  }
+  .channels {
+    gap: 6px;
+  }
+  /* Kill the neon halos inside the cramped mixer — the glow bleed between
+     adjacent controls is what reads as "cluttered". Colors stay; halos go. */
+  .mixer-center .knob-ring-fill {
+    filter: none;
+  }
+  .mixer-center .knob-pointer,
+  .mixer-center .fader-fill,
+  .mixer-center .fader-thumb,
+  .mixer-center .fader-thumb::after {
+    box-shadow: none;
+  }
+  .mixer-center .chan-id {
+    text-shadow: none;
+  }
+  .crossfader {
+    max-width: none;
+    gap: 8px;
+  }
+  .xf-end {
+    font-size: 11px;
+  }
+  .tempo-width {
+    padding: 3px 8px;
+    font-size: 11px;
+  }
+  .chin-btn {
+    padding: 9px 2px;
+    font-size: 12px;
+    gap: 5px;
+  }
+  .chin-ico {
+    font-size: 16px;
+  }
+}
+
+/* Very narrow phones: drop the chin text, keep the icons. */
+@media (max-width: 380px) {
+  .chin-label {
+    display: none;
+  }
+}
+
+/* Cue pads = SQUARE, identical to the loop pads (one uniform 1×8 block). This
+   `.bank .pad` rule outranks the earlier `.pad { aspect-ratio }` (specificity +
+   order), so the square has to live here to win. */
+.bank .pad {
+  aspect-ratio: 1 / 1;
+  height: auto;
+  width: 100%;
+  max-width: 64px; /* cap the square on wide banks (prevents the resize collapse) */
+  min-width: 0;
+}
+@media (max-width: 768px) {
+  .bank .pad {
+    font-size: 11px;
+  }
+}
+.bank-main {
+  justify-content: center;
+}
+

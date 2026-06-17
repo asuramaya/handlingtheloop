@@ -8815,6 +8815,139 @@ span.profile-handle:hover {
   color: #e0617a;
 }
 
+/* Chat (F5) + moderation (L1). */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.chat-slow-sel {
+  display: flex;
+  gap: 3px;
+}
+.chat-slow-opt {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.chat-slow-opt.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+}
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.chat-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 2px;
+}
+.chat-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.chat-who {
+  flex: none;
+  font-weight: 700;
+  color: var(--accent);
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-line.self .chat-who {
+  color: var(--muted);
+}
+.chat-text {
+  flex: 1 1 auto;
+  word-break: break-word;
+}
+.chat-mod {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.chat-line:hover .chat-mod {
+  opacity: 1;
+}
+.chat-mute,
+.chat-ban {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  filter: grayscale(0.4);
+}
+.chat-mute:hover,
+.chat-ban:hover {
+  filter: none;
+}
+.chat-form {
+  display: flex;
+  gap: 6px;
+}
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.chat-input:disabled {
+  opacity: 0.6;
+}
+.chat-send {
+  flex: none;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* --- Chin + popup additions --- */
 .room-expand {
   width: 26px;

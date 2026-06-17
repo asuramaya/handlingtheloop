@@ -24,7 +24,7 @@ import {
   welcomeFor,
   presenceFor,
 } from "./roomState";
-import { Reactions, Requests } from "./roomCrowd";
+import { Reactions, Requests, Chat } from "./roomCrowd";
 
 // The DjRoom Durable Object: socket lifecycle, membership transitions, the anchor (clock),
 // relay/presence fan-out, and persistence. The PURE state model (Attachment, roles, the pub
@@ -91,6 +91,12 @@ export class DjRoom {
   // aggregated frame via the DO's fan-out.
   private reactions = new Reactions((m) => this.broadcast(m));
   private songRequests = new Requests();
+  // Chat (F5) + moderation (L1). `chat` buffers + rate-limits the text; the DO owns slow-mode
+  // (host setting, persisted) and the session-ephemeral `muted`/`banned` device sets.
+  private chat = new Chat();
+  private chatSlow = 0; // <0 chat off, 0 normal, >0 slow-mode seconds
+  private muted = new Set<string>();
+  private banned = new Set<string>();
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -107,6 +113,7 @@ export class DjRoom {
     this.approved = new Set((await this.state.storage.get<string[]>("approved")) ?? []);
     this.isPublic = (await this.state.storage.get<boolean>("public")) ?? false;
     this.stageGate = (await this.state.storage.get<StageGate>("stageGate")) ?? "request";
+    this.chatSlow = (await this.state.storage.get<number>("chatSlow")) ?? 0;
     this.loaded = true;
   }
 
@@ -161,6 +168,11 @@ export class DjRoom {
     const pub = url.searchParams.get("pub") === "1"; // anon read-only listener (un-forgeable; the Worker sets it)
     const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
 
+    // A host-banned device can't re-enter the session (L1). Device ids are non-secret, so this
+    // is best-effort — the same posture as the rest of this anon system.
+    if (this.banned.has(device)) {
+      return new Response("you were removed from this room", { status: 403 });
+    }
     // A public listener may only enter an OPEN room, and only ever as read-only audio.
     if (pub && !this.isPublic) {
       return new Response("this room isn't public", { status: 403 });
@@ -190,6 +202,7 @@ export class DjRoom {
     this.state.acceptWebSocket(server, [device]);
 
     server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.songRequests.list)));
+    this.sendChatHistory(server); // recent chat backlog so a joiner has context
     // Hand a public listener the current board immediately so it can render without a round-trip.
     if (pub) this.sendCatchUp(server);
     this.broadcastPresence();
@@ -393,6 +406,60 @@ export class DjRoom {
         if (this.songRequests.clear()) this.relayRequests();
         break;
       }
+      case "chat": {
+        // A chat line (F5). Refused if chat is off / this device is muted; else the Chat unit
+        // rate-limits + slow-modes, and a passing line fans out to everyone.
+        const a = ws.deserializeAttachment() as Attachment | null;
+        if (!a) break;
+        if (this.chatSlow < 0) {
+          ws.send(JSON.stringify({ t: "error", message: "Chat is off." } satisfies ServerMsg));
+          break;
+        }
+        if (this.muted.has(self)) {
+          ws.send(JSON.stringify({ t: "error", message: "You're muted." } satisfies ServerMsg));
+          break;
+        }
+        const r = this.chat.post(self, a.name, msg.text, this.chatSlow);
+        if (r.ok) this.broadcast({ t: "chat", msg: r.msg });
+        else if (r.error) ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
+        break;
+      }
+      case "chat-slow": {
+        // HOST sets slow-mode (<0 = chat off). Persisted; rides presence so every client adapts.
+        if (!this.isHostDevice(self)) break;
+        const s = Math.max(-1, Math.min(60, Math.floor(msg.seconds)));
+        if (s === this.chatSlow) break;
+        this.chatSlow = s;
+        await this.state.storage.put("chatSlow", s);
+        this.broadcastPresence();
+        break;
+      }
+      case "mute": {
+        // HOST mutes/unmutes a device's chat (L1). Tell the device so its composer reflects it.
+        if (!this.isHostDevice(self)) break;
+        const to = (msg.to || "").slice(0, 64);
+        if (!to || this.isHostDevice(to)) break;
+        if (msg.on) this.muted.add(to);
+        else this.muted.delete(to);
+        for (const w of this.state.getWebSockets(to)) {
+          try {
+            w.send(JSON.stringify({ t: "muted", on: !!msg.on } satisfies ServerMsg));
+          } catch {
+            /* socket gone */
+          }
+        }
+        break;
+      }
+      case "ban": {
+        // HOST bans a device (L1): remember it (re-entry blocked in fetch) + evict it now.
+        if (!this.isHostDevice(self)) break;
+        const to = (msg.to || "").slice(0, 64);
+        if (!to || to === self || this.isHostDevice(to)) break;
+        this.banned.add(to);
+        this.muted.delete(to);
+        this.evict(to, "You were removed by the host.");
+        break;
+      }
       case "stageGate": {
         // HOST sets how the crowd reaches the decks. Persisted (survives a cold restart).
         // Closing the decks doesn't evict current stage DJs — the host ⬇-floors them by hand;
@@ -507,6 +574,7 @@ export class DjRoom {
       }
       case "request-state": {
         this.sendCatchUp(ws);
+        this.sendChatHistory(ws);
         break;
       }
       case "color": {
@@ -812,6 +880,13 @@ export class DjRoom {
   // (decks/stems/controls) + the host's per-deck stem envelopes (so a stem-less
   // remote's 4-lane display fills in). Used on request-state AND right after a guest
   // is approved, so it doesn't depend on the client asking at the right moment.
+  // Hand a socket the recent chat backlog (F5), so a joiner drops into context mid-conversation.
+  private sendChatHistory(ws: Ws): void {
+    if (this.chat.history.length) {
+      ws.send(JSON.stringify({ t: "chat-history", list: this.chat.history } satisfies ServerMsg));
+    }
+  }
+
   private sendCatchUp(ws: Ws): void {
     if (this.lastSnapshot !== undefined) {
       ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
@@ -876,6 +951,7 @@ export class DjRoom {
       isPublic: this.isPublic,
       stageGate: this.stageGate,
       stage: this.stageReqs(),
+      chatSlow: this.chatSlow,
     };
   }
 

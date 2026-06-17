@@ -49,6 +49,15 @@ export interface Peer {
 //   • closed  — the crowd can't step up at all (host + private invitees only)
 export type StageGate = "request" | "open" | "closed";
 
+// One chat line (F5). `dev` is the sender's device id — non-secret (like every device id) and
+// carried so the host can mute/ban straight from a message. Fanned out to everyone present.
+export interface ChatMsg {
+  id: string;
+  dev: string;
+  name: string;
+  text: string;
+}
+
 // A song the crowd asks the DJ to play (F1). Free text — the DJ reads it and pulls the
 // track themselves (maps onto the library/queue). Surfaced to PARTICIPANTS only.
 export interface SongRequest {
@@ -190,6 +199,10 @@ export type ClientMsg =
   | { t: "request-vote"; id: string } // upvote a song request (F3) — idempotent, one per device per request
   | { t: "request-dismiss"; id: string } // HOST removes one song request
   | { t: "request-clear" } // HOST clears the whole request list
+  | { t: "chat"; text: string } // send a chat line (F5) — rate-limited + slow-moded
+  | { t: "chat-slow"; seconds: number } // HOST: slow-mode interval (<0 = chat off, 0 = normal, >0 = N-second gate)
+  | { t: "mute"; to: string; on: boolean } // HOST: mute/unmute a device's chat (L1)
+  | { t: "ban"; to: string } // HOST: ban a device — evict + block re-entry for the session (L1)
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
@@ -205,16 +218,21 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[] }
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number }
   // The live song-request list (F1), sent to PARTICIPANTS (the DJ acts on them).
   | { t: "requests"; list: SongRequest[] }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
-  // `stageGate` rides BOTH payloads — a listener needs it to know if/how it can step up.
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate }
+  // `stageGate`/`chatSlow` ride BOTH payloads — a listener needs them to step up / chat.
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number }
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }
+  // Chat (F5): a live line to everyone, the recent backlog on join, and a private "you were
+  // muted/unmuted" signal to the affected device.
+  | { t: "chat"; msg: ChatMsg }
+  | { t: "chat-history"; list: ChatMsg[] }
+  | { t: "muted"; on: boolean }
   // Aggregated reactions (F4) + hype level (F2), flushed to EVERYONE on a ~1 Hz timer:
   // `counts` = per-emoji taps in the window (drives the floating burst), `hype` = the
   // decaying crowd-energy level 0..1 (drives the meter).

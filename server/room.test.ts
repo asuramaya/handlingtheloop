@@ -245,6 +245,37 @@ describe("DjRoom crowd guard + requests", () => {
     expect(lis.got("requests")).toBe(true); // the crowd gets the ranked list now (to vote)
   });
 
+  it("a chat line fans out to everyone; mute blocks the muted device; ban evicts + locks out", async () => {
+    const host = await liveHost();
+    const a = (await h.connect({ device: "A", name: "Ana", pub: true })).ws!;
+    await h.send(a, { t: "chat", text: "hello" });
+    expect((host.last("chat")?.msg as { text: string })?.text).toBe("hello");
+    expect(a.got("chat")).toBe(true); // sender sees it too (fan-out to all)
+
+    // host mutes Ana → her next line is refused and she's told she's muted
+    await h.send(host, { t: "mute", to: "A", on: true });
+    expect(a.got("muted")).toBe(true);
+    const chatsBefore = host.msgs().filter((m) => m.t === "chat").length;
+    await h.send(a, { t: "chat", text: "blocked?" });
+    expect(host.msgs().filter((m) => m.t === "chat").length).toBe(chatsBefore); // not fanned out
+
+    // host bans Ana → socket closed, and a re-connect with the same device id is refused
+    await h.send(host, { t: "ban", to: "A" });
+    expect(a.closed).toBe(true);
+    const rejoin = await h.connect({ device: "A", pub: true });
+    expect(rejoin.status).toBe(403);
+  });
+
+  it("chat off (slow=-1) refuses everyone", async () => {
+    const host = await liveHost();
+    const a = (await h.connect({ device: "A", pub: true })).ws!;
+    await h.send(host, { t: "chat-slow", seconds: -1 });
+    const before = a.msgs().filter((m) => m.t === "chat").length;
+    await h.send(a, { t: "chat", text: "anyone there" });
+    expect(a.msgs().filter((m) => m.t === "chat").length).toBe(before);
+    expect(a.got("error")).toBe(true);
+  });
+
   it("upvotes are idempotent per device and re-rank the list", async () => {
     const host = await liveHost();
     const a = (await h.connect({ device: "A", name: "Ana", pub: true })).ws!;

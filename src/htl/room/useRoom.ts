@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, announceRoom, closeRoom, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
-import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest } from "./protocol";
+import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -68,6 +68,14 @@ export interface RoomState {
   voteRequest: (id: string) => void; // upvote a request
   dismissRequest: (id: string) => void; // HOST: remove one request
   clearRequests: () => void; // HOST: clear all requests
+  // Chat (F5) + moderation (L1).
+  chatLog: ChatMsg[]; // the running chat (history + live)
+  chatSlow: number; // slow-mode: <0 chat off, 0 normal, >0 N-second gate
+  iAmMuted: boolean; // the host muted THIS device
+  sendChat: (text: string) => void; // post a chat line
+  setChatSlow: (seconds: number) => void; // HOST: set slow-mode / turn chat off
+  muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
+  banDevice: (to: string) => void; // HOST: ban a device (evict + block re-entry)
   error: string | null;
   client: RoomClient | null;
   join: () => void; // establish sync (listen on, control off) — guests knock first
@@ -141,6 +149,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [reactionTick, setReactionTick] = useState<{ counts: Record<string, number>; id: number }>({ counts: {}, id: 0 });
   const [songRequests, setSongRequests] = useState<SongRequest[]>([]);
   const [votedRequests, setVotedRequests] = useState<Set<string>>(new Set());
+  const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
+  const [chatSlow, setChatSlowState] = useState(0);
+  const [iAmMuted, setIAmMuted] = useState(false);
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -223,6 +234,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
         if (total > 0) setReactionTick((t) => ({ counts, id: t.id + 1 }));
       },
       requests: (list) => setSongRequests(list),
+      chat: (m) => setChatLog((l) => [...l.slice(-119), m]),
+      chatHistory: (list) => setChatLog(list),
+      chatSlow: (s) => setChatSlowState(s),
+      muted: (on) => setIAmMuted(on),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -256,6 +271,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setReactionTick({ counts: {}, id: 0 });
       setSongRequests([]);
       setVotedRequests(new Set());
+      setChatLog([]);
+      setChatSlowState(0);
+      setIAmMuted(false);
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -346,6 +364,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   }, []);
   const dismissRequest = useCallback((id: string) => clientRef.current?.dismissRequest(id), []);
   const clearRequests = useCallback(() => clientRef.current?.clearRequests(), []);
+  const sendChat = useCallback((text: string) => clientRef.current?.sendChat(text), []);
+  const setChatSlow = useCallback((seconds: number) => clientRef.current?.setChatSlow(seconds), []);
+  const muteDevice = useCallback((to: string, on: boolean) => clientRef.current?.muteDevice(to, on), []);
+  const banDevice = useCallback((to: string) => clientRef.current?.banDevice(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
@@ -443,6 +465,13 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     voteRequest,
     dismissRequest,
     clearRequests,
+    chatLog,
+    chatSlow,
+    iAmMuted,
+    sendChat,
+    setChatSlow,
+    muteDevice,
+    banDevice,
     error,
     client: clientRef.current,
     join,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { Reactions, Requests } from "./roomCrowd";
+import { Reactions, Requests, Chat } from "./roomCrowd";
 
 describe("Reactions", () => {
   it("rejects unknown emoji, accepts the set", () => {
@@ -87,5 +87,37 @@ describe("Requests", () => {
     expect(q.dismiss(id)).toBe(true);
     expect(q.list).toHaveLength(0);
     expect(q.clear()).toBe(false); // already empty
+  });
+});
+
+describe("Chat", () => {
+  it("posts, trims, ignores blank, and buffers history", () => {
+    const c = new Chat(() => 1_000_000);
+    expect(c.post("d1", "Ana", "  ", 0)).toEqual({ ok: false, error: "" }); // blank
+    const r = c.post("d1", "Ana", "  hey  ", 0);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.msg).toMatchObject({ dev: "d1", name: "Ana", text: "hey" });
+    expect(c.history).toHaveLength(1);
+  });
+
+  it("enforces the 1s anti-spam floor even with slow-mode off", () => {
+    let t = 1_000_000;
+    const c = new Chat(() => t);
+    expect(c.post("d1", "Ana", "a", 0).ok).toBe(true);
+    expect(c.post("d1", "Ana", "b", 0).ok).toBe(false); // <1s later
+    t += 1000;
+    expect(c.post("d1", "Ana", "c", 0).ok).toBe(true);
+  });
+
+  it("applies the host slow-mode gap and reports the wait", () => {
+    let t = 1_000_000;
+    const c = new Chat(() => t);
+    expect(c.post("d1", "Ana", "a", 10).ok).toBe(true);
+    t += 3000;
+    const r = c.post("d1", "Ana", "b", 10); // 3s into a 10s gate
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/wait 7s/);
+    t += 7000;
+    expect(c.post("d1", "Ana", "c", 10).ok).toBe(true);
   });
 });

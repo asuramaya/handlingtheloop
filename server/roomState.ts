@@ -68,6 +68,7 @@ export const PUB_ALLOWED: ReadonlySet<ClientMsg["t"]> = new Set<ClientMsg["t"]>(
   "react", // crowd reaction
   "request", // song request
   "request-vote", // upvote a song request (F3)
+  "chat", // chat line (F5)
 ]);
 export function pubMayChange(t: ClientMsg["t"]): boolean {
   return PUB_ALLOWED.has(t);
@@ -106,13 +107,14 @@ export interface RoomView {
   isPublic: boolean;
   stageGate: StageGate;
   stage: StageReq[]; // pending hand-raises (participants only)
+  chatSlow: number; // chat slow-mode: <0 off, 0 normal, >0 N-second gate
 }
 
 // The welcome frame for a joining socket. A participant sees the roster + pending hand-raises;
 // the anonymous crowd sees neither (just the count + the gate). BOTH get the song-request list
 // — the crowd needs it to upvote (F3). Centralised so a new role-scoped field is added once.
 export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: SongRequest[]): ServerMsg {
-  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, requests } as const;
+  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, requests } as const;
   return pub
     ? { t: "welcome", ...base, peers: [], pub: true }
     : { t: "welcome", ...base, peers: view.peers, stage: view.stage };
@@ -122,7 +124,7 @@ export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: 
 // count-only frame for the crowd (so the big roster never fans out to hundreds of listeners).
 export function presenceFor(view: RoomView): { full: ServerMsg; lite: ServerMsg } {
   return {
-    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate },
-    lite: { t: "presence", peers: [], listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate },
+    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow },
+    lite: { t: "presence", peers: [], listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow },
   };
 }

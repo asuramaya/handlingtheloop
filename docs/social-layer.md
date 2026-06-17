@@ -426,8 +426,11 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       — never per tap — with a per-device token bucket (`REACT_RATE_MAX`/window) capping a
       spammer. Pub listeners may `react` (guard carve-out). `react-bar` in SocialScreen; shown
       wherever a broadcast is happening (you host one or you've tuned in).
-- [ ] **F5. Chat at scale:** slow-mode, follower-only option, rate limit, mention
-      controls (`@everyone` guard), moderation hooks.
+- [x] **F5. Chat DONE.** A `Chat` unit (roomCrowd.ts) buffers a rolling backlog (last 30, sent
+      on join) + enforces an always-on 1s anti-spam floor under the host's **slow-mode** (Off /
+      On / 5s / 15s, persisted, rides presence). Lines fan out to everyone; `ChatPanel` is shown
+      in any session or broadcast. *(Deferred: follower-only — needs the follow graph at the DO,
+      which it can't see yet; `@everyone` mention guard.)*
 
 ## G. Async layer (persistent surface when nothing's live)  *(P4)*
 
@@ -466,12 +469,15 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## L. Moderation & safety  *(P5)*
 
-- [ ] **L1. Host/mod roles:** kick / ban / mute within a room.
+- [~] **L1. Host/mod roles:** kick (guests, existing) + **mute** (per-device chat block, from a
+      chat message) + **ban** (evict + session re-entry block via a `banned` device set) DONE for
+      chat moderation. *(Room-wide ban persistence + a mod-role grant to co-hosts = later.)*
 - [ ] **L2. Report flow → existing admin worker** (moderation queue / DMCA muscle).
 - [ ] **L3. Handle + chat blocklists** (reuse A5 lists).
 - [ ] **L4. Anti-sybil:** fake-listener count inflation, follow bots corrupting J2.
-- [ ] **L5. Social-action rate limits** (follow/mention/request spam) — extend the
-      existing `allow()` / rate-limit bindings from the security hardening pass.
+- [~] **L5. Social-action rate limits** — the in-DO crowd channels are all rate-limited now
+      (reactions token-bucket, requests 15s, chat 1s floor + host slow-mode). *(Follow/mention
+      HTTP-side limits via the `allow()` bindings still later.)*
 
 ## M. Privacy & data lifecycle  *(P5)*
 

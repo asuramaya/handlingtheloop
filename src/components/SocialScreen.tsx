@@ -8,6 +8,7 @@ import { StageBar } from "./social/StageBar";
 import { CrowdPanel } from "./social/CrowdPanel";
 import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
+import { ChatPanel } from "./social/ChatPanel";
 import { deviceIcon } from "./social/util";
 
 // The expanded session "social screen" — the full-screen surface behind the chin popup's
@@ -105,6 +106,9 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
         {/* Crowd reactions + hype — wherever a broadcast is happening (you host one, or you've
             tuned into one). Everyone present can tap; the DJ reads the energy. */}
         {(room.roomPublic || room.listeningTo) && <CrowdPanel room={room} />}
+
+        {/* Chat (F5) — in any session or broadcast you're part of. */}
+        {(room.roomPublic || room.listeningTo || room.enabled) && <ChatPanel room={room} revealed={revealed} />}
 
         {!inSession ? (
           <p className="social-hint">Sign in under Profile, or open an invite link, to join a shared session.</p>

@@ -2,7 +2,7 @@
 // out of the DjRoom as self-contained units. Each owns its OWN ephemeral state (windows,
 // timers, rate buckets) and takes its dependencies by injection (how to broadcast, the clock),
 // so they carry no membership/socket concerns and can be unit-tested without the whole DO.
-import { isReaction, type ServerMsg, type SongRequest } from "../src/htl/room/protocol";
+import { isReaction, type ServerMsg, type SongRequest, type ChatMsg } from "../src/htl/room/protocol";
 
 // Crowd reactions (F4) + hype (F2). Taps accumulate in a window and flush ONE aggregated frame
 // per tick — never per tap, so a big room can't storm the fan-out — plus a decaying 0..1 hype
@@ -130,5 +130,42 @@ export class Requests {
     this.items = [];
     this.voters.clear();
     return true;
+  }
+}
+
+// Chat (F5). Holds a short rolling backlog (so a joiner sees recent lines) and enforces the
+// anti-spam floor + the host's slow-mode per device. Mute/ban are MEMBERSHIP decisions the DO
+// owns (they touch sockets); this unit only validates + rate-limits + buffers the text.
+export class Chat {
+  private static MAXLEN = 300;
+  private static HISTORY = 30;
+  private static BASE_RATE_MS = 1000; // always-on anti-spam floor, under the host's slow-mode
+  private log: ChatMsg[] = [];
+  private seq = 0;
+  private last: Record<string, number> = {};
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  get history(): ChatMsg[] {
+    return this.log;
+  }
+
+  // Post a line. `slowSec` is the host's slow-mode (0 = none). Returns the buffered message to
+  // fan out, or a human reason it was held (rate/slow). Empty error = blank text (ignore).
+  post(dev: string, name: string, raw: string, slowSec: number): { ok: true; msg: ChatMsg } | { ok: false; error: string } {
+    const text = (raw || "").trim().slice(0, Chat.MAXLEN);
+    if (!text) return { ok: false, error: "" };
+    const now = this.now();
+    const gap = Math.max(Chat.BASE_RATE_MS, Math.max(0, slowSec) * 1000);
+    const since = now - (this.last[dev] ?? 0);
+    if (since < gap) {
+      const wait = Math.ceil((gap - since) / 1000);
+      return { ok: false, error: slowSec > 0 ? `Slow mode — wait ${wait}s` : "Slow down a moment" };
+    }
+    this.last[dev] = now;
+    const msg: ChatMsg = { id: `c${++this.seq}`, dev, name: name || "Someone", text };
+    this.log.push(msg);
+    if (this.log.length > Chat.HISTORY) this.log.shift();
+    return { ok: true, msg };
   }
 }

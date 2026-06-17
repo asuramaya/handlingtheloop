@@ -286,6 +286,7 @@ export class Deck {
 
   // --- jog/platter physics (see scrubBegin / jogTick) ---
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
+  private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
   private jogPhase: "off" | "grab" | "coast" = "off";
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
@@ -1304,6 +1305,19 @@ export class Deck {
     // can't launch it across the whole track.
     const max = Deck.MAX_COAST;
     this.jogVel = Math.max(-max, Math.min(max, this.handVel));
+    this._touchGlide = false;
+    // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the
+    // native gesture is a hard BACKWARD flick of the jog. When the release is a strong
+    // back-fling during playback, give it the dramatic, tunable back-spin-and-catch curve
+    // (backSpinTau) instead of the quick jog-physics coast. Otherwise reset _coastTau so
+    // a normal release uses the jog weight/drag (NOT a leftover touch-decel brake time).
+    if (this._vinylSpeed && this.jogReturnToPlay && this.jogVel < -Deck.SPINBACK_FLICK) {
+      this._coastTau = this.backSpinTau();
+      this._ramping = "spinback";
+    } else {
+      this._coastTau = 0;
+      this._ramping = null;
+    }
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
     this.startJogLoop();

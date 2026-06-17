@@ -260,6 +260,26 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                               Live at <b>@{room.user.handle}</b> · {room.listenerCount} listening
                             </span>
                           )}
+                          {room.roomPublic && (
+                            <div className="gate-select" role="group" aria-label="How the crowd reaches the decks">
+                              <span className="gate-label">Decks</span>
+                              {([
+                                { m: "request", label: "Request", title: "Listeners raise a hand; you approve" },
+                                { m: "open", label: "Open", title: "Listeners grab any free deck instantly" },
+                                { m: "closed", label: "Closed", title: "Only you (and private invitees) play" },
+                              ] as const).map(({ m, label, title }) => (
+                                <button
+                                  key={m}
+                                  className={`gate-opt ${room.stageGate === m ? "on" : ""}`}
+                                  onClick={() => room.setStageGate(m)}
+                                  title={title}
+                                  aria-pressed={room.stageGate === m}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </>
                       ) : (
                         <button className="broadcast-btn" disabled title="Start the session first">● Go live</button>
@@ -357,6 +377,15 @@ function StageBar({ room }: { room: RoomState }) {
       </div>
     );
   }
+  // The host has shut the decks to the crowd — nothing to offer.
+  if (room.stageGate === "closed") {
+    return (
+      <div className="stage-bar closed">
+        <span className="stage-bar-what">🔒 The host has closed the decks</span>
+      </div>
+    );
+  }
+  // A pending hand-raise (request mode; in open mode this only flashes before the grab resolves).
   if (room.myStageDeck) {
     return (
       <div className="stage-bar pending">
@@ -367,15 +396,17 @@ function StageBar({ room }: { room: RoomState }) {
       </div>
     );
   }
+  // Open decks → grab one instantly; request decks → raise a hand for the host.
+  const open = room.stageGate === "open";
   return (
     <div className="stage-bar">
-      <span className="stage-bar-what">✋ Request the decks</span>
+      <span className="stage-bar-what">{open ? "🎛️ Open decks — grab one" : "✋ Request the decks"}</span>
       <span className="stage-bar-picks">
-        <button className="stage-pick" onClick={() => room.requestStage("A")} title="Ask to play deck A">
-          Deck A
+        <button className="stage-pick" onClick={() => room.requestStage("A")} title={open ? "Take deck A now" : "Ask to play deck A"}>
+          {open ? "Take A" : "Deck A"}
         </button>
-        <button className="stage-pick" onClick={() => room.requestStage("B")} title="Ask to play deck B">
-          Deck B
+        <button className="stage-pick" onClick={() => room.requestStage("B")} title={open ? "Take deck B now" : "Ask to play deck B"}>
+          {open ? "Take B" : "Deck B"}
         </button>
       </span>
     </div>

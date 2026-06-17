@@ -8565,6 +8565,41 @@ span.profile-handle:hover {
   font-weight: 600;
 }
 
+/* Host's deck-gate selector (E6): how the public crowd reaches the decks. */
+.gate-select {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.gate-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.gate-opt {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gate-opt:hover {
+  border-color: #c8506a;
+  color: #e87f97;
+}
+.gate-opt.on {
+  background: #c8506a;
+  border-color: #c8506a;
+  color: #fff;
+}
+
 /* --- Chin + popup additions --- */
 .room-expand {
   width: 26px;
@@ -9148,6 +9183,11 @@ span.profile-handle:hover {
 }
 .stage-bar.pending {
   border-style: dashed;
+}
+.stage-bar.closed {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
 }
 .stage-bar-what {
   flex: 1 1 auto;

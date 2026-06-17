@@ -34,6 +34,12 @@ export interface Peer {
   color: string; // this device's account accent (hex) — the room's "vibe" is the host's
 }
 
+// How a public-lobby LISTENER may get onto the decks (E6). The host picks the gate:
+//   • request — raise a hand, the host approves (default; the controlled door)
+//   • open    — grab any FREE deck instantly, no approval (first-come b2b)
+//   • closed  — the crowd can't step up at all (host + private invitees only)
+export type StageGate = "request" | "open" | "closed";
+
 // A broadcast LISTENER raising a hand to step up to the decks (the floor→stage request).
 // Surfaced ONLY to participants (the host approves it); the anonymous crowd otherwise
 // stays a count, never a roster row — so a request is the one time a listener gets named.
@@ -160,6 +166,7 @@ export type ClientMsg =
   | { t: "stage"; deck: DeckId | null }
   | { t: "stage-approve"; to: string; deck: DeckId } // HOST brings a listener up onto a deck
   | { t: "stage-deny"; to: string } // HOST declines a request, or sends a stage DJ back to the floor
+  | { t: "stageGate"; mode: StageGate } // HOST sets how the crowd reaches the decks (request/open/closed)
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
@@ -175,10 +182,11 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[] }
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[] }
+  // `stageGate` rides BOTH payloads — a listener needs it to know if/how it can step up.
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate }
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }

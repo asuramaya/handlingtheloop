@@ -381,10 +381,13 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       `canDriveDeckRef`. *(b2b deck-split co-controller UI still later — E3.)*
 - [ ] **E5. Demote the two old toggles:** mute → trivial player mute (not a mode);
       device-output routing → multi-device-only setting that defaults correctly.
-- [~] **E6. Gate modes:** the **request-to-play** path is live (raise-hand → host
-      approve/decline + per-listener state feedback: request → pending → up/declined).
-      *(Still open: an `open decks` mode that skips host approval, and `invite-only`; both
-      are a host flag on top of the shipped handshake.)*
+- [x] **E6. Gate modes DONE.** A host-set `stageGate` on the public lobby: **request**
+      (raise-hand → host approves; default), **open** (grab any FREE deck instantly, no
+      approval — `deckHeldByStage` blocks a second grabber on the same deck), **closed**
+      (the crowd can't step up; host + private invitees only). Persisted, rides welcome +
+      presence (both full & lite) so every listener's StageBar shows the right affordance
+      ("Take A/B" vs "Request" vs "🔒 closed"). Host picks it from a segmented control in the
+      Public-lobby card. Refusals send `stage-self` (clear pending) + `error` (the reason).
 - [x] **E6a. Listen default already inverted for public rooms.** A `pub` listener tunes in
       open (no knock) and only *taking the decks* raises a hand (the `stage` request) — the
       private knock-to-listen path is untouched (still the invite-room model).
@@ -394,7 +397,10 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [ ] **E10. Max room-size cap** + at-cap failure mode (decision in Open Decisions).
 - [~] **E11. Zombie/orphan cleanup** — directory freshness filter (`last_seen > now-90s`)
       ages out a vanished host now; physical row sweep = later (lazy).
-- [ ] **E12. Private→public room transition** permission model.
+- [x] **E12. Private→public transition** — host-only `public` toggle (un-forgeable; the DO
+      gates on `isHostDevice`); existing private guests are unaffected by the flip (they're
+      roster participants, not `pub`); ending the broadcast evicts the anon crowd + any stage
+      DJs they brought up. Deck access for the crowd is then governed by E6's `stageGate`.
 
 ## F. Crowd → DJ interactivity channel  *(P3)*
 

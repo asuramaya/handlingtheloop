@@ -3,7 +3,7 @@
 // authenticate the upgrade + resolve which session to join), tracks the participant
 // list + the control baton, and reconnects with backoff. Pure transport: it exposes
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
-import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq } from "./protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate } from "./protocol";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -20,6 +20,7 @@ export interface RoomHandlers {
   settings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings landed
   listeners?: (count: number, isPublic: boolean) => void; // broadcast-plane listener count + whether the room is public
   stage?: (reqs: StageReq[]) => void; // HOST: listeners raising a hand to step up to the decks
+  stageGate?: (mode: StageGate) => void; // how the crowd reaches the decks (request/open/closed)
   stageSelf?: (status: "declined") => void; // LISTENER: the host declined my step-up request
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
@@ -121,6 +122,7 @@ export class RoomClient {
   listenerCount = 0; // broadcast-plane crowd size (from welcome/presence)
   roomPublic = false; // whether the room is open to anon listeners
   stageReqs: StageReq[] = []; // pending floor→stage hand-raises (host-visible)
+  stageGate: StageGate = "request"; // how the crowd reaches the decks
 
   private ws: WebSocket | null = null;
   private h: RoomHandlers = {};
@@ -250,6 +252,10 @@ export class RoomClient {
   denyStage(to: string): void {
     this.send({ t: "stage-deny", to });
   }
+  /** HOST: set how the crowd reaches the decks (request / open / closed). */
+  setStageGate(mode: StageGate): void {
+    this.send({ t: "stageGate", mode });
+  }
   /** Update this device's account accent and broadcast it (the room vibe / roster swatch). */
   setColor(color: string): void {
     if (color === this.color) return;
@@ -321,10 +327,12 @@ export class RoomClient {
         this.listenerCount = msg.listeners ?? 0;
         this.roomPublic = !!msg.public;
         this.stageReqs = msg.stage ?? [];
+        this.stageGate = msg.stageGate ?? this.stageGate;
         this.h.presence?.(msg.peers);
         this.h.role?.(msg.anchorId);
         this.h.listeners?.(this.listenerCount, this.roomPublic);
         this.h.stage?.(this.stageReqs);
+        this.h.stageGate?.(this.stageGate);
         // A PUBLIC read-only listener is auto-joined server-side and never drives — skip the
         // engage restore entirely (it has no switches to assert).
         if (this.listenHandle) {
@@ -354,9 +362,11 @@ export class RoomClient {
         this.listenerCount = msg.listeners ?? this.listenerCount;
         this.roomPublic = msg.public ?? this.roomPublic;
         this.stageReqs = msg.stage ?? this.stageReqs;
+        this.stageGate = msg.stageGate ?? this.stageGate;
         this.h.presence?.(msg.peers);
         this.h.listeners?.(this.listenerCount, this.roomPublic);
         this.h.stage?.(this.stageReqs);
+        this.h.stageGate?.(this.stageGate);
         break;
       case "role":
         this.anchorId = msg.anchorId;

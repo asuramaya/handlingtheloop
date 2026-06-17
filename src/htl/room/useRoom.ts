@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, announceRoom, closeRoom, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
-import type { Peer, Intent, TickDecks, DeckId, StageReq } from "./protocol";
+import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate } from "./protocol";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -51,10 +51,12 @@ export interface RoomState {
   onStage: boolean; // am I a stepped-up listener currently driving a deck?
   myDeck: DeckId | null; // the deck I hold while on stage (else null)
   myStageDeck: DeckId | null; // the deck I've REQUESTED while still on the floor (pending; else null)
-  requestStage: (deck: DeckId) => void; // LISTENER: raise a hand for a deck
+  requestStage: (deck: DeckId) => void; // LISTENER: raise a hand for a deck (or grab it, in open mode)
   stepDown: () => void; // LISTENER: cancel a pending request, or step down off the decks
   approveStage: (to: string, deck: DeckId) => void; // HOST: bring a listener up onto a deck
   denyStage: (to: string) => void; // HOST: decline a request / send a stage DJ to the floor
+  stageGate: StageGate; // how the crowd reaches the decks (request/open/closed)
+  setStageGate: (mode: StageGate) => void; // HOST: set the gate mode
   error: string | null;
   client: RoomClient | null;
   join: () => void; // establish sync (listen on, control off) — guests knock first
@@ -123,6 +125,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // declines (the stage-self signal) or I cancel.
   const [stageRequests, setStageRequests] = useState<StageReq[]>([]);
   const [myStageDeck, setMyStageDeck] = useState<DeckId | null>(null);
+  const [stageGate, setStageGateState] = useState<StageGate>("request");
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -193,12 +196,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
         setRoomPublic(isPublic);
       },
       stage: (reqs) => setStageRequests(reqs),
-      stageSelf: (status) => {
-        if (status === "declined") {
-          setMyStageDeck(null);
-          setError("The host didn't bring you up.");
-        }
-      },
+      stageGate: (mode) => setStageGateState(mode),
+      // A step-up didn't go through (declined / deck taken / closed) — clear the optimistic
+      // pending deck. The human reason rides a separate `error` the server sends alongside.
+      stageSelf: () => setMyStageDeck(null),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -227,6 +228,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setListenerCount(0);
       setStageRequests([]);
       setMyStageDeck(null);
+      setStageGateState("request");
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -305,6 +307,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   }, []);
   const approveStage = useCallback((to: string, deck: DeckId) => clientRef.current?.approveStage(to, deck), []);
   const denyStage = useCallback((to: string) => clientRef.current?.denyStage(to), []);
+  const setStageGate = useCallback((mode: StageGate) => {
+    clientRef.current?.setStageGate(mode);
+    setStageGateState(mode); // optimistic — the presence echo confirms
+  }, []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
@@ -391,6 +397,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     stepDown,
     approveStage,
     denyStage,
+    stageGate,
+    setStageGate,
     error,
     client: clientRef.current,
     join,

@@ -13,48 +13,23 @@
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
 import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate, SongRequest } from "../src/htl/room/protocol";
 import { canDriveIntent, isReaction } from "../src/htl/room/protocol";
+import {
+  type Attachment,
+  type Ws,
+  type DurableObjectState,
+  type RoomView,
+  isMobileKind,
+  pubMayChange,
+  peerOf,
+  welcomeFor,
+  presenceFor,
+} from "./roomState";
 
-// --- Minimal Cloudflare runtime types (no @cloudflare/workers-types installed). ---
-interface Ws {
-  send(msg: string): void;
-  close(code?: number, reason?: string): void;
-  serializeAttachment(value: unknown): void;
-  deserializeAttachment(): unknown;
-}
+// The DjRoom Durable Object: socket lifecycle, membership transitions, the anchor (clock),
+// relay/presence fan-out, and persistence. The PURE state model (Attachment, roles, the pub
+// allowlist, the presence/welcome payload shapes) lives in ./roomState so it's testable on its
+// own; this file is the stateful plumbing around it. WebSocketPair is a runtime global.
 declare const WebSocketPair: { new (): { 0: Ws; 1: Ws } };
-interface DurableObjectStorage {
-  get<T = unknown>(key: string): Promise<T | undefined>;
-  put(key: string, value: unknown): Promise<void>;
-}
-interface DurableObjectState {
-  acceptWebSocket(ws: Ws, tags?: string[]): void;
-  getWebSockets(tag?: string): Ws[];
-  storage: DurableObjectStorage;
-}
-
-interface Attachment {
-  device: string;
-  name: string;
-  kind: string; // device type (iPhone / Mac / Linux …) for the roster icon
-  host: boolean; // a device on the session-owner's account (set by the Worker, un-forgeable)
-  joined: boolean; // a participant — STICKY: only `leave`/disconnect clears it
-  listening: boolean; // rendering its own audio stream
-  controlling: boolean; // allowed to drive the decks (shared); guests need a host grant
-  pending: boolean; // a guest who knocked and is waiting on the host's approval (the handshake)
-  pub: boolean; // a PUBLIC anon read-only listener (broadcast plane): hears the mix, never drives, never anchors, not in the roster
-  decks: string; // which decks this device may DRIVE: "" | "A" | "B" | "AB" ("AB" = full — host/granted). The per-deck gate.
-  stageReq: string; // a pub LISTENER's pending hand-raise: "" | "A" | "B" (the deck it wants to step up to)
-  stage: boolean; // STEPPED UP from the floor: drives one deck, never anchors, reverts to a pub listener on step-down
-  joinedAt: number; // epoch ms this device last became a participant (0 until joined) — for "joined Nm ago"
-  color: string; // this device's account accent (hex) — the room "vibe" is the host's color
-}
-
-// Device kinds (from the client's `kind` param, see deviceName) that are phones/tablets. The
-// anchor (clock) prefers a DESKTOP over these among the owner's own devices, so a desktop refresh
-// doesn't hand the clock to a phone for good. (iPadOS Safari often reports "Mac" — fine, it then
-// counts as a desktop, which is the capable-DJ-surface behaviour we want anyway.)
-const MOBILE_KINDS = new Set(["iPhone", "iPad", "Android"]);
-const isMobileKind = (kind: string): boolean => MOBILE_KINDS.has(kind);
 
 export class DjRoom {
   private state: DurableObjectState;
@@ -230,18 +205,7 @@ export class DjRoom {
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
-    server.send(
-      JSON.stringify({
-        t: "welcome",
-        you: device,
-        anchorId: this.anchorId,
-        peers: pub ? [] : this.peers(), // the crowd doesn't need the roster
-        listeners: this.listenerCount(),
-        public: this.isPublic,
-        stageGate: this.stageGate, // every listener needs the gate to show the right step-up affordance
-        ...(pub ? { pub: true } : { stage: this.stageReqs(), requests: this.requests }), // participants see hand-raises + song requests
-      } satisfies ServerMsg),
-    );
+    server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.requests)));
     // Hand a public listener the current board immediately so it can render without a round-trip.
     if (pub) this.sendCatchUp(server);
     this.broadcastPresence();
@@ -266,7 +230,7 @@ export class DjRoom {
     // can never knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable
     // `pub`. The hand-raise is the one sanctioned floor→stage door; the host still gates it.
     const att = ws.deserializeAttachment() as Attachment | null;
-    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage" && msg.t !== "react" && msg.t !== "request") return;
+    if (att?.pub && !pubMayChange(msg.t)) return; // crowd listeners may only send the allowlisted messages
 
     switch (msg.t) {
       case "join": {
@@ -937,24 +901,22 @@ export class DjRoom {
     for (const ws of this.state.getWebSockets()) {
       if (ws === except) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (a && !a.pub) // public listeners are a count, not a roster row
-        out.push({
-          id: a.device,
-          name: a.name,
-          kind: a.kind || "Device",
-          host: !!a.host,
-          joined: !!a.joined,
-          listening: !!a.listening,
-          controlling: !!a.controlling,
-          anchor: a.device === this.anchorId,
-          pending: !!a.pending,
-          decks: a.decks || "",
-          stage: !!a.stage,
-          joinedAt: a.joinedAt || 0,
-          color: a.color || "",
-        });
+      if (a && !a.pub) out.push(peerOf(a, this.anchorId)); // public listeners are a count, not a roster row
     }
     return out;
+  }
+
+  // Snapshot the shared room state both welcome + presence are built from — one place to add a
+  // new broadcast field (see welcomeFor / presenceFor in roomState.ts).
+  private roomView(): RoomView {
+    return {
+      anchorId: this.anchorId,
+      peers: this.peers(),
+      listeners: this.listenerCount(),
+      isPublic: this.isPublic,
+      stageGate: this.stageGate,
+      stage: this.stageReqs(),
+    };
   }
 
   private async setAnchor(device: string | null, except?: Ws): Promise<void> {
@@ -970,32 +932,32 @@ export class DjRoom {
     this.broadcastPresence(except);
   }
 
+  // The ONE fan-out primitive: stringify once, send to every socket whose attachment passes
+  // `pred`. A dead socket is skipped, never thrown out of (the inconsistency the old
+  // hand-rolled loops had — some try/caught, some didn't). Every relay/broadcast helper below
+  // is just a named predicate over this, so "who receives what" reads in one line each.
+  private sendTo(pred: (a: Attachment | null, ws: Ws) => boolean, msg: ServerMsg): void {
+    const json = JSON.stringify(msg);
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (!pred(a, ws)) continue;
+      try {
+        ws.send(json);
+      } catch {
+        /* socket gone — skip it, never break the fan-out */
+      }
+    }
+  }
+
   // Relay to everyone except the sender. `skipListeners` omits the anonymous read-only
   // (public) crowd — used for gestural messages they can't reconstruct (see the jog case).
   private relay(from: string, msg: ServerMsg, skipListeners = false): void {
-    const json = JSON.stringify(msg);
-    for (const ws of this.state.getWebSockets()) {
-      if (this.deviceOf(ws) === from) continue;
-      if (skipListeners) {
-        const a = ws.deserializeAttachment() as Attachment | null;
-        if (a?.pub) continue;
-      }
-      ws.send(json);
-    }
+    this.sendTo((a) => (a?.device ?? null) !== from && !(skipListeners && a?.pub), msg);
   }
 
   // Send ONLY to the anonymous read-only (public) listener crowd. The digest path uses this.
   private relayToListeners(msg: ServerMsg): void {
-    const json = JSON.stringify(msg);
-    for (const ws of this.state.getWebSockets()) {
-      const a = ws.deserializeAttachment() as Attachment | null;
-      if (!a?.pub) continue;
-      try {
-        ws.send(json);
-      } catch {
-        /* socket gone */
-      }
-    }
+    this.sendTo((a) => !!a?.pub, msg);
   }
 
   // What makes a sweep "the same control" — so last-value-wins coalescing replaces, not
@@ -1042,35 +1004,17 @@ export class DjRoom {
   // Push the current song-request list to PARTICIPANTS only (the DJ + co-DJs act on it). The
   // anonymous crowd never receives the list — they only contribute to it.
   private relayRequests(): void {
-    const json = JSON.stringify({ t: "requests", list: this.requests } satisfies ServerMsg);
-    for (const ws of this.state.getWebSockets()) {
-      const a = ws.deserializeAttachment() as Attachment | null;
-      if (!a || a.pub) continue;
-      try {
-        ws.send(json);
-      } catch {
-        /* socket gone */
-      }
-    }
+    this.sendTo((a) => !!a && !a.pub, { t: "requests", list: this.requests });
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited
   // guests on other accounts. For account-private live sync (settings) that must not leak.
   private relayToOwnDevices(from: string, msg: ServerMsg): void {
-    const json = JSON.stringify(msg);
-    for (const ws of this.state.getWebSockets()) {
-      const a = ws.deserializeAttachment() as Attachment | null;
-      if (!a?.host || a.device === from) continue;
-      ws.send(json);
-    }
+    this.sendTo((a) => !!a?.host && a.device !== from, msg);
   }
 
   private broadcast(msg: ServerMsg, except?: Ws): void {
-    const json = JSON.stringify(msg);
-    for (const ws of this.state.getWebSockets()) {
-      if (ws === except) continue;
-      ws.send(json);
-    }
+    this.sendTo((_a, ws) => ws !== except, msg);
   }
 
   // Presence is the storm at scale: every join/leave is a "change", and fanning the full
@@ -1100,17 +1044,15 @@ export class DjRoom {
   }
 
   private flushPresence(): void {
-    const peers = this.peers();
-    const listeners = this.listenerCount();
-    // Participants get the roster + the pending floor→stage hand-raises (the host acts on them).
-    const full = JSON.stringify({ t: "presence", peers, listeners, public: this.isPublic, stage: this.stageReqs(), stageGate: this.stageGate } satisfies ServerMsg);
-    // The crowd isn't in the roster, so it gets the count only — half the payload, no stage
-    // list — but it DOES need the gate mode to show the right step-up affordance.
-    const lite = JSON.stringify({ t: "presence", peers: [], listeners, public: this.isPublic, stageGate: this.stageGate } satisfies ServerMsg);
+    // Participants get the full roster (+ pending hand-raises); the crowd gets the count-only
+    // lite frame (the big roster never fans to hundreds). Both shapes live in presenceFor.
+    const { full, lite } = presenceFor(this.roomView());
+    const fullJson = JSON.stringify(full);
+    const liteJson = JSON.stringify(lite);
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       try {
-        ws.send(a?.pub ? lite : full);
+        ws.send(a?.pub ? liteJson : fullJson);
       } catch {
         /* socket gone — ignore */
       }

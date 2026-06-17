@@ -114,9 +114,9 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [x] **A1. Split user identity columns.** `display_name`/`avatar_url`/`bio`
       (user-owned) added distinct from the Google-mirror `name`/`avatar`.
       Public read = `display_name ?? name`, `avatar_url ?? avatar`.
-- [ ] **A2. Fix the login-stomp bug.** `upsertGoogleUser` (`server/db.ts`) must
-      update only `google_*` + `email` + `last_login`, NEVER the user-owned fields.
-      *(Confirmed still present 2026-06-16.)*
+- [x] **A2. Login-stomp bug fixed.** `upsertGoogleUser` (`server/db.ts`) now writes only
+      `email`/`name`/`avatar`/`last_login` (the Google mirror) — never the user-owned
+      `display_name`/`avatar_url`/`bio`. Confirmed in code 2026-06-16.
 - [x] **A3.** `handle` + `handle_folded` columns with **DB-level UNIQUE on the
       fold** (`idx_users_handle_folded`); `setUserHandle` returns "taken" on the
       atomic conflict (pre-check + failing-UPDATE catch), not an app-only check.

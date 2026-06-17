@@ -62,7 +62,7 @@ describe("welcomeFor / presenceFor", () => {
   };
 
   it("gives a participant the roster + hand-raises + requests; the crowd gets none of it", () => {
-    const reqs = [{ id: "q1", name: "Y", text: "Rosé — APT" }];
+    const reqs = [{ id: "q1", name: "Y", text: "Rosé — APT", votes: 3 }];
     const part = welcomeFor("d1", view, false, reqs);
     const crowd = welcomeFor("anon", view, true, reqs);
     if (part.t !== "welcome" || crowd.t !== "welcome") throw new Error("not welcome");
@@ -70,11 +70,11 @@ describe("welcomeFor / presenceFor", () => {
     expect(part.stage?.length).toBe(1);
     expect(part.requests?.length).toBe(1);
     expect(part.pub).toBeUndefined();
-    // crowd: count + gate only, never the roster / hand-raises / requests
+    // crowd: count + gate + the votable request list, but never the roster / hand-raises
     expect(crowd.peers).toEqual([]);
     expect(crowd.pub).toBe(true);
     expect(crowd.stage).toBeUndefined();
-    expect(crowd.requests).toBeUndefined();
+    expect(crowd.requests?.length).toBe(1); // the crowd needs the list to upvote (F3)
     expect(crowd.listeners).toBe(7);
     expect(crowd.stageGate).toBe("open");
   });

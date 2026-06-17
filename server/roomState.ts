@@ -67,6 +67,7 @@ export const PUB_ALLOWED: ReadonlySet<ClientMsg["t"]> = new Set<ClientMsg["t"]>(
   "stage", // raise a hand to step up (the host still gates it)
   "react", // crowd reaction
   "request", // song request
+  "request-vote", // upvote a song request (F3)
 ]);
 export function pubMayChange(t: ClientMsg["t"]): boolean {
   return PUB_ALLOWED.has(t);
@@ -107,14 +108,14 @@ export interface RoomView {
   stage: StageReq[]; // pending hand-raises (participants only)
 }
 
-// The welcome frame for a joining socket. A participant sees the roster + pending hand-raises
-// + the song-request list; the anonymous crowd sees none of that (just the count + the gate).
-// Centralised so a new "participants-also-see-X" field is added in ONE place, not three.
+// The welcome frame for a joining socket. A participant sees the roster + pending hand-raises;
+// the anonymous crowd sees neither (just the count + the gate). BOTH get the song-request list
+// — the crowd needs it to upvote (F3). Centralised so a new role-scoped field is added once.
 export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: SongRequest[]): ServerMsg {
-  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate } as const;
+  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, requests } as const;
   return pub
     ? { t: "welcome", ...base, peers: [], pub: true }
-    : { t: "welcome", ...base, peers: view.peers, stage: view.stage, requests };
+    : { t: "welcome", ...base, peers: view.peers, stage: view.stage };
 }
 
 // The two presence payloads: the FULL roster (+ hand-raises) for participants, and the LITE

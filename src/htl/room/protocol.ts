@@ -55,6 +55,7 @@ export interface SongRequest {
   id: string;
   name: string; // who asked (display label)
   text: string; // the ask, e.g. "Rosé — APT"
+  votes: number; // crowd upvotes (F3); the asker auto-votes, so this is ≥1. The list sorts by it.
 }
 
 // A broadcast LISTENER raising a hand to step up to the decks (the floor→stage request).
@@ -186,6 +187,7 @@ export type ClientMsg =
   | { t: "stageGate"; mode: StageGate } // HOST sets how the crowd reaches the decks (request/open/closed)
   | { t: "react"; emoji: string } // a listener/participant taps a reaction (F4) — server-aggregated, rate-limited
   | { t: "request"; text: string } // a listener asks the DJ for a song (F1) — rate-limited
+  | { t: "request-vote"; id: string } // upvote a song request (F3) — idempotent, one per device per request
   | { t: "request-dismiss"; id: string } // HOST removes one song request
   | { t: "request-clear" } // HOST clears the whole request list
   | { t: "intent"; intent: Intent }

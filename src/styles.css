@@ -8722,7 +8722,17 @@ span.profile-handle:hover {
   opacity: 0.5;
   cursor: default;
 }
-/* HOST: the song-request list. */
+/* The crowd-ranked song-request list (F1 + F3). */
+.req-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.req-list.crowd {
+  margin-top: 2px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
 .req-head {
   display: flex;
   align-items: center;
@@ -8742,7 +8752,42 @@ span.profile-handle:hover {
   color: #e0617a;
 }
 .req-row {
+  display: flex;
+  align-items: center;
   gap: 8px;
+}
+/* The upvote pill: a stacked caret + count, lights up once you've voted. */
+.req-vote {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.req-vote:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.req-vote.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  cursor: default;
+}
+.req-caret {
+  font-size: 9px;
+}
+.req-votes {
+  font-size: 12px;
+  font-weight: 700;
 }
 .req-text {
   flex: 1 1 auto;

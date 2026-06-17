@@ -236,12 +236,26 @@ describe("DjRoom crowd guard + requests", () => {
     expect(after).toBe(before); // guard dropped it
   });
 
-  it("a song request reaches participants (the host), not the crowd", async () => {
+  it("a song request reaches everyone (host + crowd) so the crowd can upvote (F3)", async () => {
     const host = await liveHost();
     const lis = (await h.connect({ device: "L1", name: "Ana", pub: true })).ws!;
     await h.send(lis, { t: "request", text: "Rosé — APT" });
-    const req = host.last("requests");
-    expect((req?.list as { text: string }[])?.[0]?.text).toBe("Rosé — APT");
-    expect(lis.got("requests")).toBe(false); // the crowd never receives the list
+    const onHost = host.last("requests");
+    expect((onHost?.list as { text: string; votes: number }[])?.[0]).toMatchObject({ text: "Rosé — APT", votes: 1 });
+    expect(lis.got("requests")).toBe(true); // the crowd gets the ranked list now (to vote)
+  });
+
+  it("upvotes are idempotent per device and re-rank the list", async () => {
+    const host = await liveHost();
+    const a = (await h.connect({ device: "A", name: "Ana", pub: true })).ws!;
+    const b = (await h.connect({ device: "B", name: "Bo", pub: true })).ws!;
+    await h.send(a, { t: "request", text: "first" }); // votes 1 (auto)
+    await h.send(b, { t: "request", text: "second" }); // votes 1 (auto)
+    // Bo upvotes "first" → it leads; a second Bo vote is ignored (idempotent)
+    const firstId = (host.last("requests")!.list as { id: string; text: string }[]).find((r) => r.text === "first")!.id;
+    await h.send(b, { t: "request-vote", id: firstId });
+    await h.send(b, { t: "request-vote", id: firstId });
+    const list = host.last("requests")!.list as { text: string; votes: number }[];
+    expect(list[0]).toMatchObject({ text: "first", votes: 2 }); // 1 auto + 1 Bo (not 3)
   });
 });

@@ -67,6 +67,9 @@ export class Requests {
   private items: SongRequest[] = [];
   private seq = 0;
   private rate: Record<string, number> = {};
+  // Who upvoted what (F3) — kept OUT of the wire SongRequest (just a count rides the wire);
+  // here it enforces one vote per device per request.
+  private voters = new Map<string, Set<string>>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -74,8 +77,14 @@ export class Requests {
     return this.items;
   }
 
+  // Keep the list ranked: most-voted first, ties in insertion order (stable sort).
+  private sort(): void {
+    this.items.sort((a, b) => b.votes - a.votes);
+  }
+
   // Add a request. `ok:true` → relay the new list. `ok:false` with a non-empty `error` → show
-  // that toast to the asker. `ok:false` with an empty error = nothing to do (blank text).
+  // that toast to the asker. `ok:false` with an empty error = nothing to do (blank text). The
+  // asker auto-upvotes their own request (votes starts at 1).
   add(device: string, name: string, raw: string): { ok: true } | { ok: false; error: string } {
     const text = (raw || "").trim().slice(0, Requests.MAXLEN);
     if (!text) return { ok: false, error: "" };
@@ -83,20 +92,43 @@ export class Requests {
     if (now - (this.rate[device] ?? 0) < Requests.RATE_MS) return { ok: false, error: "One request at a time — give it a moment." };
     if (this.items.some((r) => r.text.toLowerCase() === text.toLowerCase())) return { ok: false, error: "Already in the queue 👍" };
     this.rate[device] = now;
-    this.items.push({ id: `q${++this.seq}`, name: name || "Someone", text });
-    if (this.items.length > Requests.MAX) this.items.shift();
+    const id = `q${++this.seq}`;
+    this.items.push({ id, name: name || "Someone", text, votes: 1 });
+    this.voters.set(id, new Set([device]));
+    if (this.items.length > Requests.MAX) {
+      const dropped = this.items.shift();
+      if (dropped) this.voters.delete(dropped.id);
+    }
+    this.sort();
     return { ok: true };
+  }
+
+  // Upvote a request. Idempotent: one vote per device per request. Returns whether it changed
+  // (so the DO only re-relays the list on a real vote).
+  vote(device: string, id: string): boolean {
+    const req = this.items.find((r) => r.id === id);
+    if (!req) return false;
+    const voted = this.voters.get(id) ?? new Set<string>();
+    if (voted.has(device)) return false; // already voted
+    voted.add(device);
+    this.voters.set(id, voted);
+    req.votes++;
+    this.sort();
+    return true;
   }
 
   dismiss(id: string): boolean {
     const before = this.items.length;
     this.items = this.items.filter((r) => r.id !== id);
-    return this.items.length !== before;
+    if (this.items.length === before) return false;
+    this.voters.delete(id);
+    return true;
   }
 
   clear(): boolean {
     if (!this.items.length) return false;
     this.items = [];
+    this.voters.clear();
     return true;
   }
 }

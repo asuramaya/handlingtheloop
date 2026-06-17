@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { type RoomState, REACTIONS } from "@htl/room";
+import { RequestList } from "./RequestList";
 
 // Crowd reactions (F4) + hype meter (F2). Everyone present taps the emoji row; the DO
 // aggregates and flushes a hype level + per-emoji counts, which we render as a filling bar
@@ -58,21 +59,25 @@ export function CrowdPanel({ room }: { room: RoomState }) {
           </button>
         ))}
       </div>
-      {/* Listeners ask the DJ for a song (F1). Hosts see the list instead, in the body. */}
+      {/* Listeners ask the DJ for a song (F1) + upvote the pool (F3). The host sees the list
+          with its moderation controls in the body instead. */}
       {room.listeningTo && (
-        <form className="request-form" onSubmit={submitRequest}>
-          <input
-            className="request-input"
-            value={reqText}
-            onChange={(e) => setReqText(e.target.value)}
-            placeholder={reqSent ? "✓ Sent to the DJ" : "Request a song…"}
-            maxLength={120}
-            aria-label="Request a song"
-          />
-          <button className="request-send" type="submit" disabled={!reqText.trim()}>
-            Request
-          </button>
-        </form>
+        <>
+          <form className="request-form" onSubmit={submitRequest}>
+            <input
+              className="request-input"
+              value={reqText}
+              onChange={(e) => setReqText(e.target.value)}
+              placeholder={reqSent ? "✓ Sent to the DJ" : "Request a song…"}
+              maxLength={120}
+              aria-label="Request a song"
+            />
+            <button className="request-send" type="submit" disabled={!reqText.trim()}>
+              Request
+            </button>
+          </form>
+          <RequestList room={room} host={false} revealed={false} />
+        </>
       )}
     </div>
   );

@@ -66,6 +66,19 @@ describe("Requests", () => {
     expect(q.add("d2", "Bo", "rosé — apt")).toEqual({ ok: false, error: "Already in the queue 👍" });
   });
 
+  it("the asker auto-upvotes; votes are idempotent per device and re-rank", () => {
+    const q = new Requests(() => 1_000_000);
+    q.add("ana", "Ana", "first");
+    q.add("bo", "Bo", "second");
+    expect(q.list[0].votes).toBe(1); // auto-vote
+    const firstId = q.list.find((r) => r.text === "first")!.id;
+    expect(q.vote("bo", firstId)).toBe(true); // Bo upvotes "first" → 2, leads
+    expect(q.vote("bo", firstId)).toBe(false); // idempotent
+    expect(q.vote("x", "nope")).toBe(false); // unknown id
+    expect(q.list[0]).toMatchObject({ text: "first", votes: 2 });
+    expect(q.list[1]).toMatchObject({ text: "second", votes: 1 });
+  });
+
   it("dismiss + clear report whether they changed anything", () => {
     const q = new Requests(() => 1_000_000);
     q.add("d1", "Ana", "x");

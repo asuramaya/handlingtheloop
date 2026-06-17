@@ -7,6 +7,7 @@ import { LiveNow } from "./social/LiveNow";
 import { StageBar } from "./social/StageBar";
 import { CrowdPanel } from "./social/CrowdPanel";
 import { SocialCard } from "./social/SocialCard";
+import { RequestList } from "./social/RequestList";
 import { deviceIcon } from "./social/util";
 
 // The expanded session "social screen" — the full-screen surface behind the chin popup's
@@ -160,22 +161,9 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
               </div>
             )}
 
-            {/* HOST: the crowd's song requests (F1). Read one, pull the track, dismiss it. */}
-            {room.host && room.songRequests.length > 0 && (
-              <div className="social-knocks req-list">
-                <div className="social-section-head req-head">
-                  🎵 Requests
-                  <button className="req-clear" onClick={room.clearRequests}>Clear all</button>
-                </div>
-                {room.songRequests.map((r) => (
-                  <div key={r.id} className="social-knock req-row">
-                    <span className="req-text">{r.text}</span>
-                    <span className="req-who">{revealed ? r.name : maskName(r.name)}</span>
-                    <button className="req-dismiss" onClick={() => room.dismissRequest(r.id)} title="Dismiss" aria-label="Dismiss request">✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* HOST: the crowd-ranked song requests (F1 + F3). Read the top one, pull the
+                track, dismiss it. Vote counts + ▲ live in the shared RequestList. */}
+            {room.host && <RequestList room={room} host revealed={revealed} />}
 
             <div className="social-section-head">
               In the room{participants.length > 0 ? ` · ${participants.length}` : ""}

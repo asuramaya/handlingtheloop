@@ -378,6 +378,11 @@ export class DjRoom {
         else if (r.error) ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
         break;
       }
+      case "request-vote": {
+        // Upvote a request (F3). Idempotent per device; on a real vote, re-relay the re-ranked list.
+        if (this.songRequests.vote(self, msg.id)) this.relayRequests();
+        break;
+      }
       case "request-dismiss": {
         if (!this.isHostDevice(self)) break;
         if (this.songRequests.dismiss(msg.id)) this.relayRequests();
@@ -936,10 +941,10 @@ export class DjRoom {
     }, DjRoom.DIGEST_FLUSH_MS);
   }
 
-  // Push the current song-request list to PARTICIPANTS only (the DJ + co-DJs act on it). The
-  // anonymous crowd never receives the list — they only contribute to it.
+  // Push the current (re-ranked) song-request list to EVERYONE — participants act on it, and
+  // the crowd needs it to upvote (F3). It's a public board for a public lobby.
   private relayRequests(): void {
-    this.sendTo((a) => !!a && !a.pub, { t: "requests", list: this.songRequests.list });
+    this.sendTo(() => true, { t: "requests", list: this.songRequests.list });
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited

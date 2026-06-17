@@ -414,7 +414,13 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       decay + window-total gain), flushed with the reaction frame; the SocialScreen renders it
       as a filling bar (throbs when hot) + a floating-emoji burst. The flush keeps ticking to
       decay hype even with no new taps, then idles.
-- [ ] **F3. Vote-the-next-track** / crowd setlists.
+- [x] **F3. Vote-the-next-track DONE (as upvoting the requests).** The F1 request pool IS the
+      crowd-ranked setlist: each request carries `votes` (the asker auto-votes → ≥1), listeners
+      tap ▲ to upvote (idempotent — one per device per request, voter sets tracked in the
+      `Requests` unit), and the DO re-ranks + relays the list to EVERYONE (the crowd needs it to
+      vote, so requests are no longer participant-only). Shared `RequestList` component: crowd
+      variant = ▲ + track; host variant adds who-asked + dismiss + clear. The DJ pulls from the
+      top. *(Deferred alternatives: DJ-proposed polls, voting on the auto-mix queue.)*
 - [x] **F4. Reactions DONE.** Fixed emoji set (`REACTIONS`, validated by `isReaction`); the DO
       AGGREGATES taps in a window and flushes ONE frame per `REACT_FLUSH_MS` (~1 Hz) to everyone
       — never per tap — with a per-device token bucket (`REACT_RATE_MAX`/window) capping a

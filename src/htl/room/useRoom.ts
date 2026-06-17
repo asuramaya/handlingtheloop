@@ -61,9 +61,11 @@ export interface RoomState {
   hype: number; // decaying crowd-energy level 0..1 (the meter)
   reactionTick: { counts: Record<string, number>; id: number }; // latest aggregated burst (id bumps on each non-empty frame → animate)
   react: (emoji: string) => void; // tap a reaction
-  // Song requests (F1).
-  songRequests: SongRequest[]; // HOST/participants: the crowd's asks
+  // Song requests (F1) + upvotes (F3).
+  songRequests: SongRequest[]; // the crowd's asks, ranked by votes (everyone sees them now)
+  votedRequests: Set<string>; // ids this device has already upvoted (to disable the ▲)
   requestSong: (text: string) => void; // LISTENER: ask the DJ for a song
+  voteRequest: (id: string) => void; // upvote a request
   dismissRequest: (id: string) => void; // HOST: remove one request
   clearRequests: () => void; // HOST: clear all requests
   error: string | null;
@@ -138,6 +140,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [hype, setHype] = useState(0);
   const [reactionTick, setReactionTick] = useState<{ counts: Record<string, number>; id: number }>({ counts: {}, id: 0 });
   const [songRequests, setSongRequests] = useState<SongRequest[]>([]);
+  const [votedRequests, setVotedRequests] = useState<Set<string>>(new Set());
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -252,6 +255,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setHype(0);
       setReactionTick({ counts: {}, id: 0 });
       setSongRequests([]);
+      setVotedRequests(new Set());
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -336,6 +340,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   }, []);
   const react = useCallback((emoji: string) => clientRef.current?.react(emoji), []);
   const requestSong = useCallback((text: string) => clientRef.current?.requestSong(text), []);
+  const voteRequest = useCallback((id: string) => {
+    clientRef.current?.voteRequest(id);
+    setVotedRequests((s) => (s.has(id) ? s : new Set(s).add(id))); // optimistic — disable the ▲
+  }, []);
   const dismissRequest = useCallback((id: string) => clientRef.current?.dismissRequest(id), []);
   const clearRequests = useCallback(() => clientRef.current?.clearRequests(), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
@@ -430,7 +438,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     reactionTick,
     react,
     songRequests,
+    votedRequests,
     requestSong,
+    voteRequest,
     dismissRequest,
     clearRequests,
     error,

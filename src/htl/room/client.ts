@@ -266,6 +266,10 @@ export class RoomClient {
   requestSong(text: string): void {
     this.send({ t: "request", text });
   }
+  /** Upvote a song request (F3). Idempotent server-side (one per device per request). */
+  voteRequest(id: string): void {
+    this.send({ t: "request-vote", id });
+  }
   /** HOST: dismiss one song request / clear them all. */
   dismissRequest(id: string): void {
     this.send({ t: "request-dismiss", id });

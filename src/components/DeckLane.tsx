@@ -62,6 +62,10 @@ interface DeckLaneProps {
   onJog?: (deltaSeconds: number) => void;
   onJogEnd?: () => void;
   onSeek?: (position: number) => void;
+  // Watch-only: this deck isn't ours to drive (a follower, or a stepped-up DJ's OFF deck).
+  // Blocks scrub / needle-drop / bend (control) but NOT zoom or expand — those stay live so a
+  // listener can still inspect the waveform.
+  locked?: boolean;
   onReprocessLyrics?: (engine: "whisper" | "youtube") => void;
 }
 
@@ -120,7 +124,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -299,27 +303,30 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         onZoom={onZoom}
         wheelSeeks={wheelSeeks}
         onScrubStart={() => {
-          if (deck.adjusting) return; // boundary-adjust mode: no platter scrub
+          if (locked || deck.adjusting) return; // watch-only / boundary-adjust: no platter scrub
           deck.scrubBegin();
           onJogStart?.();
         }}
         onScrub={(d) => {
+          if (locked) return; // watch-only: the drag does nothing (zoom + expand still work)
           if (deck.adjusting) return void deck.adjustBy(d); // move the loop edge; rAF redraws (deck.adjusting)
           deck.scrubMove(d); // deck.jogging drives the viewport's own rAF — no React churn
           onJog?.(d); // stream the finger delta so the receiver scrubs its own platter
         }}
         onScrubEnd={() => {
-          if (deck.adjusting) return;
+          if (locked || deck.adjusting) return;
           deck.scrubEnd();
           onJogEnd?.();
         }}
         onNeedleDrop={(d) => {
+          if (locked) return; // watch-only: no needle-drop seek (wheel-zoom still routes via onZoom)
           if (deck.adjusting) return void deck.adjustStep(Math.sign(d)); // scroll/tap steps the edge one notch; rAF redraws
           deck.needleDrop(d);
           refresh(); // a paused tap-seek isn't "jogging" — nudge one redraw
           onSeek?.(deck.position());
         }}
         onBend={(d) => {
+          if (locked) return; // watch-only: no pitch-bend
           // Shift+wheel → pitch-bend. deck.bend self-routes (playing = tempo nudge that
           // auto-reverts; paused = frame-search). deck.jogging drives the rAF while a
           // bend rides, so the playhead redraws; paused search still wants one nudge.

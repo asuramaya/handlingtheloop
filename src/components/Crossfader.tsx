@@ -16,16 +16,17 @@ interface CrossfaderProps {
   accentB: string;
   crossfade: number;
   onCrossfade: (v: number) => void;
+  locked?: boolean; // the crossfader is a whole-board move → blocked for non-full-controllers
 }
 
 // The A↔B crossfader as a HORIZONTAL bar across the top of the middle section.
 // A on the left, B on the right; the bipolar meter grows OUT from the centre datum
 // (deck A leftward, deck B rightward), both post-crossfade so they fade as you sweep.
-export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade }: CrossfaderProps) {
+export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked }: CrossfaderProps) {
   const { a: gainDbA, b: gainDbB } = crossfadeGainsDb(crossfade);
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   return (
-    <div className="xfader-bar">
+    <div className={`xfader-bar ${locked ? "locked" : ""}`}>
       <div className="xbar-track">
         <span className="xbip">
           <StereoMeter deck={deckA} axis="h" accent={accentA} className="xb-a" gainDb={gainDbA} />

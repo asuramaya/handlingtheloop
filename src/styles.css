@@ -9162,6 +9162,16 @@ span.profile-handle:hover {
   color: var(--accent);
 }
 
+/* A watch-only / off-seat deck (a follower, or a stepped-up DJ's OTHER deck): the button
+   bank + crossfader go non-interactive and dim, but the WAVEFORM lane is untouched — a
+   listener can still zoom + expand it (purely visual). Control is gated in the handlers too;
+   this is the visible affordance. */
+.bank.locked,
+.xfader-bar.locked {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
 /* "Listen live" button on a public /@handle profile when the host is broadcasting. */
 .listen-live-btn {
   display: block;

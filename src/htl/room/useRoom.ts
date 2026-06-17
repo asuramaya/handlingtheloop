@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, announceRoom, closeRoom, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
-import type { Peer, Intent, TickDecks, DeckId } from "./protocol";
+import type { Peer, Intent, TickDecks, DeckId, StageReq } from "./protocol";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -46,6 +46,15 @@ export interface RoomState {
   listeningTo: string | null; // a host @handle if we've tuned into their public broadcast (else null)
   tuneIn: (handle: string) => void; // tune into a public room by @handle (read-only listener)
   tuneOut: () => void; // leave the broadcast, back to our own session
+  // Floor → stage (E3–E6): a broadcast listener steps up to the decks, the host approves.
+  stageRequests: StageReq[]; // HOST: listeners raising a hand to step up (approve/deny)
+  onStage: boolean; // am I a stepped-up listener currently driving a deck?
+  myDeck: DeckId | null; // the deck I hold while on stage (else null)
+  myStageDeck: DeckId | null; // the deck I've REQUESTED while still on the floor (pending; else null)
+  requestStage: (deck: DeckId) => void; // LISTENER: raise a hand for a deck
+  stepDown: () => void; // LISTENER: cancel a pending request, or step down off the decks
+  approveStage: (to: string, deck: DeckId) => void; // HOST: bring a listener up onto a deck
+  denyStage: (to: string) => void; // HOST: decline a request / send a stage DJ to the floor
   error: string | null;
   client: RoomClient | null;
   join: () => void; // establish sync (listen on, control off) — guests knock first
@@ -109,6 +118,11 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [listenerCount, setListenerCount] = useState(0);
   const listenerCountRef = useRef(0);
   listenerCountRef.current = listenerCount;
+  // HOST: the pending floor→stage hand-raises. LISTENER (optimistic): the deck I asked for
+  // while still on the floor — set on tap, cleared when the host brings me up (onStage) or
+  // declines (the stage-self signal) or I cancel.
+  const [stageRequests, setStageRequests] = useState<StageReq[]>([]);
+  const [myStageDeck, setMyStageDeck] = useState<DeckId | null>(null);
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -178,6 +192,13 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
         setListenerCount(count);
         setRoomPublic(isPublic);
       },
+      stage: (reqs) => setStageRequests(reqs),
+      stageSelf: (status) => {
+        if (status === "declined") {
+          setMyStageDeck(null);
+          setError("The host didn't bring you up.");
+        }
+      },
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -204,6 +225,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setError(null);
       setRoomPublic(false);
       setListenerCount(0);
+      setStageRequests([]);
+      setMyStageDeck(null);
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -265,7 +288,23 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // Tune into a public room by @handle as a read-only listener (swaps our connection),
   // or tune back out to our own session. Accepts a bare or @-prefixed handle.
   const tuneIn = useCallback((handle: string) => setListenHandle(handle.replace(/^@/, "") || null), []);
-  const tuneOut = useCallback(() => setListenHandle(null), []);
+  const tuneOut = useCallback(() => {
+    setMyStageDeck(null);
+    setListenHandle(null);
+  }, []);
+  // Floor → stage. requestStage is optimistic (the floor crowd gets no stage echo, so we
+  // remember our own ask locally); stepDown covers both "cancel my pending request" and
+  // "step off the decks" (one wire message — the server infers which from our state).
+  const requestStage = useCallback((deck: DeckId) => {
+    clientRef.current?.requestStage(deck);
+    setMyStageDeck(deck);
+  }, []);
+  const stepDown = useCallback(() => {
+    clientRef.current?.stepDown();
+    setMyStageDeck(null);
+  }, []);
+  const approveStage = useCallback((to: string, deck: DeckId) => clientRef.current?.approveStage(to, deck), []);
+  const denyStage = useCallback((to: string) => clientRef.current?.denyStage(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
@@ -294,14 +333,26 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   }, []);
 
   // A TUNED-IN public listener is read-only and NOT in the roster, so derive its role
-  // locally: it's joined + hearing the mix, never driving / host / anchor / pending.
+  // locally: it's joined + hearing the mix, never driving / host / anchor / pending. BUT
+  // once the host brings it ON STAGE the server gives it a real roster row (pub→participant);
+  // from then on trust that row over the listener defaults, even though listenHandle is still
+  // set (the socket never changed — we just gained a seat). `floorListener` = on the floor,
+  // not (yet) on the decks.
   const me = peers.find((p) => p.id === you);
-  const joined = isPublicListener || (me?.joined ?? false);
-  const pending = isPublicListener ? false : (me?.pending ?? false); // knocking guest, awaiting the host's handshake
-  const listening = isPublicListener || (me?.listening ?? false); // muted-by-default model: no audio until 🔊
-  const controlling = isPublicListener ? false : (me?.controlling ?? false);
-  const host = isPublicListener ? false : (me?.host ?? false);
+  const floorListener = isPublicListener && !me;
+  const joined = floorListener || (me?.joined ?? false);
+  const pending = floorListener ? false : (me?.pending ?? false); // knocking guest, awaiting the host's handshake
+  const listening = floorListener || (me?.listening ?? false); // muted-by-default model: no audio until 🔊
+  const controlling = floorListener ? false : (me?.controlling ?? false);
+  const host = floorListener ? false : (me?.host ?? false);
   hostRef.current = host; // gate the directory-announce heartbeat (above) to host devices only
+  const onStage = me?.stage ?? false; // stepped up from the floor onto a deck
+  const myDeck: DeckId | null = onStage ? (me?.decks === "A" ? "A" : me?.decks === "B" ? "B" : null) : null;
+  // Once the host actually brings us up, the optimistic "pending" deck is resolved — clear it.
+  // (Must sit AFTER `onStage` is declared — referencing it earlier is a TDZ crash on render.)
+  useEffect(() => {
+    if (onStage) setMyStageDeck(null);
+  }, [onStage]);
   const isAnchor = !isPublicListener && anchorId !== null && anchorId === you;
   // The room's vibe colour = the host's accent. Prefer the anchor if it's a host device,
   // else any host peer with a colour set (the session owner's account colour).
@@ -332,6 +383,14 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     listeningTo: listenHandle,
     tuneIn,
     tuneOut,
+    stageRequests,
+    onStage,
+    myDeck,
+    myStageDeck,
+    requestStage,
+    stepDown,
+    approveStage,
+    denyStage,
     error,
     client: clientRef.current,
     join,

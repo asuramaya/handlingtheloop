@@ -28,8 +28,19 @@ export interface Peer {
   controlling: boolean; // allowed to drive the decks (shared — many at once)?
   anchor: boolean; // the playhead-clock / snapshot authority (invisible plumbing)?
   pending: boolean; // a GUEST who knocked (opened an invite) and is awaiting the host's approval
+  decks: string; // which decks this device may DRIVE: "" | "A" | "B" | "AB" ("AB" = full; the host/granted hold both)
+  stage: boolean; // STEPPED UP from the broadcast floor (drives one deck, never anchors; reverts to a listener on step-down)
   joinedAt: number; // epoch ms this device became a participant (0 until joined) — for "joined 3m ago"
   color: string; // this device's account accent (hex) — the room's "vibe" is the host's
+}
+
+// A broadcast LISTENER raising a hand to step up to the decks (the floor→stage request).
+// Surfaced ONLY to participants (the host approves it); the anonymous crowd otherwise
+// stays a count, never a roster row — so a request is the one time a listener gets named.
+export interface StageReq {
+  id: string;
+  name: string;
+  deck: DeckId;
 }
 
 export interface DeckTick {
@@ -144,6 +155,11 @@ export type ClientMsg =
   | { t: "approve"; to: string } // HOST lets a knocking guest in (the handshake)
   | { t: "deny"; to: string } // HOST turns a knocking guest away (before they're in)
   | { t: "kick"; to: string } // HOST removes a guest who is already in
+  // The floor→stage channel (E3–E6). A broadcast LISTENER raises a hand for a deck; the
+  // same message with deck:null cancels a pending request OR steps a stage DJ back down.
+  | { t: "stage"; deck: DeckId | null }
+  | { t: "stage-approve"; to: string; deck: DeckId } // HOST brings a listener up onto a deck
+  | { t: "stage-deny"; to: string } // HOST declines a request, or sends a stage DJ back to the floor
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
@@ -159,8 +175,13 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean }
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean }
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[] }
+  // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
+  // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[] }
+  // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
+  // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
+  | { t: "stage-self"; status: "declined" }
   | { t: "role"; anchorId: string | null } // the anchor (clock) moved
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }
@@ -171,3 +192,15 @@ export type ServerMsg =
   | { t: "settings"; settings: unknown; updatedAt: number } // a same-account device's colour/theme settings, relayed to the owner's OTHER devices
   | { t: "kicked"; reason?: string } // you were denied entry or removed — drop sync + show why
   | { t: "error"; message: string };
+
+// May a device holding `decks` (its drive permission, "" | "A" | "B" | "AB") drive this
+// intent? A deck-scoped intent needs that deck; a deck-LESS move (crossfader, tempo range,
+// sync/key, automix, queue — they touch the whole board) needs FULL control. This is the
+// per-deck gate that lets a stepped-up listener push exactly one deck and nothing else,
+// while the host/granted ("AB") drive everything exactly as before. Pure so it's testable.
+export function canDriveIntent(decks: string, intent: Intent): boolean {
+  if (!decks) return false;
+  const deck = (intent as { deck?: unknown }).deck;
+  if (deck === "A" || deck === "B") return decks.includes(deck);
+  return decks.includes("A") && decks.includes("B"); // deck-less → must hold both
+}

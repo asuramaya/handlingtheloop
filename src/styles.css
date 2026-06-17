@@ -9069,6 +9069,99 @@ span.profile-handle:hover {
   background: color-mix(in srgb, #c8506a 10%, var(--panel-2));
 }
 
+/* Floor → stage (E3–E6): the listener's request/step-down bar under the "listening" banner. */
+.stage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  font-size: 13px;
+}
+.stage-bar.up {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+}
+.stage-bar.pending {
+  border-style: dashed;
+}
+.stage-bar-what {
+  flex: 1 1 auto;
+}
+.stage-bar-what b {
+  color: var(--accent);
+}
+.stage-bar-picks {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.stage-pick {
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.stage-pick:hover {
+  background: var(--accent);
+  color: #08111a;
+}
+.stage-down {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.stage-down:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* HOST: the "wants to play" request list mirrors the knock list, accent-tinted. */
+.stage-req-deck {
+  color: var(--muted);
+  font-weight: 500;
+}
+.stage-alt {
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px dashed var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.stage-alt:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.social-floor {
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.social-floor:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* "Listen live" button on a public /@handle profile when the host is broadcasting. */
 .listen-live-btn {
   display: block;

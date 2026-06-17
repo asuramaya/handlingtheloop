@@ -11,7 +11,8 @@
 // The host's own devices land here by default; guests on OTHER accounts (incl. anonymous)
 // arrive via an invite code the Worker resolves to this same session. Uses the WebSocket
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
-import type { ClientMsg, ServerMsg, Peer, Intent } from "../src/htl/room/protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, StageReq } from "../src/htl/room/protocol";
+import { canDriveIntent } from "../src/htl/room/protocol";
 
 // --- Minimal Cloudflare runtime types (no @cloudflare/workers-types installed). ---
 interface Ws {
@@ -41,6 +42,9 @@ interface Attachment {
   controlling: boolean; // allowed to drive the decks (shared); guests need a host grant
   pending: boolean; // a guest who knocked and is waiting on the host's approval (the handshake)
   pub: boolean; // a PUBLIC anon read-only listener (broadcast plane): hears the mix, never drives, never anchors, not in the roster
+  decks: string; // which decks this device may DRIVE: "" | "A" | "B" | "AB" ("AB" = full — host/granted). The per-deck gate.
+  stageReq: string; // a pub LISTENER's pending hand-raise: "" | "A" | "B" (the deck it wants to step up to)
+  stage: boolean; // STEPPED UP from the floor: drives one deck, never anchors, reverts to a pub listener on step-down
   joinedAt: number; // epoch ms this device last became a participant (0 until joined) — for "joined Nm ago"
   color: string; // this device's account accent (hex) — the room "vibe" is the host's color
 }
@@ -195,8 +199,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, joinedAt: Date.now(), color }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, joinedAt: 0, color };
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -208,7 +212,7 @@ export class DjRoom {
         peers: pub ? [] : this.peers(), // the crowd doesn't need the roster
         listeners: this.listenerCount(),
         public: this.isPublic,
-        ...(pub ? { pub: true } : {}),
+        ...(pub ? { pub: true } : { stage: this.stageReqs() }), // participants see pending hand-raises
       } satisfies ServerMsg),
     );
     // Hand a public listener the current board immediately so it can render without a round-trip.
@@ -230,11 +234,12 @@ export class DjRoom {
     const self = this.deviceOf(ws);
     if (!self) return;
 
-    // Public listeners are strictly READ-ONLY: they may only ask for catch-up or leave.
-    // Drop any writer-ish message (join/control/intent/…) so an anon socket can never
-    // knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable `pub`.
+    // Public listeners are strictly READ-ONLY: they may only ask for catch-up, leave, or
+    // RAISE A HAND to step up (`stage`). Drop any other writer-ish message so an anon socket
+    // can never knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable
+    // `pub`. The hand-raise is the one sanctioned floor→stage door; the host still gates it.
     const att = ws.deserializeAttachment() as Attachment | null;
-    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave") return;
+    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage") return;
 
     switch (msg.t) {
       case "join": {
@@ -269,7 +274,8 @@ export class DjRoom {
           ws.send(JSON.stringify({ t: "error", message: "Only the host can hand you the decks." } satisfies ServerMsg));
           break;
         }
-        this.patch(ws, { controlling: !!msg.on });
+        // A host's own drive = FULL control (both decks); off clears the permission.
+        this.patch(ws, { controlling: !!msg.on, decks: msg.on ? "AB" : "" });
         await this.settle(self);
         break;
       }
@@ -286,7 +292,8 @@ export class DjRoom {
         if (!this.isHostDevice(self)) break;
         const target = (msg.to || "").slice(0, 64);
         if (!target || !this.isLive(target) || !this.isJoined(target)) break;
-        for (const t of this.state.getWebSockets(target)) this.patch(t, { controlling: !!msg.on });
+        // A host grant = FULL control (both decks), same as a host's own drive.
+        for (const t of this.state.getWebSockets(target)) this.patch(t, { controlling: !!msg.on, decks: msg.on ? "AB" : "" });
         if (msg.on) this.grants.add(target);
         else this.grants.delete(target);
         await this.saveGrants();
@@ -333,16 +340,74 @@ export class DjRoom {
         this.evict(target, "You were removed from the session.");
         break;
       }
+      case "stage": {
+        // The floor→stage channel (E3–E6). A broadcast LISTENER (pub) raises a hand for a
+        // deck; the SAME message with deck:null cancels a pending request OR — from someone
+        // already on the decks — steps them back down to the floor.
+        const a = ws.deserializeAttachment() as Attachment | null;
+        if (!a) break;
+        const deck = msg.deck;
+        if (deck === "A" || deck === "B") {
+          // Raise a hand. Only a floor listener requests — a seated participant already plays.
+          if (!a.pub) break;
+          this.patch(ws, { stageReq: deck });
+          this.broadcastPresence(); // surface the request to the host's roster
+        } else if (a.stage) {
+          this.returnToFloor(self); // a stage DJ steps down → back into the anonymous crowd
+        } else if (a.pub && a.stageReq) {
+          this.patch(ws, { stageReq: "" }); // a listener cancels its pending request
+          this.broadcastPresence();
+        }
+        break;
+      }
+      case "stage-approve": {
+        // HOST brings a hand-raising listener up onto a deck: they leave the anonymous crowd,
+        // enter the roster as a real participant, and drive exactly that one deck. They keep
+        // their socket — we just promote the attachment (pub → stage controller).
+        if (!this.isHostDevice(self)) break;
+        const target = (msg.to || "").slice(0, 64);
+        const deck = msg.deck === "A" || msg.deck === "B" ? msg.deck : null;
+        if (!target || !deck || !this.isLive(target)) break;
+        for (const t of this.state.getWebSockets(target)) {
+          const a = t.deserializeAttachment() as Attachment | null;
+          if (!a?.pub) continue; // only a floor listener steps up
+          this.patch(t, { pub: false, joined: true, listening: true, controlling: true, decks: deck, stage: true, stageReq: "", joinedAt: Date.now() });
+          // Hand them the full board as a driver — they had only the curated digest as a listener.
+          this.sendCatchUp(t);
+        }
+        await this.settle(target); // stage devices never anchor (settle guards on isStage) — just re-broadcasts presence
+        break;
+      }
+      case "stage-deny": {
+        // HOST declines a pending request, OR sends a stage DJ back to the floor. Either way
+        // the device reverts to an anonymous read-only listener (it's never disconnected).
+        if (!this.isHostDevice(self)) break;
+        const target = (msg.to || "").slice(0, 64);
+        if (!target || target === self || this.isHostDevice(target)) break;
+        for (const t of this.state.getWebSockets(target)) {
+          try {
+            t.send(JSON.stringify({ t: "stage-self", status: "declined" } satisfies ServerMsg));
+          } catch {
+            /* socket gone */
+          }
+        }
+        this.returnToFloor(target);
+        break;
+      }
       case "leave": {
-        this.patch(ws, { controlling: false, listening: false, joined: false });
+        this.patch(ws, { controlling: false, listening: false, joined: false, decks: "", stage: false, stageReq: "" });
         // A full leave drops any granted drive right too — the host re-grants on return.
         if (this.grants.delete(self)) await this.saveGrants();
         await this.settle(self);
         break;
       }
       case "intent": {
-        // ANY controller drives. The sender already applied it locally.
-        if (!this.isControlling(self)) break;
+        // ANY controller drives, but only the DECKS they hold: the host/granted drive
+        // everything ("AB"); a STEPPED-UP listener drives exactly their one deck and nothing
+        // else (a deck-less move — crossfader, automix, queue — needs full control). The
+        // sender already applied it locally; an out-of-lane intent is silently dropped here
+        // so the authoritative board never moves under an unauthorised hand.
+        if (!this.canDrive(self, msg.intent)) break;
         const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent } satisfies ServerMsg;
         // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
         // may be driving / mirroring the platter). skipListeners=true → non-pub only.
@@ -459,7 +524,7 @@ export class DjRoom {
         if (!this.isPublic) {
           for (const w of this.state.getWebSockets()) {
             const a = w.deserializeAttachment() as Attachment | null;
-            if (!a?.pub) continue;
+            if (!a?.pub && !a?.stage) continue; // drop the crowd AND anyone they brought up onto the decks
             try {
               w.send(JSON.stringify({ t: "kicked", reason: "The host ended the public broadcast." } satisfies ServerMsg));
             } catch {
@@ -559,6 +624,12 @@ export class DjRoom {
   // new joiners sync). So: claim the anchor if none is active; hand it to a controller if
   // the current anchor only listens while we drive; release it if we leave.
   private async settle(self: string): Promise<void> {
+    // A stepped-up listener drives a deck but never holds the clock — so its join/control
+    // transitions never move the anchor. Just refresh presence (the roster gained/changed it).
+    if (this.isStage(self)) {
+      this.broadcastPresence();
+      return;
+    }
     const anchorActive = !!this.anchorId && this.isLive(this.anchorId) && this.isJoined(this.anchorId);
     const anchorControls = !!this.anchorId && this.isControlling(this.anchorId);
     const anchorIsHost = !!this.anchorId && this.isHostDevice(this.anchorId);
@@ -594,6 +665,31 @@ export class DjRoom {
     return false;
   }
 
+  // May this device drive THIS intent? Resolves the device's strongest deck permission across
+  // its sockets and defers to the pure per-deck gate (canDriveIntent): the host/granted ("AB")
+  // drive everything; a stepped-up listener drives only their one deck. Replaces the old
+  // any-controller check on the hot intent path so a single-deck guest can't move the rest.
+  private canDrive(device: string, intent: Intent): boolean {
+    let decks = "";
+    for (const ws of this.state.getWebSockets(device)) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.joined && a?.controlling && a.decks.length > decks.length) decks = a.decks;
+    }
+    return canDriveIntent(decks, intent);
+  }
+
+  // Did this device step up from the broadcast floor? Stage devices drive a deck but must
+  // NEVER hold the clock (the host/broadcast origin stays the anchor) — settle + nextAnchor
+  // exclude them so a stepped-up phone can't become the room's playhead authority.
+  private isStage(device: string | null): boolean {
+    if (!device) return false;
+    for (const ws of this.state.getWebSockets(device)) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.stage) return true;
+    }
+    return false;
+  }
+
   // The next anchor other than `except`. Preference: a CONTROLLING participant (holds the
   // real board) › a HOST device (the session owner, authoritative even while only
   // listening — keeps a lone guest from freezing the board, #7) › any joined participant.
@@ -606,7 +702,7 @@ export class DjRoom {
     for (const ws of this.state.getWebSockets()) {
       if (ws === exceptWs) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (!a || !a.joined || a.device === except || a.pub) continue; // a public listener never anchors
+      if (!a || !a.joined || a.device === except || a.pub || a.stage) continue; // a public listener / stepped-up guest never anchors
       const mobile = isMobileKind(a.kind);
       if (a.controlling) {
         if (!mobile && !ctrlDesktop) ctrlDesktop = a.device;
@@ -646,6 +742,22 @@ export class DjRoom {
     else this.broadcastPresence();
   }
 
+  // Send a device back to the broadcast floor: a hand-raising or stepped-up listener reverts
+  // to an anonymous read-only (pub) listener — out of the roster, back into the crowd count,
+  // its deck permission and stage flag cleared. Used for cancel / step-down / host send-down.
+  // The socket is never closed; the listener keeps hearing the mix, just no longer drives.
+  private returnToFloor(device: string): void {
+    for (const ws of this.state.getWebSockets(device)) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (!a) continue;
+      this.patch(ws, { pub: true, joined: true, listening: true, controlling: false, decks: "", stage: false, stageReq: "" });
+    }
+    if (this.grants.delete(device)) void this.saveGrants();
+    // A stage device should never have been the anchor, but reassign defensively if so.
+    if (device === this.anchorId) void this.setAnchor(this.nextAnchor(device));
+    else this.broadcastPresence();
+  }
+
   // Catch a single socket up on the authoritative board: the last snapshot
   // (decks/stems/controls) + the host's per-deck stem envelopes (so a stem-less
   // remote's 4-lane display fills in). Used on request-state AND right after a guest
@@ -679,6 +791,21 @@ export class DjRoom {
     return seen.size;
   }
 
+  // The pending floor→stage hand-raises (listeners asking to play) — surfaced ONLY to
+  // participants so the host can approve/deny. Deduped by device (one request per listener).
+  private stageReqs(): StageReq[] {
+    const out: StageReq[] = [];
+    const seen = new Set<string>();
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.pub && (a.stageReq === "A" || a.stageReq === "B") && !seen.has(a.device)) {
+        seen.add(a.device);
+        out.push({ id: a.device, name: a.name, deck: a.stageReq });
+      }
+    }
+    return out;
+  }
+
   private peers(except?: Ws): Peer[] {
     const out: Peer[] = [];
     for (const ws of this.state.getWebSockets()) {
@@ -695,6 +822,8 @@ export class DjRoom {
           controlling: !!a.controlling,
           anchor: a.device === this.anchorId,
           pending: !!a.pending,
+          decks: a.decks || "",
+          stage: !!a.stage,
           joinedAt: a.joinedAt || 0,
           color: a.color || "",
         });
@@ -812,9 +941,10 @@ export class DjRoom {
   private flushPresence(): void {
     const peers = this.peers();
     const listeners = this.listenerCount();
-    const full = JSON.stringify({ t: "presence", peers, listeners, public: this.isPublic } satisfies ServerMsg);
-    // The crowd isn't in the roster, so it gets the count only — half the payload, and the
-    // big list never fans to hundreds of listeners.
+    // Participants get the roster + the pending floor→stage hand-raises (the host acts on them).
+    const full = JSON.stringify({ t: "presence", peers, listeners, public: this.isPublic, stage: this.stageReqs() } satisfies ServerMsg);
+    // The crowd isn't in the roster, so it gets the count only — half the payload, no stage
+    // list, and the big list never fans to hundreds of listeners.
     const lite = JSON.stringify({ t: "presence", peers: [], listeners, public: this.isPublic } satisfies ServerMsg);
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;

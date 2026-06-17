@@ -338,26 +338,52 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 > → "Go live" un-gates post-claim, no reload) + the `DEV_LOGIN` shortcut login.
 > **Still next:** now-playing in the heartbeat, a "Listen" button on `/@handle` itself,
 > stems-from-R2; E3–E10/E12 (per-deck roles, seat UX, gate modes).
+>
+> **SEAT/STAGE UX SHIPPED 2026-06-16 (E3/E4/E6a + the per-deck gate, build-green).** The
+> floor→stage transition is now real: a tuned-in broadcast listener taps **"✋ Request the
+> decks" → Deck A/B**; the host sees **"✋ Wants to play"** in the roster and **Brings them
+> up** onto that deck (or overrides A/B) or **Declines**. On approval the listener's socket
+> is promoted in place (`pub` → roster participant: `joined+listening+controlling`, `decks`
+> = the one deck, `stage:true`) — out of the anonymous crowd, into the roster, driving. They
+> **Step down** back to the floor (reverts to a `pub` listener, never disconnected); the host
+> can **⬇ floor** them too. **Per-deck enforcement is the spine:** the hot `intent` case now
+> gates on `canDriveIntent(decks, intent)` (pure, unit-tested) — host/granted hold `"AB"`
+> (drive everything, byte-for-byte as before), a stepped-up listener holds one deck and a
+> deck-less move (crossfader/automix/queue) needs full control. Stage devices **never anchor**
+> (`settle`/`nextAnchor` exclude them — the broadcast origin keeps the clock). Ending the
+> broadcast drops stage DJs with the crowd. Files: `protocol.ts` (`StageReq`, `stage`/
+> `stage-approve`/`stage-deny` + `stage-self` decline signal, `Peer.decks`/`stage`,
+> `canDriveIntent`), `client.ts`/`useRoom.ts` (`requestStage`/`stepDown`/`approveStage`/
+> `denyStage` + role-derivation trusts the roster row once promoted), `room.ts` (the three
+> cases + `canDrive`/`isStage`/`returnToFloor`/`stageReqs` + presence surfacing to
+> participants only), `SocialScreen.tsx` + `styles.css` (`StageBar` + host request list +
+> stage card). **All over the EXISTING public socket — no Worker/migration change.**
+> **Follow-up:** client-side deck-LOCK for a stage DJ (today the server drops their
+> out-of-lane intents and the next host snapshot self-heals the cosmetic local desync, but
+> the off-deck UI isn't dimmed yet) → E4's "deck UI locked/dimmed off your seat". E6 gate
+> modes (open/request/invite) + E6a's knock-to-listen for PRIVATE rooms still open.
 
 - [~] **E1. Room object model** — registry/data layer done (per-host live `rooms`
       row + heartbeat). Addressing already decoupled via D-1 (`?room=@handle` →
       `home:${accountId}`). *(Persistent venue history/schedule = later.)*
 - [~] **E2. Public room directory** — `GET /api/rooms/live` (busiest-first, freshness-
       filtered) + `fetchLiveRooms()` shipped. *(The "live now" screen UI is deferred.)*
-- [ ] **E3. Role ladder:** host → co-controller (write, small N) → listener (large
-      N) → b2b/handoff. **Per-deck claim**, not per-room control.
-- [ ] **E4. Seat/stage UX:** floor ⇄ decks as the ONE prominent control; deck UI
-      locked/dimmed on the floor; "Step up / Step down" is the transition.
+- [~] **E3. Role ladder:** host → co-controller (full grant, existing) → **stepped-up
+      listener (one deck, `stage`)** → listener → floor. **Per-deck claim landed** as the
+      `decks` permission + `canDriveIntent` gate (a stage DJ drives exactly their deck).
+      *(b2b handoff / co-controller deck-split UI = later.)*
+- [~] **E4. Seat/stage UX:** floor ⇄ decks transition shipped — "✋ Request the decks /
+      Step down" on the listener, "Bring up / ⬇ floor" on the host; a floor listener's board
+      is already locked (`lockedRef`). *(Off-deck deck-DIMMING for a stage DJ = the follow-up.)*
 - [ ] **E5. Demote the two old toggles:** mute → trivial player mute (not a mode);
       device-output routing → multi-device-only setting that defaults correctly.
-- [ ] **E6. Gate modes:** `open decks` / `request-to-play` (default public) /
-      `invite-only`, with **raise-hand queue** + host approve UI + state feedback
-      (taken / gated / pending / invited-up). Generalizes the existing
-      knock/approve/deny/kick handshake (`server/room.ts`).
-- [ ] **E6a. Invert the listen default for public rooms.** Today every guest knocks
-      before even *listening* (private-room model). Public rooms: listening is open
-      (no knock); only *taking the decks* triggers the handshake. Keep the
-      knock-to-listen path for private/invite-only rooms.
+- [~] **E6. Gate modes:** the **request-to-play** path is live (raise-hand → host
+      approve/decline + per-listener state feedback: request → pending → up/declined).
+      *(Still open: an `open decks` mode that skips host approval, and `invite-only`; both
+      are a host flag on top of the shipped handshake.)*
+- [x] **E6a. Listen default already inverted for public rooms.** A `pub` listener tunes in
+      open (no knock) and only *taking the decks* raises a hand (the `stage` request) — the
+      private knock-to-listen path is untouched (still the invite-room model).
 - [ ] **E7. Host-disconnect grace window** + rehydrate; optional host handoff.
 - [ ] **E8. DO-eviction rehydration** of room state (now-playing, roster, gate mode).
 - [ ] **E9. Co-controller disconnect mid-control** (deck freeze vs auto-release).

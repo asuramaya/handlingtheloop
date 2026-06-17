@@ -213,7 +213,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return true;
       }
       const b = (await readJsonBody(req)) as { handle?: string };
-      const u = await devUser();
+      const u = await devStore.devUser();
       const same = u.handle && foldHandle(u.handle) === foldHandle(String(b.handle ?? ""));
       sendJson(res, same ? 400 : 404, { error: same ? "that's you" : "no such handle" });
       return true;

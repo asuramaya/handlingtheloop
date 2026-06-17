@@ -95,14 +95,17 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
         </div>
 
         {room.listeningTo && (
-          <div className="listening-banner">
-            <span className="listening-what">
-              🎧 Listening to <b>@{room.listeningTo}</b>
-            </span>
-            <button className="listening-stop" onClick={room.tuneOut}>
-              Stop
-            </button>
-          </div>
+          <>
+            <div className="listening-banner">
+              <span className="listening-what">
+                🎧 Listening to <b>@{room.listeningTo}</b>
+              </span>
+              <button className="listening-stop" onClick={room.tuneOut}>
+                Stop
+              </button>
+            </div>
+            <StageBar room={room} />
+          </>
         )}
 
         <LiveNow
@@ -133,6 +136,36 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                     <span className="social-knock-acts">
                       <button className="social-approve" onClick={() => room.approve(p.id)}>Let in</button>
                       <button className="social-deny" onClick={() => room.deny(p.id)}>Deny</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* HOST: broadcast listeners raising a hand to step up to the decks (E3–E6). The
+                host brings them up onto the deck they asked for (or overrides A/B), or declines. */}
+            {room.host && room.stageRequests.length > 0 && (
+              <div className="social-knocks stage-reqs">
+                <div className="social-section-head">✋ Wants to play</div>
+                {room.stageRequests.map((r) => (
+                  <div key={r.id} className="social-knock">
+                    <span className="social-knock-ico" aria-hidden="true">🎧</span>
+                    <span className="social-knock-name">
+                      {revealed ? r.name : maskName(r.name)}
+                      <span className="stage-req-deck"> · deck {r.deck}</span>
+                    </span>
+                    <span className="social-knock-acts">
+                      <button className="social-approve" onClick={() => room.approveStage(r.id, r.deck)} title={`Bring up onto deck ${r.deck}`}>
+                        Bring up ▸ {r.deck}
+                      </button>
+                      <button
+                        className="stage-alt"
+                        onClick={() => room.approveStage(r.id, r.deck === "A" ? "B" : "A")}
+                        title={`Bring up onto deck ${r.deck === "A" ? "B" : "A"} instead`}
+                      >
+                        {r.deck === "A" ? "B" : "A"}
+                      </button>
+                      <button className="social-deny" onClick={() => room.denyStage(r.id)}>Decline</button>
                     </span>
                   </div>
                 ))}
@@ -286,6 +319,46 @@ function LiveNow({
   );
 }
 
+// LISTENER side of the floor→stage flow: raise a hand for a deck, watch the request pend,
+// then drive once the host brings you up — or step back down. Only rendered while tuned in.
+function StageBar({ room }: { room: RoomState }) {
+  if (room.onStage) {
+    return (
+      <div className="stage-bar up">
+        <span className="stage-bar-what">
+          🎛️ You're on the decks{room.myDeck ? <> · <b>Deck {room.myDeck}</b></> : null}
+        </span>
+        <button className="stage-down" onClick={room.stepDown} title="Step back down to the floor">
+          Step down
+        </button>
+      </div>
+    );
+  }
+  if (room.myStageDeck) {
+    return (
+      <div className="stage-bar pending">
+        <span className="stage-bar-what">✋ Requested <b>deck {room.myStageDeck}</b> — waiting for the host…</span>
+        <button className="stage-down" onClick={room.stepDown} title="Cancel the request">
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="stage-bar">
+      <span className="stage-bar-what">✋ Request the decks</span>
+      <span className="stage-bar-picks">
+        <button className="stage-pick" onClick={() => room.requestStage("A")} title="Ask to play deck A">
+          Deck A
+        </button>
+        <button className="stage-pick" onClick={() => room.requestStage("B")} title="Ask to play deck B">
+          Deck B
+        </button>
+      </span>
+    </div>
+  );
+}
+
 function SocialCard({
   room,
   p,
@@ -301,10 +374,12 @@ function SocialCard({
   const isGuest = !p.host;
   const label = isSelf ? "You" : isGuest || revealed ? p.name : maskName(p.name);
 
-  // Role line: what this device is doing right now.
+  // Role line: what this device is doing right now. A stepped-up listener shows the deck
+  // they hold (🎛️ Deck B) so a b2b is legible at a glance.
+  const driveLabel = p.controlling ? (p.stage && (p.decks === "A" || p.decks === "B") ? `🎛️ Deck ${p.decks}` : "🎛️ driving") : null;
   const role = !p.joined
     ? "discovered"
-    : [p.controlling ? "🎛️ driving" : null, p.listening ? "🔊 hearing" : "🔇 muted", p.anchor ? "clock" : null]
+    : [p.stage ? "● stage" : null, driveLabel, p.listening ? "🔊 hearing" : "🔇 muted", p.anchor ? "clock" : null]
         .filter(Boolean)
         .join(" · ");
 
@@ -357,14 +432,22 @@ function SocialCard({
         )}
         {canModerate && (
           <>
-            {p.joined && (
-              <button
-                className={`room-tog ${p.controlling ? "on" : ""}`}
-                onClick={() => room.grantControl(p.id, !p.controlling)}
-                title={p.controlling ? "Revoke control" : "Give control"}
-              >
-                🎛️
+            {/* A stepped-up listener gets a gentle "send to the floor" (keeps them listening);
+                an invited guest gets the usual grant + kick. */}
+            {p.stage ? (
+              <button className="social-floor" onClick={() => room.denyStage(p.id)} title="Send back to the floor (stays listening)">
+                ⬇ floor
               </button>
+            ) : (
+              p.joined && (
+                <button
+                  className={`room-tog ${p.controlling ? "on" : ""}`}
+                  onClick={() => room.grantControl(p.id, !p.controlling)}
+                  title={p.controlling ? "Revoke control" : "Give control"}
+                >
+                  🎛️
+                </button>
+              )
             )}
             <button className="social-kick" onClick={() => room.kick(p.id)} title="Remove from session">
               ⛔

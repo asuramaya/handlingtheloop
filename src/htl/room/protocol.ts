@@ -49,6 +49,14 @@ export interface Peer {
 //   • closed  — the crowd can't step up at all (host + private invitees only)
 export type StageGate = "request" | "open" | "closed";
 
+// A song the crowd asks the DJ to play (F1). Free text — the DJ reads it and pulls the
+// track themselves (maps onto the library/queue). Surfaced to PARTICIPANTS only.
+export interface SongRequest {
+  id: string;
+  name: string; // who asked (display label)
+  text: string; // the ask, e.g. "Rosé — APT"
+}
+
 // A broadcast LISTENER raising a hand to step up to the decks (the floor→stage request).
 // Surfaced ONLY to participants (the host approves it); the anonymous crowd otherwise
 // stays a count, never a roster row — so a request is the one time a listener gets named.
@@ -177,6 +185,9 @@ export type ClientMsg =
   | { t: "stage-deny"; to: string } // HOST declines a request, or sends a stage DJ back to the floor
   | { t: "stageGate"; mode: StageGate } // HOST sets how the crowd reaches the decks (request/open/closed)
   | { t: "react"; emoji: string } // a listener/participant taps a reaction (F4) — server-aggregated, rate-limited
+  | { t: "request"; text: string } // a listener asks the DJ for a song (F1) — rate-limited
+  | { t: "request-dismiss"; id: string } // HOST removes one song request
+  | { t: "request-clear" } // HOST clears the whole request list
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
   | { t: "state"; snapshot: unknown }
@@ -192,7 +203,9 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate }
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[] }
+  // The live song-request list (F1), sent to PARTICIPANTS (the DJ acts on them).
+  | { t: "requests"; list: SongRequest[] }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
   // `stageGate` rides BOTH payloads — a listener needs it to know if/how it can step up.

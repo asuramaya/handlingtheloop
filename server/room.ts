@@ -11,7 +11,7 @@
 // The host's own devices land here by default; guests on OTHER accounts (incl. anonymous)
 // arrive via an invite code the Worker resolves to this same session. Uses the WebSocket
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
-import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate, SongRequest } from "../src/htl/room/protocol";
 import { canDriveIntent, isReaction } from "../src/htl/room/protocol";
 
 // --- Minimal Cloudflare runtime types (no @cloudflare/workers-types installed). ---
@@ -124,6 +124,14 @@ export class DjRoom {
   private hype = 0;
   private reactFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private reactRate: Record<string, { t: number; n: number }> = {};
+  // Song requests (F1): an in-memory list the crowd feeds and the DJ reads (never persisted —
+  // it's live + ephemeral, like the knock list). Capped, deduped, one-per-device-per-window.
+  private static MAX_REQUESTS = 30;
+  private static REQUEST_RATE_MS = 15_000; // one request per device per 15s
+  private static REQUEST_MAXLEN = 120;
+  private requests: SongRequest[] = [];
+  private reqSeq = 0;
+  private requestRate: Record<string, number> = {};
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -231,7 +239,7 @@ export class DjRoom {
         listeners: this.listenerCount(),
         public: this.isPublic,
         stageGate: this.stageGate, // every listener needs the gate to show the right step-up affordance
-        ...(pub ? { pub: true } : { stage: this.stageReqs() }), // participants see pending hand-raises
+        ...(pub ? { pub: true } : { stage: this.stageReqs(), requests: this.requests }), // participants see hand-raises + song requests
       } satisfies ServerMsg),
     );
     // Hand a public listener the current board immediately so it can render without a round-trip.
@@ -258,7 +266,7 @@ export class DjRoom {
     // can never knock, drive, or anchor — defense-in-depth behind the Worker's un-forgeable
     // `pub`. The hand-raise is the one sanctioned floor→stage door; the host still gates it.
     const att = ws.deserializeAttachment() as Attachment | null;
-    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage" && msg.t !== "react") return;
+    if (att?.pub && msg.t !== "request-state" && msg.t !== "leave" && msg.t !== "stage" && msg.t !== "react" && msg.t !== "request") return;
 
     switch (msg.t) {
       case "join": {
@@ -421,6 +429,44 @@ export class DjRoom {
         }
         this.reactWindow[msg.emoji] = (this.reactWindow[msg.emoji] ?? 0) + 1;
         this.scheduleReactFlush();
+        break;
+      }
+      case "request": {
+        // A song request (F1). Anti-flood: one per device per window. Trim + cap length, dedupe
+        // identical pending text, cap the list, then push it to the PARTICIPANTS (the DJ reads it).
+        const text = (msg.text || "").trim().slice(0, DjRoom.REQUEST_MAXLEN);
+        if (!text) break;
+        const now = Date.now();
+        if (now - (this.requestRate[self] ?? 0) < DjRoom.REQUEST_RATE_MS) {
+          ws.send(JSON.stringify({ t: "error", message: "One request at a time — give it a moment." } satisfies ServerMsg));
+          break;
+        }
+        const att2 = ws.deserializeAttachment() as Attachment | null;
+        const name = att2?.name || "Someone";
+        const dupe = this.requests.some((r) => r.text.toLowerCase() === text.toLowerCase());
+        if (dupe) {
+          ws.send(JSON.stringify({ t: "error", message: "Already in the queue 👍" } satisfies ServerMsg));
+          break;
+        }
+        this.requestRate[self] = now;
+        this.requests.push({ id: `q${++this.reqSeq}`, name, text });
+        if (this.requests.length > DjRoom.MAX_REQUESTS) this.requests.shift();
+        this.relayRequests();
+        break;
+      }
+      case "request-dismiss": {
+        if (!this.isHostDevice(self)) break;
+        const before = this.requests.length;
+        this.requests = this.requests.filter((r) => r.id !== msg.id);
+        if (this.requests.length !== before) this.relayRequests();
+        break;
+      }
+      case "request-clear": {
+        if (!this.isHostDevice(self)) break;
+        if (this.requests.length) {
+          this.requests = [];
+          this.relayRequests();
+        }
         break;
       }
       case "stageGate": {
@@ -991,6 +1037,21 @@ export class DjRoom {
       // Keep ticking while there's energy to decay or fresh taps arrived; else go idle.
       if (this.hype > 0) this.scheduleReactFlush();
     }, DjRoom.REACT_FLUSH_MS);
+  }
+
+  // Push the current song-request list to PARTICIPANTS only (the DJ + co-DJs act on it). The
+  // anonymous crowd never receives the list — they only contribute to it.
+  private relayRequests(): void {
+    const json = JSON.stringify({ t: "requests", list: this.requests } satisfies ServerMsg);
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (!a || a.pub) continue;
+      try {
+        ws.send(json);
+      } catch {
+        /* socket gone */
+      }
+    }
   }
 
   // Relay a message ONLY to the session-owner's own devices (a.host) — never to invited

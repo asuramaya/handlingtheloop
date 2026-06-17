@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, announceRoom, closeRoom, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
-import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate } from "./protocol";
+import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest } from "./protocol";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -61,6 +61,11 @@ export interface RoomState {
   hype: number; // decaying crowd-energy level 0..1 (the meter)
   reactionTick: { counts: Record<string, number>; id: number }; // latest aggregated burst (id bumps on each non-empty frame → animate)
   react: (emoji: string) => void; // tap a reaction
+  // Song requests (F1).
+  songRequests: SongRequest[]; // HOST/participants: the crowd's asks
+  requestSong: (text: string) => void; // LISTENER: ask the DJ for a song
+  dismissRequest: (id: string) => void; // HOST: remove one request
+  clearRequests: () => void; // HOST: clear all requests
   error: string | null;
   client: RoomClient | null;
   join: () => void; // establish sync (listen on, control off) — guests knock first
@@ -132,6 +137,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [stageGate, setStageGateState] = useState<StageGate>("request");
   const [hype, setHype] = useState(0);
   const [reactionTick, setReactionTick] = useState<{ counts: Record<string, number>; id: number }>({ counts: {}, id: 0 });
+  const [songRequests, setSongRequests] = useState<SongRequest[]>([]);
   // Only the session OWNER (a host device) announces the room to the directory — a
   // listener/guest must NOT (anon → 401 spam; a signed-in guest would falsely register
   // its OWN room). Read through a ref so the heartbeat effect needn't depend on `host`
@@ -213,6 +219,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
         const total = Object.values(counts).reduce((s, n) => s + n, 0);
         if (total > 0) setReactionTick((t) => ({ counts, id: t.id + 1 }));
       },
+      requests: (list) => setSongRequests(list),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
     });
     c.connect();
@@ -244,6 +251,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setStageGateState("request");
       setHype(0);
       setReactionTick({ counts: {}, id: 0 });
+      setSongRequests([]);
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
@@ -327,6 +335,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     setStageGateState(mode); // optimistic — the presence echo confirms
   }, []);
   const react = useCallback((emoji: string) => clientRef.current?.react(emoji), []);
+  const requestSong = useCallback((text: string) => clientRef.current?.requestSong(text), []);
+  const dismissRequest = useCallback((id: string) => clientRef.current?.dismissRequest(id), []);
+  const clearRequests = useCallback(() => clientRef.current?.clearRequests(), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
   // listener count tracks; the room ages out of "live now" if this stops (host vanished).
   useEffect(() => {
@@ -418,6 +429,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     hype,
     reactionTick,
     react,
+    songRequests,
+    requestSong,
+    dismissRequest,
+    clearRequests,
     error,
     client: clientRef.current,
     join,

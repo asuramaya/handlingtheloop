@@ -404,8 +404,12 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## F. Crowd → DJ interactivity channel  *(P3)*
 
-- [ ] **F1. Song requests:** crowd feeds a queue the DJ can pull from (maps onto
-      the library/match engine). Anti-flood rate limit per listener.
+- [x] **F1. Song requests DONE (free-text v1).** Listeners type a request; the DO holds an
+      in-memory list (capped `MAX_REQUESTS`, deduped, one-per-device-per-`REQUEST_RATE_MS`) and
+      pushes it to PARTICIPANTS only (`relayRequests`) — the crowd feeds it, the DJ reads it.
+      Listener form in the CrowdPanel ("Request a song…"); host list in the body with dismiss +
+      Clear all. *(Follow-up: a one-tap "→ queue" that maps the text onto a catalog search +
+      the first-class auto-mix queue, instead of the DJ pulling it by hand.)*
 - [x] **F2. Live hype/energy meter DONE.** The DO keeps a decaying 0..1 `hype` EMA (per-flush
       decay + window-total gain), flushed with the reaction frame; the SocialScreen renders it
       as a filling bar (throbs when hot) + a floating-emoji burst. The flush keeps ticking to

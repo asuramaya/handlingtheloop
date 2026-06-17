@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { RoomState } from "@htl/room";
 import { REACTIONS } from "@htl/room";
 import { type LiveRoom, fetchLiveRooms } from "@htl/account";
@@ -172,6 +172,23 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                       </button>
                       <button className="social-deny" onClick={() => room.denyStage(r.id)}>Decline</button>
                     </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* HOST: the crowd's song requests (F1). Read one, pull the track, dismiss it. */}
+            {room.host && room.songRequests.length > 0 && (
+              <div className="social-knocks req-list">
+                <div className="social-section-head req-head">
+                  🎵 Requests
+                  <button className="req-clear" onClick={room.clearRequests}>Clear all</button>
+                </div>
+                {room.songRequests.map((r) => (
+                  <div key={r.id} className="social-knock req-row">
+                    <span className="req-text">{r.text}</span>
+                    <span className="req-who">{revealed ? r.name : maskName(r.name)}</span>
+                    <button className="req-dismiss" onClick={() => room.dismissRequest(r.id)} title="Dismiss" aria-label="Dismiss request">✕</button>
                   </div>
                 ))}
               </div>
@@ -423,7 +440,18 @@ function StageBar({ room }: { room: RoomState }) {
 // plus a short burst of floating emojis. The DJ reads the bar as live crowd energy.
 function CrowdPanel({ room }: { room: RoomState }) {
   const [sprites, setSprites] = useState<{ id: number; emoji: string; x: number }[]>([]);
+  const [reqText, setReqText] = useState("");
+  const [reqSent, setReqSent] = useState(false);
   const seen = useRef(0);
+  const submitRequest = (e: FormEvent) => {
+    e.preventDefault();
+    const t = reqText.trim();
+    if (!t) return;
+    room.requestSong(t);
+    setReqText("");
+    setReqSent(true);
+    setTimeout(() => setReqSent(false), 2400);
+  };
   const { id, counts } = room.reactionTick;
   useEffect(() => {
     if (id === seen.current) return;
@@ -463,6 +491,22 @@ function CrowdPanel({ room }: { room: RoomState }) {
           </button>
         ))}
       </div>
+      {/* Listeners ask the DJ for a song (F1). Hosts see the list instead, in the body. */}
+      {room.listeningTo && (
+        <form className="request-form" onSubmit={submitRequest}>
+          <input
+            className="request-input"
+            value={reqText}
+            onChange={(e) => setReqText(e.target.value)}
+            placeholder={reqSent ? "✓ Sent to the DJ" : "Request a song…"}
+            maxLength={120}
+            aria-label="Request a song"
+          />
+          <button className="request-send" type="submit" disabled={!reqText.trim()}>
+            Request
+          </button>
+        </form>
+      )}
     </div>
   );
 }

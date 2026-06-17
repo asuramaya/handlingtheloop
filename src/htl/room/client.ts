@@ -3,7 +3,7 @@
 // authenticate the upgrade + resolve which session to join), tracks the participant
 // list + the control baton, and reconnects with backoff. Pure transport: it exposes
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
-import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate } from "./protocol";
+import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest } from "./protocol";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -23,6 +23,7 @@ export interface RoomHandlers {
   stageGate?: (mode: StageGate) => void; // how the crowd reaches the decks (request/open/closed)
   stageSelf?: (status: "declined") => void; // LISTENER: the host declined my step-up request
   reactions?: (counts: Record<string, number>, hype: number) => void; // aggregated crowd reactions + hype level
+  requests?: (list: SongRequest[]) => void; // the live song-request list (participants only)
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -261,6 +262,17 @@ export class RoomClient {
   react(emoji: string): void {
     this.send({ t: "react", emoji });
   }
+  /** Ask the DJ for a song (F1). Rate-limited server-side. */
+  requestSong(text: string): void {
+    this.send({ t: "request", text });
+  }
+  /** HOST: dismiss one song request / clear them all. */
+  dismissRequest(id: string): void {
+    this.send({ t: "request-dismiss", id });
+  }
+  clearRequests(): void {
+    this.send({ t: "request-clear" });
+  }
   /** Update this device's account accent and broadcast it (the room vibe / roster swatch). */
   setColor(color: string): void {
     if (color === this.color) return;
@@ -338,6 +350,7 @@ export class RoomClient {
         this.h.listeners?.(this.listenerCount, this.roomPublic);
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
+        if (msg.requests) this.h.requests?.(msg.requests);
         // A PUBLIC read-only listener is auto-joined server-side and never drives — skip the
         // engage restore entirely (it has no switches to assert).
         if (this.listenHandle) {
@@ -404,6 +417,9 @@ export class RoomClient {
         break;
       case "reactions":
         this.h.reactions?.(msg.counts, msg.hype);
+        break;
+      case "requests":
+        this.h.requests?.(msg.list);
         break;
       case "kicked":
         // Denied entry or removed by the host. Forget our intent to be in (and the invite

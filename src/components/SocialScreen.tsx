@@ -207,44 +207,67 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                 <button className="room-unlink" onClick={room.leave}>Leave session</button>
               )}
 
-              {/* Broadcast: the host opens the room to anonymous listeners (the public plane). */}
-              {!room.isGuest && room.signedIn && room.joined && (
-                <div className="social-broadcast">
-                  {room.user?.handle ? (
-                    <>
-                      <button
-                        className={`broadcast-btn ${room.roomPublic ? "on" : ""}`}
-                        onClick={() => room.goPublic(!room.roomPublic)}
-                        title={room.roomPublic ? "Stop broadcasting publicly" : "Open this set to anyone at your @handle"}
-                      >
-                        {room.roomPublic ? "■ End broadcast" : "● Go live"}
-                      </button>
-                      {room.roomPublic && (
-                        <span className="broadcast-status">
-                          Live at <b>@{room.user.handle}</b> · {room.listenerCount} listening
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <span className="broadcast-hint">Claim a @handle (Profile) to broadcast publicly.</span>
-                  )}
-                </div>
-              )}
-
+              {/* Two distinct ways to share a session, exposed side by side so the access
+                  model is obvious: a CLOSED private invite (you approve each guest; they can
+                  co-DJ) vs an OPEN public lobby (anyone at your @handle tunes in; listeners can
+                  ask to step up to the decks). They're independent — you can run either or both. */}
               {!room.isGuest && room.signedIn && (
-                <div className="social-invite">
-                  <button className="room-invite" onClick={makeInvite} disabled={inviting}>
-                    {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Invite people"}
-                  </button>
-                  {inviteUrl && (
-                    <div className="room-invite-share">
-                      <button type="button" className="room-invite-link" title="Tap to copy" onClick={() => copyLink(inviteUrl)}>
-                        {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
-                      </button>
-                      <QRCode value={inviteUrl} size={172} className="room-invite-qr" />
-                      <span className="room-invite-scan">Scan to join on another device</span>
+                <div className="share-modes">
+                  <div className="social-section-head">Share this session</div>
+
+                  {/* PRIVATE — invite specific people; they knock, you let them in. */}
+                  <div className="share-mode private">
+                    <div className="share-mode-head">
+                      <span className="share-mode-title">🔒 Private invite</span>
+                      <span className="share-mode-sub">A link for specific people. They knock, you approve — and they can take the decks.</span>
                     </div>
-                  )}
+                    <button className="room-invite" onClick={makeInvite} disabled={inviting}>
+                      {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Invite people"}
+                    </button>
+                    {inviteUrl && (
+                      <div className="room-invite-share">
+                        <button type="button" className="room-invite-link" title="Tap to copy" onClick={() => copyLink(inviteUrl)}>
+                          {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
+                        </button>
+                        <QRCode value={inviteUrl} size={172} className="room-invite-qr" />
+                        <span className="room-invite-scan">Scan to join on another device</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PUBLIC — open the room to anyone at your @handle (the broadcast plane). */}
+                  <div className={`share-mode public ${room.roomPublic ? "live" : ""}`}>
+                    <div className="share-mode-head">
+                      <span className="share-mode-title">
+                        🌐 Public lobby{room.roomPublic && <span className="share-live-dot" aria-hidden="true"> ●</span>}
+                      </span>
+                      <span className="share-mode-sub">
+                        Open to anyone at {room.user?.handle ? <>your <b>@{room.user.handle}</b></> : "your @handle"}. They tune in to listen and can ask to step up to the decks.
+                      </span>
+                    </div>
+                    {room.user?.handle ? (
+                      room.joined ? (
+                        <>
+                          <button
+                            className={`broadcast-btn ${room.roomPublic ? "on" : ""}`}
+                            onClick={() => room.goPublic(!room.roomPublic)}
+                            title={room.roomPublic ? "Close the public lobby" : "Open this set to anyone at your @handle"}
+                          >
+                            {room.roomPublic ? "■ End broadcast" : "● Go live"}
+                          </button>
+                          {room.roomPublic && (
+                            <span className="broadcast-status">
+                              Live at <b>@{room.user.handle}</b> · {room.listenerCount} listening
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <button className="broadcast-btn" disabled title="Start the session first">● Go live</button>
+                      )
+                    ) : (
+                      <span className="broadcast-hint">Claim a @handle in Profile to open a public lobby.</span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

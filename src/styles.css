@@ -8505,6 +8505,66 @@ span.profile-handle:hover {
   gap: 9px;
 }
 
+/* The two ways to share a session, exposed as distinct cards so the access model reads at a
+   glance: a CLOSED private invite vs an OPEN public lobby. */
+.share-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.share-modes .social-section-head {
+  margin-bottom: 0;
+}
+.share-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.share-mode.public {
+  border-color: color-mix(in srgb, #c8506a 35%, var(--line));
+  background: color-mix(in srgb, #c8506a 5%, var(--panel-2));
+}
+.share-mode.public.live {
+  border-color: #c8506a;
+  background: color-mix(in srgb, #c8506a 12%, var(--panel-2));
+}
+.share-mode-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.share-mode-title {
+  font-weight: 700;
+  font-size: 13.5px;
+}
+.share-mode.public .share-mode-title {
+  color: #e87f97;
+}
+.share-live-dot {
+  color: #ff5d73;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.share-mode-sub {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.share-mode-sub b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* --- Chin + popup additions --- */
 .room-expand {
   width: 26px;

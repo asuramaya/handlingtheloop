@@ -287,6 +287,14 @@ export class JogEngine {
     this.enterMotorCoast(this.host.effRate(), false, this.brakeTau(), "brake");
   }
 
+  /** Release-FX brake: decelerate to a stop NOW regardless of the Vinyl Speed toggle (a
+   *  one-shot transition trigger, not the play/pause feel). Uses the brake time if set,
+   *  else a musical default. Playing decks only. */
+  brakeNow() {
+    if (!this.host.playing() || this.jogPhase === "reverse") return;
+    this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+  }
+
   /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
    *  time, then hand to normal playback. Falls back to instant play() when off. */
   softStart() {

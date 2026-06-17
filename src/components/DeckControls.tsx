@@ -201,6 +201,21 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           >
             ⊘
           </button>
+          {/* Release FX — one-shot motor transitions (always available). */}
+          <button
+            className="jog-btn relfx brake"
+            title="Vinyl Brake — decelerate to a stop (release FX)"
+            onClick={act(() => deck.releaseBrake())}
+          >
+            ⊟
+          </button>
+          <button
+            className="jog-btn relfx backspin"
+            title="Back Spin — throw the platter backward, then catch it to play (release FX)"
+            onClick={act(() => deck.spinback())}
+          >
+            ↺
+          </button>
         </div>
 
         {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes

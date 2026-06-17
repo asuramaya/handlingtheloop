@@ -1249,6 +1249,10 @@ export class Deck {
   spinback(strength?: number) {
     this.jog.spinback(strength);
   }
+  /** Release-FX Vinyl Brake: decelerate to a stop now (always, even with Vinyl Speed off). */
+  releaseBrake() {
+    this.jog.brakeNow();
+  }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.
   // (The viewport only grabs the platter once the finger actually moves, so a tap

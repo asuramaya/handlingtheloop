@@ -419,6 +419,7 @@ export class Deck {
       scratchBuffer: () => this.buffer,
       connectScratch: (node) => { node.connect(this.rack.input); },
       slipArm: () => this.slipArm(),
+      slipArmForce: () => this.slipArmForce(),
       slipReleasePos: () => this.slipReleasePos(),
     });
   }
@@ -1382,18 +1383,46 @@ export class Deck {
   slipArm() {
     this.slipAnchor = this.slipEnabled && this._playing ? { pos: this.position(), t: this.ctx.currentTime } : null;
   }
+  /** Force-anchor the shadow regardless of the SLIP toggle (CENSOR always slip-returns).
+   *  Still playing-only — nothing advances under a paused deck. */
+  slipArmForce() {
+    this.slipAnchor = this._playing ? { pos: this.position(), t: this.ctx.currentTime } : null;
+  }
   /** End a slip overlay: the shadow position (where the track would be now), consumed.
-   *  Returns null when slip isn't armed → the caller does its normal (coast) release. */
+   *  Returns null when no anchor is set → the caller does its normal (coast) release.
+   *  (The slip-toggle gate lives in slipArm; once an anchor exists, the shadow is real.) */
   slipReleasePos(): number | null {
     const a = this.slipAnchor;
     this.slipAnchor = null;
-    if (!this.slipEnabled || !a) return null;
-    let pos = a.pos + (this.ctx.currentTime - a.t) * this.effRate();
+    return a ? this.shadowOf(a.pos, a.t) : null;
+  }
+  /** Where a playhead anchored at (pos, t) and running at the play rate would be now —
+   *  loop-wrapped + clamped. The slip shadow, shared by slip release + cue-preview. */
+  private shadowOf(pos: number, t: number): number {
+    let p = pos + (this.ctx.currentTime - t) * this.effRate();
     if (this.loop?.active) {
       const len = this.loop.end - this.loop.start;
-      if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
+      if (len > 0 && p > this.loop.start) p = this.loop.start + ((p - this.loop.start) % len);
     }
-    return Math.max(0, Math.min(this._duration, pos));
+    return Math.max(0, Math.min(this._duration, p));
+  }
+
+  // --- sustained reverse / censor (route through the scratch resampler) ---
+  get reversing() {
+    return this.jog.reversing;
+  }
+  /** Sustained REVERSE toggle — plays backward at the set tempo until turned off. */
+  setReverse(on: boolean) {
+    if (on) this.jog.reverseStart(false);
+    else this.jog.reverseStop();
+  }
+  /** CENSOR (momentary reverse): plays backward while held, then slip-snaps forward to
+   *  where the track would be on release (always slip-returns, regardless of the toggle). */
+  censorBegin() {
+    this.jog.reverseStart(true);
+  }
+  censorEnd() {
+    this.jog.reverseStop();
   }
 
   /** Jump by N beats from the current position, landing on the real grid beat. */

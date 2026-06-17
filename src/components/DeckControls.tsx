@@ -167,6 +167,22 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           >
             ⟲<span className="kbd">Z</span>
           </button>
+          <button
+            className={`jog-btn rev ${deck.reversing ? "on" : ""}`}
+            title="Reverse — play backward (toggle)"
+            onClick={act(() => deck.setReverse(!deck.reversing))}
+          >
+            ⏪
+          </button>
+          <button
+            className="jog-btn censor"
+            title="Censor — hold to play backward, release snaps back to where the track would be (slip)"
+            onPointerDown={(e) => { e.preventDefault(); deck.censorBegin(); refresh(); }}
+            onPointerUp={() => { deck.censorEnd(); refresh(); }}
+            onPointerLeave={() => { if (deck.reversing) { deck.censorEnd(); refresh(); } }}
+          >
+            ⊘
+          </button>
         </div>
 
         {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes

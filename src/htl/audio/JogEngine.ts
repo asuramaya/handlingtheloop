@@ -23,7 +23,8 @@ export interface JogHost {
   scratchBuffer(): AudioBuffer | null; // decoded PCM for the resampler (lazy on mobile)
   connectScratch(node: AudioWorkletNode): void; // node.connect(deck channel input)
   slipArm(): void; // SLIP: anchor the shadow playhead at grab (no-op unless slip on + playing)
-  slipReleasePos(): number | null; // SLIP: where the track would be now, or null (normal release)
+  slipArmForce(): void; // CENSOR: anchor the shadow regardless of the slip toggle (still playing-only)
+  slipReleasePos(): number | null; // SLIP: where the track would be now, or null (no anchor)
 }
 
 // rekordbox-style jog / platter physics: the scratch resampler driver + the weighted-
@@ -33,7 +34,7 @@ export class JogEngine {
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
 
-  private jogPhase: "off" | "grab" | "coast" = "off";
+  private jogPhase: "off" | "grab" | "coast" | "reverse" = "off";
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
@@ -305,6 +306,47 @@ export class JogEngine {
     this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback");
   }
 
+  // --- sustained reverse / censor ---
+  // Reverse routes through the SCRATCH resampler (signed motion → it plays backward
+  // natively), so we never need the WSOLA stretch engine to run in reverse. The platter
+  // is driven at −1× the set tempo; on stop we hand back to forward playback at either the
+  // slip shadow (CENSOR, or REV with slip on) or the reversed-to position.
+  get reversing() {
+    return this.jogPhase === "reverse";
+  }
+  /** Engage sustained reverse (playing decks only). `forceSlip` arms the shadow regardless
+   *  of the slip toggle (CENSOR always slip-returns); otherwise the slip toggle decides. */
+  reverseStart(forceSlip: boolean) {
+    if (!this.host.loaded() || !this.host.playing() || this.jogPhase === "reverse") return;
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.host.clearBend();
+    if (forceSlip) this.host.slipArmForce();
+    else this.host.slipArm();
+    this.jogPos = this.host.position();
+    this.host.setStartOffset(this.jogPos);
+    this.host.stopSource(); // hand the audio to the scratch resampler
+    this.host.setPlaying(false);
+    this.jogVel = 0;
+    this.handVel = 0;
+    this.jogInputAt = this.ctx.currentTime;
+    this.jogLast = this.ctx.currentTime;
+    this.jogPhase = "reverse";
+    this.scratchStart();
+    this.startJogLoop();
+  }
+  /** Leave reverse: hand back to forward playback at the slip shadow (if armed) or the
+   *  reversed-to position. */
+  reverseStop() {
+    if (this.jogPhase !== "reverse") return;
+    this.jogPhase = "off";
+    this.scratchStop();
+    const slip = this.host.slipReleasePos();
+    const pos = slip != null ? slip : this.jogPos;
+    this.host.setStartOffset(pos);
+    this.host.spawnSource(pos);
+    this.host.setPlaying(true);
+  }
+
   // --- the platter rAF loop ---
 
   private startJogLoop() {
@@ -321,6 +363,13 @@ export class JogEngine {
         dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
         if (phase === "grab") {
           this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
+        } else if (phase === "reverse") {
+          // Drive the platter backward at the set tempo; voice it on the resampler.
+          this.jogPos -= this.host.rate() * dt;
+          this.clampJog();
+          this.host.setStartOffset(this.jogPos);
+          this.scratchMove();
+          if (this.jogPos <= 0) this.reverseStop(); // hit the start → catch back to forward
         } else {
           this.stepCoast(dt); // may settle the platter to "off"
           this.host.setStartOffset(this.jogPos);

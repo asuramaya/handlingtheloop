@@ -26,9 +26,6 @@ import {
   FREQ_MID_DEFAULT,
   FREQ_HIGH_DEFAULT,
   DEFAULT_CONTRAST,
-  readStemTrace,
-  clearStemTrace,
-  formatStemTrace,
   type StemModel,
   createKeyProfile,
   duplicateKeyProfile,
@@ -43,9 +40,9 @@ import { type UseMidi } from "@htl/midi";
 import { MidiPanel } from "./MidiPanel";
 import { ColorProfiles } from "./ColorProfiles";
 import { LyricsSettings } from "./LyricsSettings";
-import { MidiDebug } from "./MidiDebug";
 import { DockResizer } from "./DockResizer";
 import { AboutTab } from "./settings/AboutTab";
+import { DebugTab } from "./settings/DebugTab";
 import { Slider } from "./settings/Slider";
 // Account & connections moved to the full-screen Profile (see ProfileScreen).
 
@@ -314,24 +311,10 @@ export function SettingsPanel({
     }
   };
 
-  // Live diagnostics for the Debug tab — poll the collector (engine/session/device)
-  // a few times a second WHILE that tab is open; idle otherwise. `copied` flashes the
-  // Copy button (sharing the dump is the only practical way to debug a phone).
-  const [diag, setDiag] = useState<DebugSection[]>([]);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (tab !== "debug" || !debug) return;
-    const tick = () => setDiag(debug());
-    tick();
-    const iv = setInterval(tick, 400);
-    return () => clearInterval(iv);
-  }, [tab, debug]);
-
   // Per-model cache state for the tracks currently on the decks: a model is
   // "cached" (usable on ANY device, incl. phones) if every loaded track already
   // has its four stems in R2. Probed when the Stems tab is open.
   const [cachedModels, setCachedModels] = useState<Record<string, boolean>>({});
-  const [traceTick, setTraceTick] = useState(0); // bump to re-read the separation trace
   const loadedKey = loadedVideoIds.join(",");
   // Refresh badges once the real WebGPU-adapter probe resolves (so GPU models flip
   // to "Runs here" the moment WebGPU is actually available).
@@ -1049,87 +1032,7 @@ export function SettingsPanel({
           )}
 
 
-          {tab === "debug" && (
-            <>
-              {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
-                  and reverse-engineering LED / RGB protocols. Open-source debug surface. */}
-              {midi && <MidiDebug midi={midi} />}
-
-              {/* Live engine / session / device diagnostics (was the green ctx overlay).
-                  Polled only while this tab is open; Copy dumps it for sharing — the
-                  only practical way to read state off a phone (no visible console). */}
-              {diag.length > 0 && (
-                <div className="settings-section">
-                  <div className="settings-section-head">
-                    <span className="settings-label">Live diagnostics</span>
-                    <button
-                      className="link-btn"
-                      onClick={() => {
-                        const text = diag
-                          .map((s) => `[${s.title}]\n` + s.rows.map(([k, v]) => `  ${k}: ${v}`).join("\n"))
-                          .join("\n\n");
-                        void navigator.clipboard?.writeText(text).then(
-                          () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
-                          () => {},
-                        );
-                      }}
-                    >
-                      {copied ? "Copied ✓" : "Copy"}
-                    </button>
-                  </div>
-                  <div className="debug-grid">
-                    {diag.map((s) => (
-                      <div className="debug-block" key={s.title}>
-                        <div className="debug-block-title">{s.title}</div>
-                        {s.rows.map(([k, v]) => (
-                          <div className="debug-row" key={k}>
-                            <span className="debug-key">{k}</span>
-                            <span className="debug-val">{v}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* On-device separation crash trace — survives a tab OOM-kill (synchronous
-                  localStorage), so after a crash + reload this shows the LAST step it
-                  reached. The only way to debug an iPhone Safari crash without a Mac. */}
-              {(() => {
-                const trace = readStemTrace();
-                if (!trace.length) {
-                  return (
-                    <div className="settings-section">
-                      <p className="settings-hint">No separation trace yet. Run a stem split and it'll be recorded here.</p>
-                    </div>
-                  );
-                }
-                return (
-                  <div className="settings-section">
-                    <div className="settings-section-head">
-                      <span className="settings-label">Separation trace (diagnostics)</span>
-                      <button
-                        className="link-btn"
-                        onClick={() => {
-                          clearStemTrace();
-                          setTraceTick((n) => n + 1);
-                        }}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    <pre className="stem-trace" key={traceTick}>
-                      {formatStemTrace(trace)}
-                    </pre>
-                    <div className="settings-hint">
-                      Last line = where it stopped. If it ends mid-run after a crash, that step is the culprit.
-                    </div>
-                  </div>
-                );
-              })()}
-            </>
-          )}
+          {tab === "debug" && <DebugTab midi={midi} debug={debug} />}
 
           {tab === "about" && <AboutTab />}
         </div>

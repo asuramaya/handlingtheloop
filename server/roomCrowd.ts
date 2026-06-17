@@ -3,6 +3,7 @@
 // timers, rate buckets) and takes its dependencies by injection (how to broadcast, the clock),
 // so they carry no membership/socket concerns and can be unit-tested without the whole DO.
 import { isReaction, type ServerMsg, type SongRequest, type ChatMsg } from "../src/htl/room/protocol";
+import { cleanChat } from "./security";
 
 // Crowd reactions (F4) + hype (F2). Taps accumulate in a window and flush ONE aggregated frame
 // per tick — never per tap, so a big room can't storm the fan-out — plus a decaying 0..1 hype
@@ -163,7 +164,7 @@ export class Chat {
       return { ok: false, error: slowSec > 0 ? `Slow mode — wait ${wait}s` : "Slow down a moment" };
     }
     this.last[dev] = now;
-    const msg: ChatMsg = { id: `c${++this.seq}`, dev, name: name || "Someone", text };
+    const msg: ChatMsg = { id: `c${++this.seq}`, dev, name: name || "Someone", text: cleanChat(text) };
     this.log.push(msg);
     if (this.log.length > Chat.HISTORY) this.log.shift();
     return { ok: true, msg };

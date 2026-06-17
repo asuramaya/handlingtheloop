@@ -473,7 +473,10 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       chat message) + **ban** (evict + session re-entry block via a `banned` device set) DONE for
       chat moderation. *(Room-wide ban persistence + a mod-role grant to co-hosts = later.)*
 - [ ] **L2. Report flow → existing admin worker** (moderation queue / DMCA muscle).
-- [ ] **L3. Handle + chat blocklists** (reuse A5 lists).
+- [~] **L3. Handle + chat blocklists.** Handle side via A5 (`RESERVED_HANDLES`). **Chat side DONE:**
+      `cleanChat` (security.ts) masks a `CHAT_BLOCKLIST` of severe slurs — whole-token match with
+      leetspeak fold + plural, Scunthorpe-safe (grape/therapy untouched), applied in the `Chat`
+      unit so every line is filtered. *(Multi-char-spacing evasion + a fuller list = later.)*
 - [ ] **L4. Anti-sybil:** fake-listener count inflation, follow bots corrupting J2.
 - [~] **L5. Social-action rate limits** — the in-DO crowd channels are all rate-limited now
       (reactions token-bucket, requests 15s, chat 1s floor + host slow-mode). *(Follow/mention

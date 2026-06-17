@@ -134,6 +134,34 @@ export function validateHandle(raw: unknown): HandleResult {
   return { ok: true, handle, folded };
 }
 
+// Chat slur/profanity blocklist (L3). Severe terms only — masked, not dropped, so a line
+// still posts but censored; the host mute/ban handles repeat offenders. Matched per WHOLE
+// token (with leetspeak fold + simple plural), NOT substring — so "grape"/"therapy" are safe
+// from the "rape" entry (the Scunthorpe problem). Extend server-side as needed.
+export const CHAT_BLOCKLIST: ReadonlySet<string> = new Set([
+  "nigger", "nigga", "faggot", "fag", "cunt", "rape", "rapist", "retard",
+  "kike", "spic", "chink", "tranny", "wetback", "coon",
+]);
+
+const LEET: Record<string, string> = { "4": "a", "@": "a", "8": "b", "3": "e", "1": "i", "!": "i", "0": "o", "5": "s", "$": "s", "7": "t" };
+
+// Fold a token to its comparable form: lowercase, common leetspeak un-substituted, non-letters
+// stripped. "F4gg0t!" → "faggot". Used only for the blocklist check, never for display.
+function foldToken(t: string): string {
+  return t.toLowerCase().replace(/[4@83105$!7]/g, (c) => LEET[c] ?? c).replace(/[^a-z]/g, "");
+}
+
+/** Mask blocklisted slurs in a chat line (L3). Whole-token match (fold + trailing-s plural);
+ *  a hit becomes a run of • of the original length. Returns the cleaned, display-safe text. */
+export function cleanChat(text: string): string {
+  return text.replace(/\S+/g, (tok) => {
+    const f = foldToken(tok);
+    const base = f.replace(/s$/, "");
+    if (f && (CHAT_BLOCKLIST.has(f) || CHAT_BLOCKLIST.has(base))) return "•".repeat(Math.max(3, tok.length));
+    return tok;
+  });
+}
+
 /** Best-effort client IP for rate-limit keys (Cloudflare edge sets cf-connecting-ip). */
 export function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "anon";

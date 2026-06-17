@@ -15,6 +15,8 @@
 // (predelay/width/lowCut/highCut/drive/duck/postLow/postHigh/mix) drive the surrounding nodes.
 
 import { BaseFxDevice, type FxKind } from "./Fx";
+import { clamp, clamp01 } from "../../util/math";
+import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
 
 // Mode labels (the worklet owns the per-style voicing table; this is just the UI labels +
 // the index that rides the `style` param).
@@ -216,13 +218,6 @@ export class ReverbFx extends BaseFxDevice {
   }
 }
 
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, v));
-}
-function clamp01(v: number) {
-  return Math.max(0, Math.min(1, v));
-}
-
 // tanh soft-clip drive, level-matched so unity stays ~unity (Arturia-style input character).
 function makeDriveCurve(amount: number): Float32Array<ArrayBuffer> {
   const n = 2048;
@@ -232,23 +227,6 @@ function makeDriveCurve(amount: number): Float32Array<ArrayBuffer> {
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
     curve[i] = Math.tanh(k * x) / norm;
-  }
-  return curve;
-}
-// |x| rectifier for the ducking envelope follower.
-function makeRectifyCurve(): Float32Array<ArrayBuffer> {
-  const n = 1024;
-  const curve = new Float32Array(n);
-  for (let i = 0; i < n; i++) curve[i] = Math.abs((i / (n - 1)) * 2 - 1);
-  return curve;
-}
-// Clamp the boosted envelope to [0,1] so the duck can't drive the wet gain negative.
-function makeClampCurve(): Float32Array<ArrayBuffer> {
-  const n = 1024;
-  const curve = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 2 - 1;
-    curve[i] = Math.max(0, Math.min(1, x));
   }
   return curve;
 }

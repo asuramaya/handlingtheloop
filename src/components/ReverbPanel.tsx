@@ -3,6 +3,7 @@ import { REVERB_STYLES } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { ReverbViz } from "./ReverbViz";
+import { fmtPct } from "../util/format";
 
 // The Reverb device surface (v3 layout): the round decay-rate dome IS the control surface —
 // every spatial param is a drag-handle ON it (the EQ-curve pattern, see ReverbViz). Only the
@@ -10,7 +11,6 @@ import { ReverbViz } from "./ReverbViz";
 // non-fader switches (FREEZE + MODE). Same contract as the Delay/EQ panels: mutate the deck's
 // effect, `emit` the matching fxParam intent so a session converges, then `refresh`.
 
-const fmtPct = (v: number) => `${Math.round(v * 100)}`;
 
 interface ReverbPanelProps {
   deck: Deck;

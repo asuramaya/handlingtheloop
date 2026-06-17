@@ -2,6 +2,7 @@
 // Returns a Response for any /api/auth/* or /api/me route it owns, else null so
 // the main router can continue. Requires D1 (DB) + Google web-OAuth creds +
 // TOKEN_ENC_KEY in the environment.
+import { json, redirect } from "./http";
 import { oauthCreds } from "./oauth";
 import { googleAuthUrl, googleExchange } from "./googleAuth";
 import { spotifyAuthUrl, spotifyCreds, spotifyExchange } from "./spotifyAuth";
@@ -74,15 +75,6 @@ export interface AccountEnv {
   // `pnpm worker` without the Google OAuth round-trip. Absent in prod → route 404s.
   DEV_LOGIN?: string;
 }
-
-function json(status: number, body: unknown, headers?: HeadersInit): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
-  });
-}
-const redirect = (location: string, headers?: HeadersInit) =>
-  new Response(null, { status: 302, headers: { location, ...headers } });
 
 async function currentUser(env: AccountEnv, req: Request) {
   if (!env.DB) return null;

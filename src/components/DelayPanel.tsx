@@ -3,6 +3,8 @@ import type { Deck } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { DelayViz } from "./DelayViz";
+import { clamp } from "../util/math";
+import { fmtHz, fmtPct, fmtMs } from "../util/format";
 
 // The Delay device surface (H-Delay × Eternity). Mirrors the EQ contract: mutate the
 // deck's effect directly, `emit` the matching FX intent so a session converges, then
@@ -26,10 +28,6 @@ const DEFAULT_DIV = 2;
 const TIME_MODES = ["RPT", "DIG", "FADE"]; // Repitch / Digital / Fade
 const STEREO_MODES = ["MONO", "PING"]; // Single / Ping-Pong
 
-const fmtMs = (s: number) => (s >= 1 ? `${s.toFixed(2)}s` : `${Math.round(s * 1000)}`);
-const fmtHz = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`);
-const fmtPct = (v: number) => `${Math.round(v * 100)}`;
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 interface DelayPanelProps {
   deck: Deck;

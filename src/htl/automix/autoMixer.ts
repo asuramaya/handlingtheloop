@@ -4,6 +4,7 @@ import type { TrackMeta } from "../library/types";
 import { pickTransition } from "./mixability";
 import type { AutoMixPhase, MixMode, TransitionPlan } from "./types";
 import type { MixQueue } from "./queue";
+import { clamp, lerp } from "../../util/math";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
 // the same engine/deck controls the UI buttons drive, but the user can jog, scratch,
@@ -883,12 +884,6 @@ export class AutoMixer {
 
 function other(id: DeckId): DeckId {
   return id === "A" ? "B" : "A";
-}
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
 }
 function barsToSeconds(bars: number, bpm: number): number {
   if (!bpm || bpm <= 0) return bars * 2;

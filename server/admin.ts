@@ -18,6 +18,7 @@ import {
   deleteUser,
 } from "./db";
 import { type AccessEnv, verifyAccess } from "./access";
+import { json } from "./http";
 
 interface R2Listed {
   objects: { key: string; size: number; customMetadata?: Record<string, string> }[];
@@ -38,8 +39,6 @@ interface ExecutionContext {
   waitUntil(p: Promise<unknown>): void;
 }
 
-const json = (status: number, body: unknown): Response =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const isVideoId = (v: unknown): v is string => typeof v === "string" && /^[\w-]{11}$/.test(v);
 
 /** Delete every R2 object belonging to a track: audio, meta sidecar, all stem sets. */

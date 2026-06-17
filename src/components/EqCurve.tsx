@@ -3,6 +3,8 @@ import type { Deck } from "@htl/audio";
 import { EQ_MIN_DB, EQ_MAX_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
+import { clamp } from "../util/math";
+import { fmtHz, fmtDb } from "../util/format";
 
 // A pro parametric EQ surface — a simplified FabFilter Pro-Q built on the deck's real
 // biquad chain. Up to five nodes you drag in 2D over a live spectrum:
@@ -61,10 +63,7 @@ const NODES: NodeDef[] = [
   { key: "lp", label: "LP", color: "#7dffd6", vert: "q", fMin: EQ_LP.min, fMax: EQ_LP.max, fDefault: EQ_LP.freq, getFreq: (d) => d.eqLpFreq, setFreq: (d, v) => d.setEqLpFreq(v), getGain: () => 0, setGain: () => {}, getQ: (d) => d.eqLpQ, setQ: (d, v) => d.setEqLpQ(v), fParam: "eqLpFreq", qParam: "eqLpQ" },
 ];
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-// Subrow cell formatters (the Pro-Q-style numeric companion under the curve).
-const fmtHz = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1)}k` : `${Math.round(hz)}`);
-const fmtDb = (db: number) => `${db > 0 ? "+" : ""}${db.toFixed(1)}`;
+// Subrow cell formatter (the Pro-Q-style numeric companion under the curve).
 const fmtQ = (q: number) => q.toFixed(1);
 const xFromFreq = (hz: number, w: number) => (Math.log10(hz / F_MIN) / F_SPAN) * w;
 const freqFromX = (x: number, w: number) => F_MIN * Math.pow(10, (x / w) * F_SPAN);

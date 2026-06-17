@@ -6,6 +6,7 @@
 // ≤12MB (enforced here — the real cap, since a Worker can't decode audio to check length).
 import { readSessionId } from "./session";
 import { userBySession, type D1Database, type User } from "./db";
+import { json } from "./http";
 
 export const MAX_SAMPLE_BYTES = 12 * 1024 * 1024; // 12 MB — fits a 30s 48k/24-bit lossless clip
 export const MAX_SAMPLE_MS = 30_000;
@@ -32,10 +33,6 @@ interface SampleRow {
   duration_ms: number | null;
   bytes: number | null;
   created_at: number;
-}
-
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 // CREATE-IF-MISSING so the route works before the migration is applied to a live DB

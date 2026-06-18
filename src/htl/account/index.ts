@@ -181,6 +181,20 @@ export async function fetchLiveRooms(signal?: AbortSignal): Promise<LiveRoom[]> 
   return ((await res.json()) as { rooms: LiveRoom[] }).rooms;
 }
 
+/** A minimal public card from a follower/following list. */
+export interface FollowCard {
+  handle: string | null;
+  displayName: string | null;
+  avatar: string | null;
+}
+/** The handles a given @handle follows (used by Discover to surface "from people you
+ * follow" out of the live directory). Public list endpoint, paginated server-side. */
+export async function fetchFollowing(handle: string, signal?: AbortSignal): Promise<FollowCard[]> {
+  const res = await fetch(`/api/following?h=${encodeURIComponent(handle)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { list: FollowCard[] }).list;
+}
+
 export interface RoomAnnounce {
   title?: string;
   genre?: string;

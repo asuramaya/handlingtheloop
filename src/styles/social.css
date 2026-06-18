@@ -554,6 +554,30 @@ span.profile-handle:hover {
   align-self: flex-start;
 }
 
+/* Own-live badge on the Profile hero (B3): "● Live now · N listening" → opens Session. */
+.profile-live-badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #e0617a 55%, var(--line));
+  background: color-mix(in srgb, #e0617a 14%, transparent);
+  color: #e0617a;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  animation: live-pulse 2s ease-in-out infinite;
+}
+.profile-live-badge:hover {
+  background: color-mix(in srgb, #e0617a 22%, transparent);
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 /* --- Social screen body --- */
 .social-hint {
   color: var(--muted);

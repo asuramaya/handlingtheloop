@@ -25,7 +25,17 @@ import { ProfilePublicView } from "./ProfilePublicView";
 // of your public card (so "view as public" is redundant); ALL editing lives in the Account
 // section. Own profile only; session peers are device-scoped, never linked to an account id.
 
-export function ProfileScreen({ onClose }: { onClose: () => void }) {
+export function ProfileScreen({
+  onClose,
+  live,
+  listeners,
+  onGoToSession,
+}: {
+  onClose: () => void;
+  live?: boolean; // you're broadcasting a public lobby right now (B3 own-live badge)
+  listeners?: number;
+  onGoToSession?: () => void; // tapping the live badge opens the Session dock
+}) {
   const [me, setMe] = useState<Me | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,6 +113,13 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
               counts={profile?.counts ?? null}
               topTracks={top}
               emptyTopMsg="No plays yet — load tracks onto the decks and your most-played show up here."
+              live={
+                live ? (
+                  <button className="profile-live-badge" onClick={onGoToSession} title="Open the session">
+                    ● Live now{listeners ? ` · ${listeners} listening` : ""}
+                  </button>
+                ) : null
+              }
               headerAside={
                 <button
                   className={`room-eye ${revealed ? "on" : ""}`}

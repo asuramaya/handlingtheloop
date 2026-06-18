@@ -80,6 +80,12 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
           </span>
         </div>
 
+        {room.engineStale && (
+          <button className="engine-stale-note" onClick={() => location.reload()} title="Reload the app">
+            ⚠ This set was made on a different app version — refresh to hear it faithfully.
+          </button>
+        )}
+
         {room.listeningTo && (
           <>
             <div className="listening-banner">

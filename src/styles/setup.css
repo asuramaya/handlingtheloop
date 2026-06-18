@@ -187,6 +187,24 @@
   background: color-mix(in srgb, #c8506a 14%, var(--panel));
   font-size: 13px;
 }
+/* D5: the room's reconstruction engine differs from ours — a tap-to-reload warning. */
+.engine-stale-note {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid #d9a441;
+  background: color-mix(in srgb, #d9a441 14%, var(--panel));
+  color: #e7b65a;
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.engine-stale-note:hover {
+  background: color-mix(in srgb, #d9a441 22%, var(--panel));
+}
 .listening-what b {
   color: #e87f97;
 }

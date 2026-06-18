@@ -44,6 +44,7 @@ export interface Attachment {
   stage: boolean; // STEPPED UP from the floor: drives one deck, never anchors, reverts to a pub listener on step-down
   joinedAt: number; // epoch ms this device last became a participant (0 until joined) — for "joined Nm ago"
   color: string; // this device's account accent (hex) — the room "vibe" is the host's color
+  ev: number; // the device's reconstruction-engine version (D5; 0 = didn't report). The anchor's is the room's.
 }
 
 // The single derived "what is this device" — used for the roster, debugging, and tests. host
@@ -109,13 +110,14 @@ export interface RoomView {
   stage: StageReq[]; // pending hand-raises (participants only)
   chatSlow: number; // chat slow-mode: <0 off, 0 normal, >0 N-second gate
   muted: string[]; // device ids the host has muted (participants only — drives the unmute toggle)
+  engineVersion: number; // the anchor's reconstruction-engine version (D5; 0 if unknown)
 }
 
 // The welcome frame for a joining socket. A participant sees the roster + pending hand-raises;
 // the anonymous crowd sees neither (just the count + the gate). BOTH get the song-request list
 // — the crowd needs it to upvote (F3). Centralised so a new role-scoped field is added once.
 export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: SongRequest[]): ServerMsg {
-  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, requests } as const;
+  const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, engineVersion: view.engineVersion, requests } as const;
   return pub
     ? { t: "welcome", ...base, peers: [], pub: true }
     : { t: "welcome", ...base, peers: view.peers, stage: view.stage, muted: view.muted };
@@ -125,7 +127,7 @@ export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: 
 // count-only frame for the crowd (so the big roster never fans out to hundreds of listeners).
 export function presenceFor(view: RoomView): { full: ServerMsg; lite: ServerMsg } {
   return {
-    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow, muted: view.muted },
+    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow, muted: view.muted, engineVersion: view.engineVersion },
     lite: { t: "presence", peers: [], listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow },
   };
 }

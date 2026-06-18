@@ -4,6 +4,7 @@
 // list + the control baton, and reconnects with backoff. Pure transport: it exposes
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
+import { ENGINE_VERSION } from "./protocol";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -29,6 +30,7 @@ export interface RoomHandlers {
   chatSlow?: (seconds: number) => void; // slow-mode interval (<0 off, 0 normal, >0 N-sec)
   muted?: (on: boolean) => void; // the host muted/unmuted THIS device
   mutedList?: (ids: string[]) => void; // HOST: the set of muted device ids (drives the unmute toggle)
+  engine?: (stale: boolean, roomVersion: number) => void; // D5: room's engine version differs from ours → unfaithful mix
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -128,6 +130,7 @@ export class RoomClient {
   status: RoomStatus = "offline";
   listenerCount = 0; // broadcast-plane crowd size (from welcome/presence)
   roomPublic = false; // whether the room is open to anon listeners
+  roomEngineVersion = 0; // the room's reconstruction-engine version (anchor's; D5). 0 = unknown
   stageReqs: StageReq[] = []; // pending floor→stage hand-raises (host-visible)
   stageGate: StageGate = "request"; // how the crowd reaches the decks
 
@@ -304,12 +307,28 @@ export class RoomClient {
     this.send({ t: "color", color });
   }
 
+  /** True when the room's reconstruction engine (the anchor's) differs from ours (D5) — a stale
+   *  bundle on either side, so the locally-rebuilt mix can't be trusted bit-exact. Listener-facing. */
+  engineStale(): boolean {
+    return this.roomEngineVersion > 0 && this.roomEngineVersion !== ENGINE_VERSION;
+  }
+
+  // Record the room's engine version off welcome/presence and notify (only when it actually
+  // changes, so a per-presence frame doesn't re-fire the handler each tick).
+  private applyEngineVersion(v: number | undefined): void {
+    if (v === undefined) return;
+    if (v === this.roomEngineVersion) return;
+    this.roomEngineVersion = v;
+    this.h.engine?.(this.engineStale(), v);
+  }
+
   private open(): void {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const params = new URLSearchParams({ device: this.you, name: this.name, kind: this.kind });
     if (this.listenHandle) params.set("room", this.listenHandle); // public read-only listener
     else if (this.joinCode) params.set("join", this.joinCode);
     if (this.color) params.set("color", this.color);
+    params.set("ev", String(ENGINE_VERSION)); // D5: report our reconstruction-engine version
     const url = `${proto}://${location.host}/api/room?${params.toString()}`;
     this.setStatus("connecting");
     let ws: WebSocket;
@@ -374,6 +393,7 @@ export class RoomClient {
         this.h.listeners?.(this.listenerCount, this.roomPublic);
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
+        this.applyEngineVersion(msg.engineVersion);
         if (msg.requests) this.h.requests?.(msg.requests);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
         if (msg.muted) this.h.mutedList?.(msg.muted);
@@ -411,6 +431,7 @@ export class RoomClient {
         this.h.listeners?.(this.listenerCount, this.roomPublic);
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
+        this.applyEngineVersion(msg.engineVersion);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
         if (msg.muted) this.h.mutedList?.(msg.muted);
         break;

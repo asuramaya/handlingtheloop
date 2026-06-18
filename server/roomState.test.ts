@@ -6,7 +6,7 @@ function att(over: Partial<Attachment>): Attachment {
   return {
     device: "d1", name: "Dev", kind: "Mac", host: false, joined: false, listening: false,
     controlling: false, pending: false, pub: false, decks: "", stageReq: "", stage: false,
-    joinedAt: 0, color: "", ...over,
+    joinedAt: 0, color: "", ev: 0, ...over,
   };
 }
 
@@ -61,6 +61,7 @@ describe("welcomeFor / presenceFor", () => {
     stage: [{ id: "x", name: "X", deck: "A" }],
     chatSlow: 0,
     muted: [],
+    engineVersion: 1,
   };
 
   it("gives a participant the roster + hand-raises + requests; the crowd gets none of it", () => {
@@ -79,6 +80,9 @@ describe("welcomeFor / presenceFor", () => {
     expect(crowd.requests?.length).toBe(1); // the crowd needs the list to upvote (F3)
     expect(crowd.listeners).toBe(7);
     expect(crowd.stageGate).toBe("open");
+    // D5: the room's engine version rides BOTH payloads so any joiner can spot a stale mix.
+    expect(part.engineVersion).toBe(1);
+    expect(crowd.engineVersion).toBe(1);
   });
 
   it("presence full carries the roster + hand-raises; lite is count + gate only", () => {

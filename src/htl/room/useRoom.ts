@@ -42,6 +42,7 @@ export interface RoomState {
   isGuest: boolean; // did I arrive via an invite (someone else's session)?
   roomPublic: boolean; // is the room OPEN to anonymous broadcast listeners?
   listenerCount: number; // size of the anonymous broadcast crowd
+  engineStale: boolean; // D5: the room's reconstruction engine differs from ours → mix can't be trusted (refresh)
   goPublic: (on: boolean) => void; // HOST: open/close the broadcast plane (+ directory announce)
   listeningTo: string | null; // a host @handle if we've tuned into their public broadcast (else null)
   tuneIn: (handle: string) => void; // tune into a public room by @handle (read-only listener)
@@ -138,6 +139,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [error, setError] = useState<string | null>(null);
   const [roomPublic, setRoomPublic] = useState(false);
   const [listenerCount, setListenerCount] = useState(0);
+  const [engineStale, setEngineStale] = useState(false);
   const listenerCountRef = useRef(0);
   listenerCountRef.current = listenerCount;
   // HOST: the pending floor→stage hand-raises. LISTENER (optimistic): the deck I asked for
@@ -225,6 +227,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       },
       stage: (reqs) => setStageRequests(reqs),
       stageGate: (mode) => setStageGateState(mode),
+      engine: (stale) => setEngineStale(stale),
       // A step-up didn't go through (declined / deck taken / closed) — clear the optimistic
       // pending deck. The human reason rides a separate `error` the server sends alongside.
       stageSelf: () => setMyStageDeck(null),
@@ -446,6 +449,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     isGuest,
     roomPublic,
     listenerCount,
+    engineStale,
     goPublic,
     listeningTo: listenHandle,
     tuneIn,

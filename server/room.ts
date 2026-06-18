@@ -179,6 +179,7 @@ export class DjRoom {
     const host = url.searchParams.get("host") === "1"; // set by the Worker from the authed identity
     const pub = url.searchParams.get("pub") === "1"; // anon read-only listener (un-forgeable; the Worker sets it)
     const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
+    const ev = Math.max(0, Math.min(9999, Number(url.searchParams.get("ev")) || 0)); // reconstruction-engine version (D5)
 
     // A host-banned device can't re-enter the session (L1). Device ids are non-secret, so this
     // is best-effort — the same posture as the rest of this anon system.
@@ -208,8 +209,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color };
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -699,6 +700,18 @@ export class DjRoom {
     return false;
   }
 
+  // The room's authoritative reconstruction-engine version (D5) = the ANCHOR's reported `ev`
+  // (the device producing the recipe everyone rebuilds). 0 until an anchor with a known
+  // version is live. Clients compare it to their local ENGINE_VERSION to spot an unfaithful mix.
+  private engineVersion(): number {
+    if (!this.anchorId) return 0;
+    for (const ws of this.state.getWebSockets(this.anchorId)) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a) return a.ev || 0;
+    }
+    return 0;
+  }
+
   // A phone/tablet (by its reported device kind). Used only to bias the clock toward a desktop.
   private isMobile(device: string | null): boolean {
     if (!device) return false;
@@ -968,6 +981,7 @@ export class DjRoom {
       stage: this.stageReqs(),
       chatSlow: this.chatSlow,
       muted: [...this.muted],
+      engineVersion: this.engineVersion(),
     };
   }
 

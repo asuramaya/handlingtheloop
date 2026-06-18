@@ -18,6 +18,14 @@
 
 export type DeckId = "A" | "B";
 
+// The reconstruction-engine version (D5). A listener rebuilds the host's mix locally from the
+// recipe stream, so bit-exactness requires BOTH sides run the same engine semantics. BUMP this
+// whenever a change alters deterministic reconstruction (DSP math, intent semantics, default
+// values a `sync`/`key` leans on). Recordings (Epic G) stamp it so replay can pin or refuse;
+// live joins compare it (a mismatch = "refresh to hear the set faithfully"). A stale cached
+// bundle is the usual cause of divergence between a host and a listener.
+export const ENGINE_VERSION = 1;
+
 // Crowd reactions (F4) + hype (F2). A listener taps one of a FIXED set of emojis; the DO
 // AGGREGATES them (never fans out each tap — a 500-person room would storm) into a periodic
 // frame of per-emoji counts plus a decaying HYPE level (0..1) the DJ reads as crowd energy.
@@ -218,13 +226,16 @@ export type ServerMsg =
   // `listeners` = count of anonymous read-only (public) listeners, who are NOT in
   // `peers` (the roster stays the writers/guests; the crowd is just a number). `public`
   // = whether the room is open to anon listeners (the host's broadcast toggle).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number; muted?: string[] }
+  // `engineVersion` = the room's authoritative reconstruction-engine version (the anchor's;
+  // D5). A client compares it to its local ENGINE_VERSION to detect a mix it can't faithfully
+  // rebuild (stale bundle on either side).
+  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number; muted?: string[]; engineVersion?: number }
   // The live song-request list (F1), sent to PARTICIPANTS (the DJ acts on them).
   | { t: "requests"; list: SongRequest[] }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
   // `stageGate`/`chatSlow` ride BOTH payloads — a listener needs them to step up / chat.
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number; muted?: string[] }
+  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number; muted?: string[]; engineVersion?: number }
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }

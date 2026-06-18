@@ -1,20 +1,13 @@
 import { useEffect, useState } from "react";
 import { type PublicProfile, block, fetchPublicProfile, follow, unblock, unfollow } from "@htl/account";
 import { DockResizer } from "./DockResizer";
+import { ProfilePublicView } from "./ProfilePublicView";
 
 // The PUBLIC profile at /@handle — anyone can view it (no email/connections, no
-// edit controls). Mirrors the visual language of the own-Profile screen, and
-// shares the right dock with Settings/Profile/Session (mutually exclusive) — App
-// drives that via the `/@handle` path. The app has no router, so we expose a tiny
-// `handleFromPath()` helper App polls on mount + popstate.
-
-function formatDate(ms: number): string {
-  try {
-    return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "long" });
-  } catch {
-    return "—";
-  }
-}
+// edit controls). Renders the SAME ProfilePublicView as the own-Profile hero (so the
+// two can't drift), and shares the right dock with Settings/Profile/Session/Discover
+// (mutually exclusive) — App drives that via the `/@handle` path. The app has no router,
+// so we expose a tiny `handleFromPath()` helper App polls on mount + popstate.
 
 const HANDLE_PATH = /^\/@([A-Za-z0-9_]{1,20})$/;
 /** The handle in the current URL path (`/@name` → "name"), or null. */
@@ -72,75 +65,36 @@ export function PublicProfileScreen({
           </div>
         ) : (
           <div className="profile-body">
-            <div className="profile-id">
-              {profile.avatar ? (
-                <img className="profile-avatar" src={profile.avatar} alt="" />
-              ) : (
-                <span className="profile-avatar fallback" aria-hidden="true">
-                  {(profile.displayName || profile.handle).slice(0, 1).toUpperCase()}
-                </span>
-              )}
-              <div className="profile-id-text">
-                <div className="profile-name">{profile.displayName || `@${profile.handle}`}</div>
-                <span className="profile-handle">@{profile.handle}</span>
-                {profile.bio && <div className="profile-bio">{profile.bio}</div>}
-                {profile.memberSince && <div className="profile-since">Member since {formatDate(profile.memberSince)}</div>}
-              </div>
-            </div>
-
-            {profile.live && !profile.isSelf && onListen && (
-              <button className="listen-live-btn" onClick={() => onListen(profile.handle)}>
-                ● Listen live · {profile.liveListeners} tuned in
-              </button>
-            )}
-
-            <div className="profile-graph">
-              <div className="profile-counts">
-                <span>
-                  <b>{profile.counts.followers}</b> follower{profile.counts.followers === 1 ? "" : "s"}
-                </span>
-                <span>
-                  <b>{profile.counts.following}</b> following
-                </span>
-                {rel?.mutual && <span className="profile-friend">· Friends</span>}
-              </div>
-              {!profile.isSelf && rel && (
-                <div className="profile-graph-actions">
-                  <button className={`follow-btn ${rel.following ? "on" : ""}`} onClick={() => void onFollow()}>
-                    {rel.following ? "Following" : rel.followedBy ? "Follow back" : "Follow"}
+            <ProfilePublicView
+              avatar={profile.avatar}
+              avatarLetter={profile.displayName || profile.handle}
+              name={profile.displayName || `@${profile.handle}`}
+              handle={profile.handle}
+              bio={profile.bio}
+              memberSince={profile.memberSince}
+              counts={profile.counts}
+              friends={rel?.mutual}
+              topTracks={top}
+              live={
+                profile.live && !profile.isSelf && onListen ? (
+                  <button className="listen-live-btn" onClick={() => onListen(profile.handle)}>
+                    ● Listen live · {profile.liveListeners} tuned in
                   </button>
-                  <button className="block-btn" onClick={() => void onBlock()}>
-                    {rel.blocking ? "Unblock" : "Block"}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="profile-section">
-              <div className="profile-section-head">Top songs</div>
-              {top.length === 0 ? (
-                <p className="profile-empty">No plays yet.</p>
-              ) : (
-                <ol className="profile-top">
-                  {top.map((t, i) => (
-                    <li key={t.videoId} className="profile-top-row">
-                      <span className="profile-top-rank">{i + 1}</span>
-                      <img
-                        className="profile-top-thumb"
-                        src={t.thumbnail || `https://i.ytimg.com/vi/${t.videoId}/default.jpg`}
-                        alt=""
-                        loading="lazy"
-                      />
-                      <span className="profile-top-meta">
-                        <span className="profile-top-title">{t.title || t.videoId}</span>
-                        {t.artist && <span className="profile-top-artist">{t.artist}</span>}
-                      </span>
-                      <span className="profile-top-plays">{t.plays}×</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
+                ) : null
+              }
+              actions={
+                !profile.isSelf && rel ? (
+                  <>
+                    <button className={`follow-btn ${rel.following ? "on" : ""}`} onClick={() => void onFollow()}>
+                      {rel.following ? "Following" : rel.followedBy ? "Follow back" : "Follow"}
+                    </button>
+                    <button className="block-btn" onClick={() => void onBlock()}>
+                      {rel.blocking ? "Unblock" : "Block"}
+                    </button>
+                  </>
+                ) : null
+              }
+            />
           </div>
         )}
       </div>

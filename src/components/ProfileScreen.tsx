@@ -16,18 +16,13 @@ import {
 } from "@htl/account";
 import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { DockResizer } from "./DockResizer";
+import { ProfilePublicView } from "./ProfilePublicView";
 
-// The full-screen Profile — the home for everything account-shaped (moved out of
-// Settings ▸ Accounts): identity, connected services, member-since, and the user's
-// top songs (most-played). Own profile only — peers in a session are device-scoped,
-// never linked to an account id, by design.
-function formatDate(ms: number): string {
-  try {
-    return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "long" });
-  } catch {
-    return "—";
-  }
-}
+// The own Profile — PUBLIC-FIRST (Option B, docs/social-layer.md → "Surface architecture"):
+// your public card (the shared ProfilePublicView, identical to /@handle) is the hero, edited
+// in place; the account plumbing (connections, sign-out, email) is demoted to a collapsible
+// "Account" footer. NOT tabbed — hierarchy does the separating. Own profile only; session
+// peers are device-scoped, never linked to an account id, by design.
 
 // Navigate to /@handle — App listens for popstate and opens the public-profile dock
 // (which is mutually exclusive with this own-Profile dock, so it takes over).
@@ -40,8 +35,8 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editingHandle, setEditingHandle] = useState(false);
-  const [editingProfile, setEditingProfile] = useState(false);
+  const [editing, setEditing] = useState(false); // inline edit panel (handle + display/bio) revealed
+  const [accountOpen, setAccountOpen] = useState(false); // the demoted Account section (connections/sign-out)
   const revealed = usePrivacyRevealed();
 
   const load = useCallback(() => {
@@ -90,137 +85,123 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <div className="profile-body">
-            <div className="profile-id">
-              {user?.avatar ? (
-                <img className={`profile-avatar ${revealed ? "" : "private"}`} src={user.avatar} alt="" />
-              ) : (
-                <span className="profile-avatar fallback" aria-hidden="true">
-                  {(user?.name || "?").slice(0, 1).toUpperCase()}
-                </span>
-              )}
-              <div className="profile-id-text">
-                <div className="profile-name">
-                  {user?.displayName || user?.name ? (revealed ? user?.displayName || user?.name : maskName(user?.displayName || user?.name || "")) : "Signed in"}
-                </div>
-                {/* The @handle is the PUBLIC identity — always shown (never masked). */}
-                {user?.handle ? (
-                  <button className="profile-handle" onClick={() => setEditingHandle(true)} title="Change your handle">
-                    @{user.handle}
-                  </button>
+            {/* HERO — your public card, the SAME render as /@handle (no drift), edited in place. */}
+            <ProfilePublicView
+              avatar={user?.avatar}
+              maskedAvatar={!revealed}
+              avatarLetter={user?.displayName || user?.name || "?"}
+              name={
+                user?.displayName || user?.name
+                  ? revealed
+                    ? user?.displayName || user?.name || "Signed in"
+                    : maskName(user?.displayName || user?.name || "")
+                  : "Signed in"
+              }
+              handle={user?.handle ?? null}
+              bio={user?.bio}
+              memberSince={memberSince}
+              counts={profile?.counts ?? null}
+              topTracks={top}
+              emptyTopMsg="No plays yet — load tracks onto the decks and your most-played show up here."
+              headerAside={
+                <button
+                  className={`room-eye ${revealed ? "on" : ""}`}
+                  onClick={toggleRevealed}
+                  title={revealed ? "Hide name & email (streaming-safe)" : "Reveal name & email"}
+                  aria-label={revealed ? "Hide name & email" : "Reveal name & email"}
+                >
+                  {revealed ? "🙈" : "👁"}
+                </button>
+              }
+              actions={
+                user?.handle ? (
+                  <>
+                    <button className="profile-edit-btn" onClick={() => setEditing((v) => !v)}>
+                      {editing ? "Done" : "Edit"}
+                    </button>
+                    <button className="profile-view-public" onClick={() => viewPublicProfile(user.handle!)}>
+                      View as public →
+                    </button>
+                  </>
                 ) : (
-                  <button className="profile-handle claim" onClick={() => setEditingHandle(true)}>
+                  <button className="profile-handle claim" onClick={() => setEditing(true)}>
                     + Claim your @handle
                   </button>
+                )
+              }
+            />
+
+            {/* Inline edit panel (handle rename + display-name/bio), revealed by "Edit" / the
+                claim CTA — edit-in-place, no tab hop. Display/bio editor only once a handle exists. */}
+            {editing && (
+              <div className="profile-edit-panel">
+                <HandleEditor
+                  current={user?.handle ?? null}
+                  onCancel={() => setEditing(false)}
+                  onDone={() => {
+                    setEditing(false);
+                    load();
+                  }}
+                />
+                {user?.handle && (
+                  <ProfileEditor
+                    displayName={user?.displayName ?? ""}
+                    bio={user?.bio ?? ""}
+                    onCancel={() => setEditing(false)}
+                    onDone={() => {
+                      setEditing(false);
+                      load();
+                    }}
+                  />
                 )}
-                {user?.email && <div className="profile-email">{revealed ? user.email : maskEmail(user.email)}</div>}
-                {memberSince && <div className="profile-since">Member since {formatDate(memberSince)}</div>}
               </div>
+            )}
+
+            {/* "Your sets" history plugs in here when Epic G1 lands (your recorded sets,
+                drafts + published — the persistent twin of your live status). */}
+
+            {/* ACCOUNT — demoted, collapsible footer: the rare set-and-forget plumbing
+                (connections / email / sign-out), kept off the public hero. */}
+            <div className={`profile-account ${accountOpen ? "open" : ""}`}>
               <button
-                className={`room-eye ${revealed ? "on" : ""}`}
-                onClick={toggleRevealed}
-                title={revealed ? "Hide name & email (streaming-safe)" : "Reveal name & email"}
-                aria-label={revealed ? "Hide name & email" : "Reveal name & email"}
+                className="profile-account-head"
+                onClick={() => setAccountOpen((v) => !v)}
+                aria-expanded={accountOpen}
               >
-                {revealed ? "🙈" : "👁"}
+                <span className="profile-account-title">⚙ Account</span>
+                <span className="profile-account-summary">
+                  {["YouTube", hasSpotify && "Spotify", hasTidal && "TIDAL"].filter(Boolean).join(" · ")}
+                </span>
+                <span className="profile-account-caret" aria-hidden="true">
+                  {accountOpen ? "⌃" : "⌄"}
+                </span>
               </button>
-            </div>
-
-            {editingHandle && (
-              <HandleEditor
-                current={user?.handle ?? null}
-                onCancel={() => setEditingHandle(false)}
-                onDone={() => {
-                  setEditingHandle(false);
-                  load();
-                }}
-              />
-            )}
-
-            {/* Public profile — display name + bio are what others see at /@handle.
-                Distinct from the private account bits (email/connections) below. */}
-            {editingProfile ? (
-              <ProfileEditor
-                displayName={user?.displayName ?? ""}
-                bio={user?.bio ?? ""}
-                onCancel={() => setEditingProfile(false)}
-                onDone={() => {
-                  setEditingProfile(false);
-                  load();
-                }}
-              />
-            ) : (
-              <div className="profile-public">
-                {profile?.counts && (
-                  <div className="profile-counts">
-                    <span>
-                      <b>{profile.counts.followers}</b> follower{profile.counts.followers === 1 ? "" : "s"}
-                    </span>
-                    <span>
-                      <b>{profile.counts.following}</b> following
-                    </span>
+              {accountOpen && (
+                <div className="profile-account-body">
+                  {user?.email && <div className="profile-email">{revealed ? user.email : maskEmail(user.email)}</div>}
+                  <div className="profile-conns">
+                    <ConnRow label="YouTube" sub="via Google" connected actionLabel="Disconnect" onAction={() => disconnect("google")} />
+                    <ConnRow
+                      label="Spotify"
+                      sub={hasSpotify ? "linked" : "connect to sync playlists"}
+                      connected={hasSpotify}
+                      actionLabel={hasSpotify ? "Disconnect" : "Connect"}
+                      onAction={() => (hasSpotify ? disconnect("spotify") : startSpotifyConnect())}
+                    />
+                    <ConnRow
+                      label="TIDAL"
+                      sub={hasTidal ? "linked" : "connect to sync playlists"}
+                      connected={hasTidal}
+                      actionLabel={hasTidal ? "Disconnect" : "Connect"}
+                      onAction={() => (hasTidal ? disconnect("tidal") : startTidalConnect())}
+                    />
                   </div>
-                )}
-                {user?.bio && <p className="profile-bio">{user.bio}</p>}
-                <div className="profile-public-actions">
-                  <button className="profile-edit-btn" onClick={() => setEditingProfile(true)}>
-                    Edit profile
+                  <button className="profile-signout" onClick={signOut}>
+                    Sign out
                   </button>
-                  {user?.handle && (
-                    <button className="profile-view-public" onClick={() => viewPublicProfile(user.handle!)}>
-                      View public profile →
-                    </button>
-                  )}
                 </div>
-              </div>
-            )}
-
-            <div className="profile-conns">
-              <ConnRow label="YouTube" sub="via Google" connected actionLabel="Disconnect" onAction={() => disconnect("google")} />
-              <ConnRow
-                label="Spotify"
-                sub={hasSpotify ? "linked" : "connect to sync playlists"}
-                connected={hasSpotify}
-                actionLabel={hasSpotify ? "Disconnect" : "Connect"}
-                onAction={() => (hasSpotify ? disconnect("spotify") : startSpotifyConnect())}
-              />
-              <ConnRow
-                label="TIDAL"
-                sub={hasTidal ? "linked" : "connect to sync playlists"}
-                connected={hasTidal}
-                actionLabel={hasTidal ? "Disconnect" : "Connect"}
-                onAction={() => (hasTidal ? disconnect("tidal") : startTidalConnect())}
-              />
-            </div>
-
-            <div className="profile-section">
-              <div className="profile-section-head">Top songs</div>
-              {top.length === 0 ? (
-                <p className="profile-empty">No plays yet — load tracks onto the decks and your most-played show up here.</p>
-              ) : (
-                <ol className="profile-top">
-                  {top.map((t, i) => (
-                    <li key={t.videoId} className="profile-top-row">
-                      <span className="profile-top-rank">{i + 1}</span>
-                      <img
-                        className="profile-top-thumb"
-                        src={t.thumbnail || `https://i.ytimg.com/vi/${t.videoId}/default.jpg`}
-                        alt=""
-                        loading="lazy"
-                      />
-                      <span className="profile-top-meta">
-                        <span className="profile-top-title">{t.title || t.videoId}</span>
-                        {t.artist && <span className="profile-top-artist">{t.artist}</span>}
-                      </span>
-                      <span className="profile-top-plays">{t.plays}×</span>
-                    </li>
-                  ))}
-                </ol>
               )}
             </div>
-
-            <button className="profile-signout" onClick={signOut}>
-              Sign out
-            </button>
           </div>
         )}
       </div>

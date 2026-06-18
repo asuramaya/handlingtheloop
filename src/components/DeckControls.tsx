@@ -289,13 +289,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         {/* Pad bank: a CUE / LOOP mode selector swaps ONLY these 8 pads — hot cues, or the
             beat-loop sizes (folds the old separate loop-size row in). */}
         <div className="pad-mode">
-          <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
-          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
+          <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE<span className="kbd">U</span></button>
+          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">I</span></button>
         </div>
 
         {deck.padMode === "loop" && (
         <div className="loop-sizes">
-          {LOOP_SIZES.map((s) => {
+          {LOOP_SIZES.map((s, i) => {
             const active = deck.loop?.active && deck.loop.beats === s.n;
             return (
               <button
@@ -330,7 +330,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 }}
               >
                 {s.label}
-                <span className="kbd">{s.kbd}</span>
+                <span className="kbd">{i + 1}</span>
               </button>
             );
           })}

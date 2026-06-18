@@ -101,6 +101,58 @@ into the already-defined Discover-ranking + Profile-history holes when **G1** la
 (which D5→D6 gate). Affected epics annotated below: **B3** (live badge — substantially
 shipped), **E2/J1** (Discover surface), **G1–G5** (sets), **B5** (profile sets history).
 
+## Ordered backlog (task list — 2026-06-18)
+
+The remaining work, ordered. Top of the list is the active push; per-task detail is in the
+Epics section below. **Done so far (2026-06-18, main, undeployed):** surface restructure
+(Discover surface + public-first Profile), **B3**, **J1** (v1), **D5**.
+
+### Tier 1 — Sets spine (Epic G) — the active push
+- [ ] **G1a — capture + model.** Host-side: buffer the broadcast digest while live; on end,
+      persist the log to **R2** + a `sets` row in **D1** (host, duration, tracklist,
+      `engineVersion`, draft flag). DECISION: host-side capture for v1 (recipe-is-cheap model,
+      dodges the DO write-quota ceiling — see [[htl-do-write-quota]]); DO-side only if we need
+      crash-resilient recording. *Foundational — b/c/d build on it.*
+- [ ] **G1b — lifecycle.** Post-set **Save / Publish / Discard** card in Session; capture-by-
+      default → private draft → published. (Surface ownership: Session owns this.)
+- [ ] **G1c — replay** *(the hard part)*. A replay clock feeds the recorded log back through the
+      SAME engine handlers a live listener uses → deterministic on-device rebuild. D5 pins the
+      version; a dead source id = graceful gap.
+- [ ] **G1d — surfaces.** Sets list in **Discover** (published/popular) + **Profile** history
+      (drafts+published) — fill the seams already marked in DiscoverScreen + the Profile hero.
+- [ ] **D6 — gesture resync contract.** scratch/jog → snap to grid so non-deterministic gestures
+      bake cleanly into the recipe. *Fidelity follow-up to G1c, not a blocker.*
+- [ ] **G2** auto tracklists · **G3** clips/moments · **G4** external share links + OG cards ·
+      **G5** recording lifecycle (ownership = host, co-DJs credited; retention; deletion; skew).
+
+### Tier 2 — cheap / unblocked polish
+- [ ] **F1→queue** one-tap (map request text → catalog search → auto-mix queue)
+- [ ] **F2** hype meter on the board HUD (not just the Session panel)
+- [ ] **E5** demote the two legacy toggles (mute → plain mute; output-routing → a setting)
+- [ ] **B5** past-sets list on the profile (rides G1)
+
+### Tier 3 — room robustness (E + D hardening)
+- [ ] **E7** host-disconnect grace + rehydrate + optional handoff · **E8** DO-eviction rehydration
+      · **E9** co-controller disconnect (freeze vs auto-release) · **E10** max room-size cap
+- [ ] **D3** late-join snapshot (incl. auto-mix queue) · **D4** clock sync · **D7** geo-block
+      divergence · **D8** drift catch-up policy · **D9** cold-decode dedup · **D10** reconnect storm
+
+### Tier 4 — scale (demand-gated — build when a room nears 500)
+- [ ] **D2** relay tier (RelayRoom shard DOs) · **C4** denormalize follower counts
+
+### Tier 5 — moderation leftovers (Epic L)
+- [ ] **L4** anti-sybil (listener-count inflation, follow bots) · follower-only chat (needs the
+      graph at the DO) · @everyone mention guard · **L1** co-host mod-grant · **L5** HTTP
+      follow/mention rate limits
+
+### Tier 6 — cross-cutting (P5)
+- [ ] **I** notifications (go-live / follower / mention / invited-up; fan-out strategy) · **K**
+      presence semantics (online/live/listening, accurate counts, ghost/DND) · **M** privacy
+      matrix + **M3** account-deletion cascade (unblocks **A10** handle tombstone) · **N** mobile
+      listener path (verify/handoff/backgrounded audio) · **O** ToS for public broadcast
+
+---
+
 ## Review log — 2026-06-16 (plan re-validated, still good)
 
 Codebase swept; the day's commits (`1d182e0` EQ Pro-Q, `97d962b` FX rack+sampler,

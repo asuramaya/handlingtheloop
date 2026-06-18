@@ -231,16 +231,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           </button>
         </div>
 
-        {/* Performance pads: a CUE / LOOP mode selector over ONE 8-pad bank. LOOP folds the
-            old separate beat-loop-size row into the pads and shows the manual IN/OUT/EXIT
-            strip; CUE shows the hot cues. The keyboard triggers both regardless of mode. */}
-        <div className="pad-mode">
-          <button className={padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
-          <button className={padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
-        </div>
-
-        {padMode === "loop" && (
-        <>
+        {/* Manual loop strip — ALWAYS visible (IN / OUT / EXIT), constant across pad modes. */}
         <div className="loops">
           {/* IN / OUT drop the loop boundaries; SHIFT-IN / SHIFT-OUT instead arm a
               fine-adjust mode where the waveform (drag / scroll) and arrow keys nudge
@@ -291,6 +282,15 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             <span className="kbd">E</span>
           </button>
         </div>
+
+        {/* Pad bank: a CUE / LOOP mode selector swaps ONLY these 8 pads — hot cues, or the
+            beat-loop sizes (folds the old separate loop-size row in). */}
+        <div className="pad-mode">
+          <button className={padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
+          <button className={padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
+        </div>
+
+        {padMode === "loop" && (
         <div className="loop-sizes">
           {LOOP_SIZES.map((s) => {
             const active = deck.loop?.active && deck.loop.beats === s.n;
@@ -332,7 +332,6 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             );
           })}
         </div>
-        </>
         )}
 
         {padMode === "cue" && (

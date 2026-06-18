@@ -12,21 +12,29 @@ import {
 } from "@htl/media";
 import type { Me } from "@htl/account";
 
-// The sampler strip's state engine. 12 pads, routed by position:
-//   0-3   → deck A channel  (region pads: "play X→Y" of deck A's track)
-//   4-7   → master          (global pads: uploaded files, account-stored)
-//   8-11  → deck B channel  (region pads: deck B's track)
-// Region pads are positions only (per-track, local). Global pads are files (R2/D1).
+// The sampler's state engine. The 28 pads split into one GLOBAL bank + two per-deck
+// REGION banks, addressed by a flat index:
+//   0-11  → GLOBAL (master route): uploaded files, account-stored (the strip).
+//   12-19 → deck A region (A channel): "play X→Y" of deck A's track (a deck pad-mode).
+//   20-27 → deck B region (B channel): deck B's track.
+// Region pads are positions only (per-track, local); global pads are files (R2/D1).
 
-export const PAD_COUNT = 12;
-export const GLOBAL_PADS = ["g0", "g1", "g2", "g3"] as const;
-const REGION_KEY = "htl:samplerRegions"; // { [videoId]: (RegionDesc|null)[4] }
+export const GLOBAL_COUNT = 12;
+export const DECK_REGION_COUNT = 8;
+export const PAD_COUNT = GLOBAL_COUNT + DECK_REGION_COUNT * 2; // 28
+export const GLOBAL_PADS = Array.from({ length: GLOBAL_COUNT }, (_, i) => `g${i}`);
+const REGION_KEY = "htl:samplerRegions"; // { [videoId]: (RegionDesc|null)[8] }
 const GLOBAL_META_KEY = "htl:samplerGlobalMeta"; // { g0:{mode,gain}, ... } (server holds the file+name)
 
-export const routeOf = (i: number): "A" | "master" | "B" => (i < 4 ? "A" : i < 8 ? "master" : "B");
-const regionDeck = (i: number): DeckId => (i < 4 ? "A" : "B");
-const regionSlot = (i: number): number => (i < 4 ? i : i - 8); // 0..3
-const globalSlot = (i: number): number => i - 4; // 0..3
+export const routeOf = (i: number): "A" | "master" | "B" =>
+  i < GLOBAL_COUNT ? "master" : i < GLOBAL_COUNT + DECK_REGION_COUNT ? "A" : "B";
+const regionDeck = (i: number): DeckId => (i < GLOBAL_COUNT + DECK_REGION_COUNT ? "A" : "B");
+const regionSlot = (i: number): number =>
+  i < GLOBAL_COUNT + DECK_REGION_COUNT ? i - GLOBAL_COUNT : i - GLOBAL_COUNT - DECK_REGION_COUNT; // 0..7
+const globalSlot = (i: number): number => i; // 0..11
+/** First pad index of a deck's 8-pad region bank (so the deck's SAMPLER pad-mode slices it). */
+export const deckPadBase = (deckId: DeckId): number =>
+  deckId === "A" ? GLOBAL_COUNT : GLOBAL_COUNT + DECK_REGION_COUNT; // 12 | 20
 
 interface RegionDesc {
   start: number;
@@ -77,6 +85,7 @@ function saveJson(key: string, v: unknown) {
   }
 }
 
+const emptyRegionArr = (): (RegionDesc | null)[] => Array(DECK_REGION_COUNT).fill(null);
 const emptyGlobals = (meta: GlobalMeta): GlobalPad[] =>
   GLOBAL_PADS.map((g) => ({ name: "", mode: meta[g]?.mode ?? "oneshot", gain: meta[g]?.gain ?? 1, ready: false }));
 
@@ -84,7 +93,7 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
   const [regions, setRegions] = useState<RegionStore>(() => loadJson<RegionStore>(REGION_KEY, {}));
   const globalMeta = useRef<GlobalMeta>(loadJson<GlobalMeta>(GLOBAL_META_KEY, {}));
   const [globals, setGlobals] = useState<GlobalPad[]>(() => emptyGlobals(globalMeta.current));
-  const fileBuffers = useRef<(AudioBuffer | null)[]>([null, null, null, null]); // decoded global clips
+  const fileBuffers = useRef<(AudioBuffer | null)[]>(Array(GLOBAL_COUNT).fill(null)); // decoded global clips
   const [error, setError] = useState<string | null>(null);
   const [playTick, bumpPlaying] = useReducer((n: number) => n + 1, 0); // re-render when voices start/stop
 
@@ -106,7 +115,7 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
   useEffect(() => {
     if (!me?.user) {
       // signed out: drop the global clips (keep local mode/gain prefs)
-      fileBuffers.current = [null, null, null, null];
+      fileBuffers.current = Array(GLOBAL_COUNT).fill(null);
       setGlobals(emptyGlobals(globalMeta.current));
       engine.sampler.stopAll();
       return;
@@ -120,7 +129,7 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
         return;
       }
       for (const s of dtos) {
-        const gi = (GLOBAL_PADS as readonly string[]).indexOf(s.pad);
+        const gi = GLOBAL_PADS.indexOf(s.pad);
         if (gi < 0) continue;
         try {
           const res = await fetch(sampleAudioUrl(s.id), { credentials: "same-origin" });
@@ -144,7 +153,7 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.user?.id, engine]);
 
-  // The 12 pads, derived from regions (per loaded track) + globals + live playing state.
+  // The 28 pads, derived from regions (per loaded track) + globals + live playing state.
   const pads = useMemo<SamplerPad[]>(() => {
     const out: SamplerPad[] = [];
     for (let i = 0; i < PAD_COUNT; i++) {
@@ -236,7 +245,7 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
       if (end - start < 0.05) return;
       const slot = regionSlot(i);
       const next: RegionStore = { ...regions };
-      const arr = (next[vid] ? [...next[vid]] : [null, null, null, null]) as (RegionDesc | null)[];
+      const arr = (next[vid] ? [...next[vid]] : emptyRegionArr()) as (RegionDesc | null)[];
       arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1 };
       next[vid] = arr;
       persistRegions(next);
@@ -373,3 +382,5 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
 
   return { pads, error, clearError: () => setError(null), trigger, release, assignRegion, assignFile, clearPad, setMode, setGain };
 }
+
+export type SamplerApi = ReturnType<typeof useSampler>;

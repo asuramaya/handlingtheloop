@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
 import type { AudioEngine, SampleMode } from "@htl";
 import type { Me } from "@htl/account";
-import { useSampler, type SamplerPad } from "./useSampler";
+import { useSampler, GLOBAL_COUNT, type SamplerPad } from "./useSampler";
 
-// The 12-pad sampler strip that sits over the A/B crossfader. Position = route:
-// [A A A A | G G G G | B B B B] — left four into deck A's channel, middle four to
-// master (global account files), right four into deck B's channel. Deck pads capture a
-// "play X→Y" region of that deck's loaded track; global pads hold uploaded clips.
+// The 12 GLOBAL sample pads (master-routed) that sit over the A/B crossfader — uploaded
+// account clips that cut through the mix. The per-deck "play X→Y" region samples (8 each)
+// live in the decks' SAMPLER pad-mode now, not here.
 
 const MODE_LABEL: Record<SampleMode, string> = { oneshot: "1-shot", gate: "gate", loop: "loop" };
 const MODE_DOT: Record<SampleMode, string> = { oneshot: "●", gate: "▣", loop: "↻" };
@@ -16,15 +15,13 @@ export function SamplerStrip({
   engine,
   loaded,
   me,
-  accentA,
-  accentB,
   ctlRef,
 }: {
   engine: AudioEngine;
   loaded: { A: string | null; B: string | null };
   me: Me | null;
-  accentA: string;
-  accentB: string;
+  accentA?: string; // (kept for the caller; the strip is all-global now, no A/B tint)
+  accentB?: string;
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
 }) {
   const s = useSampler(engine, loaded, me);
@@ -95,14 +92,11 @@ export function SamplerStrip({
   return (
     <div className="sampler-strip" aria-label="Sampler">
       <input ref={fileInput} type="file" accept="audio/*" hidden onChange={onFile} />
-      {s.pads.map((pad) => {
-        const tint = pad.route === "A" ? accentA : pad.route === "B" ? accentB : undefined;
-        const group = pad.index === 4 || pad.index === 8 ? " smp-divide" : "";
+      {s.pads.slice(0, GLOBAL_COUNT).map((pad) => {
         return (
           <button
             key={pad.index}
-            className={`smp-pad smp-${pad.route}${group} ${pad.kind === "empty" ? "empty" : "set"} ${pad.playing ? "playing" : ""} ${dragOver === pad.index ? "drag-over" : ""} ${pad.uploading ? "uploading" : ""}`}
-            style={tint ? ({ ["--smp-tint" as string]: tint } as React.CSSProperties) : undefined}
+            className={`smp-pad smp-${pad.route} ${pad.kind === "empty" ? "empty" : "set"} ${pad.playing ? "playing" : ""} ${dragOver === pad.index ? "drag-over" : ""} ${pad.uploading ? "uploading" : ""}`}
             disabled={pad.kind === "empty" && pad.route !== "master" && !pad.hasTrack}
             title={padTitle(pad)}
             onPointerDown={(e) => onPadDown(e, pad)}
@@ -194,7 +188,7 @@ export function SamplerStrip({
   );
 }
 
-const routeIsMaster = (i: number) => i >= 4 && i < 8;
+const routeIsMaster = (i: number) => i < GLOBAL_COUNT; // the strip only shows the global pads
 
 function padTitle(pad: SamplerPad): string {
   if (pad.kind === "empty") {

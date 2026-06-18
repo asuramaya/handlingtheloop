@@ -1,7 +1,7 @@
-// Sampler GLOBAL pads (the 4 master-routed slots on the sampler strip): per-account
+// Sampler GLOBAL pads (the 12 master-routed slots on the sampler strip): per-account
 // uploaded audio clips. Bytes live in R2 at `samples/{userId}/{id}`; the user_samples
 // table indexes them (one row per (user, pad) — uploading replaces the pad's old clip).
-// Deck-region pads ("play X→Y" of a loaded track) are positions only and live
+// Deck-region pads ("play X→Y" of a loaded track, 8 per deck) are positions only and live
 // client-side, so they never touch this. Guards: ≤30s (client-validated, stored) and
 // ≤12MB (enforced here — the real cap, since a Worker can't decode audio to check length).
 import { readSessionId } from "./session";
@@ -10,7 +10,9 @@ import { json } from "./http";
 
 export const MAX_SAMPLE_BYTES = 12 * 1024 * 1024; // 12 MB — fits a 30s 48k/24-bit lossless clip
 export const MAX_SAMPLE_MS = 30_000;
-const GLOBAL_PADS = new Set(["g0", "g1", "g2", "g3"]); // the 4 master-routed strip slots
+// The 12 master-routed strip slots (g0..g11). `pad` is a free TEXT column keyed by
+// (user, pad), so widening the set needs no migration — just accept the new ids.
+const GLOBAL_PADS = new Set(Array.from({ length: 12 }, (_, i) => `g${i}`));
 const MAX_NAME = 80;
 
 // R2 binding (the worker's interface omits delete(); we need it for pad replace).

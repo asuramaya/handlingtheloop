@@ -21,15 +21,9 @@ import { ProfilePublicView } from "./ProfilePublicView";
 // The own Profile — PUBLIC-FIRST (Option B, docs/social-layer.md → "Surface architecture"):
 // your public card (the shared ProfilePublicView, identical to /@handle) is the hero, edited
 // in place; the account plumbing (connections, sign-out, email) is demoted to a collapsible
-// "Account" footer. NOT tabbed — hierarchy does the separating. Own profile only; session
-// peers are device-scoped, never linked to an account id, by design.
-
-// Navigate to /@handle — App listens for popstate and opens the public-profile dock
-// (which is mutually exclusive with this own-Profile dock, so it takes over).
-function viewPublicProfile(handle: string): void {
-  window.history.pushState(null, "", `/@${handle}`);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
+// "Account" footer. NOT tabbed — hierarchy does the separating. The hero is a pure WYSIWYG
+// of your public card (so "view as public" is redundant); ALL editing lives in the Account
+// section. Own profile only; session peers are device-scoped, never linked to an account id.
 
 export function ProfileScreen({ onClose }: { onClose: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -56,6 +50,12 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
   const hasTidal = !!me?.connections.includes("tidal");
   const memberSince = profile?.user.memberSince ?? null;
   const top = profile?.topTracks ?? [];
+
+  // A signed-in account with no @handle yet → open Account so the claim CTA (which now
+  // lives there) is visible; otherwise the hero is a clean public card and Account stays shut.
+  useEffect(() => {
+    if (signedIn && !user?.handle) setAccountOpen(true);
+  }, [signedIn, user?.handle]);
 
   const signOut = async () => {
     await accountLogout();
@@ -113,49 +113,7 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
                   {revealed ? "🙈" : "👁"}
                 </button>
               }
-              actions={
-                user?.handle ? (
-                  <>
-                    <button className="profile-edit-btn" onClick={() => setEditing((v) => !v)}>
-                      {editing ? "Done" : "Edit"}
-                    </button>
-                    <button className="profile-view-public" onClick={() => viewPublicProfile(user.handle!)}>
-                      View as public →
-                    </button>
-                  </>
-                ) : (
-                  <button className="profile-handle claim" onClick={() => setEditing(true)}>
-                    + Claim your @handle
-                  </button>
-                )
-              }
             />
-
-            {/* Inline edit panel (handle rename + display-name/bio), revealed by "Edit" / the
-                claim CTA — edit-in-place, no tab hop. Display/bio editor only once a handle exists. */}
-            {editing && (
-              <div className="profile-edit-panel">
-                <HandleEditor
-                  current={user?.handle ?? null}
-                  onCancel={() => setEditing(false)}
-                  onDone={() => {
-                    setEditing(false);
-                    load();
-                  }}
-                />
-                {user?.handle && (
-                  <ProfileEditor
-                    displayName={user?.displayName ?? ""}
-                    bio={user?.bio ?? ""}
-                    onCancel={() => setEditing(false)}
-                    onDone={() => {
-                      setEditing(false);
-                      load();
-                    }}
-                  />
-                )}
-              </div>
-            )}
 
             {/* "Your sets" history plugs in here when Epic G1 lands (your recorded sets,
                 drafts + published — the persistent twin of your live status). */}
@@ -178,6 +136,35 @@ export function ProfileScreen({ onClose }: { onClose: () => void }) {
               </button>
               {accountOpen && (
                 <div className="profile-account-body">
+                  {/* Identity editing lives here (config), not on the public hero. The button
+                      claims a handle for a new account, else edits handle + display/bio in place. */}
+                  {!editing ? (
+                    <button className="profile-edit-btn account-edit" onClick={() => setEditing(true)}>
+                      {user?.handle ? "Edit profile" : "+ Claim your @handle"}
+                    </button>
+                  ) : (
+                    <div className="profile-edit-panel">
+                      <HandleEditor
+                        current={user?.handle ?? null}
+                        onCancel={() => setEditing(false)}
+                        onDone={() => {
+                          setEditing(false);
+                          load();
+                        }}
+                      />
+                      {user?.handle && (
+                        <ProfileEditor
+                          displayName={user?.displayName ?? ""}
+                          bio={user?.bio ?? ""}
+                          onCancel={() => setEditing(false)}
+                          onDone={() => {
+                            setEditing(false);
+                            load();
+                          }}
+                        />
+                      )}
+                    </div>
+                  )}
                   {user?.email && <div className="profile-email">{revealed ? user.email : maskEmail(user.email)}</div>}
                   <div className="profile-conns">
                     <ConnRow label="YouTube" sub="via Google" connected actionLabel="Disconnect" onAction={() => disconnect("google")} />

@@ -550,6 +550,9 @@ span.profile-handle:hover {
   padding-top: 10px;
   animation: panel-in 0.14s ease-out;
 }
+.profile-edit-btn.account-edit {
+  align-self: flex-start;
+}
 
 /* --- Social screen body --- */
 .social-hint {

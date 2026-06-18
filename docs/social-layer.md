@@ -229,7 +229,9 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [x] **B2. Public profile object** — display name + bio editable via `ProfileEditor`
       (PUT `/api/me/profile`, never touches the Google-mirror). *(Custom avatar
       upload deferred — public avatar = letter fallback until set; needs R2.)*
-- [ ] **B3. Live status on profile** ("on the decks now → join"). *(Needs Epic E.)*
+- [x] **B3. Live status on profile** — DONE. Visitor side: "● Listen live · N tuned in" on
+      `/@handle` (PublicProfileScreen). Own side: a pulsing "● Live now · N listening" badge on
+      the Profile hero (taps through to the Session dock), fed by `room.roomPublic`/`listenerCount`.
 - [x] **B4. Top songs** (existing play counts) — shown on own + public profile.
 - [ ] **B5. Past sets / venues hosted** list (depends on G).
 - [x] **B6. Follower / following counts** on own + public profile (Epic C).
@@ -365,7 +367,11 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
       *now* — incl. the auto-mix queue (distinct from the steady event stream). The
       existing `state` snapshot + per-guest queue stream is the seed of this.
 - [ ] **D4. Clock sync:** NTP-style offset/RTT estimation per client + resync cadence.
-- [ ] **D5. Engine-version pinning per room** + "client too old to join" handling.
+- [x] **D5. Engine-version pinning per room** — DONE. `ENGINE_VERSION` (protocol.ts) is the
+      single reconstruction-engine version; client reports it on connect (`?ev=`), the room stamps
+      the ANCHOR's into `welcome`/`presence` (`engineVersion`), the client self-detects a mismatch
+      (`engineStale`) → tap-to-reload notice. G1 stamps the same constant on recordings for
+      pin/refuse replay. *(BUMP ENGINE_VERSION on any reconstruction-affecting change.)*
 - [ ] **D6. Resync contract for non-deterministic gestures** (scratch/jog → snap
       to next downbeat/cue via the beatgrid).
 - [ ] **D7. Per-listener track-availability divergence** (geo-block) detection +
@@ -531,7 +537,10 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 
 ## J. Discovery & cold-start  *(P4)*
 
-- [ ] **J1. "Live now from people you follow" feed** (fan-out decision in Open Decisions).
+- [~] **J1. "Live now from people you follow" feed** — v1 DONE in Discover: rooms hosted by
+      handles you follow surface in a "From people you follow" section above "Also live now"
+      (client splits the live-rooms signal against `/api/following`; on-read, no fan-out yet).
+      *(A dedicated follows-only feed / push fan-out = later.)*
 - [ ] **J2. Directory ranking** (trending, listeners, genre) + anti-gaming signals.
 - [ ] **J3. Cold-start fallback:** community pool as always-on "something's
       playing" when no rooms are live; seeded/scheduled rooms.

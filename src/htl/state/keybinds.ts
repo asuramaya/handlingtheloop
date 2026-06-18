@@ -40,6 +40,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   // Pad-mode selectors: switch what the 8 pads (and the keyboard 1-8) do. U=cue, I=loop.
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
   { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyI" },
+  { id: "padModeSampler", label: "Pad mode: Sampler", group: "Pads", defaultKey: "KeyO" },
   // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated
   // keys are FREED — 1-8 now fire them when the pad bank is in Loop mode.
   { id: "beatLoop0", label: "Beat loop 1/16", group: "Pads", defaultKey: "" },

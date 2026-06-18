@@ -1,6 +1,7 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { Deck } from "@htl/audio";
 import { HOT_CUE_COUNT } from "@htl/audio";
+import { deckPadBase, type SamplerApi, type SamplerPad } from "./useSampler";
 import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
@@ -45,6 +46,7 @@ interface DeckControlsProps {
   refresh: () => void;
   emit: (intent: Intent) => void; // broadcast one action to a shared session (no-op when off)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
+  sampler?: SamplerApi; // shared sampler — this deck's 8 region pads fill the SAMPLER pad-mode
 }
 
 // The 8 beat-loop sizes, sorted ascending, in a 4×2 grid that mirrors the hot-cue
@@ -70,7 +72,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, refresh, emit, emitControls }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, refresh, emit, emitControls, sampler }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -108,7 +110,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     const saved = localStorage.getItem(PAD_MODE_KEY);
     if (saved === "loop" || saved === "cue" || saved === "sampler") deck.setPadMode(saved);
   }
-  const changePadMode = (m: "cue" | "loop") => {
+  const changePadMode = (m: "cue" | "loop" | "sampler") => {
     deck.setPadMode(m);
     try {
       localStorage.setItem(PAD_MODE_KEY, m);
@@ -116,6 +118,25 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
       /* ignore */
     }
     refresh();
+  };
+  // SAMPLER pad-mode: this deck's 8 region pads (a slice of the shared sampler bank).
+  const smpBase = deckPadBase(id);
+  const smpPads: SamplerPad[] = sampler ? sampler.pads.slice(smpBase, smpBase + 8) : [];
+  const [smpMenu, setSmpMenu] = useState<{ i: number; x: number; y: number } | null>(null);
+  // Press a sampler pad: empty (track loaded) → grab a region; filled → trigger (gate =
+  // hold, loop = toggle, one-shot = retrigger). Mirrors the global strip's pad behaviour.
+  const smpDown = (pad: SamplerPad) => {
+    if (!sampler) return;
+    if (pad.kind === "empty") {
+      if (pad.hasTrack) { sampler.assignRegion(pad.index); refresh(); }
+      return;
+    }
+    if (pad.mode === "loop") pad.playing ? sampler.stop(pad.index) : sampler.trigger(pad.index);
+    else sampler.trigger(pad.index);
+    refresh();
+  };
+  const smpUp = (pad: SamplerPad) => {
+    if (sampler && pad.mode === "gate") { sampler.release(pad.index); refresh(); }
   };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
@@ -291,6 +312,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         <div className="pad-mode">
           <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE<span className="kbd">U</span></button>
           <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">I</span></button>
+          {sampler && <button className={deck.padMode === "sampler" ? "on" : ""} onClick={() => changePadMode("sampler")}>SMP<span className="kbd">O</span></button>}
         </div>
 
         {deck.padMode === "loop" && (
@@ -386,6 +408,54 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             );
           })}
         </div>
+        )}
+
+        {deck.padMode === "sampler" && sampler && (
+        <div className="hotcues smp-bank">
+          {smpPads.map((pad) => {
+            const slot = pad.index - smpBase; // 0..7
+            return (
+              <button
+                key={pad.index}
+                className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""}`}
+                data-cue={slot + 1}
+                disabled={pad.kind === "empty" && !pad.hasTrack}
+                title={
+                  pad.kind === "empty"
+                    ? pad.hasTrack ? `Grab a region from deck ${id}` : `Load a track on deck ${id} first`
+                    : `${pad.name || "sample"} · ${pad.mode} — tap to play, right-click for options`
+                }
+                onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
+                onPointerUp={() => smpUp(pad)}
+                onPointerLeave={() => smpUp(pad)}
+                onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
+              >
+                {pad.kind === "empty" ? (pad.hasTrack ? "grab" : "—") : pad.name || slot + 1}
+              </button>
+            );
+          })}
+        </div>
+        )}
+
+        {smpMenu && sampler && (
+          <>
+            <div className="ctx-backdrop" onClick={() => setSmpMenu(null)} onContextMenu={(e) => e.preventDefault()} />
+            <div className="ctx-menu smp-menu" style={{ left: Math.min(smpMenu.x, window.innerWidth - 200), top: Math.min(smpMenu.y, window.innerHeight - 220) }}>
+              <div className="ctx-label">Mode</div>
+              <div className="smp-modes">
+                {(["oneshot", "gate", "loop"] as const).map((m) => (
+                  <button key={m} className={sampler.pads[smpMenu.i].mode === m ? "active" : ""} onClick={() => { sampler.setMode(smpMenu.i, m); refresh(); }}>
+                    {m === "oneshot" ? "1-shot" : m}
+                  </button>
+                ))}
+              </div>
+              <div className="ctx-label">Level</div>
+              <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
+              <div className="ctx-sep" />
+              <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-grab from deck</button>
+              <button className="ctx-danger" onClick={() => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); }}>✕ Clear pad</button>
+            </div>
+          </>
         )}
 
         {/* − · TEMPO-range · PITCH-range · + rack: the ∓ tempo/key steppers flank the

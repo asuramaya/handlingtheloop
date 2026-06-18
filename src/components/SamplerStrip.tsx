@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
 import type { AudioEngine, SampleMode } from "@htl";
-import type { Me } from "@htl/account";
-import { useSampler, GLOBAL_COUNT, type SamplerPad } from "./useSampler";
+import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
 
 // The 12 GLOBAL sample pads (master-routed) that sit over the A/B crossfader — uploaded
 // account clips that cut through the mix. The per-deck "play X→Y" region samples (8 each)
@@ -13,18 +12,14 @@ const MODES: SampleMode[] = ["oneshot", "gate", "loop"];
 
 export function SamplerStrip({
   engine,
-  loaded,
-  me,
+  sampler,
   ctlRef,
 }: {
   engine: AudioEngine;
-  loaded: { A: string | null; B: string | null };
-  me: Me | null;
-  accentA?: string; // (kept for the caller; the strip is all-global now, no A/B tint)
-  accentB?: string;
+  sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
 }) {
-  const s = useSampler(engine, loaded, me);
+  const s = sampler;
   // Expose trigger/release so App's MIDI handler can fire the pads (kept out of App state).
   useEffect(() => {
     if (!ctlRef) return;

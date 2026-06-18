@@ -3,6 +3,7 @@ import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
+import { useSampler, deckPadBase } from "./components/useSampler";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -886,8 +887,20 @@ export function App() {
       slip: (deck) => {
         deck.toggleSlip(); // SLIP mode toggle (local performance mode; release snaps to shadow)
       },
+      // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck.
+      padModeCue: (deck) => deck.setPadMode("cue"),
+      padModeLoop: (deck) => deck.setPadMode("loop"),
+      padModeSampler: (deck) => deck.setPadMode("sampler"),
     };
-    for (let i = 0; i < 8; i++) HANDLERS[`hotcue${i + 1}`] = (deck, id, s) => hotcue(deck, id, s, i);
+    // The 8 pads (keys 1-8) route by the deck's pad mode: Hot Cue → cue, Loop → beat-loop
+    // size, Sampler → that deck's region pad (via the sampler bridge ref).
+    for (let i = 0; i < 8; i++)
+      HANDLERS[`hotcue${i + 1}`] = (deck, id, s) =>
+        deck.padMode === "loop"
+          ? beatLoop(deck, id, i)
+          : deck.padMode === "sampler"
+            ? samplerCtl.current?.trigger(deckPadBase(id) + i)
+            : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 
@@ -2662,8 +2675,11 @@ export function App() {
   // never jumps. Reset on focus change so re-grabbing the new deck re-catches (no jump).
   const knobPickup = useRef<Record<string, { caught: boolean; last: number }>>({});
   useEffect(() => void (knobPickup.current = {}), [focused]);
-  // Bridge to the sampler strip's trigger/release (set by SamplerStrip) so MIDI-learned
-  // pad buttons can fire the 12 sampler pads without lifting the strip's state into App.
+  // The sampler is lifted to App now (shared by the global strip AND each deck's SAMPLER
+  // pad-mode): 12 global pads + 8 region pads per deck.
+  const sampler = useSampler(engine, loaded, me);
+  // Bridge to the sampler's trigger/release (set by SamplerStrip) so MIDI-learned + 1-8
+  // keyboard pads fire the sampler without threading the api through the keymap effect.
   const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
   // A decoded MidiEvent is fanned out to the SAME handlers the keyboard/buttons use,
   // so a hardware board has full feature + session-sync parity. value is 0..1; we
@@ -3750,7 +3766,7 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <SamplerStrip engine={engine} loaded={loaded} me={me} accentA={ACCENT.A} accentB={ACCENT.B} ctlRef={samplerCtl} />
+          <SamplerStrip engine={engine} sampler={sampler} ctlRef={samplerCtl} />
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}
@@ -3789,6 +3805,7 @@ export function App() {
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
+            sampler={sampler}
           />
           <DeckControls
             id="B"
@@ -3818,6 +3835,7 @@ export function App() {
             refresh={refresh}
             emit={emit}
             emitControls={emitDeckControls}
+            sampler={sampler}
           />
           </div>
         </div>

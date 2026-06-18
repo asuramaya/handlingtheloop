@@ -380,7 +380,9 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
     [engine, globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
 
-  return { pads, error, clearError: () => setError(null), trigger, release, assignRegion, assignFile, clearPad, setMode, setGain };
+  const stop = useCallback((i: number) => engine.sampler.stop(i), [engine]); // stop a voice (loop toggle)
+
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, assignRegion, assignFile, clearPad, setMode, setGain };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { Deck } from "@htl/audio";
 import { HOT_CUE_COUNT } from "@htl/audio";
 import type { StemName } from "@htl/stems";
@@ -99,6 +99,21 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     }
     // a quick tap (timer never fired) falls through to onClick = the normal jump
   };
+  // Performance-pad mode: the one 8-pad bank shows hot cues or the beat-loop sizes (the
+  // CDJ "pad mode" idea — folds the old separate loop-size row into the pads). Persisted
+  // per deck. The keyboard still triggers both regardless of the visible mode.
+  const PAD_MODE_KEY = `htl:padMode:${id}`;
+  const [padMode, setPadMode] = useState<"cue" | "loop">(
+    () => (localStorage.getItem(PAD_MODE_KEY) === "loop" ? "loop" : "cue"),
+  );
+  const changePadMode = (m: "cue" | "loop") => {
+    setPadMode(m);
+    try {
+      localStorage.setItem(PAD_MODE_KEY, m);
+    } catch {
+      /* ignore */
+    }
+  };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
   const nudge = (dir: number) => {
@@ -178,48 +193,54 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           )}
           <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward a beat` : shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
           <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
+        </div>
+
+        {/* Performance modes/FX as flat pills (not crammed jog buttons). SLIP / REV are
+            toggles; CENSOR is momentary (hold); BRAKE is a one-shot. Back spin = flick
+            the jog/waveform backward (gesture), so it needs no button. */}
+        <div className="perf">
           <button
-            className={`jog-btn slip ${deck.slipping ? "on" : ""}`}
-            title="Slip mode — scratch or hold over the track without losing your place; release snaps back on-beat"
+            className={`perf-pill ${deck.slipping ? "on" : ""}`}
+            title="Slip — scratch or hold over the track without losing your place; release snaps back on-beat"
             onClick={act(() => deck.toggleSlip())}
           >
-            ⟲<span className="kbd">Z</span>
+            SLIP<span className="kbd">Z</span>
           </button>
           <button
-            className={`jog-btn rev ${deck.reversing ? "on" : ""}`}
+            className={`perf-pill ${deck.reversing ? "on" : ""}`}
             title="Reverse — play backward (toggle)"
             onClick={act(() => deck.setReverse(!deck.reversing))}
           >
-            ⏪
+            REV
           </button>
           <button
-            className="jog-btn censor"
+            className="perf-pill"
             title="Censor — hold to play backward, release snaps back to where the track would be (slip)"
             onPointerDown={(e) => { e.preventDefault(); deck.censorBegin(); refresh(); }}
             onPointerUp={() => { deck.censorEnd(); refresh(); }}
             onPointerLeave={() => { if (deck.reversing) { deck.censorEnd(); refresh(); } }}
           >
-            ⊘
+            CENSOR
           </button>
-          {/* Release FX — one-shot motor transitions (always available). */}
           <button
-            className="jog-btn relfx brake"
-            title="Vinyl Brake — decelerate to a stop (release FX)"
+            className="perf-pill"
+            title="Vinyl Brake — decelerate to a stop. (Back spin = flick the jog/waveform backward.)"
             onClick={act(() => deck.releaseBrake())}
           >
-            ⊟
-          </button>
-          <button
-            className="jog-btn relfx backspin"
-            title="Back Spin — throw the platter backward, then catch it to play (release FX)"
-            onClick={act(() => deck.spinback())}
-          >
-            ↺
+            BRAKE
           </button>
         </div>
 
-        {/* FLX-style loop strip: manual IN / OUT / EXIT, then the beat-loop sizes
-            (fractions of a beat, or whole beats 1–8 under SHIFT). */}
+        {/* Performance pads: a CUE / LOOP mode selector over ONE 8-pad bank. LOOP folds the
+            old separate beat-loop-size row into the pads and shows the manual IN/OUT/EXIT
+            strip; CUE shows the hot cues. The keyboard triggers both regardless of mode. */}
+        <div className="pad-mode">
+          <button className={padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
+          <button className={padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
+        </div>
+
+        {padMode === "loop" && (
+        <>
         <div className="loops">
           {/* IN / OUT drop the loop boundaries; SHIFT-IN / SHIFT-OUT instead arm a
               fine-adjust mode where the waveform (drag / scroll) and arrow keys nudge
@@ -311,7 +332,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             );
           })}
         </div>
+        </>
+        )}
 
+        {padMode === "cue" && (
         <div className="hotcues">
           {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
             const set = deck.slotIsSet(i);
@@ -360,6 +384,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             );
           })}
         </div>
+        )}
 
         {/* − · TEMPO-range · PITCH-range · + rack: the ∓ tempo/key steppers flank the
             two range buttons (SYNC and KEY moved down to the TEMPO/KEY row). */}

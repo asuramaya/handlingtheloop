@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import type { Deck } from "@htl/audio";
 import { HOT_CUE_COUNT } from "@htl/audio";
 import type { StemName } from "@htl/stems";
@@ -99,20 +99,23 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     }
     // a quick tap (timer never fired) falls through to onClick = the normal jump
   };
-  // Performance-pad mode: the one 8-pad bank shows hot cues or the beat-loop sizes (the
-  // CDJ "pad mode" idea — folds the old separate loop-size row into the pads). Persisted
-  // per deck. The keyboard still triggers both regardless of the visible mode.
+  // Performance-pad mode lives on the DECK (so the keymap/MIDI route 1-8 by it); this is
+  // just the UI mirror + persistence. Restore the saved mode onto the deck once on mount.
   const PAD_MODE_KEY = `htl:padMode:${id}`;
-  const [padMode, setPadMode] = useState<"cue" | "loop">(
-    () => (localStorage.getItem(PAD_MODE_KEY) === "loop" ? "loop" : "cue"),
-  );
+  const padRestored = useRef(false);
+  if (!padRestored.current) {
+    padRestored.current = true;
+    const saved = localStorage.getItem(PAD_MODE_KEY);
+    if (saved === "loop" || saved === "cue" || saved === "sampler") deck.setPadMode(saved);
+  }
   const changePadMode = (m: "cue" | "loop") => {
-    setPadMode(m);
+    deck.setPadMode(m);
     try {
       localStorage.setItem(PAD_MODE_KEY, m);
     } catch {
       /* ignore */
     }
+    refresh();
   };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
@@ -286,11 +289,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         {/* Pad bank: a CUE / LOOP mode selector swaps ONLY these 8 pads — hot cues, or the
             beat-loop sizes (folds the old separate loop-size row in). */}
         <div className="pad-mode">
-          <button className={padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
-          <button className={padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
+          <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE</button>
+          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP</button>
         </div>
 
-        {padMode === "loop" && (
+        {deck.padMode === "loop" && (
         <div className="loop-sizes">
           {LOOP_SIZES.map((s) => {
             const active = deck.loop?.active && deck.loop.beats === s.n;
@@ -334,7 +337,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {padMode === "cue" && (
+        {deck.padMode === "cue" && (
         <div className="hotcues">
           {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
             const set = deck.slotIsSet(i);

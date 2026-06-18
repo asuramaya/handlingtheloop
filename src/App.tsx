@@ -886,8 +886,13 @@ export function App() {
       slip: (deck) => {
         deck.toggleSlip(); // SLIP mode toggle (local performance mode; release snaps to shadow)
       },
+      padModeCue: (deck) => deck.setPadMode("cue"),
+      padModeLoop: (deck) => deck.setPadMode("loop"),
     };
-    for (let i = 0; i < 8; i++) HANDLERS[`hotcue${i + 1}`] = (deck, id, s) => hotcue(deck, id, s, i);
+    // The 8 pads (keys 1-8) route by the deck's pad mode: Hot Cue → cue, Loop → beat-loop.
+    for (let i = 0; i < 8; i++)
+      HANDLERS[`hotcue${i + 1}`] = (deck, id, s) =>
+        deck.padMode === "loop" ? beatLoop(deck, id, i) : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 

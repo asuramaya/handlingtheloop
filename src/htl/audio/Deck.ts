@@ -264,6 +264,13 @@ export class Deck {
   get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
   get scratchAttached() { return this.jog.attached; } // did the scrub worklet attach?
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
+  // Performance-pad mode: the one 8-pad bank (+ the keyboard 1-8) acts as hot cues, beat
+  // loops, or the sampler. Lives on the deck (not just the UI) so the keymap + MIDI route
+  // 1-8 by it. "sampler" reserved for the upcoming sampler pad-mode.
+  padMode: "cue" | "loop" | "sampler" = "cue";
+  setPadMode(m: "cue" | "loop" | "sampler") {
+    this.padMode = m;
+  }
   // --- Slip mode (the shadow-playhead primitive) ---
   // rekordbox SLIP: while a scratch / hold / loop-roll overrides the audio, the track
   // keeps advancing SILENTLY underneath; on release, playback snaps to where it would be

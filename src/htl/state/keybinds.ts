@@ -36,16 +36,20 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "loopIn", label: "Loop In", group: "Loops", defaultKey: "KeyQ" },
   { id: "loopOut", label: "Loop Out", group: "Loops", defaultKey: "KeyW" },
   { id: "loopExit", label: "Loop Exit / Reloop", group: "Loops", defaultKey: "KeyE" },
-  // The 8 beat-loop pads, sorted ascending by size, each on its own key left→right
-  // (U I O P H J K L) to mirror the on-screen 4×2 grid.
-  { id: "beatLoop0", label: "Beat loop 1/16", group: "Loops", defaultKey: "KeyU" },
-  { id: "beatLoop1", label: "Beat loop 1/8", group: "Loops", defaultKey: "KeyI" },
-  { id: "beatLoop2", label: "Beat loop 1/4", group: "Loops", defaultKey: "KeyO" },
-  { id: "beatLoop3", label: "Beat loop 1/2", group: "Loops", defaultKey: "KeyP" },
-  { id: "beatLoop4", label: "Beat loop 1", group: "Loops", defaultKey: "KeyH" },
-  { id: "beatLoop5", label: "Beat loop 2", group: "Loops", defaultKey: "KeyJ" },
-  { id: "beatLoop6", label: "Beat loop 4", group: "Loops", defaultKey: "KeyK" },
-  { id: "beatLoop7", label: "Beat loop 8", group: "Loops", defaultKey: "KeyL" },
+
+  // Pad-mode selectors: switch what the 8 pads (and the keyboard 1-8) do. U=cue, I=loop.
+  { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
+  { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyI" },
+  // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated
+  // keys are FREED — 1-8 now fire them when the pad bank is in Loop mode.
+  { id: "beatLoop0", label: "Beat loop 1/16", group: "Pads", defaultKey: "" },
+  { id: "beatLoop1", label: "Beat loop 1/8", group: "Pads", defaultKey: "" },
+  { id: "beatLoop2", label: "Beat loop 1/4", group: "Pads", defaultKey: "" },
+  { id: "beatLoop3", label: "Beat loop 1/2", group: "Pads", defaultKey: "" },
+  { id: "beatLoop4", label: "Beat loop 1", group: "Pads", defaultKey: "" },
+  { id: "beatLoop5", label: "Beat loop 2", group: "Pads", defaultKey: "" },
+  { id: "beatLoop6", label: "Beat loop 4", group: "Pads", defaultKey: "" },
+  { id: "beatLoop7", label: "Beat loop 8", group: "Pads", defaultKey: "" },
 
   { id: "muteDrums", label: "Mute Drums", group: "Stems", defaultKey: "KeyV", shiftLabel: "Solo Drums" },
   { id: "muteBass", label: "Mute Bass", group: "Stems", defaultKey: "KeyB", shiftLabel: "Solo Bass" },
@@ -61,12 +65,13 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "spinback", label: "Spinback (back-spin)", group: "Jog", defaultKey: "KeyX" },
   { id: "slip", label: "Slip mode (toggle)", group: "Jog", defaultKey: "KeyZ" },
 
+  // The 8 pads (1-8): act as hot cues / beat loops / sampler per the deck's pad mode.
   ...Array.from({ length: 8 }, (_, i) => ({
     id: `hotcue${i + 1}`,
-    label: `Hot cue ${i + 1}`,
-    group: "Hot cues",
+    label: `Pad ${i + 1} (cue / loop)`,
+    group: "Pads",
     defaultKey: `Digit${i + 1}`,
-    shiftLabel: "Save loop / clear",
+    shiftLabel: "Save loop / clear (cue mode)",
   })),
 ];
 

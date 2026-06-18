@@ -219,41 +219,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
         </div>
 
-        {/* Performance modes/FX as flat pills (not crammed jog buttons). SLIP / REV are
-            toggles; CENSOR is momentary (hold); BRAKE is a one-shot. Back spin = flick
-            the jog/waveform backward (gesture), so it needs no button. */}
-        <div className="perf">
-          <button
-            className={`perf-pill ${deck.slipping ? "on" : ""}`}
-            title="Slip — scratch or hold over the track without losing your place; release snaps back on-beat"
-            onClick={act(() => deck.toggleSlip())}
-          >
-            SLIP<span className="kbd">Z</span>
-          </button>
-          <button
-            className={`perf-pill ${deck.reversing ? "on" : ""}`}
-            title="Reverse — play backward (toggle)"
-            onClick={act(() => deck.setReverse(!deck.reversing))}
-          >
-            REV
-          </button>
-          <button
-            className="perf-pill"
-            title="Censor — hold to play backward, release snaps back to where the track would be (slip)"
-            onPointerDown={(e) => { e.preventDefault(); deck.censorBegin(); refresh(); }}
-            onPointerUp={() => { deck.censorEnd(); refresh(); }}
-            onPointerLeave={() => { if (deck.reversing) { deck.censorEnd(); refresh(); } }}
-          >
-            CENSOR
-          </button>
-          <button
-            className="perf-pill"
-            title="Vinyl Brake — decelerate to a stop. (Back spin = flick the jog/waveform backward.)"
-            onClick={act(() => deck.releaseBrake())}
-          >
-            BRAKE
-          </button>
-        </div>
+        {/* SLIP moved to a Controls setting (it's a scrub behaviour); BRAKE is the Vinyl
+            Speed pause brake; REV/CENSOR stay engine-only (reuse: sampler bounce, FX). */}
 
         {/* Manual loop strip — ALWAYS visible (IN / OUT / EXIT), constant across pad modes. */}
         <div className="loops">

@@ -884,8 +884,9 @@ export function App() {
       spinback: (deck) => {
         deck.spinback(); // back-spin then catch to play (local audio effect)
       },
-      slip: (deck) => {
-        deck.toggleSlip(); // SLIP mode toggle (local performance mode; release snaps to shadow)
+      slip: () => {
+        // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
+        setSettings((s) => ({ ...s, slip: !s.slip }));
       },
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck.
       padModeCue: (deck) => deck.setPadMode("cue"),
@@ -955,6 +956,7 @@ export function App() {
     for (const d of [engine.deckA, engine.deckB]) {
       d.setVinylSpeed(settings.vinylSpeed, settings.vinylBrakeTime, settings.vinylStartTime);
       d.setBackSpinLength(settings.backSpinLength);
+      d.setSlip(settings.slip); // Slip is a scrub behaviour now, driven from Controls (not a per-deck button)
     }
     // Re-seed the FLX4 jog-mode latch from the saved default (the CC stream re-latches
     // it on the next turn; this just sets the starting mode before the first tick).

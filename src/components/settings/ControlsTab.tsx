@@ -70,6 +70,18 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
             <span className="toggle-knob" />
           </button>
         </div>
+        <div className="settings-row">
+          <span className="settings-label">Slip mode (scrub returns on release)</span>
+          <button
+            className={`toggle ${settings.slip ? "on" : ""}`}
+            onClick={() => set({ slip: !settings.slip })}
+            role="switch"
+            aria-checked={settings.slip}
+            title="Scratch / hold / loop over the track without losing your place — on release, playback snaps to where it WOULD be (on-beat). Toggle key: Z"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
       </div>
 
       <div className="settings-section">

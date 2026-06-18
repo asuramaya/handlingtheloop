@@ -45,38 +45,6 @@
   color: #fff;
 }
 
-/* Performance pills — SLIP / REV / CENSOR / BRAKE as flat, color-lit chips (the modes
-   that used to be crammed into the jog-arrow row). */
-.perf {
-  display: flex;
-  gap: 5px;
-}
-.perf-pill {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  border: 1px solid var(--btn-border, var(--line));
-  background: var(--panel-2);
-  color: var(--muted);
-  border-radius: 5px;
-  padding: 6px 0;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  cursor: pointer;
-}
-.perf-pill:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.perf-pill.on {
-  background: color-mix(in srgb, var(--accent) 28%, var(--panel));
-  border-color: var(--accent);
-  color: #fff;
-  box-shadow: inset 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent);
-}
 
 .hotcues {
   display: grid;

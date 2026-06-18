@@ -39,6 +39,7 @@ export interface Settings {
   vinylBrakeTime: number; // 0..1 — pause-brake + platter-touch decel time (rekordbox Touch/Brake)
   vinylStartTime: number; // 0..1 — play soft-start spin-up time (rekordbox Release/Start)
   backSpinLength: number; // 0..1 — spinback length + strength (Short … Long)
+  slip: boolean; // Slip mode: a scrub/hold returns to the live (shadow) position on release (off = stay where you scratched)
   wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
   stemModel: string; // stem-separation backend id (see @htl/stems STEM_MODELS); "off" = Single (plain mix, no stems)
   streamSource: string; // playback source id (see @htl/media STREAM_SOURCES) — credential tier + catalog
@@ -174,6 +175,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vinylBrakeTime: 0.22,
   vinylStartTime: 0.18,
   backSpinLength: 0.5,
+  slip: false,
   wheelSeeks: false,
   stemModel: "off", // "Single" (plain mix, no stems) until the user picks a neural engine; DSP split was dropped
   streamSource: "yt-anonymous", // == DEFAULT_SOURCE in @htl/media; hardcoded to keep settings dep-free

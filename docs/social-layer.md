@@ -116,8 +116,12 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       replay). engineVersion stamped (D5). Host-side for v1 (recipe is cheap, dodges the DO
       write-quota ceiling — [[htl-do-write-quota]]); solo host = full capture (co-DJ intents not
       tee'd here — G5). 86 tests green. **Migration 0016 needs `d1 migrations apply` at deploy.**
-- [ ] **G1b — lifecycle.** Post-set **Save / Publish / Discard** card in Session; capture-by-
-      default → private draft → published. (Surface ownership: Session owns this.)
+- [x] **G1b — lifecycle.** DONE (`3dce9d6`, undeployed). `RecordingsPanel` in Session lists the
+      host's sets (fetchMySets) → Publish / Unpublish / inline Rename / Discard (deletes row +
+      R2 blob). Owner-only routes `POST /api/sets/:id/{publish,unpublish,rename}` + `DELETE
+      /api/sets/:id` (403 unauthed, drafts 404 to non-owners). Self-hides until the first set,
+      stays collapsed (Session stays uncluttered), auto-opens when a fresh draft lands via the
+      new `room.setsRev` signal. Verified end-to-end against the live worker (2 drafts captured).
 - [ ] **G1c — replay** *(the hard part)*. A replay clock feeds the recorded log back through the
       SAME engine handlers a live listener uses → deterministic on-device rebuild. D5 pins the
       version; a dead source id = graceful gap.

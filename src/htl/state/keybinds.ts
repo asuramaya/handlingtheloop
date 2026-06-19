@@ -41,6 +41,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
   { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyI" },
   { id: "padModeSampler", label: "Pad mode: Sampler", group: "Pads", defaultKey: "KeyO" },
+  { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyP" },
   // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated
   // keys are FREED — 1-8 now fire them when the pad bank is in Loop mode.
   { id: "beatLoop0", label: "Beat loop 1/16", group: "Pads", defaultKey: "" },

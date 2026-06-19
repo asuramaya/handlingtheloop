@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { Deck } from "@htl/audio";
 import { HOT_CUE_COUNT } from "@htl/audio";
 import { deckPadBase, type SamplerApi, type SamplerPad } from "./useSampler";
+import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
@@ -108,9 +109,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   if (!padRestored.current) {
     padRestored.current = true;
     const saved = localStorage.getItem(PAD_MODE_KEY);
-    if (saved === "loop" || saved === "cue" || saved === "sampler") deck.setPadMode(saved);
+    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx") deck.setPadMode(saved);
   }
-  const changePadMode = (m: "cue" | "loop" | "sampler") => {
+  const changePadMode = (m: "cue" | "loop" | "sampler" | "fx") => {
     deck.setPadMode(m);
     try {
       localStorage.setItem(PAD_MODE_KEY, m);
@@ -137,6 +138,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
   const smpUp = (pad: SamplerPad) => {
     if (sampler && pad.mode === "gate") { sampler.release(pad.index); refresh(); }
+  };
+  // FX pad-mode (Pad-FX): press fires the effect (hold = momentary, capture the pointer so a
+  // drift-off doesn't cut it early; one-shot = trigger-and-done). Release ends a hold.
+  const fxDown = (e: React.PointerEvent, slot: number) => {
+    if (e.button !== 0) return;
+    const pad = FX_PADS[slot];
+    if (!pad || (pad.enabled && !pad.enabled(deck))) return;
+    if (pad.hold) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    pad.on(deck);
+    refresh();
+  };
+  const fxUp = (slot: number) => {
+    const pad = FX_PADS[slot];
+    if (pad?.hold) { pad.off?.(deck); refresh(); }
   };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
@@ -312,6 +327,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE<span className="kbd">U</span></button>
           <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">I</span></button>
           {sampler && <button className={deck.padMode === "sampler" ? "on" : ""} onClick={() => changePadMode("sampler")}>SMP<span className="kbd">O</span></button>}
+          <button className={deck.padMode === "fx" ? "on" : ""} onClick={() => changePadMode("fx")}>FX<span className="kbd">P</span></button>
         </div>
 
         {deck.padMode === "loop" && (
@@ -431,6 +447,30 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               >
                 {pad.kind === "empty" ? (pad.hasTrack ? "grab" : "—") : pad.name || slot + 1}
                 {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+              </button>
+            );
+          })}
+        </div>
+        )}
+
+        {/* FX pad-mode: 8 fixed performance effects (Throws + Motion). Hold-FX glow while held;
+            one-shots flash. ECHO/VERB dim until a delay/reverb is in the rack. */}
+        {deck.padMode === "fx" && (
+        <div className="hotcues fx-bank">
+          {FX_PADS.map((pad, i) => {
+            const dis = pad.enabled ? !pad.enabled(deck) : false;
+            return (
+              <button
+                key={pad.label}
+                className={`pad fx ${pad.active?.(deck) ? "playing" : ""} ${pad.hold ? "" : "oneshot"}`}
+                data-cue={i + 1}
+                disabled={dis}
+                title={`${pad.label} — ${pad.hint}`}
+                onPointerDown={(e) => fxDown(e, i)}
+                onPointerUp={() => fxUp(i)}
+                onPointerLeave={() => fxUp(i)}
+              >
+                {pad.label}
               </button>
             );
           })}

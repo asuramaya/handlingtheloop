@@ -239,17 +239,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           <button className="eq-tool copy" title={`Copy this device to deck ${otherId}`} onClick={copyToOther}>
             COPY
           </button>
-          {deck.canEchoOut && (
-            <button
-              className={`eq-tool echo ${deck.echoingOut ? "on" : ""}`}
-              title="Echo Out — HOLD to throw a long delay tail; release lets it ring out (pair with a brake / fader pull into silence)"
-              onPointerDown={() => { deck.echoOut(true); refresh(); }}
-              onPointerUp={() => { deck.echoOut(false); refresh(); }}
-              onPointerLeave={() => { deck.echoOut(false); refresh(); }}
-            >
-              ECHO
-            </button>
-          )}
         </div>
       )}
 

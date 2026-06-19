@@ -265,10 +265,10 @@ export class Deck {
   get scratchAttached() { return this.jog.attached; } // did the scrub worklet attach?
   quantizeOn = false; // magnet: snap cues/loops/jumps to the beatgrid
   // Performance-pad mode: the one 8-pad bank (+ the keyboard 1-8) acts as hot cues, beat
-  // loops, or the sampler. Lives on the deck (not just the UI) so the keymap + MIDI route
-  // 1-8 by it. "sampler" reserved for the upcoming sampler pad-mode.
-  padMode: "cue" | "loop" | "sampler" = "cue";
-  setPadMode(m: "cue" | "loop" | "sampler") {
+  // loops, the sampler, or performance FX (Pad-FX). Lives on the deck (not just the UI) so
+  // the keymap + MIDI route 1-8 by it.
+  padMode: "cue" | "loop" | "sampler" | "fx" = "cue";
+  setPadMode(m: "cue" | "loop" | "sampler" | "fx") {
     this.padMode = m;
   }
   // --- Slip mode (the shadow-playhead primitive) ---
@@ -1785,6 +1785,31 @@ export class Deck {
   get echoingOut(): boolean {
     return this.echoSnapshot != null;
   }
+  // REVERB OUT — the wet-throw twin of echoOut for the rack's reverb device: snapshot the
+  // mix, un-bypass, drench it (mix → 0.85) while held; release restores so the tail blooms
+  // and decays. No-op without a reverb in the chain (canReverbOut gates the FX pad).
+  private reverbSnapshot: { mix: number } | null = null;
+  reverbOut(on: boolean): void {
+    const dev = this.rack.deviceAt(this.rack.indexOf("reverb"));
+    if (!dev) return;
+    if (on) {
+      if (this.reverbSnapshot) return;
+      this.reverbSnapshot = { mix: dev.getParam("mix") };
+      if (dev.bypassed) dev.setBypass(false);
+      dev.setParam("mix", 0.85);
+    } else {
+      const s = this.reverbSnapshot;
+      if (!s) return;
+      this.reverbSnapshot = null;
+      dev.setParam("mix", s.mix);
+    }
+  }
+  get canReverbOut(): boolean {
+    return this.rack.indexOf("reverb") >= 0;
+  }
+  get reverbingOut(): boolean {
+    return this.reverbSnapshot != null;
+  }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
    *  missing). Returns the destination rack index on `other`, or −1. */
@@ -1876,6 +1901,22 @@ export class Deck {
       this._hp = 0;
     }
     this.applyFilter();
+  }
+  // Momentary one-knob filter THROW (FX pad): hold sweeps the colour filter to `target`
+  // (−1 = full LP, +1 = full HP), release restores whatever it was before. applyFilter
+  // ramps the cutoff, so the sweep in and back are declicked.
+  private filterSnapshot: number | null = null;
+  filterThrow(target: number, on: boolean): void {
+    if (on) {
+      if (this.filterSnapshot == null) this.filterSnapshot = this.filterValue;
+      this.setFilter(target);
+    } else if (this.filterSnapshot != null) {
+      this.setFilter(this.filterSnapshot);
+      this.filterSnapshot = null;
+    }
+  }
+  get filteringThrow(): boolean {
+    return this.filterSnapshot != null;
   }
   // Independent high-pass / low-pass amount (0 = off … 1 = full) — the Starrypad's two
   // dedicated knobs, which can engage both at once (band-pass) instead of one-or-other.

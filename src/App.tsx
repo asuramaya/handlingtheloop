@@ -4,6 +4,7 @@ import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
+import { FX_PADS, fireFxPad } from "./components/fxPads";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -892,16 +893,21 @@ export function App() {
       padModeCue: (deck) => deck.setPadMode("cue"),
       padModeLoop: (deck) => deck.setPadMode("loop"),
       padModeSampler: (deck) => deck.setPadMode("sampler"),
+      padModeFx: (deck) => deck.setPadMode("fx"),
     };
     // The 8 pads (keys 1-8) route by the deck's pad mode: Hot Cue → cue, Loop → beat-loop
-    // size, Sampler → that deck's region pad (via the sampler bridge ref).
+    // size, Sampler → that deck's region pad (via the sampler bridge ref), FX → a Pad-FX.
+    // The keyboard has no per-key keyup, so a hold-FX TOGGLES here (press on / press off) and
+    // a one-shot fires once; the on-screen pads stay true momentary.
     for (let i = 0; i < 8; i++)
       HANDLERS[`hotcue${i + 1}`] = (deck, id, s) =>
         deck.padMode === "loop"
           ? beatLoop(deck, id, i)
           : deck.padMode === "sampler"
             ? samplerCtl.current?.trigger(deckPadBase(id) + i)
-            : hotcue(deck, id, s, i);
+            : deck.padMode === "fx"
+              ? fireFxPad(deck, i, FX_PADS[i].hold ? !(FX_PADS[i].active?.(deck) ?? false) : true)
+              : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 

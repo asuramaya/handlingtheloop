@@ -23,6 +23,8 @@ import {
   ensureSetsTable,
   getSet,
   setsByHost,
+  setSetStatus,
+  setSetTitle,
   deleteConnection,
   deleteSession,
   announceRoom,
@@ -202,15 +204,47 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     });
   }
 
-  // A recorded set by id (G1): the card metadata, or `?log=1` for the R2 recipe blob the
-  // replay engine consumes (G1c). Drafts are private to their host. Dynamic path → matched
-  // before the exact switch, like /api/u/ above.
+  // A recorded set by id (G1): GET the card / `?log=1` recipe blob (G1c replay), or the
+  // owner lifecycle mutations (G1b) — POST <id>/publish | <id>/unpublish | <id>/rename,
+  // DELETE <id>. Drafts are private to their host. Dynamic path → matched before the exact
+  // switch, like /api/u/ above.
   if (path.startsWith("/api/sets/")) {
     if (!env.DB) return json(404, { error: "not found" });
     await ensureSetsTable(env.DB);
-    const id = path.slice("/api/sets/".length);
-    const row = id ? await getSet(env.DB, id) : null;
+    const rest = path.slice("/api/sets/".length);
+    const slash = rest.indexOf("/");
+    const id = slash === -1 ? rest : rest.slice(0, slash);
+    const action = slash === -1 ? "" : rest.slice(slash + 1);
+    if (!id) return json(404, { error: "no such set" });
+    const row = await getSet(env.DB, id);
     if (!row) return json(404, { error: "no such set" });
+
+    // Lifecycle mutations — owner only (the host_id guard in the model double-enforces).
+    if (req.method !== "GET") {
+      const viewer = await currentUser(env, req);
+      if (!viewer || viewer.id !== row.hostId) return json(403, { error: "not your set" });
+      if (req.method === "DELETE" && action === "") {
+        await deleteSet(env.DB, id, viewer.id);
+        try {
+          await env.AUDIO?.delete?.(`sets/${id}.json`);
+        } catch {
+          /* blob already gone — the row is what mattered */
+        }
+        return json(200, { ok: true });
+      }
+      if (req.method === "POST" && (action === "publish" || action === "unpublish")) {
+        await setSetStatus(env.DB, id, viewer.id, action === "publish" ? "published" : "draft");
+        return json(200, { ok: true });
+      }
+      if (req.method === "POST" && action === "rename") {
+        const b = (await req.json().catch(() => ({}))) as { title?: string };
+        await setSetTitle(env.DB, id, viewer.id, cleanText(b.title ?? "", 120) || null);
+        return json(200, { ok: true });
+      }
+      return json(405, { error: "bad method" });
+    }
+
+    // GET — the card, or the recipe blob. Drafts are owner-private.
     if (row.status !== "published") {
       const viewer = await currentUser(env, req);
       if (!viewer || viewer.id !== row.hostId) return json(404, { error: "no such set" });

@@ -267,6 +267,28 @@ export async function fetchMySets(signal?: AbortSignal): Promise<SetCard[]> {
   return ((await res.json()) as { sets: SetCard[] }).sets;
 }
 
+// Set lifecycle (G1b) — owner-only mutations. Each resolves to ok; the caller refetches.
+const setAction = async (id: string, action: string, body?: unknown): Promise<boolean> => {
+  const res = await fetch(`/api/sets/${encodeURIComponent(id)}/${action}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res.ok;
+};
+/** Make a draft public (it shows on the profile + Discover). */
+export const publishSet = (id: string) => setAction(id, "publish");
+/** Pull a published set back to a private draft. */
+export const unpublishSet = (id: string) => setAction(id, "unpublish");
+/** Rename a set (empty → a default "Set · date" label). */
+export const renameSet = (id: string, title: string) => setAction(id, "rename", { title });
+/** Discard a set — deletes the row + the R2 recipe blob. */
+export async function discardSet(id: string): Promise<boolean> {
+  const res = await fetch(`/api/sets/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "same-origin" });
+  return res.ok;
+}
+
 /** File a moderation report (L2) — a room, a chat line, or a user. Lands in the admin queue. */
 export async function fileReport(r: { kind: "room" | "chat" | "user"; room?: string; dev?: string; text?: string; reason?: string }): Promise<boolean> {
   try {

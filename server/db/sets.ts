@@ -107,6 +107,11 @@ export async function setSetStatus(db: D1Database, id: string, hostId: string, s
     .run();
 }
 
+/** Rename a set (G1b). Owner-scoped; empty/null title → falls back to a default label. */
+export async function setSetTitle(db: D1Database, id: string, hostId: string, title: string | null): Promise<void> {
+  await db.prepare("UPDATE sets SET title = ? WHERE id = ? AND host_id = ?").bind(title, id, hostId).run();
+}
+
 /** Discard a set (G1b). Owner-scoped; the caller deletes the R2 log alongside. */
 export async function deleteSet(db: D1Database, id: string, hostId: string): Promise<void> {
   await db.prepare("DELETE FROM sets WHERE id = ? AND host_id = ?").bind(id, hostId).run();

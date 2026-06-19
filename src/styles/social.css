@@ -502,6 +502,235 @@ span.profile-handle:hover {
   animation: panel-in 0.14s ease-out;
 }
 
+/* --- Session redesign: status hero + crowd/room console ------------------------- */
+.room-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  margin-bottom: 4px;
+}
+.room-hero.live {
+  border-color: #c8506a;
+  background: color-mix(in srgb, #c8506a 12%, var(--panel));
+}
+.hero-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.hero-title {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.hero-title.idle-title {
+  color: var(--muted);
+  font-weight: 700;
+}
+.hero-dot {
+  color: #ff5d73;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+.hero-handle {
+  color: #e87f97;
+  font-weight: 700;
+}
+.hero-listeners {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+.hero-sub {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.hero-sub b {
+  color: var(--text);
+  font-weight: 600;
+}
+.hero-end,
+.hero-golive {
+  align-self: stretch;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+}
+.hero-golive {
+  border: 1px solid #c8506a;
+  background: #c8506a;
+  color: #fff;
+}
+.hero-golive:hover {
+  filter: brightness(1.08);
+}
+.hero-golive:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hero-end {
+  border: 1px solid #c8506a;
+  background: transparent;
+  color: #e87f97;
+}
+.hero-end:hover {
+  background: #c8506a;
+  color: #fff;
+}
+.hero-stop {
+  flex: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #c8506a;
+  background: transparent;
+  color: #e87f97;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.hero-stop:hover {
+  background: #c8506a;
+  color: #fff;
+}
+.room-hero.listening {
+  border-color: #c8506a;
+  background: color-mix(in srgb, #c8506a 10%, var(--panel));
+  gap: 6px;
+}
+.room-hero.listening .hero-title b {
+  color: #e87f97;
+}
+
+/* The crowd console + room section: grouped cards, clear separation. */
+.crowd-section,
+.room-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.crowd-section {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.room-section {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 2px;
+}
+
+/* Session-control links — secondary, the hero owns the primary action. */
+.room-leave-link,
+.room-join-link,
+.room-start-link {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.room-join-link {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-leave-link:hover,
+.room-start-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.room-join-link:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Just-recorded prompt (G1b) — a one-line nudge after a broadcast ends. */
+.set-saved {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #3ddc84 45%, var(--line));
+  background: color-mix(in srgb, #3ddc84 10%, var(--panel));
+  animation: panel-in 0.16s ease-out;
+}
+.set-saved-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.set-saved-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #4ee79a;
+}
+.set-saved-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.set-saved-acts {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.set-saved-publish {
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid #c8506a;
+  background: #c8506a;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.set-saved-publish:hover {
+  filter: brightness(1.08);
+}
+.set-saved-discard {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.set-saved-discard:hover {
+  border-color: #c8506a;
+  color: #e87f97;
+}
+.set-saved-x {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.set-saved-x:hover {
+  color: var(--text);
+}
+.set-saved-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* --- Recordings (G1b): the host's captured sets, collapsible in Session --------- */
 .recordings {
   margin: 4px 0 10px;

@@ -11,10 +11,12 @@ export function RecordingsPanel({
   setsRev = 0,
   heading = "🔴 Recordings",
   defaultOpen = false,
+  onPlay,
 }: {
   setsRev?: number;
   heading?: string;
   defaultOpen?: boolean;
+  onPlay?: (id: string) => void; // G1c: replay this set on the decks
 }) {
   const [sets, setSets] = useState<SetCard[] | null>(null);
   const [open, setOpen] = useState(defaultOpen);
@@ -101,6 +103,11 @@ export function RecordingsPanel({
                 </span>
               </div>
               <div className="rec-acts">
+                {onPlay && (
+                  <button className="rec-play" title="Replay this set on the decks" onClick={() => onPlay(s.id)}>
+                    ▶
+                  </button>
+                )}
                 {s.status === "draft" ? (
                   <button className="rec-publish" disabled={busy === s.id} onClick={() => act(s.id, () => publishSet(s.id))}>
                     Publish

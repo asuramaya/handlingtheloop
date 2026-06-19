@@ -731,6 +731,93 @@ span.profile-handle:hover {
   cursor: default;
 }
 
+/* --- Replay bar (G1c): the recorded-set transport over the decks ---------------- */
+.replay-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(520px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--panel) 92%, black);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  animation: panel-in 0.16s ease-out;
+}
+.replay-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.replay-tag {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent);
+  flex: 1;
+}
+.replay-stale {
+  font-size: 11px;
+  color: #e7b65a;
+}
+.replay-stop {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.replay-stop:hover {
+  border-color: #c8506a;
+  color: #e87f97;
+}
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.replay-toggle {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.replay-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.replay-time {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.replay-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+  cursor: pointer;
+  overflow: hidden;
+}
+.replay-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 /* --- Recordings (G1b): the host's captured sets, collapsible in Session --------- */
 .recordings {
   margin: 4px 0 10px;
@@ -861,6 +948,18 @@ span.profile-handle:hover {
   align-items: center;
   gap: 5px;
   flex: none;
+}
+.rec-play {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.rec-play:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .rec-publish {
   padding: 4px 11px;

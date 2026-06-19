@@ -13,7 +13,9 @@ import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileS
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
 import { type Me, fetchMe, logPlay } from "@htl/account";
-import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
+import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
+import { useSetReplay } from "@htl/replay";
+import { ReplayBar } from "./components/ReplayBar";
 import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
 import {
   AudioEngine,
@@ -2280,6 +2282,28 @@ export function App() {
     [engine, refresh],
   );
 
+  // ── G1c: recorded-set replay ──────────────────────────────────────────────────
+  // A replay drives the SAME live-listener handlers from a local clock instead of the WS.
+  // replayDispatch routes a recipe message to its handler; pauseAudio halts both decks (they
+  // run their own clock once a transport intent starts them). The follow gates below are
+  // forced open while replay.active so the handlers don't no-op outside a session.
+  const replayDispatch = useCallback(
+    (m: ClientMsg) => {
+      if (m.t === "state") applyRoomSnapshot(m.snapshot);
+      else if (m.t === "intent") onRoomIntent(m.intent);
+      else if (m.t === "tick") onRoomTick(m.decks);
+      else if (m.t === "automix") setRemoteAutomix(m.state as AutoMixMirror | null);
+    },
+    [applyRoomSnapshot, onRoomIntent, onRoomTick],
+  );
+  const replay = useSetReplay({
+    dispatch: replayDispatch,
+    pauseAudio: () => {
+      engine.deck("A").pause();
+      engine.deck("B").pause();
+    },
+  });
+
   // A peer's stem waveform envelopes arrived (the host streams them) → rebuild this
   // deck's 4-lane display from them, even though we hold no local stem PCM (mobile).
   const onRoomStemView = useCallback(
@@ -2624,13 +2648,13 @@ export function App() {
   emitDeckRef.current = emitDeckControls;
   // Apply inbound control whenever we're a participant — intents are always from
   // OTHER controllers (the DO never echoes our own), so it never fights us.
-  followRef.current = room.enabled;
+  followRef.current = room.enabled || replay.active; // G1c: replay drives the same handlers
   // Catch-up snapshots apply to everyone EXCEPT the anchor (the authoritative board / its
   // own source of truth). A non-anchor CONTROLLER — e.g. a same-account "control extension"
   // device that joined with empty decks — still needs the snapshot to load the host's deck
   // songs; gating on !controlling left it driving a blank board (deck songs never synced).
   // Re-stomping a controller's live edits is prevented by the per-videoId reconcile dedupe.
-  snapFollowRef.current = room.enabled && !room.isAnchor;
+  snapFollowRef.current = (room.enabled && !room.isAnchor) || replay.active;
   // Locked out of driving (a watch-only listener) → block the keys + show the overlay.
   lockedRef.current = room.enabled && !room.controlling;
   // Per-deck drive permission (E3/E4 seat model). A full controller/host (myDeck null) drives
@@ -3929,8 +3953,19 @@ export function App() {
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
+          onPlaySet={
+            room.enabled || room.listeningTo
+              ? undefined // can't replay while in / tuned into a live session — the decks are busy
+              : (id) => {
+                  engine.unlock(); // user gesture → prime iOS audio
+                  replay.play(id);
+                  setProfileOpen(false); // get out of the way; the replay bar drives from here
+                }
+          }
         />
       )}
+      <ReplayBar replay={replay} />
+
       {publicHandle && (
         <PublicProfileScreen
           handle={publicHandle}

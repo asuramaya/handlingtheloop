@@ -6,6 +6,7 @@ export * from "./db/core";
 export * from "./db/identity";
 export * from "./db/social";
 export * from "./db/rooms";
+export * from "./db/sets";
 export * from "./db/connections";
 export * from "./db/community";
 export * from "./db/transcripts";

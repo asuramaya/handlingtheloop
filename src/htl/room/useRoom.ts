@@ -3,7 +3,7 @@
 // model (joined / listening / controller) + the actions and the intent/state/tick
 // channels used by the App-level sync wiring.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchMe, announceRoom, closeRoom, type AccountUser } from "../account";
+import { fetchMe, announceRoom, closeRoom, saveSet, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
 import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 export type { TickDecks } from "./protocol";
@@ -228,6 +228,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       stage: (reqs) => setStageRequests(reqs),
       stageGate: (mode) => setStageGateState(mode),
       engine: (stale) => setEngineStale(stale),
+      // G1a: a broadcast ended → persist the captured recipe as a private draft
+      // (capture-by-default; the host curates it later via the lifecycle card, G1b).
+      setCaptured: (set) => void saveSet(set),
       // A step-up didn't go through (declined / deck taken / closed) — clear the optimistic
       // pending deck. The human reason rides a separate `error` the server sends alongside.
       stageSelf: () => setMyStageDeck(null),
@@ -387,7 +390,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // between heartbeats). Keyed on the videoId so an unchanged object ref never re-fires.
   useEffect(() => {
     if (roomPublic && hostRef.current) void announce();
-  }, [nowPlaying?.videoId, roomPublic, announce]);
+    // G1a: tag the recorded set's tracklist as the host's now-playing changes.
+    if (roomPublic && hostRef.current && nowPlaying?.videoId) clientRef.current?.markTrack(nowPlaying);
+  }, [nowPlaying?.videoId, roomPublic, announce]); // eslint-disable-line react-hooks/exhaustive-deps
   // Re-broadcast the accent whenever it changes (the user re-themed) so peers re-vibe live.
   useEffect(() => {
     if (color) clientRef.current?.setColor(color);

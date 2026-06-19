@@ -13,8 +13,16 @@ import { getMySpotifyPlaylists } from "./spotifyData";
 import { getMyTidalPlaylists } from "./tidalData";
 import {
   type D1Database,
+  type R2Bucket,
   type User,
+  type SetRow,
+  type SetTrack,
   createSession,
+  createSet,
+  deleteSet,
+  ensureSetsTable,
+  getSet,
+  setsByHost,
   deleteConnection,
   deleteSession,
   announceRoom,
@@ -65,6 +73,7 @@ import {
 
 export interface AccountEnv {
   DB: D1Database;
+  AUDIO?: R2Bucket; // R2 bucket — stores recorded-set recipe logs (G1) alongside the audio cache
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   SPOTIFY_CLIENT_ID?: string;
@@ -94,6 +103,51 @@ function publicIdentity(u: User) {
     displayName: u.display_name ?? u.name ?? null,
     avatar: u.avatar_url ?? u.avatar ?? null,
     bio: u.bio ?? null,
+  };
+}
+
+// --- Recorded sets (G1) helpers -------------------------------------------
+const MAX_SET_BYTES = 12 * 1024 * 1024; // a recipe is commands-only; 12 MB covers very long sets
+
+function clampInt(v: unknown, lo: number, hi: number): number {
+  const n = Math.floor(Number(v) || 0);
+  return Math.max(lo, Math.min(hi, n));
+}
+
+/** Validate one captured tracklist marker (untrusted client input). */
+function sanitizeTrack(t: unknown): SetTrack | null {
+  if (!t || typeof t !== "object") return null;
+  const o = t as Record<string, unknown>;
+  if (typeof o.videoId !== "string" || !/^[\w-]{11}$/.test(o.videoId)) return null;
+  return {
+    videoId: o.videoId,
+    title: cleanText(String(o.title ?? ""), 200) || null,
+    artist: cleanText(String(o.artist ?? ""), 120) || null,
+    at: clampInt(o.at, 0, 24 * 3600_000),
+  };
+}
+
+/** A `sets` row → the JSON card the client reads (tracklist parsed; host identity is
+ *  joined in by the public-list routes, G1d). */
+function setCard(row: SetRow) {
+  let tracklist: SetTrack[] = [];
+  try {
+    tracklist = row.tracklist ? (JSON.parse(row.tracklist) as SetTrack[]) : [];
+  } catch {
+    /* corrupt tracklist → empty */
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    genre: row.genre,
+    status: row.status,
+    duration: row.duration,
+    tracks: row.tracks,
+    tracklist,
+    coverVideo: row.coverVideo,
+    engineVer: row.engineVer,
+    createdAt: row.createdAt,
+    publishedAt: row.publishedAt,
   };
 }
 
@@ -146,6 +200,27 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       isSelf: !!viewer && viewer.id === u.id,
       relationship: rel, // null when signed out or viewing self
     });
+  }
+
+  // A recorded set by id (G1): the card metadata, or `?log=1` for the R2 recipe blob the
+  // replay engine consumes (G1c). Drafts are private to their host. Dynamic path → matched
+  // before the exact switch, like /api/u/ above.
+  if (path.startsWith("/api/sets/")) {
+    if (!env.DB) return json(404, { error: "not found" });
+    await ensureSetsTable(env.DB);
+    const id = path.slice("/api/sets/".length);
+    const row = id ? await getSet(env.DB, id) : null;
+    if (!row) return json(404, { error: "no such set" });
+    if (row.status !== "published") {
+      const viewer = await currentUser(env, req);
+      if (!viewer || viewer.id !== row.hostId) return json(404, { error: "no such set" });
+    }
+    if (url.searchParams.get("log") === "1") {
+      const obj = env.AUDIO ? await env.AUDIO.get(`sets/${id}.json`) : null;
+      if (!obj) return json(404, { error: "log unavailable" });
+      return new Response(await obj.text(), { headers: { "content-type": "application/json" } });
+    }
+    return json(200, { set: setCard(row) });
   }
 
   switch (path) {
@@ -315,6 +390,59 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       await ensureRoomsTable(env.DB);
       await closeRoom(env.DB, user.id);
       return json(200, { ok: true });
+    }
+
+    // HOST persists a captured broadcast recipe as a private draft (G1a). Body = the
+    // CapturedSet { engineVersion, duration, log, tracklist, coverVideo }. The log blob goes
+    // to R2 (commands only — no audio); this writes the indexed D1 row.
+    case "/api/sets": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureIdentityColumns(env.DB);
+      if (!user.handle) return json(400, { error: "claim a handle before saving a set" });
+      const raw = await req.text();
+      if (raw.length > MAX_SET_BYTES) return json(413, { error: "set too large" });
+      let body: { engineVersion?: number; duration?: number; log?: unknown; tracklist?: unknown; coverVideo?: unknown };
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        return json(400, { error: "bad json" });
+      }
+      const log = Array.isArray(body.log) ? body.log : [];
+      const tracklist = Array.isArray(body.tracklist) ? body.tracklist.slice(0, 500).map(sanitizeTrack).filter(Boolean) : [];
+      const duration = clampInt(body.duration, 0, 24 * 3600_000);
+      const engineVer = clampInt(body.engineVersion, 0, 9999);
+      const coverVideo =
+        typeof body.coverVideo === "string" && /^[\w-]{11}$/.test(body.coverVideo)
+          ? body.coverVideo
+          : ((tracklist[0] as SetTrack | undefined)?.videoId ?? null);
+      const logJson = JSON.stringify({ engineVersion: engineVer, duration, log });
+      await ensureSetsTable(env.DB);
+      const id = await createSet(env.DB, {
+        hostId: user.id,
+        duration,
+        tracklist: tracklist as SetTrack[],
+        coverVideo,
+        engineVer,
+        bytes: logJson.length,
+      });
+      try {
+        await env.AUDIO?.put(`sets/${id}.json`, logJson, { httpMetadata: { contentType: "application/json" } });
+      } catch {
+        await deleteSet(env.DB, id, user.id); // no blob → no dangling row
+        return json(500, { error: "could not store set" });
+      }
+      return json(200, { id });
+    }
+
+    // The signed-in host's own sets (drafts + published), newest first (G1b/G1d).
+    case "/api/me/sets": {
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureSetsTable(env.DB);
+      const rows = await setsByHost(env.DB, user.id, true);
+      return json(200, { sets: rows.map(setCard) });
     }
 
     // File a moderation report (L2) — anyone present (incl. anon listeners) can flag a room or

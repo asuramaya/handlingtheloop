@@ -5,6 +5,7 @@
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { ENGINE_VERSION } from "./protocol";
+import { SetCapture, type CapturedSet } from "./setCapture";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -31,6 +32,7 @@ export interface RoomHandlers {
   muted?: (on: boolean) => void; // the host muted/unmuted THIS device
   mutedList?: (ids: string[]) => void; // HOST: the set of muted device ids (drives the unmute toggle)
   engine?: (stale: boolean, roomVersion: number) => void; // D5: room's engine version differs from ours → unfaithful mix
+  setCaptured?: (set: CapturedSet) => void; // G1a HOST: a broadcast ended → here's the captured recipe to persist
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
 }
@@ -136,6 +138,8 @@ export class RoomClient {
 
   private ws: WebSocket | null = null;
   private h: RoomHandlers = {};
+  // G1a: records the host's outbound recipe while live (started/stopped by goPublic).
+  private capture = new SetCapture();
   private retry = 0;
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -171,6 +175,7 @@ export class RoomClient {
 
   close(): void {
     this.closed = true;
+    this.finalizeCapture(); // teardown mid-broadcast still keeps the set (best-effort; G1a)
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -242,9 +247,22 @@ export class RoomClient {
   requestState(): void {
     this.send({ t: "request-state" });
   }
-  /** HOST only: open/close the room to anonymous read-only listeners (the broadcast plane). */
+  /** HOST only: open/close the room to anonymous read-only listeners (the broadcast plane).
+   *  The broadcast IS the recording-in-flight — going live starts the capture, ending it
+   *  finalizes the set (capture-by-default; G1a). */
   goPublic(on: boolean): void {
     this.send({ t: "public", on });
+    if (on) this.capture.start();
+    else this.finalizeCapture();
+  }
+  /** HOST: tag the captured set's tracklist when the now-playing track changes (G1a). */
+  markTrack(track: { videoId: string; title?: string; artist?: string }): void {
+    this.capture.mark(track);
+  }
+  /** Stop the capture + hand the recipe to the persistence layer (idempotent). */
+  private finalizeCapture(): void {
+    const set = this.capture.stop();
+    if (set) this.h.setCaptured?.(set);
   }
   /** LISTENER: raise a hand to step up onto a deck (the host approves). */
   requestStage(deck: DeckId): void {
@@ -498,5 +516,6 @@ export class RoomClient {
   private send(msg: ClientMsg): void {
     const ws = this.ws;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+    this.capture.record(msg); // G1a tee — cheap no-op unless this host is live + capturing
   }
 }

@@ -17,6 +17,22 @@ export interface D1Database {
   prepare(query: string): D1PreparedStatement;
 }
 
+// Minimal R2 surface (recorded-set log blobs live in R2, not D1). Same avoid-the-dep
+// stance as D1Database above; mirrors the worker's local R2Bucket shape.
+export interface R2ObjectBody {
+  text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+export interface R2Bucket {
+  get(key: string): Promise<R2ObjectBody | null>;
+  put(
+    key: string,
+    value: ArrayBuffer | Uint8Array | string,
+    opts?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> },
+  ): Promise<unknown>;
+  delete?(key: string): Promise<void>;
+}
+
 export const now = () => Date.now();
 export const uuid = () => crypto.randomUUID();
 

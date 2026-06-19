@@ -216,6 +216,57 @@ export async function closeRoom(): Promise<void> {
   await fetch("/api/rooms/close", { method: "POST", credentials: "same-origin" });
 }
 
+// --- Recorded sets (Epic G1) -----------------------------------------------
+export interface SetTrack {
+  videoId: string;
+  title?: string | null;
+  artist?: string | null;
+  at: number; // ms from set start
+}
+/** A recorded set's card (a row in the profile history / Discover; the heavy recipe log
+ *  lives in R2 and is fetched only at replay, G1c). Host identity fields ride public lists. */
+export interface SetCard {
+  id: string;
+  handle?: string | null;
+  displayName?: string | null;
+  avatar?: string | null;
+  title: string | null;
+  genre: string | null;
+  status: "draft" | "published";
+  duration: number; // ms
+  tracks: number;
+  tracklist: SetTrack[];
+  coverVideo: string | null;
+  engineVer: number;
+  createdAt: number;
+  publishedAt: number | null;
+}
+
+/** HOST: persist a just-captured broadcast recipe as a private draft (capture-by-default,
+ *  G1a). Best-effort — a failed save just means no recording, never a broken broadcast. */
+export async function saveSet(set: unknown): Promise<{ id: string } | null> {
+  try {
+    const res = await fetch("/api/sets", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(set),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { id: string };
+  } catch {
+    return null;
+  }
+}
+
+/** The signed-in host's own sets (drafts + published), newest first — the lifecycle card
+ *  (G1b) + profile history (G1d) read this. */
+export async function fetchMySets(signal?: AbortSignal): Promise<SetCard[]> {
+  const res = await fetch("/api/me/sets", { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { sets: SetCard[] }).sets;
+}
+
 /** File a moderation report (L2) — a room, a chat line, or a user. Lands in the admin queue. */
 export async function fileReport(r: { kind: "room" | "chat" | "user"; room?: string; dev?: string; text?: string; reason?: string }): Promise<boolean> {
   try {

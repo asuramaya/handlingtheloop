@@ -80,6 +80,8 @@ interface R2ObjectBody {
   body: ReadableStream;
   size: number;
   httpMetadata?: { contentType?: string };
+  text(): Promise<string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 interface R2Object {
   key: string;
@@ -91,9 +93,10 @@ interface R2Bucket {
   head(key: string): Promise<{ size: number } | null>;
   put(
     key: string,
-    value: ArrayBuffer | Uint8Array,
+    value: ArrayBuffer | Uint8Array | string,
     opts?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> },
   ): Promise<unknown>;
+  delete(key: string): Promise<void>;
   list(opts?: {
     prefix?: string;
     limit?: number;

@@ -8,7 +8,6 @@ import { CrowdPanel } from "./social/CrowdPanel";
 import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
-import { RecordingsPanel } from "./social/RecordingsPanel";
 import { deviceIcon } from "./social/util";
 
 // The Session "social screen" — the room you're in/hosting (the live-rooms DIRECTORY moved
@@ -187,10 +186,6 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
             {/* Own-session management is hidden while tuned into someone else's broadcast
                 (you're a read-only listener there — the banner's Stop is the only action). */}
             <div className="social-foot" style={room.listeningTo ? { display: "none" } : undefined}>
-              {/* Recordings (G1b): the host's own captured sets — Publish / rename / Discard.
-                  Self-hides until the first set; auto-opens when a fresh draft lands. */}
-              {!room.isGuest && room.signedIn && <RecordingsPanel setsRev={room.setsRev} />}
-
               {!room.joined ? (
                 !online ? (
                   <button className="room-cta" disabled>

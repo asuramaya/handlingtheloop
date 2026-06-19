@@ -4,11 +4,20 @@ import { fmtTime } from "../../util/format";
 
 // G1b — the host's Recordings: the post-set lifecycle home. Capture-by-default drops a
 // private DRAFT whenever a broadcast ends (G1a); here the host curates it — Publish (→ their
-// profile + Discover, G1d), rename, or Discard. Collapsed by default so it never crowds the
-// Session panel; auto-opens when a fresh recording lands. Hidden entirely until the first set.
-export function RecordingsPanel({ setsRev }: { setsRev: number }) {
+// profile + Discover, G1d), rename, or Discard. Lives on the OWN Profile (the "person" axis,
+// `defaultOpen` as a real section) per the redesign; `setsRev` lets a host surface refetch
+// when a fresh set lands. Hidden entirely until the first set.
+export function RecordingsPanel({
+  setsRev = 0,
+  heading = "🔴 Recordings",
+  defaultOpen = false,
+}: {
+  setsRev?: number;
+  heading?: string;
+  defaultOpen?: boolean;
+}) {
   const [sets, setSets] = useState<SetCard[] | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -46,7 +55,7 @@ export function RecordingsPanel({ setsRev }: { setsRev: number }) {
   return (
     <section className="recordings">
       <button className="recordings-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="recordings-title">🔴 Recordings · {sets.length}</span>
+        <span className="recordings-title">{heading} · {sets.length}</span>
         {drafts > 0 && <span className="recordings-badge">{drafts} draft{drafts > 1 ? "s" : ""}</span>}
         <span className="recordings-caret">{open ? "▾" : "▸"}</span>
       </button>

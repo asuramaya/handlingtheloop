@@ -17,6 +17,7 @@ import {
 import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { DockResizer } from "./DockResizer";
 import { ProfilePublicView } from "./ProfilePublicView";
+import { RecordingsPanel } from "./social/RecordingsPanel";
 
 // The own Profile — PUBLIC-FIRST (Option B, docs/social-layer.md → "Surface architecture"):
 // your public card (the shared ProfilePublicView, identical to /@handle) is the hero, edited
@@ -132,8 +133,10 @@ export function ProfileScreen({
               }
             />
 
-            {/* "Your sets" history plugs in here when Epic G1 lands (your recorded sets,
-                drafts + published — the persistent twin of your live status). */}
+            {/* Your sets (G1b) — your recorded sets, drafts + published; the persistent twin
+                of your live status. The "person" axis home for recordings (the Session shows
+                only a just-recorded prompt). Self-hides until your first set. */}
+            {user?.handle && <RecordingsPanel heading="Your sets" defaultOpen />}
 
             {/* ACCOUNT — demoted, collapsible footer: the rare set-and-forget plumbing
                 (connections / email / sign-out), kept off the public hero. */}

@@ -903,6 +903,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       const pxPerBeat = (interval / trackWindow) * w;
       const beatsPerBar = beatgrid.beatsPerBar ?? 4;
       const downbeat = beatgrid.downbeat ?? 0;
+      // The marker-bar thickness setting also scales the beat-grid line weights, kept in
+      // proportion (bar > beat > sub). /2 so the 2px default is the neutral 1× — unchanged
+      // from the original 2.2 / 1.3 / 1 px tiers.
+      const gridScale = Math.max(1, p.markerThickness || 2) / 2;
       // gridSize is the snap resolution in BEATS (8 = 2 bars, 1 = a beat, 0.0625 = 1/16
       // beat). Three independent tiers, each LOD-gated by its own pixel spacing:
       //   • BAR  — bold + bar number, every beatsPerBar beats from the downbeat.
@@ -953,7 +957,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       for (let b = leftBar - barStep; ; b += barStep) {
         const t = beatTimeAt(downbeat + b * beatsPerBar);
         if (t > right) break;
-        vline(t, 2.2, barCol);
+        vline(t, 2.2 * gridScale, barCol);
         if (showLabels && t >= left && t <= right && t >= 0 && t <= dur) {
           ctx.fillStyle = barCol;
           ctx.fillText(String(b + 1), toX(t) + 3 * dpr, h - 4 * dpr);
@@ -964,9 +968,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // drawn bold above, so skip them here and just lay the lighter in-between lines.
       if (showBeat || showSub) {
         const drawFine = (i: number, t: number) => {
-          if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1, subCol);
+          if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1 * gridScale, subCol);
           const isBar = (((i - downbeat) % beatsPerBar) + beatsPerBar) % beatsPerBar === 0;
-          if (!isBar && showBeat) vline(t, 1.3, beatCol);
+          if (!isBar && showBeat) vline(t, 1.3 * gridScale, beatCol);
         };
         if (beats && beats.length >= 2) {
           let lo = 0;

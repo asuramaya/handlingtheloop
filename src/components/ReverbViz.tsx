@@ -1,24 +1,20 @@
 import { useEffect, useRef } from "react";
 
 // Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim,
-// AND a direct-control surface (like the EQ curve): the dome's grips ARE the knobs. Read it
-// from the centre out:
+// AND a direct-control surface. Read the dome from the centre out:
 //   • CENTRE = the source (a warm DRIVE glow); a dark inner disc = the PREDELAY gap.
-//   • RADIUS outward = time → the diffuse fog dissipates as the tail decays; DECAY sets how
-//     far it reaches, SIZE the circle's footprint, FREEZE halts it, MIX its presence.
-//   • ANGLE around the circle = FREQUENCY (top = low, clockwise through mid to high). The
-//     rim CURVE's reach at each angle = how long that band rings: BRIGHTNESS pulls the high
-//     side in, LO/HI CUT flatten the curve at the band edges, WIDTH lifts the mids.
-//   • CHARACTER ripples the rim; DUCK makes the whole bloom breathe; DRIVE warms + swells the
-//     core. Animates only when something moves.
+//   • RADIUS outward = time → the diffuse fog dissipates as the tail decays.
+//   • ANGLE around the circle = FREQUENCY (top = low, clockwise to high); the rim CURVE's
+//     reach at each angle = how long that band rings. Animates only when something moves.
 //
-// DIRECT CONTROL (WYSIWYG, the EQ pattern): drag a grip to set its param.
-//   rim LOW grip  → DECAY   (shift-wheel → CHARACTER)
-//   rim MID grip  → WIDTH   (shift-wheel → RATE)
-//   rim HIGH grip → BRIGHT
-//   disc edge     → PREDLY     boundary ring → SIZE     core → DRIVE
-//   LO/HI band-edge grips (drag AROUND the rim) → LO CUT / HI CUT
-//   wheel over a grip nudges it; dbl-click / right-click resets it. MIX·DUCK stay as cells.
+// DIRECT CONTROL — two grip kinds, both absolute (the grip tracks your finger along a radius,
+// with a grab-offset so there's no jump), big hit targets, on fixed evenly-spaced spokes so
+// nothing piles up:
+//   • FEATURE grips sit ON the thing they control, so dragging moves that feature: DRIVE = the
+//     core, PREDLY = the inner disc edge, DECAY = the bloom edge, SIZE = the boundary ring.
+//   • VALUE grips ride a clean radial track: BRIGHT, WIDTH, and the LO/HI band CUTS (log Hz).
+// shift-wheel on DECAY → CHAR, on WIDTH → RATE. wheel nudges a grip; dbl-click / right-click
+// resets it. MIX·DUCK stay as cells beside the dome.
 
 interface ReverbVizProps {
   size: number; // 0..1 footprint
@@ -42,61 +38,88 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
 const f2n = (hz: number) => clamp01(Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000)); // 20‥20k → 0..1 log
-const n2f = (n: number) => 20 * Math.pow(1000, clamp01(n)); // inverse of f2n
 const TWO_PI = Math.PI * 2;
 const WARM = "255,150,70"; // DRIVE glow colour
 
-// Pixels of radial drag that span a grip's whole range (matches ValueCell's feel).
-const DRAG_SPAN_PX = 130;
-const GRAB_PX = 16; // pointer-to-grip hit radius
+const GRAB_PX = 26; // pointer-to-grip hit radius (generous — the grips ARE the controls)
+const NODE_R = 6.5; // grip dot radius
+const T = -Math.PI / 2; // 12 o'clock
+const Q = Math.PI / 2;
 
-// A grip's static meta. Radial grips map drag DISTANCE-from-centre → param; angular grips
-// (the band-edge cuts) map drag ANGLE-around-the-rim → param. Some carry a shift-wheel
-// secondary, exactly like the EQ node's shift-wheel = Q.
+// The live dome geometry the grips measure against (set each draw, read by the handlers).
+interface Ctx {
+  base: number; // unscaled dome radius = min(w,h)*0.46
+  R: number; // SIZE boundary radius
+  r0: number; // PREDELAY inner-disc radius
+  coreR: number; // DRIVE core radius
+  fogR: number; // DECAY bloom radius
+  duckPulse: number;
+}
+
+// A grip rides a fixed spoke (angle). A VALUE grip maps its param linearly (or log, for Hz)
+// along a track between two fractions of `base`. A FEATURE grip instead sits on a live dome
+// feature (`rad`) and inverts that feature's radius back to its param (`toParam`) — so the
+// grip IS the feature and dragging moves it. `sec` is a shift-wheel secondary.
 interface Grip {
   id: string;
   param: string;
   label: string;
-  kind: "radial" | "angular";
+  angle: number;
   min: number;
   max: number;
   def: number;
   fmt: (v: number) => string;
+  rIn?: number; // VALUE track (fraction of base)
+  rOut?: number;
+  log?: boolean;
+  feat?: { rad: (c: Ctx) => number; toParam: (r: number, c: Ctx) => number }; // FEATURE anchor
   sec?: { param: string; min: number; max: number };
 }
 const pct = (v: number) => `${Math.round(v * 100)}`;
 const hz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
 const ms = (v: number) => `${Math.round(v * 1000)}ms`;
 const GRIPS: Grip[] = [
-  { id: "decay", param: "decay", label: "DECAY", kind: "radial", min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
-  { id: "width", param: "width", label: "WIDTH", kind: "radial", min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
-  { id: "bright", param: "brightness", label: "BRIGHT", kind: "radial", min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "predelay", param: "predelay", label: "PREDLY", kind: "radial", min: 0, max: 0.2, def: 0.012, fmt: ms },
-  { id: "size", param: "size", label: "SIZE", kind: "radial", min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "drive", param: "drive", label: "DRIVE", kind: "radial", min: 0, max: 1, def: 0, fmt: pct },
-  { id: "lowCut", param: "lowCut", label: "LO CUT", kind: "angular", min: 20, max: 2000, def: 20, fmt: hz },
-  { id: "highCut", param: "highCut", label: "HI CUT", kind: "angular", min: 1000, max: 20000, def: 18000, fmt: hz },
+  // EVERY grip is the SAME radial control: a dot on a fixed spoke, dragged in/out along a
+  // track (0.42 → 1.0 of the dome radius) — identical travel + feel for all of them. The
+  // inner end is 0.42 (not 0) so a min-value grip (DRIVE 0, PREDLY ~0) lands on a clean ring
+  // OUTSIDE the orange core instead of buried in it; the outer end reaches the boundary. The
+  // dome's core / disc / bloom / boundary still grow live from the params as the readout.
+  { id: "decay", param: "decay", label: "DECAY", angle: T, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
+  { id: "size", param: "size", label: "SIZE", angle: T + Q / 2, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "highCut", param: "highCut", label: "HI CUT", angle: T + Q, rIn: 0.42, rOut: 1.0, min: 1000, max: 20000, def: 18000, log: true, fmt: hz },
+  { id: "width", param: "width", label: "WIDTH", angle: T + Q * 1.5, rIn: 0.42, rOut: 1.0, min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
+  { id: "drive", param: "drive", label: "DRIVE", angle: T + Q * 2, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
+  { id: "bright", param: "brightness", label: "BRIGHT", angle: T + Q * 2.5, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "lowCut", param: "lowCut", label: "LO CUT", angle: T + Q * 3, rIn: 0.42, rOut: 1.0, min: 20, max: 2000, def: 20, log: true, fmt: hz },
+  { id: "predelay", param: "predelay", label: "PREDLY", angle: T + Q * 3.5, rIn: 0.42, rOut: 1.0, min: 0, max: 0.2, def: 0.012, fmt: ms },
 ];
+// VALUE grip: norm (0..1 along track) ⇄ param value.
+const gripNorm = (g: Grip, v: number) => (g.log ? clamp01(Math.log(clamp(v, g.min, g.max) / g.min) / Math.log(g.max / g.min)) : clamp01((v - g.min) / (g.max - g.min)));
+const gripVal = (g: Grip, n: number) => (g.log ? g.min * Math.pow(g.max / g.min, clamp01(n)) : g.min + clamp01(n) * (g.max - g.min));
+// Where a grip sits (radius in px) for the current params, and the param a dragged radius maps to.
+const gripRadius = (g: Grip, v: number, c: Ctx) => (g.feat ? g.feat.rad(c) : c.base * ((g.rIn ?? 0.3) + gripNorm(g, v) * ((g.rOut ?? 0.98) - (g.rIn ?? 0.3))));
+const gripParamAt = (g: Grip, r: number, c: Ctx) => (g.feat ? g.feat.toParam(r, c) : gripVal(g, (r / c.base - (g.rIn ?? 0.3)) / ((g.rOut ?? 0.98) - (g.rIn ?? 0.3))));
 
 interface Placed extends Grip {
   x: number;
   y: number;
+  radius: number;
 }
 
 export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Live state the pointer/wheel handlers read (kept off the effect's closure so the listeners
-  // can be attached once yet always see fresh values).
+  // Live state the pointer/wheel handlers read (kept off the effect's closure).
   const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate });
   params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
   const onParamRef = useRef(onParam);
   onParamRef.current = onParam;
-  const center = useRef({ cx: 0, cy: 0 }); // canvas centre, for radius/angle of a pointer
-  const placed = useRef<Placed[]>([]); // grips at their current screen positions (hit-testing)
+  const center = useRef({ cx: 0, cy: 0 });
+  const ctxRef = useRef<Ctx>({ base: 1, R: 1, r0: 0, coreR: 1, fogR: 1, duckPulse: 1 });
+  const placed = useRef<Placed[]>([]);
   const hover = useRef<string | null>(null);
-  const drag = useRef<{ grip: Grip; startVal: number; startR: number; startAngN: number } | null>(null);
+  const drag = useRef<{ grip: Grip; offset: number } | null>(null); // offset = gripRadius − grabRadius (no jump)
   const lastTap = useRef(0);
   const drawRef = useRef<(now: number) => void>(() => {});
   const nowRef = useRef(0);
@@ -137,9 +160,10 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
 
       const cx = w / 2;
       const cy = h / 2;
+      const base = Math.min(w, h) * 0.46;
       center.current = { cx, cy };
       const sizeScale = 0.6 + clamp01(size) * 0.4;
-      const R = Math.min(w, h) * 0.46 * sizeScale;
+      const R = base * sizeScale;
       const r0frac = 0.1 + clamp01(predelay / 0.2) * 0.22; // predelay gap (fraction of R)
       const r0 = R * r0frac;
       const span = R - r0;
@@ -148,10 +172,12 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const reachBase = frozen ? 1 : 0.18 + clamp01(decay) * 0.82;
       const mixA = 0.32 + clamp01(mix) * 0.68;
       const dr = clamp01(drive);
-      // DUCK — a pronounced slow breathe of the whole bloom (the sidechain pump).
       const duckPulse = duck > 0 ? 1 - clamp01(duck) * 0.3 * (0.5 + 0.5 * Math.sin(elapsed * 2.4)) : 1;
       const loN = f2n(lowCut);
       const hiN = f2n(highCut);
+      const coreR = Math.max(3, R * 0.14) * (1 + dr * 1.1) * duckPulse;
+      const fogR = R * reachBase * duckPulse;
+      ctxRef.current = { base, R, r0, coreR, fogR, duckPulse };
 
       const reachAt = (fNorm: number) => {
         const tilt = 1 - (1 - clamp01(brightness)) * fNorm * 0.85;
@@ -162,7 +188,6 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       };
 
       // === diffuse BLOOM — radial fog, warmed by DRIVE, scaled by MIX + DUCK breathe ===
-      const fogR = R * reachBase * duckPulse;
       const grad = ctx.createRadialGradient(cx, cy, r0 * 0.6, cx, cy, Math.max(r0 + 1, fogR));
       grad.addColorStop(0, dr > 0 ? `rgba(${WARM},${(0.34 + dr * 0.3) * mixA})` : withAlpha(accent, 0.4 * mixA));
       grad.addColorStop(0.5, withAlpha(accent, 0.14 * mixA));
@@ -176,23 +201,12 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const RINGS = 4;
       for (let i = 0; i < RINGS; i++) {
         const u = (elapsed * 0.16 + i / RINGS) % 1;
-        const rr = (r0 + u * (fogR - r0)) * 1;
+        const rr = r0 + u * (fogR - r0);
         const a = (frozen ? 0.2 : 0.24 * (1 - u)) * (0.5 + 0.5 * clamp01(decay)) * mixA;
         ctx.strokeStyle = withAlpha(accent, a);
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(cx, cy, Math.max(1, rr), 0, TWO_PI);
-        ctx.stroke();
-      }
-
-      // frequency guide spokes (low / mid / high).
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
-      ctx.lineWidth = 1;
-      for (const fN of [0, 0.33, 0.66]) {
-        const a = angOf(fN);
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
-        ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
         ctx.stroke();
       }
 
@@ -229,9 +243,8 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       ctx.arc(cx, cy, r0, 0, TWO_PI);
       ctx.fill();
 
-      // === DRIVE → a warm, swelling core glow at the source (unmistakable when up) ===
+      // === DRIVE → a warm, swelling core glow at the source ===
       ctx.save();
-      const coreR = Math.max(3, R * 0.14) * (1 + dr * 1.1) * duckPulse;
       if (dr > 0) {
         ctx.shadowColor = `rgba(${WARM},0.95)`;
         ctx.shadowBlur = 8 + dr * 26;
@@ -244,57 +257,49 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       ctx.fill();
       ctx.restore();
 
-      // === place + draw the interactive GRIPS (the dome's "knobs") ===
-      // Rim grips ride the curve at fixed band angles (kept inside the live cut window so they
-      // never collapse onto the centre); disc/boundary/core grips sit at fixed visual angles;
-      // the cut grips ride the rim at their own cutoff angle (drag them AROUND to sweep).
-      const rimAng = (fNorm: number) => {
-        const r = r0 + reachAt(fNorm) * span;
-        const a = angOf(fNorm);
-        return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
-      };
-      const at = (a: number, rad: number) => ({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
-      const fLow = clamp(loN + 0.1, 0.06, 0.32);
-      const fMid = clamp((loN + hiN) / 2, 0.34, 0.66);
-      const fHigh = clamp(hiN - 0.1, 0.68, 0.94);
-      const posFor = (id: string): { x: number; y: number } => {
-        switch (id) {
-          case "decay": return rimAng(fLow);
-          case "width": return rimAng(fMid);
-          case "bright": return rimAng(fHigh);
-          case "predelay": return at(angOf(0.875), r0); // up-left, on the disc edge
-          case "size": return at(angOf(0.125), R); // up-right, on the boundary ring
-          case "drive": return at(Math.PI / 2, Math.max(coreR, R * 0.16)); // straight down, off the core
-          case "lowCut": return at(angOf(loN), R * 0.92);
-          case "highCut": return at(angOf(hiN), R * 0.92);
-          default: return { x: cx, y: cy };
-        }
-      };
-      placed.current = GRIPS.map((g) => ({ ...g, ...posFor(g.id) }));
+      // === place + draw the GRIPS ===
+      const c = ctxRef.current;
+      placed.current = GRIPS.map((g) => {
+        const radius = gripRadius(g, (params.current as Record<string, number>)[g.param], c);
+        return { ...g, radius, x: cx + Math.cos(g.angle) * radius, y: cy + Math.sin(g.angle) * radius };
+      });
 
+      // faint radial guides (so the in/out drag axis is discoverable), then the dots.
       for (const g of placed.current) {
-        const active = drag.current?.grip.id === g.id;
-        const hot = active || hover.current === g.id;
+        const hot = drag.current?.grip.id === g.id || hover.current === g.id;
+        const ix = cx + Math.cos(g.angle) * base * 0.08;
+        const iy = cy + Math.sin(g.angle) * base * 0.08;
+        const ox = cx + Math.cos(g.angle) * base * (g.feat ? 1.05 : g.rOut ?? 0.98);
+        const oy = cy + Math.sin(g.angle) * base * (g.feat ? 1.05 : g.rOut ?? 0.98);
+        ctx.strokeStyle = withAlpha(accent, hot ? 0.3 : 0.1);
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(g.x, g.y, hot ? 6 : 4.5, 0, TWO_PI);
-        ctx.fillStyle = hot ? "#fff" : withAlpha(accent, 0.92);
+        ctx.moveTo(ix, iy);
+        ctx.lineTo(ox, oy);
+        ctx.stroke();
+      }
+      for (const g of placed.current) {
+        const hot = drag.current?.grip.id === g.id || hover.current === g.id;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, hot ? NODE_R + 2.5 : NODE_R, 0, TWO_PI);
+        ctx.fillStyle = hot ? "#fff" : withAlpha(accent, 0.95);
         ctx.shadowColor = accent;
-        ctx.shadowBlur = hot ? 10 : 4;
+        ctx.shadowBlur = hot ? 12 : 5;
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = withAlpha(accent, hot ? 1 : 0.5);
+        ctx.strokeStyle = withAlpha(accent, hot ? 1 : 0.55);
         ctx.stroke();
       }
 
-      // active grip readout — its label + value, top-left (mirrors the EQ band-edit chip).
-      const act = drag.current;
+      // active/hover grip readout — its label + value, top-left.
+      const act = drag.current ? drag.current.grip : hover.current ? GRIPS.find((g) => g.id === hover.current) ?? null : null;
       if (act) {
-        const v = (params.current as Record<string, number>)[act.grip.param];
+        const v = (params.current as Record<string, number>)[act.param];
         ctx.fillStyle = accent;
-        ctx.font = "700 9px system-ui, sans-serif";
+        ctx.font = "700 10px system-ui, sans-serif";
         ctx.textAlign = "left";
-        ctx.fillText(`${act.grip.label} ${act.grip.fmt(v)}`, 6, 11);
+        ctx.fillText(`${act.label} ${act.fmt(v)}`, 7, 12);
       } else {
         ctx.fillStyle = "rgba(255,255,255,0.28)";
         ctx.font = "8px system-ui, sans-serif";
@@ -305,7 +310,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       if (frozen) {
         ctx.fillStyle = accent;
         ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(elapsed * 3));
-        ctx.fillText("❄ FROZEN", w - 56, 10);
+        ctx.fillText("❄ FROZEN", w - 56, 11);
         ctx.globalAlpha = 1;
       }
     };
@@ -330,21 +335,14 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
     };
   }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent]);
 
-  // --- direct control: hit-test grips, map drag → param (no audio nodes; just onParam) ---
+  // --- direct control: hit-test grips, map drag → param (absolute along the spoke radius) ---
   const localPt = (e: { clientX: number; clientY: number }) => {
     const r = canvasRef.current?.getBoundingClientRect();
     return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
   };
-  const angN = (x: number, y: number) => {
-    const { cx, cy } = center.current;
-    return (Math.atan2(y - cy, x - cx) / TWO_PI + 1.25) % 1; // 0 at top, clockwise (matches fNorm)
-  };
-  const radOf = (x: number, y: number) => {
-    const { cx, cy } = center.current;
-    return Math.hypot(x - cx, y - cy);
-  };
-  const nearest = (x: number, y: number): Grip | null => {
-    let best: Grip | null = null;
+  const radOf = (x: number, y: number) => Math.hypot(x - center.current.cx, y - center.current.cy);
+  const nearest = (x: number, y: number): Placed | null => {
+    let best: Placed | null = null;
     let bestD = GRAB_PX;
     for (const g of placed.current) {
       const d = Math.hypot(x - g.x, y - g.y);
@@ -369,8 +367,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const dir = e.deltaY < 0 ? 1 : -1;
       const tgt = e.shiftKey && g.sec ? g.sec : { param: g.param, min: g.min, max: g.max };
       const cur = (params.current as Record<string, number>)[tgt.param];
-      const unit = (tgt.max - tgt.min) / 40;
-      onParamRef.current(tgt.param, clamp(cur + dir * unit, tgt.min, tgt.max));
+      onParamRef.current(tgt.param, clamp(cur + dir * (tgt.max - tgt.min) / 40, tgt.min, tgt.max));
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
@@ -396,8 +393,9 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
           return;
         }
         lastTap.current = e.timeStamp;
-        const startVal = (params.current as Record<string, number>)[g.param];
-        drag.current = { grip: g, startVal, startR: radOf(pt.x, pt.y), startAngN: angN(pt.x, pt.y) };
+        // Grab-offset: keep (gripRadius − grabRadius) so the grip doesn't jump to the finger;
+        // it then tracks the finger's radius absolutely.
+        drag.current = { grip: g, offset: g.radius - radOf(pt.x, pt.y) };
         hover.current = g.id;
         redraw();
       }}
@@ -405,18 +403,10 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         const pt = localPt(e);
         const d = drag.current;
         if (d) {
-          const g = d.grip;
-          if (g.kind === "radial") {
-            const delta = radOf(pt.x, pt.y) - d.startR; // outward = increase
-            onParam(g.param, clamp(d.startVal + (delta / DRAG_SPAN_PX) * (g.max - g.min), g.min, g.max));
-          } else {
-            let dN = angN(pt.x, pt.y) - d.startAngN; // clockwise = up
-            dN = ((dN + 0.5) % 1 + 1) % 1 - 0.5; // shortest signed wrap
-            onParam(g.param, clamp(n2f(f2n(d.startVal) + dN), g.min, g.max));
-          }
+          const r = radOf(pt.x, pt.y) + d.offset;
+          onParam(d.grip.param, gripParamAt(d.grip, r, ctxRef.current));
           return;
         }
-        // hover highlight
         const g = nearest(pt.x, pt.y);
         const id = g?.id ?? null;
         if (id !== hover.current) {

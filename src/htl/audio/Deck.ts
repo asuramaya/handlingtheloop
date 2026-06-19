@@ -1749,6 +1749,37 @@ export class Deck {
   resetFxAt(i: number) {
     this.rack.deviceAt(i)?.reset();
   }
+  // ECHO OUT (Release FX, item 8): a momentary delay-tail "throw". Press snapshots the rack's
+  // delay device, un-bypasses it, and pushes it to a long near-self-oscillating wet tail;
+  // RELEASE restores the prior feedback/mix (but leaves the device active) so the captured
+  // repeats decay naturally and ring out — pair it with a brake / fader pull into silence.
+  // No-op when no delay is in the chain (canEchoOut gates the UI). OWES a real-device ear-test
+  // (the 0.85/0.85 throw is a starting point, not eared-in).
+  private echoSnapshot: { fb: number; mix: number } | null = null;
+  echoOut(on: boolean): void {
+    const dev = this.rack.deviceAt(this.rack.indexOf("delay"));
+    if (!dev) return;
+    if (on) {
+      if (this.echoSnapshot) return; // already thrown
+      this.echoSnapshot = { fb: dev.getParam("feedback"), mix: dev.getParam("mix") };
+      if (dev.bypassed) dev.setBypass(false);
+      dev.setParam("feedback", 0.85); // long, slowly-decaying tail (FB cap is 0.95)
+      dev.setParam("mix", 0.85); // mostly-wet throw
+    } else {
+      const s = this.echoSnapshot;
+      if (!s) return;
+      this.echoSnapshot = null;
+      dev.setParam("feedback", s.fb); // back to the user's setting → the tail decays out
+      dev.setParam("mix", s.mix);
+    }
+  }
+  /** A delay device is present to throw an echo from (gates the ECHO control). */
+  get canEchoOut(): boolean {
+    return this.rack.indexOf("delay") >= 0;
+  }
+  get echoingOut(): boolean {
+    return this.echoSnapshot != null;
+  }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
    *  missing). Returns the destination rack index on `other`, or −1. */

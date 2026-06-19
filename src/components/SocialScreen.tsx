@@ -21,6 +21,7 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false); // private-invite card collapses by default (decongest)
   const revealed = usePrivacyRevealed();
 
   const online = room.status === "online";
@@ -105,8 +106,10 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
             tuned into one). Everyone present can tap; the DJ reads the energy. */}
         {(room.roomPublic || room.listeningTo) && <CrowdPanel room={room} />}
 
-        {/* Chat (F5) — in any session or broadcast you're part of. */}
-        {(room.roomPublic || room.listeningTo || room.enabled) && <ChatPanel room={room} revealed={revealed} />}
+        {/* Chat (F5) — only when there's actually someone to talk to: you're broadcasting
+            (listeners can chat), you've tuned into a broadcast, or a real multi-party session.
+            A solo host idling alone no longer gets an empty chat box. */}
+        {(room.roomPublic || room.listeningTo || participants.length > 1) && <ChatPanel room={room} revealed={revealed} />}
 
         {!inSession ? (
           <p className="social-hint">Sign in under Profile, or open an invite link, to join a shared session.</p>
@@ -214,23 +217,29 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                 <div className="share-modes">
                   <div className="social-section-head">Share this session</div>
 
-                  {/* PRIVATE — invite specific people; they knock, you let them in. */}
+                  {/* PRIVATE — invite specific people; they knock, you let them in. Collapsed by
+                      default (most sessions are solo or public); the header expands it on demand. */}
                   <div className="share-mode private">
-                    <div className="share-mode-head">
+                    <button className="share-mode-head as-toggle" onClick={() => setInviteOpen((o) => !o)} aria-expanded={inviteOpen}>
                       <span className="share-mode-title">🔒 Private invite</span>
-                      <span className="share-mode-sub">A link for specific people. They knock, you approve — and they can take the decks.</span>
-                    </div>
-                    <button className="room-invite" onClick={makeInvite} disabled={inviting}>
-                      {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Invite people"}
+                      <span className="share-mode-caret">{inviteOpen ? "▾" : "▸"}</span>
                     </button>
-                    {inviteUrl && (
-                      <div className="room-invite-share">
-                        <button type="button" className="room-invite-link" title="Tap to copy" onClick={() => copyLink(inviteUrl)}>
-                          {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
+                    {inviteOpen && (
+                      <>
+                        <span className="share-mode-sub">A link for specific people. They knock, you approve — and they can take the decks.</span>
+                        <button className="room-invite" onClick={makeInvite} disabled={inviting}>
+                          {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Invite people"}
                         </button>
-                        <QRCode value={inviteUrl} size={172} className="room-invite-qr" />
-                        <span className="room-invite-scan">Scan to join on another device</span>
-                      </div>
+                        {inviteUrl && (
+                          <div className="room-invite-share">
+                            <button type="button" className="room-invite-link" title="Tap to copy" onClick={() => copyLink(inviteUrl)}>
+                              {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
+                            </button>
+                            <QRCode value={inviteUrl} size={172} className="room-invite-qr" />
+                            <span className="room-invite-scan">Scan to join on another device</span>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
 
@@ -240,9 +249,11 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                       <span className="share-mode-title">
                         🌐 Public lobby{room.roomPublic && <span className="share-live-dot" aria-hidden="true"> ●</span>}
                       </span>
-                      <span className="share-mode-sub">
-                        Open to anyone at {room.user?.handle ? <>your <b>@{room.user.handle}</b></> : "your @handle"}. They tune in to listen and can ask to step up to the decks.
-                      </span>
+                      {!room.roomPublic && (
+                        <span className="share-mode-sub">
+                          Open to anyone at {room.user?.handle ? <>your <b>@{room.user.handle}</b></> : "your @handle"}. They tune in to listen and can ask to step up to the decks.
+                        </span>
+                      )}
                     </div>
                     {room.user?.handle ? (
                       room.joined ? (

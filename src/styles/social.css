@@ -975,6 +975,25 @@ span.profile-handle:hover {
   flex-direction: column;
   gap: 3px;
 }
+/* Collapsible variant (private invite): the head is the toggle button. */
+.share-mode-head.as-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.share-mode-head.as-toggle:hover .share-mode-title {
+  color: var(--accent);
+}
+.share-mode-caret {
+  color: var(--muted);
+  font-size: 11px;
+}
 .share-mode-title {
   font-weight: 700;
   font-size: 13.5px;

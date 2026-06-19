@@ -383,6 +383,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   useEffect(() => {
     if (!roomPublic || !hostRef.current) return; // ONLY the host announces — never a listener/guest
     void announce();
+    // G1a: the host IS the live broadcaster → make sure the recipe capture is running. Fires
+    // on the go-live edge AND on a reconnect into an already-public room (mid-set reload), so a
+    // refresh no longer silently loses the recording. Idempotent; the OFF edge finalizes it.
+    clientRef.current?.ensureCapturing();
     const t = setInterval(() => void announce(), 30_000);
     return () => clearInterval(t);
   }, [roomPublic, announce]);

@@ -252,8 +252,14 @@ export class RoomClient {
    *  finalizes the set (capture-by-default; G1a). */
   goPublic(on: boolean): void {
     this.send({ t: "public", on });
-    if (on) this.capture.start();
+    if (on) this.ensureCapturing();
     else this.finalizeCapture();
+  }
+  /** Start the recording if it isn't already running — idempotent, so it fires on the
+   *  go-live edge AND when a host (re)connects into an already-public room (a mid-set
+   *  reload), without wiping an in-progress capture. */
+  ensureCapturing(): void {
+    if (!this.capture.capturing) this.capture.start();
   }
   /** HOST: tag the captured set's tracklist when the now-playing track changes (G1a). */
   markTrack(track: { videoId: string; title?: string; artist?: string }): void {

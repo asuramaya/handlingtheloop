@@ -182,6 +182,38 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
       emit({ kind: "cue", deck: id, position: deck.cuePoint });
     }
   };
+  // CUE button HOLD = momentary preview from the cue point (CDJ "cue play"): paused + held
+  // past HOLD_MS plays from the cue while down; release snaps back (slip-aware previewRelease,
+  // the same primitive as the hot-cue hold). A quick tap stays the normal cueAction. Only
+  // arms when paused & un-shifted — holding while playing, or with Shift, is just a tap.
+  const cueHold = useRef<{ held: boolean; tmr: number } | null>(null);
+  const cueSuppress = useRef(false);
+  const cueDown = () => {
+    if (shift || deck.playing) return; // tap-only path (START / jump-to-cue) resolves on click
+    const rec = { held: false, tmr: 0 };
+    rec.tmr = window.setTimeout(() => {
+      rec.held = true;
+      deck.previewHold(deck.cuePoint); // play from the cue while held
+      refresh();
+    }, HOLD_MS);
+    cueHold.current = rec;
+  };
+  const cueEndHold = () => {
+    const rec = cueHold.current;
+    cueHold.current = null;
+    if (!rec) return;
+    clearTimeout(rec.tmr);
+    if (rec.held) {
+      deck.previewRelease(); // slip-aware return to the cue point
+      cueSuppress.current = true; // the hold owned it — don't also set/jump on the trailing click
+      refresh();
+    }
+  };
+  const cueClick = () => {
+    if (cueSuppress.current) { cueSuppress.current = false; return; }
+    cueAction(); // quick tap (or the play/shift tap-only path)
+    refresh();
+  };
 
   return (
     <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
@@ -474,8 +506,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           ) : (
             <button
               className="hw-btn cue"
-              title={shift ? "Jump to start" : "Cue"}
-              onPointerDown={act(cueAction)}
+              title={shift ? "Jump to start" : "Cue — tap to set/jump, hold to preview from the cue"}
+              onPointerDown={cueDown}
+              onPointerUp={cueEndHold}
+              onPointerLeave={cueEndHold}
+              onClick={cueClick}
             >
               {shift ? "START" : "CUE"}
               <span className="kbd">C</span>

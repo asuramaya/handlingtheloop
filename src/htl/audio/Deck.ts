@@ -1463,10 +1463,15 @@ export class Deck {
     this.previewAnchor = null;
     if (!a) return;
     if (this.slipEnabled && a.wasPlaying) {
-      this.seek(this.shadowOf(a.pos, a.t));
+      this.seek(this.shadowOf(a.pos, a.t)); // slip: snap to where it would be, keep playing
+    } else if (a.wasPlaying) {
+      this.seek(a.pos); // was playing, slip off: return to the press point, keep rolling
     } else {
+      // Was PAUSED (cue-preview): stop the preview voice FIRST so the return seek happens
+      // while paused — a paused seek only moves startOffset (silent). Seeking before pausing
+      // re-seated a fresh gapless source at a.pos whose declick fade rang out = the "ghost".
+      this.pause();
       this.seek(a.pos);
-      if (!a.wasPlaying) this.pause();
     }
   }
 

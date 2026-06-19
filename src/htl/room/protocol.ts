@@ -124,7 +124,7 @@ export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";
 export type StemName = "drums" | "bass" | "vocals" | "other";
 // Sampler voice behaviour (mirrors SampleMode in the audio engine; inlined so this wire
 // file stays import-free, exactly like StemName above).
-export type SampleMode = "oneshot" | "gate" | "loop";
+export type SampleMode = "oneshot" | "gate" | "loop" | "bounce";
 
 // One channel-strip effect AFTER the EQ (delay/reverb/chorus…) — see src/htl/audio/Fx.ts.
 // The EQ is NOT here: it keeps its dedicated ControlParams above. Devices ride the wire

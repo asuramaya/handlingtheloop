@@ -6,7 +6,7 @@
 // live voice (retrigger replaces it). Deck-region pads pass the deck's own decoded
 // buffer with an {offset,duration} window; global pads pass an uploaded clip's buffer.
 
-export type SampleMode = "oneshot" | "gate" | "loop";
+export type SampleMode = "oneshot" | "gate" | "loop" | "bounce";
 export type SampleRoute = "A" | "master" | "B";
 
 export interface PlayOpts {
@@ -41,7 +41,15 @@ export class Sampler {
     src.connect(g).connect(this.routes[o.route] ?? this.routes.master);
     const start = Math.max(0, Math.min(o.offset ?? 0, o.buffer.duration));
     const len = o.duration && o.duration > 0 ? o.duration : undefined;
-    if (o.mode === "loop") {
+    if (o.mode === "bounce") {
+      // Ping-pong: loop a [forward ++ reversed] copy of the window so it plays out then back,
+      // seamlessly (the mirror makes both folds click-free — the turn samples match).
+      src.buffer = Sampler.bounceBuffer(this.ctx, o.buffer, start, len ?? o.buffer.duration - start);
+      src.loop = true;
+      src.loopStart = 0;
+      src.loopEnd = src.buffer.duration;
+      src.start(0, 0);
+    } else if (o.mode === "loop") {
       src.loop = true;
       src.loopStart = start;
       src.loopEnd = len ? Math.min(o.buffer.duration, start + len) : o.buffer.duration;
@@ -104,5 +112,23 @@ export class Sampler {
   setRate(pad: number, rate: number): void {
     const v = this.voices.get(pad);
     if (v && rate > 0) v.src.playbackRate.value = rate;
+  }
+
+  /** Build a ping-pong buffer for `bounce` mode: the [startSec, startSec+lenSec) window
+   *  followed by its reverse, so looping it plays the slice forward then backward forever.
+   *  Both folds are click-free (the mirror repeats the turn sample). */
+  private static bounceBuffer(ctx: AudioContext, src: AudioBuffer, startSec: number, lenSec: number): AudioBuffer {
+    const sr = src.sampleRate;
+    const s0 = Math.max(0, Math.floor(startSec * sr));
+    const n = Math.min(src.length - s0, Math.max(1, Math.floor(lenSec * sr)));
+    const ch = src.numberOfChannels;
+    const out = ctx.createBuffer(ch, n * 2, sr);
+    for (let c = 0; c < ch; c++) {
+      const inD = src.getChannelData(c);
+      const outD = out.getChannelData(c);
+      for (let i = 0; i < n; i++) outD[i] = inD[s0 + i]; // forward
+      for (let i = 0; i < n; i++) outD[n + i] = inD[s0 + n - 1 - i]; // reversed
+    }
+    return out;
   }
 }

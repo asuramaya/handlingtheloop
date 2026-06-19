@@ -6,9 +6,9 @@ import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
 // account clips that cut through the mix. The per-deck "play X→Y" region samples (8 each)
 // live in the decks' SAMPLER pad-mode now, not here.
 
-const MODE_LABEL: Record<SampleMode, string> = { oneshot: "1-shot", gate: "gate", loop: "loop" };
-const MODE_DOT: Record<SampleMode, string> = { oneshot: "●", gate: "▣", loop: "↻" };
-const MODES: SampleMode[] = ["oneshot", "gate", "loop"];
+const MODE_LABEL: Record<SampleMode, string> = { oneshot: "1-shot", gate: "gate", loop: "loop", bounce: "bounce" };
+const MODE_DOT: Record<SampleMode, string> = { oneshot: "●", gate: "▣", loop: "↻", bounce: "⇄" };
+const MODES: SampleMode[] = ["oneshot", "gate", "loop", "bounce"];
 
 export function SamplerStrip({
   sampler,
@@ -47,8 +47,8 @@ export function SamplerStrip({
     if (pad.mode === "gate") {
       (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
       s.trigger(pad.index);
-    } else if (pad.mode === "loop") {
-      pad.playing ? s.stop(pad.index) : s.trigger(pad.index);
+    } else if (pad.mode === "loop" || pad.mode === "bounce") {
+      pad.playing ? s.stop(pad.index) : s.trigger(pad.index); // continuous modes toggle
     } else {
       s.trigger(pad.index);
     }

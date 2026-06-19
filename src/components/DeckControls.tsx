@@ -131,7 +131,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
       if (pad.hasTrack) { sampler.assignRegion(pad.index); refresh(); }
       return;
     }
-    if (pad.mode === "loop") pad.playing ? sampler.stop(pad.index) : sampler.trigger(pad.index);
+    if (pad.mode === "loop" || pad.mode === "bounce") pad.playing ? sampler.stop(pad.index) : sampler.trigger(pad.index);
     else sampler.trigger(pad.index);
     refresh();
   };
@@ -443,7 +443,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             <div className="ctx-menu smp-menu" style={{ left: Math.min(smpMenu.x, window.innerWidth - 200), top: Math.min(smpMenu.y, window.innerHeight - 220) }}>
               <div className="ctx-label">Mode</div>
               <div className="smp-modes">
-                {(["oneshot", "gate", "loop"] as const).map((m) => (
+                {(["oneshot", "gate", "loop", "bounce"] as const).map((m) => (
                   <button key={m} className={sampler.pads[smpMenu.i].mode === m ? "active" : ""} onClick={() => { sampler.setMode(smpMenu.i, m); refresh(); }}>
                     {m === "oneshot" ? "1-shot" : m}
                   </button>

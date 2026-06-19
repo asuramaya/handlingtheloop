@@ -531,6 +531,15 @@ body {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, var(--panel));
 }
+/* The 5-way stem picker (full + 4 stems) wraps rather than crushing the buttons. */
+.smp-menu .smp-stems {
+  flex-wrap: wrap;
+}
+.smp-menu .smp-stems button {
+  flex: 1 0 28%;
+  font-size: 10px;
+  padding: 4px 2px;
+}
 .smp-menu .smp-gain {
   width: calc(100% - 16px);
   margin: 2px 8px 8px;

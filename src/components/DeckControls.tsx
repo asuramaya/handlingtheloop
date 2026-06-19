@@ -384,13 +384,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             return (
               <button
                 key={pad.index}
-                className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""}`}
+                className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
                 data-cue={slot + 1}
                 disabled={pad.kind === "empty" && !pad.hasTrack}
                 title={
                   pad.kind === "empty"
                     ? pad.hasTrack ? `Grab a region from deck ${id}` : `Load a track on deck ${id} first`
-                    : `${pad.name || "sample"} · ${pad.mode} — tap to play, right-click for options`
+                    : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
                 }
                 onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
                 onPointerUp={() => smpUp(pad)}
@@ -398,6 +398,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
               >
                 {pad.kind === "empty" ? (pad.hasTrack ? "grab" : "—") : pad.name || slot + 1}
+                {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
               </button>
             );
           })}
@@ -418,6 +419,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               </div>
               <div className="ctx-label">Level</div>
               <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
+              {deck.hasStems && (
+                <>
+                  <div className="ctx-label">Stem</div>
+                  <div className="smp-modes smp-stems">
+                    <button className={!sampler.pads[smpMenu.i].stem ? "active" : ""} onClick={() => { sampler.setStem(smpMenu.i, undefined); refresh(); }}>full</button>
+                    {STEM_CELLS.map((s) => (
+                      <button key={s.name} className={sampler.pads[smpMenu.i].stem === s.name ? "active" : ""} onClick={() => { sampler.setStem(smpMenu.i, s.name); refresh(); }}>
+                        {s.label.toLowerCase()}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
               <div className="ctx-sep" />
               <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-grab from deck</button>
               <button className="ctx-danger" onClick={() => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); }}>✕ Clear pad</button>

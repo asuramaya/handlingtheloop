@@ -811,6 +811,12 @@ export class Deck {
   stemChannel(name: StemName): Float32Array | null {
     return this.stems ? this.stems[name].getChannelData(0) : null;
   }
+  /** A stem's full decoded buffer — for the sampler's stem-aware region pads (chop just the
+   *  vocal / drums). Resident only on desktop, short tracks (mobile + long tracks release
+   *  `this.stems`), so a null here makes the sampler fall back to the full-mix region. */
+  stemBuffer(name: StemName): AudioBuffer | null {
+    return this.stems ? this.stems[name] : null;
+  }
   /** The knob level for a stem (0..1.5; 1 = unity). */
   stemLevel(name: StemName): number {
     return this.stemGain[name];

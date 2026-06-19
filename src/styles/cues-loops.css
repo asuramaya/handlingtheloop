@@ -85,6 +85,20 @@
   box-shadow: inset 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent),
     0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
+/* A stem-chopped region pad: a corner letter (D/B/V/O) + a subtle ring so a glance shows
+   it plays one stem, not the full mix. */
+.pad-stem {
+  position: absolute;
+  bottom: 1px;
+  right: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+.pad.smp.stemmed {
+  border-style: dashed;
+}
 .pad-clear {
   position: absolute;
   top: 1px;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { AudioEngine, DeckId, SampleMode } from "@htl";
+import type { AudioEngine, DeckId, SampleMode, StemName } from "@htl";
 import type { Intent } from "@htl/room";
 import { decodeAudio } from "@htl/audio";
 import {
@@ -43,6 +43,7 @@ interface RegionDesc {
   name: string;
   mode: SampleMode;
   gain: number;
+  stem?: StemName; // chop just this stem (desktop, neural stems resident); undefined = full mix
 }
 type RegionStore = Record<string, (RegionDesc | null)[]>;
 interface GlobalPad {
@@ -68,6 +69,7 @@ export interface SamplerPad {
   uploading?: boolean;
   ready: boolean; // can be triggered right now
   hasTrack?: boolean; // region pads: a track is loaded on that deck (so capture is possible)
+  stem?: StemName; // region pads: chop just this stem (undefined = full mix)
 }
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -197,6 +199,7 @@ export function useSampler(
           playing,
           ready: !!r,
           hasTrack: !!vid,
+          stem: r?.stem,
         });
       }
     }
@@ -222,11 +225,13 @@ export function useSampler(
         const d = engine.deck(id);
         const vid = id === "A" ? loaded.A : loaded.B;
         const r = vid ? regions[vid]?.[regionSlot(i)] : null;
-        if (!r || !d.buffer) return;
+        if (!r) return;
+        const buf = (r.stem && d.stemBuffer(r.stem)) || d.buffer; // stem-aware: chop one stem, else the full mix
+        if (!buf) return;
         const rate = d.rate; // tempo-sync the region voice to the live deck
-        engine.sampler.play(i, { buffer: d.buffer, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
+        engine.sampler.play(i, { buffer: buf, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
         // Carry the slice — the guest plays it off ITS OWN copy of the deck's track (no audio on the wire).
-        emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate } });
+        emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stem: r.stem } });
       }
     },
     [engine, globals, regions, loaded.A, loaded.B, emit],
@@ -397,6 +402,21 @@ export function useSampler(
     [engine, globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
 
+  // Pick which stem a REGION pad chops (undefined = full mix). Master pads have no stems → no-op.
+  const setStem = useCallback(
+    (i: number, stem: StemName | undefined) => {
+      if (routeOf(i) === "master") return;
+      const vid = regionDeck(i) === "A" ? loaded.A : loaded.B;
+      if (!vid || !regions[vid]?.[regionSlot(i)]) return;
+      const next: RegionStore = { ...regions };
+      const arr = [...next[vid]];
+      arr[regionSlot(i)] = { ...(arr[regionSlot(i)] as RegionDesc), stem };
+      next[vid] = arr;
+      persistRegions(next);
+    },
+    [regions, loaded.A, loaded.B, persistRegions],
+  );
+
   const stop = useCallback(
     (i: number) => {
       engine.sampler.stop(i);
@@ -435,14 +455,16 @@ export function useSampler(
       } else {
         const d = engine.deck(route);
         const rg = intent.region;
-        if (!d.buffer || !rg) return; // guest hasn't decoded this deck's track yet → skip
-        engine.sampler.play(pad, { buffer: d.buffer, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
+        if (!rg) return;
+        const buf = (rg.stem && d.stemBuffer(rg.stem)) || d.buffer; // guest's own stem if it has it, else the mix
+        if (!buf) return; // guest hasn't decoded this deck's track yet → skip
+        engine.sampler.play(pad, { buffer: buf, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
       }
     },
     [engine],
   );
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, clearPad, setMode, setGain };
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, clearPad, setMode, setGain, setStem };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

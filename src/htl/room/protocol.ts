@@ -185,7 +185,7 @@ export type Intent =
       pad: number;
       route: "A" | "master" | "B";
       action: "trigger" | "release" | "stop";
-      region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number };
+      region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number; stem?: StemName };
       sampleId?: string;
       name?: string;
       mode?: SampleMode;

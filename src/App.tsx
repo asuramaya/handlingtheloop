@@ -2011,6 +2011,8 @@ export function App() {
   // can reach the queue (defined far below) and gate who mutates it.
   const mixQueueRef = useRef<MixQueue | null>(null);
   const autoIsRemoteRef = useRef(false);
+  // Plays a co-DJ's sampler pad fire — assigned where the sampler is set up (far below).
+  const samplerApplyRef = useRef<((intent: Extract<Intent, { kind: "sample" }>) => void) | null>(null);
 
   // Apply ONE control intent to the local engine — used for both inbound remote
   // intents and our own actions. Pure local effect, no network.
@@ -2053,6 +2055,12 @@ export function App() {
       if (intent.kind === "key") {
         engine.mirrorKeyDisplay(intent.slave);
         refresh();
+        return;
+      }
+      // A co-DJ fired a sampler pad — reconstruct it locally (region off our own deck buffer,
+      // global by fetching the host's clip). Has no `deck` field, so handle before that lookup.
+      if (intent.kind === "sample") {
+        samplerApplyRef.current?.(intent);
         return;
       }
       const deck = engine.deck(intent.deck);
@@ -2679,7 +2687,11 @@ export function App() {
   useEffect(() => void (knobPickup.current = {}), [focused]);
   // The sampler is lifted to App now (shared by the global strip AND each deck's SAMPLER
   // pad-mode): 12 global pads + 8 region pads per deck.
-  const sampler = useSampler(engine, loaded, me);
+  const sampler = useSampler(engine, loaded, me, emit);
+  // A co-DJ's `sample` intent reaches applyIntent (defined far above) through this ref.
+  useEffect(() => {
+    samplerApplyRef.current = sampler.applyRemote;
+  }, [sampler.applyRemote]);
   // Bridge to the sampler's trigger/release (set by SamplerStrip) so MIDI-learned + 1-8
   // keyboard pads fire the sampler without threading the api through the keymap effect.
   const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
@@ -3768,7 +3780,7 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <SamplerStrip engine={engine} sampler={sampler} ctlRef={samplerCtl} />
+          <SamplerStrip sampler={sampler} ctlRef={samplerCtl} />
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}

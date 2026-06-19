@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
-import type { AudioEngine, SampleMode } from "@htl";
+import type { SampleMode } from "@htl";
 import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
 
 // The 12 GLOBAL sample pads (master-routed) that sit over the A/B crossfader — uploaded
@@ -11,11 +11,9 @@ const MODE_DOT: Record<SampleMode, string> = { oneshot: "●", gate: "▣", loop
 const MODES: SampleMode[] = ["oneshot", "gate", "loop"];
 
 export function SamplerStrip({
-  engine,
   sampler,
   ctlRef,
 }: {
-  engine: AudioEngine;
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
 }) {
@@ -50,7 +48,7 @@ export function SamplerStrip({
       (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
       s.trigger(pad.index);
     } else if (pad.mode === "loop") {
-      pad.playing ? engine.sampler.stop(pad.index) : s.trigger(pad.index);
+      pad.playing ? s.stop(pad.index) : s.trigger(pad.index);
     } else {
       s.trigger(pad.index);
     }

@@ -122,6 +122,9 @@ export type ControlParam =
   | "pitch";
 export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";
 export type StemName = "drums" | "bass" | "vocals" | "other";
+// Sampler voice behaviour (mirrors SampleMode in the audio engine; inlined so this wire
+// file stays import-free, exactly like StemName above).
+export type SampleMode = "oneshot" | "gate" | "loop";
 
 // One channel-strip effect AFTER the EQ (delay/reverb/chorus…) — see src/htl/audio/Fx.ts.
 // The EQ is NOT here: it keeps its dedicated ControlParams above. Devices ride the wire
@@ -170,6 +173,24 @@ export type Intent =
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
   | { kind: "loop"; deck: DeckId; action: "in" | "out" | "exit" | "reloop" | "beat"; beats?: number }
   | { kind: "hotcue"; deck: DeckId; slot: number; action: "press" | "save" | "clear" }
+  // A sampler pad fired in a session. SELF-CONTAINED so a guest reconstructs WITHOUT the
+  // host's local pad store: a REGION pad (route A/B) carries its slice — the guest plays it
+  // off its OWN decoded copy of that deck's track, so no audio crosses the wire — and `rate`
+  // tempo-syncs the voice to the deck. A GLOBAL pad (route master) carries the server
+  // `sampleId`; the guest fetches the clip's bytes (same-account today, cross-account once
+  // session-scoped audio access lands). Triggers are DISCRETE — never coalesced (D1 digest).
+  // Has no top-level `deck`, so canDriveIntent treats it as board-wide (host/granted only).
+  | {
+      kind: "sample";
+      pad: number;
+      route: "A" | "master" | "B";
+      action: "trigger" | "release" | "stop";
+      region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number };
+      sampleId?: string;
+      name?: string;
+      mode?: SampleMode;
+      gain?: number;
+    }
   // Channel-strip effects (post-EQ). `slot` indexes the EFFECT list (0 = first effect
   // after the EQ), NOT the full rack. fxParam/fxBypass are the high-frequency live moves;
   // fxRack carries the whole effect list (add/remove/reorder + late-joiner catch-up).

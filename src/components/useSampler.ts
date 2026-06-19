@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { AudioEngine, DeckId, SampleMode } from "@htl";
+import type { Intent } from "@htl/room";
 import { decodeAudio } from "@htl/audio";
 import {
   MAX_SAMPLE_BYTES,
@@ -89,11 +90,19 @@ const emptyRegionArr = (): (RegionDesc | null)[] => Array(DECK_REGION_COUNT).fil
 const emptyGlobals = (meta: GlobalMeta): GlobalPad[] =>
   GLOBAL_PADS.map((g) => ({ name: "", mode: meta[g]?.mode ?? "oneshot", gain: meta[g]?.gain ?? 1, ready: false }));
 
-export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: string | null }, me: Me | null) {
+type SampleIntent = Extract<Intent, { kind: "sample" }>;
+
+export function useSampler(
+  engine: AudioEngine,
+  loaded: { A: string | null; B: string | null },
+  me: Me | null,
+  emit?: (intent: SampleIntent) => void, // session: broadcast a local pad fire to the room (no-op solo)
+) {
   const [regions, setRegions] = useState<RegionStore>(() => loadJson<RegionStore>(REGION_KEY, {}));
   const globalMeta = useRef<GlobalMeta>(loadJson<GlobalMeta>(GLOBAL_META_KEY, {}));
   const [globals, setGlobals] = useState<GlobalPad[]>(() => emptyGlobals(globalMeta.current));
   const fileBuffers = useRef<(AudioBuffer | null)[]>(Array(GLOBAL_COUNT).fill(null)); // decoded global clips
+  const remoteGlobalBuf = useRef<Map<string, AudioBuffer>>(new Map()); // guest-side cache of host global clips (by sampleId)
   const [error, setError] = useState<string | null>(null);
   const [playTick, bumpPlaying] = useReducer((n: number) => n + 1, 0); // re-render when voices start/stop
 
@@ -206,24 +215,32 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
         const g = globals[globalSlot(i)];
         if (!buf) return;
         engine.sampler.play(i, { buffer: buf, route: "master", mode: g.mode, gain: g.gain });
+        // Guests fetch the clip by id (same-account today; cross-account once session-scoped audio lands).
+        emit?.({ kind: "sample", pad: i, route, action: "trigger", sampleId: g.sampleId, name: g.name, mode: g.mode, gain: g.gain });
       } else {
         const id = regionDeck(i);
         const d = engine.deck(id);
         const vid = id === "A" ? loaded.A : loaded.B;
         const r = vid ? regions[vid]?.[regionSlot(i)] : null;
         if (!r || !d.buffer) return;
-        engine.sampler.play(i, { buffer: d.buffer, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain });
+        const rate = d.rate; // tempo-sync the region voice to the live deck
+        engine.sampler.play(i, { buffer: d.buffer, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
+        // Carry the slice — the guest plays it off ITS OWN copy of the deck's track (no audio on the wire).
+        emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate } });
       }
     },
-    [engine, globals, regions, loaded.A, loaded.B],
+    [engine, globals, regions, loaded.A, loaded.B, emit],
   );
 
   const release = useCallback(
     (i: number) => {
       const pad = pads[i];
-      if (pad?.mode === "gate") engine.sampler.release(i);
+      if (pad?.mode === "gate") {
+        engine.sampler.release(i);
+        emit?.({ kind: "sample", pad: i, route: routeOf(i), action: "release" });
+      }
     },
-    [engine, pads],
+    [engine, pads, emit],
   );
 
   // Capture a region from the deck: its active loop if set, else one bar from the playhead.
@@ -380,9 +397,52 @@ export function useSampler(engine: AudioEngine, loaded: { A: string | null; B: s
     [engine, globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
 
-  const stop = useCallback((i: number) => engine.sampler.stop(i), [engine]); // stop a voice (loop toggle)
+  const stop = useCallback(
+    (i: number) => {
+      engine.sampler.stop(i);
+      emit?.({ kind: "sample", pad: i, route: routeOf(i), action: "stop" });
+    },
+    [engine, emit],
+  ); // stop a voice (loop toggle)
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, assignRegion, assignFile, clearPad, setMode, setGain };
+  // Apply a remote pad fire (a co-DJ's `sample` intent). Reconstructs locally — NEVER
+  // re-emits (that path is `trigger`). Region pads play off the guest's own deck buffer;
+  // global pads fetch the host's clip by id (cached after the first fetch).
+  const applyRemote = useCallback(
+    (intent: SampleIntent) => {
+      const { pad, route, action } = intent;
+      if (action === "release") return engine.sampler.release(pad);
+      if (action === "stop") return engine.sampler.stop(pad);
+      // trigger
+      if (route === "master") {
+        const id = intent.sampleId;
+        if (!id) return;
+        const play = (buffer: AudioBuffer) =>
+          engine.sampler.play(pad, { buffer, route: "master", mode: intent.mode ?? "oneshot", gain: intent.gain ?? 1 });
+        const cached = remoteGlobalBuf.current.get(id);
+        if (cached) return play(cached);
+        void (async () => {
+          try {
+            const res = await fetch(sampleAudioUrl(id), { credentials: "same-origin" });
+            if (!res.ok) return; // cross-account guest can't read the host's clip yet (needs session-scoped access)
+            const buf = await decodeAudio(engine.ctx, await res.arrayBuffer());
+            remoteGlobalBuf.current.set(id, buf);
+            play(buf);
+          } catch {
+            /* unfetchable / undecodable — silently skip */
+          }
+        })();
+      } else {
+        const d = engine.deck(route);
+        const rg = intent.region;
+        if (!d.buffer || !rg) return; // guest hasn't decoded this deck's track yet → skip
+        engine.sampler.play(pad, { buffer: d.buffer, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
+      }
+    },
+    [engine],
+  );
+
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, clearPad, setMode, setGain };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

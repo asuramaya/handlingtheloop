@@ -16,6 +16,7 @@ export interface PlayOpts {
   route: SampleRoute;
   mode: SampleMode;
   gain?: number; // 0..1.5 (unity = 1)
+  rate?: number; // playback rate (region voices tempo-sync to the deck; default 1 = original)
 }
 
 export class Sampler {
@@ -34,6 +35,7 @@ export class Sampler {
     if (this.ctx.state === "suspended") void this.ctx.resume();
     const src = this.ctx.createBufferSource();
     src.buffer = o.buffer;
+    if (o.rate && o.rate > 0) src.playbackRate.value = o.rate; // tempo-sync (region voices ride the deck rate)
     const g = this.ctx.createGain();
     g.gain.value = o.gain ?? 1;
     src.connect(g).connect(this.routes[o.route] ?? this.routes.master);
@@ -96,5 +98,11 @@ export class Sampler {
   setGain(pad: number, gain: number): void {
     const v = this.voices.get(pad);
     if (v) v.g.gain.value = gain;
+  }
+
+  /** Live-adjust a sounding voice's playback rate (a region voice following a deck tempo move). */
+  setRate(pad: number, rate: number): void {
+    const v = this.voices.get(pad);
+    if (v && rate > 0) v.src.playbackRate.value = rate;
   }
 }

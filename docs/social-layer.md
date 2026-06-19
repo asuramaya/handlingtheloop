@@ -108,11 +108,14 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
 (Discover surface + public-first Profile), **B3**, **J1** (v1), **D5**.
 
 ### Tier 1 — Sets spine (Epic G) — the active push
-- [ ] **G1a — capture + model.** Host-side: buffer the broadcast digest while live; on end,
-      persist the log to **R2** + a `sets` row in **D1** (host, duration, tracklist,
-      `engineVersion`, draft flag). DECISION: host-side capture for v1 (recipe-is-cheap model,
-      dodges the DO write-quota ceiling — see [[htl-do-write-quota]]); DO-side only if we need
-      crash-resilient recording. *Foundational — b/c/d build on it.*
+- [x] **G1a — capture + model.** DONE (`18b32f0`, undeployed). `SetCapture` (src/htl/room/
+      setCapture.ts) tees the host's outbound recipe (snapshot+intents+automix+~1/sec ticks;
+      drops display-only stemview/lyrics) → on broadcast-end POSTs to `POST /api/sets` → R2 log
+      blob `sets/<id>.json` + a `sets` D1 row (migration 0016, server/db/sets.ts) as a private
+      DRAFT. `GET /api/me/sets` (own history), `GET /api/sets/:id` (card; `?log=1` → R2 recipe for
+      replay). engineVersion stamped (D5). Host-side for v1 (recipe is cheap, dodges the DO
+      write-quota ceiling — [[htl-do-write-quota]]); solo host = full capture (co-DJ intents not
+      tee'd here — G5). 86 tests green. **Migration 0016 needs `d1 migrations apply` at deploy.**
 - [ ] **G1b — lifecycle.** Post-set **Save / Publish / Discard** card in Session; capture-by-
       default → private draft → published. (Surface ownership: Session owns this.)
 - [ ] **G1c — replay** *(the hard part)*. A replay clock feeds the recorded log back through the

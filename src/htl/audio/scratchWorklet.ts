@@ -51,6 +51,11 @@ class Scratch extends AudioWorkletProcessor {
     for (let i = 0; i < this.glen; i++) this.gwin[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / this.glen);
     this.phaseA = 0; this.startA = 0; this.startB = 0; // two staggered grain heads
     this.stepRaw = 0; this.curRaw = 0; // uncapped finger-tracking velocity
+    // Worklet-OWNED motor ramp (brake / spinback / soft-start): the read velocity glides
+    // exponentially toward a target at AUDIO rate instead of being re-posted as positions
+    // ~60x/s. That kills the stair-step on the pitch glide (Mixxx drives its scratch at a
+    // 1 kHz timer; here it's per output sample). Reports position back for the visual playhead.
+    this.ramping = false; this.rampTarget = 0; this.kRamp = 0; this.rampSince = 0;
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'load') {
@@ -94,8 +99,19 @@ class Scratch extends AudioWorkletProcessor {
         // Clamp 1…8 ms. (Updates now arrive at the mouse's full report rate.)
         const tau = Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
         this.kStep = 1 - Math.exp(-1 / (tau * sampleRate));
+      } else if (d.type === 'ramp') {
+        // Begin an audio-rate motor ramp. vel = initial read velocity (samples/output-sample,
+        // i.e. playback rate: 1 = forward 1x, -8 = 8x reverse), target = where it eases to
+        // (0 = stop, the play rate = catch back to play), tau = exp time constant (seconds).
+        this.pos = d.pos;
+        this.curStep = d.vel;
+        this.rampTarget = d.target;
+        this.kRamp = 1 - Math.exp(-1 / (Math.max(0.001, d.tau) * sampleRate));
+        this.ramping = true; this.granular = false; this.rampSince = 0;
+        this.active = true; this.gainTarget = 1;
       } else if (d.type === 'stop') {
         this.gainTarget = 0; // fade out; go fully idle once silent
+        this.ramping = false; // a transport takeover cancels an in-flight ramp
       }
     };
   }
@@ -164,6 +180,28 @@ class Scratch extends AudioWorkletProcessor {
     for (let i = 0; i < frames; i++) {
       this.since++;
       this.gain += (this.gainTarget - this.gain) * this.kGain;
+      if (this.ramping) {
+        // Motor ramp: ease the read velocity toward the target every sample (exp approach),
+        // walk the pointer, and read the PCM continuously — the pitch glides at audio rate.
+        this.curStep += (this.rampTarget - this.curStep) * this.kRamp;
+        let done = (this.curStep - this.rampTarget) * (this.curStep - this.rampTarget) < 0.0004; // within 0.02
+        const p0 = this.pos;
+        this.pos += this.curStep;
+        if (this.pos < 0) { this.pos = 0; done = true; }
+        else if (this.pos > last) { this.pos = last; done = true; }
+        const sp = this.curStep < 0 ? -this.curStep : this.curStep;
+        for (let c = 0; c < nCh; c++) {
+          const buf = this.ch[c] || this.ch[this.ch.length - 1];
+          const s = buf ? this.readScrub(buf, p0, this.pos, sp) : 0;
+          const st = this.lp[c] || (this.lp[c] = [0, 0]);
+          st[0] += a * (s - st[0]);
+          st[1] += a * (st[0] - st[1]);
+          output[c][i] = st[1] * this.gain;
+        }
+        if (++this.rampSince >= this.nominal) { this.rampSince = 0; this.port.postMessage({ type: 'rampPos', pos: this.pos }); }
+        if (done) { this.ramping = false; this.gainTarget = 0; this.port.postMessage({ type: 'rampDone', pos: this.pos }); }
+        continue;
+      }
       if (this.granular) {
         // Follow the finger UNCAPPED (no multi-second catch-up) …
         this.curRaw += (this.stepRaw - this.curRaw) * this.kStep;

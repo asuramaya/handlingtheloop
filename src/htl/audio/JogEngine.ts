@@ -34,7 +34,7 @@ export class JogEngine {
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
 
-  private jogPhase: "off" | "grab" | "coast" | "reverse" = "off";
+  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
@@ -71,7 +71,32 @@ export class JogEngine {
   attachNode(node: AudioWorkletNode) {
     this.host.connectScratch(node);
     this.scratchNode = node;
+    node.port.onmessage = (e) => this.onScratchMessage(e.data); // worklet-ramp position + done
     if (this.host.scratchBuffer() && !isMobileDevice()) this.sendBuffer();
+  }
+  // A worklet-owned motor ramp (brake / spinback / soft-start) reports its read position back
+  // for the visual playhead, then a 'rampDone' when it settles — at which point we either
+  // resume normal playback (spinback catch / soft-start) or stay paused (brake).
+  private onScratchMessage(d: { type: string; pos: number }) {
+    if (this.jogPhase !== "motor") return; // stale message from a cancelled ramp
+    if (d.type === "rampPos") {
+      this.jogPos = d.pos / this.ctx.sampleRate;
+      this.host.setStartOffset(this.jogPos);
+    } else if (d.type === "rampDone") {
+      this.jogPos = d.pos / this.ctx.sampleRate;
+      this.clampJog();
+      const resume = this.jogReturnToPlay;
+      this.jogPhase = "off";
+      this._ramping = null;
+      this._coastTau = 0;
+      this.jogVel = 0;
+      this.host.setStartOffset(this.jogPos);
+      if (resume) {
+        // The scratch voice fades out (gain→0 in the worklet) as the deck source fades in.
+        this.host.spawnSource(this.jogPos);
+        this.host.setPlaying(true);
+      }
+    }
   }
   get attached() {
     return this.scratchNode != null;
@@ -263,17 +288,26 @@ export class JogEngine {
       this.host.stopSource(); // hand the audio to the scratch resampler
       this.host.setPlaying(false);
     }
-    this.handPos = this.handLast = this.jogPos;
-    this.handVel = 0;
-    this.jogVel = initialVel;
     this.jogReturnToPlay = resumePlay;
     this._coastTau = tau;
     this._ramping = kind;
-    this.jogInputAt = this.ctx.currentTime;
-    this.jogLast = this.ctx.currentTime;
-    this.jogPhase = "coast";
-    this.scratchStart();
-    this.startJogLoop();
+    // The WORKLET owns the ramp now: it eases the read velocity from initialVel toward the
+    // target at audio rate (smooth pitch glide), instead of us posting positions ~60x/s. A
+    // brake settles at 0 (paused); spinback / soft-start ease up to the play rate and catch
+    // back to normal playback. Cancel any in-flight platter rAF — the worklet drives this one.
+    if (this.jogRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.jogRaf);
+      this.jogRaf = 0;
+    }
+    this.jogPhase = "motor";
+    this.scratchStart(); // loads PCM (lazy on mobile) + raises the resampler gain
+    this.scratchNode?.port.postMessage({
+      type: "ramp",
+      vel: initialVel,
+      target: resumePlay ? this.host.rate() : 0,
+      tau,
+      pos: this.jogPos * this.ctx.sampleRate,
+    });
   }
 
   /** Pause with a turntable power-down: decelerate the audio to a stop over the brake
@@ -378,7 +412,7 @@ export class JogEngine {
           this.host.setStartOffset(this.jogPos);
           this.scratchMove();
           if (this.jogPos <= 0) this.reverseStop(); // hit the start → catch back to forward
-        } else {
+        } else if (phase === "coast") {
           this.stepCoast(dt); // may settle the platter to "off"
           this.host.setStartOffset(this.jogPos);
           if (this.jogPhase !== "off") this.scratchMove(); // voice the coast motion

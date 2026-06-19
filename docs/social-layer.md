@@ -122,9 +122,14 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       /api/sets/:id` (403 unauthed, drafts 404 to non-owners). Self-hides until the first set,
       stays collapsed (Session stays uncluttered), auto-opens when a fresh draft lands via the
       new `room.setsRev` signal. Verified end-to-end against the live worker (2 drafts captured).
-- [ ] **G1c — replay** *(the hard part)*. A replay clock feeds the recorded log back through the
-      SAME engine handlers a live listener uses → deterministic on-device rebuild. D5 pins the
-      version; a dead source id = graceful gap.
+- [x] **G1c — replay** DONE (`e99fd0c`, undeployed; OWES real-device ear-test). `useSetReplay`
+      (src/htl/replay/) drives a local rAF clock that fires each recipe entry at its timestamp
+      through the SAME live-listener handlers (App `replayDispatch` → applyRoomSnapshot/onRoomIntent/
+      onRoomTick/setRemoteAutomix; follow gates forced open while replay.active). play/pause (halts
+      decks)/seek (rebuild from last snapshot + intents + final tick)/stop. ReplayBar transport;
+      ▶ Play on each set in Profile "Your sets" (gated off while in a live session). D5 mismatch
+      warns; dead source id = graceful gap (load self-heals). *Decks play own clock at 1x, ticks
+      correct drift — the broadcast-listener contract.*
 - [ ] **G1d — surfaces.** Sets list in **Discover** (published/popular) + **Profile** history
       (drafts+published) — fill the seams already marked in DiscoverScreen + the Profile hero.
 - [ ] **D6 — gesture resync contract.** scratch/jog → snap to grid so non-deterministic gestures

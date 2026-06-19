@@ -3953,18 +3953,15 @@ export function App() {
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
-          onPlaySet={
-            // Block replay ONLY when the decks are driven by someone else — you're tuned into a
-            // live broadcast, or you're a non-anchor follower in a session. A solo host (anchor)
-            // or not-in-a-session can replay freely (it takes over your own decks).
-            room.listeningTo || (room.enabled && !room.isAnchor)
-              ? undefined
-              : (id) => {
-                  engine.unlock(); // user gesture → prime iOS audio
-                  replay.play(id);
-                  setProfileOpen(false); // get out of the way; the replay bar drives from here
-                }
-          }
+          onPlaySet={(id) => {
+            // Replay just TAKES OVER the decks — loading the recorded tracks is the replacement
+            // (there's no separate "unload"). The only real conflict is consuming a live remote
+            // feed, so tune out of one first; everything else, hijack the decks and go.
+            if (room.listeningTo) room.tuneOut();
+            engine.unlock(); // user gesture → prime iOS audio
+            replay.play(id);
+            setProfileOpen(false); // get out of the way; the replay bar drives from here
+          }}
         />
       )}
       <ReplayBar replay={replay} />

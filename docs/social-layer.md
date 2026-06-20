@@ -148,10 +148,15 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
 - [x] **B5** DONE via G1d ("Your sets" on own Profile + published on /@handle).
 
 ### Tier 3 — room robustness (E + D hardening)
-- [ ] **E7** host-disconnect grace + rehydrate + optional handoff · **E8** DO-eviction rehydration
-      · **E9** co-controller disconnect (freeze vs auto-release) · **E10** max room-size cap
-- [ ] **D3** late-join snapshot (incl. auto-mix queue) · **D4** clock sync · **D7** geo-block
-      divergence · **D8** drift catch-up policy · **D9** cold-decode dedup · **D10** reconnect storm
+- [x] **E7**/**E8** done+validated (see Tier-1/E detail). **E9** covered by design — deck-held/
+      controller state derives from LIVE sockets, so a dropped stage-DJ/co-controller AUTO-releases
+      their deck (recompute excludes the closed socket). **E10** cap + accept-then-kick "room full"
+      (4003) + no-reconnect-into-terminal-closes (`5d…`), which also kills the broadcast-end storm.
+- [~] **D3** late-join snapshot COVERED (sendCatchUp ships snapshot+automix+stemview+lyrics; relay
+      caches the same). **D10** reconnect backoff+JITTER done (client.scheduleReconnect) + terminal-
+      close guard. DEFERRED (demand-gated / speculative, low current value): **D4** NTP clock sync,
+      **D7** geo-block divergence, **D8** drift catch-up policy, **D9** cold-decode single-flight
+      (needs a DecodeLock DO — build with the load harness when broadcast cold-loads bite, like D2).
 
 ### Tier 4 — scale (demand-gated — MEASURED: one DO holds 500, see D2 spec note)
 - [x] **D2** relay tier VALIDATED PoC (`2d0a954`). RelayRoom crowd shards, env-gated (RELAY_SHARDS,

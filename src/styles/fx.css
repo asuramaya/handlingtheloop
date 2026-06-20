@@ -1746,16 +1746,12 @@ button.room-tog:hover {
 
 
 /* ── Saturator (Phase-1 panel; the SatViz WYSIWYG replaces the body in Phase 2) ───────── */
-/* Fit the SHARED --fx-body-h (= the EQ height) exactly: the style row + cells are fixed,
-   the canvas FLEXES to fill what's left, so the panel never overflows into the toolbar. */
+/* Inherits .fx-panel (height = the shared --fx-body-h, overflow hidden). Do NOT set height
+   here — .fx-stage is a flexing flex:1 with no definite height, so height:100% resolves to
+   the content and balloons. The style row + cells are fixed; the canvas (basis 0) absorbs
+   the surplus, exactly like the delay viz. */
 .sat-panel {
-  display: flex;
-  flex-direction: column;
   gap: 5px;
-  padding: 6px;
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
 }
 .sat-styles {
   display: flex;
@@ -1802,15 +1798,24 @@ button.room-tog:hover {
   flex: 1;
 }
 
-/* Saturator WYSIWYG canvas (Saturn-style log-frequency display) — flexes to fill the body. */
+/* Saturator WYSIWYG — a sized WRAPPER (the surplus-absorber, basis 0, collapses first) with
+   the canvas absolutely filling it, matching .dly-viz so the panel fits --fx-body-h and the
+   canvas never fights its own intrinsic aspect ratio. */
 .sat-viz {
-  flex: 1 1 auto;
-  min-height: 40px;
-  width: 100%;
-  display: block;
+  flex: 1 1 0;
+  min-height: 0;
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 70%, #000);
+  overflow: hidden;
+}
+.sat-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
   touch-action: none;
   cursor: crosshair;
 }

@@ -208,5 +208,9 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
     }
   };
 
-  return <canvas ref={canvasRef} className="sat-viz" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />;
+  return (
+    <div className="sat-viz">
+      <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+    </div>
+  );
 }

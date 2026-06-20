@@ -1,6 +1,8 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
+import { MicInput } from "./MicInput";
+import { Recorder, type RecordSource } from "./Recorder";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 import { REVERB_WORKLET_SRC } from "./reverbWorklet";
@@ -30,7 +32,11 @@ export class AudioEngine {
 
   private readonly xfadeA: GainNode;
   private readonly xfadeB: GainNode;
+  private readonly musicBus: GainNode; // decks + region samples sum here → master; the mic auto-duck modulates its gain
   private readonly master: GainNode;
+  // Live mic (talkover + sampling source) and the capture recorder (any node → AudioBuffer).
+  readonly mic: MicInput;
+  readonly recorder: Recorder;
   private readonly limiter: DynamicsCompressorNode;
   // Headphone-cue (PFL) bus: both decks' pre-fader cueSend taps mix into cueMaster,
   // which — when a separate cue device is chosen — bridges through a MediaStream into a
@@ -74,8 +80,12 @@ export class AudioEngine {
 
     this.xfadeA = this.ctx.createGain();
     this.xfadeB = this.ctx.createGain();
-    this.xfadeA.connect(this.master);
-    this.xfadeB.connect(this.master);
+    // Decks + region samples sum into the music bus → master. The bus gain rests at 1; the mic's
+    // sidechain dips it for talkover ducking. Global pads connect to master directly (un-ducked).
+    this.musicBus = this.ctx.createGain();
+    this.musicBus.connect(this.master);
+    this.xfadeA.connect(this.musicBus);
+    this.xfadeB.connect(this.musicBus);
 
     this.deckA = new Deck(this.ctx);
     this.deckB = new Deck(this.ctx);
@@ -90,6 +100,10 @@ export class AudioEngine {
     this.cueMaster = this.ctx.createGain();
     this.deckA.cueSend.connect(this.cueMaster);
     this.deckB.cueSend.connect(this.cueMaster);
+    // Live mic: talkover into master with a sidechain that ducks the music bus; its tap doubles
+    // as a record source. Recorder captures any node into an AudioBuffer for the sampler.
+    this.mic = new MicInput(this.ctx, this.master, this.musicBus.gain);
+    this.recorder = new Recorder(this.ctx);
     // Sync follow/release: any tempo change routes through the state machine.
     this.deckA.onTempoChange = () => this.onDeckTempo("A");
     this.deckB.onTempoChange = () => this.onDeckTempo("B");
@@ -269,6 +283,50 @@ export class AudioEngine {
       console.warn("[htl] setSinkId failed:", e);
       return false;
     }
+  }
+
+  // ── Live mic (talkover + sampling) ──────────────────────────────────────────────────────
+  /** Acquire the mic (user gesture + secure context). Returns false if denied/unavailable. */
+  async enableMic(): Promise<boolean> {
+    return this.mic.enable();
+  }
+  disableMic() {
+    this.mic.disable();
+  }
+  /** Talkover on/off — mic into the master with the music auto-ducking under it. */
+  setMicOn(on: boolean) {
+    this.mic.setOn(on);
+  }
+  setMicLevel(v: number) {
+    this.mic.setLevel(v);
+  }
+  setMicDuck(v: number) {
+    this.mic.setDuck(v);
+  }
+  get micReady(): boolean {
+    return this.mic.hasStream;
+  }
+  get micOn(): boolean {
+    return this.mic.on;
+  }
+  /** True when this browser exposes getUserMedia (gates the mic UI). */
+  get canMic(): boolean {
+    return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  }
+
+  // ── Capture (any node → AudioBuffer for a sampler pad) ───────────────────────────────────
+  /** Arm + start recording a source: "deckA" | "deckB" | "mic" | "master". Auto-stops at maxSec. */
+  startCapture(source: "deckA" | "deckB" | "mic" | "master", maxSec = 30): boolean {
+    const node: RecordSource = source === "deckA" ? this.deckA.output : source === "deckB" ? this.deckB.output : source === "mic" ? this.mic.tap : this.master;
+    this.recorder.setSource(node);
+    return this.recorder.start(maxSec);
+  }
+  /** Stop the take and decode it to an AudioBuffer (null if nothing captured). */
+  async stopCapture(): Promise<AudioBuffer | null> {
+    return this.recorder.stop();
+  }
+  get capturing(): boolean {
+    return this.recorder.recording;
   }
 
   /** True when this browser can pin a media element to a chosen output device

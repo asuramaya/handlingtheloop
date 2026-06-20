@@ -3389,31 +3389,40 @@ export function App() {
     provider: t.provider,
     providerId: t.providerId ?? null,
   });
+  // A track → the free-text a listener's "add to queue" becomes when routed as a song request.
+  const requestTextFor = (t: TrackMeta): string => [t.artist, t.title].filter(Boolean).join(" — ").slice(0, 120) || t.title || "a track";
   const queueCanEdit = !autoIsRemote || room.controlling;
   const queueEdit = useMemo(
     () => ({
+      // An anon LISTENER (tuned into a broadcast, not joined → not autoIsRemote) can't touch the
+      // host's queue directly — their "add to queue" is a gated SONG REQUEST the host approves
+      // (not a no-op local enqueue into a queue that isn't theirs).
       add: (t: TrackMeta) => {
-        if (autoIsRemote) {
+        if (room.listeningTo) room.requestSong(requestTextFor(t));
+        else if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "add", track: toQueuedTrack(t) });
         } else mixQueue.enqueue(t);
       },
       addNext: (t: TrackMeta) => {
-        if (autoIsRemote) {
+        if (room.listeningTo) room.requestSong(requestTextFor(t)); // a listener can only request, not jump the queue
+        else if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "addNext", track: toQueuedTrack(t) });
         } else mixQueue.enqueueNext(t);
       },
       remove: (videoId: string) => {
+        if (room.listeningTo) return; // a listener owns no queue to remove from
         if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "remove", videoId });
         } else mixQueue.remove(videoId);
       },
       move: (from: number, to: number) => {
+        if (room.listeningTo) return;
         if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "move", from, to });
         } else mixQueue.reorder(from, to);
       },
     }),
-    [autoIsRemote, room.controlling, room.sendIntent, mixQueue],
+    [autoIsRemote, room.controlling, room.sendIntent, room.listeningTo, room.requestSong, mixQueue],
   );
   // F1→queue: a crowd song-request, actioned in one tap — search the free text, drop the top
   // hit onto the auto-mix queue (authority-correct via queueEdit.add), then clear the request.

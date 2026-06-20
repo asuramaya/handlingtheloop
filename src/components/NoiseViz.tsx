@@ -58,6 +58,11 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.clearRect(0, 0, w, h);
       const nyq = actx.sampleRate / 2;
 
+      // BARS build meter — FULL-HEIGHT bar columns spanning the whole viz, drawn FIRST as a
+      // backdrop so the spectrum + sweep curve render on top. One column per bar, filled to the
+      // live build progress + a leading playhead. RISE off = a "MANUAL" label.
+      drawRiseBars(ctx2d, w, h, accent, dev);
+
       // live generated-noise spectrum — fills in as the riser is engaged (dim until then).
       an.getByteFrequencyData(bins);
       ctx2d.beginPath();
@@ -112,11 +117,6 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.engaged ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
 
-      // BARS build meter — a footer band flush along the bottom (sized to a healthy share of the
-      // viz, not a thin sliver): one cell per bar, filled to the live build progress + a leading
-      // playhead. Manual = label.
-      drawRiseBars(ctx2d, w, h, Math.round(Math.min(64, Math.max(40, h * 0.3))), accent, dev);
-
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -163,72 +163,56 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
   );
 }
 
-// The BARS build meter — a clean FOOTER strip flush along the bottom of the main viz: one cell
-// per bar, filled to the live build progress with a bright leading playhead, so you watch the
-// rise march bar-by-bar to the drop. RISE off = an instant gate, so it reads "MANUAL".
-function drawRiseBars(ctx: CanvasRenderingContext2D, fullW: number, fullH: number, sh: number, accent: string, dev: NoiseFx) {
-  const sy = fullH - sh;
-  // solid-ish footer backdrop + a divider line so it reads as its own band, not floating.
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(0, sy, fullW, sh);
-  ctx.strokeStyle = `color-mix(in srgb, ${accent} 24%, transparent)`;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, sy + 0.5);
-  ctx.lineTo(fullW, sy + 0.5);
-  ctx.stroke();
-
-  const pad = 8;
-  const labelW = 48;
-  const cy = sy + 8;
-  const ch = sh - 16;
-  const x0 = pad;
-  const iw = fullW - pad * 2 - labelW;
-  if (iw < 20 || ch < 4) return;
-
+// The BARS build meter — FULL-HEIGHT bar columns spanning the whole viz, drawn as a backdrop
+// behind the spectrum + sweep curve. One column per bar, filled bottom-up to the live build
+// progress with a bright leading playhead, so you watch the rise march bar-by-bar to the drop.
+// RISE off = an instant gate, so it reads "MANUAL".
+function drawRiseBars(ctx: CanvasRenderingContext2D, w: number, h: number, accent: string, dev: NoiseFx) {
   if (!dev.rising) {
-    ctx.fillStyle = `color-mix(in srgb, ${accent} 50%, transparent)`;
-    ctx.font = "700 10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("MANUAL — hold to sweep noise in", x0 + (fullW - pad * 2) / 2, sy + sh / 2);
+    ctx.fillStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
+    ctx.font = "700 11px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillText("MANUAL", w - 8, 6);
     ctx.textAlign = "left";
     return;
   }
 
   const bars = Math.max(1, Math.round(dev.bars));
-  const prog = dev.riseProgress; // -1 when idle
+  const prog = dev.riseProgress; // -1 when idle (armed but not yet building)
   const gap = 3;
-  const cellW = (iw - gap * (bars - 1)) / bars;
+  const cellW = (w - gap * (bars - 1)) / bars;
   for (let i = 0; i < bars; i++) {
-    const cx = x0 + i * (cellW + gap);
-    // faint base so empty cells read as segments (not hollow outlines), then the outline.
-    ctx.fillStyle = `color-mix(in srgb, ${accent} 8%, transparent)`;
-    ctx.fillRect(cx, cy, cellW, ch);
-    ctx.strokeStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
+    const cx = i * (cellW + gap);
+    // full-height column: a faint base so the segment is visible, then a bottom-up fill.
+    ctx.fillStyle = `color-mix(in srgb, ${accent} 7%, transparent)`;
+    ctx.fillRect(cx, 0, cellW, h);
+    ctx.strokeStyle = `color-mix(in srgb, ${accent} 16%, transparent)`;
     ctx.lineWidth = 1;
-    ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, ch - 1);
-    const fill = prog >= 0 ? clamp01(prog * bars - i) : 0; // this cell's fill fraction
+    ctx.strokeRect(cx + 0.5, 0.5, cellW - 1, h - 1);
+    const fill = prog >= 0 ? clamp01(prog * bars - i) : 0; // this column's fill fraction
     if (fill > 0) {
-      ctx.fillStyle = `color-mix(in srgb, ${accent} ${Math.round(38 + 42 * fill)}%, transparent)`;
-      ctx.fillRect(cx, cy, Math.max(1, cellW * fill), ch);
+      const fh = h * fill;
+      ctx.fillStyle = `color-mix(in srgb, ${accent} ${Math.round(14 + 22 * fill)}%, transparent)`;
+      ctx.fillRect(cx, h - fh, cellW, fh);
     }
   }
 
-  // leading playhead glow at the live build position.
+  // leading playhead — a glowing vertical line at the live build position.
   if (prog >= 0) {
-    const hx = x0 + clamp01(prog) * iw;
+    const hx = clamp01(prog) * w;
     ctx.fillStyle = accent;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 8;
-    ctx.fillRect(hx - 1, cy - 1, 2, ch + 2);
+    ctx.shadowBlur = 10;
+    ctx.fillRect(hx - 1, 0, 2, h);
     ctx.shadowBlur = 0;
   }
 
-  // bar-count label in the reserved right gutter.
-  ctx.fillStyle = `color-mix(in srgb, ${accent} 70%, transparent)`;
+  // bar-count label, top-right.
+  ctx.fillStyle = `color-mix(in srgb, ${accent} 55%, transparent)`;
   ctx.font = "700 10px ui-monospace, monospace";
-  ctx.textBaseline = "middle";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "right";
+  ctx.fillText(`${bars} BAR${bars > 1 ? "S" : ""}`, w - 8, 6);
   ctx.textAlign = "left";
-  ctx.fillText(`${bars} BAR${bars > 1 ? "S" : ""}`, x0 + iw + 7, sy + sh / 2);
 }

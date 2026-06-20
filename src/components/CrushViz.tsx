@@ -84,6 +84,35 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       }
       ctx2d.stroke();
 
+      // CUT/RES → the DAC reconstruction lowpass, drawn FULL-SIZE as a dim BACKDROP behind the
+      // scope (one viz, not a mini-window): flat to the cutoff, rolloff after, a resonance bump
+      // scaled by RES. Filled under + a soft line, so the pixel bars read on top of it.
+      const lp = (t: number) => {
+        let g = t < cut ? 1 : Math.max(0, 1 - (t - cut) * 4);
+        g += res * Math.exp(-Math.pow((t - cut) * 12, 2)) * 0.9;
+        return Math.min(1, g / 1.25);
+      };
+      const NP = Math.max(2, Math.round(w));
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, h);
+      for (let i = 0; i <= NP; i++) {
+        const t = i / NP;
+        ctx2d.lineTo(t * w, h - clamp01(lp(t)) * h * 0.92);
+      }
+      ctx2d.lineTo(w, h);
+      ctx2d.closePath();
+      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 7%, transparent)`;
+      ctx2d.fill();
+      ctx2d.beginPath();
+      for (let i = 0; i <= NP; i++) {
+        const t = i / NP;
+        const py = h - clamp01(lp(t)) * h * 0.92;
+        i === 0 ? ctx2d.moveTo(t * w, py) : ctx2d.lineTo(t * w, py);
+      }
+      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
+      ctx2d.lineWidth = 1.5;
+      ctx2d.stroke();
+
       // MIX → the clean DRY ghost behind (the reference you compare the crush against).
       ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 15%, transparent)`;
       ctx2d.lineWidth = 1;
@@ -155,43 +184,6 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.moveTo(0, center);
       ctx2d.lineTo(w, center);
       ctx2d.stroke();
-
-      // CUT/RES → the lowpass response as a small OVERLAY in the top-right corner (no second
-      // mini-window): flat to the cutoff, rolloff after, a resonance bump scaled by RES.
-      const ow = Math.min(118, w * 0.34);
-      const oh = Math.min(58, h * 0.42);
-      const ox = w - ow - 7;
-      const oy = 7;
-      const lp = (t: number) => {
-        let g = t < cut ? 1 : Math.max(0, 1 - (t - cut) * 4);
-        g += res * Math.exp(-Math.pow((t - cut) * 12, 2)) * 0.9;
-        return Math.min(1, g / 1.25);
-      };
-      ctx2d.fillStyle = "rgba(0,0,0,0.42)";
-      ctx2d.beginPath();
-      if (ctx2d.roundRect) ctx2d.roundRect(ox, oy, ow, oh, 5);
-      else ctx2d.rect(ox, oy, ow, oh);
-      ctx2d.fill();
-      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
-      ctx2d.lineWidth = 1;
-      ctx2d.stroke();
-      const ipad = 5;
-      const iw = ow - ipad * 2;
-      const ih = oh - ipad * 2;
-      ctx2d.strokeStyle = accent;
-      ctx2d.lineWidth = 1.5;
-      ctx2d.shadowColor = accent;
-      ctx2d.shadowBlur = 4;
-      ctx2d.beginPath();
-      const NP = Math.max(2, Math.round(iw));
-      for (let i = 0; i <= NP; i++) {
-        const t = i / NP;
-        const px = ox + ipad + t * iw;
-        const py = oy + ipad + ih - clamp01(lp(t)) * (ih - 1) - 1;
-        i === 0 ? ctx2d.moveTo(px, py) : ctx2d.lineTo(px, py);
-      }
-      ctx2d.stroke();
-      ctx2d.shadowBlur = 0;
 
       // MODE → label, bottom-left.
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 75%, transparent)`;

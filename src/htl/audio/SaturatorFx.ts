@@ -40,20 +40,25 @@ function makeCurve(style: number, punish: boolean) {
     const k = x * hot;
     let y: number;
     switch (style) {
-      case 0: // TUBE — asymmetric soft sigmoid (even harmonics from the asymmetry)
-        y = Math.tanh(k * (x < 0 ? 0.8 : 1));
+      case 0: // TUBE — round + ASYMMETRIC: a soft sigmoid plus an EVEN (k²) term so the + and
+        // − halves differ → 2nd-harmonic warmth (single-ended tube). The DC the k² adds is
+        // removed by the per-band DC blocker, leaving the even harmonic.
+        y = Math.tanh(1.5 * k) + 0.18 * k * k;
         break;
-      case 1: // TAPE — algebraic soft saturation, very smooth knee
-        y = (k / (1 + Math.abs(k))) * 1.3;
+      case 1: // TAPE — gentle soft-knee compression that never fully clips → low-order, smooth
+        // (lots of headroom; the dirt comes up slowly). Voiced dark below.
+        y = k / (1 + 0.6 * Math.abs(k));
         break;
-      case 2: // CLIP — transistor-ish, hardens toward a hard clip
-        y = (2 / Math.PI) * Math.atan(k * 1.6);
+      case 2: // CLIP — near-HARD clip (a thin cubic knee then flat) → strong ODD harmonics,
+        // buzzy/transistor. Deliberately the opposite of TUBE/TAPE's soft round.
+        y = k <= -1 ? -1 : k >= 1 ? 1 : 1.5 * k - 0.5 * k * k * k;
         break;
-      case 3: // FOLD — sine wavefolder (peaks then folds back → harsh harmonics)
-        y = Math.sin(k * Math.PI * (punish ? 1.0 : 0.7));
+      case 3: // FOLD — sine wavefolder; peaks then folds back on itself → inharmonic, metallic
+        y = Math.sin(k * Math.PI * (punish ? 1.3 : 0.95));
         break;
-      case 4: // DIODE — asymmetric diode clipper (hot on +, gentler on −)
-        y = k >= 0 ? 1 - Math.exp(-1.8 * k) : -(1 - Math.exp(1.8 * k)) * 0.7;
+      case 4: // DIODE — heavily asymmetric: the + half saturates hard, the − half stays gentle
+        // → octave-up + gnarly fuzz, a rectifier-like bite. Voiced nasal below.
+        y = k >= 0 ? Math.tanh(2.4 * k) : -0.45 * (1 - Math.exp(1.9 * k));
         break;
       default:
         y = Math.tanh(k);
@@ -68,6 +73,17 @@ interface Xover {
   hp: [BiquadFilterNode, BiquadFilterNode]; // LR4 highpass pair (feeds the band above)
 }
 
+// Per-style baked tonal VOICING (one post filter) — the Decapitator-model trick: the curve
+// gives the harmonics, the voicing gives each model its EQ identity (tape dark, transistor
+// bright, the asymmetric ones honk). Separate from the user TONE knob, applied at the sum.
+const VOICING: { type: BiquadFilterType; f: number; g: number; q: number }[] = [
+  { type: "peaking", f: 380, g: 2.5, q: 0.7 }, // TUBE  — low-mid warmth
+  { type: "highshelf", f: 5500, g: -5, q: 0.7 }, // TAPE  — HF rolloff (dark, vintage)
+  { type: "highshelf", f: 3500, g: 3.5, q: 0.7 }, // CLIP  — bright transistor edge
+  { type: "peaking", f: 2000, g: 0, q: 0.7 }, // FOLD  — flat (let the folds speak)
+  { type: "peaking", f: 1400, g: 4.5, q: 1.3 }, // DIODE — nasal fuzz honk
+];
+
 export class SaturatorFx extends BaseFxDevice {
   readonly kind: FxKind = "saturator";
   static readonly BANDS = 3;
@@ -77,7 +93,8 @@ export class SaturatorFx extends BaseFxDevice {
   private readonly bandGains: GainNode[] = [];
   private readonly xovers: Xover[] = []; // BANDS-1 crossovers (retunable)
   private readonly bias: ConstantSourceNode;
-  private readonly tone: BiquadFilterNode; // post tilt (high-shelf)
+  private readonly voicing: BiquadFilterNode; // per-style baked EQ identity
+  private readonly tone: BiquadFilterNode; // post tilt (high-shelf), user TONE
   private readonly outTrim: GainNode;
   private readonly bandSum: GainNode;
 
@@ -100,6 +117,7 @@ export class SaturatorFx extends BaseFxDevice {
     this.bias = ctx.createConstantSource();
     this.bias.offset.value = 0;
     this.bias.start();
+    this.voicing = ctx.createBiquadFilter();
     this.tone = ctx.createBiquadFilter();
     this.tone.type = "highshelf";
     this.tone.frequency.value = 3000;
@@ -108,10 +126,11 @@ export class SaturatorFx extends BaseFxDevice {
     this.outTrim.gain.value = 1;
 
     this.buildBands();
-    this.bandSum.connect(this.tone).connect(this.outTrim).connect(this.wet);
+    this.bandSum.connect(this.voicing).connect(this.tone).connect(this.outTrim).connect(this.wet);
     this.applyDry();
     this.registerParams();
     this.refreshCurves();
+    this.applyVoicing();
   }
 
   // Build the per-band shaper chains + the LR4 crossover tree (input → splits → drives).
@@ -172,6 +191,13 @@ export class SaturatorFx extends BaseFxDevice {
     const curve = makeCurve(this._style, this._punish);
     for (const s of this.shapers) s.curve = curve; // global style → all bands share the curve
   }
+  private applyVoicing() {
+    const v = VOICING[this._style] ?? VOICING[0];
+    this.voicing.type = v.type;
+    this.voicing.frequency.setTargetAtTime(v.f, this.ctx.currentTime, 0.01);
+    this.voicing.Q.value = v.q;
+    this.voicing.gain.setTargetAtTime(v.g, this.ctx.currentTime, 0.02); // ramp → no click on style switch
+  }
 
   // Dry leg = (1 − mix) when active, full when bypassed → a real insert crossfade (BaseFxDevice
   // keeps dry at unity for send effects; saturation must replace, not stack onto, the dry).
@@ -201,6 +227,7 @@ export class SaturatorFx extends BaseFxDevice {
   private setStyle(v: number) {
     this._style = clamp(Math.round(v), 0, SAT_STYLES.length - 1);
     this.refreshCurves();
+    this.applyVoicing();
   }
   private setPunish(on: boolean) {
     this._punish = on;

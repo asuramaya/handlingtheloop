@@ -71,10 +71,10 @@ export function LibraryPanel({
   auto,
 }: LibraryPanelProps) {
   // ＋ Queue / ↑ Play next on every track row — the obvious "play later" alongside Load A/B.
-  // Routed through the queue authority (host local / controlling remote → intent); hidden when
-  // this device can't edit the queue (a non-controlling mirror).
-  const queueAdd = auto?.canEdit ? auto.edit.add : undefined;
-  const queueNext = auto?.canEdit ? auto.edit.addNext : undefined;
+  // ALWAYS exposed; queueEdit self-gates the BEHAVIOUR (host/co-DJ → real edit, anon listener →
+  // gated song request, otherwise no-op), so the action is never silently missing for a role.
+  const queueAdd = auto?.edit.add;
+  const queueNext = auto?.edit.addNext;
   // The open library tab (Collection / Community / a playlist / Search / Sync) is
   // remembered across reloads. One JSON blob holds all three so the right tab reopens.
   // A persisted playlist that no longer exists falls back to Collection.

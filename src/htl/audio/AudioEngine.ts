@@ -220,19 +220,34 @@ export class AudioEngine {
     this.deckB.configureStretch(this.stretchCfg);
   }
 
-  /** Raise/lower the worklet's pre-roll FIFO headroom on BOTH decks. The host bumps
-   *  this while an on-device stem separation is in flight: the per-segment CPU FFT
-   *  bursts (separator.worker) momentarily crowd the audio thread, and a reserve lets
-   *  a pressured render quantum output pre-built grains instead of running the WSOLA/PV
-   *  search and overrunning its budget (the mid-split stutter). 0 off = zero tempo/pitch
-   *  control latency the rest of the time. Resends the FULL config so the worklet's
-   *  geometry early-return fires (no grain rebuild / click). */
-  setStretchReserve(samples: number) {
-    const reserve = Math.max(0, Math.round(samples));
+  // The worklet's pre-roll FIFO headroom has TWO independent drivers — on-device stem
+  // SEPARATION (CPU FFT bursts crowd the audio thread) and a high-latency WIRELESS output
+  // sink (Bluetooth/CarPlay's jittery clock starves the render thread, #14). They're combined
+  // as the MAX so neither clobbers the other. Either rising lets a pressured/late render
+  // quantum output pre-built grains instead of running the WSOLA/PV search and overrunning
+  // its budget (the stutter); both at 0 = zero tempo/jog latency the rest of the time.
+  // Resends the FULL config so the worklet's geometry early-return fires (no rebuild / click).
+  private separationReserve = 0;
+  private wirelessReserve = 0;
+  private applyReserve() {
+    const reserve = Math.max(this.separationReserve, this.wirelessReserve);
     if (this.stretchCfg.reserve === reserve) return;
     this.stretchCfg = { ...this.stretchCfg, reserve };
     this.deckA.configureStretch(this.stretchCfg);
     this.deckB.configureStretch(this.stretchCfg);
+  }
+
+  /** Pre-roll headroom for an in-flight on-device stem separation (the mid-split stutter). */
+  setStretchReserve(samples: number) {
+    this.separationReserve = Math.max(0, Math.round(samples));
+    this.applyReserve();
+  }
+
+  /** Pre-roll headroom for a high-latency WIRELESS output (Bluetooth/CarPlay), whose jittery
+   *  clock starves the render thread → skips/stutter (#14). Driven by ctx.outputLatency. */
+  setWirelessReserve(samples: number) {
+    this.wirelessReserve = Math.max(0, Math.round(samples));
+    this.applyReserve();
   }
 
   /** True when this browser can route the context to a chosen output device

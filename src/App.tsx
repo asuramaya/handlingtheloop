@@ -1062,6 +1062,29 @@ export function App() {
     engine.setStretchReserve(separating ? Math.round(engine.ctx.sampleRate * 0.064) : 0);
   }, [engine, separating]);
 
+  // #14: a high-latency WIRELESS output (Bluetooth / CarPlay) has a jittery clock that starves
+  // the render thread → skips/stutter. Detect it via ctx.outputLatency (a wired sink is
+  // ~10-20 ms; BT/CarPlay 80 ms+) and raise the worklet's pre-roll so a late render quantum
+  // coasts on pre-built grains. Mobile-only (where wireless routing is common + the CPU is
+  // tightest); polled because the route flips when BT connects/disconnects mid-session. NOTE:
+  // outputLatency is under-reported on some iOS builds — if it reads 0 there this stays off and
+  // the stutter would need the fifo-underrun fallback (#14). Best-effort; needs device testing.
+  useEffect(() => {
+    if (!isMobileDevice()) return;
+    const sr = engine.ctx.sampleRate;
+    const probe = () => {
+      const lat = (engine.ctx as unknown as { outputLatency?: number }).outputLatency ?? 0;
+      const reserve = lat > 0.06 ? Math.min(Math.round(lat * sr * 1.5), Math.round(sr * 0.12)) : 0;
+      engine.setWirelessReserve(reserve);
+    };
+    probe();
+    const iv = window.setInterval(probe, 3000);
+    return () => {
+      window.clearInterval(iv);
+      engine.setWirelessReserve(0);
+    };
+  }, [engine]);
+
   // Mirror settings to the account when signed in (last-write-wins by timestamp), so
   // theme/stem/keybind prefs follow the user across devices.
   useSettingsSync(settings, setSettings);

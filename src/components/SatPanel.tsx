@@ -2,6 +2,7 @@ import type { Deck } from "@htl/audio";
 import { SAT_STYLES } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
+import { SatViz } from "./SatViz";
 
 // Minimal Saturator surface (Phase 1) — per-band DRIVE + the shared controls, mutated on the
 // deck's device and broadcast as fxParam (a session converges; an old client ignores the
@@ -29,7 +30,6 @@ export function SatPanel({ deck, id, slot, accent, emit, refresh }: SatPanelProp
   };
   const style = Math.round(get("style"));
   const punish = get("punish") >= 0.5;
-  const bands = ["LOW", "MID", "HIGH"];
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
@@ -44,11 +44,9 @@ export function SatPanel({ deck, id, slot, accent, emit, refresh }: SatPanelProp
         </button>
       </div>
 
-      <div className="sat-bands">
-        {bands.map((b, i) => (
-          <ValueCell key={b} label={b} value={get(`drive${i}`)} min={0} max={1} onChange={(v) => setParam(`drive${i}`, v)} format={(v) => `${Math.round(v * 100)}`} />
-        ))}
-      </div>
+      {/* WYSIWYG: log-freq display — drag a crossover line to retune the split, drag inside a
+          band to set its drive; the transfer curve reads out bottom-right. */}
+      <SatViz deck={deck} slot={slot} accent={accent} set={setParam} />
 
       <div className="sat-shared">
         <ValueCell label="BIAS" value={get("bias")} min={0} max={1} onChange={(v) => setParam("bias", v)} format={(v) => `${Math.round(v * 100)}`} />

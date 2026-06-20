@@ -1794,3 +1794,15 @@ button.room-tog:hover {
 .sat-shared .vcell {
   flex: 1;
 }
+
+/* Saturator WYSIWYG canvas (Saturn-style log-frequency display). */
+.sat-viz {
+  width: 100%;
+  height: 132px;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 70%, #000);
+  touch-action: none;
+  cursor: crosshair;
+}

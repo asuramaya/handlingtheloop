@@ -162,9 +162,20 @@ export class NoiseFx extends BaseFxDevice {
     if (bpm > 0) this._bpm = bpm;
   }
 
+  private _riseStart = 0;
   private _riseEnd = 0;
   private _isRising() {
     return this._throw && this._rise && this.ctx.currentTime < this._riseEnd;
+  }
+  /** Auto-build progress 0..1 while a tempo-synced rise is in flight, else −1 (for the viz). */
+  get riseProgress(): number {
+    if (!this._isRising()) return -1;
+    const span = this._riseEnd - this._riseStart;
+    return span > 0 ? clamp01((this.ctx.currentTime - this._riseStart) / span) : 0;
+  }
+  /** The auto-build length in bars (1..8). */
+  get bars(): number {
+    return this._bars;
   }
 
   /** Pad-throw / engage. RISE mode → tempo-synced auto-build; else a manual gate at SWEEP. */
@@ -179,6 +190,7 @@ export class NoiseFx extends BaseFxDevice {
       if (this._rise) {
         const barSec = (60 / this._bpm) * 4;
         const dur = Math.max(0.25, this._bars * barSec);
+        this._riseStart = t;
         this._riseEnd = t + dur;
         // cutoff climbs 80 Hz → ~12 kHz; level swells 0 → 1 over the build.
         f.setValueAtTime(80, t);

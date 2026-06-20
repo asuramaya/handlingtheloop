@@ -86,6 +86,7 @@ import { DelayFx } from "./DelayFx";
 import { ReverbFx } from "./ReverbFx";
 import { SaturatorFx } from "./SaturatorFx";
 import { CrushFx } from "./CrushFx";
+import { ModFx } from "./ModFx";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -1709,7 +1710,7 @@ export class Deck {
   // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush"]);
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod"]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1723,7 +1724,8 @@ export class Deck {
         return new SaturatorFx(this.ctx);
       case "crush":
         return new CrushFx(this.ctx);
-      // chorus lands here as it's built
+      case "mod":
+        return new ModFx(this.ctx);
       default:
         return null;
     }

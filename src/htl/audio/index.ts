@@ -7,6 +7,7 @@ export { DelayFx, DELAY_MAX_SECONDS } from "./DelayFx";
 export { ReverbFx, REVERB_STYLES } from "./ReverbFx";
 export { SaturatorFx, SAT_STYLES, type SatStyle } from "./SaturatorFx";
 export { CrushFx, CRUSH_MODES, type CrushMode } from "./CrushFx";
+export { ModFx, MOD_MODES, MOD_WAVES, MOD_SOURCES } from "./ModFx";
 export { REVERB_WORKLET_SRC } from "./reverbWorklet";
 export { CRUSH_WORKLET_SRC } from "./crushWorklet";
 export { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, type FxPreset } from "./fxPresets";

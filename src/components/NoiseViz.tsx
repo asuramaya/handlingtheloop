@@ -112,9 +112,10 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.engaged ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
 
-      // BARS build meter — a clean footer strip flush along the bottom (no floating box): one
-      // cell per bar, filled to the live build progress with a leading playhead. Manual = label.
-      drawRiseBars(ctx2d, w, h, Math.min(26, Math.max(18, h * 0.16)), accent, dev);
+      // BARS build meter — a footer band flush along the bottom (sized to a healthy share of the
+      // viz, not a thin sliver): one cell per bar, filled to the live build progress + a leading
+      // playhead. Manual = label.
+      drawRiseBars(ctx2d, w, h, Math.round(Math.min(64, Math.max(40, h * 0.3))), accent, dev);
 
       raf = requestAnimationFrame(draw);
     };
@@ -179,8 +180,8 @@ function drawRiseBars(ctx: CanvasRenderingContext2D, fullW: number, fullH: numbe
 
   const pad = 8;
   const labelW = 48;
-  const cy = sy + 5;
-  const ch = sh - 10;
+  const cy = sy + 8;
+  const ch = sh - 16;
   const x0 = pad;
   const iw = fullW - pad * 2 - labelW;
   if (iw < 20 || ch < 4) return;
@@ -201,7 +202,10 @@ function drawRiseBars(ctx: CanvasRenderingContext2D, fullW: number, fullH: numbe
   const cellW = (iw - gap * (bars - 1)) / bars;
   for (let i = 0; i < bars; i++) {
     const cx = x0 + i * (cellW + gap);
-    ctx.strokeStyle = `color-mix(in srgb, ${accent} 24%, transparent)`;
+    // faint base so empty cells read as segments (not hollow outlines), then the outline.
+    ctx.fillStyle = `color-mix(in srgb, ${accent} 8%, transparent)`;
+    ctx.fillRect(cx, cy, cellW, ch);
+    ctx.strokeStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
     ctx.lineWidth = 1;
     ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, ch - 1);
     const fill = prog >= 0 ? clamp01(prog * bars - i) : 0; // this cell's fill fraction

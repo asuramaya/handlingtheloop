@@ -154,7 +154,9 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       divergence · **D8** drift catch-up policy · **D9** cold-decode dedup · **D10** reconnect storm
 
 ### Tier 4 — scale (demand-gated — MEASURED: one DO holds 500, see D2 spec note)
-- [~] **D2** relay tier (RelayRoom shard DOs) — load-measured (one DO fine to 500); R=1 scaffold IN PROGRESS · **C4** denormalize follower counts
+- [x] **D2** relay tier VALIDATED PoC (`2d0a954`). RelayRoom crowd shards, env-gated (RELAY_SHARDS,
+      default off). Load-validated N=1000/R=4 → p95 48ms (vs single-DO p95 910ms @ N=500). TODOs:
+      relay failover/liveness + crowd→DJ forwarding from sharded listeners (receive-only in PoC). · **C4** denormalize follower counts
 
 ### Tier 5 — moderation leftovers (Epic L)
 - [ ] **L4** anti-sybil (listener-count inflation, follow bots) · follower-only chat (needs the

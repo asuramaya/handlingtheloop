@@ -278,7 +278,10 @@ export function TrackTable({
               aria-label={searchMode ? "Search" : "Filter tracks"}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (searchMode && e.key === "Enter") onSubmitSearch!(query.trim());
+                if (e.key === "Enter") {
+                  if (searchMode) onSubmitSearch!(query.trim());
+                  e.currentTarget.blur(); // hand the keyboard back to the decks after committing
+                }
               }}
             />
             {query && !searchMode && (

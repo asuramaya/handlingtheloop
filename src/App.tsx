@@ -701,11 +701,24 @@ export function App() {
     const up = (e: KeyboardEvent) => {
       if (e.key === "Shift") setShiftHeld(false);
     };
+    // If the window loses focus while Shift is held (alt-tab, address bar, an OS shortcut, a
+    // permission prompt), the Shift keyUP lands on the other surface and we never see it — so
+    // shiftHeld would stay stuck on, remapping every board key to its shifted variant. Clear
+    // the held modifier whenever we lose the keyboard. (The on-screen SHIFT latch is a
+    // deliberate toggle, so it is intentionally NOT cleared here.)
+    const clear = () => setShiftHeld(false);
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+    };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", clear);
+    document.addEventListener("visibilitychange", onVis);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", clear);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
 
@@ -947,7 +960,16 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       // Never hijack typing or a modal that owns the screen.
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+        // …but give the keyboard a way OUT of a lingering field (e.g. the Library filter box,
+        // which keeps focus after you click it and otherwise swallows every board key with no
+        // escape). Escape blurs it → focus returns to the body and the deck keys work again.
+        if (e.key === "Escape") {
+          el.blur();
+          e.preventDefault();
+        }
+        return;
+      }
       // Alt (on its own) toggles the Library dock — handled before the modifier guard.
       if (e.key === "Alt" && !e.repeat) {
         e.preventDefault();

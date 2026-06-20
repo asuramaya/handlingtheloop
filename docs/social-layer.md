@@ -136,8 +136,10 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       spine G1a→d is COMPLETE** (capture → lifecycle → replay → surfaces).
 - [ ] **D6 — gesture resync contract.** scratch/jog → snap to grid so non-deterministic gestures
       bake cleanly into the recipe. *Fidelity follow-up to G1c, not a blocker.*
-- [ ] **G2** auto tracklists · **G3** clips/moments · **G4** external share links + OG cards ·
-      **G5** recording lifecycle (ownership = host, co-DJs credited; retention; deletion; skew).
+- [x] **G2** tracklists (expandable set cards) · **G3** clips/moments (`/set/:id?t=` range deep-links,
+      ReplayBar ⚑ + play-this-moment CTA) · **G4** share links + OG cards (worker-injected, verified) ·
+      [x] **G5** lifecycle substantially done (deletion/version-skew(D5)/R2/host-ownership shipped;
+      co-DJ credit moot until co-DJ capture; retention=keep-all). **Sets spine G1-G5 COMPLETE.**
 
 ### Tier 2 — cheap / unblocked polish
 - [x] **F1→queue** DONE (one-tap ＋Queue on a host request → searchYouTube → queueEdit.add → dismiss)

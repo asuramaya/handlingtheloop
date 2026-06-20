@@ -16,7 +16,7 @@ export { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 export { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, type FxPreset } from "./fxPresets";
 export { decodeAudio } from "./decode";
 export { MicInput } from "./MicInput";
-export { Recorder } from "./Recorder";
+export { Recorder, type Take } from "./Recorder";
 export { Sampler, type SampleMode, type SampleRoute, type PlayOpts } from "./Sampler";
 export { getCachedTrack, setCachedTrack, getCachedMeta, dropCachedBuffer, type CachedTrack } from "./trackCache";
 export { STRETCH_WORKLET_SRC } from "./stretchWorklet";

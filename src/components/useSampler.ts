@@ -333,6 +333,49 @@ export function useSampler(
     [engine, me?.user],
   );
 
+  // Drop a recorded take (mic / deck / master capture) onto the FIRST FREE global pad — captures
+  // are OWNED audio, so they join the global tier (always-available, master-routed, uploadable),
+  // never the per-song region pads. Returns the pad index used, or null if the strip is full.
+  const captureToGlobal = useCallback(
+    async (take: { buffer: AudioBuffer; blob: Blob }, label = "Take"): Promise<number | null> => {
+      const gi = globals.findIndex((g) => !g.sampleId && !g.uploading && !g.ready);
+      if (gi < 0) {
+        setError("Sampler strip is full — clear a global pad to capture.");
+        return null;
+      }
+      setError(null);
+      const name = label.slice(0, 60) || "Take";
+      fileBuffers.current[gi] = take.buffer;
+      setGlobals((prev) => {
+        const next = [...prev];
+        next[gi] = { ...next[gi], name, ready: true, uploading: !!me?.user };
+        return next;
+      });
+      if (!me?.user) {
+        setError("Sign in to keep captures — this take is loaded for now but won't persist.");
+        return gi;
+      }
+      try {
+        const raw = await take.blob.arrayBuffer();
+        const dto = await uploadSample(GLOBAL_PADS[gi], name, take.buffer.duration * 1000, raw, take.blob.type || "audio/webm");
+        setGlobals((prev) => {
+          const next = [...prev];
+          next[gi] = { ...next[gi], sampleId: dto.id, uploading: false };
+          return next;
+        });
+      } catch (e) {
+        setGlobals((prev) => {
+          const next = [...prev];
+          next[gi] = { ...next[gi], uploading: false };
+          return next;
+        });
+        setError(`Capture upload failed: ${(e as Error).message}`);
+      }
+      return gi;
+    },
+    [globals, me?.user],
+  );
+
   const clearPad = useCallback(
     (i: number) => {
       engine.sampler.stop(i);
@@ -490,7 +533,7 @@ export function useSampler(
     [engine, assignRegion, clearPad, setMode, setGain, setStem],
   );
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, clearPad, setMode, setGain, setStem };
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStem };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

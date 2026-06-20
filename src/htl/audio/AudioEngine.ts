@@ -2,7 +2,7 @@ import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeySh
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput } from "./MicInput";
-import { Recorder, type RecordSource } from "./Recorder";
+import { Recorder, type RecordSource, type Take } from "./Recorder";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 import { REVERB_WORKLET_SRC } from "./reverbWorklet";
@@ -321,8 +321,8 @@ export class AudioEngine {
     this.recorder.setSource(node);
     return this.recorder.start(maxSec);
   }
-  /** Stop the take and decode it to an AudioBuffer (null if nothing captured). */
-  async stopCapture(): Promise<AudioBuffer | null> {
+  /** Stop the take → { buffer, blob } (null if nothing captured). The blob is the upload payload. */
+  async stopCapture(): Promise<Take | null> {
     return this.recorder.stop();
   }
   get capturing(): boolean {

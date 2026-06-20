@@ -7,6 +7,13 @@ import { decodeAudio } from "./decode";
 
 export type RecordSource = AudioNode | null;
 
+// A finished take: the decoded buffer (immediate playback) + the encoded blob (the upload
+// payload — the server stores these bytes and re-decodes them on login).
+export interface Take {
+  buffer: AudioBuffer;
+  blob: Blob;
+}
+
 export class Recorder {
   private readonly input: GainNode; // the single tap; the engine connects a source to it
   private readonly dest: MediaStreamAudioDestinationNode;
@@ -59,8 +66,8 @@ export class Recorder {
     return true;
   }
 
-  /** Stop and decode the take into an AudioBuffer (null if nothing was captured / decode fails). */
-  async stop(): Promise<AudioBuffer | null> {
+  /** Stop the take → the decoded buffer + the encoded blob (null if nothing captured / no decode). */
+  async stop(): Promise<Take | null> {
     const mr = this.rec;
     if (!mr) return null;
     if (this._maxTimer) {
@@ -77,7 +84,8 @@ export class Recorder {
     const blob = new Blob(this.chunks, { type: this.chunks[0].type || "audio/webm" });
     this.chunks = [];
     try {
-      return await decodeAudio(this.ctx, await blob.arrayBuffer());
+      const buffer = await decodeAudio(this.ctx, await blob.arrayBuffer());
+      return { buffer, blob };
     } catch {
       return null;
     }

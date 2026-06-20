@@ -16,17 +16,21 @@ export function RequestList({
   revealed: boolean;
   onQueue?: (text: string, reqId: string) => void; // F1→queue: one-tap action onto the auto-mix queue
 }) {
-  if (room.songRequests.length === 0) return null;
+  const empty = room.songRequests.length === 0;
+  // For a listener, nothing to show until requests exist. For a live HOST, show the section even
+  // when empty so they KNOW the crowd can suggest songs + where those land (the discoverability gap).
+  if (empty && !(host && room.roomPublic)) return null;
   return (
     <div className={`req-list ${host ? "host" : "crowd"}`}>
       <div className="social-section-head req-head">
-        🎵 Requests
-        {host && (
+        🎵 Song requests
+        {host && !empty && (
           <button className="req-clear" onClick={room.clearRequests}>
             Clear all
           </button>
         )}
       </div>
+      {empty && <div className="req-empty">Listeners can suggest songs — they show up here, crowd-ranked. Tap <b>＋ Queue</b> to drop one into your auto-mix queue.</div>}
       {room.songRequests.map((r) => {
         const voted = room.votedRequests.has(r.id);
         return (

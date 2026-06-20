@@ -157,21 +157,25 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
         <div ref={endRef} />
       </div>
 
-      {/* Listener → DJ song request (F1) — the host sees the ranked list in the body. */}
+      {/* Listener → DJ song request (F1) — a clearly-labelled suggest box, distinct from chat.
+          The host sees the crowd-ranked list + a ＋ Queue action in the body. */}
       {room.listeningTo && (
-        <form className="request-form" onSubmit={submitRequest}>
-          <input
-            className="request-input"
-            value={reqText}
-            onChange={(e) => setReqText(e.target.value)}
-            placeholder={reqSent ? "✓ Sent to the DJ" : "Request a song…"}
-            maxLength={120}
-            aria-label="Request a song"
-          />
-          <button className="request-send" type="submit" disabled={!reqText.trim()}>
-            Request
-          </button>
-        </form>
+        <div className="suggest-box">
+          <div className="suggest-head">🎵 Suggest a song to the DJ</div>
+          <form className="request-form" onSubmit={submitRequest}>
+            <input
+              className="request-input"
+              value={reqText}
+              onChange={(e) => setReqText(e.target.value)}
+              placeholder={reqSent ? "✓ Sent to the DJ" : "Artist — title…"}
+              maxLength={120}
+              aria-label="Suggest a song"
+            />
+            <button className="request-send" type="submit" disabled={!reqText.trim()}>
+              Suggest
+            </button>
+          </form>
+        </div>
       )}
 
       <form className="chat-form" onSubmit={submit}>

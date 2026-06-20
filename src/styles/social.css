@@ -1734,6 +1734,31 @@ span.profile-handle:hover {
   transform: scale(0.86);
 }
 /* Listener's "request a song" form (F1). */
+/* The listener's clearly-labelled "suggest a song" box, set off from chat. */
+.suggest-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.suggest-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+/* Host empty-state: tells the DJ requests will land here + how to accept one. */
+.req-empty {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  padding: 2px 2px 4px;
+}
+.req-empty b {
+  color: var(--accent);
+}
 .request-form {
   display: flex;
   gap: 6px;

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { Deck } from "@htl/audio";
 
 // Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim,
 // AND a direct-control surface. Read the dome from the centre out:
@@ -32,6 +33,19 @@ interface ReverbVizProps {
   frozen: boolean;
   accent: string;
   onParam: (param: string, value: number) => void; // direct-control callback (drag/wheel)
+  deck?: Deck; // for the live wet-signal tap (the room field reacts to the music)
+  slot?: number;
+}
+
+// A reflection mote dispersing into the wings (the living room field — see the draw loop).
+interface Mote {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  max: number;
+  warm: boolean; // DRIVE-warmed colour
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -106,9 +120,17 @@ interface Placed extends Grip {
   radius: number;
 }
 
-export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam }: ReverbVizProps) {
+export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Living room field: the wet-signal energy tap + the reflection motes drifting into the wings.
+  const anRef = useRef<AnalyserNode | null>(null);
+  const anBufRef = useRef<Float32Array<ArrayBuffer> | null>(null);
+  const energyRef = useRef(0); // smoothed wet RMS (0..1) — drives spawn rate + glow
+  const motes = useRef<Mote[]>([]);
+  const spawnAcc = useRef(0);
+  const lastNowRef = useRef(0);
 
   // Live state the pointer/wheel handlers read (kept off the effect's closure).
   const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate });
@@ -123,6 +145,32 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
   const lastTap = useRef(0);
   const drawRef = useRef<(now: number) => void>(() => {});
   const nowRef = useRef(0);
+
+  // Tap the device's wet output so the room field reacts to what's actually being fed in.
+  useEffect(() => {
+    if (!deck || slot == null) return;
+    const dev = deck.fxDeviceAt(slot);
+    if (!dev) return;
+    const actx = dev.output.context;
+    const an = actx.createAnalyser();
+    an.fftSize = 512;
+    an.smoothingTimeConstant = 0.6;
+    try {
+      dev.output.connect(an);
+    } catch {
+      /* ignore */
+    }
+    anRef.current = an;
+    anBufRef.current = new Float32Array(an.fftSize);
+    return () => {
+      try {
+        dev.output.disconnect(an);
+      } catch {
+        /* ignore */
+      }
+      anRef.current = null;
+    };
+  }, [deck, slot]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -152,11 +200,25 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
 
     const draw = (now: number) => {
       nowRef.current = now;
+      const dt = lastNowRef.current ? Math.min(0.05, (now - lastNowRef.current) / 1000) : 0.016;
+      lastNowRef.current = now;
       const { w, h, dpr } = sizeCanvas();
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+
+      // live wet energy (smoothed RMS) — the room field swells with the music.
+      const an = anRef.current;
+      const buf = anBufRef.current;
+      let e = 0;
+      if (an && buf) {
+        an.getFloatTimeDomainData(buf);
+        let s = 0;
+        for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+        e = clamp01(Math.sqrt(s / buf.length) * 3.2);
+      }
+      energyRef.current += (e - energyRef.current) * 0.25;
 
       const cx = w / 2;
       const cy = h / 2;
@@ -178,6 +240,63 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const coreR = Math.max(3, R * 0.14) * (1 + dr * 1.1) * duckPulse;
       const fogR = R * reachBase * duckPulse;
       ctxRef.current = { base, R, r0, coreR, fogR, duckPulse };
+
+      // === LIVING ROOM FIELD — fills the wide panel's empty side bands with the reverb's
+      //     energy dispersing into the room. Drawn BEHIND the dome (the central dome paints
+      //     over the inner region, leaving this visible in the wings). A horizontal glow +
+      //     reflection motes that fan OUTWARD (spread by WIDTH, reach/lifetime by DECAY,
+      //     presence by MIX), breathing with DUCK and PULSING with the live wet signal. ===
+      const energy = energyRef.current;
+      const wing = w / 2 - R; // empty horizontal space beyond the dome boundary
+      if (wing > 40) {
+        // horizontal room glow — radial to the panel width; since the panel is wider than
+        // tall it reads mostly in the L/R wings, barely top/bottom.
+        const wingA = (0.05 + 0.06 * clamp01(mix)) * (0.55 + 0.45 * energy) * duckPulse;
+        const wg = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, w * 0.62);
+        wg.addColorStop(0, withAlpha(dr > 0 ? `rgb(${WARM})` : accent, wingA));
+        wg.addColorStop(1, withAlpha(accent, 0));
+        ctx.fillStyle = wg;
+        ctx.fillRect(0, 0, w, h);
+
+        // spawn reflection motes from the room boundary, fanning into the wings.
+        spawnAcc.current += dt * (1.5 + energy * 16 + clamp01(decay) * 5) * (0.4 + clamp01(mix));
+        const spread = 0.5 + clamp01(width / 1.5) * 1.4; // WIDTH → how far they reach sideways
+        while (spawnAcc.current >= 1 && motes.current.length < 70) {
+          spawnAcc.current -= 1;
+          const dir = (now * 997 + motes.current.length) % 2 < 1 ? -1 : 1; // alternate-ish L/R
+          const vj = (((now * 131 + motes.current.length * 53) % 100) / 100 - 0.5) * 0.5; // vert jitter
+          const ang = (dir > 0 ? 0 : Math.PI) + vj; // mostly horizontal
+          const speed = (38 + clamp01(decay) * 130) * (0.6 + energy * 0.8);
+          const life = 0.5 + clamp01(decay) * 1.8;
+          motes.current.push({ x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, vx: Math.cos(ang) * speed * spread, vy: Math.sin(ang) * speed * 0.5, life, max: life, warm: dr > 0.2 && (now % 100) / 100 < dr });
+        }
+        // advance + draw motes (outward drift with air drag, fading over their life)
+        const arr = motes.current;
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const m = arr[i];
+          m.life -= dt;
+          if (m.life <= 0) {
+            arr.splice(i, 1);
+            continue;
+          }
+          m.x += m.vx * dt;
+          m.y += m.vy * dt;
+          m.vx *= 0.985;
+          m.vy *= 0.985;
+          const u = m.life / m.max;
+          const a = u * u * (0.32 + clamp01(mix) * 0.68) * (0.5 + 0.5 * energy) * duckPulse;
+          const rr = 1.2 + (1 - u) * 2.2;
+          ctx.beginPath();
+          ctx.arc(m.x, m.y, rr, 0, TWO_PI);
+          ctx.fillStyle = withAlpha(m.warm ? `rgb(${WARM})` : accent, a);
+          ctx.shadowColor = m.warm ? `rgb(${WARM})` : accent;
+          ctx.shadowBlur = 6;
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+      } else if (motes.current.length) {
+        motes.current.length = 0; // narrow panel — no wings, drop the field
+      }
 
       const reachAt = (fNorm: number) => {
         const tilt = 1 - (1 - clamp01(brightness)) * fNorm * 0.85;
@@ -316,7 +435,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
     };
     drawRef.current = draw;
 
-    const animated = (character > 0 && modRate > 0) || frozen || duck > 0;
+    const animated = true; // always alive — the room field drifts at rest + reacts to the wet signal
     let raf = 0;
     if (animated) {
       const loop = (now: number) => {

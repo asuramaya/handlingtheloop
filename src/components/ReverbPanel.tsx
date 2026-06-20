@@ -49,7 +49,7 @@ export function ReverbPanel({ deck, id, slot, accent, emit, refresh }: ReverbPan
   return (
     <div className="fx-panel fx-reverb" style={{ ["--accent" as string]: accent }}>
       <div className="rv-body">
-        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={tweak} />
+        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={tweak} deck={deck} slot={slot} />
         {/* Every spatial param is a drag-handle ON the dome now (the EQ pattern). Only the two
             non-spatial knobs — MIX (wet presence) and DUCK (the breathing sidechain) — keep a
             numeric cell. This also kills the old 12-cell-beside-a-square-dome mobile crush. */}

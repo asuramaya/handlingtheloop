@@ -6,6 +6,7 @@ import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
 import { applyBoardAction } from "@htl/board/boardActions";
+import { searchYouTube } from "@htl/media";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -3377,6 +3378,22 @@ export function App() {
     }),
     [autoIsRemote, room.controlling, room.sendIntent, mixQueue],
   );
+  // F1→queue: a crowd song-request, actioned in one tap — search the free text, drop the top
+  // hit onto the auto-mix queue (authority-correct via queueEdit.add), then clear the request.
+  const queueRequest = useCallback(
+    async (text: string, reqId: string) => {
+      try {
+        const results = await searchYouTube(text, 1);
+        if (results[0]) {
+          queueEdit.add(results[0]);
+          room.dismissRequest(reqId);
+        }
+      } catch {
+        /* search failed — leave the request for a manual pull */
+      }
+    },
+    [queueEdit, room],
+  );
 
   // Background-precompute the next queued tracks' key/BPM (desktop only — a full
   // decode is too heavy for phones, which stay on provider-order + honest badges).
@@ -3969,7 +3986,7 @@ export function App() {
         />
       )}
       {socialOpen && (
-        <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} />
+        <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} onQueueRequest={queueRequest} />
       )}
       {discoverOpen && (
         <DiscoverScreen

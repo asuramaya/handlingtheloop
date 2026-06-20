@@ -1663,6 +1663,21 @@ span.profile-handle:hover {
   font-size: 11px;
   color: var(--muted);
 }
+.req-queue {
+  flex: none;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.req-queue:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .req-dismiss {
   flex: none;
   border: none;

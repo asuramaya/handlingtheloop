@@ -17,7 +17,17 @@ import { deviceIcon } from "./social/util";
 // one primary action (Go live / End broadcast / Listening); below it the body is contextual —
 // THE CROWD (hype+reactions+chat+requests+gate, only when a broadcast exists), then ROOM
 // (roster + knocks + session control), then a collapsed INVITE. Leaf pieces live in ./social/.
-export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; onClose: () => void; onActivate?: () => void }) {
+export function SocialScreen({
+  room,
+  onClose,
+  onActivate,
+  onQueueRequest,
+}: {
+  room: RoomState;
+  onClose: () => void;
+  onActivate?: () => void;
+  onQueueRequest?: (text: string, reqId: string) => void; // F1→queue: action a song request onto the auto-mix queue
+}) {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
@@ -163,7 +173,7 @@ export function SocialScreen({ room, onClose, onActivate }: { room: RoomState; o
                 <CrowdPanel room={room} />
 
                 {/* HOST: the crowd-ranked song requests (F1 + F3) with moderation. */}
-                {room.host && <RequestList room={room} host revealed={revealed} />}
+                {room.host && <RequestList room={room} host revealed={revealed} onQueue={onQueueRequest} />}
 
                 {/* HOST: listeners raising a hand to step up to the decks (E3–E6). */}
                 {room.host && room.stageRequests.length > 0 && (

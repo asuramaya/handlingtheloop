@@ -129,10 +129,9 @@ export class GateFx extends BaseFxDevice {
   private freqOf(): number {
     if (this._sync) {
       const beats = GATE_DIVS[this.divIndex()].beats;
-      const hz = (this._syncBpm / 60) / beats;
-      return clamp(hz * (this._throw ? 2 : 1), 0.05, 80);
+      return clamp(this._syncBpm / 60 / beats, 0.05, 80);
     }
-    return clamp(0.2 * Math.pow(100, this._rate) * (this._throw ? 2 : 1), 0.05, 80); // 0.2‥20 Hz, ×2 thrown
+    return clamp(0.2 * Math.pow(100, this._rate), 0.05, 80); // 0.2‥20 Hz
   }
   private applyFreq() {
     this.sawLfo.frequency.setTargetAtTime(this.freqOf(), this.ctx.currentTime, 0.01);
@@ -140,9 +139,8 @@ export class GateFx extends BaseFxDevice {
 
   // ---- depth / floor -------------------------------------------------------
   private applyDepth() {
-    const d = this._throw ? 1 : this._depth; // throw = full chop while held
-    this.depthGain.gain.setTargetAtTime(d, this.ctx.currentTime, 0.01);
-    this.floorConst.offset.setTargetAtTime(1 - d, this.ctx.currentTime, 0.01);
+    this.depthGain.gain.setTargetAtTime(this._depth, this.ctx.currentTime, 0.01);
+    this.floorConst.offset.setTargetAtTime(1 - this._depth, this.ctx.currentTime, 0.01);
   }
 
   private refreshCurve() {
@@ -194,13 +192,11 @@ export class GateFx extends BaseFxDevice {
     if (this._sync) this.applyFreq();
   }
 
-  /** Pad-throw TRIGGER: engage the gate (un-bypass if dormant) at a full-depth double-rate
-   *  chop while held; release restores depth/rate and re-bypasses if it was off. */
+  /** Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
+   *  while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify. */
   setThrow(on: boolean) {
     this.throwEngage(on);
     this._throw = on;
-    this.applyDepth();
-    this.applyFreq();
   }
   get throwing() {
     return this._throw;
@@ -221,7 +217,7 @@ export class GateFx extends BaseFxDevice {
   }
   /** The full gain envelope (what you hear) at phase p∈[0,1): (1−depth) + depth·window. */
   gateShape(p: number): number {
-    const d = this._throw ? 1 : this._depth;
+    const d = this._depth;
     return 1 - d + d * windowShape(((p % 1) + 1) % 1, this._shape, this._duty, this._smooth);
   }
 

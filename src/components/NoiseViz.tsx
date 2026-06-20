@@ -112,13 +112,9 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.engaged ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
 
-      // BARS build timeline, OVERLAID as a strip along the bottom (no second mini-window): bar
-      // segments + the rise ramp, with a playhead sweeping as an auto-build runs. Manual = "MANUAL".
-      const bh = Math.min(34, Math.max(22, h * 0.3));
-      ctx2d.save();
-      ctx2d.translate(8, h - bh - 6);
-      drawRiseBars(ctx2d, Math.max(20, w - 16), bh, accent, dev);
-      ctx2d.restore();
+      // BARS build meter — a clean footer strip flush along the bottom (no floating box): one
+      // cell per bar, filled to the live build progress with a leading playhead. Manual = label.
+      drawRiseBars(ctx2d, w, h, Math.min(26, Math.max(18, h * 0.16)), accent, dev);
 
       raf = requestAnimationFrame(draw);
     };
@@ -166,117 +162,69 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
   );
 }
 
-// The BARS build timeline: the rise length drawn as `bars` segments with the level ramp
-// climbing across them, plus a sweeping playhead while an auto-build is in flight. RISE off =
-// the throw is an instant gate (no timed build), so it reads "MANUAL".
-function drawRiseBars(ctx: CanvasRenderingContext2D, w: number, h: number, accent: string, dev: NoiseFx) {
-  // translucent backdrop so the strip reads over the live spectrum behind it.
-  ctx.fillStyle = "rgba(0,0,0,0.42)";
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(0, 0, w, h, 5);
-  else ctx.rect(0, 0, w, h);
-  ctx.fill();
-  ctx.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
+// The BARS build meter — a clean FOOTER strip flush along the bottom of the main viz: one cell
+// per bar, filled to the live build progress with a bright leading playhead, so you watch the
+// rise march bar-by-bar to the drop. RISE off = an instant gate, so it reads "MANUAL".
+function drawRiseBars(ctx: CanvasRenderingContext2D, fullW: number, fullH: number, sh: number, accent: string, dev: NoiseFx) {
+  const sy = fullH - sh;
+  // solid-ish footer backdrop + a divider line so it reads as its own band, not floating.
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(0, sy, fullW, sh);
+  ctx.strokeStyle = `color-mix(in srgb, ${accent} 24%, transparent)`;
   ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, sy + 0.5);
+  ctx.lineTo(fullW, sy + 0.5);
   ctx.stroke();
-  const pad = 6;
-  const x0 = pad;
-  const y0 = pad;
-  const iw = w - pad * 2;
-  const ih = h - pad * 2;
-  if (iw < 10 || ih < 10) return;
-  const dim = `color-mix(in srgb, ${accent} 14%, transparent)`;
-  const px = (t: number) => x0 + clamp01(t) * iw;
-  const py = (v: number) => y0 + ih - clamp01(v) * (ih - 1) - 1;
-  const ramp = (t: number) => Math.pow(clamp01(t), 0.7); // level climb (eased, matches the build)
 
-  // baseline
-  ctx.strokeStyle = dim;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x0, py(0));
-  ctx.lineTo(x0 + iw, py(0));
-  ctx.stroke();
+  const pad = 8;
+  const labelW = 48;
+  const cy = sy + 5;
+  const ch = sh - 10;
+  const x0 = pad;
+  const iw = fullW - pad * 2 - labelW;
+  if (iw < 20 || ch < 4) return;
 
   if (!dev.rising) {
-    // manual mode — the timed build doesn't apply.
-    ctx.fillStyle = `color-mix(in srgb, ${accent} 45%, transparent)`;
-    ctx.font = "700 11px system-ui, sans-serif";
+    ctx.fillStyle = `color-mix(in srgb, ${accent} 50%, transparent)`;
+    ctx.font = "700 10px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("MANUAL", x0 + iw / 2, y0 + ih / 2);
+    ctx.fillText("MANUAL — hold to sweep noise in", x0 + (fullW - pad * 2) / 2, sy + sh / 2);
     ctx.textAlign = "left";
     return;
   }
 
   const bars = Math.max(1, Math.round(dev.bars));
-  // bar dividers — the "wiring": one tick per bar boundary.
-  ctx.strokeStyle = dim;
-  for (let i = 1; i < bars; i++) {
-    const x = x0 + (i / bars) * iw;
-    ctx.beginPath();
-    ctx.moveTo(x, y0);
-    ctx.lineTo(x, y0 + ih);
-    ctx.stroke();
+  const prog = dev.riseProgress; // -1 when idle
+  const gap = 3;
+  const cellW = (iw - gap * (bars - 1)) / bars;
+  for (let i = 0; i < bars; i++) {
+    const cx = x0 + i * (cellW + gap);
+    ctx.strokeStyle = `color-mix(in srgb, ${accent} 24%, transparent)`;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, ch - 1);
+    const fill = prog >= 0 ? clamp01(prog * bars - i) : 0; // this cell's fill fraction
+    if (fill > 0) {
+      ctx.fillStyle = `color-mix(in srgb, ${accent} ${Math.round(38 + 42 * fill)}%, transparent)`;
+      ctx.fillRect(cx, cy, Math.max(1, cellW * fill), ch);
+    }
   }
 
-  // the planned ramp across the whole build (faint).
-  const N = Math.max(8, Math.round(iw));
-  const line = (alpha: string, upTo: number) => {
-    ctx.strokeStyle = alpha;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    for (let i = 0; i <= N; i++) {
-      const t = i / N;
-      if (t > upTo) break;
-      const x = px(t);
-      const y = py(ramp(t));
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  };
-  line(`color-mix(in srgb, ${accent} 28%, transparent)`, 1);
-
-  const prog = dev.riseProgress; // -1 when not building
+  // leading playhead glow at the live build position.
   if (prog >= 0) {
-    // filled area + bright ramp up to the playhead, then the sweeping playhead.
-    ctx.beginPath();
-    ctx.moveTo(x0, py(0));
-    for (let i = 0; i <= N; i++) {
-      const t = i / N;
-      if (t > prog) break;
-      ctx.lineTo(px(t), py(ramp(t)));
-    }
-    ctx.lineTo(px(prog), py(0));
-    ctx.closePath();
-    ctx.fillStyle = `color-mix(in srgb, ${accent} 22%, transparent)`;
-    ctx.fill();
-    ctx.shadowColor = accent;
-    ctx.shadowBlur = 6;
-    line(accent, prog);
-    ctx.shadowBlur = 0;
-
-    const hx = px(prog);
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(hx, y0);
-    ctx.lineTo(hx, y0 + ih);
-    ctx.stroke();
+    const hx = x0 + clamp01(prog) * iw;
     ctx.fillStyle = accent;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 7;
-    ctx.beginPath();
-    ctx.arc(hx, py(ramp(prog)), 3, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.shadowBlur = 8;
+    ctx.fillRect(hx - 1, cy - 1, 2, ch + 2);
     ctx.shadowBlur = 0;
   }
 
-  // bar-count label
-  ctx.fillStyle = `color-mix(in srgb, ${accent} 60%, transparent)`;
-  ctx.font = "9px ui-monospace, monospace";
-  ctx.textBaseline = "top";
-  ctx.textAlign = "right";
-  ctx.fillText(`${bars} BAR${bars > 1 ? "S" : ""}`, x0 + iw, y0);
+  // bar-count label in the reserved right gutter.
+  ctx.fillStyle = `color-mix(in srgb, ${accent} 70%, transparent)`;
+  ctx.font = "700 10px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
   ctx.textAlign = "left";
+  ctx.fillText(`${bars} BAR${bars > 1 ? "S" : ""}`, x0 + iw + 7, sy + sh / 2);
 }

@@ -102,6 +102,29 @@ export function AudioTab({
     };
   }, [outputSupported]);
 
+  // Microphone INPUT devices (for the mic talkover + sampling source). Same label-permission
+  // quirk as outputs; gated on getUserMedia. The "Show device names" reveal fills both.
+  const micSupported = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
+  useEffect(() => {
+    if (!micSupported || !navigator.mediaDevices?.enumerateDevices) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+        if (!cancelled) setInputs(devs);
+      } catch {
+        /* ignore */
+      }
+    };
+    void refresh();
+    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
+    };
+  }, [micSupported]);
+
   // One-shot: ask for mic permission so enumerateDevices reveals output labels,
   // then immediately stop the stream (we never record — we only want the names).
   const revealOutputNames = async () => {
@@ -109,8 +132,10 @@ export function AudioTab({
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach((t) => t.stop());
-      const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const devs = all.filter((d) => d.kind === "audiooutput");
       setOutputs(devs);
+      setInputs(all.filter((d) => d.kind === "audioinput")); // the same grant reveals mic names
       setOutputNeedsPerm(devs.length > 0 && devs.every((d) => !d.label));
     } catch (e) {
       // Surface WHY instead of silently no-op'ing (the old behaviour looked like the
@@ -259,6 +284,33 @@ export function AudioTab({
               </button>
             </p>
           )}
+        </div>
+      )}
+
+      {micSupported && (
+        <div className="settings-section">
+          <div className="settings-section-head">
+            <span className="settings-label">Microphone</span>
+          </div>
+          <select className="settings-select" value={settings.audioInputId} onChange={(e) => set({ audioInputId: e.target.value })}>
+            <option value="">System default mic</option>
+            {inputs.map((d, i) => (
+              <option key={d.deviceId || i} value={d.deviceId}>
+                {d.label || `Microphone ${i + 1}`}
+              </option>
+            ))}
+          </select>
+          <p className="settings-hint muted">
+            Input for talkover + sampling (the 🎙 on the sampler strip). Switching while the mic is live re-acquires it.
+            {inputs.length > 0 && inputs.every((d) => !d.label) && (
+              <>
+                {" "}Names are hidden until you grant audio access once.{" "}
+                <button className="link-btn" onClick={revealOutputNames}>
+                  Show device names
+                </button>
+              </>
+            )}
+          </p>
         </div>
       )}
 

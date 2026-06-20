@@ -1050,6 +1050,12 @@ export function App() {
     void engine.setCueSinkId(settings.audioCueOutputId);
   }, [engine, settings.audioCueOutputId]);
 
+  // Chosen microphone input — remembered by the engine so the next enableMic() uses it, and
+  // re-acquired live if the mic is already running. "" = system default mic.
+  useEffect(() => {
+    void engine.setMicDevice(settings.audioInputId);
+  }, [engine, settings.audioInputId]);
+
   // While a deck is SEPARATING stems on-device, the separator worker's per-segment CPU
   // FFT bursts crowd the audio thread → the mid-split playback stutter. Raise the stretch
   // worklet's pre-roll FIFO headroom (~64 ms) so a pressured render quantum outputs

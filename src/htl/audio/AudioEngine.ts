@@ -286,12 +286,16 @@ export class AudioEngine {
   }
 
   // ── Live mic (talkover + sampling) ──────────────────────────────────────────────────────
-  /** Acquire the mic (user gesture + secure context). Returns false if denied/unavailable. */
-  async enableMic(): Promise<boolean> {
-    return this.mic.enable();
+  /** Acquire the mic (user gesture + secure context). `deviceId` picks an input ("" = default). */
+  async enableMic(deviceId = ""): Promise<boolean> {
+    return this.mic.enable(deviceId);
   }
   disableMic() {
     this.mic.disable();
+  }
+  /** Choose the mic input device (re-acquires if already live). */
+  async setMicDevice(deviceId: string): Promise<boolean> {
+    return this.mic.setDevice(deviceId);
   }
   /** Talkover on/off — mic into the master with the music auto-ducking under it. */
   setMicOn(on: boolean) {

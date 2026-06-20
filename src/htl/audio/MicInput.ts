@@ -24,6 +24,7 @@ export class MicInput {
   private _duck = 0.6; // 0..1: how far the music dips when the mic is hot
   private _on = false; // talkover engaged (level → master)
   private _hasStream = false;
+  private _deviceId = ""; // chosen input device ("" = system default)
 
   constructor(
     private readonly ctx: AudioContext,
@@ -73,23 +74,43 @@ export class MicInput {
     return this._duck;
   }
 
-  /** Acquire the mic stream (user gesture + secure context). Idempotent; returns success. */
-  async enable(): Promise<boolean> {
-    if (this._hasStream) return true;
+  /** The chosen input device id ("" = system default). */
+  get deviceId() {
+    return this._deviceId;
+  }
+
+  /** Acquire the mic stream (user gesture + secure context). Idempotent; returns success.
+   *  `deviceId` selects a specific input ("" = system default). */
+  async enable(deviceId = this._deviceId): Promise<boolean> {
+    if (this._hasStream && deviceId === this._deviceId) return true;
+    const wasOn = this._on;
+    if (this._hasStream) this.disable(); // switching device → re-acquire
+    this._deviceId = deviceId;
     try {
       // No DSP cleanup on the input — echo-cancel / noise-suppress / AGC mangle music + a sung mic.
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      });
+      const audio: MediaTrackConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+      if (deviceId) audio.deviceId = { exact: deviceId };
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio });
     } catch {
       return false; // permission denied / no device / insecure context
     }
     this.source = this.ctx.createMediaStreamSource(this.stream);
     this.source.connect(this.hpf);
     this._hasStream = true;
+    this._on = wasOn; // keep talkover state across a device switch
     this.applyLevel();
     this.applyDuck();
     return true;
+  }
+
+  /** Switch the input device, re-acquiring if a stream is already live. */
+  async setDevice(deviceId: string): Promise<boolean> {
+    if (deviceId === this._deviceId) return true;
+    if (!this._hasStream) {
+      this._deviceId = deviceId; // not live yet — just remember for the next enable()
+      return true;
+    }
+    return this.enable(deviceId);
   }
 
   /** Release the mic (stops the OS capture indicator). */

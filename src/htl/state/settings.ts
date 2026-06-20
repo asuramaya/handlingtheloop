@@ -61,6 +61,7 @@ export interface Settings {
   stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
   audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
   audioCueOutputId: string; // separate cue/headphone output device (PFL pre-listen); "" = no separate cue (single output)
+  audioInputId: string; // chosen microphone input device (getUserMedia deviceId); "" = system default mic
   autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
   mobileStems: boolean; // MOBILE only: split every loaded deck into on-device stems (off = plain mix). AUTO forces it on.
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
@@ -197,6 +198,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
   audioOutputId: "", // system default output until the user picks a device
   audioCueOutputId: "", // no separate cue device by default (CUE stays a plain button)
+  audioInputId: "", // system default microphone until the user picks one
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour

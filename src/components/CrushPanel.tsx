@@ -2,6 +2,7 @@ import type { Deck, CrushFx } from "@htl/audio";
 import { CRUSH_MODES } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
+import { CrushViz } from "./CrushViz";
 
 // Minimal Bitcrusher surface (Phase 1) — MODE selector + the shared controls, mutated on the
 // deck's device and broadcast as fxParam. Phase 2 drops the CrushViz pixel scope in above the
@@ -37,12 +38,13 @@ export function CrushPanel({ deck, id, slot, accent, emit, refresh }: CrushPanel
         ))}
       </div>
 
+      {/* Pixel scope — live staircase over the quantization grid; also an XY pad (X=RATE, Y=BITS). */}
+      <CrushViz deck={deck} slot={slot} accent={accent} set={setParam} />
+
       <div className="sat-shared">
         <ValueCell label="BITS" value={get("bits")} min={0} max={1} onChange={(v) => setParam("bits", v)} format={() => dev.bitsValue.toFixed(1)} />
         <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => `${dev.rateDiv.toFixed(0)}×`} />
         <ValueCell label="JITTER" value={get("jitter")} min={0} max={1} onChange={(v) => setParam("jitter", v)} format={(v) => `${Math.round(v * 100)}`} />
-      </div>
-      <div className="sat-shared">
         <ValueCell label="CUT" value={get("cut")} min={0} max={1} onChange={(v) => setParam("cut", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="RES" value={get("res")} min={0} max={1} onChange={(v) => setParam("res", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="MIX" value={get("mix")} min={0} max={1} reset={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />

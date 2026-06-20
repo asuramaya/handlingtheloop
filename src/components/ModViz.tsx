@@ -35,8 +35,16 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     const an = actx.createAnalyser();
     an.fftSize = 4096;
     an.smoothingTimeConstant = 0.5;
-    dev.output.connect(an); // tap only
+    dev.output.connect(an); // dim audio backdrop
     const bins = new Uint8Array(an.frequencyBinCount);
+    const modAn = actx.createAnalyser(); // the REAL modulation signal (LFO + envelope)
+    modAn.fftSize = 256;
+    try {
+      dev.modSignal.connect(modAn);
+    } catch {
+      /* ignore */
+    }
+    const modBuf = new Float32Array(modAn.fftSize);
 
     let raf = 0;
     const draw = () => {
@@ -70,43 +78,53 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
       }
       ctx2d.lineTo(w, h);
       ctx2d.closePath();
-      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
+      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 10%, transparent)`; // DIM audio backdrop
       ctx2d.fill();
 
-      // glowing outline
-      ctx2d.strokeStyle = accent;
-      ctx2d.lineWidth = 1.4;
+      // THE STAR — the sweeping comb/notch positions from the REAL mod signal (LFO + env),
+      // bright glowing vertical lines that move with the modulation (the audio is just context).
+      modAn.getFloatTimeDomainData(modBuf);
+      const m = modBuf[modBuf.length - 1] || 0;
+      const targets = dev.modTargets(m);
       ctx2d.shadowColor = accent;
-      ctx2d.shadowBlur = 4;
-      ctx2d.beginPath();
-      started = false;
-      for (let b = 1; b < bins.length; b++) {
-        const f = (b / bins.length) * nyq;
-        if (f < F_MIN) continue;
-        if (f > F_MAX) break;
-        const x = fx(f, w);
-        started ? ctx2d.lineTo(x, yOf(b)) : (ctx2d.moveTo(x, yOf(b)), (started = true));
+      ctx2d.shadowBlur = 7;
+      for (let i = 0; i < targets.length; i++) {
+        const x = fx(targets[i], w);
+        const a = Math.max(22, Math.round(95 - i * 7));
+        ctx2d.strokeStyle = `color-mix(in srgb, ${accent} ${a}%, transparent)`;
+        ctx2d.lineWidth = i === 0 ? 2.6 : 1.4;
+        ctx2d.beginPath();
+        ctx2d.moveTo(x, 0);
+        ctx2d.lineTo(x, h);
+        ctx2d.stroke();
       }
-      ctx2d.stroke();
       ctx2d.shadowBlur = 0;
 
-      // LFO waveform in the standardized curve panel.
+      // LFO waveform in the standardized curve panel + a moving PLAYHEAD dot (the modulation,
+      // foregrounded). Phase reconstructed from the LFO rate; the dot rides the wave.
       const cc = curveRef.current;
       if (cc) {
         const f = fitCanvas(cc);
         if (f.ctx) {
           const wave = Math.round(dev.getParam("wave"));
-          drawCurvePanel(
-            f.ctx,
-            f.w,
-            f.h,
-            accent,
-            (t) => {
-              const s = Math.sin(2 * Math.PI * t);
-              return wave === 1 ? Math.asin(s) * (2 / Math.PI) : wave === 2 ? (s >= 0 ? 1 : -1) : s;
-            },
-            { bipolar: true },
-          );
+          const shape = (t: number) => {
+            const s = Math.sin(2 * Math.PI * t);
+            return wave === 1 ? Math.asin(s) * (2 / Math.PI) : wave === 2 ? (s >= 0 ? 1 : -1) : s;
+          };
+          drawCurvePanel(f.ctx, f.w, f.h, accent, shape, { bipolar: true });
+          const ph = (actx.currentTime * dev.rateHz) % 1;
+          const pad = 5;
+          const iw = f.w - pad * 2;
+          const ih = f.h - pad * 2;
+          const dx = pad + ph * iw;
+          const dy = pad + ih / 2 - shape(ph) * (ih / 2) * 0.92;
+          f.ctx.fillStyle = accent;
+          f.ctx.shadowColor = accent;
+          f.ctx.shadowBlur = 7;
+          f.ctx.beginPath();
+          f.ctx.arc(dx, dy, 3, 0, 2 * Math.PI);
+          f.ctx.fill();
+          f.ctx.shadowBlur = 0;
         }
       }
 
@@ -117,6 +135,11 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
       cancelAnimationFrame(raf);
       try {
         dev.output.disconnect(an);
+      } catch {
+        /* ignore */
+      }
+      try {
+        dev.modSignal.disconnect(modAn);
       } catch {
         /* ignore */
       }

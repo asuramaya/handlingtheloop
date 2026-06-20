@@ -255,6 +255,37 @@ export class ModFx extends BaseFxDevice {
   get stages() {
     return this._stages;
   }
+  /** The live modulation bus (LFO + envelope) — for the viz to tap and read the real sweep. */
+  get modSignal(): AudioNode {
+    return this.modBus;
+  }
+  /** The comb-notch / allpass-notch frequencies for a normalized mod value `m` (−1..1). The
+   *  viz reads the real `m` off the mod bus and draws THESE sweeping — emphasising the
+   *  modulation over the program audio. */
+  modTargets(m: number): number[] {
+    const boost = this._throw ? 1.6 : 1;
+    const out: number[] = [];
+    if (this._mode === 2) {
+      const n = Math.max(1, this._stages - 1);
+      const sweep = m * this._depth * 1300 * boost;
+      for (let i = 0; i < this._stages; i++) {
+        const f = 200 * Math.pow(16, i / n) + sweep;
+        if (f > 25 && f < 20000) out.push(f);
+      }
+      return out;
+    }
+    const flanger = this._mode === 1;
+    const baseSec = flanger ? (this._thru ? 0.0004 : 0.0028) : 0.018;
+    const magSec = flanger ? 0.0022 : 0.006;
+    let delay = baseSec + m * this._depth * magSec * boost;
+    if (delay < 0.00005) delay = 0.00005;
+    for (let k = 0; k < 16; k++) {
+      const f = (k + 0.5) / delay; // flanger/chorus comb nulls
+      if (f >= 20000) break;
+      if (f > 25) out.push(f);
+    }
+    return out;
+  }
 
   private registerParams() {
     this.params.push(

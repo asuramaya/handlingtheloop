@@ -20,6 +20,7 @@ import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/t
 import { audioChunks, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
+import { handleSampleRoute } from "../server/samples";
 import {
   type D1Database,
   userBySession,
@@ -242,6 +243,10 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
     // SaaS account / connected-service routes (D1-backed) get first refusal.
     const accountRes = await handleAccountRoute(url, req, env);
     if (accountRes) return accountRes;
+
+    // Sampler global-pad clips (D1 index + R2 bytes), account-gated. Null when not its path.
+    const sampleRes = await handleSampleRoute(url, req, env);
+    if (sampleRes) return sampleRes;
 
     switch (url.pathname) {
       case "/api/audio": {

@@ -130,8 +130,10 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       ▶ Play on each set in Profile "Your sets" (gated off while in a live session). D5 mismatch
       warns; dead source id = graceful gap (load self-heals). *Decks play own clock at 1x, ticks
       correct drift — the broadcast-listener contract.*
-- [ ] **G1d — surfaces.** Sets list in **Discover** (published/popular) + **Profile** history
-      (drafts+published) — fill the seams already marked in DiscoverScreen + the Profile hero.
+- [x] **G1d — surfaces.** DONE (`4f288ec`). Discover "Sets" facet + public /@handle "Sets"
+      section, both tap-to-replay (G1c). `discoverSets` host-identity join; `GET /api/sets/discover`
+      + `GET /api/u/:handle/sets`; reusable `SetList` card; one `playRecordedSet` in App. **The Sets
+      spine G1a→d is COMPLETE** (capture → lifecycle → replay → surfaces).
 - [ ] **D6 — gesture resync contract.** scratch/jog → snap to grid so non-deterministic gestures
       bake cleanly into the recipe. *Fidelity follow-up to G1c, not a blocker.*
 - [ ] **G2** auto tracklists · **G3** clips/moments · **G4** external share links + OG cards ·

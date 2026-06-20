@@ -90,6 +90,11 @@ export class AutoMixer {
   private preloadedId: DeckId | null = null;
   private preloadedTrack: TrackMeta | null = null;
   private eagerLoading = false;
+  // Monotonic generation, bumped by skip/cancel/adoptLive. An async load (preload/cue/kickoff)
+  // captures it before awaiting and discards its result if it changed during the await — so a
+  // Skip mid-preload can't still mix in the just-skipped track (the stale continuation that
+  // re-set preloaded* after clearPreload zeroed it). #2.
+  private gen = 0;
   // The "session vibe" — the track the user last set as live. Radio seeds from this
   // PLUS the current track so suggestions stay tethered to the original vibe instead
   // of drifting track-to-track.
@@ -145,6 +150,7 @@ export class AutoMixer {
 
   skip(): void {
     if (!this.enabled) return;
+    this.gen++; // invalidate any in-flight preload — it may be loading the track we're skipping
     this.abandonCue();
     this.deps.queue.remove(this.nextTrack?.videoId ?? "");
     this.resetArm();
@@ -158,6 +164,7 @@ export class AutoMixer {
 
   /** Abort any in-progress transition and return the decks to a clean state. */
   cancel(): void {
+    this.gen++; // invalidate any in-flight preload / cue load
     if (this.phase === "mixing" && this.liveId) {
       const idle = other(this.liveId);
       this.deps.engine.deck(idle).pause();
@@ -337,6 +344,7 @@ export class AutoMixer {
   // Adopt a deck as the live one. Re-seeds radio when the track actually changed, so
   // suggestions follow whatever's playing now (not the track we started from).
   private adoptLive(id: DeckId): void {
+    this.gen++; // live deck changed under us → any in-flight preload is for the old context
     this.abandonCue();
     const prev = this.liveVideoId;
     this.liveId = id;
@@ -356,15 +364,16 @@ export class AutoMixer {
   // free deck (a plain continue when no mix was in progress).
   private async advanceToNext(): Promise<void> {
     if (this.preloading || !this.liveId) return;
+    const g = this.gen;
     const seeds = [this.deps.deckTrack("A"), this.deps.deckTrack("B")].filter((t): t is TrackMeta => !!t?.videoId);
     const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
-    if (!next || !this.enabled || !this.liveId) return;
+    if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
     const target = other(this.liveId);
     if (this.deps.engine.deck(target).playing) return; // don't stomp a deck in use
     this.preloading = true;
     try {
       await this.deps.loadDeck(target, next);
-      if (!this.enabled) return;
+      if (!this.enabled || this.gen !== g) return;
       this.deps.engine.deck(target).play();
       const sign = target === "A" ? -1 : 1;
       this.deps.applyCrossfade(sign);
@@ -399,10 +408,11 @@ export class AutoMixer {
     if (this.preloading) return;
     const first = this.deps.queue.advance() ?? this.deps.queue.peekNext();
     if (!first) return;
+    const g = this.gen;
     this.preloading = true;
     try {
       await this.deps.loadDeck("A", first);
-      if (!this.enabled) return;
+      if (!this.enabled || this.gen !== g) return;
       this.deps.engine.deck("A").play();
       this.deps.applyCrossfade(-1);
       this.lastXfade = -1;
@@ -449,9 +459,10 @@ export class AutoMixer {
     if (this.eagerLoading || this.preloading || !this.liveId) return;
     const idle = other(this.liveId);
     if (this.deps.engine.deck(idle).playing) return; // user is on that deck — don't grab it
+    const g = this.gen;
     const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
     const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
-    if (!next || !this.enabled || !this.liveId) return;
+    if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
     const tgt = other(this.liveId);
     if (this.deps.engine.deck(tgt).playing) return;
     // Already sitting on the idle deck (we loaded it, or it happens to be there)? Latch it
@@ -464,7 +475,7 @@ export class AutoMixer {
     this.eagerLoading = true;
     try {
       await this.deps.loadDeck(tgt, next); // decode + analysis + (desktop) neural stems — EARLY
-      if (this.enabled && this.liveId != null && !this.deps.engine.deck(tgt).playing) {
+      if (this.enabled && this.liveId != null && this.gen === g && !this.deps.engine.deck(tgt).playing) {
         this.preloadedId = tgt;
         this.preloadedTrack = next;
       }
@@ -488,6 +499,7 @@ export class AutoMixer {
     // hasn't landed yet.
     const preloaded =
       this.preloadedId === idle && !!this.preloadedTrack && this.deps.deckTrack(idle)?.videoId === this.preloadedTrack.videoId;
+    const g = this.gen;
     const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
     const next = preloaded ? this.preloadedTrack! : await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
     if (!next) {
@@ -497,8 +509,9 @@ export class AutoMixer {
     this.preloading = true;
     try {
       if (!preloaded) await this.deps.loadDeck(idle, next);
-      // Bail if the world changed under us during the async load.
-      if (!this.enabled || this.liveId == null || this.deps.engine.deck(idle).playing) {
+      // Bail if the world changed under us during the async load (incl. a skip/cancel/adopt
+      // that bumped the generation — otherwise we'd cue the stale next track).
+      if (!this.enabled || this.liveId == null || this.gen !== g || this.deps.engine.deck(idle).playing) {
         this.phase = "armed";
         return;
       }

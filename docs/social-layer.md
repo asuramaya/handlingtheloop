@@ -153,8 +153,8 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
 - [ ] **D3** late-join snapshot (incl. auto-mix queue) · **D4** clock sync · **D7** geo-block
       divergence · **D8** drift catch-up policy · **D9** cold-decode dedup · **D10** reconnect storm
 
-### Tier 4 — scale (demand-gated — build when a room nears 500)
-- [ ] **D2** relay tier (RelayRoom shard DOs) · **C4** denormalize follower counts
+### Tier 4 — scale (demand-gated — MEASURED: one DO holds 500, see D2 spec note)
+- [~] **D2** relay tier (RelayRoom shard DOs) — load-measured (one DO fine to 500); R=1 scaffold IN PROGRESS · **C4** denormalize follower counts
 
 ### Tier 5 — moderation leftovers (Epic L)
 - [ ] **L4** anti-sybil (listener-count inflation, follow bots) · follower-only chat (needs the
@@ -544,8 +544,15 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 - [x] **E6a. Listen default already inverted for public rooms.** A `pub` listener tunes in
       open (no knock) and only *taking the decks* raises a hand (the `stage` request) — the
       private knock-to-listen path is untouched (still the invite-room model).
-- [ ] **E7. Host-disconnect grace window** + rehydrate; optional host handoff.
-- [ ] **E8. DO-eviction rehydration** of room state (now-playing, roster, gate mode).
+- [x] **E7. Host-disconnect grace DONE+VALIDATED** (`scripts/test-host-drop.mjs`: 20/20 released
+      at ~8077ms). 8s anchor grace (host reconnect resumes seamlessly); grace-expiry on an abandoned
+      PUBLIC room now `endBroadcast("The host left.")` instead of freezing the crowd. Handoff to a
+      participant for private rooms via nextAnchor.
+- [x] **E8. DO-eviction rehydration COVERED** — `load()` runs atop every entry point (fetch/
+      webSocketMessage/webSocketClose/grace), so a hibernation wake rehydrates anchor/snapshot/
+      public/gate/grants/mutes/stemviews/lyrics before handling; roster = platform-restored
+      hibernated sockets. Only ephemeral crowd state (reactions/hype/requests) intentionally not
+      persisted (transient; dodges the DO write-quota).
 - [ ] **E9. Co-controller disconnect mid-control** (deck freeze vs auto-release).
 - [ ] **E10. Max room-size cap** + at-cap failure mode (decision in Open Decisions).
 - [~] **E11. Zombie/orphan cleanup** — directory freshness filter (`last_seen > now-90s`)

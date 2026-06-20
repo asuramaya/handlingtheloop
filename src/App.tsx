@@ -3424,38 +3424,44 @@ export function App() {
   });
   // A track → the free-text a listener's "add to queue" becomes when routed as a song request.
   const requestTextFor = (t: TrackMeta): string => [t.artist, t.title].filter(Boolean).join(" — ").slice(0, 120) || t.title || "a track";
-  const queueCanEdit = !autoIsRemote || room.controlling;
+  // Queue-edit POLICY off the attachment (P3): VISITING another rig WITHOUT full board
+  // control → my add/addNext is a gated SONG REQUEST (never a silent no-op), and remove/move
+  // I simply don't own. On my OWN rig (home), or visiting WITH full control granted, I edit
+  // the canonical queue — directly when I'm the anchor, else via a queue intent the authority
+  // applies + re-streams. `fullControl` excludes a stepped-up single-deck listener (myDeck
+  // set), whose deck-less queue intent the server would drop anyway. This generalises the old
+  // `listeningTo`-only check, which left invite guests + stage listeners with a dead button.
+  const fullControl = room.controlling && room.myDeck === null;
+  const visitingNoControl = room.attachment.to === "rig" && !fullControl;
+  const queueCanEdit = !autoIsRemote || fullControl;
   const queueEdit = useMemo(
     () => ({
-      // An anon LISTENER (tuned into a broadcast, not joined → not autoIsRemote) can't touch the
-      // host's queue directly — their "add to queue" is a gated SONG REQUEST the host approves
-      // (not a no-op local enqueue into a queue that isn't theirs).
       add: (t: TrackMeta) => {
-        if (room.listeningTo) room.requestSong(requestTextFor(t));
+        if (visitingNoControl) room.requestSong(requestTextFor(t));
         else if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "add", track: toQueuedTrack(t) });
         } else mixQueue.enqueue(t);
       },
       addNext: (t: TrackMeta) => {
-        if (room.listeningTo) room.requestSong(requestTextFor(t)); // a listener can only request, not jump the queue
+        if (visitingNoControl) room.requestSong(requestTextFor(t)); // can only request, not jump the queue
         else if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "addNext", track: toQueuedTrack(t) });
         } else mixQueue.enqueueNext(t);
       },
       remove: (videoId: string) => {
-        if (room.listeningTo) return; // a listener owns no queue to remove from
+        if (visitingNoControl) return; // don't own a queue to remove from
         if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "remove", videoId });
         } else mixQueue.remove(videoId);
       },
       move: (from: number, to: number) => {
-        if (room.listeningTo) return;
+        if (visitingNoControl) return;
         if (autoIsRemote) {
           if (room.controlling) room.sendIntent({ kind: "queue", action: "move", from, to });
         } else mixQueue.reorder(from, to);
       },
     }),
-    [autoIsRemote, room.controlling, room.sendIntent, room.listeningTo, room.requestSong, mixQueue],
+    [autoIsRemote, visitingNoControl, room.controlling, room.sendIntent, room.requestSong, mixQueue],
   );
   // F1→queue: a crowd song-request, actioned in one tap — search the free text, drop the top
   // hit onto the auto-mix queue (authority-correct via queueEdit.add), then clear the request.
@@ -3487,6 +3493,10 @@ export function App() {
   // mixer owns `current`, so we step aside.
   useEffect(() => {
     if (autoStatus.enabled) return;
+    // A queue-remote (any non-anchor device — my own iPad, a co-DJ, a listener) mirrors the
+    // authority's queue via remoteAutomix; running a SECOND local radio engine here just burns
+    // recommendation fetches on a queue it never uses (audit #4). Only the authority seeds.
+    if (autoIsRemote) return;
     const a = deckTrack("A");
     const b = deckTrack("B");
     const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
@@ -3496,7 +3506,7 @@ export function App() {
     // the seed-set signature in ensureNext means loading EITHER deck re-seeds.
     if (live) void mixQueue.ensureNext([live, other].filter((t): t is TrackMeta => !!t));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, mixQueue.mode]);
+  }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, autoIsRemote, mixQueue.mode]);
 
   // The audio master publishes the authoritative set so a joiner (or a device that
   // just became master) mirrors it. EVENT-DRIVEN ONLY — on peer-join (someone new to

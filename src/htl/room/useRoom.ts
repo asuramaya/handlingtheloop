@@ -351,11 +351,15 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   );
   const goPublic = useCallback(
     (on: boolean) => {
+      // R8: you can only make YOUR OWN rig go live — never someone else's. A device VISITING
+      // another rig (tuned-in listener or invite guest) must not broadcast; the affordance
+      // belongs to the home rig. The UI also hides "Go live" off-home, but this is the hard gate.
+      if (on && (isPublicListener || isGuest)) return;
       clientRef.current?.goPublic(on);
       if (on) void announce();
       else void closeRoom();
     },
-    [announce],
+    [announce, isPublicListener, isGuest],
   );
   // Tune into a public room by @handle as a read-only listener (swaps our connection),
   // or tune back out to our own session. Accepts a bare or @-prefixed handle.

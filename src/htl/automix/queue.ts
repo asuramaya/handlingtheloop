@@ -306,8 +306,12 @@ export function useMixQueue(): MixQueue {
     if (!dynamic) return;
     lastFill.current = 0;
     lastSeed.current = null; // force a fresh fill from the new seed on the next tick
-    manualSeed.current = null; // a deliberate reseed (deck adopted) drops any manual pick
-    setItems([]);
+    // Drop the manual pick as the radio SEED (suggestions re-anchor to the new deck), but KEEP
+    // the user's explicitly queued "play next" track — nuking the whole queue on a deck change
+    // silently lost a track the user had deliberately lined up.
+    const keep = manualSeed.current ? [manualSeed.current] : [];
+    manualSeed.current = null;
+    setItems(keep);
   }, []);
 
   const enqueue = useCallback((t: TrackMeta) => {

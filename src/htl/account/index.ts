@@ -267,6 +267,20 @@ export async function fetchMySets(signal?: AbortSignal): Promise<SetCard[]> {
   return ((await res.json()) as { sets: SetCard[] }).sets;
 }
 
+/** The published-sets directory for Discover (newest first, with host identity). Public. */
+export async function fetchDiscoverSets(signal?: AbortSignal): Promise<SetCard[]> {
+  const res = await fetch("/api/sets/discover", { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { sets: SetCard[] }).sets;
+}
+
+/** A @handle's PUBLISHED sets (their public profile history). Public. */
+export async function fetchHandleSets(handle: string, signal?: AbortSignal): Promise<SetCard[]> {
+  const res = await fetch(`/api/u/${encodeURIComponent(handle)}/sets`, { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { sets: SetCard[] }).sets;
+}
+
 // Set lifecycle (G1b) — owner-only mutations. Each resolves to ok; the caller refetches.
 const setAction = async (id: string, action: string, body?: unknown): Promise<boolean> => {
   const res = await fetch(`/api/sets/${encodeURIComponent(id)}/${action}`, {

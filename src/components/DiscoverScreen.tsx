@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { type LiveRoom, fetchFollowing, fetchLiveRooms } from "@htl/account";
+import { type LiveRoom, type SetCard, fetchDiscoverSets, fetchFollowing, fetchLiveRooms } from "@htl/account";
 import { DockResizer } from "./DockResizer";
+import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
 
 // Discover — the browse-what's-out-there surface, its OWN right-dock panel (NOT part of a
@@ -15,14 +16,27 @@ export function DiscoverScreen({
   tunedTo,
   onListen,
   onClose,
+  onPlaySet,
 }: {
   self: string | null;
   tunedTo: string | null;
   onListen: (handle: string) => void;
   onClose: () => void;
+  onPlaySet?: (id: string) => void; // G1c/G1d: replay a published set on the decks
 }) {
   const [rooms, setRooms] = useState<LiveRoom[] | null>(null); // null = first load not back yet
   const [following, setFollowing] = useState<Set<string>>(new Set());
+  const [sets, setSets] = useState<SetCard[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    fetchDiscoverSets()
+      .then((s) => alive && setSets(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -116,8 +130,14 @@ export function DiscoverScreen({
           </>
         )}
 
-        {/* SETS facet plugs in here when Epic G1 lands (published/popular recordings, replayed
-            on-device from the persisted recipe). Same browse UX, persistent twin of Live now. */}
+        {/* SETS — published recordings, replayed on-device from the recipe (G1d). The
+            persistent twin of Live now; tap a card to replay it on your decks. */}
+        {sets.length > 0 && (
+          <div className="discover-section">
+            <div className="social-section-head">Sets</div>
+            <SetList sets={sets} onPlay={onPlaySet} showHost />
+          </div>
+        )}
       </div>
     </div>
   );

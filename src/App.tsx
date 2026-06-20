@@ -2322,6 +2322,20 @@ export function App() {
       engine.deck("B").pause();
     },
   });
+  // Replay a recorded set on the decks (from Profile / Discover / a public profile). Tune out
+  // of a live broadcast-listen first (only real conflict), prime audio, then close the docks so
+  // the board is visible — the replay bar drives from there.
+  const playRecordedSet = useCallback(
+    (id: string) => {
+      if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
+      engine.unlock();
+      replay.play(id);
+      setProfileOpen(false);
+      setDiscoverOpen(false);
+      setPublicHandle(null);
+    },
+    [engine, replay],
+  );
 
   // A peer's stem waveform envelopes arrived (the host streams them) → rebuild this
   // deck's 4-lane display from them, even though we hold no local stem PCM (mobile).
@@ -3967,6 +3981,7 @@ export function App() {
             room.tuneIn(h);
             setDiscoverOpen(false); // hand off to the Session dock's "Listening to @X" banner
           }}
+          onPlaySet={playRecordedSet}
         />
       )}
       {profileOpen && (
@@ -3975,15 +3990,7 @@ export function App() {
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
-          onPlaySet={(id) => {
-            // Replay just TAKES OVER the decks — loading the recorded tracks is the replacement
-            // (there's no separate "unload"). The only real conflict is consuming a live remote
-            // feed, so tune out of one first; everything else, hijack the decks and go.
-            if (room.listeningTo) room.tuneOut();
-            engine.unlock(); // user gesture → prime iOS audio
-            replay.play(id);
-            setProfileOpen(false); // get out of the way; the replay bar drives from here
-          }}
+          onPlaySet={playRecordedSet}
         />
       )}
       <ReplayBar replay={replay} />
@@ -3997,6 +4004,7 @@ export function App() {
             room.tuneIn(h);
             closePublic(); // hand off to the Session dock's "Listening to @X" banner
           }}
+          onPlaySet={playRecordedSet}
         />
       )}
 

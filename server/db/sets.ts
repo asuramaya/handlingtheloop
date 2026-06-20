@@ -97,6 +97,29 @@ export async function publishedSets(db: D1Database, limit = 100): Promise<SetRow
   return r.results ?? [];
 }
 
+// A set row carrying its host's public identity — for the Discover directory (many hosts).
+export interface DiscoverSetRow extends SetRow {
+  handle: string | null;
+  displayName: string | null;
+  avatar: string | null;
+}
+/** Published sets across all hosts (with handles), newest first — the Discover Sets facet. */
+export async function discoverSets(db: D1Database, limit = 60): Promise<DiscoverSetRow[]> {
+  const r = await db
+    .prepare(
+      `SELECT s.id, s.host_id AS hostId, s.title, s.genre, s.status, s.duration, s.tracks, s.tracklist,
+              s.cover_video AS coverVideo, s.engine_ver AS engineVer, s.bytes, s.created_at AS createdAt,
+              s.published_at AS publishedAt,
+              u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+       FROM sets s JOIN users u ON u.id = s.host_id
+       WHERE s.status = 'published' AND u.handle IS NOT NULL
+       ORDER BY s.published_at DESC LIMIT ?`,
+    )
+    .bind(limit)
+    .all<DiscoverSetRow>();
+  return r.results ?? [];
+}
+
 /** Flip a set's lifecycle state (G1b). Owner-scoped: the host_id guard makes it a no-op
  *  for anyone else. Stamps published_at on the draft→published transition. */
 export async function setSetStatus(db: D1Database, id: string, hostId: string, status: "draft" | "published"): Promise<void> {

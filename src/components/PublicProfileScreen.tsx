@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { type PublicProfile, block, fetchPublicProfile, follow, unblock, unfollow } from "@htl/account";
+import { type PublicProfile, type SetCard, block, fetchHandleSets, fetchPublicProfile, follow, unblock, unfollow } from "@htl/account";
 import { DockResizer } from "./DockResizer";
 import { ProfilePublicView } from "./ProfilePublicView";
+import { SetList } from "./social/SetList";
 
 // The PUBLIC profile at /@handle — anyone can view it (no email/connections, no
 // edit controls). Renders the SAME ProfilePublicView as the own-Profile hero (so the
@@ -18,20 +19,27 @@ export function PublicProfileScreen({
   handle,
   onClose,
   onListen,
+  onPlaySet,
 }: {
   handle: string;
   onClose: () => void;
   onListen?: (handle: string) => void;
+  onPlaySet?: (id: string) => void; // G1d: replay one of this DJ's published sets
 }) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sets, setSets] = useState<SetCard[]>([]);
 
   useEffect(() => {
     const ctl = new AbortController();
     setLoading(true);
+    setSets([]);
     fetchPublicProfile(handle, ctl.signal)
       .then(setProfile)
       .finally(() => setLoading(false));
+    fetchHandleSets(handle, ctl.signal)
+      .then(setSets)
+      .catch(() => {});
     return () => ctl.abort();
   }, [handle]);
 
@@ -95,6 +103,14 @@ export function PublicProfileScreen({
                 ) : null
               }
             />
+
+            {/* This DJ's published sets (G1d) — tap to replay on your decks. */}
+            {sets.length > 0 && (
+              <div className="profile-section">
+                <div className="profile-section-head">Sets</div>
+                <SetList sets={sets} onPlay={onPlaySet} />
+              </div>
+            )}
           </div>
         )}
       </div>

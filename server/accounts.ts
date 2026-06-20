@@ -18,8 +18,10 @@ import {
   type SetRow,
   type SetTrack,
   createSession,
+  type DiscoverSetRow,
   createSet,
   deleteSet,
+  discoverSets,
   ensureSetsTable,
   getSet,
   setsByHost,
@@ -129,6 +131,11 @@ function sanitizeTrack(t: unknown): SetTrack | null {
   };
 }
 
+/** A Discover row → a card carrying the host's public identity (B7: never the Google name). */
+function discoverCard(row: DiscoverSetRow) {
+  return { ...setCard(row), handle: row.handle, displayName: row.displayName ?? null, avatar: row.avatar ?? null };
+}
+
 /** A `sets` row → the JSON card the client reads (tracklist parsed; host identity is
  *  joined in by the public-list routes, G1d). */
 function setCard(row: SetRow) {
@@ -172,7 +179,16 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     if (!env.DB) return json(404, { error: "not found" });
     await ensureIdentityColumns(env.DB);
     await ensureGraphTables(env.DB);
-    const folded = foldHandle(decodeURIComponent(path.slice("/api/u/".length)));
+    const rest = decodeURIComponent(path.slice("/api/u/".length));
+    // /api/u/<handle>/sets → that handle's PUBLISHED sets (public profile history, G1d).
+    if (rest.endsWith("/sets")) {
+      const owner = await userByHandle(env.DB, foldHandle(rest.slice(0, -"/sets".length)));
+      if (!owner || !owner.handle) return json(404, { error: "no such handle" });
+      await ensureSetsTable(env.DB);
+      const rows = await setsByHost(env.DB, owner.id, false); // published only
+      return json(200, { sets: rows.map(setCard) });
+    }
+    const folded = foldHandle(rest);
     const u = folded ? await userByHandle(env.DB, folded) : null;
     if (!u || !u.handle) return json(404, { error: "no such handle" });
     const viewer = await currentUser(env, req);
@@ -212,6 +228,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     if (!env.DB) return json(404, { error: "not found" });
     await ensureSetsTable(env.DB);
     const rest = path.slice("/api/sets/".length);
+    // /api/sets/discover → the published-sets directory across all hosts (with identity), G1d.
+    if (rest === "discover") {
+      return json(200, { sets: (await discoverSets(env.DB)).map(discoverCard) });
+    }
     const slash = rest.indexOf("/");
     const id = slash === -1 ? rest : rest.slice(0, slash);
     const action = slash === -1 ? "" : rest.slice(slash + 1);

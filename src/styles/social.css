@@ -731,6 +731,85 @@ span.profile-handle:hover {
   cursor: default;
 }
 
+/* --- Published-set list (G1d): Discover + public-profile browse cards ----------- */
+.set-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.set-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.set-card:hover {
+  border-color: var(--accent);
+}
+.set-cover {
+  position: relative;
+  width: 54px;
+  height: 40px;
+  flex: none;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--line);
+  display: grid;
+  place-items: center;
+}
+.set-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.set-cover-ph {
+  color: var(--muted);
+  font-size: 16px;
+}
+.set-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.set-card:hover .set-play {
+  opacity: 1;
+}
+.set-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+.set-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-host {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.set-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* --- Replay bar (G1c): the recorded-set transport over the decks ---------------- */
 .replay-bar {
   position: fixed;

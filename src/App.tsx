@@ -7,6 +7,7 @@ import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { searchYouTube } from "@htl/media";
+import { fmtTime } from "./util/format";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -398,17 +399,23 @@ export function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  // G4: a shared /set/:id link → resolve to the owner's @handle profile (where the set lists),
-  // canonicalizing the URL. The rich preview already came from the server-injected OG card.
+  // G4/G3: a shared /set/:id (optionally ?t=a-b for a G3 clip) → resolve to the owner's @handle
+  // profile (the set lists there) + surface a one-tap "play this moment" (the audio gesture).
+  // The rich preview already came from the server-injected OG card.
+  const [pendingClip, setPendingClip] = useState<{ id: string; start: number; end: number } | null>(null);
   useEffect(() => {
     const m = location.pathname.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
     if (!m) return;
+    const id = m[1];
+    const tm = new URLSearchParams(location.search).get("t")?.match(/^(\d+)-(\d+)$/);
+    const clip = tm ? { id, start: Number(tm[1]) * 1000, end: Number(tm[2]) * 1000 } : null;
     let alive = true;
-    void fetchSet(m[1])
+    void fetchSet(id)
       .then((s) => {
         if (!alive) return;
         history.replaceState(null, "", s?.handle ? `/@${s.handle}` : "/");
         if (s?.handle) setPublicHandle(s.handle);
+        if (s && clip) setPendingClip(clip); // needs a tap (audio gesture) to play
       })
       .catch(() => {});
     return () => {
@@ -2345,10 +2352,10 @@ export function App() {
   // of a live broadcast-listen first (only real conflict), prime audio, then close the docks so
   // the board is visible — the replay bar drives from there.
   const playRecordedSet = useCallback(
-    (id: string) => {
+    (id: string, clip?: { start: number; end: number }) => {
       if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
       engine.unlock();
-      replay.play(id);
+      replay.play(id, clip);
       setProfileOpen(false);
       setDiscoverOpen(false);
       setPublicHandle(null);
@@ -4030,6 +4037,17 @@ export function App() {
         />
       )}
       <ReplayBar replay={replay} />
+      {pendingClip && !replay.active && (
+        <button
+          className="clip-cta"
+          onClick={() => {
+            playRecordedSet(pendingClip.id, { start: pendingClip.start, end: pendingClip.end });
+            setPendingClip(null);
+          }}
+        >
+          ▶ Play this moment · {fmtTime(Math.round(pendingClip.start / 1000))}–{fmtTime(Math.round(pendingClip.end / 1000))}
+        </button>
+      )}
 
       {publicHandle && (
         <PublicProfileScreen

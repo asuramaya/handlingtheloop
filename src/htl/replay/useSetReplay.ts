@@ -35,7 +35,7 @@ export interface ReplayState {
   position: number; // ms
   duration: number; // ms
   engineStale: boolean; // recipe's engineVersion ≠ ours → the rebuild may differ (D5)
-  play: (setId: string) => void; // load + start from the top
+  play: (setId: string, clip?: { start: number; end: number }) => void; // load + start (clip = play just [start,end])
   toggle: () => void; // play/pause
   seek: (ms: number) => void;
   stop: () => void; // tear down, release the decks
@@ -60,6 +60,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
   const posRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const lastUiRef = useRef(0);
+  const clipEndRef = useRef(Infinity); // G3: a clip stops the replay at this offset
 
   const stopClock = () => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -84,12 +85,13 @@ export function useSetReplay(control: ReplayControl): ReplayState {
       lastUiRef.current = now;
       setPosition(posRef.current);
     }
-    if (idxRef.current >= log.length && elapsed >= durRef.current) {
+    if ((idxRef.current >= log.length && elapsed >= durRef.current) || elapsed >= clipEndRef.current) {
       stopClock();
       ctl.current.pauseAudio();
-      posRef.current = durRef.current;
-      setPosition(durRef.current);
-      setPlaying(false); // reached the end (stays "active" so the bar shows the finished set)
+      const stopAt = Math.min(durRef.current, clipEndRef.current);
+      posRef.current = stopAt;
+      setPosition(stopAt);
+      setPlaying(false); // reached the end / clip-out (stays "active" so the bar shows it)
       return;
     }
     rafRef.current = requestAnimationFrame(loop);
@@ -138,7 +140,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
   };
 
   const play = useCallback(
-    (id: string) => {
+    (id: string, clip?: { start: number; end: number }) => {
       stopClock();
       ctl.current.pauseAudio();
       setSetId(id);
@@ -148,6 +150,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
       posRef.current = 0;
       idxRef.current = 0;
       logRef.current = [];
+      clipEndRef.current = Infinity;
       fetch(`/api/sets/${encodeURIComponent(id)}?log=1`, { credentials: "same-origin" })
         .then((r) => (r.ok ? (r.json() as Promise<RecordedLog>) : null))
         .then((data) => {
@@ -161,6 +164,11 @@ export function useSetReplay(control: ReplayControl): ReplayState {
           setDuration(durRef.current);
           setEngineStale(data.engineVersion !== ENGINE_VERSION);
           setLoading(false);
+          // G3: a clip plays just [start,end] — rebuild deck state at the in-point, stop at the out.
+          if (clip && clip.end > clip.start) {
+            clipEndRef.current = clip.end;
+            rebuildAt(Math.max(0, clip.start));
+          }
           setPlaying(true);
           startClock();
         })

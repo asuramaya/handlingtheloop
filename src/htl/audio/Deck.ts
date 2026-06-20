@@ -1813,6 +1813,17 @@ export class Deck {
   get reverbingOut(): boolean {
     return this.reverbSnapshot != null;
   }
+  // SATURATOR THROW — slam the rack's saturator drive while held (pad-FX). No-op without a
+  // saturator in the chain (canSatThrow gates the pad).
+  satThrow(on: boolean): void {
+    (this.rack.deviceAt(this.rack.indexOf("saturator")) as SaturatorFx | undefined)?.setThrow(on);
+  }
+  get canSatThrow(): boolean {
+    return this.rack.indexOf("saturator") >= 0;
+  }
+  get satThrowing(): boolean {
+    return (this.rack.deviceAt(this.rack.indexOf("saturator")) as SaturatorFx | undefined)?.throwing ?? false;
+  }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
    *  missing). Returns the destination rack index on `other`, or −1. */

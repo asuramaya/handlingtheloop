@@ -22,7 +22,7 @@ export interface FxPadDef {
 export const FX_PADS: FxPadDef[] = [
   { label: "ECHO", hold: true, on: (d) => d.echoOut(true), off: (d) => d.echoOut(false), enabled: (d) => d.canEchoOut, active: (d) => d.echoingOut, hint: "Delay-tail throw — add a Delay to the rack to use" },
   { label: "VERB", hold: true, on: (d) => d.reverbOut(true), off: (d) => d.reverbOut(false), enabled: (d) => d.canReverbOut, active: (d) => d.reverbingOut, hint: "Reverb-tail throw — add a Reverb to the rack to use" },
-  { label: "LPF", hold: true, on: (d) => d.filterThrow(-0.78, true), off: (d) => d.filterThrow(-0.78, false), active: (d) => d.filterValue < 0, hint: "Low-pass sweep while held" },
+  { label: "SAT", hold: true, on: (d) => d.satThrow(true), off: (d) => d.satThrow(false), enabled: (d) => d.canSatThrow, active: (d) => d.satThrowing, hint: "Saturation slam — add a Saturator to the rack to use" },
   { label: "HPF", hold: true, on: (d) => d.filterThrow(0.78, true), off: (d) => d.filterThrow(0.78, false), active: (d) => d.filterValue > 0, hint: "High-pass sweep while held" },
   { label: "REV", hold: true, on: (d) => d.setReverse(true), off: (d) => d.setReverse(false), active: (d) => d.reversing, hint: "Reverse while held" },
   { label: "CENS", hold: true, on: (d) => d.censorBegin(), off: (d) => d.censorEnd(), active: (d) => d.reversing, hint: "Censor — reverse, slip-return on release" },

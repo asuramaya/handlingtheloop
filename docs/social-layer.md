@@ -416,6 +416,15 @@ Critical path: **A → D → E**. B/C can run parallel to D once A lands.
 >   (presence was the real cost) for new audio-quality risk.
 >
 > ### D2 — Relay tier (the thousands-scale lift; build only on real demand)
+> **MEASURED 2026-06-19 (scripts/loadtest-room.mjs — a real harness: dev-auth host goes public +
+> emits timestamped ticks, N synthetic pub-listeners measure admit/latency/count).** The single
+> DjRoom holds up FAR better than the pessimistic "~hundreds": N=200 → full delivery, fan-out
+> p50 8ms / p95 24ms, count accurate; N=500 (the MAX_LISTENERS cap) → still full + accurate but
+> the TAIL degrades (p50 17ms / **p95 ~910ms / max ~2.1s**) as the single-thread O(N) send loop
+> serializes ~2500 sends/s. **Conclusion: one DO is fine to ~500 (the cap is at the knee); the
+> relay tier is genuinely only needed for >500 (thousands).** The harness is now the validation
+> rig — build the relay against it (push past 500 across R shards, watch the p95) the moment a
+> room demands it. Not before.
 > One DjRoom is single-threaded → O(N) sends/message caps it ~hundreds. To shard:
 > - **New `RelayRoom` DO.** Holds a SHARD of listener WebSockets. Receives digest pushes
 >   from the master and fans out to its shard. Read-only (no writer messages).

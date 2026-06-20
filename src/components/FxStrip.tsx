@@ -9,6 +9,7 @@ import { SatPanel } from "./SatPanel";
 import { CrushPanel } from "./CrushPanel";
 import { ModPanel } from "./ModPanel";
 import { GatePanel } from "./GatePanel";
+import { NoisePanel } from "./NoisePanel";
 import { PromptModal } from "./Dialog";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
@@ -18,7 +19,7 @@ import { PromptModal } from "./Dialog";
 // instance (only one EQ); its params ride the eq* ControlParams while presence/order ride
 // the fxRack intent. One device's surface shows at a time.
 
-const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE" };
+const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE" };
 // Effects the palette can add (label shown in the + menu). EQ is only offered when absent
 // (single instance); others can stack.
 const ADDABLE: { kind: FxKind; label: string }[] = [
@@ -29,6 +30,7 @@ const ADDABLE: { kind: FxKind; label: string }[] = [
   { kind: "crush", label: "Bitcrusher" },
   { kind: "mod", label: "Modulation" },
   { kind: "gate", label: "Gate" },
+  { kind: "noise", label: "Noise" },
 ];
 
 interface FxStripProps {
@@ -239,6 +241,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           <ModPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
         ) : selDev.kind === "gate" ? (
           <GatePanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+        ) : selDev.kind === "noise" ? (
+          <NoisePanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
         ) : (
           <div className="fx-panel fx-unknown">This effect isn’t available in this build.</div>
         )}

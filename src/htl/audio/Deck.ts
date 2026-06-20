@@ -88,6 +88,7 @@ import { SaturatorFx } from "./SaturatorFx";
 import { CrushFx } from "./CrushFx";
 import { ModFx } from "./ModFx";
 import { GateFx } from "./GateFx";
+import { NoiseFx } from "./NoiseFx";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -1711,7 +1712,7 @@ export class Deck {
   // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate"]);
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise"]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1729,6 +1730,8 @@ export class Deck {
         return new ModFx(this.ctx);
       case "gate":
         return new GateFx(this.ctx);
+      case "noise":
+        return new NoiseFx(this.ctx);
       default:
         return null;
     }
@@ -1864,6 +1867,17 @@ export class Deck {
   }
   get gateThrowing(): boolean {
     return (this.rack.deviceAt(this.rack.indexOf("gate")) as GateFx | undefined)?.throwing ?? false;
+  }
+  // NOISE THROW — engage the rack's noise riser while held (RISE mode auto-builds, else a manual
+  // gate at the current sweep); release cuts it (the drop). No-op without a noise device.
+  noiseThrow(on: boolean): void {
+    (this.rack.deviceAt(this.rack.indexOf("noise")) as NoiseFx | undefined)?.setThrow(on);
+  }
+  get canNoiseThrow(): boolean {
+    return this.rack.indexOf("noise") >= 0;
+  }
+  get noiseThrowing(): boolean {
+    return (this.rack.deviceAt(this.rack.indexOf("noise")) as NoiseFx | undefined)?.throwing ?? false;
   }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if

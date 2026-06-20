@@ -25,6 +25,7 @@ import {
   ensureSetsTable,
   getSet,
   setsByHost,
+  userById,
   setSetStatus,
   setSetTitle,
   deleteConnection,
@@ -274,7 +275,9 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!obj) return json(404, { error: "log unavailable" });
       return new Response(await obj.text(), { headers: { "content-type": "application/json" } });
     }
-    return json(200, { set: setCard(row) });
+    // Carry the host's @handle so a shared /set/:id link can open their public profile (G4).
+    const host = await userById(env.DB, row.hostId);
+    return json(200, { set: { ...setCard(row), handle: host?.handle ?? null, displayName: host?.display_name ?? null } });
   }
 
   switch (path) {

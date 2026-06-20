@@ -66,7 +66,23 @@ export function ProfilePublicView({
         )}
         <div className="profile-id-text">
           <div className="profile-name">{name}</div>
-          {handle && <span className="profile-handle">@{handle}</span>}
+          {handle && (
+            <span className="profile-handle">
+              @{handle}
+              <button
+                className="profile-share-btn"
+                title="Copy share link"
+                onClick={() => {
+                  const url = `${location.origin}/@${handle}`;
+                  const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
+                  if (nav.share) void nav.share({ url }).catch(() => {});
+                  else void navigator.clipboard?.writeText(url).catch(() => {});
+                }}
+              >
+                ⤴
+              </button>
+            </span>
+          )}
           {bio && <div className="profile-bio">{bio}</div>}
           {memberSince != null && <div className="profile-since">Member since {formatDate(memberSince)}</div>}
         </div>

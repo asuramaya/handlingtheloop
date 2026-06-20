@@ -15,7 +15,7 @@ import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
-import { type Me, fetchMe, logPlay } from "@htl/account";
+import { type Me, fetchMe, fetchSet, logPlay } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
@@ -397,6 +397,23 @@ export function App() {
     const onPop = () => setPublicHandle(handleFromPath());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  // G4: a shared /set/:id link → resolve to the owner's @handle profile (where the set lists),
+  // canonicalizing the URL. The rich preview already came from the server-injected OG card.
+  useEffect(() => {
+    const m = location.pathname.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
+    if (!m) return;
+    let alive = true;
+    void fetchSet(m[1])
+      .then((s) => {
+        if (!alive) return;
+        history.replaceState(null, "", s?.handle ? `/@${s.handle}` : "/");
+        if (s?.handle) setPublicHandle(s.handle);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, []);
   useEffect(() => {
     // Opening the public profile closes the own-account docks…

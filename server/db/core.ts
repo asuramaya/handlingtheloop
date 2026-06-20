@@ -118,3 +118,12 @@ export async function userBySession(db: D1Database, sessionId: string): Promise<
 export async function deleteSession(db: D1Database, sessionId: string): Promise<void> {
   await db.prepare("DELETE FROM sessions WHERE id = ?").bind(sessionId).run();
 }
+
+/** A user by id — public identity fields (for resolving a set's host → @handle, G4). */
+export async function userById(db: D1Database, id: string): Promise<User | null> {
+  const row = await db
+    .prepare("SELECT id, google_sub, email, name, avatar, created_at, handle, display_name, avatar_url, bio FROM users WHERE id = ?")
+    .bind(id)
+    .first<User>();
+  return row ?? null;
+}

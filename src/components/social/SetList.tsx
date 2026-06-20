@@ -25,6 +25,9 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
                   {fmtTime(Math.round(s.duration / 1000))} · {s.tracks} track{s.tracks === 1 ? "" : "s"} · {expanded ? "▾" : "▸"}
                 </span>
               </button>
+              <button className="set-share-btn" title="Copy share link" onClick={() => shareSet(s.id)}>
+                ⤴
+              </button>
               {onPlay && (
                 <button className="set-play-btn" title="Replay this set" onClick={() => onPlay(s.id)}>
                   ▶
@@ -58,4 +61,13 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
 function setLabel(s: SetCard): string {
   const at = s.publishedAt ?? s.createdAt;
   return `Set · ${new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+// Copy a shareable /set/:id link (G4 — it unfurls with an OG card off the worker). Falls back to
+// the native share sheet on mobile.
+function shareSet(id: string): void {
+  const url = `${location.origin}/set/${id}`;
+  const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
+  if (nav.share) void nav.share({ url }).catch(() => {});
+  else void navigator.clipboard?.writeText(url).catch(() => {});
 }

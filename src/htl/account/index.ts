@@ -267,6 +267,13 @@ export async function fetchMySets(signal?: AbortSignal): Promise<SetCard[]> {
   return ((await res.json()) as { sets: SetCard[] }).sets;
 }
 
+/** One set by id (card + host handle) — for resolving a shared /set/:id link (G4). */
+export async function fetchSet(id: string, signal?: AbortSignal): Promise<SetCard | null> {
+  const res = await fetch(`/api/sets/${encodeURIComponent(id)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return null;
+  return ((await res.json()) as { set: SetCard }).set ?? null;
+}
+
 /** The published-sets directory for Discover (newest first, with host identity). Public. */
 export async function fetchDiscoverSets(signal?: AbortSignal): Promise<SetCard[]> {
   const res = await fetch("/api/sets/discover", { signal, credentials: "same-origin" });

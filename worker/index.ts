@@ -33,6 +33,8 @@ import {
   inviteOwner,
   ensureIdentityColumns,
   userByHandle,
+  ensureSetsTable,
+  getSet,
   getCachedCaptions,
   putCachedCaptions,
   getLyrics,
@@ -943,6 +945,54 @@ function hashStr(s: string): number {
   return h >>> 0;
 }
 
+// G4 — shareable links unfurl: build OpenGraph/Twitter meta for /@handle + /set/:id so a pasted
+// link shows a rich card (title + cover + description) on social/chat, then escapes htl. The SPA
+// is otherwise meta-blind (one static index.html); we inject these tags server-side per URL.
+function ogEsc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function ogBlock(o: { title: string; desc: string; img: string; url: string; large: boolean }): string {
+  const tags = [
+    `<meta property="og:title" content="${ogEsc(o.title)}">`,
+    `<meta property="og:description" content="${ogEsc(o.desc)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="Handling The Loop">`,
+    `<meta property="og:url" content="${ogEsc(o.url)}">`,
+    `<meta name="twitter:card" content="${o.large && o.img ? "summary_large_image" : "summary"}">`,
+    `<meta name="twitter:title" content="${ogEsc(o.title)}">`,
+    `<meta name="twitter:description" content="${ogEsc(o.desc)}">`,
+    `<meta name="description" content="${ogEsc(o.desc)}">`,
+  ];
+  if (o.img) {
+    tags.push(`<meta property="og:image" content="${ogEsc(o.img)}">`);
+    tags.push(`<meta name="twitter:image" content="${ogEsc(o.img)}">`);
+  }
+  return tags.join("\n");
+}
+async function ogMetaFor(url: URL, env: Env): Promise<string | null> {
+  if (!env.DB) return null;
+  const path = decodeURIComponent(url.pathname); // some hosts encode /@h as /%40h
+  const handleM = path.match(/^\/@([A-Za-z0-9_]{1,20})$/);
+  if (handleM) {
+    await ensureIdentityColumns(env.DB);
+    const u = await userByHandle(env.DB, foldHandle(handleM[1]));
+    if (!u || !u.handle) return null;
+    const name = u.display_name || `@${u.handle}`;
+    return ogBlock({ title: name, desc: u.bio || `${name} on Handling The Loop`, img: u.avatar_url || "", url: `${url.origin}/@${u.handle}`, large: false });
+  }
+  const setM = path.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
+  if (setM) {
+    await ensureSetsTable(env.DB);
+    const s = await getSet(env.DB, setM[1]);
+    if (!s || s.status !== "published") return null;
+    const mins = Math.max(1, Math.round(s.duration / 60000));
+    const desc = `${s.tracks} track${s.tracks === 1 ? "" : "s"} · ~${mins} min — replay it on Handling The Loop`;
+    const img = s.coverVideo ? `https://i.ytimg.com/vi/${s.coverVideo}/mqdefault.jpg` : "";
+    return ogBlock({ title: s.title || "A DJ set", desc, img, url: `${url.origin}/set/${s.id}`, large: true });
+  }
+  return null;
+}
+
 // The DjRoom Durable Object must be exported from the Worker entry so the runtime
 // can find the class named in wrangler.jsonc's durable_objects binding.
 export { DjRoom } from "../server/room";
@@ -967,6 +1017,12 @@ export default {
     // CSP's script-src has no 'unsafe-inline', so an injected <script> can't run —
     // turning any residual HTML-injection from account-takeover into a no-op.
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+    // G4: inject OpenGraph meta into the SPA shell for shareable /@handle + /set/:id links.
+    let body: BodyInit | null = res.body;
+    if ((res.headers.get("content-type") || "").includes("text/html")) {
+      const meta = await ogMetaFor(url, env).catch(() => null);
+      if (meta) body = (await res.text()).replace("</head>", `${meta}\n</head>`);
+    }
+    return new Response(body, { status: res.status, statusText: res.statusText, headers });
   },
 };

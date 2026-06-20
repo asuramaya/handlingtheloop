@@ -799,6 +799,36 @@ span.profile-handle:hover {
 .set-row:hover {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
+.set-share-btn {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.set-share-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.profile-share-btn {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.profile-share-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .set-play-btn {
   flex: none;
   width: 30px;

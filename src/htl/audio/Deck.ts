@@ -84,6 +84,7 @@ import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
 import { FxRack, type FxDevice, type FxKind, type FxSlot } from "./Fx";
 import { DelayFx } from "./DelayFx";
 import { ReverbFx } from "./ReverbFx";
+import { SaturatorFx } from "./SaturatorFx";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -1707,7 +1708,7 @@ export class Deck {
   // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb"]);
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator"]);
   private makeFx(kind: string): FxDevice | null {
     switch (kind) {
       case "eq":
@@ -1716,6 +1717,8 @@ export class Deck {
         return new DelayFx(this.ctx);
       case "reverb":
         return new ReverbFx(this.ctx);
+      case "saturator":
+        return new SaturatorFx(this.ctx);
       // chorus lands here as it's built
       default:
         return null;

@@ -5,6 +5,7 @@ import type { Intent } from "@htl/room";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
+import { SatPanel } from "./SatPanel";
 import { PromptModal } from "./Dialog";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
@@ -14,13 +15,14 @@ import { PromptModal } from "./Dialog";
 // instance (only one EQ); its params ride the eq* ControlParams while presence/order ride
 // the fxRack intent. One device's surface shows at a time.
 
-const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS" };
+const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT" };
 // Effects the palette can add (label shown in the + menu). EQ is only offered when absent
 // (single instance); others can stack.
 const ADDABLE: { kind: FxKind; label: string }[] = [
   { kind: "eq", label: "EQ" },
   { kind: "delay", label: "Delay" },
   { kind: "reverb", label: "Reverb" },
+  { kind: "saturator", label: "Saturator" },
 ];
 
 interface FxStripProps {
@@ -222,6 +224,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           <DelayPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
         ) : selDev.kind === "reverb" ? (
           <ReverbPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+        ) : selDev.kind === "saturator" ? (
+          <SatPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
         ) : (
           <div className="fx-panel fx-unknown">This effect isn’t available in this build.</div>
         )}

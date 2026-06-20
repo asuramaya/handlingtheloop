@@ -1744,3 +1744,53 @@ button.room-tog:hover {
   }
 }
 
+
+/* ── Saturator (Phase-1 panel; the SatViz WYSIWYG replaces the body in Phase 2) ───────── */
+.sat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+.sat-styles {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.sat-styles button {
+  flex: 1;
+  min-width: 44px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 5px 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+.sat-styles button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.sat-styles button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  color: #fff;
+}
+.sat-styles .sat-punish.active {
+  border-color: #ff6a3d;
+  background: color-mix(in srgb, #ff6a3d 24%, var(--panel));
+  color: #fff;
+}
+.sat-bands,
+.sat-shared {
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+.sat-bands .vcell,
+.sat-shared .vcell {
+  flex: 1;
+}

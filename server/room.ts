@@ -32,6 +32,36 @@ import { Reactions, Requests, Chat } from "./roomCrowd";
 // own; this file is the stateful plumbing around it. WebSocketPair is a runtime global.
 declare const WebSocketPair: { new (): { 0: Ws; 1: Ws } };
 
+// D2: the RelayRoom namespace + shard count the master needs to fan out the crowd to shards.
+interface RelayStub {
+  fetch(req: Request | string, init?: RequestInit): Promise<Response>;
+}
+interface RelayNs {
+  idFromName(name: string): { readonly name?: string };
+  get(id: { readonly name?: string }): RelayStub;
+}
+interface RoomEnv {
+  RELAY?: RelayNs;
+  RELAY_SHARDS?: string | number;
+}
+// Map a crowd frame to its catch-up cache key (so a late joiner on a relay rebuilds `now`).
+function cacheKindOf(msg: ServerMsg): "welcome" | "state" | "automix" | "stemview" | "lyrics" | "live" {
+  switch (msg.t) {
+    case "welcome":
+      return "welcome";
+    case "state":
+      return "state";
+    case "automix":
+      return "automix";
+    case "stemview":
+      return "stemview";
+    case "lyrics":
+      return "lyrics";
+    default:
+      return "live";
+  }
+}
+
 export class DjRoom {
   private state: DurableObjectState;
   private anchorId: string | null = null;
@@ -98,8 +128,20 @@ export class DjRoom {
   private muted = new Set<string>();
   private banned = new Set<string>();
 
-  constructor(state: DurableObjectState) {
+  // D2 relay tier (off unless RELAY_SHARDS>0). When on, the crowd lives on R RelayRoom shards;
+  // the master pushes each crowd frame to them (O(R)) + aggregates their counts. See relayRoom.ts.
+  private readonly relayShards: number;
+  private readonly relayNs?: RelayNs;
+  private roomHostId = ""; // this room's host account id (Worker passes ?rid=) — to address relays
+  private relayCounts = new Map<number, number>(); // shard idx → listener count (aggregate = the crowd)
+
+  constructor(state: DurableObjectState, env?: RoomEnv) {
     this.state = state;
+    this.relayShards = Math.max(0, Math.min(64, Number(env?.RELAY_SHARDS) || 0));
+    this.relayNs = env?.RELAY;
+  }
+  private get relayOn(): boolean {
+    return this.relayShards > 0 && !!this.relayNs;
   }
 
   // The anchor assignment is the only durable bit — load it lazily.
@@ -167,12 +209,22 @@ export class DjRoom {
   }
 
   async fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    // D2: a relay shard reporting its listener count (DO-to-DO). Aggregate → refresh presence.
+    if (url.pathname === "/internal/relay-count") {
+      const idx = Number(url.searchParams.get("idx")) || 0;
+      const count = Math.max(0, Number(url.searchParams.get("count")) || 0);
+      this.relayCounts.set(idx, count);
+      await this.load();
+      this.broadcastPresence();
+      return new Response(null, { status: 204 });
+    }
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
     await this.load();
 
-    const url = new URL(req.url);
+    if (url.searchParams.get("rid")) this.roomHostId = url.searchParams.get("rid")!.slice(0, 64); // host account id → address relays
     const device = (url.searchParams.get("device") || "").slice(0, 64) || `anon-${this.seq++}`;
     const name = (url.searchParams.get("name") || "Guest").slice(0, 48);
     const kind = (url.searchParams.get("kind") || "Device").slice(0, 24);
@@ -955,6 +1007,12 @@ export class DjRoom {
   // Count of distinct anonymous read-only (public) listeners — the crowd surfaced as
   // a number, never an individual roster entry (privacy + fan-out cost at scale).
   private listenerCount(): number {
+    // D2: with the relay tier on, the crowd lives on the shards — sum their reported counts.
+    if (this.relayOn) {
+      let total = 0;
+      for (const c of this.relayCounts.values()) total += c;
+      return total;
+    }
     const seen = new Set<string>();
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
@@ -1037,11 +1095,24 @@ export class DjRoom {
   // Relay to everyone except the sender. `skipListeners` omits the anonymous read-only
   // (public) crowd — used for gestural messages they can't reconstruct (see the jog case).
   private relay(from: string, msg: ServerMsg, skipListeners = false): void {
+    if (!skipListeners) this.pushToRelays(msg); // D2: the crowd's copy goes to the shards
     this.sendTo((a) => (a?.device ?? null) !== from && !(skipListeners && a?.pub), msg);
   }
 
   // Send ONLY to the anonymous read-only (public) listener crowd. The digest path uses this.
+  // D2: push ONE crowd frame to every relay shard (O(R)); each shard fans out to its slice
+  // (O(N/R)). Fire-and-forget — a slow/dead relay never stalls the master's tick loop. No-op
+  // when the relay tier is off (the local sendTo paths handle the crowd then).
+  private pushToRelays(msg: ServerMsg, cacheOnly = false): void {
+    if (!this.relayOn || !this.roomHostId) return;
+    const body = JSON.stringify({ frame: msg, cache: cacheKindOf(msg), cacheOnly, hostId: this.roomHostId });
+    for (let i = 0; i < this.relayShards; i++) {
+      const stub = this.relayNs!.get(this.relayNs!.idFromName(`relay:${this.roomHostId}:${i}`));
+      void stub.fetch("https://relay/push", { method: "POST", body }).catch(() => {});
+    }
+  }
   private relayToListeners(msg: ServerMsg): void {
+    this.pushToRelays(msg); // D2: crowd is sharded → relays (no-op when off)
     this.sendTo((a) => !!a?.pub, msg);
   }
 
@@ -1111,7 +1182,8 @@ export class DjRoom {
   private flushPresence(): void {
     // Participants get the full roster (+ pending hand-raises); the crowd gets the count-only
     // lite frame (the big roster never fans to hundreds). Both shapes live in presenceFor.
-    const { full, lite } = presenceFor(this.roomView());
+    const view = this.roomView();
+    const { full, lite } = presenceFor(view);
     const fullJson = JSON.stringify(full);
     const liteJson = JSON.stringify(lite);
     for (const ws of this.state.getWebSockets()) {
@@ -1121,6 +1193,12 @@ export class DjRoom {
       } catch {
         /* socket gone — ignore */
       }
+    }
+    // D2: the crowd lives on the shards → push their presence + refresh the cached crowd-welcome
+    // a fresh listener catches up from.
+    if (this.relayOn) {
+      this.pushToRelays(lite); // fan the count to the crowd
+      this.pushToRelays(welcomeFor("", view, true, this.songRequests.list), true); // refresh catch-up cache ONLY
     }
   }
 }

@@ -140,6 +140,8 @@ interface Env extends AccountEnv {
   // One DjRoom per account coordinates a shared live set across the account's
   // devices. Optional so plain `vite` dev (no binding) degrades gracefully.
   ROOM?: DurableObjectNamespace;
+  RELAY?: DurableObjectNamespace; // D2: RelayRoom crowd shards (only used when RELAY_SHARDS>0)
+  RELAY_SHARDS?: string; // number of relay shards per room (0/unset = relay tier OFF)
   // Cloudflare Workers Rate Limiting bindings (wrangler.jsonc unsafe.bindings).
   // Per-IP caps on the unauthenticated write/resolve paths. Optional → absent in
   // plain `vite` dev, where `allow()` no-ops. RL_WRITE: catalog/analysis/stem
@@ -913,13 +915,38 @@ async function handleRoom(req: Request, env: Env): Promise<Response> {
   url.searchParams.delete("pub");
   if (isHost) url.searchParams.set("host", "1");
   if (asPublic) url.searchParams.set("pub", "1");
+
+  // D2 relay tier: when RELAY_SHARDS>0, an anonymous pub-listener is sharded onto one of R
+  // RelayRoom DOs (by hash(device)) instead of piling onto the master — the master pushes the
+  // crowd frames to the shards. Participants always hit the master. Off (0) = the live path.
+  const shards = Math.max(0, Math.min(64, Number(env.RELAY_SHARDS) || 0));
+  if (asPublic && shards > 0 && env.RELAY) {
+    const device = url.searchParams.get("device") || "";
+    const idx = hashStr(device) % shards;
+    url.searchParams.set("host_id", hostId);
+    url.searchParams.set("idx", String(idx));
+    const relay = env.RELAY.get(env.RELAY.idFromName(`relay:${hostId}:${idx}`));
+    return relay.fetch(new Request(url.toString(), req));
+  }
+  url.searchParams.set("rid", hostId); // master needs its host id to address the relays
   const stub = env.ROOM.get(env.ROOM.idFromName(`home:${hostId}`));
   return stub.fetch(new Request(url.toString(), req));
+}
+
+// Stable non-crypto hash for sharding a device id across relays (FNV-1a).
+function hashStr(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
 
 // The DjRoom Durable Object must be exported from the Worker entry so the runtime
 // can find the class named in wrangler.jsonc's durable_objects binding.
 export { DjRoom } from "../server/room";
+export { RelayRoom } from "../server/relayRoom"; // D2 crowd shards (dormant unless RELAY_SHARDS>0)
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

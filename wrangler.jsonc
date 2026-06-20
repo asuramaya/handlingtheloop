@@ -26,10 +26,18 @@
   // Shared DJ session ("rooms"): one DjRoom Durable Object per account coordinates
   // a live set across the account's devices. SQLite-backed (runs locally under
   // `wrangler dev`). See server/room.ts and docs/shared-session.md.
+  // RelayRoom (D2) shards the anonymous broadcast crowd past the single-DO ~500 ceiling; dormant
+  // unless RELAY_SHARDS>0 (set in vars/.dev.vars). See server/relayRoom.ts.
   "durable_objects": {
-    "bindings": [{ "name": "ROOM", "class_name": "DjRoom" }]
+    "bindings": [
+      { "name": "ROOM", "class_name": "DjRoom" },
+      { "name": "RELAY", "class_name": "RelayRoom" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DjRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DjRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["RelayRoom"] }
+  ],
   "routes": [
     { "pattern": "handlingtheloop.com", "custom_domain": true },
     { "pattern": "www.handlingtheloop.com", "custom_domain": true }

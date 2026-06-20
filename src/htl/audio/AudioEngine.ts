@@ -4,6 +4,7 @@ import { Sampler } from "./Sampler";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 import { REVERB_WORKLET_SRC } from "./reverbWorklet";
+import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
@@ -162,6 +163,7 @@ export class AudioEngine {
         }
       }
       await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
+      await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
     } finally {
       this.ensuring = false;
     }

@@ -9,11 +9,15 @@ export async function ensureSetsTable(db: D1Database): Promise<void> {
   if (setsReady) return;
   await db
     .prepare(
-      "CREATE TABLE IF NOT EXISTS sets (id TEXT PRIMARY KEY, host_id TEXT NOT NULL, title TEXT, genre TEXT, status TEXT NOT NULL DEFAULT 'draft', duration INTEGER NOT NULL DEFAULT 0, tracks INTEGER NOT NULL DEFAULT 0, tracklist TEXT, cover_video TEXT, engine_ver INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, published_at INTEGER)",
+      "CREATE TABLE IF NOT EXISTS sets (id TEXT PRIMARY KEY, host_id TEXT NOT NULL, title TEXT, genre TEXT, status TEXT NOT NULL DEFAULT 'draft', duration INTEGER NOT NULL DEFAULT 0, tracks INTEGER NOT NULL DEFAULT 0, tracklist TEXT, cover_video TEXT, engine_ver INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, published_at INTEGER, trim_start INTEGER, trim_end INTEGER)",
     )
     .run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_sets_host ON sets(host_id, created_at)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_sets_pub ON sets(status, published_at)").run();
+  // Older tables (pre-0017) — add the trim columns if missing (idempotent, ignore "duplicate").
+  for (const col of ["trim_start", "trim_end"]) {
+    await db.prepare(`ALTER TABLE sets ADD COLUMN ${col} INTEGER`).run().catch(() => {});
+  }
   setsReady = true;
 }
 
@@ -75,10 +79,12 @@ export interface SetRow {
   bytes: number;
   createdAt: number;
   publishedAt: number | null;
+  trimStart: number | null; // ms — performance in-point (null = start of recording)
+  trimEnd: number | null; // ms — performance out-point (null = end of recording)
 }
 
 const SELECT =
-  "SELECT id, host_id AS hostId, title, genre, status, duration, tracks, tracklist, cover_video AS coverVideo, engine_ver AS engineVer, bytes, created_at AS createdAt, published_at AS publishedAt FROM sets";
+  "SELECT id, host_id AS hostId, title, genre, status, duration, tracks, tracklist, cover_video AS coverVideo, engine_ver AS engineVer, bytes, created_at AS createdAt, published_at AS publishedAt, trim_start AS trimStart, trim_end AS trimEnd FROM sets";
 
 export async function getSet(db: D1Database, id: string): Promise<SetRow | null> {
   return db.prepare(`${SELECT} WHERE id = ?`).bind(id).first<SetRow>();
@@ -109,7 +115,7 @@ export async function discoverSets(db: D1Database, limit = 60): Promise<Discover
     .prepare(
       `SELECT s.id, s.host_id AS hostId, s.title, s.genre, s.status, s.duration, s.tracks, s.tracklist,
               s.cover_video AS coverVideo, s.engine_ver AS engineVer, s.bytes, s.created_at AS createdAt,
-              s.published_at AS publishedAt,
+              s.published_at AS publishedAt, s.trim_start AS trimStart, s.trim_end AS trimEnd,
               u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
        FROM sets s JOIN users u ON u.id = s.host_id
        WHERE s.status = 'published' AND u.handle IS NOT NULL
@@ -133,6 +139,11 @@ export async function setSetStatus(db: D1Database, id: string, hostId: string, s
 /** Rename a set (G1b). Owner-scoped; empty/null title → falls back to a default label. */
 export async function setSetTitle(db: D1Database, id: string, hostId: string, title: string | null): Promise<void> {
   await db.prepare("UPDATE sets SET title = ? WHERE id = ? AND host_id = ?").bind(title, id, hostId).run();
+}
+
+/** Trim a set's performance in/out (ms; null clears). Owner-scoped (the host curates the tape). */
+export async function setSetTrim(db: D1Database, id: string, hostId: string, start: number | null, end: number | null): Promise<void> {
+  await db.prepare("UPDATE sets SET trim_start = ?, trim_end = ? WHERE id = ? AND host_id = ?").bind(start, end, id, hostId).run();
 }
 
 /** Discard a set (G1b). Owner-scoped; the caller deletes the R2 log alongside. */

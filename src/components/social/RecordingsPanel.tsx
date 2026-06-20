@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { type SetCard, discardSet, fetchMySets, publishSet, renameSet, unpublishSet } from "@htl/account";
 import { fmtTime } from "../../util/format";
+import { trimRange } from "./SetList";
 
 // G1b — the host's Recordings: the post-set lifecycle home. Capture-by-default drops a
 // private DRAFT whenever a broadcast ends (G1a); here the host curates it — Publish (→ their
@@ -12,11 +13,13 @@ export function RecordingsPanel({
   heading = "🔴 Recordings",
   defaultOpen = false,
   onPlay,
+  onTrim,
 }: {
   setsRev?: number;
   heading?: string;
   defaultOpen?: boolean;
-  onPlay?: (id: string) => void; // G1c: replay this set on the decks
+  onPlay?: (id: string, range?: { start: number; end: number }) => void; // G1c: replay (curated range)
+  onTrim?: (s: SetCard) => void; // trim the performance in/out before publishing
 }) {
   const [sets, setSets] = useState<SetCard[] | null>(null);
   const [open, setOpen] = useState(defaultOpen);
@@ -104,8 +107,13 @@ export function RecordingsPanel({
               </div>
               <div className="rec-acts">
                 {onPlay && (
-                  <button className="rec-play" title="Replay this set on the decks" onClick={() => onPlay(s.id)}>
+                  <button className="rec-play" title="Replay this set on the decks" onClick={() => onPlay(s.id, trimRange(s))}>
                     ▶
+                  </button>
+                )}
+                {onTrim && (
+                  <button className="rec-trim" title="Trim the performance in/out" onClick={() => onTrim(s)}>
+                    ✂
                   </button>
                 )}
                 {s.status === "draft" ? (

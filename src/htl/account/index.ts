@@ -240,6 +240,8 @@ export interface SetCard {
   engineVer: number;
   createdAt: number;
   publishedAt: number | null;
+  trimStart?: number | null; // ms — curated performance in-point (null = recording start)
+  trimEnd?: number | null; // ms — curated performance out-point (null = recording end)
 }
 
 /** HOST: persist a just-captured broadcast recipe as a private draft (capture-by-default,
@@ -304,6 +306,8 @@ export const publishSet = (id: string) => setAction(id, "publish");
 export const unpublishSet = (id: string) => setAction(id, "unpublish");
 /** Rename a set (empty → a default "Set · date" label). */
 export const renameSet = (id: string, title: string) => setAction(id, "rename", { title });
+/** Trim the set's performance in/out (ms; pass nulls to clear). The curated range is what plays. */
+export const trimSet = (id: string, start: number | null, end: number | null) => setAction(id, "trim", { start, end });
 /** Discard a set — deletes the row + the R2 recipe blob. */
 export async function discardSet(id: string): Promise<boolean> {
   const res = await fetch(`/api/sets/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "same-origin" });

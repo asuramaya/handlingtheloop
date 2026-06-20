@@ -32,12 +32,14 @@ export function ProfileScreen({
   listeners,
   onGoToSession,
   onPlaySet,
+  onTrimSet,
 }: {
   onClose: () => void;
   live?: boolean; // you're broadcasting a public lobby right now (B3 own-live badge)
   listeners?: number;
   onGoToSession?: () => void; // tapping the live badge opens the Session dock
-  onPlaySet?: (id: string) => void; // G1c: replay one of your recorded sets on the decks
+  onPlaySet?: (id: string, range?: { start: number; end: number }) => void; // G1c: replay (curated range)
+  onTrimSet?: (s: { id: string; trimStart?: number | null; trimEnd?: number | null; duration: number }) => void; // trim in/out
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -138,7 +140,7 @@ export function ProfileScreen({
             {/* Your sets (G1b) — your recorded sets, drafts + published; the persistent twin
                 of your live status. The "person" axis home for recordings (the Session shows
                 only a just-recorded prompt). Self-hides until your first set. */}
-            {user?.handle && <RecordingsPanel heading="Your sets" defaultOpen onPlay={onPlaySet} />}
+            {user?.handle && <RecordingsPanel heading="Your sets" defaultOpen onPlay={onPlaySet} onTrim={onTrimSet} />}
 
             {/* ACCOUNT — demoted, collapsible footer: the rare set-and-forget plumbing
                 (connections / email / sign-out), kept off the public hero. */}

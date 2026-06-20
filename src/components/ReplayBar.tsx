@@ -1,31 +1,31 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReplayState } from "../htl/replay/useSetReplay";
 import { fmtTime } from "../util/format";
 
-// G1c — the recorded-set replay transport. A slim bar that appears while a set is replaying
-// (the decks are being driven by the recipe). Play/pause, a seekable progress bar, and stop
-// (which releases the decks). A D5 engine-version mismatch warns that the rebuild may differ.
-// G3 — mark a clip [in,out] and copy a shareable /set/:id?t= link to that moment.
-const CLIP_LEN_MS = 30_000; // a "moment" = the ~30s leading up to where you tapped
+// When the owner replays their own draft, App passes a TrimEdit so they can curate the
+// performance in/out before publishing (cut the dead air at the head/tail).
+export interface TrimEdit {
+  setId: string;
+  start: number; // ms — seed in-point (existing trim or 0)
+  end: number; // ms — seed out-point (existing trim or duration)
+  onSave: (start: number, end: number) => void;
+  onClear: () => void;
+}
 
-export function ReplayBar({ replay }: { replay: ReplayState }) {
-  const [shared, setShared] = useState(false);
+// G1c — the recorded-set replay transport: play/pause, a seekable progress bar, stop. TRIM mode
+// (owner only) adds [Set start]/[Set end] (to the playhead) + Save, and shades the kept range —
+// the curated [in,out] is what everyone then replays.
+export function ReplayBar({ replay, trim }: { replay: ReplayState; trim?: TrimEdit | null }) {
+  const [tin, setTin] = useState(0);
+  const [tout, setTout] = useState(0);
+  useEffect(() => {
+    if (trim) {
+      setTin(trim.start);
+      setTout(trim.end || replay.duration);
+    }
+  }, [trim?.setId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!replay.active) return null;
   const pct = replay.duration > 0 ? (replay.position / replay.duration) * 100 : 0;
-
-  // One tap = share the moment: the 30s ending at the playhead (the "share THAT drop" gesture).
-  const clip = () => {
-    if (!replay.setId) return;
-    const b = Math.round(replay.position / 1000);
-    const a = Math.max(0, b - CLIP_LEN_MS / 1000);
-    if (b <= a) return;
-    const url = `${location.origin}/set/${replay.setId}?t=${a}-${b}`;
-    const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
-    if (nav.share) void nav.share({ url }).catch(() => {});
-    else void navigator.clipboard?.writeText(url).catch(() => {});
-    setShared(true);
-    setTimeout(() => setShared(false), 1600);
-  };
 
   const onScrub = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -33,21 +33,32 @@ export function ReplayBar({ replay }: { replay: ReplayState }) {
     replay.seek(f * replay.duration);
   };
 
+  const dur = replay.duration || 1;
+  const trimmed = trim && (tin > 0 || tout < replay.duration);
+
   return (
     <div className="replay-bar">
       <div className="replay-row">
-        <span className="replay-tag">▶ Replaying a set</span>
+        <span className="replay-tag">{trim ? "✂ Trim your set" : "▶ Replaying a set"}</span>
         {replay.engineStale && (
           <span className="replay-stale" title="This set was recorded on a different engine version — the rebuild may differ.">
             ⚠ different version
           </span>
         )}
-        <button className="replay-clip" onClick={clip} title="Share this moment (the last 30s) as a clip link">
-          {shared ? "link copied ✓" : "⤴ Clip moment"}
-        </button>
-        <button className="replay-stop" onClick={replay.stop} title="Stop replay (release the decks)">
-          ✕
-        </button>
+        {trim ? (
+          <>
+            <button className="replay-trim-save" disabled={tout <= tin} onClick={() => trim.onSave(Math.round(tin), Math.round(tout))} title="Save the trimmed performance">
+              Save {fmtTime(Math.round((tout - tin) / 1000))}
+            </button>
+            <button className="replay-stop" onClick={trim.onClear} title="Cancel trimming">
+              ✕
+            </button>
+          </>
+        ) : (
+          <button className="replay-stop" onClick={replay.stop} title="Stop replay (release the decks)">
+            ✕
+          </button>
+        )}
       </div>
       <div className="replay-controls">
         <button className="replay-toggle" onClick={replay.toggle} disabled={replay.loading} aria-label={replay.playing ? "Pause" : "Play"}>
@@ -55,10 +66,22 @@ export function ReplayBar({ replay }: { replay: ReplayState }) {
         </button>
         <span className="replay-time">{fmtTime(Math.round(replay.position / 1000))}</span>
         <div className="replay-track" onClick={onScrub} role="slider" aria-label="Seek" aria-valuenow={Math.round(pct)}>
+          {trimmed && <div className="replay-trim-shade" style={{ left: `${(tin / dur) * 100}%`, width: `${((tout - tin) / dur) * 100}%` }} />}
           <div className="replay-fill" style={{ width: `${pct}%` }} />
         </div>
         <span className="replay-time">{fmtTime(Math.round(replay.duration / 1000))}</span>
       </div>
+      {trim && (
+        <div className="replay-trim-row">
+          <button className="replay-trim-set" onClick={() => setTin(replay.position)}>
+            ⟦ Start here ({fmtTime(Math.round(tin / 1000))})
+          </button>
+          <span className="replay-trim-hint">scrub to the in/out, then Save</span>
+          <button className="replay-trim-set" onClick={() => setTout(replay.position)}>
+            End here ({fmtTime(Math.round(tout / 1000))}) ⟧
+          </button>
+        </div>
+      )}
     </div>
   );
 }

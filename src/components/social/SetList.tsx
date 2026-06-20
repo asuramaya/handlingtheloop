@@ -5,7 +5,12 @@ import { fmtTime } from "../../util/format";
 // A published-set list — the browse card shared by Discover (showHost: many DJs) and a public
 // /@handle profile (the host's own history). Tapping the card EXPANDS its captured tracklist
 // (G2 — the shareable set artifact); the ▶ button replays it on-device (G1c) via onPlay.
-export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: (id: string) => void; showHost?: boolean }) {
+// The curated play range — a set's trim [in,out], or undefined for the full recording.
+export function trimRange(s: SetCard): { start: number; end: number } | undefined {
+  return s.trimStart != null || s.trimEnd != null ? { start: s.trimStart ?? 0, end: s.trimEnd ?? s.duration } : undefined;
+}
+
+export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: (id: string, range?: { start: number; end: number }) => void; showHost?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   if (sets.length === 0) return null;
   return (
@@ -29,7 +34,7 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
                 ⤴
               </button>
               {onPlay && (
-                <button className="set-play-btn" title="Replay this set" onClick={() => onPlay(s.id)}>
+                <button className="set-play-btn" title="Replay this set" onClick={() => onPlay(s.id, trimRange(s))}>
                   ▶
                 </button>
               )}

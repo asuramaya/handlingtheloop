@@ -7,7 +7,6 @@ import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { searchYouTube } from "@htl/media";
-import { fmtTime } from "./util/format";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -16,7 +15,7 @@ import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
-import { type Me, fetchMe, fetchSet, logPlay } from "@htl/account";
+import { type Me, fetchMe, fetchSet, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
@@ -399,23 +398,17 @@ export function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  // G4/G3: a shared /set/:id (optionally ?t=a-b for a G3 clip) → resolve to the owner's @handle
-  // profile (the set lists there) + surface a one-tap "play this moment" (the audio gesture).
-  // The rich preview already came from the server-injected OG card.
-  const [pendingClip, setPendingClip] = useState<{ id: string; start: number; end: number } | null>(null);
+  // G4: a shared /set/:id link → resolve to the owner's @handle profile (the set lists + plays
+  // there). The rich preview already came from the server-injected OG card.
   useEffect(() => {
     const m = location.pathname.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
     if (!m) return;
-    const id = m[1];
-    const tm = new URLSearchParams(location.search).get("t")?.match(/^(\d+)-(\d+)$/);
-    const clip = tm ? { id, start: Number(tm[1]) * 1000, end: Number(tm[2]) * 1000 } : null;
     let alive = true;
-    void fetchSet(id)
+    void fetchSet(m[1])
       .then((s) => {
         if (!alive) return;
         history.replaceState(null, "", s?.handle ? `/@${s.handle}` : "/");
         if (s?.handle) setPublicHandle(s.handle);
-        if (s && clip) setPendingClip(clip); // needs a tap (audio gesture) to play
       })
       .catch(() => {});
     return () => {
@@ -2356,13 +2349,28 @@ export function App() {
   // Replay a recorded set on the decks (from Profile / Discover / a public profile). Tune out
   // of a live broadcast-listen first (only real conflict), prime audio, then close the docks so
   // the board is visible — the replay bar drives from there.
+  // Replay a set. `range` plays just the curated [start,end] (the set's trim); omit for full.
   const playRecordedSet = useCallback(
-    (id: string, clip?: { start: number; end: number }) => {
+    (id: string, range?: { start: number; end: number }) => {
       if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
       engine.unlock();
-      replay.play(id, clip);
+      setTrimEdit(null);
+      replay.play(id, range);
       setProfileOpen(false);
       setDiscoverOpen(false);
+      setPublicHandle(null);
+    },
+    [engine, replay],
+  );
+  // The owner curates a set: replay the FULL recording + open trim controls (set in/out → save).
+  const [trimEdit, setTrimEdit] = useState<{ id: string; start: number; end: number } | null>(null);
+  const editTrim = useCallback(
+    (s: { id: string; trimStart?: number | null; trimEnd?: number | null; duration: number }) => {
+      if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
+      engine.unlock();
+      replay.play(s.id); // full, so they can scrub the whole tape
+      setTrimEdit({ id: s.id, start: s.trimStart ?? 0, end: s.trimEnd ?? s.duration });
+      setProfileOpen(false);
       setPublicHandle(null);
     },
     [engine, replay],
@@ -4051,20 +4059,30 @@ export function App() {
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
           onPlaySet={playRecordedSet}
+          onTrimSet={editTrim}
         />
       )}
-      <ReplayBar replay={replay} />
-      {pendingClip && !replay.active && (
-        <button
-          className="clip-cta"
-          onClick={() => {
-            playRecordedSet(pendingClip.id, { start: pendingClip.start, end: pendingClip.end });
-            setPendingClip(null);
-          }}
-        >
-          ▶ Play this moment · {fmtTime(Math.round(pendingClip.start / 1000))}–{fmtTime(Math.round(pendingClip.end / 1000))}
-        </button>
-      )}
+      <ReplayBar
+        replay={replay}
+        trim={
+          trimEdit && replay.setId === trimEdit.id
+            ? {
+                setId: trimEdit.id,
+                start: trimEdit.start,
+                end: trimEdit.end,
+                onSave: (start, end) => {
+                  void trimSet(trimEdit.id, start || null, end);
+                  setTrimEdit(null);
+                  replay.stop();
+                },
+                onClear: () => {
+                  setTrimEdit(null);
+                  replay.stop();
+                },
+              }
+            : null
+        }
+      />
 
       {publicHandle && (
         <PublicProfileScreen

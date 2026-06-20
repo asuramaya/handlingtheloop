@@ -960,43 +960,71 @@ span.profile-handle:hover {
   font-size: 11px;
   color: #e7b65a;
 }
-.replay-clip {
-  padding: 3px 9px;
+.replay-trim-save {
+  padding: 4px 11px;
+  border-radius: 6px;
+  border: 1px solid #c8506a;
+  background: #c8506a;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.replay-trim-save:hover {
+  filter: brightness(1.08);
+}
+.replay-trim-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.replay-trim-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.replay-trim-set {
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.replay-trim-set:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.replay-trim-hint {
+  flex: 1;
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.replay-trim-shade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border-left: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
+}
+.replay-track {
+  position: relative;
+}
+.rec-trim {
+  padding: 4px 9px;
   border-radius: 6px;
   border: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 600;
   cursor: pointer;
 }
-.replay-clip:hover {
+.rec-trim:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-.replay-clip.armed {
-  border-color: #e7b65a;
-  color: #e7b65a;
-}
-.clip-cta {
-  position: fixed;
-  left: 50%;
-  bottom: 14px;
-  transform: translateX(-50%);
-  z-index: 60;
-  padding: 11px 18px;
-  border-radius: 999px;
-  border: 1px solid #c8506a;
-  background: #c8506a;
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
-  animation: panel-in 0.16s ease-out;
-}
-.clip-cta:hover {
-  filter: brightness(1.08);
 }
 .replay-stop {
   width: 24px;

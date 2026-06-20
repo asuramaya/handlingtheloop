@@ -28,6 +28,7 @@ import {
   userById,
   setSetStatus,
   setSetTitle,
+  setSetTrim,
   deleteConnection,
   deleteSession,
   announceRoom,
@@ -158,6 +159,8 @@ function setCard(row: SetRow) {
     engineVer: row.engineVer,
     createdAt: row.createdAt,
     publishedAt: row.publishedAt,
+    trimStart: row.trimStart ?? null,
+    trimEnd: row.trimEnd ?? null,
   };
 }
 
@@ -260,6 +263,13 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (req.method === "POST" && action === "rename") {
         const b = (await req.json().catch(() => ({}))) as { title?: string };
         await setSetTitle(env.DB, id, viewer.id, cleanText(b.title ?? "", 120) || null);
+        return json(200, { ok: true });
+      }
+      if (req.method === "POST" && action === "trim") {
+        const b = (await req.json().catch(() => ({}))) as { start?: number; end?: number };
+        const start = b.start != null ? clampInt(b.start, 0, row.duration) : null;
+        const end = b.end != null ? clampInt(b.end, 0, row.duration) : null;
+        await setSetTrim(env.DB, id, viewer.id, start, end && (!start || end > start) ? end : null);
         return json(200, { ok: true });
       }
       return json(405, { error: "bad method" });

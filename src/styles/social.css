@@ -1356,6 +1356,12 @@ span.profile-handle:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* The panel is a bounded flex column (head fixed); the body takes the rest + SCROLLS, so a
+     long crowd/chat/roster stack never grows the panel infinitely off-screen. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 4px;
 }
 .social-waiting,
 .social-offline {

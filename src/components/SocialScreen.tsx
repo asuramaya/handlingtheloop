@@ -141,6 +141,23 @@ export function SocialScreen({
                 <button className="hero-end" onClick={() => room.goPublic(false)} title="Close the public lobby">
                   ■ End broadcast
                 </button>
+                {/* DECKS access lives WITH the live controls (one place), not buried mid-crowd. */}
+                {room.host && (
+                  <div className="gate-select" role="group" aria-label="How the crowd reaches the decks">
+                    <span className="gate-label">Decks</span>
+                    {gateOpts.map(({ m, label, title }) => (
+                      <button
+                        key={m}
+                        className={`gate-opt ${room.stageGate === m ? "on" : ""}`}
+                        onClick={() => room.setStageGate(m)}
+                        title={title}
+                        aria-pressed={room.stageGate === m}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : !room.isGuest && room.signedIn ? (
               <div className="room-hero idle">
@@ -204,23 +221,6 @@ export function SocialScreen({
 
                 <ChatPanel room={room} revealed={revealed} />
 
-                {/* HOST: how the crowd reaches the decks (live only). */}
-                {room.host && broadcasting && (
-                  <div className="gate-select" role="group" aria-label="How the crowd reaches the decks">
-                    <span className="gate-label">Decks</span>
-                    {gateOpts.map(({ m, label, title }) => (
-                      <button
-                        key={m}
-                        className={`gate-opt ${room.stageGate === m ? "on" : ""}`}
-                        onClick={() => room.setStageGate(m)}
-                        title={title}
-                        aria-pressed={room.stageGate === m}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
               </section>
             )}
 

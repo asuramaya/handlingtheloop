@@ -357,7 +357,17 @@ export function useSampler(
       }
       try {
         const raw = await take.blob.arrayBuffer();
-        const dto = await uploadSample(GLOBAL_PADS[gi], name, take.buffer.duration * 1000, raw, take.blob.type || "audio/webm");
+        if (raw.byteLength > MAX_SAMPLE_BYTES) {
+          // loaded locally above, but too big to persist (a long WAV capture exceeds the cap)
+          setError(`Take is ${(raw.byteLength / 1024 / 1024).toFixed(1)} MB — too big to save (loaded for this session only).`);
+          setGlobals((prev) => {
+            const next = [...prev];
+            next[gi] = { ...next[gi], uploading: false };
+            return next;
+          });
+          return gi;
+        }
+        const dto = await uploadSample(GLOBAL_PADS[gi], name, take.buffer.duration * 1000, raw, take.blob.type || "audio/wav");
         setGlobals((prev) => {
           const next = [...prev];
           next[gi] = { ...next[gi], sampleId: dto.id, uploading: false };

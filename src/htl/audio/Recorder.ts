@@ -4,11 +4,13 @@
 // AudioBuffer ready to drop on a pad. MediaRecorder (not a worklet) keeps it dependency-free and
 // universal; the opus round-trip is inaudible for short sampler clips.
 import { decodeAudio } from "./decode";
+import { bufferToWav } from "./encodeWav";
 
 export type RecordSource = AudioNode | null;
 
-// A finished take: the decoded buffer (immediate playback) + the encoded blob (the upload
-// payload — the server stores these bytes and re-decodes them on login).
+// A finished take: the decoded buffer (immediate playback) + a WAV blob (the upload payload).
+// We record opus/webm (universal to capture) but re-encode the decoded audio to WAV for upload —
+// opus only DECODES on Chromium, so a stored opus clip wouldn't reload on Safari/iOS; WAV does.
 export interface Take {
   buffer: AudioBuffer;
   blob: Blob;
@@ -85,7 +87,7 @@ export class Recorder {
     this.chunks = [];
     try {
       const buffer = await decodeAudio(this.ctx, await blob.arrayBuffer());
-      return { buffer, blob };
+      return { buffer, blob: bufferToWav(buffer) }; // re-encode to WAV so it reloads on any device
     } catch {
       return null;
     }

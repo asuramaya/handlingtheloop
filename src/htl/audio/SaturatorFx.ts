@@ -141,6 +141,7 @@ export class SaturatorFx extends BaseFxDevice {
       dc.frequency.value = DC_BLOCK_HZ;
       dc.Q.value = LR_Q;
       const g = ctx.createGain();
+      g.gain.value = 1 / driveGain(this._drive[i]); // auto gain-comp (see applyDrive)
       drive.connect(shaperIn);
       this.bias.connect(shaperIn); // global DC bias → asymmetry, removed by dc below
       shaperIn.connect(shaper).connect(dc).connect(g).connect(this.bandSum);
@@ -188,7 +189,14 @@ export class SaturatorFx extends BaseFxDevice {
   }
 
   private applyDrive(i: number) {
-    this.drives[i].gain.setTargetAtTime(driveGain(this._drive[i]) * this._throwBoost, this.ctx.currentTime, 0.01);
+    const g = driveGain(this._drive[i]);
+    this.drives[i].gain.setTargetAtTime(g * this._throwBoost, this.ctx.currentTime, 0.01);
+    // AUTO GAIN-COMP: the band output undoes the drive PRE-gain, so cranking drive pushes the
+    // signal harder INTO the curve (more saturation) at a roughly constant level — dirt, not
+    // loudness. This is what makes MIX a perceptually even dry↔wet blend (the wet path was
+    // ~10–15 dB hotter, tipping the knob fully wet by ~10%). The throwBoost is NOT comped (a
+    // pad throw should hit harder + a touch louder); OUT trims the rest.
+    this.bandGains[i].gain.setTargetAtTime(1 / g, this.ctx.currentTime, 0.01);
   }
   private setStyle(v: number) {
     this._style = clamp(Math.round(v), 0, SAT_STYLES.length - 1);

@@ -1827,6 +1827,17 @@ export class Deck {
   get satThrowing(): boolean {
     return (this.rack.deviceAt(this.rack.indexOf("saturator")) as SaturatorFx | undefined)?.throwing ?? false;
   }
+  // CRUSH THROW — smash the rack's bitcrusher to a heavy setting while held (pad-FX). No-op
+  // without a crusher in the chain (canCrushThrow gates the pad).
+  crushThrow(on: boolean): void {
+    (this.rack.deviceAt(this.rack.indexOf("crush")) as CrushFx | undefined)?.setThrow(on);
+  }
+  get canCrushThrow(): boolean {
+    return this.rack.indexOf("crush") >= 0;
+  }
+  get crushThrowing(): boolean {
+    return (this.rack.deviceAt(this.rack.indexOf("crush")) as CrushFx | undefined)?.throwing ?? false;
+  }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
    *  missing). Returns the destination rack index on `other`, or −1. */

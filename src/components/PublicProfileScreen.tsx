@@ -12,8 +12,20 @@ import { SetList } from "./social/SetList";
 
 const HANDLE_PATH = /^\/@([A-Za-z0-9_]{1,20})$/;
 /** The handle in the current URL path (`/@name` → "name"), or null. */
-export const handleFromPath = (): string | null =>
-  typeof window === "undefined" ? null : (window.location.pathname.match(HANDLE_PATH)?.[1] ?? null);
+export const handleFromPath = (): string | null => {
+  if (typeof window === "undefined") return null;
+  // Browsers keep the path percent-encoded, so a shared /@dev link that arrives as /%40dev
+  // (the @ encoded — by a link builder, a redirect, or a hand-typed URL) would miss the
+  // literal-@ regex and the public profile / live session never resolved for an anon visitor.
+  // Decode first so BOTH /@dev and /%40dev match. Guard a malformed % escape (decode throws).
+  let path = window.location.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* malformed escape → fall back to the raw path */
+  }
+  return path.match(HANDLE_PATH)?.[1] ?? null;
+};
 
 export function PublicProfileScreen({
   handle,

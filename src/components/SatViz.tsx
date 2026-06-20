@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck, SaturatorFx } from "@htl/audio";
+import { drawCurveInset } from "./curveInset";
 
 // The Saturn-glass WYSIWYG for the multiband saturator. A log-frequency display:
 //   • live spectrum of the device output (the "see the distortion" backdrop),
@@ -107,44 +108,27 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
         ctx2d.stroke();
       }
 
-      // transfer-curve readout (bottom-right): the literal WaveShaper curve = WYSIWYG
-      const cs = Math.min(72, w * 0.32, h * 0.6);
-      const cx = w - cs - 6;
-      const cy = h - cs - 6;
-      ctx2d.fillStyle = "rgba(0,0,0,0.45)";
-      ctx2d.fillRect(cx, cy, cs, cs);
-      ctx2d.strokeStyle = "rgba(255,255,255,0.18)";
-      ctx2d.lineWidth = 1;
-      ctx2d.strokeRect(cx, cy, cs, cs);
-      ctx2d.beginPath();
-      ctx2d.moveTo(cx, cy + cs / 2);
-      ctx2d.lineTo(cx + cs, cy + cs / 2);
-      ctx2d.moveTo(cx + cs / 2, cy);
-      ctx2d.lineTo(cx + cs / 2, cy + cs);
-      ctx2d.stroke();
-      // The EFFECTIVE transfer from the input: drive (hottest band) pushes the signal toward
-      // the saturated edges, bias shifts it (asymmetry). So the readout reacts to drive/bias/
-      // style/punish — not just the raw style curve.
+      // The EFFECTIVE transfer readout (standardized curve inset, bottom-right): drive (hottest
+      // band) pushes the input toward the saturated edges, bias shifts it (asymmetry) — so it
+      // reacts to drive/bias/style/punish, not just the raw style curve.
       const curve = dev.curveFor();
       const L = curve.length;
       let dmax = 0;
       for (let i = 0; i < BANDS; i++) dmax = Math.max(dmax, dev.driveOf(i));
       const g = Math.pow(10, dmax);
       const bias = dev.getParam("bias") * 0.4;
-      ctx2d.strokeStyle = accent;
-      ctx2d.lineWidth = 1.5;
-      ctx2d.beginPath();
-      for (let px = 0; px <= cs; px++) {
-        const inp = (px / cs) * 2 - 1;
-        let driven = g * inp + bias;
-        if (driven < -1) driven = -1;
-        else if (driven > 1) driven = 1;
-        const idx = Math.round(((driven + 1) / 2) * (L - 1));
-        const x = cx + px;
-        const y = cy + cs / 2 - (curve[idx] * cs) / 2;
-        px === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
-      }
-      ctx2d.stroke();
+      drawCurveInset(
+        ctx2d,
+        w,
+        h,
+        accent,
+        (t) => {
+          const inp = t * 2 - 1;
+          const driven = Math.max(-1, Math.min(1, g * inp + bias));
+          return curve[Math.round(((driven + 1) / 2) * (L - 1))];
+        },
+        { bipolar: true },
+      );
 
       raf = requestAnimationFrame(draw);
     };

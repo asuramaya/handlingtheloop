@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { CRUSH_MODES, type Deck, type CrushFx } from "@htl/audio";
+import { drawCurveInset } from "./curveInset";
 
 // The Pixelator-style WYSIWYG for the bitcrusher. EVERY param has a visual cue:
 //   BITS   → horizontal quantization grid rows (fewer rows = coarser).
@@ -156,28 +157,20 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.lineTo(w, center);
       ctx2d.stroke();
 
-      // CUT/RES → a small lowpass-response inset, top-right (flat to the cutoff, rolloff after,
-      // a resonance bump scaled by RES). Shows the DAC/reconstruction filter at a glance.
-      const iw = Math.min(64, w * 0.28);
-      const ih = Math.min(30, h * 0.32);
-      const ix = w - iw - 5;
-      const iy = 5;
-      ctx2d.fillStyle = "rgba(0,0,0,0.4)";
-      ctx2d.fillRect(ix, iy, iw, ih);
-      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
-      ctx2d.strokeRect(ix, iy, iw, ih);
-      ctx2d.strokeStyle = accent;
-      ctx2d.lineWidth = 1.4;
-      ctx2d.beginPath();
-      for (let px = 0; px <= iw; px++) {
-        const fn = px / iw;
-        let g = fn < cut ? 1 : Math.max(0, 1 - (fn - cut) * 4);
-        g += res * Math.exp(-Math.pow((fn - cut) * 12, 2)) * 0.9; // resonance peak at the cutoff
-        g = Math.max(0, Math.min(1.25, g));
-        const y = iy + ih - (g / 1.25) * (ih - 2) - 1;
-        px === 0 ? ctx2d.moveTo(ix + px, y) : ctx2d.lineTo(ix + px, y);
-      }
-      ctx2d.stroke();
+      // CUT/RES → the lowpass response (standardized curve inset, bottom-right): flat to the
+      // cutoff, rolloff after, a resonance bump scaled by RES — the DAC/reconstruction filter.
+      drawCurveInset(
+        ctx2d,
+        w,
+        h,
+        accent,
+        (t) => {
+          let g = t < cut ? 1 : Math.max(0, 1 - (t - cut) * 4);
+          g += res * Math.exp(-Math.pow((t - cut) * 12, 2)) * 0.9; // resonance peak at the cutoff
+          return Math.min(1, g / 1.25);
+        },
+        { bipolar: false },
+      );
 
       // MODE → label, bottom-left.
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 75%, transparent)`;

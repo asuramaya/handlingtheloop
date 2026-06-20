@@ -87,6 +87,7 @@ import { ReverbFx } from "./ReverbFx";
 import { SaturatorFx } from "./SaturatorFx";
 import { CrushFx } from "./CrushFx";
 import { ModFx } from "./ModFx";
+import { GateFx } from "./GateFx";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -1710,7 +1711,7 @@ export class Deck {
   // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod"]);
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate"]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1726,6 +1727,8 @@ export class Deck {
         return new CrushFx(this.ctx);
       case "mod":
         return new ModFx(this.ctx);
+      case "gate":
+        return new GateFx(this.ctx);
       default:
         return null;
     }
@@ -1850,6 +1853,17 @@ export class Deck {
   }
   get modThrowing(): boolean {
     return (this.rack.deviceAt(this.rack.indexOf("mod")) as ModFx | undefined)?.throwing ?? false;
+  }
+  // GATE THROW — slam the rack's trance-gate to a full-depth stutter while held (pad-FX). No-op
+  // without a gate in the chain (canGateThrow gates the pad).
+  gateThrow(on: boolean): void {
+    (this.rack.deviceAt(this.rack.indexOf("gate")) as GateFx | undefined)?.setThrow(on);
+  }
+  get canGateThrow(): boolean {
+    return this.rack.indexOf("gate") >= 0;
+  }
+  get gateThrowing(): boolean {
+    return (this.rack.deviceAt(this.rack.indexOf("gate")) as GateFx | undefined)?.throwing ?? false;
   }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if

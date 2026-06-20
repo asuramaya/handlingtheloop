@@ -11,7 +11,7 @@
 // The EQ (Eq3) is the first device by default; it's pinned but reorderable. New
 // effects (delay, reverb, chorus…) implement the same FxDevice contract and slot in.
 
-export type FxKind = "eq" | "delay" | "reverb" | "chorus" | "saturator" | "crush" | "mod";
+export type FxKind = "eq" | "delay" | "reverb" | "chorus" | "saturator" | "crush" | "mod" | "gate";
 
 // Serializable device state — the unit of persistence (profiles) and session sync. The
 // wire form lives in src/htl/room/protocol.ts with `kind: string` (forward-compatible);

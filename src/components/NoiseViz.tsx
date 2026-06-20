@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import type { Deck, NoiseFx } from "@htl/audio";
-import { fitCanvas } from "./curveInset";
 
 // WYSIWYG for the NOISE riser: a log-frequency display where the LIVE generated noise spectrum
 // fills in as you engage (dim when idle), the resonant SWEEP filter response glows over it, and
@@ -22,7 +21,6 @@ interface NoiseVizProps {
 
 export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
   const mainRef = useRef<HTMLCanvasElement>(null);
-  const curveRef = useRef<HTMLCanvasElement>(null);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -114,14 +112,13 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.engaged ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
 
-      // inset: the BARS build timeline — bar segments + the rise ramp, with a playhead that
-      // sweeps as an auto-build runs (so you SEE the build length + progress, not a second copy
-      // of the filter curve). Manual mode = an instant gate, so it reads "MANUAL".
-      const cc = curveRef.current;
-      if (cc) {
-        const f = fitCanvas(cc);
-        if (f.ctx) drawRiseBars(f.ctx, f.w, f.h, accent, dev);
-      }
+      // BARS build timeline, OVERLAID as a strip along the bottom (no second mini-window): bar
+      // segments + the rise ramp, with a playhead sweeping as an auto-build runs. Manual = "MANUAL".
+      const bh = Math.min(34, Math.max(22, h * 0.3));
+      ctx2d.save();
+      ctx2d.translate(8, h - bh - 6);
+      drawRiseBars(ctx2d, Math.max(20, w - 16), bh, accent, dev);
+      ctx2d.restore();
 
       raf = requestAnimationFrame(draw);
     };
@@ -165,9 +162,6 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       <div className="sat-viz">
         <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
       </div>
-      <div className="fx-curve">
-        <canvas ref={curveRef} className="fx-curve-canvas" />
-      </div>
     </div>
   );
 }
@@ -176,7 +170,15 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
 // climbing across them, plus a sweeping playhead while an auto-build is in flight. RISE off =
 // the throw is an instant gate (no timed build), so it reads "MANUAL".
 function drawRiseBars(ctx: CanvasRenderingContext2D, w: number, h: number, accent: string, dev: NoiseFx) {
-  ctx.clearRect(0, 0, w, h);
+  // translucent backdrop so the strip reads over the live spectrum behind it.
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(0, 0, w, h, 5);
+  else ctx.rect(0, 0, w, h);
+  ctx.fill();
+  ctx.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
   const pad = 6;
   const x0 = pad;
   const y0 = pad;

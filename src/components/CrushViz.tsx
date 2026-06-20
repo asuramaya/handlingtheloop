@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { CRUSH_MODES, type Deck, type CrushFx } from "@htl/audio";
-import { drawCurvePanel, fitCanvas } from "./curveInset";
 
 // The Pixelator-style WYSIWYG for the bitcrusher. EVERY param has a visual cue:
 //   BITS   → horizontal quantization grid rows (fewer rows = coarser).
@@ -22,7 +21,6 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const curveRef = useRef<HTMLCanvasElement>(null);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -158,26 +156,42 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.lineTo(w, center);
       ctx2d.stroke();
 
-      // CUT/RES → the lowpass response in its own panel to the right: flat to the cutoff,
-      // rolloff after, a resonance bump scaled by RES — the DAC/reconstruction filter.
-      const cc = curveRef.current;
-      if (cc) {
-        const f = fitCanvas(cc);
-        if (f.ctx) {
-          drawCurvePanel(
-            f.ctx,
-            f.w,
-            f.h,
-            accent,
-            (t) => {
-              let g = t < cut ? 1 : Math.max(0, 1 - (t - cut) * 4);
-              g += res * Math.exp(-Math.pow((t - cut) * 12, 2)) * 0.9; // resonance peak at the cutoff
-              return Math.min(1, g / 1.25);
-            },
-            { bipolar: false },
-          );
-        }
+      // CUT/RES → the lowpass response as a small OVERLAY in the top-right corner (no second
+      // mini-window): flat to the cutoff, rolloff after, a resonance bump scaled by RES.
+      const ow = Math.min(118, w * 0.34);
+      const oh = Math.min(58, h * 0.42);
+      const ox = w - ow - 7;
+      const oy = 7;
+      const lp = (t: number) => {
+        let g = t < cut ? 1 : Math.max(0, 1 - (t - cut) * 4);
+        g += res * Math.exp(-Math.pow((t - cut) * 12, 2)) * 0.9;
+        return Math.min(1, g / 1.25);
+      };
+      ctx2d.fillStyle = "rgba(0,0,0,0.42)";
+      ctx2d.beginPath();
+      if (ctx2d.roundRect) ctx2d.roundRect(ox, oy, ow, oh, 5);
+      else ctx2d.rect(ox, oy, ow, oh);
+      ctx2d.fill();
+      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
+      ctx2d.lineWidth = 1;
+      ctx2d.stroke();
+      const ipad = 5;
+      const iw = ow - ipad * 2;
+      const ih = oh - ipad * 2;
+      ctx2d.strokeStyle = accent;
+      ctx2d.lineWidth = 1.5;
+      ctx2d.shadowColor = accent;
+      ctx2d.shadowBlur = 4;
+      ctx2d.beginPath();
+      const NP = Math.max(2, Math.round(iw));
+      for (let i = 0; i <= NP; i++) {
+        const t = i / NP;
+        const px = ox + ipad + t * iw;
+        const py = oy + ipad + ih - clamp01(lp(t)) * (ih - 1) - 1;
+        i === 0 ? ctx2d.moveTo(px, py) : ctx2d.lineTo(px, py);
       }
+      ctx2d.stroke();
+      ctx2d.shadowBlur = 0;
 
       // MODE → label, bottom-left.
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 75%, transparent)`;
@@ -230,9 +244,6 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     <div className="fx-viz-row">
       <div className="sat-viz">
         <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
-      </div>
-      <div className="fx-curve">
-        <canvas ref={curveRef} className="fx-curve-canvas" />
       </div>
     </div>
   );

@@ -89,8 +89,10 @@ export class CrushFx extends BaseFxDevice {
     this.post.Q.setTargetAtTime(0.7 + this._res * 8, this.ctx.currentTime, 0.01);
   }
 
-  /** Pad-throw: smash to a heavy crush while held, restore the user's setting on release. */
+  /** Pad-throw TRIGGER: engage (un-bypass if dormant) + smash to a heavy crush while held;
+   *  release restores the user's setting and re-bypasses if it was off. */
   setThrow(on: boolean) {
+    this.throwEngage(on);
     this._throw = on;
     this.node?.port.postMessage({ bits: extToBits(on ? 0.82 : this._bits), rate: extToRate(on ? 0.7 : this._rate) });
   }

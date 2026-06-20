@@ -1,15 +1,13 @@
 import { useEffect, useRef } from "react";
 import type { Deck, GateFx } from "@htl/audio";
-import { drawCurvePanel, fitCanvas } from "./curveInset";
 
-// WYSIWYG for the trance GATE: the GATE ENVELOPE is the star. The main canvas tiles a few
-// gate cycles across the width as a bright glowing shape — exactly the gain the audio is
-// multiplied by — with a vertical PLAYHEAD sweeping at the live rate, while the program audio
-// rides UNDER it as a dim level band (gated by the same envelope, so you SEE it chopped). The
-// standardized curve panel (right) shows ONE cycle + a playhead dot. Doubles as an XY pad:
-// drag X = RATE, Y = DEPTH.
+// WYSIWYG for the trance GATE: the GATE ENVELOPE is the star, full-width. The canvas tiles
+// several gate cycles across the width as a bright glowing shape — exactly the gain the audio
+// is multiplied by — with a vertical PLAYHEAD sweeping at the live rate, while the program
+// audio rides UNDER it as a dim level band (gated by the same envelope, so you SEE it chopped).
+// Doubles as an XY pad: drag X = RATE, Y = DEPTH.
 
-const CYCLES = 4; // gate cycles drawn across the main canvas
+const CYCLES = 6; // gate cycles drawn across the (now full-width) canvas
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 interface GateVizProps {
@@ -21,7 +19,6 @@ interface GateVizProps {
 
 export function GateViz({ deck, slot, accent, set }: GateVizProps) {
   const mainRef = useRef<HTMLCanvasElement>(null);
-  const curveRef = useRef<HTMLCanvasElement>(null);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -112,27 +109,6 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.synced ? dev.divLabel : `${dev.freqHz.toFixed(1)}Hz`, 6, 5);
 
-      // ONE cycle in the standardized curve panel + a moving playhead dot.
-      const cc = curveRef.current;
-      if (cc) {
-        const f = fitCanvas(cc);
-        if (f.ctx) {
-          drawCurvePanel(f.ctx, f.w, f.h, accent, (t) => dev.gateShape(t), { bipolar: false });
-          const pad = 5;
-          const iw = f.w - pad * 2;
-          const ih = f.h - pad * 2;
-          const dx = pad + ph * iw;
-          const dy = pad + ih - clamp01(dev.gateShape(ph)) * (ih - 1) - 1;
-          f.ctx.fillStyle = accent;
-          f.ctx.shadowColor = accent;
-          f.ctx.shadowBlur = 7;
-          f.ctx.beginPath();
-          f.ctx.arc(dx, dy, 3, 0, 2 * Math.PI);
-          f.ctx.fill();
-          f.ctx.shadowBlur = 0;
-        }
-      }
-
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -174,9 +150,6 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
     <div className="fx-viz-row">
       <div className="sat-viz">
         <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
-      </div>
-      <div className="fx-curve">
-        <canvas ref={curveRef} className="fx-curve-canvas" />
       </div>
     </div>
   );

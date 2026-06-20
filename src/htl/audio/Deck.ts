@@ -1713,6 +1713,8 @@ export class Deck {
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
   private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise"]);
+  // Effects driven by a momentary pad-throw — added DORMANT (bypassed) so the pad is the trigger.
+  private static readonly PAD_THROW_KINDS: ReadonlySet<string> = new Set<FxKind>(["saturator", "crush", "mod", "gate", "noise"]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1752,6 +1754,11 @@ export class Deck {
     const d = this.makeFx(kind);
     if (!d) return null;
     this.rack.add(d, at);
+    // Pad-throw effects are momentary TRIGGERS (FLX4/rekordbox-style): they start DORMANT
+    // (bypassed) and the pad enables + applies them while held, then they go back off on
+    // release (setThrow snapshots/restores the bypass). Un-bypass in the panel to run one
+    // persistently. ECHO/VERB target delay/reverb (real sends you dial), so those stay active.
+    if (Deck.PAD_THROW_KINDS.has(kind)) d.setBypass(true);
     return d;
   }
   removeFxAt(i: number) {

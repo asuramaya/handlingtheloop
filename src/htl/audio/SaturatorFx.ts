@@ -255,8 +255,10 @@ export class SaturatorFx extends BaseFxDevice {
     for (const n of [...this.xovers[j].lp, ...this.xovers[j].hp]) n.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.02);
   }
 
-  /** Pad-throw: slam all band drives up while held, restore on release (echoOut pattern). */
+  /** Pad-throw TRIGGER: engage (un-bypass if dormant) + slam all band drives up while held;
+   *  release restores the drives and re-bypasses if it was off. */
   setThrow(on: boolean) {
+    this.throwEngage(on);
     this._throwBoost = on ? 3 : 1;
     for (let i = 0; i < this.drives.length; i++) this.applyDrive(i);
   }

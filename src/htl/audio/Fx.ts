@@ -248,6 +248,24 @@ export abstract class BaseFxDevice implements FxDevice {
     return this._bypassed;
   }
 
+  // Momentary pad-throw trigger (FLX4/rekordbox-style): on press, if the effect is dormant
+  // (bypassed) engage it and remember that; on release, restore the prior bypass — so a pad
+  // hold enables + applies the effect and lets go of it. Subclasses call this at the top of
+  // their setThrow(); when the effect was already running, this is a no-op (the throw just
+  // intensifies it and leaves it on). Idempotent across repeat key-downs.
+  private _throwWasBypassed = false;
+  protected throwEngage(on: boolean) {
+    if (on) {
+      if (this._bypassed) {
+        this._throwWasBypassed = true;
+        this.setBypass(false);
+      }
+    } else if (this._throwWasBypassed) {
+      this._throwWasBypassed = false;
+      this.setBypass(true);
+    }
+  }
+
   setParam(id: string, value: number) {
     this.params.find((p) => p.id === id)?.set(value);
   }

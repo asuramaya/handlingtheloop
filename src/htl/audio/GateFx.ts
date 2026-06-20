@@ -194,8 +194,10 @@ export class GateFx extends BaseFxDevice {
     if (this._sync) this.applyFreq();
   }
 
-  /** Pad-throw: full-depth chop at double rate while held, restore on release. */
+  /** Pad-throw TRIGGER: engage the gate (un-bypass if dormant) at a full-depth double-rate
+   *  chop while held; release restores depth/rate and re-bypasses if it was off. */
   setThrow(on: boolean) {
+    this.throwEngage(on);
     this._throw = on;
     this.applyDepth();
     this.applyFreq();

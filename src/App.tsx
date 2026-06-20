@@ -10,7 +10,6 @@ import { searchYouTube } from "@htl/media";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
-import { HypeHud } from "./components/social/HypeHud";
 import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
@@ -3849,7 +3848,6 @@ export function App() {
         >
           <span className="chin-discover-i" aria-hidden="true">🧭</span>
         </button>
-        <HypeHud room={room} onOpen={toggleSocial} />
         <RoomBar room={room} onExpand={toggleSocial} />
       </nav>
 

@@ -4,7 +4,6 @@ import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { QRCode } from "./QRCode";
 import { DockResizer } from "./DockResizer";
 import { StageBar } from "./social/StageBar";
-import { CrowdPanel } from "./social/CrowdPanel";
 import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
@@ -170,7 +169,6 @@ export function SocialScreen({
             {crowdLive && (
               <section className="crowd-section">
                 <div className="social-section-head">The crowd{broadcasting ? ` · ${room.listenerCount}` : ""}</div>
-                <CrowdPanel room={room} />
 
                 {/* HOST: the crowd-ranked song requests (F1 + F3) with moderation. */}
                 {room.host && <RequestList room={room} host revealed={revealed} onQueue={onQueueRequest} />}

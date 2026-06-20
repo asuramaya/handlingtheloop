@@ -1,11 +1,14 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import type { RoomState } from "@htl/room";
+import { type RoomState, REACTIONS } from "@htl/room";
 import { maskName } from "@htl/privacy";
 import { fileReport } from "@htl/account";
 
-// Chat (F5) + host moderation (L1). A scrolling log + composer; the host gets a slow-mode
-// selector (incl. Off) and per-message mute / remove. A muted device's composer locks; chat-off
-// locks it for everyone. The crowd is anonymous, so moderation acts on the message's device id.
+// The crowd channel (F2/F4/F5 + L1 moderation) — ONE card. A live HYPE strip + reaction row sit
+// atop the chat (no more header hype bar): tap a reaction → it feeds the meter + floats an emoji.
+// Then the scrolling chat log + composer; the host gets a slow-mode selector (incl. Off) and
+// per-message mute/remove. A tuned-in listener also gets the song-request form here. Hype +
+// reactions only show in a BROADCAST (you host one, or you've tuned in) — a plain multi-device
+// session is just chat.
 const SLOW_OPTS = [
   { v: -1, l: "Off", t: "Turn chat off" },
   { v: 0, l: "On", t: "Chat on (anti-spam floor only)" },
@@ -17,6 +20,40 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
   const [text, setText] = useState("");
   const [reported, setReported] = useState<Set<string>>(new Set());
   const endRef = useRef<HTMLDivElement>(null);
+  const crowd = room.roomPublic || !!room.listeningTo; // a broadcast is happening → show hype/reactions
+
+  // Floating-emoji burst on each reaction frame (F4), feeding the hype bar (F2).
+  const [sprites, setSprites] = useState<{ id: number; emoji: string; x: number }[]>([]);
+  const seen = useRef(0);
+  const { id: rid, counts } = room.reactionTick;
+  useEffect(() => {
+    if (rid === seen.current) return;
+    seen.current = rid;
+    const add: { id: number; emoji: string; x: number }[] = [];
+    let k = 0;
+    for (const [emoji, n] of Object.entries(counts)) {
+      for (let i = 0; i < Math.min(n, 6); i++) add.push({ id: rid * 1000 + k++, emoji, x: 6 + Math.floor(Math.random() * 86) });
+    }
+    if (!add.length) return;
+    setSprites((s) => [...s.slice(-40), ...add]);
+    const ids = new Set(add.map((a) => a.id));
+    const t = setTimeout(() => setSprites((s) => s.filter((sp) => !ids.has(sp.id))), 1500);
+    return () => clearTimeout(t);
+  }, [rid, counts]);
+
+  // Listener → DJ song request (F1).
+  const [reqText, setReqText] = useState("");
+  const [reqSent, setReqSent] = useState(false);
+  const submitRequest = (e: FormEvent) => {
+    e.preventDefault();
+    const t = reqText.trim();
+    if (!t) return;
+    room.requestSong(t);
+    setReqText("");
+    setReqSent(true);
+    setTimeout(() => setReqSent(false), 2400);
+  };
+
   const report = (m: { id: string; dev: string; text: string }) => {
     void fileReport({ kind: "chat", room: room.listeningTo ?? undefined, dev: m.dev, text: m.text });
     setReported((s) => new Set(s).add(m.id)); // optimistic — flag stays marked
@@ -35,9 +72,35 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
     setText("");
   };
   const placeholder = off ? "Chat is off" : room.iAmMuted ? "You're muted" : room.chatSlow > 0 ? `Slow mode · ${room.chatSlow}s` : "Say something…";
+  const pct = Math.round(room.hype * 100);
 
   return (
     <div className="chat-panel">
+      {crowd && (
+        <>
+          <div className="hype-row">
+            <span className="hype-label">🔥 Hype</span>
+            <div className={`hype-bar ${pct >= 70 ? "hot" : ""}`}>
+              <div className="hype-fill" style={{ width: `${pct}%` }} />
+              <div className="hype-sprites" aria-hidden="true">
+                {sprites.map((s) => (
+                  <span key={s.id} className="hype-sprite" style={{ left: `${s.x}%` }}>
+                    {s.emoji}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="react-bar">
+            {REACTIONS.map((e) => (
+              <button key={e} className="react-btn" onClick={() => room.react(e)} aria-label={`React ${e}`}>
+                {e}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       <div className="social-section-head chat-head">
         💬 Chat
         {room.host && (
@@ -93,6 +156,24 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
         })}
         <div ref={endRef} />
       </div>
+
+      {/* Listener → DJ song request (F1) — the host sees the ranked list in the body. */}
+      {room.listeningTo && (
+        <form className="request-form" onSubmit={submitRequest}>
+          <input
+            className="request-input"
+            value={reqText}
+            onChange={(e) => setReqText(e.target.value)}
+            placeholder={reqSent ? "✓ Sent to the DJ" : "Request a song…"}
+            maxLength={120}
+            aria-label="Request a song"
+          />
+          <button className="request-send" type="submit" disabled={!reqText.trim()}>
+            Request
+          </button>
+        </form>
+      )}
+
       <form className="chat-form" onSubmit={submit}>
         <input
           className="chat-input"

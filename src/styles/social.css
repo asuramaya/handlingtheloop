@@ -731,47 +731,6 @@ span.profile-handle:hover {
   cursor: default;
 }
 
-/* --- Hype HUD (F2): the crowd-energy meter in the chin / board HUD -------------- */
-.hype-hud {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  margin-right: 4px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, #c8506a 45%, var(--line));
-  background: color-mix(in srgb, #c8506a 9%, transparent);
-  cursor: pointer;
-}
-.hype-hud:hover {
-  border-color: #c8506a;
-}
-.hype-hud-icon {
-  font-size: 12px;
-  filter: grayscale(0.3);
-}
-.hype-hud.hot .hype-hud-icon {
-  filter: none;
-  animation: live-pulse 1.1s ease-in-out infinite;
-}
-.hype-hud-bar {
-  width: 56px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--line);
-  overflow: hidden;
-}
-.hype-hud-fill {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #c8506a, #ff7a3c);
-  transition: width 0.3s ease-out;
-}
-.hype-hud.hot .hype-hud-fill {
-  box-shadow: 0 0 8px #ff7a3c;
-}
-
 /* --- Published-set list (G1d): Discover + public-profile browse cards ----------- */
 .set-list {
   list-style: none;
@@ -1920,6 +1879,15 @@ span.profile-handle:hover {
   border-radius: 11px;
   border: 1px solid var(--line);
   background: var(--panel-2);
+}
+/* When the crowd channel carries hype/reactions, tint the card + rule off the crowd controls
+   from the chat below so it reads as one unified channel (hype → react → chat). */
+.chat-panel:has(.hype-row) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.chat-panel .react-bar {
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
 }
 .chat-head {
   display: flex;

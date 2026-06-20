@@ -1711,9 +1711,10 @@ export class Deck {
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
   private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush"]);
   private makeFx(kind: string): FxDevice | null {
+    if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
       case "eq":
-        return this.rack.list.includes(this.eq) ? null : this.eq; // single EQ instance
+        return this.eq; // single instance (the guard above prevents a second)
       case "delay":
         return new DelayFx(this.ctx);
       case "reverb":

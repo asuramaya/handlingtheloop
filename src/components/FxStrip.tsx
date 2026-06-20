@@ -207,7 +207,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           </button>
           {paletteOpen && (
             <div className="fx-palette" role="menu">
-              {ADDABLE.filter((a) => a.kind !== "eq" || !deck.hasFxKind("eq")).map((a) => (
+              {/* One of each kind per channel — hide any effect already in this rack. */}
+              {ADDABLE.filter((a) => !deck.hasFxKind(a.kind)).map((a) => (
                 <button key={a.kind} className="fx-palette-item" onClick={() => addDevice(a.kind)} role="menuitem">
                   {a.label}
                 </button>

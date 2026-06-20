@@ -233,6 +233,18 @@ export function AudioTab({
               </option>
             ))}
           </select>
+          {/* Bluetooth/wireless cue device → warn: A2DP adds large latency and can shift pitch
+              (the cue routes through a MediaStream <audio> sink, unlike the native master). The
+              fix is a wired/USB output — no code makes a Bluetooth cue accurate. (#13) */}
+          {(() => {
+            const cueLabel = outputs.find((d) => d.deviceId === settings.audioCueOutputId)?.label ?? "";
+            return /\b(bluetooth|airpods?|wireless|bt|beats|buds|jabra)\b/i.test(cueLabel) ? (
+              <p className="settings-hint" style={{ color: "#ffd250" }}>
+                ⚠ “{cueLabel}” looks like a Bluetooth output. Wireless headphones add ~150–300&nbsp;ms of latency
+                and can shift the cue’s pitch — use a <strong>wired / USB</strong> output for accurate cueing.
+              </p>
+            ) : null;
+          })()}
           <p className="settings-hint muted">
             Pick a second device (headphones) to pre-listen each deck like a DJ board. The deck’s <strong>CUE</strong>{" "}
             button becomes a fader — tap still sets / jumps the cue point, drag or scroll sets its headphone level.

@@ -652,6 +652,12 @@ export function App() {
   // dedupes so we reconcile a given videoId once (live edits after that flow via intents).
   const lastSnapshotRef = useRef<SessionSnapshot | null>(null);
   const reconciledTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
+  // P2 (snapshot/restore across a rig visit): `homeAdoptAt` = when applyRoomSnapshot last
+  // adopted a real board (so the return-home logic can tell "the rig's live state already
+  // restored me" from "I'm solo → replay preVisit"). `preVisitRef` = my own board, captured
+  // the instant I leave home to visit another rig (in-memory → can't outlive this app load).
+  const homeAdoptAt = useRef(0);
+  const preVisitRef = useRef<SessionSnapshot | null>(null);
   // Graceful follower sync: when we last did a follow-driven seek (so the steady-state drift
   // corrector doesn't fire back-to-back and "skip/repeat"), and when we last saw a tick per
   // deck (so the post-decode fallback doesn't start from the now-stale snapshot position when
@@ -1538,6 +1544,10 @@ export function App() {
   const lastPersist = useRef<string>("");
   const persistSession = useCallback((immediate = false) => {
     const doSave = () => {
+      // P2: while VISITING another rig the local engine mirrors THEIR board — never let it
+      // overwrite my own solo board in localStorage, or a cold reopen-while-visiting would
+      // boot into the visited set. My board stays the last thing persisted before I left.
+      if (roomRef.current?.attachment.to === "rig") return;
       const snap = buildSnapshot();
       const json = JSON.stringify(snap);
       if (json === lastPersist.current) return; // unchanged → no write, no jank
@@ -2029,6 +2039,7 @@ export function App() {
           reconciledTarget.current[id] = d.videoId;
         }
       });
+      homeAdoptAt.current = performance.now(); // P2: a real board was adopted (cancels a pending preVisit restore)
       refresh();
     },
     [engine, runRoomLoad, reconcileDeckState, refresh],
@@ -3636,6 +3647,65 @@ export function App() {
       refresh();
     }
   }, [room.enabled, room.status, engine, refresh]);
+
+  // Cue (PFL) is a per-device LOCAL monitor — NOT part of the shared board — so it must be
+  // zeroed on every context transition: attaching to / leaving a VISITED rig (home↔rig), or
+  // a replay start/stop. Otherwise a cue send left open from a prior context bleeds the now
+  // remote/replay-driven deck audio into the cue device "at whatever volume" — the ghost
+  // (#15: (a) unasked bleed + (b) stale level). Keyed on attachment+replay only, so a plain
+  // join/leave of your OWN home rig keeps your cue (it's yours there). Fires on mount too
+  // (cue is already 0 → harmless). Re-cue deliberately after a transition.
+  useEffect(() => {
+    engine.deckA.setCueLevel(0);
+    engine.deckB.setCueLevel(0);
+    refresh();
+  }, [room.attachment.to, replay.active, engine, refresh]);
+
+  // Load a SessionSnapshot onto THIS device's decks unconditionally (mirrors the boot-
+  // restore) — used to put my OWN board back when I return home from visiting another rig.
+  // Not gated on the follower path (applyRoomSnapshot is), because here I'm the driver
+  // restoring my own set. (A deck empty in the snapshot is left as-is for now — restoring
+  // loaded decks is the common case; a stale visited track on an unused deck is a minor edge.)
+  const restoreBoard = useCallback(
+    (snap: SessionSnapshot) => {
+      setCrossfade(snap.crossfade);
+      engine.setCrossfade(snap.crossfade);
+      setZoom(snap.zoom);
+      (["A", "B"] as DeckId[]).forEach((id) => {
+        const d = snap.decks[id];
+        if (!d?.videoId) return;
+        const track: TrackMeta = { videoId: d.videoId, title: d.name, artist: d.artist, duration: d.duration, thumbnail: null, views: null, bpm: d.bpm };
+        void loadTrackToDeck(id, track, d);
+      });
+      refresh();
+    },
+    [engine, loadTrackToDeck, refresh],
+  );
+
+  // P2: snapshot/restore my board across a VISIT to another rig. preVisit is captured the
+  // instant I leave home, BEFORE the visited board overwrites my engine (network latency
+  // makes the synchronous capture safe). On return I prefer the rig's LIVE state — another
+  // of my devices may have advanced it, adopted via applyRoomSnapshot when I come back a
+  // follower (it bumps homeAdoptAt) — and replay preVisit only if no live home snapshot lands
+  // within a grace (the solo / cold-home case). Fixes the lost-solo-board defect: leaving a
+  // visit used to strand you on the visited board.
+  const prevAttachRef = useRef(room.attachment.to);
+  useEffect(() => {
+    const prev = prevAttachRef.current;
+    const cur = room.attachment.to;
+    prevAttachRef.current = cur;
+    if (prev === cur) return;
+    if (prev === "home" && cur === "rig") {
+      preVisitRef.current = buildSnapshot();
+    } else if (prev === "rig" && cur === "home") {
+      const armedAt = performance.now();
+      const snap = preVisitRef.current;
+      window.setTimeout(() => {
+        if (homeAdoptAt.current > armedAt) return; // the rig's live state already restored me
+        if (snap) restoreBoard(snap);
+      }, 2000);
+    }
+  }, [room.attachment.to, buildSnapshot, restoreBoard]);
 
   // Anonymous first run: nothing saved + empty collection → drop 2 random
   // community tracks onto the decks so a new user lands on something playable.

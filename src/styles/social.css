@@ -1002,16 +1002,52 @@ span.profile-handle:hover {
   font-size: 10.5px;
   color: var(--muted);
 }
+.replay-track {
+  position: relative;
+}
+/* Trim mode: give the bar room so the IN/OUT handles read clearly above it. */
+.replay-track.trimming {
+  height: 12px;
+  overflow: visible;
+  margin: 12px 0;
+}
 .replay-trim-shade {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
-  border-left: 2px solid var(--accent);
-  border-right: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  pointer-events: none;
 }
-.replay-track {
-  position: relative;
+/* The IN/OUT markers — tall accent handles with a flag label, sitting proud of the track. */
+.replay-trim-mark {
+  position: absolute;
+  top: -7px;
+  bottom: -7px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+.replay-trim-mark::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: #08111a;
+  background: var(--accent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.replay-trim-mark.out::after {
+  top: auto;
+  bottom: -15px;
 }
 .rec-trim {
   padding: 4px 9px;

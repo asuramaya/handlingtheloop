@@ -34,7 +34,6 @@ export function ReplayBar({ replay, trim }: { replay: ReplayState; trim?: TrimEd
   };
 
   const dur = replay.duration || 1;
-  const trimmed = trim && (tin > 0 || tout < replay.duration);
 
   return (
     <div className="replay-bar">
@@ -65,8 +64,14 @@ export function ReplayBar({ replay, trim }: { replay: ReplayState; trim?: TrimEd
           {replay.loading ? "…" : replay.playing ? "❚❚" : "▶"}
         </button>
         <span className="replay-time">{fmtTime(Math.round(replay.position / 1000))}</span>
-        <div className="replay-track" onClick={onScrub} role="slider" aria-label="Seek" aria-valuenow={Math.round(pct)}>
-          {trimmed && <div className="replay-trim-shade" style={{ left: `${(tin / dur) * 100}%`, width: `${((tout - tin) / dur) * 100}%` }} />}
+        <div className={`replay-track ${trim ? "trimming" : ""}`} onClick={onScrub} role="slider" aria-label="Seek" aria-valuenow={Math.round(pct)}>
+          {trim && (
+            <>
+              <div className="replay-trim-shade" style={{ left: `${(tin / dur) * 100}%`, width: `${((tout - tin) / dur) * 100}%` }} />
+              <div className="replay-trim-mark in" style={{ left: `${(tin / dur) * 100}%` }} data-label="IN" />
+              <div className="replay-trim-mark out" style={{ left: `${(tout / dur) * 100}%` }} data-label="OUT" />
+            </>
+          )}
           <div className="replay-fill" style={{ width: `${pct}%` }} />
         </div>
         <span className="replay-time">{fmtTime(Math.round(replay.duration / 1000))}</span>

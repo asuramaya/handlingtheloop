@@ -511,6 +511,73 @@ body {
   float: right;
   opacity: 0.7;
 }
+/* Mic + capture IO cluster — sits at the end of the strip row, after the 12 global pads. */
+.smp-io {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding-left: 5px;
+  margin-left: 3px;
+  border-left: 1px solid var(--line);
+}
+.smp-io button {
+  font: 700 10px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+.smp-io button:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.smp-io-src {
+  min-width: 34px;
+  color: var(--accent);
+}
+.smp-io-btn.on {
+  background: color-mix(in srgb, var(--accent) 26%, var(--panel));
+  border-color: var(--accent);
+}
+.smp-io-rec.armed {
+  background: color-mix(in srgb, #c0334e 40%, var(--panel));
+  border-color: #e23a57;
+  color: #fff;
+  animation: smp-rec-pulse 1s ease-in-out infinite;
+}
+@keyframes smp-rec-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+/* Mic level/duck sliders — overlay below the strip like the error toast. */
+.smp-mic-ctl {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  z-index: 5;
+  display: flex;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.smp-mic-ctl label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 700 9px ui-monospace, monospace;
+  color: var(--muted, var(--text));
+}
+.smp-mic-ctl input[type="range"] {
+  width: 78px;
+}
 /* Pad context menu (reuses .ctx-menu): mode picker + level + clear. */
 .smp-menu .smp-modes {
   display: flex;

@@ -4049,7 +4049,7 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <SamplerStrip sampler={sampler} ctlRef={samplerCtl} />
+          <SamplerStrip sampler={sampler} ctlRef={samplerCtl} engine={engine} />
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}

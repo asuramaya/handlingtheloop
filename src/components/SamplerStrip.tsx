@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
-import type { SampleMode } from "@htl";
+import type { AudioEngine, SampleMode } from "@htl";
 import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
+
+// Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
+// exists. Each captures into the next free global pad (owned-audio tier).
+type CapSource = "master" | "deckA" | "deckB" | "mic";
+const SRC_LABEL: Record<CapSource, string> = { master: "MIX", deckA: "A", deckB: "B", mic: "MIC" };
+const SRC_TAKE: Record<CapSource, string> = { master: "Mix take", deckA: "Deck A take", deckB: "Deck B take", mic: "Mic take" };
 
 // The 12 GLOBAL sample pads (master-routed) that sit over the A/B crossfader — uploaded
 // account clips that cut through the mix. The per-deck "play X→Y" region samples (8 each)
@@ -13,11 +19,67 @@ const MODES: SampleMode[] = ["oneshot", "gate", "loop", "bounce"];
 export function SamplerStrip({
   sampler,
   ctlRef,
+  engine,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
+  engine: AudioEngine;
 }) {
   const s = sampler;
+
+  // Mic (talkover) + capture-record controls. Captures land in the next free GLOBAL pad.
+  const [micOn, setMicOn] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
+  const [micLevel, setMicLevel] = useState(0.85);
+  const [duck, setDuck] = useState(0.6);
+  const [showMic, setShowMic] = useState(false); // level/duck expander
+  const [recSrc, setRecSrc] = useState<CapSource>("master");
+  const [recording, setRecording] = useState(false);
+  const [ioErr, setIoErr] = useState<string | null>(null);
+
+  // Toggle talkover; first use acquires the mic (permission prompt).
+  const toggleMic = async () => {
+    if (!engine.micReady) {
+      setMicBusy(true);
+      const ok = await engine.enableMic();
+      setMicBusy(false);
+      if (!ok) {
+        setIoErr("Mic unavailable — check the browser permission (needs HTTPS).");
+        return;
+      }
+      engine.setMicLevel(micLevel);
+      engine.setMicDuck(duck);
+    }
+    const next = !micOn;
+    setMicOn(next);
+    engine.setMicOn(next);
+    setShowMic(next);
+  };
+
+  const cycleSrc = () => {
+    const order: CapSource[] = engine.canMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
+    setRecSrc((c) => order[(order.indexOf(c) + 1) % order.length]);
+  };
+
+  const toggleRec = async () => {
+    if (recording) {
+      setRecording(false);
+      const take = await engine.stopCapture();
+      if (take) await s.captureToGlobal(take, SRC_TAKE[recSrc]);
+      else setIoErr("Nothing captured.");
+      return;
+    }
+    setIoErr(null);
+    if (recSrc === "mic" && !engine.micReady) {
+      const ok = await engine.enableMic();
+      if (!ok) {
+        setIoErr("Mic unavailable — check the browser permission (needs HTTPS).");
+        return;
+      }
+    }
+    if (engine.startCapture(recSrc)) setRecording(true);
+    else setIoErr("Couldn't start recording.");
+  };
   // Expose trigger/release so App's MIDI handler can fire the pads (kept out of App state).
   useEffect(() => {
     if (!ctlRef) return;
@@ -133,9 +195,31 @@ export function SamplerStrip({
         );
       })}
 
-      {s.error && (
-        <div className="smp-error" role="status" onClick={s.clearError}>
-          {s.error} <span className="smp-error-x">✕</span>
+      {/* Mic + capture IO — captures drop into the next free global pad above. */}
+      <div className="smp-io">
+        {engine.canMic && (
+          <button className={`smp-io-btn ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Microphone talkover — music ducks while you talk">
+            🎙{micBusy ? "…" : micOn ? " ON" : ""}
+          </button>
+        )}
+        <button className="smp-io-src" onClick={cycleSrc} title="Record source — what the ● captures">
+          {SRC_LABEL[recSrc]}
+        </button>
+        <button className={`smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
+          {recording ? "■ STOP" : "● REC"}
+        </button>
+      </div>
+
+      {showMic && micOn && (
+        <div className="smp-mic-ctl">
+          <label>LVL<input type="range" min={0} max={1} step={0.02} value={micLevel} onChange={(e) => { const v = Number(e.target.value); setMicLevel(v); engine.setMicLevel(v); }} /></label>
+          <label>DUCK<input type="range" min={0} max={1} step={0.02} value={duck} onChange={(e) => { const v = Number(e.target.value); setDuck(v); engine.setMicDuck(v); }} /></label>
+        </div>
+      )}
+
+      {(s.error || ioErr) && (
+        <div className="smp-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
+          {s.error || ioErr} <span className="smp-error-x">✕</span>
         </div>
       )}
 

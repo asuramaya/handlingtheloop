@@ -25,6 +25,8 @@ export { TRACK_DND_MIME } from "./lib/trackTable";
 interface TrackTableProps {
   tracks: TrackMeta[];
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
+  onQueue?: (track: TrackMeta) => void; // ＋ Add to the auto-mix queue
+  onQueueNext?: (track: TrackMeta) => void; // ↑ Play next
   onRemove?: (videoId: string) => void;
   removeTitle?: string;
   emptyHint: string;
@@ -58,6 +60,8 @@ interface TrackTableProps {
 export function TrackTable({
   tracks,
   onLoad,
+  onQueue,
+  onQueueNext,
   onRemove,
   removeTitle,
   emptyHint,
@@ -461,6 +465,8 @@ export function TrackTable({
           onClose={() => setMenu(null)}
           byId={byId}
           onLoad={onLoad}
+          onQueue={onQueue}
+          onQueueNext={onQueueNext}
           onRemove={onRemove}
           removeTitle={removeTitle}
           playlists={playlists}

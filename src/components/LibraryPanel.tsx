@@ -70,6 +70,11 @@ export function LibraryPanel({
   onOpenChange = () => {},
   auto,
 }: LibraryPanelProps) {
+  // ＋ Queue / ↑ Play next on every track row — the obvious "play later" alongside Load A/B.
+  // Routed through the queue authority (host local / controlling remote → intent); hidden when
+  // this device can't edit the queue (a non-controlling mirror).
+  const queueAdd = auto?.canEdit ? auto.edit.add : undefined;
+  const queueNext = auto?.canEdit ? auto.edit.addNext : undefined;
   // The open library tab (Collection / Community / a playlist / Search / Sync) is
   // remembered across reloads. One JSON blob holds all three so the right tab reopens.
   // A persisted playlist that no longer exists falls back to Collection.
@@ -733,6 +738,8 @@ export function LibraryPanel({
           // takes over the content area — no separate dock anymore.
           <Explorer
             onLoad={onLoad}
+            onQueue={queueAdd}
+            onQueueNext={queueNext}
             onAdd={library.addTrack}
             inCollection={inCollection}
             deckLoaded={deckLoaded}
@@ -756,6 +763,8 @@ export function LibraryPanel({
           <TrackTable
             tracks={library.collection.map(withCached)}
             onLoad={onLoad}
+            onQueue={queueAdd}
+            onQueueNext={queueNext}
             onRemove={library.removeTrack}
             removeTitle="Remove from collection"
             emptyHint="Your collection is empty. Tap “Search YouTube” to find tracks and add them with +."
@@ -771,6 +780,8 @@ export function LibraryPanel({
           <TrackTable
             tracks={community.map(withCached)}
             onLoad={onLoad}
+            onQueue={queueAdd}
+            onQueueNext={queueNext}
             emptyHint="No community tracks yet — they appear here as people load and cache songs. (Production only.)"
             loadedIds={loadedIds}
             deckLoaded={deckLoaded}
@@ -794,6 +805,8 @@ export function LibraryPanel({
               <TrackTable
                 tracks={tracks}
                 onLoad={onLoad}
+                onQueue={queueAdd}
+                onQueueNext={queueNext}
                 onRemove={(vid) => library.removeFromPlaylist(pl.id, vid)}
                 removeTitle="Remove from playlist"
                 emptyHint="Empty playlist. Add tracks from Search or your Collection."

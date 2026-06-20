@@ -6,6 +6,8 @@ import { TrackTable } from "./TrackTable";
 
 interface ExplorerProps {
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
+  onQueue?: (track: TrackMeta) => void;
+  onQueueNext?: (track: TrackMeta) => void;
   onAdd: (track: TrackMeta) => void;
   inCollection: (videoId: string) => boolean;
   // Paste a playlist link/id → pull it straight into the library.
@@ -22,7 +24,7 @@ interface ExplorerProps {
 // there's no arbitrary-URL import, so nothing untrusted gets fetched. Results render
 // through the shared TrackTable (same look/sort/columns as the library + queue); this
 // component just owns the search request + the persisted dig session.
-export function Explorer({ onLoad, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors }: ExplorerProps) {
+export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors }: ExplorerProps) {
   const saved = useRef(loadSearchState()).current;
   const [results, setResults] = useState<TrackMeta[]>(saved.results);
   const [searching, setSearching] = useState(false);
@@ -78,6 +80,8 @@ export function Explorer({ onLoad, onAdd, inCollection, onIngestPlaylist, playli
     <TrackTable
       tracks={results}
       onLoad={onLoad}
+      onQueue={onQueue}
+      onQueueNext={onQueueNext}
       onAddToCollection={onAdd}
       inCollection={inCollection}
       playlists={playlists}

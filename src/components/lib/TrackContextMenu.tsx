@@ -6,6 +6,8 @@ interface TrackContextMenuProps {
   onClose: () => void;
   byId: Map<string, TrackMeta>;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
+  onQueue?: (track: TrackMeta) => void; // add to the end of the auto-mix queue
+  onQueueNext?: (track: TrackMeta) => void; // jump to the front of the queue
   onRemove?: (videoId: string) => void;
   removeTitle?: string;
   playlists?: { id: string; name: string }[];
@@ -24,6 +26,8 @@ export function TrackContextMenu({
   onClose,
   byId,
   onLoad,
+  onQueue,
+  onQueueNext,
   onRemove,
   removeTitle,
   playlists,
@@ -66,6 +70,28 @@ export function TrackContextMenu({
             >
               ▶ Load to Deck B
             </button>
+            {/* Queue actions — "play later" (vs Load = "play now"). Multi-select queues all. */}
+            {(onQueue || onQueueNext) && <div className="ctx-sep" />}
+            {onQueueNext && (
+              <button
+                onClick={() => {
+                  tracksOf(menu.ids).forEach((t) => onQueueNext(t));
+                  onClose();
+                }}
+              >
+                ↑ Play next
+              </button>
+            )}
+            {onQueue && (
+              <button
+                onClick={() => {
+                  tracksOf(menu.ids).forEach((t) => onQueue(t));
+                  onClose();
+                }}
+              >
+                ＋ Add to queue
+              </button>
+            )}
           </>
         )}
 

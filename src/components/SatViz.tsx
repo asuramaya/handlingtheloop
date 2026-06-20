@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck, SaturatorFx } from "@htl/audio";
-import { drawCurveInset } from "./curveInset";
+import { drawCurvePanel, fitCanvas } from "./curveInset";
 
 // The Saturn-glass WYSIWYG for the multiband saturator. A log-frequency display:
 //   • live spectrum of the device output (the "see the distortion" backdrop),
@@ -27,6 +27,7 @@ interface SatVizProps {
 
 export function SatViz({ deck, slot, accent, set }: SatVizProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const curveRef = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ kind: "xover" | "drive"; idx: number; grab: number } | null>(null);
 
   useEffect(() => {
@@ -108,27 +109,32 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
         ctx2d.stroke();
       }
 
-      // The EFFECTIVE transfer readout (standardized curve inset, bottom-right): drive (hottest
-      // band) pushes the input toward the saturated edges, bias shifts it (asymmetry) — so it
-      // reacts to drive/bias/style/punish, not just the raw style curve.
-      const curve = dev.curveFor();
-      const L = curve.length;
-      let dmax = 0;
-      for (let i = 0; i < BANDS; i++) dmax = Math.max(dmax, dev.driveOf(i));
-      const g = Math.pow(10, dmax);
-      const bias = dev.getParam("bias") * 0.4;
-      drawCurveInset(
-        ctx2d,
-        w,
-        h,
-        accent,
-        (t) => {
-          const inp = t * 2 - 1;
-          const driven = Math.max(-1, Math.min(1, g * inp + bias));
-          return curve[Math.round(((driven + 1) / 2) * (L - 1))];
-        },
-        { bipolar: true },
-      );
+      // The EFFECTIVE transfer readout, in its own panel to the right: drive (hottest band)
+      // pushes the input toward the saturated edges, bias shifts it (asymmetry) — so it reacts
+      // to drive/bias/style/punish, not just the raw style curve.
+      const cc = curveRef.current;
+      if (cc) {
+        const f = fitCanvas(cc);
+        if (f.ctx) {
+          const curve = dev.curveFor();
+          const L = curve.length;
+          let dmax = 0;
+          for (let i = 0; i < BANDS; i++) dmax = Math.max(dmax, dev.driveOf(i));
+          const g = Math.pow(10, dmax);
+          const bias = dev.getParam("bias") * 0.4;
+          drawCurvePanel(
+            f.ctx,
+            f.w,
+            f.h,
+            accent,
+            (t) => {
+              const driven = Math.max(-1, Math.min(1, g * (t * 2 - 1) + bias));
+              return curve[Math.round(((driven + 1) / 2) * (L - 1))];
+            },
+            { bipolar: true },
+          );
+        }
+      }
 
       raf = requestAnimationFrame(draw);
     };
@@ -193,8 +199,13 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
   };
 
   return (
-    <div className="sat-viz">
-      <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+    <div className="fx-viz-row">
+      <div className="sat-viz">
+        <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+      </div>
+      <div className="fx-curve">
+        <canvas ref={curveRef} className="fx-curve-canvas" />
+      </div>
     </div>
   );
 }

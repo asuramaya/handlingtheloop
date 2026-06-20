@@ -1798,17 +1798,40 @@ button.room-tog:hover {
   flex: 1;
 }
 
-/* Saturator WYSIWYG — a sized WRAPPER (the surplus-absorber, basis 0, collapses first) with
-   the canvas absolutely filling it, matching .dly-viz so the panel fits --fx-body-h and the
-   canvas never fights its own intrinsic aspect ratio. */
+/* FX viz row: the main display (flex) + a fixed curve-preview panel to its RIGHT. The ROW is
+   the panel's surplus-absorber (basis 0, fits --fx-body-h); both children stretch to its height. */
+.fx-viz-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  gap: 6px;
+}
+/* Main WYSIWYG display — the canvas absolutely fills it (the .dly-viz pattern, no aspect fight). */
 .sat-viz {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   position: relative;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 70%, #000);
   overflow: hidden;
+}
+/* Standardized curve-preview panel (transfer / filter response) — right of the main viz. */
+.fx-curve {
+  flex: 0 0 clamp(64px, 22%, 96px);
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 70%, #000);
+  overflow: hidden;
+}
+.fx-curve-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .sat-canvas {
   position: absolute;

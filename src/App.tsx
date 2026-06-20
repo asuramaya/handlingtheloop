@@ -1937,6 +1937,11 @@ export function App() {
       if (deck.fxOn !== (d.fxOn ?? true)) deck.setFx(d.fxOn ?? true);
       if (deck.keylock !== d.keylock) deck.setKeylock(d.keylock);
       if (deck.quantizing !== d.quantize) deck.setQuantize(d.quantize);
+      // The FX RACK (Delay/Reverb/Saturator…) — reconcile it too, so a track loaded via a `load`
+      // intent (no restore snapshot) gets its backing effects. Without this the ECHO/VERB/SAT
+      // throws fire into an empty rack (silent) on replay AND for a guest who loaded by intent.
+      // Per-videoId dedupe (reconciledTarget) means this runs once per load, not over live edits.
+      if (d.fx !== undefined) deck.applyFxSnapshot(d.fx);
     },
     [engine, setStatusFor],
   );
@@ -3470,6 +3475,18 @@ export function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView, sendHostLyrics]);
+
+  // On GO-LIVE, force a fresh full snapshot so the recording's baseline captures the CURRENT
+  // decks + FX racks (a rack/track set up before broadcasting would otherwise be missed, and the
+  // FX-pad throws would replay into an empty rack). The capture is already running by now.
+  useEffect(() => {
+    if (room.roomPublic && room.isAnchor && room.status === "online") {
+      room.publishState(buildSnapshot());
+      sendHostStemView("A");
+      sendHostStemView("B");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.roomPublic]);
 
   // The auto-mixer drives the host's decks DIRECTLY (play/seek/sync/key/EQ) — those
   // don't emit the per-control intents the session relays, so a guest would see the

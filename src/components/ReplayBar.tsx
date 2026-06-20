@@ -6,22 +6,19 @@ import { fmtTime } from "../util/format";
 // (the decks are being driven by the recipe). Play/pause, a seekable progress bar, and stop
 // (which releases the decks). A D5 engine-version mismatch warns that the rebuild may differ.
 // G3 — mark a clip [in,out] and copy a shareable /set/:id?t= link to that moment.
+const CLIP_LEN_MS = 30_000; // a "moment" = the ~30s leading up to where you tapped
+
 export function ReplayBar({ replay }: { replay: ReplayState }) {
-  const [clipIn, setClipIn] = useState<number | null>(null);
   const [shared, setShared] = useState(false);
   if (!replay.active) return null;
   const pct = replay.duration > 0 ? (replay.position / replay.duration) * 100 : 0;
 
-  // First tap marks the in-point; second tap (out) copies the clip link to this moment.
+  // One tap = share the moment: the 30s ending at the playhead (the "share THAT drop" gesture).
   const clip = () => {
-    if (clipIn == null) {
-      setClipIn(replay.position);
-      return;
-    }
-    const a = Math.round(Math.min(clipIn, replay.position) / 1000);
-    const b = Math.round(Math.max(clipIn, replay.position) / 1000);
-    setClipIn(null);
-    if (!replay.setId || b <= a) return;
+    if (!replay.setId) return;
+    const b = Math.round(replay.position / 1000);
+    const a = Math.max(0, b - CLIP_LEN_MS / 1000);
+    if (b <= a) return;
     const url = `${location.origin}/set/${replay.setId}?t=${a}-${b}`;
     const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
     if (nav.share) void nav.share({ url }).catch(() => {});
@@ -45,12 +42,8 @@ export function ReplayBar({ replay }: { replay: ReplayState }) {
             ⚠ different version
           </span>
         )}
-        <button
-          className={`replay-clip ${clipIn != null ? "armed" : ""}`}
-          onClick={clip}
-          title={clipIn == null ? "Clip — mark the start of a moment" : "Mark the end + copy the clip link"}
-        >
-          {shared ? "link copied ✓" : clipIn == null ? "⚑ Clip" : `⚑ out (${fmtTime(Math.round(clipIn / 1000))})`}
+        <button className="replay-clip" onClick={clip} title="Share this moment (the last 30s) as a clip link">
+          {shared ? "link copied ✓" : "⤴ Clip moment"}
         </button>
         <button className="replay-stop" onClick={replay.stop} title="Stop replay (release the decks)">
           ✕

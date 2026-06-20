@@ -615,21 +615,13 @@ export class DjRoom {
         // Only the HOST opens/closes the broadcast plane. Persisted so the room stays
         // public across a cold restart. Closing it evicts the anonymous listeners.
         if (!this.isHostDevice(self)) break;
-        this.isPublic = !!msg.on;
-        await this.state.storage.put("public", this.isPublic);
-        if (!this.isPublic) {
-          for (const w of this.state.getWebSockets()) {
-            const a = w.deserializeAttachment() as Attachment | null;
-            if (!a?.pub && !a?.stage) continue; // drop the crowd AND anyone they brought up onto the decks
-            try {
-              w.send(JSON.stringify({ t: "kicked", reason: "The host ended the public broadcast." } satisfies ServerMsg));
-            } catch {
-              /* socket already gone */
-            }
-            w.close(4002, "broadcast ended");
-          }
+        if (msg.on) {
+          this.isPublic = true;
+          await this.state.storage.put("public", true);
+          this.broadcastPresence();
+        } else {
+          await this.endBroadcast("The host ended the public broadcast.");
         }
-        this.broadcastPresence();
         break;
       }
     }
@@ -662,12 +654,39 @@ export class DjRoom {
     this.anchorGraceTimer = setTimeout(async () => {
       this.anchorGraceTimer = null;
       await this.load();
-      // Host back + live + joined → its reconnect already re-anchored; leave it. Still gone
-      // → release the clock (nextAnchor is likely null here, which clears it for the crowd).
+      // Host back + live + joined → its reconnect already re-anchored; leave it.
       if (this.anchorId === droppedAnchor && !(this.isLive(droppedAnchor) && this.isJoined(droppedAnchor))) {
-        await this.setAnchor(this.nextAnchor(droppedAnchor));
+        const next = this.nextAnchor(droppedAnchor);
+        if (!next && this.isPublic) {
+          // E7: the host ABANDONED a public broadcast (gone past grace, no one else can hold the
+          // clock). Don't strand the crowd on a frozen mix — END the broadcast so they're told
+          // and released, exactly as an explicit "stop" would. (The D1 directory row ages out via
+          // the freshness filter once the host's heartbeat stops.)
+          await this.endBroadcast("The host left.");
+        } else {
+          await this.setAnchor(next); // private room (or a handoff target) → release/hand the clock
+        }
       }
     }, DjRoom.ANCHOR_GRACE_MS);
+  }
+
+  // End the public broadcast: clear the flag (persisted) + evict the anonymous crowd AND any
+  // stage DJs they brought up, with a reason. Shared by the host's explicit stop and E7's
+  // host-abandonment grace expiry.
+  private async endBroadcast(reason: string): Promise<void> {
+    this.isPublic = false;
+    await this.state.storage.put("public", false);
+    for (const w of this.state.getWebSockets()) {
+      const a = w.deserializeAttachment() as Attachment | null;
+      if (!a?.pub && !a?.stage) continue;
+      try {
+        w.send(JSON.stringify({ t: "kicked", reason } satisfies ServerMsg));
+      } catch {
+        /* socket already gone */
+      }
+      w.close(4002, "broadcast ended");
+    }
+    this.broadcastPresence();
   }
 
   async webSocketError(ws: Ws): Promise<void> {

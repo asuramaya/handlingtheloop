@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
 import type { AudioEngine, SampleMode } from "@htl";
 import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
+import { ValueCell } from "./ValueCell";
 
 // Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
 // exists. Each captures into the next free global pad (owned-audio tier).
@@ -30,12 +31,26 @@ export function SamplerStrip({
   // Mic (talkover) + capture-record controls. Captures land in the next free GLOBAL pad.
   const [micOn, setMicOn] = useState(false);
   const [micBusy, setMicBusy] = useState(false);
-  const [micLevel, setMicLevel] = useState(0.85);
+  const [micVol, setMicVol] = useState(0.85); // talkover VOLUME (engine.setMicLevel)
   const [duck, setDuck] = useState(0.6);
-  const [showMic, setShowMic] = useState(false); // level/duck expander
+  const [monitor, setMonitor] = useState(false); // PFL — hear the mic in the cue/headphone bus
+  const [showMic, setShowMic] = useState(false); // vol/duck expander
   const [recSrc, setRecSrc] = useState<CapSource>("master");
   const [recording, setRecording] = useState(false);
   const [ioErr, setIoErr] = useState<string | null>(null);
+  const meterRef = useRef<HTMLSpanElement>(null);
+
+  // Live input-level meter: drive a bar width from engine.micLevel while the mic is live.
+  useEffect(() => {
+    if (!micOn && !monitor) return;
+    let raf = 0;
+    const tick = () => {
+      if (meterRef.current) meterRef.current.style.width = `${Math.round(engine.micLevel * 100)}%`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [engine, micOn, monitor]);
 
   // Toggle talkover; first use acquires the mic (permission prompt).
   const toggleMic = async () => {
@@ -47,13 +62,28 @@ export function SamplerStrip({
         setIoErr("Mic unavailable — check the browser permission (needs HTTPS).");
         return;
       }
-      engine.setMicLevel(micLevel);
+      engine.setMicLevel(micVol);
       engine.setMicDuck(duck);
     }
     const next = !micOn;
     setMicOn(next);
     engine.setMicOn(next);
     setShowMic(next);
+  };
+
+  // Monitor (PFL): hear the mic in the cue device. First use acquires the mic.
+  const toggleMonitor = async () => {
+    if (!engine.micReady) {
+      const ok = await engine.enableMic();
+      if (!ok) {
+        setIoErr("Mic unavailable — check the browser permission (needs HTTPS).");
+        return;
+      }
+    }
+    const next = !monitor;
+    setMonitor(next);
+    engine.setMicMonitor(next);
+    if (next) setShowMic(true);
   };
 
   const cycleSrc = () => {
@@ -200,6 +230,12 @@ export function SamplerStrip({
         {engine.canMic && (
           <button className={`smp-io-btn ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Microphone talkover — music ducks while you talk">
             🎙{micBusy ? "…" : micOn ? " ON" : ""}
+            <span className="smp-io-meter"><span ref={meterRef} /></span>
+          </button>
+        )}
+        {engine.canMic && (
+          <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Monitor — hear the mic in your headphone/cue device (needs a cue device set)">
+            MON
           </button>
         )}
         <button className="smp-io-src" onClick={cycleSrc} title="Record source — what the ● captures">
@@ -210,10 +246,10 @@ export function SamplerStrip({
         </button>
       </div>
 
-      {showMic && micOn && (
+      {showMic && (micOn || monitor) && (
         <div className="smp-mic-ctl">
-          <label>LVL<input type="range" min={0} max={1} step={0.02} value={micLevel} onChange={(e) => { const v = Number(e.target.value); setMicLevel(v); engine.setMicLevel(v); }} /></label>
-          <label>DUCK<input type="range" min={0} max={1} step={0.02} value={duck} onChange={(e) => { const v = Number(e.target.value); setDuck(v); engine.setMicDuck(v); }} /></label>
+          <ValueCell label="VOL" value={micVol} min={0} max={1} step={0.02} reset={0.85} onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }} format={(v) => `${Math.round(v * 100)}`} />
+          <ValueCell label="DUCK" value={duck} min={0} max={1} step={0.02} reset={0.6} onChange={(v) => { setDuck(v); engine.setMicDuck(v); }} format={(v) => `${Math.round(v * 100)}`} />
         </div>
       )}
 

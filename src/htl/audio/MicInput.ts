@@ -19,10 +19,14 @@ export class MicInput {
   private readonly clamp: WaveShaperNode; // saturate the envelope to [0,1] (no over-duck/invert)
   private readonly duckLP: BiquadFilterNode; // smooth the envelope (~12 Hz)
   private readonly duckDepth: GainNode; // −depth → pulls the music bus gain down
+  private readonly monitor: GainNode; // pre-level PFL send → cue bus (hear yourself in headphones)
+  private readonly meterAn: AnalyserNode; // input level (pre-level, post-HPF) for the UI meter
+  private readonly meterBuf: Float32Array<ArrayBuffer>;
 
   private _level = 0.85;
   private _duck = 0.6; // 0..1: how far the music dips when the mic is hot
   private _on = false; // talkover engaged (level → master)
+  private _monitor = false; // PFL — route the mic to the cue/headphone bus
   private _hasStream = false;
   private _deviceId = ""; // chosen input device ("" = system default)
 
@@ -46,15 +50,42 @@ export class MicInput {
     this.duckLP.frequency.value = 12;
     this.duckDepth = ctx.createGain();
     this.duckDepth.gain.value = 0; // set to −duck while ON
+    this.monitor = ctx.createGain();
+    this.monitor.gain.value = 0; // PFL send, off until monitoring
+    this.meterAn = ctx.createAnalyser();
+    this.meterAn.fftSize = 256;
+    this.meterBuf = new Float32Array(this.meterAn.fftSize);
 
     // static graph (the source attaches on enable):
     this.hpf.connect(this.level);
+    this.hpf.connect(this.meterAn); // meter the INPUT (pre-level) so it reads even before talkover
+    this.hpf.connect(this.monitor); // PFL → cue bus (engine wires monitor → cueMaster)
     this.level.connect(this.master); // talkover
     this.level.connect(this.tapNode); // recorder / sampler tap
     // sidechain duck: post-level envelope → −depth → music gain. Rests at the param's 1.0; a hot
     // mic adds a negative offset, dipping the music. clamp keeps the offset in [0,1]·(−depth).
     this.level.connect(this.rect).connect(this.clamp).connect(this.duckLP).connect(this.duckDepth);
     this.duckDepth.connect(this.musicDuck);
+  }
+
+  /** PFL monitor send — the engine connects this to the cue/headphone bus. */
+  get monitorOut(): AudioNode {
+    return this.monitor;
+  }
+  /** Live input level (RMS 0..1, pre-level) for the UI meter. 0 until a stream is acquired. */
+  get inputLevel(): number {
+    if (!this._hasStream) return 0;
+    this.meterAn.getFloatTimeDomainData(this.meterBuf);
+    let s = 0;
+    for (let i = 0; i < this.meterBuf.length; i++) s += this.meterBuf[i] * this.meterBuf[i];
+    return Math.min(1, Math.sqrt(s / this.meterBuf.length) * 2.2);
+  }
+  get monitoring() {
+    return this._monitor;
+  }
+  setMonitor(on: boolean) {
+    this._monitor = on;
+    this.monitor.gain.setTargetAtTime(this._hasStream && on ? 1 : 0, this.ctx.currentTime, 0.02);
   }
 
   /** The post-level mic signal — what the recorder/sampler captures. */
@@ -100,6 +131,7 @@ export class MicInput {
     this._on = wasOn; // keep talkover state across a device switch
     this.applyLevel();
     this.applyDuck();
+    this.setMonitor(this._monitor);
     return true;
   }
 

@@ -103,6 +103,7 @@ export class AudioEngine {
     // Live mic: talkover into master with a sidechain that ducks the music bus; its tap doubles
     // as a record source. Recorder captures any node into an AudioBuffer for the sampler.
     this.mic = new MicInput(this.ctx, this.master, this.musicBus.gain);
+    this.mic.monitorOut.connect(this.cueMaster); // PFL — hear the mic in the headphone/cue device
     this.recorder = new Recorder(this.ctx);
     // Sync follow/release: any tempo change routes through the state machine.
     this.deckA.onTempoChange = () => this.onDeckTempo("A");
@@ -306,6 +307,17 @@ export class AudioEngine {
   }
   setMicDuck(v: number) {
     this.mic.setDuck(v);
+  }
+  /** PFL — route the mic to the headphone/cue device so you can hear yourself. */
+  setMicMonitor(on: boolean) {
+    this.mic.setMonitor(on);
+  }
+  get micMonitoring(): boolean {
+    return this.mic.monitoring;
+  }
+  /** Live mic input level (RMS 0..1) for a meter. */
+  get micLevel(): number {
+    return this.mic.inputLevel;
   }
   get micReady(): boolean {
     return this.mic.hasStream;

@@ -554,7 +554,27 @@ body {
     opacity: 0.55;
   }
 }
-/* Mic level/duck sliders — overlay below the strip like the error toast. */
+/* Mic input-level meter — a thin bar under the 🎙 button, width driven by engine.micLevel. */
+.smp-io-meter {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+}
+.smp-io-meter > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+}
+.smp-io-btn {
+  position: relative;
+}
+/* Mic VOL/DUCK cells (the buttonoid ValueCells) — overlay below the strip like the error toast. */
 .smp-mic-ctl {
   position: absolute;
   top: 100%;
@@ -562,21 +582,15 @@ body {
   margin-top: 4px;
   z-index: 5;
   display: flex;
-  gap: 12px;
-  padding: 6px 10px;
+  gap: 8px;
+  padding: 7px 9px;
   border-radius: 6px;
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.smp-mic-ctl label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font: 700 9px ui-monospace, monospace;
-  color: var(--muted, var(--text));
-}
-.smp-mic-ctl input[type="range"] {
-  width: 78px;
+.smp-mic-ctl .vcell {
+  width: 52px;
+  height: 40px;
 }
 /* Pad context menu (reuses .ctx-menu): mode picker + level + clear. */
 .smp-menu .smp-modes {

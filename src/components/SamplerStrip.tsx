@@ -34,6 +34,7 @@ export function SamplerStrip({
   const [micVol, setMicVol] = useState(0.85); // talkover VOLUME (engine.setMicLevel)
   const [duck, setDuck] = useState(0.6);
   const [monitor, setMonitor] = useState(false); // PFL — hear the mic in the cue/headphone bus
+  const [micDest, setMicDest] = useState<"master" | "A" | "B">("master"); // PA, or into a deck's FX rack
   const [showMic, setShowMic] = useState(false); // vol/duck expander
   const [recSrc, setRecSrc] = useState<CapSource>("master");
   const [recording, setRecording] = useState(false);
@@ -84,6 +85,14 @@ export function SamplerStrip({
     setMonitor(next);
     engine.setMicMonitor(next);
     if (next) setShowMic(true);
+  };
+
+  // Cycle the mic destination: PA (master, ducks) → into deck A's FX rack → deck B's.
+  const cycleDest = () => {
+    const order = ["master", "A", "B"] as const;
+    const next = order[(order.indexOf(micDest) + 1) % order.length];
+    setMicDest(next);
+    engine.setMicRoute(next);
   };
 
   const cycleSrc = () => {
@@ -236,6 +245,11 @@ export function SamplerStrip({
         {engine.canMic && (
           <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Monitor — hear the mic in your headphone/cue device (needs a cue device set)">
             MON
+          </button>
+        )}
+        {engine.canMic && (
+          <button className="smp-io-src" onClick={cycleDest} title="Mic destination — PA (talkover, ducks the music) or into Deck A/B's FX rack">
+            →{micDest === "master" ? "PA" : micDest}
           </button>
         )}
         <button className="smp-io-src" onClick={cycleSrc} title="Record source — what the ● captures">

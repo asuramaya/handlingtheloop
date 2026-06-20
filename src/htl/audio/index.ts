@@ -15,7 +15,7 @@ export { CRUSH_WORKLET_SRC } from "./crushWorklet";
 export { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 export { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, type FxPreset } from "./fxPresets";
 export { decodeAudio } from "./decode";
-export { MicInput } from "./MicInput";
+export { MicInput, type MicRoute } from "./MicInput";
 export { Recorder, type Take } from "./Recorder";
 export { Sampler, type SampleMode, type SampleRoute, type PlayOpts } from "./Sampler";
 export { getCachedTrack, setCachedTrack, getCachedMeta, dropCachedBuffer, type CachedTrack } from "./trackCache";

@@ -9,6 +9,11 @@
 //                                         └─→ |x| → LP → −duck ─→ musicDuck.gain   (sidechain)
 import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
 
+// Where the mic lands: "master" = PA talkover (auto-duck on); "A"/"B" = into that deck's channel
+// input, so the deck's FX RACK + EQ + fader process the mic (no separate mic rack — and no
+// auto-duck there, since the mic would be inside the music bus and would duck itself).
+export type MicRoute = "master" | "A" | "B";
+
 export class MicInput {
   private stream: MediaStream | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -30,9 +35,12 @@ export class MicInput {
   private _hasStream = false;
   private _deviceId = ""; // chosen input device ("" = system default)
 
+  private readonly mixSend: GainNode; // level → mixSend → the chosen destination (re-routeable)
+  private _route: MicRoute = "master";
+
   constructor(
     private readonly ctx: AudioContext,
-    private readonly master: AudioNode, // talkover destination
+    private readonly dests: Record<MicRoute, AudioNode>, // master (PA, with duck) | A | B (deck rack → that deck's FX)
     private readonly musicDuck: AudioParam, // the music-bus gain we modulate (rests at 1)
   ) {
     this.hpf = ctx.createBiquadFilter();
@@ -41,13 +49,14 @@ export class MicInput {
     this.level = ctx.createGain();
     this.level.gain.value = 0; // silent until ON (and a stream exists)
     this.tapNode = ctx.createGain();
+    this.mixSend = ctx.createGain();
     this.rect = ctx.createWaveShaper();
     this.rect.curve = makeRectifyCurve();
     this.clamp = ctx.createWaveShaper();
     this.clamp.curve = makeClampCurve();
     this.duckLP = ctx.createBiquadFilter();
     this.duckLP.type = "lowpass";
-    this.duckLP.frequency.value = 12;
+    this.duckLP.frequency.value = 9; // gentle release — music returns smoothly between words
     this.duckDepth = ctx.createGain();
     this.duckDepth.gain.value = 0; // set to −duck while ON
     this.monitor = ctx.createGain();
@@ -60,11 +69,13 @@ export class MicInput {
     this.hpf.connect(this.level);
     this.hpf.connect(this.meterAn); // meter the INPUT (pre-level) so it reads even before talkover
     this.hpf.connect(this.monitor); // PFL → cue bus (engine wires monitor → cueMaster)
-    this.level.connect(this.master); // talkover
+    this.level.connect(this.mixSend);
+    this.mixSend.connect(this.dests.master); // default route: PA/master talkover
     this.level.connect(this.tapNode); // recorder / sampler tap
-    // sidechain duck: post-level envelope → −depth → music gain. Rests at the param's 1.0; a hot
-    // mic adds a negative offset, dipping the music. clamp keeps the offset in [0,1]·(−depth).
-    this.level.connect(this.rect).connect(this.clamp).connect(this.duckLP).connect(this.duckDepth);
+    // sidechain duck: PRE-LEVEL envelope → −depth → music gain. Tapped at the HPF (not post-level)
+    // so the duck follows VOICE PRESENCE regardless of the talkover VOL fader; clamp bounds the
+    // offset to [0,1]·(−depth); applyDuck gates it to master-route + on (no self-duck on a deck).
+    this.hpf.connect(this.rect).connect(this.clamp).connect(this.duckLP).connect(this.duckDepth);
     this.duckDepth.connect(this.musicDuck);
   }
 
@@ -174,13 +185,31 @@ export class MicInput {
     this._duck = Math.max(0, Math.min(1, v));
     this.applyDuck();
   }
+  get route() {
+    return this._route;
+  }
+  /** Route the mic to the PA (master, with auto-duck) or INTO a deck's channel (its FX rack
+   *  processes the voice; no auto-duck there). */
+  setRoute(dest: MicRoute) {
+    if (dest === this._route) return;
+    try {
+      this.mixSend.disconnect();
+    } catch {
+      /* ignore */
+    }
+    this._route = dest;
+    this.mixSend.connect(this.dests[dest]);
+    this.applyDuck(); // duck only makes sense on the master route
+  }
 
   private applyLevel() {
     const g = this._hasStream && this._on ? this._level : 0;
     this.level.gain.setTargetAtTime(g, this.ctx.currentTime, 0.02);
   }
   private applyDuck() {
-    const d = this._hasStream && this._on ? -this._duck : 0;
+    // Only duck when talking INTO the PA — on a deck route the mic is already in the music bus,
+    // so ducking it would pump the voice against itself.
+    const d = this._hasStream && this._on && this._route === "master" ? -this._duck : 0;
     this.duckDepth.gain.setTargetAtTime(d, this.ctx.currentTime, 0.03);
   }
 

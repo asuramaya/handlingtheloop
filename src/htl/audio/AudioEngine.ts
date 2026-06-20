@@ -1,7 +1,7 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
-import { MicInput } from "./MicInput";
+import { MicInput, type MicRoute } from "./MicInput";
 import { Recorder, type RecordSource, type Take } from "./Recorder";
 import { SCRATCH_WORKLET_SRC } from "./scratchWorklet";
 import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
@@ -102,7 +102,9 @@ export class AudioEngine {
     this.deckB.cueSend.connect(this.cueMaster);
     // Live mic: talkover into master with a sidechain that ducks the music bus; its tap doubles
     // as a record source. Recorder captures any node into an AudioBuffer for the sampler.
-    this.mic = new MicInput(this.ctx, this.master, this.musicBus.gain);
+    // Mic routes to the PA (master, with auto-duck) or INTO a deck's channel input (the deck's FX
+    // rack/EQ/fader then process the voice — no separate mic rack needed).
+    this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.input, B: this.deckB.rack.input }, this.musicBus.gain);
     this.mic.monitorOut.connect(this.cueMaster); // PFL — hear the mic in the headphone/cue device
     this.recorder = new Recorder(this.ctx);
     // Sync follow/release: any tempo change routes through the state machine.
@@ -307,6 +309,13 @@ export class AudioEngine {
   }
   setMicDuck(v: number) {
     this.mic.setDuck(v);
+  }
+  /** Route the mic: "master" (PA talkover, auto-duck) or "A"/"B" (into that deck's FX rack). */
+  setMicRoute(dest: MicRoute) {
+    this.mic.setRoute(dest);
+  }
+  get micRoute(): MicRoute {
+    return this.mic.route;
   }
   /** PFL — route the mic to the headphone/cue device so you can hear yourself. */
   setMicMonitor(on: boolean) {

@@ -246,7 +246,18 @@ export class DjRoom {
     // needed. Cap the anonymous CROWD (not participants — they're a small set). A reconnect
     // of an already-counted device is exempt (it owns a slot already).
     if (pub && this.listenerCount() >= DjRoom.MAX_LISTENERS && this.state.getWebSockets(device).length === 0) {
-      return new Response("this room is full", { status: 503 });
+      // At capacity (E10). A rejected WS upgrade gives the browser no readable reason, so accept
+      // the socket just long enough to TELL the listener why + close with a terminal code (4003)
+      // the client won't reconnect into — instead of a silent retry storm.
+      const full = new WebSocketPair();
+      this.state.acceptWebSocket(full[1], [device]);
+      try {
+        full[1].send(JSON.stringify({ t: "kicked", reason: "This room is full — try again soon." } satisfies ServerMsg));
+      } catch {
+        /* socket already gone */
+      }
+      full[1].close(4003, "room full");
+      return new Response(null, { status: 101, webSocket: full[0] } as unknown as ResponseInit);
     }
 
     // A device reconnecting replaces its stale socket(s) — keep one per device.

@@ -368,9 +368,14 @@ export class RoomClient {
       this.setStatus("online");
     };
     ws.onmessage = (ev) => this.onMessage(ev);
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       this.ws = null;
-      if (!this.closed) {
+      // App-level TERMINAL closes (4001 kicked, 4002 broadcast ended, 4003 room full) carry their
+      // reason via a `kicked` message just before the close — DON'T reconnect into them, or a
+      // whole crowd storms a room that just told them to leave (E10 / broadcast-end).
+      const terminal = ev.code >= 4000 && ev.code < 4100;
+      if (terminal) this.setStatus("offline");
+      else if (!this.closed) {
         this.setStatus("offline");
         this.scheduleReconnect();
       }

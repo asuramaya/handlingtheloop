@@ -182,7 +182,7 @@ export function AudioTab({
     <>
       <div className="settings-section">
         <div className="settings-section-head">
-          <span className="settings-label">Output device</span>
+          <span className="settings-label">Output device (PA)</span>
         </div>
         {outputSupported ? (
           <>
@@ -198,6 +198,7 @@ export function AudioTab({
                 </option>
               ))}
             </select>
+            <p className="settings-hint muted">The main mix — including the mic — your PA / house output. (Headphone cue is the separate device below.)</p>
             {outputNeedsPerm && (
               <p className="settings-hint muted">
                 Device names are hidden until you grant audio permission once.{" "}

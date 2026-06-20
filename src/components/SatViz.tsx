@@ -122,14 +122,27 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
       ctx2d.moveTo(cx + cs / 2, cy);
       ctx2d.lineTo(cx + cs / 2, cy + cs);
       ctx2d.stroke();
+      // The EFFECTIVE transfer from the input: drive (hottest band) pushes the signal toward
+      // the saturated edges, bias shifts it (asymmetry). So the readout reacts to drive/bias/
+      // style/punish — not just the raw style curve.
       const curve = dev.curveFor();
+      const L = curve.length;
+      let dmax = 0;
+      for (let i = 0; i < BANDS; i++) dmax = Math.max(dmax, dev.driveOf(i));
+      const g = Math.pow(10, dmax);
+      const bias = dev.getParam("bias") * 0.4;
       ctx2d.strokeStyle = accent;
       ctx2d.lineWidth = 1.5;
       ctx2d.beginPath();
-      for (let i = 0; i < curve.length; i += 4) {
-        const x = cx + (i / (curve.length - 1)) * cs;
-        const y = cy + cs / 2 - (curve[i] * cs) / 2;
-        i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+      for (let px = 0; px <= cs; px++) {
+        const inp = (px / cs) * 2 - 1;
+        let driven = g * inp + bias;
+        if (driven < -1) driven = -1;
+        else if (driven > 1) driven = 1;
+        const idx = Math.round(((driven + 1) / 2) * (L - 1));
+        const x = cx + px;
+        const y = cy + cs / 2 - (curve[idx] * cs) / 2;
+        px === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
       }
       ctx2d.stroke();
 

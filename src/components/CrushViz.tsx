@@ -1,10 +1,14 @@
 import { useEffect, useRef } from "react";
-import type { Deck, CrushFx } from "@htl/audio";
+import { CRUSH_MODES, type Deck, type CrushFx } from "@htl/audio";
 
-// The Pixelator-style WYSIWYG for the bitcrusher: a live time-domain scope of the crushed
-// output drawn over the QUANTIZATION GRID — horizontal lines at the bit-depth levels +
-// faint vertical columns at the sample-hold width. You literally watch the resolution drop
-// as BITS/RATE move. Doubles as an XY "pixelate pad": drag X = RATE (downsample), Y = BITS.
+// The Pixelator-style WYSIWYG for the bitcrusher. EVERY param has a visual cue:
+//   BITS   → horizontal quantization grid rows (fewer rows = coarser).
+//   RATE   → the pixel-bar column width (fatter = more downsampled).
+//   JITTER → the columns wobble in width (the resample instability).
+//   MIX    → a faint DRY "ghost" of the clean input behind + the wet bars' opacity.
+//   CUT/RES→ a little lowpass-response inset (cutoff position + resonance bump), top-right.
+//   MODE   → a label, bottom-left (and the inherent waveform shape: ZERO gaps, VINTAGE ramps…).
+// Doubles as an XY "pixelate pad": drag X = RATE, Y = BITS.
 
 interface CrushVizProps {
   deck: Deck;
@@ -26,10 +30,22 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     const ctx2d = canvas.getContext("2d");
     if (!ctx2d) return;
     const actx = dev.output.context;
-    const analyser = actx.createAnalyser();
-    analyser.fftSize = 1024;
-    dev.output.connect(analyser); // tap only
-    const wave = new Float32Array(analyser.fftSize);
+    const wet = actx.createAnalyser();
+    wet.fftSize = 1024;
+    dev.output.connect(wet); // tap only
+    const dryA = actx.createAnalyser();
+    dryA.fftSize = 1024;
+    try {
+      dev.input.connect(dryA); // the clean reference (MIX ghost)
+    } catch {
+      /* ignore */
+    }
+    const wave = new Float32Array(wet.fftSize);
+    const dwave = new Float32Array(dryA.fftSize);
+    const hash = (n: number) => {
+      const x = Math.sin(n * 12.9898) * 43758.5453;
+      return x - Math.floor(x); // deterministic 0..1 (stable wobble, not per-frame flicker)
+    };
 
     let raf = 0;
     const draw = () => {
@@ -46,12 +62,17 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       const amp = h * 0.46;
       const bits = dev.bitsValue;
       const rate = dev.rateDiv;
-      const view = analyser.fftSize;
-      const colPx = (rate / view) * w; // pixel width of one sample-hold "pixel"
-      analyser.getFloatTimeDomainData(wave);
+      const mode = dev.modeIndex;
+      const mix = dev.getParam("mix");
+      const jitter = dev.getParam("jitter");
+      const cut = dev.getParam("cut");
+      const res = dev.getParam("res");
+      const view = wet.fftSize;
+      const colPx = (rate / view) * w;
+      wet.getFloatTimeDomainData(wave);
+      dryA.getFloatTimeDomainData(dwave);
 
-      // Quantization GRID — horizontal lines at the bit levels (capped so 16-bit isn't a wall),
-      // brighter as the depth drops so heavy crush reads as a coarse pixel grid.
+      // BITS → quantization grid rows (capped; brighter when coarse).
       const rows = Math.min(64, Math.round(Math.pow(2, bits)));
       ctx2d.strokeStyle = `color-mix(in srgb, ${accent} ${rows <= 24 ? 18 : 7}%, transparent)`;
       ctx2d.lineWidth = 1;
@@ -63,27 +84,48 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       }
       ctx2d.stroke();
 
+      // MIX → the clean DRY ghost behind (the reference you compare the crush against).
+      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 15%, transparent)`;
+      ctx2d.lineWidth = 1;
+      ctx2d.beginPath();
+      for (let i = 0; i < view; i++) {
+        const x = (i / (view - 1)) * w;
+        const y = center - dwave[i] * amp;
+        i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+      }
+      ctx2d.stroke();
+
+      // MIX → the wet result's opacity (more mix = the crush reads louder over the ghost).
+      ctx2d.globalAlpha = 0.25 + 0.75 * mix;
+      // sample the wet wave at a given x
+      const wv = (x: number, cw: number) => wave[Math.min(view - 1, Math.round(((x + cw / 2) / w) * (view - 1)))];
+      // JITTER → wobble each column's width deterministically.
+      const colW = (ci: number) => Math.max(1, colPx * (1 + (hash(ci) - 0.5) * 2 * jitter * 0.7));
+
       if (colPx >= 2 && colPx < w) {
-        // BLOCKY: one filled "pixel" bar per hold-column from the centre to the held value —
-        // the bars get fatter as RATE rises and snap to fewer rows as BITS drops. Two passes
-        // (fills, then glowing caps) so the glow toggles once, not per column.
+        // RATE/JITTER/BITS → blocky pixel bars (fills, then glowing caps).
         ctx2d.fillStyle = `color-mix(in srgb, ${accent} 40%, transparent)`;
-        for (let x = 0; x < w; x += colPx) {
-          const v = wave[Math.min(view - 1, Math.round(((x + colPx / 2) / w) * (view - 1)))];
-          const y = center - v * amp;
-          const top = Math.min(center, y);
-          ctx2d.fillRect(x, top, Math.max(1, colPx - 1), Math.max(1, Math.abs(y - center)));
+        let ci = 0;
+        for (let x = 0; x < w; ) {
+          const cw = colW(ci);
+          const y = center - wv(x, cw) * amp;
+          ctx2d.fillRect(x, Math.min(center, y), Math.max(1, cw - 1), Math.max(1, Math.abs(y - center)));
+          x += cw;
+          ci++;
         }
         ctx2d.shadowColor = accent;
         ctx2d.shadowBlur = 6;
         ctx2d.fillStyle = accent;
-        for (let x = 0; x < w; x += colPx) {
-          const v = wave[Math.min(view - 1, Math.round(((x + colPx / 2) / w) * (view - 1)))];
-          ctx2d.fillRect(x, center - v * amp - 1.5, Math.max(1, colPx - 1), 3); // bright cap = the pixel top
+        ci = 0;
+        for (let x = 0; x < w; ) {
+          const cw = colW(ci);
+          ctx2d.fillRect(x, center - wv(x, cw) * amp - 1.5, Math.max(1, cw - 1), 3);
+          x += cw;
+          ci++;
         }
         ctx2d.shadowBlur = 0;
       } else {
-        // Near-transparent (rate ≈ 1): a smooth glowing filled waveform — no fake blocks.
+        // Near-transparent (rate ≈ 1): smooth glowing filled waveform — no fake blocks.
         ctx2d.beginPath();
         ctx2d.moveTo(0, center);
         for (let i = 0; i < view; i++) ctx2d.lineTo((i / (view - 1)) * w, center - wave[i] * amp);
@@ -104,6 +146,7 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
         ctx2d.stroke();
         ctx2d.shadowBlur = 0;
       }
+      ctx2d.globalAlpha = 1;
 
       // centre line
       ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 22%, transparent)`;
@@ -113,15 +156,48 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.lineTo(w, center);
       ctx2d.stroke();
 
+      // CUT/RES → a small lowpass-response inset, top-right (flat to the cutoff, rolloff after,
+      // a resonance bump scaled by RES). Shows the DAC/reconstruction filter at a glance.
+      const iw = Math.min(64, w * 0.28);
+      const ih = Math.min(30, h * 0.32);
+      const ix = w - iw - 5;
+      const iy = 5;
+      ctx2d.fillStyle = "rgba(0,0,0,0.4)";
+      ctx2d.fillRect(ix, iy, iw, ih);
+      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 18%, transparent)`;
+      ctx2d.strokeRect(ix, iy, iw, ih);
+      ctx2d.strokeStyle = accent;
+      ctx2d.lineWidth = 1.4;
+      ctx2d.beginPath();
+      for (let px = 0; px <= iw; px++) {
+        const fn = px / iw;
+        let g = fn < cut ? 1 : Math.max(0, 1 - (fn - cut) * 4);
+        g += res * Math.exp(-Math.pow((fn - cut) * 12, 2)) * 0.9; // resonance peak at the cutoff
+        g = Math.max(0, Math.min(1.25, g));
+        const y = iy + ih - (g / 1.25) * (ih - 2) - 1;
+        px === 0 ? ctx2d.moveTo(ix + px, y) : ctx2d.lineTo(ix + px, y);
+      }
+      ctx2d.stroke();
+
+      // MODE → label, bottom-left.
+      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 75%, transparent)`;
+      ctx2d.font = "700 9px ui-monospace, SFMono-Regular, monospace";
+      ctx2d.fillText(CRUSH_MODES[mode] ?? "", 5, h - 5);
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
       try {
-        dev.output.disconnect(analyser);
+        dev.output.disconnect(wet);
       } catch {
-        /* already gone */
+        /* ignore */
+      }
+      try {
+        dev.input.disconnect(dryA);
+      } catch {
+        /* ignore */
       }
     };
   }, [deck, slot, accent]);

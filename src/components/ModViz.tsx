@@ -48,6 +48,8 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
 
     let raf = 0;
     const draw = () => {
+      const bpm = deck.effectiveBpm;
+      if (bpm) dev.setSyncBpm(bpm);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;

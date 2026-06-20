@@ -14,9 +14,21 @@ export const MOD_MODES = ["CHORUS", "FLANGER", "PHASER"] as const;
 export const MOD_WAVES = ["SINE", "TRI", "SQUARE"] as const;
 export const MOD_SOURCES = ["LFO", "ENV", "BOTH"] as const;
 
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const extToRate = (e: number) => 0.05 * Math.pow(200, clamp01(e)); // 0.05‥10 Hz log
 const oscType = (w: number): OscillatorType => (w === 1 ? "triangle" : w === 2 ? "square" : "sine");
+
+// SYNC divisions = beats per ONE LFO cycle. Modulation sweeps run slow → span 4 bars down to
+// an 1/8 (faster than this and a chorus/flanger just sounds like vibrato).
+const MOD_DIVS: { label: string; beats: number }[] = [
+  { label: "4 bar", beats: 16 },
+  { label: "2 bar", beats: 8 },
+  { label: "1 bar", beats: 4 },
+  { label: "1/2", beats: 2 },
+  { label: "1/4", beats: 1 },
+  { label: "1/8", beats: 0.5 },
+];
 
 function absCurve() {
   const n = 1024;
@@ -53,6 +65,8 @@ export class ModFx extends BaseFxDevice {
   private _src = 0;
   private _thru = false;
   private _throw = false;
+  private _sync = false;
+  private _syncBpm = 120;
 
   constructor(ctx: AudioContext) {
     super(ctx, 0.5); // send-style, half wet (equal dry/wet = deepest notches)
@@ -199,9 +213,31 @@ export class ModFx extends BaseFxDevice {
     this._mode = Math.max(0, Math.min(MOD_MODES.length - 1, Math.round(v)));
     this.buildEngine();
   }
+  // The live LFO frequency: a musical division of the deck tempo when SYNC is on, else the
+  // free 0.05‥10 Hz knob.
+  private divIndex() {
+    return clamp(Math.round(this._rate * (MOD_DIVS.length - 1)), 0, MOD_DIVS.length - 1);
+  }
+  private lfoHz(): number {
+    if (this._sync) return clamp(this._syncBpm / 60 / MOD_DIVS[this.divIndex()].beats, 0.01, 40);
+    return extToRate(this._rate);
+  }
+  private applyRate() {
+    this.lfo.frequency.setTargetAtTime(this.lfoHz(), this.ctx.currentTime, 0.02);
+  }
   private setRate(e: number) {
     this._rate = clamp01(e);
-    this.lfo.frequency.setTargetAtTime(extToRate(this._rate), this.ctx.currentTime, 0.02);
+    this.applyRate();
+  }
+  private setSync(on: boolean) {
+    this._sync = on;
+    this.applyRate();
+  }
+  /** Panel feeds the deck's live BPM so a synced LFO tracks tempo changes. */
+  setSyncBpm(bpm: number) {
+    if (!(bpm > 0) || Math.abs(bpm - this._syncBpm) < 0.01) return;
+    this._syncBpm = bpm;
+    if (this._sync) this.applyRate();
   }
   private setDepth(e: number) {
     this._depth = clamp01(e);
@@ -252,7 +288,13 @@ export class ModFx extends BaseFxDevice {
     return this._mode;
   }
   get rateHz() {
-    return extToRate(this._rate);
+    return this.lfoHz();
+  }
+  get synced() {
+    return this._sync;
+  }
+  get divLabel() {
+    return MOD_DIVS[this.divIndex()].label;
   }
   get stages() {
     return this._stages;
@@ -300,6 +342,7 @@ export class ModFx extends BaseFxDevice {
       { id: "wave", def: 0, get: () => this._wave, set: (v) => this.setWave(v) },
       { id: "src", def: 0, get: () => this._src, set: (v) => this.setSrc(v) },
       { id: "thru", def: 0, get: () => (this._thru ? 1 : 0), set: (v) => this.setThru(v >= 0.5) },
+      { id: "sync", def: 0, get: () => (this._sync ? 1 : 0), set: (v) => this.setSync(v >= 0.5) },
     );
   }
 

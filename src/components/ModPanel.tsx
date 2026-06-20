@@ -30,6 +30,7 @@ export function ModPanel({ deck, id, slot, accent, emit, refresh }: ModPanelProp
   const src = Math.round(get("src"));
   const wave = Math.round(get("wave"));
   const thru = get("thru") >= 0.5;
+  const sync = get("sync") >= 0.5;
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
@@ -56,6 +57,9 @@ export function ModPanel({ deck, id, slot, accent, emit, refresh }: ModPanelProp
             THRU
           </button>
         )}
+        <button className={`sat-punish ${sync ? "active" : ""}`} onClick={() => setParam("sync", sync ? 0 : 1)} title="Sync the LFO rate to the deck tempo (musical divisions) vs free Hz">
+          SYNC
+        </button>
       </div>
 
       {/* Live spectrum — the comb/notches sweep with the LFO; LFO waveform in the side panel.
@@ -63,7 +67,7 @@ export function ModPanel({ deck, id, slot, accent, emit, refresh }: ModPanelProp
       <ModViz deck={deck} slot={slot} accent={accent} set={setParam} />
 
       <div className="sat-shared">
-        <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => `${dev.rateHz.toFixed(2)}`} />
+        <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => (sync ? dev.divLabel : `${dev.rateHz.toFixed(2)}`)} />
         <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="F.BACK" value={get("feedback")} min={0} max={1} onChange={(v) => setParam("feedback", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />

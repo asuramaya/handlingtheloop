@@ -794,6 +794,22 @@ export class DjRoom {
     return 0;
   }
 
+  // The room "vibe" colour = the anchor's account accent (or, failing that, any host device's).
+  // Rides every welcome/presence so even a crowd LISTENER (no roster) inherits it.
+  private hostColor(): string {
+    if (this.anchorId) {
+      for (const ws of this.state.getWebSockets(this.anchorId)) {
+        const a = ws.deserializeAttachment() as Attachment | null;
+        if (a?.color) return a.color;
+      }
+    }
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.host && a.color) return a.color;
+    }
+    return "";
+  }
+
   // A phone/tablet (by its reported device kind). Used only to bias the clock toward a desktop.
   private isMobile(device: string | null): boolean {
     if (!device) return false;
@@ -1070,6 +1086,7 @@ export class DjRoom {
       chatSlow: this.chatSlow,
       muted: [...this.muted],
       engineVersion: this.engineVersion(),
+      hostColor: this.hostColor(),
     };
   }
 

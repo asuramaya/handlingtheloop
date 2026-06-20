@@ -32,6 +32,7 @@ export interface RoomHandlers {
   muted?: (on: boolean) => void; // the host muted/unmuted THIS device
   mutedList?: (ids: string[]) => void; // HOST: the set of muted device ids (drives the unmute toggle)
   engine?: (stale: boolean, roomVersion: number) => void; // D5: room's engine version differs from ours → unfaithful mix
+  hostColor?: (color: string) => void; // the room vibe (host accent) — applies for crowd listeners too (no roster)
   setCaptured?: (set: CapturedSet) => void; // G1a HOST: a broadcast ended → here's the captured recipe to persist
   kicked?: (reason?: string) => void;
   error?: (message: string) => void;
@@ -133,6 +134,7 @@ export class RoomClient {
   listenerCount = 0; // broadcast-plane crowd size (from welcome/presence)
   roomPublic = false; // whether the room is open to anon listeners
   roomEngineVersion = 0; // the room's reconstruction-engine version (anchor's; D5). 0 = unknown
+  roomHostColor = ""; // the host/anchor's account accent — the room vibe (rides welcome/presence)
   stageReqs: StageReq[] = []; // pending floor→stage hand-raises (host-visible)
   stageGate: StageGate = "request"; // how the crowd reaches the decks
 
@@ -345,6 +347,13 @@ export class RoomClient {
     this.roomEngineVersion = v;
     this.h.engine?.(this.engineStale(), v);
   }
+  // The room vibe (host accent) off welcome/presence — fired on change so a crowd listener (no
+  // roster) still inherits the host's colour. Empty string is a valid "no host colour" signal.
+  private applyHostColor(c: string | undefined): void {
+    if (c === undefined || c === this.roomHostColor) return;
+    this.roomHostColor = c;
+    this.h.hostColor?.(c);
+  }
 
   private open(): void {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -423,6 +432,7 @@ export class RoomClient {
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
         this.applyEngineVersion(msg.engineVersion);
+        this.applyHostColor(msg.hostColor);
         if (msg.requests) this.h.requests?.(msg.requests);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
         if (msg.muted) this.h.mutedList?.(msg.muted);
@@ -461,6 +471,7 @@ export class RoomClient {
         this.h.stage?.(this.stageReqs);
         this.h.stageGate?.(this.stageGate);
         this.applyEngineVersion(msg.engineVersion);
+        this.applyHostColor(msg.hostColor);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
         if (msg.muted) this.h.mutedList?.(msg.muted);
         break;

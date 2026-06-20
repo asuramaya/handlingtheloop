@@ -141,6 +141,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [roomPublic, setRoomPublic] = useState(false);
   const [listenerCount, setListenerCount] = useState(0);
   const [engineStale, setEngineStale] = useState(false);
+  const [streamedHostColor, setStreamedHostColor] = useState(""); // room vibe off welcome/presence (works for listeners)
   const [setsRev, setSetsRev] = useState(0); // bumped when a captured set is persisted (G1b)
   const listenerCountRef = useRef(0);
   listenerCountRef.current = listenerCount;
@@ -230,6 +231,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       stage: (reqs) => setStageRequests(reqs),
       stageGate: (mode) => setStageGateState(mode),
       engine: (stale) => setEngineStale(stale),
+      hostColor: (c) => setStreamedHostColor(c),
       // G1a: a broadcast ended → persist the captured recipe as a private draft
       // (capture-by-default; the host curates it later via the lifecycle card, G1b). Bump
       // setsRev once it lands so the recordings panel pulls the fresh draft in.
@@ -441,9 +443,12 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const isAnchor = !isPublicListener && anchorId !== null && anchorId === you;
   // The room's vibe colour = the host's accent. Prefer the anchor if it's a host device,
   // else any host peer with a colour set (the session owner's account colour).
+  // Prefer the server-streamed vibe (rides every welcome/presence → works for a crowd listener
+  // who gets no roster); fall back to the roster-derived host colour for participants.
   const hostColor =
-    peers.find((p) => p.host && p.id === anchorId && p.color)?.color ??
-    peers.find((p) => p.host && p.color)?.color ??
+    streamedHostColor ||
+    peers.find((p) => p.host && p.id === anchorId && p.color)?.color ||
+    peers.find((p) => p.host && p.color)?.color ||
     null;
 
   return {

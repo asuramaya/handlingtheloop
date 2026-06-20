@@ -62,6 +62,7 @@ describe("welcomeFor / presenceFor", () => {
     chatSlow: 0,
     muted: [],
     engineVersion: 1,
+    hostColor: "",
   };
 
   it("gives a participant the roster + hand-raises + requests; the crowd gets none of it", () => {

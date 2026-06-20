@@ -1841,6 +1841,16 @@ export class Deck {
   get crushThrowing(): boolean {
     return (this.rack.deviceAt(this.rack.indexOf("crush")) as CrushFx | undefined)?.throwing ?? false;
   }
+  // MOD THROW — deepen the rack modulator's swirl (depth + feedback) while held (pad-FX).
+  modThrow(on: boolean): void {
+    (this.rack.deviceAt(this.rack.indexOf("mod")) as ModFx | undefined)?.setThrow(on);
+  }
+  get canModThrow(): boolean {
+    return this.rack.indexOf("mod") >= 0;
+  }
+  get modThrowing(): boolean {
+    return (this.rack.deviceAt(this.rack.indexOf("mod")) as ModFx | undefined)?.throwing ?? false;
+  }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
    *  missing). Returns the destination rack index on `other`, or −1. */

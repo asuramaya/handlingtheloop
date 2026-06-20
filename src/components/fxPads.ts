@@ -4,8 +4,8 @@ import { registerBoardAction } from "@htl/board/boardActions";
 // The deck's FX pad-mode bank ("Pad-FX") — 8 fixed performance effects over the one 8-pad
 // bank (and the keyboard 1-8 when padMode === "fx"). The "Throws + Motion" shape:
 //   row 1 (0-3) = effect THROWS:        ECHO  VERB  SAT   CRUSH
-//   row 2 (4-7) = motion / transport:   REV   CENS  BRAKE SPIN
-// (Target bank = …/ CENS MOD GATE NOISE; REV/BRAKE/SPIN swap out as MOD/GATE/NOISE land.)
+//   row 2 (4-7) = effect / transport:   MOD   CENS  BRAKE SPIN
+// (Target bank = …/ MOD CENS GATE NOISE; BRAKE/SPIN swap out as GATE/NOISE land.)
 // `hold` effects fire on press and release on pointer-up (momentary); one-shots fire once.
 // `enabled` dims a pad whose backend isn't ready (ECHO/VERB need a delay/reverb in the rack).
 // `active` lights a sounding pad. One table, shared by DeckControls (render + pointer) and
@@ -25,7 +25,7 @@ export const FX_PADS: FxPadDef[] = [
   { label: "VERB", hold: true, on: (d) => d.reverbOut(true), off: (d) => d.reverbOut(false), enabled: (d) => d.canReverbOut, active: (d) => d.reverbingOut, hint: "Reverb-tail throw — add a Reverb to the rack to use" },
   { label: "SAT", hold: true, on: (d) => d.satThrow(true), off: (d) => d.satThrow(false), enabled: (d) => d.canSatThrow, active: (d) => d.satThrowing, hint: "Saturation slam — add a Saturator to the rack to use" },
   { label: "CRUSH", hold: true, on: (d) => d.crushThrow(true), off: (d) => d.crushThrow(false), enabled: (d) => d.canCrushThrow, active: (d) => d.crushThrowing, hint: "Bitcrush smash — add a Bitcrusher to the rack to use" },
-  { label: "REV", hold: true, on: (d) => d.setReverse(true), off: (d) => d.setReverse(false), active: (d) => d.reversing, hint: "Reverse while held" },
+  { label: "MOD", hold: true, on: (d) => d.modThrow(true), off: (d) => d.modThrow(false), enabled: (d) => d.canModThrow, active: (d) => d.modThrowing, hint: "Modulation swirl — add a Modulation device to the rack to use" },
   { label: "CENS", hold: true, on: (d) => d.censorBegin(), off: (d) => d.censorEnd(), active: (d) => d.reversing, hint: "Censor — reverse, slip-return on release" },
   { label: "BRAKE", hold: false, on: (d) => d.releaseBrake(), hint: "Brake to a stop" },
   { label: "SPIN", hold: false, on: (d) => d.spinback(), hint: "Backspin" },

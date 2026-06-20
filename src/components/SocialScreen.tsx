@@ -277,14 +277,14 @@ export function SocialScreen({
                 {!room.isGuest && room.signedIn && (
                   <div className="share-mode private">
                     <button className="share-mode-head as-toggle" onClick={() => setInviteOpen((o) => !o)} aria-expanded={inviteOpen}>
-                      <span className="share-mode-title">🔒 Invite specific people</span>
+                      <span className="share-mode-title">🎚 Invite a co-DJ</span>
                       <span className="share-mode-caret">{inviteOpen ? "▾" : "▸"}</span>
                     </button>
                     {inviteOpen && (
                       <>
-                        <span className="share-mode-sub">A private link. They knock, you approve — and they can take the decks.</span>
+                        <span className="share-mode-sub">A private link for someone to play the decks WITH you — they knock, you approve, then they can mix. (To invite an audience, Go live above.)</span>
                         <button className="room-invite" onClick={makeInvite} disabled={inviting}>
-                          {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Invite people"}
+                          {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Create co-DJ link"}
                         </button>
                         {inviteUrl && (
                           <div className="room-invite-share">

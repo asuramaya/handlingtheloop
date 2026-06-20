@@ -658,6 +658,7 @@ export function App() {
   // the instant I leave home to visit another rig (in-memory → can't outlive this app load).
   const homeAdoptAt = useRef(0);
   const preVisitRef = useRef<SessionSnapshot | null>(null);
+  const restoreTokenRef = useRef(0); // bumped each rig→home so a stale grace timer can't fire
   // Graceful follower sync: when we last did a follow-driven seek (so the steady-state drift
   // corrector doesn't fire back-to-back and "skip/repeat"), and when we last saw a tick per
   // deck (so the post-decode fallback doesn't start from the now-stale snapshot position when
@@ -3741,8 +3742,11 @@ export function App() {
       preVisitRef.current = buildSnapshot();
     } else if (prev === "rig" && cur === "home") {
       const armedAt = performance.now();
+      const token = ++restoreTokenRef.current;
       const snap = preVisitRef.current;
       window.setTimeout(() => {
+        if (restoreTokenRef.current !== token) return; // a newer transition superseded this one
+        if (roomRef.current?.attachment.to !== "home") return; // re-visited within the grace → don't clobber the live rig
         if (homeAdoptAt.current > armedAt) return; // the rig's live state already restored me
         if (snap) restoreBoard(snap);
       }, 2000);

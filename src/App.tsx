@@ -14,7 +14,7 @@ import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
-import { type Me, fetchMe, fetchSet, logPlay, trimSet } from "@htl/account";
+import { type Me, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
@@ -397,22 +397,19 @@ export function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  // G4: a shared /set/:id link → resolve to the owner's @handle profile (the set lists + plays
-  // there). The rich preview already came from the server-injected OG card.
+  // playRecordedSet is defined far below; reach it from this on-mount effect via a ref
+  // (assigned during render, so it's ready by the time this post-commit effect fires).
+  const playSetRef = useRef<(id: string) => void>(() => {});
+  const launchingSetRef = useRef(false); // a /set/ deep link is taking over → the boot-restore stands down
+  // G4: a shared /set/:id link launches STRAIGHT into the replay (replay.play fetches the log) —
+  // it used to dump you on the owner's profile to find + click the set. Clean the URL so a
+  // reload doesn't re-fire, and flag the boot-restore so it doesn't flash the old board first.
   useEffect(() => {
     const m = location.pathname.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
     if (!m) return;
-    let alive = true;
-    void fetchSet(m[1])
-      .then((s) => {
-        if (!alive) return;
-        history.replaceState(null, "", s?.handle ? `/@${s.handle}` : "/");
-        if (s?.handle) setPublicHandle(s.handle);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+    launchingSetRef.current = true;
+    history.replaceState(null, "", "/");
+    playSetRef.current(m[1]);
   }, []);
   useEffect(() => {
     // Opening the public profile closes the own-account docks…
@@ -659,6 +656,7 @@ export function App() {
   const homeAdoptAt = useRef(0);
   const preVisitRef = useRef<SessionSnapshot | null>(null);
   const restoreTokenRef = useRef(0); // bumped each rig→home so a stale grace timer can't fire
+  const restorePendingRef = useRef(false); // true during the return-home grace → don't persist the lingering visited board
   // Graceful follower sync: when we last did a follow-driven seek (so the steady-state drift
   // corrector doesn't fire back-to-back and "skip/repeat"), and when we last saw a tick per
   // deck (so the post-decode fallback doesn't start from the now-stale snapshot position when
@@ -1574,10 +1572,11 @@ export function App() {
   const lastPersist = useRef<string>("");
   const persistSession = useCallback((immediate = false) => {
     const doSave = () => {
-      // P2: while VISITING another rig the local engine mirrors THEIR board — never let it
-      // overwrite my own solo board in localStorage, or a cold reopen-while-visiting would
-      // boot into the visited set. My board stays the last thing persisted before I left.
-      if (roomRef.current?.attachment.to === "rig") return;
+      // P2: while VISITING another rig (or during the return-home grace, when the decks still
+      // mirror the visited board) the local engine reflects THEIR board — never let it overwrite
+      // my own solo board in localStorage, or a cold reopen would boot into the visited set. My
+      // board stays the last thing persisted before I left.
+      if (roomRef.current?.attachment.to === "rig" || restorePendingRef.current) return;
       const snap = buildSnapshot();
       const json = JSON.stringify(snap);
       if (json === lastPersist.current) return; // unchanged → no write, no jank
@@ -1908,6 +1907,7 @@ export function App() {
   useEffect(() => {
     if (didRestore.current) return;
     didRestore.current = true;
+    if (launchingSetRef.current) return; // a /set/ deep link owns the decks → don't flash the old board
     const snap = loadSession();
     if (!snap) return;
     setCrossfade(snap.crossfade);
@@ -2424,6 +2424,7 @@ export function App() {
     },
     [engine, replay],
   );
+  playSetRef.current = playRecordedSet; // wire the /set/ deep-link launcher to the real handler
   // The owner curates a set: replay the FULL recording + open trim controls (set in/out → save).
   const [trimEdit, setTrimEdit] = useState<{ id: string; start: number; end: number } | null>(null);
   const editTrim = useCallback(
@@ -3744,8 +3745,10 @@ export function App() {
       const armedAt = performance.now();
       const token = ++restoreTokenRef.current;
       const snap = preVisitRef.current;
+      restorePendingRef.current = true; // suspend persistence: the decks still mirror the visited board until restore
       window.setTimeout(() => {
-        if (restoreTokenRef.current !== token) return; // a newer transition superseded this one
+        if (restoreTokenRef.current !== token) return; // a newer transition owns the flag now → it clears it
+        restorePendingRef.current = false;
         if (roomRef.current?.attachment.to !== "home") return; // re-visited within the grace → don't clobber the live rig
         if (homeAdoptAt.current > armedAt) return; // the rig's live state already restored me
         if (snap) restoreBoard(snap);

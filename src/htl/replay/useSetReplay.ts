@@ -61,6 +61,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
   const rafRef = useRef<number | null>(null);
   const lastUiRef = useRef(0);
   const clipEndRef = useRef(Infinity); // G3: a clip stops the replay at this offset
+  const loadSeq = useRef(0); // bumped per play()/stop() so a stale log fetch can't start the wrong set
 
   const stopClock = () => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -141,6 +142,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
 
   const play = useCallback(
     (id: string, clip?: { start: number; end: number }) => {
+      const seq = ++loadSeq.current; // this load supersedes any in-flight one
       stopClock();
       ctl.current.pauseAudio();
       setSetId(id);
@@ -154,6 +156,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
       fetch(`/api/sets/${encodeURIComponent(id)}?log=1`, { credentials: "same-origin" })
         .then((r) => (r.ok ? (r.json() as Promise<RecordedLog>) : null))
         .then((data) => {
+          if (seq !== loadSeq.current) return; // a newer play()/stop() superseded this fetch
           if (!data) {
             setLoading(false);
             setSetId(null);
@@ -210,6 +213,7 @@ export function useSetReplay(control: ReplayControl): ReplayState {
   );
 
   const stop = useCallback(() => {
+    loadSeq.current++; // discard any in-flight log fetch
     stopClock();
     ctl.current.pauseAudio();
     setSetId(null);

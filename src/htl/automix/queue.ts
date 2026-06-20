@@ -44,6 +44,9 @@ export interface MixQueue {
   enqueueNext: (t: TrackMeta) => void;
   remove: (videoId: string) => void;
   reorder: (from: number, to: number) => void;
+  /** Move the track with `videoId` to slot `to` — id-based so a remote's reorder lands on the
+   *  RIGHT track even though its from-index was stale against the live queue. No-op if absent. */
+  moveById: (videoId: string, to: number) => void;
   /** Take over an in-flight queue when this device becomes the session anchor, so the
    *  host→guest stream continues 1:1 instead of resetting to empty on handover. Preserves
    *  mode (radio keeps refilling; a fixed playlist stays fixed) and the now-playing track. */
@@ -338,6 +341,19 @@ export function useMixQueue(): MixQueue {
     });
   }, []);
 
+  const moveById = useCallback((videoId: string, to: number) => {
+    setItems((cur) => {
+      const from = cur.findIndex((t) => t.videoId === videoId);
+      if (from < 0) return cur; // already advanced/removed under us → drop the stale move
+      const dest = Math.max(0, Math.min(to, cur.length - 1));
+      if (from === dest) return cur;
+      const next = cur.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(dest, 0, moved);
+      return next;
+    });
+  }, []);
+
   const adopt = useCallback((tracks: TrackMeta[], cur: TrackMeta | null, m: MixMode) => {
     played.current = new Set();
     if (cur) played.current.add(cur.videoId);
@@ -385,6 +401,7 @@ export function useMixQueue(): MixQueue {
     enqueueNext,
     remove,
     reorder,
+    moveById,
     adopt,
     clear,
   };

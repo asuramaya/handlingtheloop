@@ -216,7 +216,10 @@ export type Intent =
   // shared upcoming list (which is the host's queue verbatim, so they line up).
   | { kind: "queue"; action: "add" | "addNext"; track: QueuedTrack }
   | { kind: "queue"; action: "remove"; videoId: string }
-  | { kind: "queue"; action: "move"; from: number; to: number }
+  // Move is ID-BASED (not from-index): the sender's indices are computed against a stale
+  // mirror, and the host's canonical queue shifts under it (radio refill / advance), so a
+  // from-index would reorder the WRONG track. `videoId` pins the track; `to` is the target slot.
+  | { kind: "queue"; action: "move"; videoId: string; to: number }
   | { kind: "load"; deck: DeckId; videoId: string; name?: string; artist?: string };
 
 export type ClientMsg =

@@ -2139,7 +2139,7 @@ export function App() {
         if (intent.action === "add") q.enqueue(intent.track as TrackMeta);
         else if (intent.action === "addNext") q.enqueueNext(intent.track as TrackMeta);
         else if (intent.action === "remove") q.remove(intent.videoId);
-        else if (intent.action === "move") q.reorder(intent.from, intent.to);
+        else if (intent.action === "move") q.moveById(intent.videoId, intent.to); // id-based: the right track even if from-index was stale
         return;
       }
       if (intent.kind === "crossfade") {
@@ -3480,11 +3480,14 @@ export function App() {
       move: (from: number, to: number) => {
         if (visitingNoControl) return;
         if (autoIsRemote) {
-          if (room.controlling) room.sendIntent({ kind: "queue", action: "move", from, to });
+          // Resolve the moved track's id from the list the user actually sees (the mirror), so
+          // the host moves the RIGHT track — its from-index is stale against the live queue.
+          const videoId = remoteAutomix?.upcoming[from]?.videoId;
+          if (room.controlling && videoId) room.sendIntent({ kind: "queue", action: "move", videoId, to });
         } else mixQueue.reorder(from, to);
       },
     }),
-    [autoIsRemote, visitingNoControl, room.controlling, room.sendIntent, room.requestSong, mixQueue],
+    [autoIsRemote, visitingNoControl, room.controlling, room.sendIntent, room.requestSong, mixQueue, remoteAutomix],
   );
   // F1→queue: a crowd song-request, actioned in one tap — search the free text, drop the top
   // hit onto the auto-mix queue (authority-correct via queueEdit.add), then clear the request.

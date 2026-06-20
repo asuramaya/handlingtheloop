@@ -2,6 +2,7 @@ import type { Deck, ModFx } from "@htl/audio";
 import { MOD_MODES, MOD_WAVES, MOD_SOURCES } from "@htl/audio";
 import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
+import { ModViz } from "./ModViz";
 
 // Minimal Modulation surface (Phase 1) — MODE / SOURCE / WAVE selectors + the shared knobs.
 // Phase 2 drops the ModViz (sweeping notch/comb response + LFO inset) in above the cells.
@@ -56,6 +57,10 @@ export function ModPanel({ deck, id, slot, accent, emit, refresh }: ModPanelProp
           </button>
         )}
       </div>
+
+      {/* Live spectrum — the comb/notches sweep with the LFO; LFO waveform in the side panel.
+          Also an XY mod pad (X=RATE, Y=DEPTH). */}
+      <ModViz deck={deck} slot={slot} accent={accent} set={setParam} />
 
       <div className="sat-shared">
         <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => `${dev.rateHz.toFixed(2)}`} />

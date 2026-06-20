@@ -38,6 +38,7 @@ export function SamplerStrip({
   const [showMic, setShowMic] = useState(false); // vol/duck expander
   const [recSrc, setRecSrc] = useState<CapSource>("master");
   const [recording, setRecording] = useState(false);
+  const [grabbing, setGrabbing] = useState(false);
   const [ioErr, setIoErr] = useState<string | null>(null);
   const meterRef = useRef<HTMLSpanElement>(null);
 
@@ -93,6 +94,17 @@ export function SamplerStrip({
     const next = order[(order.indexOf(micDest) + 1) % order.length];
     setMicDest(next);
     engine.setMicRoute(next);
+  };
+
+  // Retroactive grab: lift the last 4 bars of the master out of the ring → next free pad.
+  const doGrab = async () => {
+    if (grabbing) return;
+    setGrabbing(true);
+    setIoErr(null);
+    const take = await engine.grabBars(4);
+    setGrabbing(false);
+    if (take) await s.captureToGlobal(take, "Grab");
+    else setIoErr("Nothing to grab yet — let some audio play first.");
   };
 
   const cycleSrc = () => {
@@ -258,6 +270,11 @@ export function SamplerStrip({
         <button className={`smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
           {recording ? "■ STOP" : "● REC"}
         </button>
+        {engine.canRingCapture && (
+          <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Grab the last 4 bars that just played (from the master) → next free pad">
+            {grabbing ? "…" : "⟲ GRAB"}
+          </button>
+        )}
       </div>
 
       {showMic && (micOn || monitor) && (

@@ -8,6 +8,8 @@ import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 import { REVERB_WORKLET_SRC } from "./reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
+import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
+import { bufferToWav } from "./encodeWav";
 
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
@@ -37,6 +39,11 @@ export class AudioEngine {
   // Live mic (talkover + sampling source) and the capture recorder (any node → AudioBuffer).
   readonly mic: MicInput;
   readonly recorder: Recorder;
+  // Master ring buffer (the retroactive "grab what just happened" capture). Built lazily in
+  // ensureWorklets; a silent keep-alive output holds it in the pull graph so it always buffers.
+  private ringNode: AudioWorkletNode | null = null;
+  private ringKeep: GainNode | null = null;
+  private ringPending: ((take: Take | null) => void) | null = null;
   private readonly limiter: DynamicsCompressorNode;
   // Headphone-cue (PFL) bus: both decks' pre-fader cueSend taps mix into cueMaster,
   // which — when a separate cue device is chosen — bridges through a MediaStream into a
@@ -183,6 +190,20 @@ export class AudioEngine {
       await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
       await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
       await this.addModuleOnce("moddelay", MOD_DELAY_WORKLET_SRC); // ModFx chorus/flanger
+      if (!this.ringNode && (await this.addModuleOnce("ringrec", RING_REC_WORKLET_SRC))) {
+        try {
+          const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);
+          const node = new AudioWorkletNode(this.ctx, "ringrec", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { size } });
+          this.master.connect(node); // tap the as-heard mix (post-crossfade, pre-limiter)
+          this.ringKeep = this.ctx.createGain();
+          this.ringKeep.gain.value = 0; // silent — only keeps the node in the pull graph
+          node.connect(this.ringKeep).connect(this.ctx.destination);
+          node.port.onmessage = (e: MessageEvent) => this.onRingMessage(e);
+          this.ringNode = node;
+        } catch (e) {
+          console.warn("[htl] ring recorder attach failed:", e);
+        }
+      }
     } finally {
       this.ensuring = false;
     }
@@ -352,6 +373,46 @@ export class AudioEngine {
   }
   get capturing(): boolean {
     return this.recorder.recording;
+  }
+
+  // ── Master ring — retroactive "grab the last N seconds/bars" ─────────────────────────────
+  get canRingCapture(): boolean {
+    return this.ringNode != null;
+  }
+  private onRingMessage(e: MessageEvent) {
+    const d = e.data as { type?: string; frames?: number; ch0?: ArrayBuffer; ch1?: ArrayBuffer };
+    if (d?.type !== "grab") return;
+    const resolve = this.ringPending;
+    this.ringPending = null;
+    if (!resolve) return;
+    const frames = d.frames ?? 0;
+    if (!frames || !d.ch0 || !d.ch1) return resolve(null);
+    const buffer = this.ctx.createBuffer(2, frames, this.ctx.sampleRate);
+    buffer.getChannelData(0).set(new Float32Array(d.ch0));
+    buffer.getChannelData(1).set(new Float32Array(d.ch1));
+    resolve({ buffer, blob: bufferToWav(buffer) });
+  }
+  /** Grab the last `seconds` of the master into a Take (capped to the ring size). One at a time. */
+  grabRing(seconds: number): Promise<Take | null> {
+    const node = this.ringNode;
+    if (!node || this.ringPending) return Promise.resolve(null);
+    const frames = Math.floor(Math.max(0.1, Math.min(seconds, RING_SECONDS)) * this.ctx.sampleRate);
+    return new Promise<Take | null>((resolve) => {
+      this.ringPending = resolve;
+      node.port.postMessage({ type: "grab", frames });
+      setTimeout(() => {
+        if (this.ringPending === resolve) {
+          this.ringPending = null;
+          resolve(null);
+        }
+      }, 1500);
+    });
+  }
+  /** Grab the last `bars` bars of the master, timed to a playing deck's tempo (fallback ~2 s/bar). */
+  grabBars(bars: number): Promise<Take | null> {
+    const bpm = this.deckA.effectiveBpm ?? this.deckB.effectiveBpm ?? null;
+    const secPerBar = bpm ? (60 / bpm) * 4 : 2;
+    return this.grabRing(bars * secPerBar);
   }
 
   /** True when this browser can pin a media element to a chosen output device

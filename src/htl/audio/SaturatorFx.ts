@@ -13,6 +13,7 @@
 // the per-band DC blocker. The band count + crossover tree are built in a loop, so widening
 // to 2 or 4 bands is a constant change, not a rewrite.
 import { BaseFxDevice, type FxKind } from "./Fx";
+import { clamp, clamp01, logMap } from "./fxDsp";
 
 export const SAT_STYLES = ["TUBE", "TAPE", "CLIP", "FOLD", "DIODE"] as const;
 export type SatStyle = (typeof SAT_STYLES)[number];
@@ -20,13 +21,11 @@ export type SatStyle = (typeof SAT_STYLES)[number];
 const CURVE_LEN = 2048;
 const DC_BLOCK_HZ = 12;
 const LR_Q = 0.7071; // Butterworth; two cascaded = Linkwitz-Riley LR4 (flat sum)
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
 // 0..1 knob → pre-gain into the curve (0 ≈ unity, 1 ≈ +20 dB hot).
 const driveGain = (ext: number) => Math.pow(10, (clamp01(ext) * 20) / 20);
 // 0..1 → log frequency 20 Hz‥20 kHz (crossover points).
-const extToHz = (ext: number) => 20 * Math.pow(1000, clamp01(ext));
+const extToHz = logMap(20, 20000);
 const hzToExt = (hz: number) => Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000);
 
 // Per-style transfer function over x∈[-1,1]. WaveShaperNode clamps its INPUT to [-1,1] then

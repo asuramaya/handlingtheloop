@@ -13,14 +13,13 @@
 //   • RISE    — auto-build: cutoff + level ramp UP over BARS bars (tempo-synced); release = cut.
 // SWEEP/RES are always live AudioParam ramps; the viz reads the real filter response.
 import { BaseFxDevice, type FxKind } from "./Fx";
+import { clamp, clamp01, logMap } from "./fxDsp";
 
 export const NOISE_TYPES = ["WHITE", "PINK", "TONAL"] as const;
 export type NoiseType = (typeof NOISE_TYPES)[number];
 
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-const sweepHzOf = (ext: number) => 60 * Math.pow(16000 / 60, clamp01(ext)); // 60 Hz‥16 kHz log
-const toneHzOf = (ext: number) => 600 * Math.pow(20000 / 600, clamp01(ext)); // 600 Hz‥20 kHz log
+const sweepHzOf = logMap(60, 16000); // 60 Hz‥16 kHz log
+const toneHzOf = logMap(600, 20000); // 600 Hz‥20 kHz log
 
 // White + pink (Paul Kellet's economy filter) noise into a ~2 s looping buffer.
 function makeNoiseBuffer(ctx: AudioContext, pink: boolean): AudioBuffer {

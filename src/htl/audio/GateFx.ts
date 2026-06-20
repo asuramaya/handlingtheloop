@@ -14,23 +14,13 @@
 // ramps. RATE is a musical division synced to `effectiveBpm` (the panel feeds it each frame),
 // or a free Hz rate when SYNC is off.
 import { BaseFxDevice, type FxKind } from "./Fx";
+import { clamp, clamp01, logMap, SyncRate, GATE_DIVS } from "./fxDsp";
 
 export const GATE_SHAPES = ["SQUARE", "PLUCK", "RAMP", "TRI", "SINE"] as const;
 export type GateShape = (typeof GATE_SHAPES)[number];
 
-// Musical divisions (beats per ONE gate cycle): 1/4 = 1 beat, 1/8 = ½, triplets = ⅓ etc.
-const GATE_DIVS: { label: string; beats: number }[] = [
-  { label: "1/4", beats: 1 },
-  { label: "1/8", beats: 0.5 },
-  { label: "1/8T", beats: 1 / 3 },
-  { label: "1/16", beats: 0.25 },
-  { label: "1/16T", beats: 1 / 6 },
-  { label: "1/32", beats: 0.125 },
-];
-
 const CURVE_LEN = 2048;
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const gateFreeHz = logMap(0.2, 20); // free-mode RATE: 0.2‥20 Hz
 
 // The gate WINDOW as a function of phase p∈[0,1): 0 = closed (ducked), 1 = open (full). `duty`
 // is the open fraction; `smooth` rounds the edges (raised-cosine) so steps don't click. Each
@@ -88,13 +78,12 @@ export class GateFx extends BaseFxDevice {
   private readonly depthGain: GainNode; // window × depth
   private readonly floorConst: ConstantSourceNode; // (1 − depth) floor
 
-  private _rate = 0.2; // 0..1 → division (synced) / Hz (free)
+  // RATE = a tempo-synced division (default) or a free 0.2‥20 Hz knob; synced Hz clamped 0.05‥80.
+  private readonly rate = new SyncRate(GATE_DIVS, gateFreeHz, 0.05, 80, 0.2);
   private _depth = 0.85;
   private _duty = 0.5;
   private _smooth = 0.15;
   private _shape = 0;
-  private _sync = true;
-  private _syncBpm = 120;
   private _throw = false;
 
   constructor(ctx: AudioContext) {
@@ -106,6 +95,7 @@ export class GateFx extends BaseFxDevice {
     this.floorConst = ctx.createConstantSource();
     this.sawLfo = ctx.createOscillator();
     this.sawLfo.type = "sawtooth";
+    this.rate.setSync(true); // GATE defaults to beat-synced
 
     // window envelope → gate.gain
     this.sawLfo.connect(this.shaper).connect(this.depthGain).connect(this.gate.gain);
@@ -122,19 +112,9 @@ export class GateFx extends BaseFxDevice {
     this.registerParams();
   }
 
-  // ---- division / frequency ------------------------------------------------
-  private divIndex(): number {
-    return clamp(Math.round(this._rate * (GATE_DIVS.length - 1)), 0, GATE_DIVS.length - 1);
-  }
-  private freqOf(): number {
-    if (this._sync) {
-      const beats = GATE_DIVS[this.divIndex()].beats;
-      return clamp(this._syncBpm / 60 / beats, 0.05, 80);
-    }
-    return clamp(0.2 * Math.pow(100, this._rate), 0.05, 80); // 0.2‥20 Hz
-  }
+  // ---- frequency -----------------------------------------------------------
   private applyFreq() {
-    this.sawLfo.frequency.setTargetAtTime(this.freqOf(), this.ctx.currentTime, 0.01);
+    this.sawLfo.frequency.setTargetAtTime(this.rate.hz(), this.ctx.currentTime, 0.01);
   }
 
   // ---- depth / floor -------------------------------------------------------
@@ -161,7 +141,7 @@ export class GateFx extends BaseFxDevice {
   }
 
   private setRate(v: number) {
-    this._rate = clamp01(v);
+    this.rate.setRate(v);
     this.applyFreq();
   }
   private setDepth(v: number) {
@@ -181,15 +161,13 @@ export class GateFx extends BaseFxDevice {
     this.refreshCurve();
   }
   private setSync(on: boolean) {
-    this._sync = on;
+    this.rate.setSync(on);
     this.applyFreq();
   }
 
   /** The panel feeds the deck's live `effectiveBpm` so the synced gate tracks tempo changes. */
   setSyncBpm(bpm: number) {
-    if (!(bpm > 0) || Math.abs(bpm - this._syncBpm) < 0.01) return;
-    this._syncBpm = bpm;
-    if (this._sync) this.applyFreq();
+    if (this.rate.setBpm(bpm)) this.applyFreq();
   }
 
   /** Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
@@ -207,13 +185,13 @@ export class GateFx extends BaseFxDevice {
     return this._shape;
   }
   get synced() {
-    return this._sync;
+    return this.rate.sync;
   }
   get freqHz() {
-    return this.freqOf();
+    return this.rate.hz();
   }
   get divLabel() {
-    return GATE_DIVS[this.divIndex()].label;
+    return this.rate.divLabel;
   }
   /** The full gain envelope (what you hear) at phase p∈[0,1): (1−depth) + depth·window. */
   gateShape(p: number): number {
@@ -223,12 +201,12 @@ export class GateFx extends BaseFxDevice {
 
   private registerParams() {
     this.params.push(
-      { id: "rate", def: 0.2, get: () => this._rate, set: (v) => this.setRate(v) },
+      { id: "rate", def: 0.2, get: () => this.rate.ext, set: (v) => this.setRate(v) },
       { id: "depth", def: 0.85, get: () => this._depth, set: (v) => this.setDepth(v) },
       { id: "duty", def: 0.5, get: () => this._duty, set: (v) => this.setDuty(v) },
       { id: "smooth", def: 0.15, get: () => this._smooth, set: (v) => this.setSmooth(v) },
       { id: "shape", def: 0, get: () => this._shape, set: (v) => this.setShape(v) },
-      { id: "sync", def: 1, get: () => (this._sync ? 1 : 0), set: (v) => this.setSync(v >= 0.5) },
+      { id: "sync", def: 1, get: () => (this.rate.sync ? 1 : 0), set: (v) => this.setSync(v >= 0.5) },
     );
   }
 

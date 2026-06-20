@@ -5,17 +5,17 @@
 // crossfade, free when bypassed). The worklet module is addModule()'d once by AudioEngine;
 // the node is created on demand here, with a passthrough fallback if the module is missing.
 import { BaseFxDevice, type FxKind } from "./Fx";
+import { clamp01, logMap } from "./fxDsp";
 
 export const CRUSH_MODES = ["S&H", "ZERO", "VINTAGE", "JITTER"] as const;
 export type CrushMode = (typeof CRUSH_MODES)[number];
 
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 // 0..1 knob → bit depth: 0 = 16 (clean) … 1 = ~1.5 bits (smashed).
 const extToBits = (e: number) => 16 - clamp01(e) * 14.5;
 // 0..1 → downsample divisor 1..64 (exponential — most of the action is up top).
 const extToRate = (e: number) => 1 + clamp01(e) * clamp01(e) * 63;
 // 0..1 → filter cutoff, log 200 Hz‥18 kHz (1 = effectively open).
-const extToHz = (e: number) => 200 * Math.pow(90, clamp01(e));
+const extToHz = logMap(200, 18000);
 
 export class CrushFx extends BaseFxDevice {
   readonly kind: FxKind = "crush";

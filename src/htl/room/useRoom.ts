@@ -24,6 +24,12 @@ export interface Invite {
   url: string;
 }
 
+/** Where THIS device's audio engine is currently attached (per-device, not per-account):
+ *  its own always-on rig, or — deliberately — another person's rig it is visiting (a
+ *  tuned-in listener or an invite guest). The single boundary the snapshot/restore +
+ *  queue-edit policy hang off of. See docs/shared-session.md "Attachment model". */
+export type Attachment = { to: "home" } | { to: "rig"; host: string };
+
 export interface RoomState {
   enabled: boolean; // "in the session" = joined as a participant
   signedIn: boolean;
@@ -40,6 +46,7 @@ export interface RoomState {
   host: boolean; // is THIS device on the session-owner's account (vs a guest)?
   hostColor: string | null; // the host's account accent (hex) — the room "vibe" colour
   isGuest: boolean; // did I arrive via an invite (someone else's session)?
+  attachment: Attachment; // home rig vs visiting another rig — the snapshot/restore + queue-policy boundary
   roomPublic: boolean; // is the room OPEN to anonymous broadcast listeners?
   listenerCount: number; // size of the anonymous broadcast crowd
   engineStale: boolean; // D5: the room's reconstruction engine differs from ours → mix can't be trusted (refresh)
@@ -451,6 +458,14 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     peers.find((p) => p.host && p.color)?.color ||
     null;
 
+  // The attachment: I'm VISITING another rig iff I tuned into a public room (listenHandle)
+  // or arrived via someone else's invite (isGuest); otherwise I'm on my own home rig. This
+  // names the existing distinction as a first-class fact — no behavior change here; P2/P3
+  // (snapshot-restore, queue-edit policy) build on it. NOT the same as `autoIsRemote`, which
+  // is anchor-based (a non-anchor device on my OWN rig is still a queue-remote).
+  const attachment: Attachment =
+    isPublicListener || isGuest ? { to: "rig", host: listenHandle ?? "" } : { to: "home" };
+
   return {
     enabled: joined,
     signedIn: !!user,
@@ -467,6 +482,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     host,
     hostColor,
     isGuest,
+    attachment,
     roomPublic,
     listenerCount,
     engineStale,

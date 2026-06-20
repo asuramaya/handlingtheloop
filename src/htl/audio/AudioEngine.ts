@@ -296,6 +296,23 @@ export class AudioEngine {
       }
       await el.setSinkId(deviceId);
       void el.play().catch(() => {}); // best-effort; starts once the context is running
+      // CUE-PITCH SPIKE (verify-first): the cueMaster → MediaStreamDestination → <audio>
+      // bridge resamples to the stream's rate. If the context runs at 48 kHz but the
+      // <audio> path is assumed 44.1 kHz, the cue plays SHARP by 48000/44100 ≈ +1.47
+      // semitones (the reported "pitch is wrong"). Log both rates so the mismatch is
+      // confirmable empirically with a cue device connected — drives the sampleRate fix.
+      try {
+        const track = this.cueStreamDest?.stream.getAudioTracks()[0];
+        const trackRate = (track?.getSettings?.() as { sampleRate?: number } | undefined)?.sampleRate;
+        const ratio = trackRate ? this.ctx.sampleRate / trackRate : 1;
+        const semis = ratio > 0 ? 12 * Math.log2(ratio) : 0;
+        console.info(
+          `[htl] cue-pitch diag — ctx.sampleRate=${this.ctx.sampleRate}Hz, cueTrack.sampleRate=${trackRate ?? "unknown"}Hz, ` +
+            `ratio=${ratio.toFixed(4)} → ${semis >= 0 ? "+" : ""}${semis.toFixed(2)} semitones`,
+        );
+      } catch {
+        /* diagnostics only — never affect routing */
+      }
       return true;
     } catch (e) {
       console.warn("[htl] cue setSinkId failed:", e);

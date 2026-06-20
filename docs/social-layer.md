@@ -140,10 +140,12 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       **G5** recording lifecycle (ownership = host, co-DJs credited; retention; deletion; skew).
 
 ### Tier 2 — cheap / unblocked polish
-- [ ] **F1→queue** one-tap (map request text → catalog search → auto-mix queue)
-- [ ] **F2** hype meter on the board HUD (not just the Session panel)
-- [ ] **E5** demote the two legacy toggles (mute → plain mute; output-routing → a setting)
-- [ ] **B5** past-sets list on the profile (rides G1)
+- [x] **F1→queue** DONE (one-tap ＋Queue on a host request → searchYouTube → queueEdit.add → dismiss)
+- [x] **F2** DONE (HypeHud in the chin when broadcasting/listening; throbs hot, taps to crowd)
+- [~] **E5** DEFERRED — "mute" is the per-device `listening` flag (role model: joined/listening/
+      controlling); output-routing is ALREADY a SettingsPanel setting. Demoting `listening` risks the
+      seat model replay/sync/broadcast depend on, for low gain. Revisit only if the toggle confuses users.
+- [x] **B5** DONE via G1d ("Your sets" on own Profile + published on /@handle).
 
 ### Tier 3 — room robustness (E + D hardening)
 - [ ] **E7** host-disconnect grace + rehydrate + optional handoff · **E8** DO-eviction rehydration

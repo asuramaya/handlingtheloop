@@ -1,4 +1,5 @@
 import type { Deck } from "@htl/audio";
+import { registerBoardAction } from "@htl/board/boardActions";
 
 // The deck's FX pad-mode bank ("Pad-FX") — 8 fixed performance effects over the one 8-pad
 // bank (and the keyboard 1-8 when padMode === "fx"). The "Throws + Motion" shape:
@@ -37,3 +38,7 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
   if (on) pad.on(deck);
   else pad.off?.(deck);
 }
+
+// Sync + replay over the board-agnostic gesture bus: a recorded/relayed "fxPad" gesture applies
+// by slot index, so any pad added to FX_PADS above is covered with no protocol/applyIntent edit.
+registerBoardAction("fxPad", (deck, phase, arg) => fireFxPad(deck, Number(arg), phase !== "up"));

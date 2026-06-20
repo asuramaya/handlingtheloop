@@ -118,6 +118,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     } catch {
       /* ignore */
     }
+    emit({ kind: "board", deck: id, id: "padMode", arg: m }); // sync + record the bank switch
     refresh();
   };
   // SAMPLER pad-mode: this deck's 8 region pads (a slice of the shared sampler bank).
@@ -147,11 +148,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     if (!pad || (pad.enabled && !pad.enabled(deck))) return;
     if (pad.hold) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     pad.on(deck);
+    emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot }); // sync + record the throw
     refresh();
   };
   const fxUp = (slot: number) => {
     const pad = FX_PADS[slot];
-    if (pad?.hold) { pad.off?.(deck); refresh(); }
+    if (pad?.hold) {
+      pad.off?.(deck);
+      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
+      refresh();
+    }
   };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).

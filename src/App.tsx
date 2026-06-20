@@ -5,6 +5,7 @@ import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
+import { applyBoardAction } from "@htl/board/boardActions";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
@@ -728,6 +729,17 @@ export function App() {
         emitRef.current({ kind: "loop", deck: id, action: "beat", beats });
       }
     };
+    // Keyboard/MIDI FX pad (1-8 in fx mode): no key-up, so a hold-FX toggles. Emit the
+    // resulting phase over the board bus so it syncs + records like the on-screen pad.
+    const fxKey = (deck: DeckRef, id: DeckId, i: number) => {
+      const on = FX_PADS[i].hold ? !(FX_PADS[i].active?.(deck) ?? false) : true;
+      fireFxPad(deck, i, on);
+      emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: i });
+    };
+    const padModeKey = (deck: DeckRef, id: DeckId, m: "cue" | "loop" | "sampler" | "fx") => {
+      deck.setPadMode(m);
+      emitRef.current({ kind: "board", deck: id, id: "padMode", arg: m });
+    };
     const jogBy = (deck: DeckRef, id: DeckId, s: boolean, beats: number) => {
       if (deck.adjusting) {
         // Boundary-adjust mode: arrows step the loop edge; lock follows the grid
@@ -891,11 +903,12 @@ export function App() {
         // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
         setSettings((s) => ({ ...s, slip: !s.slip }));
       },
-      // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck.
-      padModeCue: (deck) => deck.setPadMode("cue"),
-      padModeLoop: (deck) => deck.setPadMode("loop"),
-      padModeSampler: (deck) => deck.setPadMode("sampler"),
-      padModeFx: (deck) => deck.setPadMode("fx"),
+      // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
+      // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
+      padModeCue: (deck, id) => padModeKey(deck, id, "cue"),
+      padModeLoop: (deck, id) => padModeKey(deck, id, "loop"),
+      padModeSampler: (deck, id) => padModeKey(deck, id, "sampler"),
+      padModeFx: (deck, id) => padModeKey(deck, id, "fx"),
     };
     // The 8 pads (keys 1-8) route by the deck's pad mode: Hot Cue → cue, Loop → beat-loop
     // size, Sampler → that deck's region pad (via the sampler bridge ref), FX → a Pad-FX.
@@ -908,7 +921,7 @@ export function App() {
           : deck.padMode === "sampler"
             ? samplerCtl.current?.trigger(deckPadBase(id) + i)
             : deck.padMode === "fx"
-              ? fireFxPad(deck, i, FX_PADS[i].hold ? !(FX_PADS[i].active?.(deck) ?? false) : true)
+              ? fxKey(deck, id, i)
               : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
@@ -2030,6 +2043,12 @@ export function App() {
         autoMixerControlRef.current(intent.action);
         return;
       }
+      // Board-agnostic gesture (pad mode, FX-pad throw, …) — the registry owns the semantics,
+      // so new board controls sync + replay without touching this switch. onRoomIntent refreshes.
+      if (intent.kind === "board") {
+        applyBoardAction(engine.deck(intent.deck), intent.id, intent.phase, intent.arg);
+        return;
+      }
       if (intent.kind === "queue") {
         // Only the queue AUTHORITY (the device running the auto-mixer + broadcasting the
         // automix stream) mutates the canonical queue; it then re-streams so everyone
@@ -2655,16 +2674,19 @@ export function App() {
   // songs; gating on !controlling left it driving a blank board (deck songs never synced).
   // Re-stomping a controller's live edits is prevented by the per-videoId reconcile dedupe.
   snapFollowRef.current = (room.enabled && !room.isAnchor) || replay.active;
-  // Locked out of driving (a watch-only listener) → block the keys + show the overlay.
-  lockedRef.current = room.enabled && !room.controlling;
+  // Locked out of driving (a watch-only listener, OR replay is driving the decks) → block the
+  // keys + show the overlay. During replay the user must not fight the recipe.
+  lockedRef.current = (room.enabled && !room.controlling) || replay.active;
   // Per-deck drive permission (E3/E4 seat model). A full controller/host (myDeck null) drives
   // both decks; a stepped-up listener drives ONLY their one deck; a pure follower/listener
   // drives neither. A LOCKED deck blocks control (jog/seek/bend + the whole button bank) but
   // never the purely visual zoom + expand — a listener can still inspect either waveform.
+  // Replay locks both decks (it's driving them).
   const canDriveDeck = (id: DeckId) => room.controlling && (room.myDeck === null || room.myDeck === id);
-  const deckLocked = (id: DeckId) => room.enabled && !canDriveDeck(id);
-  // A whole-board move (the crossfader) needs FULL control — locked for a stage DJ and any follower.
-  const boardLocked = room.enabled && !(room.controlling && room.myDeck === null);
+  const deckLocked = (id: DeckId) => (room.enabled && !canDriveDeck(id)) || replay.active;
+  // A whole-board move (the crossfader) needs FULL control — locked for a stage DJ, any follower,
+  // and during replay.
+  const boardLocked = (room.enabled && !(room.controlling && room.myDeck === null)) || replay.active;
   canDriveDeckRef.current = canDriveDeck;
   // Defer decode while we're a pure muted passenger — enabled but rendering no audio and
   // holding no authority. The moment any of those change (🔊 on, granted control, became

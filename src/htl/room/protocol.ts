@@ -197,6 +197,13 @@ export type Intent =
   | { kind: "fxParam"; deck: DeckId; slot: number; param: string; value: number }
   | { kind: "fxBypass"; deck: DeckId; slot: number; value: boolean }
   | { kind: "fxRack"; deck: DeckId; rack: FxSlot[] }
+  // BOARD-AGNOSTIC gesture. The protocol deliberately does NOT enumerate specific buttons
+  // (pad modes, FX-pad throws, future performance controls) — the board owns the semantics via
+  // a registry (src/htl/board/boardActions.ts), so new pads/effects sync + replay by REGISTERING
+  // an apply fn, not by editing the protocol or applyIntent. `id` = a board-namespaced action key
+  // ("padMode", "fxPad", …); `phase` covers momentary hold gestures (down/up); `arg` is an
+  // optional scalar payload (a mode name, a pad slot). Deck-scoped (gated like any per-deck intent).
+  | { kind: "board"; deck: DeckId; id: string; phase?: "down" | "up"; arg?: string | number }
   | { kind: "automix"; action: "toggle" | "skip" | "mixnow" | "hold" } // remote drives the auto-DJ
   // Queue is first-class, host-authoritative room state: a remote mutates it by intent,
   // the host (queue authority) applies it to its single canonical queue, and the automix

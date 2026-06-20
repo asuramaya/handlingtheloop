@@ -462,9 +462,9 @@ export class Deck {
     return this._keylock;
   }
 
-  /** Unified time-stretch engine (Phase 1: attached + wired to EQ but not yet
-   *  driving playback — it outputs silence until Phase 2 routes the transport
-   *  through it). Owns the playhead, looping, stems, and tempo+pitch. */
+  /** Attach (or hot-swap) the unified time-stretch worklet — THE playback engine: it owns the
+   *  playhead, looping, stems, and tempo+pitch, and its output feeds the rack (→ EQ → fader).
+   *  Re-attach reloads the current PCM and re-sends speed/pitch (they're port messages). */
   attachStretchNode(node: AudioWorkletNode) {
     if (this.stretchNode) {
       try {

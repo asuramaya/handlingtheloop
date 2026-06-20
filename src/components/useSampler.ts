@@ -107,6 +107,12 @@ export function useSampler(
   const remoteGlobalBuf = useRef<Map<string, AudioBuffer>>(new Map()); // guest-side cache of host global clips (by sampleId)
   const [error, setError] = useState<string | null>(null);
   const [playTick, bumpPlaying] = useReducer((n: number) => n + 1, 0); // re-render when voices start/stop
+  // When applyRemote re-runs a mutator to apply an inbound config change, suppress its emit so
+  // it can't echo back into the session (the local board fired directly; the wire carried it once).
+  const muteEmit = useRef(false);
+  const doEmit = (intent: SampleIntent) => {
+    if (!muteEmit.current) emit?.(intent);
+  };
 
   // Light a pad while its voice sounds.
   useEffect(() => {
@@ -271,6 +277,7 @@ export function useSampler(
       arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1 };
       next[vid] = arr;
       persistRegions(next);
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "assign" }); // watcher grabs the same region off its synced deck
     },
     [engine, loaded.A, loaded.B, regions, persistRegions],
   );
@@ -349,6 +356,7 @@ export function useSampler(
         else next[vid] = arr;
         persistRegions(next);
       }
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "clear" });
     },
     [engine, globals, regions, loaded.A, loaded.B, persistRegions],
   );
@@ -373,6 +381,7 @@ export function useSampler(
         next[vid] = arr;
         persistRegions(next);
       }
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "mode", mode });
     },
     [globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
@@ -398,6 +407,7 @@ export function useSampler(
         next[vid] = arr;
         persistRegions(next);
       }
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "gain", gain });
     },
     [engine, globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
@@ -413,6 +423,7 @@ export function useSampler(
       arr[regionSlot(i)] = { ...(arr[regionSlot(i)] as RegionDesc), stem };
       next[vid] = arr;
       persistRegions(next);
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "stem", stem });
     },
     [regions, loaded.A, loaded.B, persistRegions],
   );
@@ -433,6 +444,21 @@ export function useSampler(
       const { pad, route, action } = intent;
       if (action === "release") return engine.sampler.release(pad);
       if (action === "stop") return engine.sampler.stop(pad);
+      // Pad CONFIG changes — re-run the local mutator with its emit muted (the wire already
+      // carried it). assign re-derives the region off the watcher's own (synced) deck.
+      if (action === "assign" || action === "clear" || action === "mode" || action === "gain" || action === "stem") {
+        muteEmit.current = true;
+        try {
+          if (action === "assign") assignRegion(pad);
+          else if (action === "clear") clearPad(pad);
+          else if (action === "mode") setMode(pad, intent.mode ?? "oneshot");
+          else if (action === "gain") setGain(pad, intent.gain ?? 1);
+          else setStem(pad, intent.stem);
+        } finally {
+          muteEmit.current = false;
+        }
+        return;
+      }
       // trigger
       if (route === "master") {
         const id = intent.sampleId;
@@ -461,7 +487,7 @@ export function useSampler(
         engine.sampler.play(pad, { buffer: buf, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
       }
     },
-    [engine],
+    [engine, assignRegion, clearPad, setMode, setGain, setStem],
   );
 
   return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, clearPad, setMode, setGain, setStem };

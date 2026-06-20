@@ -184,12 +184,16 @@ export type Intent =
       kind: "sample";
       pad: number;
       route: "A" | "master" | "B";
-      action: "trigger" | "release" | "stop";
+      // trigger/release/stop = fire a voice; assign/clear/mode/gain/stem = pad CONFIG changes
+      // (so a watcher/replay sees a region grabbed, a pad cleared, a mode/gain/stem badge change —
+      // the audio itself always rides the self-contained trigger above).
+      action: "trigger" | "release" | "stop" | "assign" | "clear" | "mode" | "gain" | "stem";
       region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number; stem?: StemName };
       sampleId?: string;
       name?: string;
       mode?: SampleMode;
       gain?: number;
+      stem?: StemName; // for action:"stem" — which stem a region pad chops (undefined = full mix)
     }
   // Channel-strip effects (post-EQ). `slot` indexes the EFFECT list (0 = first effect
   // after the EQ), NOT the full rack. fxParam/fxBypass are the high-frequency live moves;

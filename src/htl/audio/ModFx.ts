@@ -39,8 +39,9 @@ export class ModFx extends BaseFxDevice {
 
   // engine nodes + per-target mod scales — torn down/rebuilt on mode/stages change.
   private nodes: AudioNode[] = [];
-  private scales: { g: GainNode; mag: number }[] = [];
-  private fbGain: GainNode | null = null;
+  private scales: { g: GainNode; mag: number }[] = []; // PHASER: native freq-sweep scales
+  private fbGain: GainNode | null = null; // PHASER: native feedback gain
+  private delayNode: AudioWorkletNode | null = null; // CHORUS/FLANGER: the cubic fractional delay
 
   private _mode = 0;
   private _rate = 0.3;
@@ -93,59 +94,86 @@ export class ModFx extends BaseFxDevice {
     this.nodes = [];
     this.scales = [];
     this.fbGain = null;
+    this.delayNode = null;
     this.input.connect(this.engineIn);
     const ctx = this.ctx;
 
     if (this._mode === 2) {
       // PHASER — an allpass cascade; the LFO/env sweeps every stage's frequency together.
+      // Mitigations vs mud: base notches spread EXPONENTIALLY (not piled in the low-mids),
+      // lower Q, and a high-pass in the feedback path so regeneration doesn't build low-end.
       let prev: AudioNode = this.engineIn;
       const aps: BiquadFilterNode[] = [];
+      const n = Math.max(1, this._stages - 1);
       for (let i = 0; i < this._stages; i++) {
         const ap = ctx.createBiquadFilter();
         ap.type = "allpass";
-        ap.frequency.value = 250 + i * 220; // spread the base notches
-        ap.Q.value = 0.7;
+        ap.frequency.value = 200 * Math.pow(16, i / n); // 200 Hz‥3.2 kHz, log-spread
+        ap.Q.value = 0.5;
         prev.connect(ap);
         prev = ap;
         aps.push(ap);
         this.nodes.push(ap);
       }
       prev.connect(this.tone);
+      const fbHp = ctx.createBiquadFilter();
+      fbHp.type = "highpass";
+      fbHp.frequency.value = 180;
       const fb = ctx.createGain();
-      fb.gain.value = this._fb * 0.85;
-      prev.connect(fb);
+      fb.gain.value = this._fb * 0.8;
+      prev.connect(fbHp).connect(fb);
       fb.connect(this.engineIn);
       this.fbGain = fb;
-      this.nodes.push(fb);
+      this.nodes.push(fbHp, fb);
       const scale = ctx.createGain();
       scale.gain.value = this._depth * 1300 * (this._throw ? 1.6 : 1);
       this.modBus.connect(scale);
       for (const ap of aps) scale.connect(ap.frequency);
       this.scales.push({ g: scale, mag: 1300 });
     } else {
-      // CHORUS / FLANGER — a modulated delay; chorus = long + no feedback, flanger = short + fb.
+      // CHORUS / FLANGER — the cubic-interpolated fractional-delay WORKLET (kills the linear-
+      // interp HF muffle = the mud). The mod bus drives delay time at audio rate via input 1;
+      // feedback + its high-pass live inside the worklet. Falls back to a native DelayNode if
+      // the module isn't ready (muddy but functional).
       const flanger = this._mode === 1;
-      const delay = ctx.createDelay(0.05);
-      const base = flanger ? (this._thru ? 0.0004 : 0.0028) : 0.018;
-      delay.delayTime.value = base;
-      this.engineIn.connect(delay);
-      delay.connect(this.tone);
-      this.nodes.push(delay);
-      if (flanger) {
-        const fb = ctx.createGain();
-        fb.gain.value = this._fb * 0.92;
-        delay.connect(fb);
-        fb.connect(this.engineIn);
-        this.fbGain = fb;
-        this.nodes.push(fb);
+      const sr = ctx.sampleRate;
+      const baseSec = flanger ? (this._thru ? 0.0004 : 0.0028) : 0.018;
+      const magSec = flanger ? 0.0022 : 0.006;
+      try {
+        const node = new AudioWorkletNode(ctx, "moddelay", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit" });
+        this.engineIn.connect(node, 0, 0);
+        this.modBus.connect(node, 0, 1);
+        node.connect(this.tone);
+        node.port.postMessage({ base: baseSec * sr, depth: this._depth * magSec * sr * (this._throw ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
+        this.delayNode = node;
+        this.nodes.push(node);
+      } catch {
+        const delay = ctx.createDelay(0.05);
+        delay.delayTime.value = baseSec;
+        this.engineIn.connect(delay).connect(this.tone);
+        this.nodes.push(delay);
+        if (flanger) {
+          const fb = ctx.createGain();
+          fb.gain.value = this._fb * 0.85;
+          delay.connect(fb).connect(this.engineIn);
+          this.fbGain = fb;
+          this.nodes.push(fb);
+        }
+        const scale = ctx.createGain();
+        scale.gain.value = this._depth * magSec * (this._throw ? 1.6 : 1);
+        this.modBus.connect(scale);
+        scale.connect(delay.delayTime);
+        this.scales.push({ g: scale, mag: magSec });
       }
-      const mag = flanger ? 0.0022 : 0.006; // ± seconds of delay sweep
-      const scale = ctx.createGain();
-      scale.gain.value = this._depth * mag * (this._throw ? 1.6 : 1);
-      this.modBus.connect(scale);
-      scale.connect(delay.delayTime);
-      this.scales.push({ g: scale, mag });
     }
+  }
+
+  // Re-post the worklet delay's depth/feedback in samples (chorus/flanger on the worklet path).
+  private postDelay() {
+    if (!this.delayNode) return;
+    const flanger = this._mode === 1;
+    const magSec = flanger ? 0.0022 : 0.006;
+    this.delayNode.port.postMessage({ depth: this._depth * magSec * this.ctx.sampleRate * (this._throw ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
   }
 
   private applyDepth() {
@@ -178,10 +206,12 @@ export class ModFx extends BaseFxDevice {
   private setDepth(e: number) {
     this._depth = clamp01(e);
     this.applyDepth();
+    this.postDelay();
   }
   private setFeedback(e: number) {
     this._fb = clamp01(e);
-    if (this.fbGain) this.fbGain.gain.setTargetAtTime(this._fb * (this._mode === 2 ? 0.85 : 0.92), this.ctx.currentTime, 0.02);
+    if (this.fbGain) this.fbGain.gain.setTargetAtTime(this._fb * 0.8, this.ctx.currentTime, 0.02);
+    this.postDelay();
   }
   private setTone(e: number) {
     this._tone = clamp01(e);
@@ -208,7 +238,8 @@ export class ModFx extends BaseFxDevice {
   setThrow(on: boolean) {
     this._throw = on;
     this.applyDepth();
-    if (this.fbGain) this.fbGain.gain.setTargetAtTime(Math.min(0.95, this._fb * (this._mode === 2 ? 0.85 : 0.92) + (on ? 0.25 : 0)), this.ctx.currentTime, 0.02);
+    if (this.fbGain) this.fbGain.gain.setTargetAtTime(Math.min(0.95, this._fb * 0.8 + (on ? 0.2 : 0)), this.ctx.currentTime, 0.02);
+    this.postDelay();
   }
   get throwing() {
     return this._throw;

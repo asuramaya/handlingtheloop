@@ -10,6 +10,7 @@ export { CrushFx, CRUSH_MODES, type CrushMode } from "./CrushFx";
 export { ModFx, MOD_MODES, MOD_WAVES, MOD_SOURCES } from "./ModFx";
 export { REVERB_WORKLET_SRC } from "./reverbWorklet";
 export { CRUSH_WORKLET_SRC } from "./crushWorklet";
+export { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 export { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, type FxPreset } from "./fxPresets";
 export { decodeAudio } from "./decode";
 export { Sampler, type SampleMode, type SampleRoute, type PlayOpts } from "./Sampler";

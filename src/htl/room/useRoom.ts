@@ -351,15 +351,20 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   );
   const goPublic = useCallback(
     (on: boolean) => {
-      // R8: you can only make YOUR OWN rig go live — never someone else's. A device VISITING
-      // another rig (tuned-in listener or invite guest) must not broadcast; the affordance
-      // belongs to the home rig. The UI also hides "Go live" off-home, but this is the hard gate.
-      if (on && (isPublicListener || isGuest)) return;
+      // You can't broadcast your OWN rig while your socket is pointed at ANOTHER rig you've
+      // tuned into (listenHandle) — tune out first; the server also rejects a non-host "public".
+      // NOTE: `isGuest` was ALSO gated here (R8) but it's a STICKY flag captured from a consumed
+      // ?join= code that stays true the whole session — it was permanently blocking legit hosts
+      // (any account that ever opened an invite link) from going live. That was the prod
+      // go-live regression: goPublic early-returned → the DO never went public → roomPublic
+      // never flipped → the directory heartbeat never fired → the room aged out of Discover +
+      // the /@handle "Listen live" affordance. Gate on the live tune-in only.
+      if (on && isPublicListener) return;
       clientRef.current?.goPublic(on);
       if (on) void announce();
       else void closeRoom();
     },
-    [announce, isPublicListener, isGuest],
+    [announce, isPublicListener],
   );
   // Tune into a public room by @handle as a read-only listener (swaps our connection),
   // or tune back out to our own session. Accepts a bare or @-prefixed handle.

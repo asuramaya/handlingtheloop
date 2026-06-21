@@ -399,3 +399,58 @@ The context runs at the 48 kHz hardware default (`AudioEngine.ts` constructs it 
 verify the 48/44.1 ratio empirically, (2) pin `sampleRate: 44100` on the context — the
 cheap pitch fix; latency stays a known browser limit of 2-output until a dedicated
 cue-`AudioContext` (constructor `{ sinkId }`) spike proves it beats the `<audio>` path.
+
+---
+
+# Live broadcast — follower sync + directory liveness (2026-06-20/21)
+
+Lessons + mechanisms hardened while debugging the public-broadcast / anon-listener path
+in production.
+
+## Followers run at the anchor's effective rate (the tick carries it)
+
+A follower — an anon listener rendering its OWN decoded audio, OR a same-account remote
+mirroring the clock — must advance at the **host's** effective playback rate or it drifts
+and `onRoomTick` hard-seeks it back every few seconds (a visible playhead catch-up + the
+occasional audible skip; on iOS the suspended-context path makes the visual snap obvious).
+
+The trap: `effRate() = _rate·(1+_bend)·(1+_syncTrim)`. `_rate` tracks via tempo/pitch
+intents, but **`_bend` (jog beat-match) and `_syncTrim` (continuous phase-lock) never cross
+as intents** — jog is even dropped for the listener digest. So a follower that computes its
+own rate drifts whenever the host nudges or sync-locks.
+
+Fix: `DeckTick.rate = deck.effectiveRate` rides every 250 ms tick. A following deck stores
+`_followRate`; `effRate()` and `followExtrapolate()` **override** the local rate with it, so
+the follower's clock *and* a listener's own audio run in lockstep with the host — self-healing
+each tick regardless of any dropped intent. `pushRate()` re-speeds the worklet on change;
+`endFollow()` clears `_followRate` so a co-DJ that takes over the clock reverts to its own
+tempo. (Deck.ts `effRate`/`followTick`/`endFollow`/`effectiveRate`; App.tsx `buildTick`/
+`onRoomTick`; protocol.ts `DeckTick.rate`.)
+
+## Directory "live now" freshness is CLIENT-HEARTBEAT-only (known limitation)
+
+A host's row in the D1 `rooms` directory is kept LIVE solely by the host client's
+`setInterval(announce, 30 s)` (useRoom), with a 90 s freshness filter on read (`liveRooms` /
+`liveRoomStatus`). **There is no DjRoom DO alarm / server keepalive.** Consequences:
+
+- A backgrounded/locked **mobile host** has its timer throttled → the room ages out of
+  Discover *and* the `/@handle` "Listen live" affordance after 90 s even though the WebSocket
+  is still connected and broadcasting.
+- A stale `live=1` row can linger (heartbeat died without a clean `close`); the freshness
+  filter hides it, so it's harmless to readers but misleading in the raw table.
+
+Proper fix (deferred until mobile hosts matter): a DjRoom DO **alarm** refreshes the
+directory while the host socket is connected — immune to client-timer throttling.
+
+**Diagnosis note:** when a "live" host isn't discoverable, query the prod `rooms` row first
+(`wrangler d1 execute htl-db --remote --command "SELECT … FROM rooms …"`) — `live` + the
+`now - last_seen` age is the smoking gun (announce firing or not). `wrangler tail`'s JSON
+shape doesn't match a naive `grep` filter, so it's a poor first tool here.
+
+## Late-joiner stem delivery
+
+A listener's join `sendCatchUp` re-sends the cached `lastStemView`, but it arrives in a
+burst BEFORE the deck finishes decoding — `onRoomStemView`'s slot-vs-song guard then drops it
+and nothing re-delivers (the host only re-streams on a NEW separation edge; anon listeners
+aren't in `joinedSig`). So a mismatched stem view is **stashed** (`pendingStemView`) and
+re-applied by an effect keyed on `loaded` once the deck's track lands.

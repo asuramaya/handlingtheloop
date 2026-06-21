@@ -1078,14 +1078,18 @@ export function App() {
     if (!isMobileDevice()) return;
     const sr = engine.ctx.sampleRate;
     const max = Math.round(sr * 0.12); // ~120 ms — covers A2DP/CarPlay clock jitter
+    // Primary path: the engine auto-ramps the pre-roll from the worklet's REAL dropout count
+    // (the only signal iOS gives us on Bluetooth/CarPlay — outputLatency reads 0 there).
+    engine.setWirelessAuto(true);
     const probe = () => {
-      // Manual override: iOS Safari reports outputLatency as 0 even on Bluetooth/CarPlay, so
-      // the auto-detect below can't see the high-latency sink and the skips persist. When the
-      // user flips "Wireless output" on (e.g. in the car) just force the full reserve.
+      // Optional manual force (Settings ▸ Audio): pin the full reserve always-on instead of
+      // waiting for the auto-ramp to catch the first few skips.
       if (settings.wirelessOutput) {
         engine.setWirelessReserve(max);
         return;
       }
+      // Predictive bonus where the browser is honest about it (Android Chromium): a high
+      // reported outputLatency pre-buffers before any dropout. No-op on iOS (reads 0).
       const lat = (engine.ctx as unknown as { outputLatency?: number }).outputLatency ?? 0;
       const reserve = lat > 0.06 ? Math.min(Math.round(lat * sr * 1.5), max) : 0;
       engine.setWirelessReserve(reserve);
@@ -1095,6 +1099,7 @@ export function App() {
     return () => {
       window.clearInterval(iv);
       engine.setWirelessReserve(0);
+      engine.setWirelessAuto(false);
     };
   }, [engine, settings.wirelessOutput]);
 

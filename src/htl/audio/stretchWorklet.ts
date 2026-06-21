@@ -54,6 +54,7 @@ class Stretch extends AudioWorkletProcessor {
     this.pitch = 1; this.pitchTarget = 1;
     this.kParam = 1 - Math.exp(-128 / (0.02 * this.sr));
     this.diagN = 0; // heartbeat counter (TEMP iPhone playback diagnostics)
+    this.underruns = 0; // cumulative FIFO-dry dropouts mid-playback (host auto-raises pre-roll, #14)
     // PCM groups (1 = mix, 4 = stems): per-group L/R int16 channels + live gains.
     this.gL = []; this.gR = []; this.gain_ = new Float32Array(4); this.nG = 0; this.length = 0;
     this.pcmScale = INV16; // int16 PCM → float at OLA; host sends int16:false (desktop) for raw float32
@@ -534,7 +535,13 @@ class Stretch extends AudioWorkletProcessor {
         if (++guard > 64) break; // safety: never spin forever in the audio thread
       }
       const avail = this.wHead - this.rHead;
-      if (avail < 2) { outL[i] = 0; outR[i] = 0; continue; }
+      if (avail < 2) {
+        // FIFO ran dry mid-playback = a real audible dropout (the producer couldn't refill
+        // inside this quantum — the symptom a wireless clock's bursty callbacks cause). Count
+        // it, but NOT during a seek reset / end-of-track, so the host adapts to true skips only.
+        if (this.playing && !this.ended && this.seekPending < 0) this.underruns++;
+        outL[i] = 0; outR[i] = 0; continue;
+      }
       // sinc only while its full support is buffered; cubic otherwise (drain tail)
       const useAa = aa && avail > supp + 1;
       const l = useAa ? this.sincRing(this.ringL, this.rHead, c) : this.cubicRing(this.ringL, this.rHead);
@@ -565,6 +572,7 @@ class Stretch extends AudioWorkletProcessor {
         type: 'diag', loaded: this.loaded, playing: this.playing, ended: this.ended,
         nG: this.nG, len: this.length, fifo: this.wHead - this.rHead,
         ideal: Math.round(this.idealPos), peak: pk, gain: this.gain,
+        underruns: this.underruns,
       });
     }
     return true;

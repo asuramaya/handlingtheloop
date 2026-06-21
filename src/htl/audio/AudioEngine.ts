@@ -265,14 +265,67 @@ export class AudioEngine {
   // quantum output pre-built grains instead of running the WSOLA/PV search and overrunning
   // its budget (the stutter); both at 0 = zero tempo/jog latency the rest of the time.
   // Resends the FULL config so the worklet's geometry early-return fires (no rebuild / click).
+  // A THIRD driver, `adaptiveReserve`, closes the loop on ACTUAL dropouts: iOS reports
+  // outputLatency as 0 on Bluetooth/CarPlay so the wireless driver below is blind there, but
+  // the worklet counts every FIFO-dry quantum (a real skip). The auto-guard ramps this up on
+  // new dropouts and decays it back when playback is clean — so wireless gets buffered without
+  // a manual toggle, and wired output keeps its low latency. All three combine as the MAX.
   private separationReserve = 0;
   private wirelessReserve = 0;
+  private adaptiveReserve = 0;
   private applyReserve() {
-    const reserve = Math.max(this.separationReserve, this.wirelessReserve);
+    const reserve = Math.max(this.separationReserve, this.wirelessReserve, this.adaptiveReserve);
     if (this.stretchCfg.reserve === reserve) return;
     this.stretchCfg = { ...this.stretchCfg, reserve };
     this.deckA.configureStretch(this.stretchCfg);
     this.deckB.configureStretch(this.stretchCfg);
+  }
+
+  // ---- #14 automatic wireless-skip guard ---------------------------------------
+  private lastUnderruns = 0;
+  private cleanTicks = 0;
+  private autoGuard: ReturnType<typeof setInterval> | null = null;
+  private totalUnderruns(): number {
+    return (this.deckA.lastDiag?.underruns ?? 0) + (this.deckB.lastDiag?.underruns ?? 0);
+  }
+  /** Start/stop the dropout-driven pre-roll auto-ramp (mobile-only; the host enables it).
+   *  Watches the worklet's real underrun counter once a second: any NEW dropout while a deck
+   *  is playing steps the reserve up (to a ~120 ms cap); a sustained clean stretch decays it
+   *  back to 0. Platform-agnostic — it reacts to skips themselves, the signal iOS can't predict. */
+  setWirelessAuto(on: boolean) {
+    if (on === !!this.autoGuard) return;
+    if (!on) {
+      if (this.autoGuard) clearInterval(this.autoGuard);
+      this.autoGuard = null;
+      this.adaptiveReserve = 0;
+      this.cleanTicks = 0;
+      this.applyReserve();
+      return;
+    }
+    const sr = this.ctx.sampleRate;
+    const step = Math.round(sr * 0.03); // +30 ms per dropout-second
+    const cap = Math.round(sr * 0.12); // ceiling ~120 ms (matches the manual force)
+    const decay = Math.round(sr * 0.015); // -15 ms per clean window (slow, anti-flap)
+    this.lastUnderruns = this.totalUnderruns();
+    this.cleanTicks = 0;
+    this.autoGuard = setInterval(() => {
+      const u = this.totalUnderruns();
+      const delta = u - this.lastUnderruns; // node re-attach resets the counter → negative → treated clean
+      this.lastUnderruns = u;
+      if (!(this.deckA.playing || this.deckB.playing)) return;
+      if (delta > 0) {
+        this.cleanTicks = 0;
+        const next = Math.min(this.adaptiveReserve + step, cap);
+        if (next !== this.adaptiveReserve) {
+          this.adaptiveReserve = next;
+          this.applyReserve();
+        }
+      } else if (this.adaptiveReserve > 0 && ++this.cleanTicks >= 12) {
+        this.cleanTicks = 0;
+        this.adaptiveReserve = Math.max(0, this.adaptiveReserve - decay);
+        this.applyReserve();
+      }
+    }, 1000);
   }
 
   /** Pre-roll headroom for an in-flight on-device stem separation (the mid-split stutter). */

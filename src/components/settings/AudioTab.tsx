@@ -245,7 +245,7 @@ export function AudioTab({
       {isMobileDevice() && (
         <div className="settings-section">
           <div className="settings-row">
-            <span className="settings-label">Wireless output (Bluetooth / CarPlay)</span>
+            <span className="settings-label">Force wireless buffering</span>
             <button
               className={`toggle ${settings.wirelessOutput ? "on" : ""}`}
               onClick={() => set({ wirelessOutput: !settings.wirelessOutput })}
@@ -256,9 +256,9 @@ export function AudioTab({
             </button>
           </div>
           <p className="settings-hint muted">
-            Turn this on when the audio skips over a car stereo or Bluetooth speaker. It adds ~120&nbsp;ms of buffering
-            so the jittery wireless clock can’t starve playback. Leave it off for wired output (lower latency) — it’s
-            auto-detected where the browser reports it, but iOS can’t, so flip it manually in the car.
+            Skips over a car stereo or Bluetooth speaker are corrected <strong>automatically</strong> — the app detects
+            the dropouts and adds buffering, then backs it off once playback is clean. Turn this on only to pin the full
+            ~120&nbsp;ms buffer always-on (skips the brief auto-detect), at the cost of a little extra latency on wired output.
           </p>
         </div>
       )}

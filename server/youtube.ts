@@ -352,12 +352,25 @@ const DIAG_CLIENTS: PlayerClient[] = [
 
 export interface AudioDiag {
   videoId: string;
+  egressIp: string; // the IP YouTube SEES — proves whether this ran from CF's edge or a dev box
   visitor: { ok: boolean; prefix: string; supplied: boolean };
   clients: Array<{ name: string; http: number; status: string; reason: string; error: string; formats: number; audioWithUrl: number; ciphered: number; firstItag: number | null }>;
   byteProbe: { client: string; itag: number; status: number; contentLength: string | null } | { error: string } | null;
 }
 
+// Report the worker's own egress IP (what YouTube sees) so a diag run is self-identifying —
+// CF edge vs a local dev box look identical otherwise. cdn-cgi/trace is a plain-text k=v dump.
+async function egressIp(): Promise<string> {
+  try {
+    const t = await (await fetch("https://www.cloudflare.com/cdn-cgi/trace", withTimeout(VISITOR_TIMEOUT_MS, {}))).text();
+    return t.match(/^ip=(.+)$/m)?.[1] ?? "?";
+  } catch {
+    return "?";
+  }
+}
+
 export async function diagnoseAudio(videoId: string, auth?: YtAuth): Promise<AudioDiag> {
+  const egress = await egressIp();
   let visitor = auth?.visitorData || "";
   const supplied = !!auth?.visitorData;
   if (!visitor) {
@@ -400,7 +413,7 @@ export async function diagnoseAudio(videoId: string, auth?: YtAuth): Promise<Aud
       clients.push({ name: client.name, http: 0, status: "THREW", reason: e instanceof Error ? e.message : String(e), error: "", formats: 0, audioWithUrl: 0, ciphered: 0, firstItag: null });
     }
   }
-  return { videoId, visitor: { ok: !!visitor, prefix: visitor.slice(0, 12), supplied }, clients, byteProbe };
+  return { videoId, egressIp: egress, visitor: { ok: !!visitor, prefix: visitor.slice(0, 12), supplied }, clients, byteProbe };
 }
 
 /** Single-video metadata from the player response's videoDetails. */

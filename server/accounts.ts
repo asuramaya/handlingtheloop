@@ -48,6 +48,8 @@ import {
   followingOf,
   getTopTracks,
   getUserSettings,
+  getUserLibrary,
+  putUserLibrary,
   handleTaken,
   relationship,
   unblockUser,
@@ -621,6 +623,29 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         if (serialized.length > 256 * 1024) return json(413, { error: "settings too large" });
         const ts = typeof body.updatedAt === "number" ? body.updatedAt : Date.now();
         await putUserSettings(env.DB, user.id, serialized, ts);
+        return json(200, { ok: true, updatedAt: ts });
+      }
+      return json(405, { error: "GET or PUT only" });
+    }
+
+    case "/api/me/library": {
+      // The signed-in user's Collection + Playlists, synced across their devices. Same
+      // last-write-wins blob contract as /api/me/settings (audio is NOT here — just the
+      // curation). A bigger cap than settings since a collection can run to thousands of
+      // small track rows, still bounded so it can't be used to bloat D1.
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      if (req.method === "GET") {
+        const row = await getUserLibrary(env.DB, user.id);
+        return json(200, { data: row ? JSON.parse(row.data) : null, updatedAt: row?.updated_at ?? 0 });
+      }
+      if (req.method === "PUT") {
+        const body = (await req.json().catch(() => null)) as { data?: unknown; updatedAt?: number } | null;
+        if (!body || body.data == null) return json(400, { error: "data required" });
+        const serialized = JSON.stringify(body.data);
+        if (serialized.length > 2 * 1024 * 1024) return json(413, { error: "library too large" });
+        const ts = typeof body.updatedAt === "number" ? body.updatedAt : Date.now();
+        await putUserLibrary(env.DB, user.id, serialized, ts);
         return json(200, { ok: true, updatedAt: ts });
       }
       return json(405, { error: "GET or PUT only" });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Library, Playlist, TrackMeta } from "@htl/library";
+import { canonicalVideoId, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
   fetchMe,
@@ -277,7 +277,13 @@ export function LibraryPanel({
     return m;
   }, [library.collection]);
 
-  const inCollection = (videoId: string) => byId.has(videoId);
+  // "Already in my collection?" — match on the canonical id so a community/search row
+  // (bare id) lines up with a collection entry stored from a URL/other id form.
+  const collectionIds = useMemo(
+    () => new Set(library.collection.map((t) => canonicalVideoId(t.videoId) || t.videoId)),
+    [library.collection],
+  );
+  const inCollection = (videoId: string) => collectionIds.has(canonicalVideoId(videoId) || videoId);
 
   const isPlaylist = typeof view === "object";
   const activePlaylistId = isPlaylist ? view.playlistId : null;

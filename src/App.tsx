@@ -31,6 +31,7 @@ import {
   setCachedTrack,
   dropCachedBuffer,
   useLibrary,
+  useLibrarySync,
   type TrackMeta,
   fetchYouTubeAudio,
   fileToArrayBuffer,
@@ -1106,6 +1107,9 @@ export function App() {
   // Mirror settings to the account when signed in (last-write-wins by timestamp), so
   // theme/stem/keybind prefs follow the user across devices.
   useSettingsSync(settings, setSettings);
+  // Same for the Collection + Playlists — curation follows the user across devices (audio
+  // itself doesn't need syncing: R2 is a shared cache and anything missing re-resolves).
+  useLibrarySync(library);
 
 
   const loadedIds = new Set([loaded.A, loaded.B].filter((v): v is string => v !== null));

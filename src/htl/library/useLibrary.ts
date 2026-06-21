@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Store, migrateLegacyKey } from "../persistence";
+import { canonicalizeTrack, trackKey } from "./identity";
 import type { Playlist, TrackMeta } from "./types";
 
 // Persistent library: the collection (every track you've saved) plus playlists
@@ -7,7 +8,7 @@ import type { Playlist, TrackMeta } from "./types";
 // audio lives in the IndexedDB cache. Mirrors rekordbox's Collection +
 // Playlists model.
 
-interface LibraryData {
+export interface LibraryData {
   collection: TrackMeta[];
   playlists: Playlist[];
 }
@@ -40,6 +41,9 @@ export interface Library {
   addToPlaylist: (playlistId: string, track: TrackMeta) => void;
   removeFromPlaylist: (playlistId: string, videoId: string) => void;
   markSynced: (id: string, ts: number) => void;
+  /** Replace the whole library wholesale — used by cross-device sync when it adopts a
+   *  newer remote blob. Bypasses the per-op dedupe (the blob is already canonical). */
+  replaceAll: (next: LibraryData) => void;
 }
 
 export function useLibrary(): Library {
@@ -50,11 +54,13 @@ export function useLibrary(): Library {
   }, [data]);
 
   const addTrack = useCallback((track: TrackMeta) => {
+    const t = canonicalizeTrack(track);
+    const key = trackKey(t);
     setData((d) => {
-      if (d.collection.some((t) => t.videoId === track.videoId)) return d;
+      if (d.collection.some((x) => trackKey(x) === key)) return d;
       return {
         ...d,
-        collection: [{ ...track, addedAt: Date.now() }, ...d.collection],
+        collection: [{ ...t, addedAt: Date.now() }, ...d.collection],
       };
     });
   }, []);
@@ -126,13 +132,15 @@ export function useLibrary(): Library {
 
   // Adding to a playlist also ensures the track exists in the collection.
   const addToPlaylist = useCallback((playlistId: string, track: TrackMeta) => {
+    const t = canonicalizeTrack(track);
+    const key = trackKey(t);
     setData((d) => {
-      const collection = d.collection.some((t) => t.videoId === track.videoId)
+      const collection = d.collection.some((x) => trackKey(x) === key)
         ? d.collection
-        : [{ ...track, addedAt: Date.now() }, ...d.collection];
+        : [{ ...t, addedAt: Date.now() }, ...d.collection];
       const playlists = d.playlists.map((p) =>
-        p.id === playlistId && !p.trackIds.includes(track.videoId)
-          ? { ...p, trackIds: [...p.trackIds, track.videoId] }
+        p.id === playlistId && !p.trackIds.includes(t.videoId)
+          ? { ...p, trackIds: [...p.trackIds, t.videoId] }
           : p,
       );
       return { collection, playlists };
@@ -156,6 +164,13 @@ export function useLibrary(): Library {
     }));
   }, []);
 
+  const replaceAll = useCallback((next: LibraryData) => {
+    setData({
+      collection: Array.isArray(next.collection) ? next.collection : [],
+      playlists: Array.isArray(next.playlists) ? next.playlists : [],
+    });
+  }, []);
+
   return {
     collection: data.collection,
     playlists: data.playlists,
@@ -170,5 +185,6 @@ export function useLibrary(): Library {
     addToPlaylist,
     removeFromPlaylist,
     markSynced,
+    replaceAll,
   };
 }

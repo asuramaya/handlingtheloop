@@ -27,6 +27,49 @@ export async function putUserSettings(db: D1Database, userId: string, data: stri
     .run();
 }
 
+// --- Per-user library blob (Collection + Playlists, synced across devices) -------
+// Same shape + LWW policy as user_settings, but a SEPARATE row so a big library can't
+// bloat (or race) the small UI-settings blob. Ensured at runtime so it works before the
+// migration is applied to an existing DB (mirrors ensureUserPlays).
+let ensuredLibrary = false;
+async function ensureUserLibrary(db: D1Database): Promise<void> {
+  if (ensuredLibrary) return;
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS user_library (
+         user_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+    )
+    .run();
+  ensuredLibrary = true;
+}
+
+/** The signed-in user's synced library blob (JSON string), or null if never saved. */
+export async function getUserLibrary(
+  db: D1Database,
+  userId: string,
+): Promise<{ data: string; updated_at: number } | null> {
+  await ensureUserLibrary(db);
+  return db
+    .prepare("SELECT data, updated_at FROM user_library WHERE user_id = ?")
+    .bind(userId)
+    .first<{ data: string; updated_at: number }>();
+}
+
+/** Upsert the user's library blob (last-write-wins by the client-supplied timestamp). */
+export async function putUserLibrary(db: D1Database, userId: string, data: string, updatedAt: number): Promise<void> {
+  await ensureUserLibrary(db);
+  // Conditional upsert: write only when the incoming value is BOTH newer AND different — a
+  // stale or identical PUT (a cross-device adopt re-pushing the same blob) no-ops at the DB.
+  await db
+    .prepare(
+      `INSERT INTO user_library (user_id, data, updated_at) VALUES (?,?,?)
+       ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+         WHERE excluded.updated_at > user_library.updated_at AND excluded.data <> user_library.data`,
+    )
+    .bind(userId, data, updatedAt)
+    .run();
+}
+
 // --- Per-user play stats (the profile's "top songs") ---------------------------
 // An aggregate, not a log: one row per (user, track) with a running count, so "top N"
 // is an indexed query and the table can't grow without bound. See migration 0008 — also

@@ -2439,6 +2439,10 @@ export function App() {
     [engine, replay],
   );
 
+  // A stem view that arrived for a track this deck hasn't finished decoding yet (the
+  // catch-up burst on join races the deck load) — stashed here and re-applied the moment
+  // loaded[deck] catches up, so an anon/mobile listener doesn't lose stems forever.
+  const pendingStemView = useRef<Record<DeckId, { videoId: string; view: StemView } | null>>({ A: null, B: null });
   // A peer's stem waveform envelopes arrived (the host streams them) → rebuild this
   // deck's 4-lane display from them, even though we hold no local stem PCM (mobile).
   const onRoomStemView = useCallback(
@@ -2455,7 +2459,13 @@ export function App() {
         // (Older peers omit videoId → render best-effort, as before.)
         const sv = view as StemView;
         const here = latest.current.loaded[deck];
-        if (sv?.videoId && here && sv.videoId !== here) return;
+        if (sv?.videoId && here && sv.videoId !== here) {
+          // Track still decoding (or a different track loading) — stash, don't drop. The
+          // flush effect re-applies it once loaded[deck] becomes this view's videoId.
+          pendingStemView.current[deck] = { videoId: sv.videoId, view: sv };
+          return;
+        }
+        pendingStemView.current[deck] = null;
         d.setRemoteStemView(sv);
         // The host's stems are now displayed here — cancel any pending "couldn't deliver"
         // timer, clear the "Requesting…" chip, and show the view is live from the host.
@@ -2475,6 +2485,26 @@ export function App() {
     },
     [engine, refresh, setStatusFor],
   );
+
+  // Flush a stashed stem view once this deck finishes decoding its matching track (the join
+  // catch-up streamed the view before the deck had loaded — without this, a mobile/anon
+  // listener that races the load loses the host's stems permanently). Keyed on `loaded`.
+  useEffect(() => {
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      const p = pendingStemView.current[id];
+      if (!p || loaded[id] !== p.videoId) return;
+      const d = engine.deck(id);
+      pendingStemView.current[id] = null;
+      if (d.ownStems) return; // grew its own stems meanwhile → local wins
+      d.setRemoteStemView(p.view);
+      if (stemViewWaitTimers.current[id]) {
+        clearTimeout(stemViewWaitTimers.current[id]);
+        stemViewWaitTimers.current[id] = undefined;
+      }
+      setStatusFor(id, { phase: "ready", src: "host", detail: "Stems from the session host." });
+      refresh();
+    });
+  }, [loaded, engine, refresh, setStatusFor]);
 
   // Instant cross-device colour sync (inbound): a same-account device re-themed → adopt its
   // colours here too. The DO relays this ONLY between the owner's own devices, so it never

@@ -246,35 +246,38 @@ export function SamplerStrip({
         );
       })}
 
-      {/* Mic + capture IO — captures drop into the next free global pad above. */}
+      {/* IO — two labelled groups so the controls read at a glance. Captures drop into the
+          next free global pad above. */}
       <div className="smp-io">
         {engine.canMic && (
-          <button className={`smp-io-btn ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Microphone talkover — music ducks while you talk">
-            🎙{micBusy ? "…" : micOn ? " ON" : ""}
-            <span className="smp-io-meter"><span ref={meterRef} /></span>
-          </button>
+          <div className="smp-io-grp">
+            <span className="smp-io-tag">MIC</span>
+            <button className={`smp-io-btn smp-io-pill ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Talkover — your mic into the mix; the music ducks while you talk">
+              🎙 {micBusy ? "…" : micOn ? "ON" : "OFF"}
+              <span className="smp-io-meter"><span ref={meterRef} /></span>
+            </button>
+            <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Cue — hear your own mic in the headphone/cue device (needs a cue device set)">
+              CUE
+            </button>
+            <button className="smp-io-sel" onClick={cycleDest} title="Where the mic goes — the PA (talkover, ducks the music) or through Deck A/B's FX rack">
+              <b>OUT</b> {micDest === "master" ? "PA" : `DECK ${micDest}`}
+            </button>
+          </div>
         )}
-        {engine.canMic && (
-          <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Monitor — hear the mic in your headphone/cue device (needs a cue device set)">
-            MON
+        <div className="smp-io-grp">
+          <span className="smp-io-tag">CAPTURE</span>
+          <button className="smp-io-sel" onClick={cycleSrc} title="What ● REC records (the live grab below always takes the master)">
+            <b>FROM</b> {SRC_LABEL[recSrc]}
           </button>
-        )}
-        {engine.canMic && (
-          <button className="smp-io-src" onClick={cycleDest} title="Mic destination — PA (talkover, ducks the music) or into Deck A/B's FX rack">
-            →{micDest === "master" ? "PA" : micDest}
+          <button className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → the take drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
+            {recording ? "■ STOP" : "● REC"}
           </button>
-        )}
-        <button className="smp-io-src" onClick={cycleSrc} title="Record source — what the ● captures">
-          {SRC_LABEL[recSrc]}
-        </button>
-        <button className={`smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
-          {recording ? "■ STOP" : "● REC"}
-        </button>
-        {engine.canRingCapture && (
-          <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Grab the last 4 bars that just played (from the master) → next free pad">
-            {grabbing ? "…" : "⟲ GRAB"}
-          </button>
-        )}
+          {engine.canRingCapture && (
+            <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Grab the last 4 bars that just played (from the master) → next free pad">
+              {grabbing ? "…" : "⟲ GRAB"}
+            </button>
+          )}
+        </div>
       </div>
 
       {showMic && (micOn || monitor) && (

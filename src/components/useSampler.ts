@@ -13,14 +13,14 @@ import {
 } from "@htl/media";
 import type { Me } from "@htl/account";
 
-// The sampler's state engine. The 28 pads split into one GLOBAL bank + two per-deck
+// The sampler's state engine. The 24 pads split into one GLOBAL bank + two per-deck
 // REGION banks, addressed by a flat index:
-//   0-11  → GLOBAL (master route): uploaded files, account-stored (the strip).
-//   12-19 → deck A region (A channel): "play X→Y" of deck A's track (a deck pad-mode).
-//   20-27 → deck B region (B channel): deck B's track.
+//   0-7   → GLOBAL (master route): uploaded/captured clips, account-stored (the strip).
+//   8-15  → deck A region (A channel): "play X→Y" of deck A's track (a deck pad-mode).
+//   16-23 → deck B region (B channel): deck B's track.
 // Region pads are positions only (per-track, local); global pads are files (R2/D1).
 
-export const GLOBAL_COUNT = 12;
+export const GLOBAL_COUNT = 8;
 export const DECK_REGION_COUNT = 8;
 export const PAD_COUNT = GLOBAL_COUNT + DECK_REGION_COUNT * 2; // 28
 export const GLOBAL_PADS = Array.from({ length: GLOBAL_COUNT }, (_, i) => `g${i}`);

@@ -511,37 +511,65 @@ body {
   float: right;
   opacity: 0.7;
 }
-/* Mic + capture IO cluster — sits at the end of the strip row, after the 12 global pads. */
+/* Mic + capture IO — two labelled groups at the end of the strip row, after the global pads. */
 .smp-io {
   display: flex;
   align-items: stretch;
-  gap: 3px;
+  gap: 8px;
   flex: 0 0 auto;
-  padding-left: 5px;
-  margin-left: 3px;
+  padding-left: 8px;
+  margin-left: 4px;
   border-left: 1px solid var(--line);
+}
+/* A group (MIC / CAPTURE): its tag label spans the top, the buttons sit below. */
+.smp-io-grp {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  grid-auto-rows: 1fr;
+  align-content: stretch;
+  gap: 2px 3px;
+  padding: 1px 5px 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 70%, #000 6%);
+}
+.smp-io-tag {
+  grid-column: 1 / -1;
+  font: 800 8px ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  color: var(--muted, color-mix(in srgb, var(--text) 55%, transparent));
+  padding: 1px 1px 0;
 }
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 5px;
   background: var(--panel);
   color: var(--text);
   cursor: pointer;
-  padding: 0 7px;
+  padding: 3px 8px;
   white-space: nowrap;
 }
 .smp-io button:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
-.smp-io-src {
-  min-width: 34px;
+/* Labelled selector chips (OUT·PA / FROM·MIX) — bold grey prefix, accent value. */
+.smp-io-sel b {
+  color: var(--muted, color-mix(in srgb, var(--text) 50%, transparent));
+  font-weight: 800;
+  margin-right: 3px;
+}
+.smp-io-sel {
   color: var(--accent);
 }
 .smp-io-btn.on {
   background: color-mix(in srgb, var(--accent) 26%, var(--panel));
   border-color: var(--accent);
+}
+.smp-io-pill {
+  min-width: 64px;
+  position: relative;
 }
 .smp-io-rec.armed {
   background: color-mix(in srgb, #c0334e 40%, var(--panel));

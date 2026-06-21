@@ -344,6 +344,7 @@ const DIAG_CLIENTS: PlayerClient[] = [
   CLIENTS.ANDROID_VR,
   { name: "IOS", id: "5", version: "19.45.4", ua: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)", extra: { deviceMake: "Apple", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.1.0.22B83" } },
   { name: "ANDROID", id: "3", version: "19.44.38", ua: "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip", extra: { androidSdkVersion: 34, osName: "Android", osVersion: "14" } },
+  { name: "WEB", id: "1", version: "2.20240726.00.00", ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" },
   { name: "WEB_EMBEDDED_PLAYER", id: "56", version: "1.20241201.00.00" },
   { name: "TVHTML5_SIMPLY_EMBEDDED_PLAYER", id: "85", version: "2.0" },
   { name: "MWEB", id: "2", version: "2.20241202.07.00", ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1" },

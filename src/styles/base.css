@@ -521,24 +521,12 @@ body {
   margin-left: 4px;
   border-left: 1px solid var(--line);
 }
-/* A group (MIC / CAPTURE): its tag label spans the top, the buttons sit below. */
+/* A group (mic / capture): a plain row of buttons, no box — they read as one even
+   strip with the sampler pads beside them. */
 .smp-io-grp {
-  display: grid;
-  grid-template-columns: repeat(3, auto);
-  grid-auto-rows: 1fr;
-  align-content: stretch;
-  gap: 2px 3px;
-  padding: 1px 5px 0;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--surface) 70%, #000 6%);
-}
-.smp-io-tag {
-  grid-column: 1 / -1;
-  font: 800 8px ui-monospace, monospace;
-  letter-spacing: 0.12em;
-  color: var(--muted, color-mix(in srgb, var(--text) 55%, transparent));
-  padding: 1px 1px 0;
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
 }
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;

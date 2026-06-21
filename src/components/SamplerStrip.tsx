@@ -251,7 +251,6 @@ export function SamplerStrip({
       <div className="smp-io">
         {engine.canMic && (
           <div className="smp-io-grp">
-            <span className="smp-io-tag">MIC</span>
             <button className={`smp-io-btn smp-io-pill ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Talkover — your mic into the mix; the music ducks while you talk">
               🎙 {micBusy ? "…" : micOn ? "ON" : "OFF"}
               <span className="smp-io-meter"><span ref={meterRef} /></span>
@@ -265,7 +264,6 @@ export function SamplerStrip({
           </div>
         )}
         <div className="smp-io-grp">
-          <span className="smp-io-tag">CAPTURE</span>
           <button className="smp-io-sel" onClick={cycleSrc} title="What ● REC records (the live grab below always takes the master)">
             <b>FROM</b> {SRC_LABEL[recSrc]}
           </button>

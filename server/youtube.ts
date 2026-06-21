@@ -334,6 +334,74 @@ export async function resolveAudio(videoId: string, auth?: YtAuth): Promise<Reso
   };
 }
 
+// ---- cold-load diagnostics ---------------------------------------------------
+// The anti-bot wall hits DIFFERENTLY per egress IP (a Cloudflare Worker IP is gated
+// far harder than a dev box), so the only authoritative read is from the deployed
+// worker itself. `diagnoseAudio` runs the real path + probes a cascade of alternate
+// direct-url clients and reports each stage, non-throwing, so /api/audio/diag can
+// show what YouTube actually returns here — and which client (if any) still works.
+const DIAG_CLIENTS: PlayerClient[] = [
+  CLIENTS.ANDROID_VR,
+  { name: "IOS", id: "5", version: "19.45.4", ua: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)", extra: { deviceMake: "Apple", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.1.0.22B83" } },
+  { name: "ANDROID", id: "3", version: "19.44.38", ua: "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip", extra: { androidSdkVersion: 34, osName: "Android", osVersion: "14" } },
+  { name: "WEB_EMBEDDED_PLAYER", id: "56", version: "1.20241201.00.00" },
+  { name: "TVHTML5_SIMPLY_EMBEDDED_PLAYER", id: "85", version: "2.0" },
+  { name: "MWEB", id: "2", version: "2.20241202.07.00", ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1" },
+];
+
+export interface AudioDiag {
+  videoId: string;
+  visitor: { ok: boolean; prefix: string; supplied: boolean };
+  clients: Array<{ name: string; http: number; status: string; reason: string; error: string; formats: number; audioWithUrl: number; ciphered: number; firstItag: number | null }>;
+  byteProbe: { client: string; itag: number; status: number; contentLength: string | null } | { error: string } | null;
+}
+
+export async function diagnoseAudio(videoId: string, auth?: YtAuth): Promise<AudioDiag> {
+  let visitor = auth?.visitorData || "";
+  const supplied = !!auth?.visitorData;
+  if (!visitor) {
+    try {
+      visitor = await getVisitorData();
+    } catch {
+      /* leave empty — the report will show LOGIN_REQUIRED, which IS the diagnosis */
+    }
+  }
+  const clients: AudioDiag["clients"] = [];
+  let byteProbe: AudioDiag["byteProbe"] = null;
+  for (const client of DIAG_CLIENTS) {
+    try {
+      const { http, body } = await rawPlayer(videoId, { client, visitorData: visitor || undefined, cookie: auth?.cookie, poToken: auth?.poToken });
+      const fmts = body.streamingData?.adaptiveFormats ?? [];
+      const audio = fmts.filter((f) => f.mimeType?.startsWith("audio/"));
+      const withUrl = audio.filter((f) => f.url);
+      const ciphered = audio.filter((f) => !f.url && ((f as unknown as { signatureCipher?: string }).signatureCipher));
+      clients.push({
+        name: client.name,
+        http,
+        status: body.playabilityStatus?.status ?? "—",
+        reason: body.playabilityStatus?.reason ?? "",
+        error: body.error?.message ?? "",
+        formats: fmts.length,
+        audioWithUrl: withUrl.length,
+        ciphered: ciphered.length,
+        firstItag: withUrl[0]?.itag ?? null,
+      });
+      // First client that yields a direct url → probe the byte stage (range 0-1KB).
+      if (!byteProbe && withUrl[0]?.url) {
+        try {
+          const r = await fetch(withUrl[0].url, withTimeout(PLAYER_TIMEOUT_MS, { headers: { range: "bytes=0-1023" } }));
+          byteProbe = { client: client.name, itag: withUrl[0].itag, status: r.status, contentLength: r.headers.get("content-length") };
+        } catch (e) {
+          byteProbe = { error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+    } catch (e) {
+      clients.push({ name: client.name, http: 0, status: "THREW", reason: e instanceof Error ? e.message : String(e), error: "", formats: 0, audioWithUrl: 0, ciphered: 0, firstItag: null });
+    }
+  }
+  return { videoId, visitor: { ok: !!visitor, prefix: visitor.slice(0, 12), supplied }, clients, byteProbe };
+}
+
 /** Single-video metadata from the player response's videoDetails. */
 export async function fetchMeta(videoId: string, auth?: YtAuth): Promise<TrackMeta> {
   // Same anonymous ANDROID_VR path as resolveAudio.

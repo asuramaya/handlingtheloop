@@ -17,7 +17,7 @@ import { acoustidLookup } from "../server/acoustid";
 import { getValidToken } from "../server/connections";
 import { getTidalTrackRadio, tidalTrackIdByIsrc, searchTidalTracks, tidalProbe } from "../server/tidalData";
 import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/tidalAuth";
-import { audioChunks, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
+import { audioChunks, diagnoseAudio, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
 import { handleSampleRoute } from "../server/samples";
@@ -249,6 +249,16 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
     if (sampleRes) return sampleRes;
 
     switch (url.pathname) {
+      // Cold-load diagnostics: run the real resolve path + probe alternate clients from
+      // THIS (Cloudflare) egress and report each stage. The anti-bot wall is IP-specific,
+      // so this is the only authoritative read of why new songs fail. Rate-limited (hits
+      // YouTube), never cached. Hit it in a browser: /api/audio/diag?v=<id>.
+      case "/api/audio/diag": {
+        const v = url.searchParams.get("v");
+        if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
+        if (!(await allow(env.RL_AUDIO, clientIp(req)))) return json(429, { error: "rate limited — try again shortly" });
+        return json(200, await diagnoseAudio(v, readAuth(req)));
+      }
       case "/api/audio": {
         const v = url.searchParams.get("v");
         if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
@@ -274,7 +284,14 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         if (!(await allow(env.RL_AUDIO, clientIp(req)))) {
           return json(429, { error: "rate limited — try again shortly" });
         }
-        const r = await resolveAudio(v, readAuth(req));
+        let r;
+        try {
+          r = await resolveAudio(v, readAuth(req));
+        } catch (e) {
+          // Surface YouTube's own reason (LOGIN_REQUIRED / bot-check / no format) so a cold
+          // failure is legible instead of an opaque 500. See /api/audio/diag for the full read.
+          return json(502, { error: "could not load from YouTube", reason: e instanceof Error ? e.message : String(e) });
+        }
 
         // Oversized (long mixes): stream chunk-by-chunk, skip caching to protect
         // Worker memory.

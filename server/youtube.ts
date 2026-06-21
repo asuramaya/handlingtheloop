@@ -270,14 +270,18 @@ async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // YouTube intermittently 403s / LOGIN_REQUIREDs requests from datacenter IPs
-// (Cloudflare's edge). Retry with backoff and a fresh visitorData — in practice
-// the next attempt almost always succeeds.
-async function playerWithRetry(videoId: string, attempts = 4, auth?: YtAuth): Promise<PlayerResponse> {
+// (Cloudflare's edge). Measured: the block is bursty per-egress-IP, not per-video — a
+// given cold load fails only when ALL attempts land in a throttled window, and a FRESH
+// visitorData on the next try is the lever that clears it (verified: rotating visitors
+// rides out the bursts). So retry generously with jittered backoff. The latency cost is
+// paid only on the rare fully-walled video; most resolve on attempt 0-1.
+async function playerWithRetry(videoId: string, attempts = 6, auth?: YtAuth): Promise<PlayerResponse> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      // Prefer the user's browser-minted visitorData (it pairs with their PO
-      // token / cookie); otherwise fetch our own.
+      // Prefer the user's browser-minted visitorData (it pairs with their PO token / cookie
+      // and must stay fixed for that binding); otherwise fetch our own and ROTATE it every
+      // retry (force=true once past attempt 0) so a burned token can't wall every attempt.
       const visitor = auth?.visitorData || (await getVisitorData(i > 0));
       const pr = await playerRequest(videoId, visitor, auth);
       if (pr.playabilityStatus?.status === "OK") return pr;
@@ -287,7 +291,9 @@ async function playerWithRetry(videoId: string, attempts = 4, auth?: YtAuth): Pr
     } catch (e) {
       lastErr = e; // HTTP 403 / 429 / 5xx
     }
-    if (i < attempts - 1) await sleep(250 * (i + 1));
+    // Jittered backoff (capped) — the jitter de-synchronises concurrent cold loads so they
+    // don't retry in lockstep and re-throttle the same egress together.
+    if (i < attempts - 1) await sleep(Math.min(200 * (i + 1), 1000) + Math.floor(Math.random() * 200));
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
@@ -312,7 +318,7 @@ function pickAudio(formats: RawFormat[]): RawFormat | null {
 // browser-minted visitorData / PO token that hardens the anonymous request against
 // datacenter bot-blocks. `playerWithRetry` already retries with a fresh visitorData.
 export async function resolveAudio(videoId: string, auth?: YtAuth): Promise<ResolvedAudio> {
-  const pr = await playerWithRetry(videoId, 4, auth);
+  const pr = await playerWithRetry(videoId, 6, auth);
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
   if (!fmt || !fmt.url) throw new Error("no playable audio format");
   const d = pr.videoDetails;
@@ -419,7 +425,7 @@ export async function diagnoseAudio(videoId: string, auth?: YtAuth): Promise<Aud
 /** Single-video metadata from the player response's videoDetails. */
 export async function fetchMeta(videoId: string, auth?: YtAuth): Promise<TrackMeta> {
   // Same anonymous ANDROID_VR path as resolveAudio.
-  const pr = await playerWithRetry(videoId, 4, auth);
+  const pr = await playerWithRetry(videoId, 6, auth);
   const d = pr.videoDetails;
   if (!d?.videoId) throw new Error("no metadata");
   const thumbs = d.thumbnail?.thumbnails;

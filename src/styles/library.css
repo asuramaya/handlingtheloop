@@ -488,6 +488,51 @@
   cursor: default;
 }
 
+/* Cache-state filter chips (Library / Community): toggle to narrow the view to pooled
+   and/or stemmed tracks. The dot mirrors the row pip so the legend reads at a glance. */
+.tt-cache-chips {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tt-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.tt-chip.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.tt-chip .pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.tt-chip .pip-song {
+  background: #3ddc84;
+}
+.tt-chip .pip-stems {
+  background: var(--accent, #36c2ff);
+}
+
 /* Sortable header: click to sort (caret shows direction); a drag handle on the
    right border resizes the column. */
 .tt-sortable {

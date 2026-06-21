@@ -11,7 +11,7 @@ export function useCommunityPool(): TrackMeta[] {
   const [community, setCommunity] = useState<TrackMeta[]>([]);
   useEffect(() => {
     let cancelled = false;
-    fetchCommunity(120)
+    fetchCommunity(5000)
       .then((tracks) => {
         if (cancelled) return;
         // Apply any titles we backfilled on a previous visit straight away.

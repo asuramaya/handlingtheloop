@@ -575,7 +575,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // The shared cache, surfaced as a browsable pool. PRIMARY path: the D1
         // index (ordered, paginated, O(limit)). FALLBACK: scan R2 directly — used
         // pre-migration or before the one-time reindex has populated D1.
-        const limit = Math.min(Number(url.searchParams.get("limit")) || 60, 200);
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 60, 5000);
         // The Library/Search cache badges ask for a per-track stems flag; the plain
         // pool browse omits it so it stays a single indexed query (no R2 walk).
         const stemIds = url.searchParams.get("stems") === "1" ? await stemCachedIds(env) : null;
@@ -630,7 +630,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
             });
           }
           cursor = page.truncated ? page.cursor : undefined;
-        } while (cursor && tracks.length < 1000);
+        } while (cursor && tracks.length < 5000);
         return json(200, { tracks: tracks.slice(0, limit) });
       }
       case "/api/room/invite": {

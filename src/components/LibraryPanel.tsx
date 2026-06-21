@@ -774,6 +774,7 @@ export function LibraryPanel({
             playlists={playlistRefs}
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
+            cacheFilter
           />
         )}
         {view === "community" && (
@@ -791,6 +792,7 @@ export function LibraryPanel({
             onCreatePlaylistWith={createPlaylistWith}
             onAddToCollection={library.addTrack}
             inCollection={inCollection}
+            cacheFilter
           />
         )}
         {isPlaylist &&

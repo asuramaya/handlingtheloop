@@ -3,13 +3,16 @@ import { cacheState, primeCachePool, subscribeCacheStatus } from "@htl/media";
 
 // Subscribe a list component (Library table / Search results) to cache-pool updates:
 // primes the shared manifest once and re-renders when it (or a later refresh) lands,
-// so the pips appear without a reload.
-export function useCacheStatus(): void {
-  const [, bump] = useReducer((n: number) => n + 1, 0);
+// so the pips appear without a reload. Returns a version counter that bumps on each
+// manifest change — callers that *filter* by cache state (not just render pips) fold it
+// into their memo deps so the filtered view recomputes when the manifest arrives.
+export function useCacheStatus(): number {
+  const [ver, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     primeCachePool();
     return subscribeCacheStatus(() => bump());
   }, []);
+  return ver;
 }
 
 // Compact, at-a-glance cache markers for a track row: a green dot when the song is

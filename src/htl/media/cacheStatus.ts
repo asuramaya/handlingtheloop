@@ -40,7 +40,7 @@ function emit() {
 export function primeCachePool(): void {
   if (primed) return;
   primed = true;
-  fetch("/api/community?limit=500&stems=1")
+  fetch("/api/community?limit=5000&stems=1")
     .then((r) => (r.ok ? r.json() : { tracks: [] }))
     .then((d: { tracks?: { videoId?: string; stems?: boolean }[] }) => {
       let changed = false;

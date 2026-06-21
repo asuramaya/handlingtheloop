@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TrackMeta } from "@htl/library";
+import { cacheState } from "@htl/media";
 import { fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
@@ -50,6 +51,7 @@ interface TrackTableProps {
   onReorder?: (from: number, to: number) => void; // enables intra-list drag-reorder (Queue)
   deckLoaded?: { A: string | null; B: string | null }; // videoIds on each deck → an A/B chip on that row
   deckColors?: { A: string; B: string }; // deck accent colours for the A/B chips
+  cacheFilter?: boolean; // show Cached / Stemmed toggle chips that narrow the view by pool state
 }
 
 // rekordbox-style track list with desktop-grade interaction: click selects,
@@ -81,6 +83,7 @@ export function TrackTable({
   onReorder,
   deckLoaded,
   deckColors,
+  cacheFilter,
 }: TrackTableProps) {
   const searchMode = !!onSubmitSearch; // toolbar field submits a YouTube search instead of filtering
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -89,7 +92,9 @@ export function TrackTable({
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   const [query, setQuery] = useState(initialQuery ?? ""); // filter (library/queue) OR search box text
   const [reorderOver, setReorderOver] = useState<number | null>(null); // queue: row being hovered for reorder
-  useCacheStatus(); // re-render rows when the cached-pool manifest lands
+  const [cacheOnly, setCacheOnly] = useState(false); // narrow to pooled (instant-load) tracks
+  const [stemOnly, setStemOnly] = useState(false); // narrow to tracks whose stems are cached
+  const cacheVer = useCacheStatus(); // re-render rows (+ recompute the filter) when the manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   // Column sizing (persisted widths, row scale, # / thumb px widths + resize handlers).
   const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, changeScale, colWidth } =
@@ -109,12 +114,21 @@ export function TrackTable({
     const q = query.trim().toLowerCase();
     // No live filter in search mode (the field submits a query) nor in reorder mode (the
     // Queue is a curated order — filtering would misalign the drag indices into it).
-    const filtered = searchMode || onReorder || !q
+    let filtered = searchMode || onReorder || !q
       ? tracks
       : tracks.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q));
+    // Cache-state chips (Library / Community): narrow to pooled and/or stemmed tracks.
+    // Both on ⇒ require both. Read live from the shared manifest; cacheVer forces the
+    // recompute once it lands. Never applies to the reorderable queue (indices must hold).
+    if (cacheFilter && !onReorder && (cacheOnly || stemOnly)) {
+      filtered = filtered.filter((t) => {
+        const cs = cacheState(t.videoId);
+        return (!cacheOnly || cs.song) && (!stemOnly || cs.stems);
+      });
+    }
     if (onReorder || sortKey === "index") return sortDir === 1 || onReorder ? filtered : [...filtered].reverse();
     return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
-  }, [tracks, sortKey, sortDir, query, searchMode, onReorder]);
+  }, [tracks, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
 
   // ----- Row windowing (only render the visible slice of a large list) -----
   // Reorder lists (the queue) are small and their drag math wants every index present, so
@@ -292,6 +306,26 @@ export function TrackTable({
           </div>
         )}
         {onReorder && <span className="tt-queue-label">Up next</span>}
+        {cacheFilter && !onReorder && (
+          <div className="tt-cache-chips" role="group" aria-label="Filter by cache state">
+            <button
+              className={`tt-chip ${cacheOnly ? "on" : ""}`}
+              aria-pressed={cacheOnly}
+              title="Show only tracks already cached (load instantly)"
+              onClick={() => setCacheOnly((v) => !v)}
+            >
+              <span className="pip pip-song" /> Cached
+            </button>
+            <button
+              className={`tt-chip ${stemOnly ? "on" : ""}`}
+              aria-pressed={stemOnly}
+              title="Show only tracks whose stems are cached"
+              onClick={() => setStemOnly((v) => !v)}
+            >
+              <span className="pip pip-stems" /> Stemmed
+            </button>
+          </div>
+        )}
         {searchMode && (
           <button className="tt-search-btn btn" onClick={() => onSubmitSearch!(query.trim())} disabled={searching || !query.trim()}>
             {searching ? "…" : "Search"}
@@ -458,8 +492,16 @@ export function TrackTable({
         </table>
       )}
       {footer}
-      {tracks.length > 0 && view.length === 0 && query && !searchMode && (
-        <div className="lib-empty">No tracks match “{query.trim()}”.</div>
+      {tracks.length > 0 && view.length === 0 && !searchMode && (
+        <div className="lib-empty">
+          {query.trim()
+            ? `No tracks match “${query.trim()}”.`
+            : stemOnly && cacheOnly
+              ? "No cached tracks with stems here yet."
+              : stemOnly
+                ? "No tracks with cached stems here yet."
+                : "No cached tracks here yet."}
+        </div>
       )}
 
       {menu && (

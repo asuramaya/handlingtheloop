@@ -567,7 +567,10 @@ export class AudioEngine {
    *  AND re-play the keep-alive element (iOS pauses it on an interruption). Call on
    *  return-to-foreground and on audio-route changes so the sound doesn't stay dead. */
   resumeOutput(): void {
-    if (this.ctx.state === "suspended") void this.ctx.resume();
+    // Any non-running state, not just "suspended": iOS Safari parks the context in a
+    // non-standard "interrupted" state on a phone call / Siri / another app grabbing the
+    // audio session, and resume() is the documented recovery from it.
+    if (this.ctx.state !== "running") void this.ctx.resume();
     const el = this.keepAlive;
     if (el && el.paused) void el.play().catch(() => {});
   }

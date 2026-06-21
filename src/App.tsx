@@ -1077,9 +1077,17 @@ export function App() {
   useEffect(() => {
     if (!isMobileDevice()) return;
     const sr = engine.ctx.sampleRate;
+    const max = Math.round(sr * 0.12); // ~120 ms — covers A2DP/CarPlay clock jitter
     const probe = () => {
+      // Manual override: iOS Safari reports outputLatency as 0 even on Bluetooth/CarPlay, so
+      // the auto-detect below can't see the high-latency sink and the skips persist. When the
+      // user flips "Wireless output" on (e.g. in the car) just force the full reserve.
+      if (settings.wirelessOutput) {
+        engine.setWirelessReserve(max);
+        return;
+      }
       const lat = (engine.ctx as unknown as { outputLatency?: number }).outputLatency ?? 0;
-      const reserve = lat > 0.06 ? Math.min(Math.round(lat * sr * 1.5), Math.round(sr * 0.12)) : 0;
+      const reserve = lat > 0.06 ? Math.min(Math.round(lat * sr * 1.5), max) : 0;
       engine.setWirelessReserve(reserve);
     };
     probe();
@@ -1088,7 +1096,7 @@ export function App() {
       window.clearInterval(iv);
       engine.setWirelessReserve(0);
     };
-  }, [engine]);
+  }, [engine, settings.wirelessOutput]);
 
   // Mirror settings to the account when signed in (last-write-wins by timestamp), so
   // theme/stem/keybind prefs follow the user across devices.
@@ -3851,6 +3859,16 @@ export function App() {
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("pageshow", resume);
     window.addEventListener("focus", resume);
+    // The DOM hooks above only fire when the PAGE backgrounds/foregrounds. iOS can suspend
+    // or "interrupt" the audio context with the page still visible — a phone call, Siri,
+    // another app taking the session, a Bluetooth/CarPlay route flip — and then the sound
+    // stays dead until a manual refresh happens to re-prime it. Watch the context's OWN
+    // state and a light poll so any drop out of "running" while a deck is playing self-heals.
+    const onState = () => { if (!engine.running) engine.resumeOutput(); };
+    engine.ctx.addEventListener("statechange", onState);
+    const watch = window.setInterval(() => {
+      if (!engine.running && (engine.deckA.playing || engine.deckB.playing)) engine.resumeOutput();
+    }, 1500);
     const ms = navigator.mediaSession;
     if (ms) {
       const d = meta[focused];
@@ -3882,6 +3900,8 @@ export function App() {
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("pageshow", resume);
       window.removeEventListener("focus", resume);
+      engine.ctx.removeEventListener("statechange", onState);
+      window.clearInterval(watch);
     };
   }, [engine, meta, focused, refresh]);
 

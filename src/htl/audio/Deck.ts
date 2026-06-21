@@ -351,6 +351,10 @@ export class Deck {
   private followAt = 0; // performance.now() (sec) when the anchor was set
   private followPlaying = false;
   private followBias = 0; // extra velocity (track-sec/sec) that eases the head onto the tick
+  // The anchor's effective rate streamed in the tick. When set (following), it OVERRIDES our
+  // locally-computed effRate so our clock + (listener) audio run at the host's exact rate —
+  // the host's bend/sync-trim never cross as intents, so self-computing the rate drifts.
+  private _followRate: number | null = null;
 
   onEnded?: () => void;
 
@@ -1059,7 +1063,15 @@ export class Deck {
    *  Everything that advances the playhead reads THIS, not the raw tempo, so a bend
    *  speeds/slows the audio + clock together and stays drift-free. */
   private effRate(): number {
+    // A follower runs at the ANCHOR's streamed rate (folds in the host's bend + sync-trim,
+    // which never cross as intents) so audio + clock stay in lockstep instead of drifting.
+    if (this._followRate != null && this._followRate > 0) return this._followRate;
     return this._rate * (1 + this._bend) * (1 + this._syncTrim);
+  }
+  /** The effective sounding rate (tempo·bend·sync-trim) — the anchor publishes this in its tick
+   *  so followers can match it. */
+  get effectiveRate(): number {
+    return this.effRate();
   }
 
   /** Current playhead position in seconds (wraps inside an active loop). */
@@ -1082,14 +1094,23 @@ export class Deck {
   // Track-sec the follow clock has reached right now (anchor + elapsed·velocity).
   private followExtrapolate(now: number): number {
     const dt = Math.min(Math.max(0, now - this.followAt), 0.5); // cap a stalled tick
-    return this.followPos + dt * ((this._rate > 0 ? this._rate : 1) + this.followBias);
+    const base = this._followRate != null && this._followRate > 0 ? this._followRate : this._rate > 0 ? this._rate : 1;
+    return this.followPos + dt * (base + this.followBias);
   }
   /** Feed the anchor's playhead tick (a co-DJ following the session). Re-anchors the
    *  clock to where it ALREADY is (continuity — no step) and folds the phase error into
    *  a gentle velocity bias that eases onto the tick over ~0.4 s; a real jump (seek /
    *  loop / big desync) or a play-state change snaps hard. */
-  followTick(pos: number, playing: boolean): void {
+  followTick(pos: number, playing: boolean, rate?: number): void {
     const now = Deck.nowSec();
+    // Adopt the anchor's effective rate so our clock + (listener) audio run in lockstep with
+    // the host (its bend/sync-trim never cross as intents). Re-speed the worklet only when it
+    // moved meaningfully, so a listener's own audio tracks the host's tempo/jog.
+    if (rate != null && rate > 0) {
+      const moved = this._followRate == null || Math.abs(this._followRate - rate) > 0.0008;
+      this._followRate = rate;
+      if (moved) this.pushRate();
+    }
     if (this.followOn && this.followPlaying && playing) {
       const predicted = this.followExtrapolate(now);
       const err = pos - predicted;
@@ -1112,6 +1133,10 @@ export class Deck {
   endFollow(): void {
     this.followOn = false;
     this.followBias = 0;
+    if (this._followRate != null) {
+      this._followRate = null; // back to our own tempo/pitch
+      this.pushRate();
+    }
   }
   /** Playhead for DRAWING. A follower draws the smooth, phase-locked extrapolation of
    *  the anchor tick (so the head glides at the display rate even when the local audio

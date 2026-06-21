@@ -87,6 +87,11 @@ export interface StageReq {
 export interface DeckTick {
   pos: number; // playhead position in seconds (the anchor's real clock)
   playing: boolean;
+  // The anchor's EFFECTIVE playback rate (tempo · pitch-bend · sync-trim). Followers play +
+  // extrapolate at THIS instead of computing their own — the host's bend (jog beat-match) and
+  // sync-trim never cross as intents, so a follower's self-computed rate drifts and gets
+  // yanked back every few seconds. Self-heals the rate every tick. Absent on older anchors → 1.
+  rate?: number;
   // Compact AUTHORITATIVE per-stem mixer state from the anchor, piggybacked on the tick
   // only when it CHANGED or on a ~1 Hz heartbeat — so stem mute/gain self-heals a dropped
   // intent without re-sending it every tick. g = gains, m = mutes, both length-4 in the

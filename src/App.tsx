@@ -2377,10 +2377,11 @@ export function App() {
           // diverged (idle session stays mix-only → the OOM fix).
           ensureGuestStemsRef.current(id);
         }
-        // Feed the follower visual clock: the waveform glides at the display rate off a
-        // wall-clock extrapolation of this tick, even when the local audio clock is
-        // frozen (muted passenger / suspended mobile context). See Deck.visualPosition.
-        deck.followTick(t.pos, t.playing);
+        // Feed the follower visual clock + the anchor's effective RATE: the waveform glides at
+        // the display rate off a wall-clock extrapolation of this tick, and a listener's own
+        // audio re-speeds to the host's rate so it stops drifting (the host's jog-bend /
+        // sync-trim never cross as intents). See Deck.visualPosition / followTick.
+        deck.followTick(t.pos, t.playing, t.rate);
       });
       if (flipped) refresh();
     },
@@ -3645,7 +3646,7 @@ export function App() {
       const key = `${g.map((x) => x.toFixed(3)).join(",")}|${m.map((x) => (x ? 1 : 0)).join("")}`;
       const include = lastStemKey.current[id] !== key || tickN.current % 4 === 0;
       lastStemKey.current[id] = key;
-      const tick: DeckTick = { pos: deck.position(), playing: deck.playing };
+      const tick: DeckTick = { pos: deck.position(), playing: deck.playing, rate: deck.effectiveRate };
       if (include) tick.stems = { g, m };
       return tick;
     };

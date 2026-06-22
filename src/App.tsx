@@ -2843,12 +2843,14 @@ export function App() {
   // Locked out of driving (a watch-only listener, OR replay is driving the decks) → block the
   // keys + show the overlay. During replay the user must not fight the recipe.
   lockedRef.current = (room.enabled && !room.controlling) || replay.active;
-  // Per-deck drive permission (E3/E4 seat model). A full controller/host (myDeck null) drives
-  // both decks; a stepped-up listener drives ONLY their one deck; a pure follower/listener
-  // drives neither. A LOCKED deck blocks control (jog/seek/bend + the whole button bank) but
-  // never the purely visual zoom + expand — a listener can still inspect either waveform.
-  // Replay locks both decks (it's driving them).
-  const canDriveDeck = (id: DeckId) => room.controlling && (room.myDeck === null || room.myDeck === id);
+  // Per-deck drive permission (E3/E4 seat model). SOLO (no session) always drives — the seat
+  // rules only bind once you're IN a room: a full controller/host (myDeck null) drives both
+  // decks; a stepped-up listener drives ONLY their one deck; a pure follower/listener drives
+  // neither. A LOCKED deck blocks control (jog/seek/bend + the whole button bank) but never the
+  // purely visual zoom + expand — a listener can still inspect either waveform. Replay locks
+  // both decks (it's driving them). (Without the !enabled bypass, EVERY local control surface —
+  // keyboard, MIDI, gamepad — goes dead off-session, since `controlling` is false with no rig.)
+  const canDriveDeck = (id: DeckId) => !room.enabled || (room.controlling && (room.myDeck === null || room.myDeck === id));
   const deckLocked = (id: DeckId) => (room.enabled && !canDriveDeck(id)) || replay.active;
   // A whole-board move (the crossfader) needs FULL control — locked for a stage DJ, any follower,
   // and during replay.

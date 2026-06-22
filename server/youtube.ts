@@ -17,9 +17,8 @@ const ANDROID_VR_VERSION = "1.65.10";
 const ANDROID_VR_UA =
   "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip";
 
-// ANDROID_VR's native host. Both anonymous and signed-in (cookie) calls use it —
-// we never send a browser `Origin` header (see authHeaders), so there's no
-// Origin/Host mismatch to dodge.
+// ANDROID_VR's native host. We never send a browser `Origin` header, so there's
+// no Origin/Host mismatch to dodge.
 const PLAYER_ENDPOINT = "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false";
 
 // Hard timeouts on every upstream call so a hung googlevideo / youtubei request
@@ -68,49 +67,16 @@ export function makeRelayFetch(
 }
 
 // Optional per-request YouTube credentials, supplied BY THE USER from their own
-// browser session (see the privacy notice in the app). YouTube blocks the
-// player API from datacenter IPs with LOGIN_REQUIRED ("confirm you're not a
-// bot"); a real signed-in session (cookies) or a browser-minted visitorData /
-// PO token passes that challenge. We thread these straight through to YouTube
-// per request and never persist them server-side.
+// browser session (see the privacy notice in the app). YouTube blocks the player
+// API from datacenter IPs with LOGIN_REQUIRED ("confirm you're not a bot"); a
+// browser-minted visitorData / PO token, or an OAuth bearer, passes that challenge.
+// We thread these straight through to YouTube per request and never persist them
+// server-side. (The legacy pasted youtube.com-cookie path was REMOVED — the
+// residential relay handles the bot wall now; see docs/security-handoff.md Tier 3.)
 export interface YtAuth {
-  cookie?: string; // the user's youtube.com Cookie header
   visitorData?: string; // a browser-minted visitorData (overrides our fetched one)
   poToken?: string; // a BotGuard PO token bound to that visitorData
   accessToken?: string; // OAuth 2.0 bearer from the device-code sign-in (see oauth.ts)
-}
-
-function cookieValue(cookie: string, name: string): string | null {
-  const m = cookie.match(new RegExp("(?:^|;\\s*)" + name + "=([^;]+)"));
-  return m ? m[1] : null;
-}
-
-async function sha1Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(input));
-  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-// Headers for a cookie-authenticated player call against the ANDROID_VR client.
-//
-// CRITICAL: these must look like an ANDROID app request, not a browser one.
-// SAPISIDHASH is the account proof (SHA1 over the youtube.com origin) and is
-// always sent for a signed-in cookie — but Android clients DON'T send the
-// browser-only `Origin`/`X-Origin` headers. Sending them alongside an ANDROID_VR
-// context makes the request incoherent and YouTube returns
-// `400 "Request contains an invalid argument."`. Omitting `Origin` also means the
-// "Origin doesn't match Host" check never fires, so we can keep ANDROID_VR on its
-// native youtubei.googleapis.com host. An ANONYMOUS cookie (no SAPISID) sends just
-// the Cookie.
-async function authHeaders(cookie: string): Promise<Record<string, string>> {
-  const headers: Record<string, string> = { cookie };
-  const sapisid =
-    cookieValue(cookie, "SAPISID") ?? cookieValue(cookie, "__Secure-3PAPISID") ?? cookieValue(cookie, "__Secure-1PAPISID");
-  if (sapisid) {
-    const ts = Math.floor(Date.now() / 1000);
-    headers.authorization = `SAPISIDHASH ${ts}_${await sha1Hex(`${ts} ${sapisid} https://www.youtube.com`)}`;
-    headers["x-goog-authuser"] = "0";
-  }
-  return headers;
 }
 
 export interface ResolvedAudio {
@@ -232,7 +198,6 @@ interface PlayerOpts {
   client: PlayerClient;
   visitorData?: string;
   bearer?: string; // OAuth access token
-  cookie?: string; // youtube.com cookie (SAPISIDHASH)
   poToken?: string;
 }
 
@@ -265,9 +230,8 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
   };
   if (o.client.ua) headers["user-agent"] = o.client.ua;
   if (o.visitorData) headers["X-Goog-Visitor-Id"] = o.visitorData;
-  // An OAuth bearer authenticates as the signed-in user; a cookie is the other way.
+  // An OAuth bearer authenticates as the signed-in user.
   if (o.bearer) headers.authorization = `Bearer ${o.bearer}`;
-  else if (o.cookie) Object.assign(headers, await authHeaders(o.cookie));
 
   const res = await fx(
     PLAYER_ENDPOINT,
@@ -283,12 +247,11 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
 }
 
 // Thin ANDROID_VR wrapper preserving the original throw-on-error contract used
-// by the anonymous / cookie path.
+// by the anonymous path.
 async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
   const { http, body } = await rawPlayer(videoId, {
     client: CLIENTS.ANDROID_VR,
     visitorData,
-    cookie: auth?.cookie,
     poToken: auth?.poToken,
   }, fx);
   if (http !== 200) {
@@ -424,7 +387,7 @@ export async function diagnoseAudio(videoId: string, auth?: YtAuth): Promise<Aud
   let byteProbe: AudioDiag["byteProbe"] = null;
   for (const client of DIAG_CLIENTS) {
     try {
-      const { http, body } = await rawPlayer(videoId, { client, visitorData: visitor || undefined, cookie: auth?.cookie, poToken: auth?.poToken });
+      const { http, body } = await rawPlayer(videoId, { client, visitorData: visitor || undefined, poToken: auth?.poToken });
       const fmts = body.streamingData?.adaptiveFormats ?? [];
       const audio = fmts.filter((f) => f.mimeType?.startsWith("audio/"));
       const withUrl = audio.filter((f) => f.url);

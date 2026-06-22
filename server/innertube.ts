@@ -62,9 +62,8 @@ function normalize(n: AnyNode): TrackMeta | null {
   };
 }
 
-// A cookie-authenticated Innertube instance exposes the account browse endpoints.
-// Typed loosely — youtubei.js's node shapes vary by version and we read them
-// defensively (textOf/numOf below).
+// An Innertube instance exposes the search / playlist / watch-next endpoints.
+// Typed loosely — youtubei.js's node shapes vary by version.
 interface InnertubeInstance {
   search(q: string, opts: { type: string }): Promise<{ results?: unknown[] }>;
   getPlaylist(id: string): Promise<{ info?: { title?: string }; videos?: unknown[] }>;
@@ -81,17 +80,13 @@ interface InnertubeLike {
 }
 
 /**
- * Credentials for an authenticated browse (a user's own/private data). The two
- * are read by DIFFERENT backends because they authenticate different clients:
- *   - `cookie` (SAPISID) → youtubei.js, which signs the WEB client with its
- *     SAPISIDHASH so browse/getPlaylists work.
- *   - `token` (Google sign-in) → the YouTube Data API v3 (see ytdata.ts); a
- *     TV-device token can't authenticate youtubei.js's WEB browse (it 400/401s),
- *     but the Data API accepts any validly-scoped Bearer.
- * Cookie wins when both are present.
+ * Credentials for an authenticated browse (a user's own/private data):
+ *   - `token` (Google sign-in) → the YouTube Data API v3 (see ytdata.ts); the
+ *     Data API accepts any validly-scoped Bearer.
+ * (The legacy `cookie`/SAPISID youtubei.js WEB-browse path was removed for
+ *  security — see docs/security-handoff.md Tier 3.)
  */
 export interface BrowseAuth {
-  cookie?: string;
   token?: string;
 }
 
@@ -109,26 +104,13 @@ export interface InnertubeApi {
   searchYouTube(query: string, limit?: number): Promise<TrackMeta[]>;
   // auth is optional — supply it to reach the user's PRIVATE playlists.
   fetchPlaylist(listId: string, auth?: BrowseAuth): Promise<{ title: string; tracks: TrackMeta[] }>;
-  // The signed-in user's own playlists (requires a cookie, or an OAuth token).
+  // The signed-in user's own playlists (requires an OAuth token).
   getMyPlaylists(auth: BrowseAuth): Promise<MyPlaylist[]>;
   // YouTube watch-next / autoplay graph for a video — the universal "what plays
   // after this" feed. auth is optional (personalizes the feed when present).
   getWatchNext(videoId: string, auth?: BrowseAuth): Promise<TrackMeta[]>;
 }
 
-// youtubei.js wraps strings in Text nodes (`{ text }`) and counts in Text too —
-// read both shapes (and bare strings) safely.
-function textOf(v: unknown): string {
-  if (!v) return "";
-  if (typeof v === "string") return v;
-  const o = v as { text?: string; toString?: () => string };
-  if (typeof o.text === "string") return o.text;
-  return typeof o.toString === "function" ? o.toString() : "";
-}
-function numOf(v: unknown): number {
-  const s = textOf(v).replace(/[^\d]/g, "");
-  return s ? parseInt(s, 10) : 0;
-}
 
 // --- Watch-next parsing -------------------------------------------------------
 // The `/next` response embeds the up-next/autoplay set as `compactVideoRenderer`
@@ -280,17 +262,6 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
     throw lastErr;
   }
 
-  // A fresh, cookie-authenticated client per request. youtubei.js authenticates
-  // the WEB client with the cookie's SAPISIDHASH, so browse/getPlaylists work and
-  // parse cleanly. (OAuth tokens go through the Data API instead — see ytdata.ts.)
-  async function cookieClient(cookie: string): Promise<InnertubeInstance> {
-    try {
-      return await Innertube.create({ retrieve_player: false, cookie });
-    } catch (e) {
-      throw new Error(`cookie signin failed: ${(e as Error).message}`);
-    }
-  }
-
   async function readPlaylist(yt: InnertubeInstance, listId: string) {
     const pl = await yt.getPlaylist(listId);
     const tracks: TrackMeta[] = [];
@@ -314,46 +285,20 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       return out;
     },
     async fetchPlaylist(listId, auth) {
-      // Cookie → youtubei.js; OAuth token → Data API; neither → public youtubei.js.
-      if (auth?.cookie) return readPlaylist(await cookieClient(auth.cookie), listId);
+      // OAuth token → the official Data API; otherwise public youtubei.js.
       if (auth?.token) return fetchPlaylistData(auth.token, listId);
       return readPlaylist(await client(), listId);
     },
     async getMyPlaylists(auth) {
-      // OAuth token → the official Data API (a TV token can't drive youtubei browse).
-      if (!auth.cookie && auth.token) return getMyPlaylistsData(auth.token);
-      if (!auth.cookie) throw new Error("connect YouTube first");
-      const yt = await cookieClient(auth.cookie);
-      if (!yt.getPlaylists) throw new Error("getPlaylists unavailable in this youtubei build");
-      let feed: { playlists?: unknown[] };
-      try {
-        feed = await yt.getPlaylists();
-      } catch (e) {
-        throw new Error(`browse failed: ${(e as Error).message}`);
-      }
-      const raw = feed.playlists ?? [];
-      const out: MyPlaylist[] = [];
-      for (const p of raw) {
-        const node = p as { id?: string; title?: unknown; video_count?: unknown; thumbnails?: { url: string }[] };
-        if (!node.id) continue;
-        const thumbs = node.thumbnails;
-        out.push({
-          id: node.id,
-          title: textOf(node.title) || "Playlist",
-          count: numOf(node.video_count),
-          thumbnail: thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : null,
-        });
-      }
-      // Surface a parse gap (browse returned items we couldn't read) vs a genuinely
-      // empty account, so the UI error is actionable.
-      if (out.length === 0 && raw.length > 0) {
-        throw new Error(`browse returned ${raw.length} items but none parsed as playlists`);
-      }
-      return out;
+      // OAuth token → the official Data API. (The legacy cookie/youtubei WEB-browse
+      // path was removed for security — see docs/security-handoff.md Tier 3.)
+      if (auth.token) return getMyPlaylistsData(auth.token);
+      throw new Error("connect YouTube first");
     },
     async getWatchNext(videoId, auth) {
-      // Cookie personalizes the feed (recently-played aware); otherwise anonymous (and
-      // retried through fresh clients, since the anon path catches the same 403 flakiness).
+      // Anonymous watch-next, retried through fresh clients (the anon path catches the
+      // 403 flakiness). `auth` is accepted for API parity but no longer personalizes.
+      void auth;
       const exec = async (yt: InnertubeInstance): Promise<unknown> => {
         if (!yt.actions?.execute) throw new Error("watch-next unavailable in this youtubei build");
         const res = await yt.actions.execute("/next", { videoId, parse: false });
@@ -361,7 +306,7 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       };
       let data: unknown;
       try {
-        data = auth?.cookie ? await exec(await cookieClient(auth.cookie)) : await withRetry(exec);
+        data = await withRetry(exec);
       } catch (e) {
         throw new Error(`watch-next failed: ${(e as Error).message}`);
       }

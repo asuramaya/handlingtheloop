@@ -187,7 +187,7 @@ export function LibraryPanel({
   };
 
   // htl account (server session) — its Google connection is what reaches the
-  // user's YouTube playlists. A login cookie (SAPISID) is a fallback path.
+  // user's YouTube playlists.
   const [me, setMe] = useState<Me | null>(null);
   const ytConnected = !!me?.connections.includes("google");
   const spotifyConnected = !!me?.connections.includes("spotify");

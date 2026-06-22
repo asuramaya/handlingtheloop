@@ -1,15 +1,12 @@
 // User-supplied YouTube credentials, sent (per request) to our own Worker, which
 // forwards them to YouTube so the user passes the "confirm you're not a bot"
-// challenge with their OWN session. Two very different risk profiles:
+// challenge with their OWN session.
 //
-//   1. Google sign-in (OAuth) — scoped + revocable + auto-refreshing. Low risk,
-//      so it lives in localStorage. Powers playlist/library browsing (it can't
-//      fetch audio — see the streaming cookie).
-//   2. Streaming cookie — account-grade (a full Google session), the only thing
-//      that loads new tracks past the bot wall. Treated as SENSITIVE: kept in
-//      memory + sessionStorage only (NEVER localStorage), time-boxed with a TTL,
-//      and trimmed to the minimum cookies the request needs. Gone when the tab
-//      closes. See the ephemeral cookie section below.
+// Google sign-in (OAuth) — scoped + revocable + auto-refreshing — is the ONLY
+// account credential now. It powers playlist/library browsing. (The legacy
+// "paste your youtube.com cookie" streaming path was REMOVED for security: the
+// residential relay covers cold loads past the bot wall, so a full Google session
+// never has to transit the Worker. See docs/security-handoff.md Tier 3.)
 import { Store } from "../persistence";
 
 export interface OAuthTokens {
@@ -18,28 +15,25 @@ export interface OAuthTokens {
   expiresAt: number; // epoch ms when the access token stops working
 }
 
-// NOTE: the streaming cookie is deliberately NOT in this (persistent) store.
 export interface YtAuth {
   visitorData?: string; // browser-minted visitorData
   poToken?: string; // BotGuard PO token bound to that visitorData
   oauth?: OAuthTokens; // device-code sign-in tokens
 }
 
-// The persistent store now holds ONLY the non-sensitive, browser-minted hints
-// (visitorData / poToken). The OAuth tokens were moved off localStorage — see the
-// session-only holder below.
+// The persistent store holds ONLY the non-sensitive, browser-minted hints
+// (visitorData / poToken). The OAuth tokens are session-only — see the holder below.
 const store = new Store<YtAuth>("ytauth", {}, 2);
 
 // ---------------------------------------------------------------------------
 // OAuth tokens — session-only (NOT localStorage)
 // ---------------------------------------------------------------------------
 // The device-code tokens are account-adjacent: an access token (browse the user's
-// library) + a long-lived refresh token. Treat them like the streaming cookie —
-// held in memory + sessionStorage only, so they're gone when the tab closes and
-// never sit on disk where another-origin/extension read or a residual XSS could
-// lift them. (The new main-origin CSP blocks injected script; this is depth.)
-// Trade-off: sign-in no longer survives fully closing the browser — the one-tap
-// device-code flow re-establishes it.
+// library) + a long-lived refresh token. Held in memory + sessionStorage only, so
+// they're gone when the tab closes and never sit on disk where another-origin/
+// extension read or a residual XSS could lift them. (The main-origin CSP blocks
+// injected script; this is depth.) Trade-off: sign-in no longer survives fully
+// closing the browser — the one-tap device-code flow re-establishes it.
 const OAUTH_KEY = "htl.ytoauth";
 let oauthMem: OAuthTokens | null = null;
 let oauthLoaded = false;
@@ -74,10 +68,10 @@ function writeOAuth(tok: OAuthTokens | null): void {
 try {
   const legacy = localStorage.getItem("htl.ytauth.v1");
   if (legacy) {
-    const p = JSON.parse(legacy) as YtAuth & { cookie?: string };
+    const p = JSON.parse(legacy) as YtAuth;
     if (p?.visitorData || p?.poToken) store.set({ visitorData: p.visitorData, poToken: p.poToken });
     if (p?.oauth) writeOAuth(p.oauth);
-    localStorage.removeItem("htl.ytauth.v1"); // drops the old persisted cookie + tokens
+    localStorage.removeItem("htl.ytauth.v1"); // drops the old persisted tokens (and any legacy cookie)
   }
   const cur = store.get();
   if (cur.oauth) {
@@ -104,13 +98,13 @@ export function clearYtAuth(): void {
   writeOAuth(null);
 }
 
-/** Any credential connected at all (OAuth or cookie). */
+/** Any credential connected at all (OAuth or a browser-minted hint). */
 export function hasYtAuth(): boolean {
   const a = store.get();
-  return !!(readOAuth()?.accessToken || hasCookie() || a.visitorData || a.poToken);
+  return !!(readOAuth()?.accessToken || a.visitorData || a.poToken);
 }
 
-/** Specifically signed in via Google (vs. a pasted cookie). */
+/** Signed in via Google. */
 export function isSignedIn(): boolean {
   return !!readOAuth()?.accessToken;
 }
@@ -173,7 +167,7 @@ export async function pollGoogleSignIn(deviceCode: string): Promise<SignInPoll> 
   return { status: r.status as SignInPoll["status"] };
 }
 
-/** Sign out of Google but leave any pasted cookie/visitor data intact. */
+/** Sign out of Google but leave the browser-minted visitor data intact. */
 export function signOutGoogle(): void {
   writeOAuth(null);
 }
@@ -204,176 +198,15 @@ async function refreshIfNeeded(a: YtAuth): Promise<OAuthTokens | null> {
   return refreshing;
 }
 
-// ---------------------------------------------------------------------------
-// Cookie parsing (streaming auth) — minimal by design
-// ---------------------------------------------------------------------------
-// Accept a Netscape cookies.txt export (from "Get cookies.txt LOCALLY"), a JSON
-// cookie export, or a raw Cookie header, and distil it to the `name=value; …`
-// header YouTube needs — keeping ONLY the cookies the request uses and dropping
-// everything else (ad/analytics/unrelated google.com cookies) to shrink what's
-// ever held. SAPISIDHASH needs a SAPISID-family cookie, so we flag its presence.
-const AUTH_KEYS = ["SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID"];
-
-// The only cookies we keep. Two groups: the authenticated-session cluster (used
-// when signed in) and the anonymous visitor/consent cookies (used for a
-// signed-OUT export — no account, ~zero blast radius). Anything not here is
-// discarded before storage.
-const KEEP_COOKIES = new Set<string>([
-  // authenticated session (SAPISIDHASH)
-  "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO", "SIDCC",
-  "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
-  "__Secure-1PSIDCC", "__Secure-3PSIDCC", "__Secure-1PSIDTS", "__Secure-3PSIDTS",
-  // anonymous visitor / consent / preferences
-  "VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "__Secure-YEC", "YSC",
-  "PREF", "CONSENT", "SOCS", "__Secure-ROLLOUT_TOKEN",
-]);
-
-export interface ParsedCookies {
-  header: string; // "name=value; …" of the kept youtube.com cookies
-  count: number;
-  hasAuth: boolean; // a SAPISID-family cookie is present (i.e. a signed-in export)
-}
-
-export function parseCookieInput(raw: string): ParsedCookies {
-  const text = raw.trim();
-  const jar = new Map<string, string>();
-  const add = (name: string, value: string) => {
-    const n = name.trim();
-    const v = value.trim();
-    // Keep only the cookies we actually use — drop everything else immediately.
-    if (n && v && KEEP_COOKIES.has(n)) jar.set(n, v);
-  };
-
-  // 1. JSON export (Cookie-Editor / EditThisCookie): [{ name, value, domain }, …]
-  if (text.startsWith("[") || text.startsWith("{")) {
-    try {
-      const data = JSON.parse(text) as unknown;
-      const arr = Array.isArray(data) ? data : ((data as { cookies?: unknown[] }).cookies ?? []);
-      for (const c of arr as { name?: string; value?: string; domain?: string }[]) {
-        const domain = String(c.domain ?? "");
-        if (domain && !/youtube\.com|google\.com/.test(domain)) continue;
-        add(String(c.name ?? ""), String(c.value ?? ""));
-      }
-    } catch {
-      /* not JSON — fall through */
-    }
-  }
-
-  // 2. Netscape cookies.txt: domain \t flag \t path \t secure \t expiry \t name \t value
-  // CRITICAL: HttpOnly cookies (SAPISID etc. — the ones we actually need) are
-  // written with a "#HttpOnly_" domain prefix; a naive "skip #" comment filter
-  // would drop exactly those. Un-skip them.
-  if (jar.size === 0 && text.includes("\t")) {
-    for (const rawLine of text.split(/\r?\n/)) {
-      let line = rawLine;
-      if (line.startsWith("#HttpOnly_")) line = line.slice("#HttpOnly_".length);
-      else if (!line.trim() || line.startsWith("#")) continue;
-      const parts = line.split("\t");
-      if (parts.length < 7) continue;
-      if (!parts[0].includes("youtube.com")) continue;
-      add(parts[5], parts.slice(6).join("\t"));
-    }
-  }
-
-  // 3. Raw Cookie header: name=value; name2=value2
-  if (jar.size === 0) {
-    for (const pair of text.split(/;\s*/)) {
-      const eq = pair.indexOf("=");
-      if (eq > 0) add(pair.slice(0, eq), pair.slice(eq + 1));
-    }
-  }
-
-  return {
-    header: [...jar].map(([n, v]) => `${n}=${v}`).join("; "),
-    count: jar.size,
-    hasAuth: AUTH_KEYS.some((k) => jar.has(k)),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Ephemeral streaming cookie store
-// ---------------------------------------------------------------------------
-// Account-grade, so minimise exposure: held in memory + sessionStorage only
-// (never localStorage → gone when the tab closes), and time-boxed with a TTL so
-// it auto-purges even within a long session.
-const COOKIE_KEY = "htl.ytcookie";
-const COOKIE_TTL_MS = 8 * 60 * 60 * 1000; // 8h
-
-interface CookieRecord {
-  header: string;
-  expiresAt: number;
-}
-let cookieMem: CookieRecord | null = null;
-
-function readCookie(): CookieRecord | null {
-  if (!cookieMem) {
-    try {
-      const raw = sessionStorage.getItem(COOKIE_KEY);
-      if (raw) cookieMem = JSON.parse(raw) as CookieRecord;
-    } catch {
-      /* sessionStorage unavailable */
-    }
-  }
-  if (cookieMem && cookieMem.expiresAt <= Date.now()) clearCookie(); // auto-expire
-  return cookieMem;
-}
-
-/** Store the (already-minimised) cookie header for this session. Returns expiry ms. */
-export function setCookie(header: string): number {
-  cookieMem = { header, expiresAt: Date.now() + COOKIE_TTL_MS };
-  try {
-    sessionStorage.setItem(COOKIE_KEY, JSON.stringify(cookieMem));
-  } catch {
-    /* memory-only if sessionStorage is blocked */
-  }
-  return cookieMem.expiresAt;
-}
-
-export function clearCookie(): void {
-  cookieMem = null;
-  try {
-    sessionStorage.removeItem(COOKIE_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-/** The current cookie header, or null if none/expired. */
-export function getCookie(): string | null {
-  return readCookie()?.header ?? null;
-}
-
-export function hasCookie(): boolean {
-  return !!getCookie();
-}
-
-/**
- * Whether the connected cookie carries an actual ACCOUNT (a SAPISID-family
- * credential), vs an anonymous/signed-out cookie that can stream but has no
- * playlists. Used to decide if "MY YOUTUBE" (the user's own playlists) applies —
- * an anonymous cookie would just 401 on browse.
- */
-export function hasAccountCookie(): boolean {
-  const c = getCookie();
-  return !!c && /(?:^|;\s*)(SAPISID|__Secure-3PAPISID|__Secure-1PAPISID)=/.test(c);
-}
-
-/** When the current cookie expires (epoch ms), or null if none. */
-export function cookieExpiresAt(): number | null {
-  return readCookie()?.expiresAt ?? null;
-}
-
 // Request headers carrying the credentials to the Worker (omitted when unset).
 // Async because it may refresh an expired OAuth access token first. Used for
-// BROWSE (playlists / library / meta), so it always sends everything available —
-// private playlists need the account.
+// BROWSE (playlists / library / meta) — sends the OAuth token (private playlists
+// need the account) plus any browser-minted bot-wall hints.
 export async function ytAuthHeaders(): Promise<Record<string, string>> {
   const a = getYtAuth();
   const h: Record<string, string> = {};
   const tok = await refreshIfNeeded(a);
   if (tok?.accessToken) h["x-htl-yt-token"] = tok.accessToken;
-  const cookie = getCookie();
-  if (cookie) h["x-htl-yt-cookie"] = cookie;
   if (a.visitorData) h["x-htl-yt-visitor"] = a.visitorData.trim();
   if (a.poToken) h["x-htl-yt-potoken"] = a.poToken.trim();
   return h;
@@ -381,8 +214,8 @@ export async function ytAuthHeaders(): Promise<Record<string, string>> {
 
 // Headers for STREAMING audio. Streaming is ANONYMOUS-ONLY — the decode path needs
 // a YouTube DIRECT stream (ANDROID_VR), which account credentials can't unlock here,
-// so no cookie/token is ever sent. A browser-minted visitorData / PO token (when
-// present) just hardens the anonymous request against datacenter bot-blocks.
+// so no token is ever sent. A browser-minted visitorData / PO token (when present)
+// just hardens the anonymous request against datacenter bot-blocks.
 export async function ytStreamHeaders(): Promise<Record<string, string>> {
   const a = store.get();
   const h: Record<string, string> = {};

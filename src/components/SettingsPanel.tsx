@@ -36,7 +36,7 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 // Settings modal, organised into tabs: Color (theme), Deck (feel), Accounts
-// (sign-in + streaming cookie), Info (about), FAQ (how it works & privacy).
+// (sign-in), Info (about), FAQ (how it works & privacy).
 export function SettingsPanel({
   settings,
   onChange,

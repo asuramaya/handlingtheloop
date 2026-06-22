@@ -41,13 +41,6 @@ export function AboutTab() {
             own Worker (same origin) — never an ad/tracking host.
           </li>
           <li>
-            <strong>Streaming cookie (optional).</strong> The only way to load brand-new tracks past YouTube's
-            bot check is a youtube.com cookie. It's held <strong>in memory for this browser session only</strong>
-            — never written to disk, trimmed to the minimum cookies, auto-expiring, and gone when you close the
-            tab. It's sent only to our Worker, which forwards it to YouTube and <strong>never stores, logs, or
-            shares it</strong>.
-          </li>
-          <li>
             <strong>Google sign-in token (optional).</strong> Used only to browse <em>your</em> YouTube
             playlists. It stays in this browser and is browse-only (it can't fetch audio). Revoke anytime at
             Google's “Third-party access”.
@@ -106,21 +99,20 @@ export function AboutTab() {
       </details>
 
       <h3 className="about-faq-head">FAQ</h3>
-      <Faq q="Why do I need to sign in or paste a cookie?">
-        YouTube blocks the player API from datacenter IPs (the Worker) with a bot challenge. To load a track that
-        isn't already cached, the Worker needs credentials YouTube trusts — your signed-in session.
+      <Faq q="Do I need to sign in to play music?">
+        No — playback works signed-out. Sign in only to browse <em>your</em> YouTube playlists. Cold loads past
+        YouTube's datacenter bot check are handled server-side, so you never have to hand over a cookie.
       </Faq>
       <Faq q="Where are my credentials stored?">
-        The <strong>Google account token</strong> stays only in this browser (revoke anytime at Google's
-        “Third-party access”). The <strong>streaming cookie</strong> is kept only in memory for this browser
-        session — never written to disk, trimmed to the minimum cookies, auto-expiring, gone when you close the
-        tab. It's sent only to this site's own Worker, which forwards it to YouTube and never stores, logs, or
-        shares it.
+        The <strong>Google account token</strong> stays only in this browser (in memory for the tab session) and
+        is browse-only — revoke anytime at Google's “Third-party access”. If you sign in to the htl account to
+        sync, that session is an httpOnly cookie and your provider tokens are <strong>encrypted at rest</strong>.
+        We never take or store a youtube.com cookie.
       </Faq>
       <Faq q="What does the account see?">
-        While connected, YouTube sees those requests as your account, from the Worker's IP. Treat it like signing
-        in elsewhere — use an account you're comfortable with, and disconnect to remove it. For zero exposure,
-        export cookies while signed out (anonymous) or use a throwaway account.
+        While connected, YouTube sees your playlist-browse requests as your account, from the Worker's IP. Treat
+        it like signing in elsewhere — use an account you're comfortable with, and disconnect anytime from the
+        Accounts tab.
       </Faq>
       <Faq q="Is the cached audio shared?">
         Yes — audio, stems, and analysis are cached by video id and shared across users so nothing is fetched or

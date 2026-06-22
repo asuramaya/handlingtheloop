@@ -105,12 +105,11 @@ function readAuth(req: IncomingMessage): YtAuth | undefined {
     const v = req.headers[n];
     return (Array.isArray(v) ? v[0] : v) || undefined;
   };
-  const cookie = h("x-htl-yt-cookie");
   const visitorData = h("x-htl-yt-visitor");
   const poToken = h("x-htl-yt-potoken");
   const accessToken = h("x-htl-yt-token");
-  return cookie || visitorData || poToken || accessToken
-    ? { cookie, visitorData, poToken, accessToken }
+  return visitorData || poToken || accessToken
+    ? { visitorData, poToken, accessToken }
     : undefined;
 }
 
@@ -298,7 +297,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const limit = Number(url.searchParams.get("limit")) || 30;
         const provider = url.searchParams.get("provider");
         const a = readAuth(req);
-        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit }, { cookie: a?.cookie, token: a?.accessToken });
+        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit }, { token: a?.accessToken });
         sendJson(res, 200, { candidates });
         return true;
       }
@@ -349,16 +348,16 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           }
         }
         const a = readAuth(req);
-        sendJson(res, 200, await fetchPlaylist(listId, { cookie: a?.cookie, token: a?.accessToken }));
+        sendJson(res, 200, await fetchPlaylist(listId, { token: a?.accessToken }));
         return true;
       }
       case "/api/me/playlists": {
         const a = readAuth(req);
-        if (!a?.cookie && !a?.accessToken) {
+        if (!a?.accessToken) {
           sendJson(res, 401, { error: "connect YouTube first" });
           return true;
         }
-        sendJson(res, 200, { playlists: await getMyPlaylists({ cookie: a.cookie, token: a.accessToken }) });
+        sendJson(res, 200, { playlists: await getMyPlaylists({ token: a.accessToken }) });
         return true;
       }
       case "/api/analysis": {

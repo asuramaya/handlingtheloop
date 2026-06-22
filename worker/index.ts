@@ -68,15 +68,15 @@ import {
 
 // User-supplied YouTube credentials, forwarded per request from their browser
 // (never stored). Lets each user pass YouTube's "not a bot" challenge with their
-// own session — an OAuth bearer (device-code sign-in) or a pasted cookie. See the
-// in-app privacy notice.
+// own session — an OAuth bearer (device-code sign-in) or a browser-minted
+// visitorData / PO token. (The pasted youtube.com-cookie path was removed — see
+// docs/security-handoff.md Tier 3.) See the in-app privacy notice.
 function readAuth(req: Request): YtAuth | undefined {
-  const cookie = req.headers.get("x-htl-yt-cookie") || undefined;
   const visitorData = req.headers.get("x-htl-yt-visitor") || undefined;
   const poToken = req.headers.get("x-htl-yt-potoken") || undefined;
   const accessToken = req.headers.get("x-htl-yt-token") || undefined;
-  return cookie || visitorData || poToken || accessToken
-    ? { cookie, visitorData, poToken, accessToken }
+  return visitorData || poToken || accessToken
+    ? { visitorData, poToken, accessToken }
     : undefined;
 }
 
@@ -431,7 +431,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
             return resolved.filter((x): x is TrackMeta => !!x);
           };
         }
-        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit, providerRadio }, { cookie: a?.cookie, token: a?.accessToken });
+        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit, providerRadio }, { token: a?.accessToken });
         return json(200, { candidates });
       }
       case "/api/tidal-probe": {
@@ -519,14 +519,14 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           }
         }
         const a = readAuth(req);
-        return json(200, await fetchPlaylist(listId, { cookie: a?.cookie, token: a?.accessToken }));
+        return json(200, await fetchPlaylist(listId, { token: a?.accessToken }));
       }
       case "/api/me/playlists": {
         // The signed-in user's own playlists (private included). Browse is driven
-        // by the cookie (preferred) or an OAuth token — one of them is required.
+        // by an OAuth token — required (the legacy cookie path was removed).
         const a = readAuth(req);
-        if (!a?.cookie && !a?.accessToken) return json(401, { error: "connect YouTube first" });
-        return json(200, { playlists: await getMyPlaylists({ cookie: a.cookie, token: a.accessToken }) });
+        if (!a?.accessToken) return json(401, { error: "connect YouTube first" });
+        return json(200, { playlists: await getMyPlaylists({ token: a.accessToken }) });
       }
       case "/api/meta": {
         const v = url.searchParams.get("v");

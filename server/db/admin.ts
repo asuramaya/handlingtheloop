@@ -48,12 +48,12 @@ export async function deleteUser(db: D1Database, userId: string): Promise<void> 
   await purgeAccount(db, userId);
 }
 
-// NOTE: server-side storage of the user's YouTube *streaming cookie* (the
-// account-grade credential) was intentionally removed. It was wired to no route
-// and storing that cookie at rest is exactly the blast radius we avoid — the
-// cookie stays client-side only (memory + sessionStorage + TTL; see
-// src/htl/media/auth.ts). The `user_cookies` table (migration 0006) is left in
-// place but unused; drop it in a later migration if desired.
+// NOTE: the YouTube *streaming cookie* path (the account-grade credential) was
+// REMOVED ENTIRELY (2026-06-22) — client paste UI, client store, the Worker's
+// x-htl-yt-cookie accept, and the server-side use are all gone. The residential
+// relay now handles the datacenter bot wall, so a full Google session never has to
+// transit the Worker (see docs/security-handoff.md Tier 3). The `user_cookies`
+// table (migration 0006) was never wired to a route; drop it in a later migration.
 
 /** Accounts overview for the admin panel (with their linked services). */
 export async function listUsers(db: D1Database, limit = 200): Promise<AdminUser[]> {

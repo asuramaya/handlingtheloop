@@ -20,6 +20,7 @@ import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, 
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
 import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
+import { useGamepad } from "@htl/gamepad";
 import {
   AudioEngine,
   type Deck,
@@ -3232,6 +3233,11 @@ export function App() {
     onEvent: onMidiEvent,
     onLearnChange: (next) => setSettings((s) => ({ ...s, midiBindings: next })),
   });
+
+  // 🎮 An Xbox/standard gamepad as a control surface — emits the SAME MidiEvents as the MIDI
+  // layer into onMidiEvent (so it inherits focus / shift / room-sync / jog). Live whenever a
+  // pad is present; rumbles on the beat of the deck being driven. See src/htl/gamepad.
+  useGamepad({ engine, getFocused: () => focused, onEvent: onMidiEvent });
 
   // Light the controller from deck state (play/cue/sync/loop + hot-cue pads). Polled
   // at ~7 Hz; the engine diffs each lamp so only changes are actually sent. The mute

@@ -48,6 +48,7 @@ interface DeckControlsProps {
   emit: (intent: Intent) => void; // broadcast one action to a shared session (no-op when off)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
   sampler?: SamplerApi; // shared sampler — this deck's 8 region pads fill the SAMPLER pad-mode
+  onFxSelect?: (id: "A" | "B", i: number) => void; // surface this deck's selected FX index (for gamepad bypass)
 }
 
 // The 8 beat-loop sizes, sorted ascending, in a 4×2 grid that mirrors the hot-cue
@@ -73,7 +74,7 @@ const TEMPO_NUDGE = 0.5;
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, refresh, emit, emitControls, sampler }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, refresh, emit, emitControls, sampler, onFxSelect }: DeckControlsProps) {
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -716,7 +717,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             up/down = gain; mid wheel = bell width; right-click / double-click = reset).
             Further tabs are stacked effects (delay…); + adds one. */}
         <div className="eq-row">
-          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} />
+          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} onSelect={(i) => onFxSelect?.(id, i)} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via

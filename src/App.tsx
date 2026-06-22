@@ -609,6 +609,9 @@ export function App() {
   // controller drives both decks, a stepped-up listener only their one deck. Read through a
   // ref so the input handlers see the live value without re-subscribing.
   const canDriveDeckRef = useRef<(id: DeckId) => boolean>(() => true);
+  // Per-deck "current FX" index — the device selected in each deck's FX strip, mirrored up so
+  // the gamepad's bypass-current action (R3) knows which device to flip.
+  const fxSelRef = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -858,6 +861,15 @@ export function App() {
       fx: (deck, id) => {
         deck.setFx(!deck.fxOn);
         emitRef.current({ kind: "toggle", deck: id, param: "fx", value: deck.fxOn });
+      },
+      // Toggle bypass on the FX device currently selected in this deck's FX strip (gamepad R3).
+      fxBypassCur: (deck, id) => {
+        const i = fxSelRef.current[id];
+        const dev = deck.fxDevices[i];
+        if (!dev) return;
+        const next = !dev.bypassed;
+        deck.setFxBypass(i, next);
+        emitRef.current({ kind: "fxBypass", deck: id, slot: i, value: next });
       },
       tempoRange: (deck, id, s) => {
         if (s) {
@@ -4181,6 +4193,7 @@ export function App() {
             emit={emit}
             emitControls={emitDeckControls}
             sampler={sampler}
+            onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}
           />
           <DeckControls
             id="B"
@@ -4211,6 +4224,7 @@ export function App() {
             emit={emit}
             emitControls={emitDeckControls}
             sampler={sampler}
+            onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}
           />
           </div>
         </div>

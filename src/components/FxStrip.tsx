@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Deck, FxKind } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset } from "@htl/audio";
 import type { Intent } from "@htl/room";
@@ -42,9 +42,10 @@ interface FxStripProps {
   emit: (intent: Intent) => void;
   emitControls: (id: "A" | "B") => void;
   refresh: () => void;
+  onSelect?: (i: number) => void; // report the selected rack index up (so the gamepad can bypass it)
 }
 
-export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh }: FxStripProps) {
+export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect }: FxStripProps) {
   const [sel, setSel] = useState(0); // selected rack index
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
@@ -57,6 +58,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const devices = deck.fxDevices; // the whole chain, in order
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = devices[cur];
+  useEffect(() => onSelect?.(cur), [cur, onSelect]); // keep App's per-deck "current FX" ref in sync
   const otherId: "A" | "B" = id === "A" ? "B" : "A";
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });

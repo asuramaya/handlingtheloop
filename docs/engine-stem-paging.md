@@ -33,8 +33,27 @@ the tab reloads):
 | Android Chrome (4 GB) | renderer OOM-kill ~0.5–1.5 GB + 4 GB V8 cage | tier by `deviceMemory` | `measureUserAgentSpecificMemory()` ✓ |
 | desktop Chromium/FF/Safari | multi-GB | generous | Chromium ✓, FF/Safari ✗ |
 
-- iOS also has a **~2 GB Gigacage single-allocation cap** (RAM-independent; an 8 GB iPad gives
-  only ~1.88 GB to one typed array) — never make one giant SAB/WASM heap; partition.
+- **★ THE BINDING CEILING FOR PCM IS THE GIGACAGE, NOT THE PER-DEVICE PAGE LIMIT.** All JS typed
+  arrays (every Int16Array/Float32Array of PCM) live inside WebKit's **Gigacage — a fixed ~2 GB
+  virtual reservation, RAM-INDEPENDENT.** MEASURED 2026-06: iPhone 17 Pro Max (12 GB) AND iPad 9
+  (3 GB) both cap at ~2 GB, safe ~1.5 GB — identical despite 4× RAM difference = the cage, not a
+  RAM-fraction. The per-device ~100–450 MB numbers in the table above are the **JS OBJECT HEAP**
+  (React/DOM/strings), a SEPARATE budget — they do NOT bound PCM. So: **two int16 stem sets
+  (~460 MB) fit comfortably on essentially any modern iOS device in steady state**; the cliff is a
+  flat ~1.5 GB you can't buy past with newer hardware. Never make one giant SAB/WASM heap either —
+  partition (the single-allocation limit is also ~2 GB: an 8 GB iPad gives only ~1.88 GB to one
+  typed array).
+- **★ THE ACTUAL 2-DEADMAU5 CRASH IS A TRANSIENT, NOT STEADY-STATE.** Repro: load deck 1 fully,
+  deck 2 crashes *mid-load before it finishes*, page reloads, loops (deadmau5 Cephei + Where's My
+  Keys). Cause: `Deck.loadEnginePcm` (Deck.ts:602) packs all 4 stems while `this.stems` still
+  holds all 4 **float32** AudioBuffers (freed only after the postMessage handoff) AND `this.buffer`
+  (float32 mix) isn't releaseMixBuffer'd yet — so deck 2's load transiently holds float32 stems
+  (~460 MB) + new int16 (~230 MB) + float32 mix, ON TOP of deck 1, briefly doubling its own
+  footprint into the ~1.5 GB cage. **Fix = STREAMING PACK** (decode→pack→free one stem at a time
+  with an `await` yield so GC reclaims each float32 before the next — async because JS GC won't
+  free synchronously mid-loop). Collapses the transient ~4–5× to ≈ steady-state. **This is the
+  cheap fix for the crash; paging (below) is NOT needed for it** — paging is for content genuinely
+  over ~1.5 GB steady-state (e.g. 2× 30-min mixes ≈ 2.76 GB).
 - **A single 10-min full-rate int16 stem set is ~460 MB — that alone exceeds the iPhone-13/14
   page limit.** So paging is *mandatory to play even one long track* on iOS, not an optimization.
   (The current code survives only short tracks: a 5-min set ~230 MB squeaks under.)
@@ -230,9 +249,16 @@ one-liner ("deck B: host mix — phone memory"), and keep the floor so audio nev
 
 **Order by RISK, not by layer — the storage tier is mechanical; the iOS real-time ring is the
 keystone. Build the cheap crash-stopper first, prove the keystone, then go straight to OPFS (no
-throwaway IDB step).**
+throwaway IDB step). ★ AND NOTE: the immediate 2-deadmau5 crash is fixed by Step 0a (streaming
+pack), NOT by the paging engine — see §1a. Paging is for genuinely-over-1.5GB content.**
 
-- **Step 0 (now, shippable, no new infra): the iOS self-accounting seatbelt.** Convert the crash
+- **Step 0a (THE FIX for the actual crash — do first): streaming pack.** Restructure
+  decode→pack→free in `Deck.loadEnginePcm` + the setStems/decode path so the 4 float32 stems
+  (+ the float32 mix) never all coexist with the new int16 — decode/pack/free ONE stem at a time
+  with an `await` yield between (JS GC won't reclaim synchronously mid-loop). Collapses the
+  ~4–5× transient pack spike (§1a) to ≈ steady-state. Kills the Cephei+Where's-My-Keys crash
+  WITHOUT any paging machinery. Cheapest, highest-value, ships independently.
+- **Step 0b (now, shippable, no new infra): the iOS self-accounting seatbelt.** Convert the crash
   into graceful degradation (second deck → mix-only when the byte tally would exceed the §1a
   budget). No ring, no OPFS, no Worker — pure accounting + the existing demote path. Stops the
   bleeding independent of everything below.

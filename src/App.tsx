@@ -69,6 +69,7 @@ import {
   getAudio,
   putAudio,
   loadStems,
+  loadStemsPackedInt16,
   loadStemsLocal,
   getStemModel,
   modelSupport,
@@ -1380,10 +1381,15 @@ export function App() {
               const src = stemSrcLabel(mid);
               setStatusFor(id, { phase: "downloading", src, detail: `Host's ${m.label} stems — downloading…` });
               try {
-                const stems = await loadStems(engine.ctx, videoId, mix, m, (pct) => {
+                const onPct = (pct: number) => {
                   const p = Math.round(pct * 100);
                   setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Downloading ${m.label} stems… ${p}%` });
-                });
+                };
+                // Decode+pack ONE stem at a time (never the full float32 set) → the OOM-safe path
+                // that fixes the 2-long-track crash-loop. null = cache incomplete → float32 fallback.
+                const packed = await loadStemsPackedInt16(engine.ctx, videoId, m, onPct);
+                if (packed) return { kind: "neuralPacked" as const, packed, mid };
+                const stems = await loadStems(engine.ctx, videoId, mix, m, onPct);
                 return { kind: "neural" as const, stems, mid };
               } catch {
                 break; // download failed → plain mix
@@ -1396,6 +1402,15 @@ export function App() {
           if (stale?.() || res?.kind === "stale") return;
           if (res?.kind === "neural") {
             engine.deck(id).setStems(res.stems, true); // packs int16 + builds lanes + frees float32
+            stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
+            // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
+            engine.deck(id).releaseMixBuffer();
+            dropCachedBuffer(videoId);
+            refresh();
+            const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
+            setStatusFor(id, { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` });
+          } else if (res?.kind === "neuralPacked") {
+            engine.deck(id).loadPackedStems(res.packed, true); // int16 direct — no float32 set ever held
             stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
             // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
             engine.deck(id).releaseMixBuffer();

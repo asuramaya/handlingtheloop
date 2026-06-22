@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>htl · iPhone memory probe</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px; font: 15px/1.5 -apple-system, system-ui, sans-serif;
+    background: #0c0d10; color: #e7e9ee;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .sub { color: #8a8f9c; font-size: 12px; margin: 0 0 16px; }
+  .big {
+    font-size: 34px; font-weight: 700; letter-spacing: -0.5px; margin: 12px 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .dead { color: #ff5a5a; }
+  .alive { color: #4ade80; }
+  .card { background: #15171c; border: 1px solid #23262e; border-radius: 12px; padding: 14px; margin: 10px 0; }
+  button {
+    font: 600 16px system-ui; color: #fff; background: #2563eb; border: 0;
+    border-radius: 10px; padding: 14px 18px; width: 100%; margin: 6px 0;
+  }
+  button.ghost { background: #23262e; }
+  button:active { filter: brightness(1.2); }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+  .row span:first-child { color: #8a8f9c; }
+  code { color: #9db4ff; }
+  .step { font-size: 13px; color: #aeb3bf; }
+  .note { font-size: 12px; color: #8a8f9c; margin-top: 6px; }
+  ol { padding-left: 20px; font-size: 13px; color: #aeb3bf; }
+</style>
+</head>
+<body>
+<h1>htl · iPhone per-page memory probe</h1>
+<p class="sub">Finds the real WebKit per-page kill point for THIS device. The crash is silent (tab reloads); we record each step before allocating, so after a reload we know what killed it.</p>
+
+<div id="verdict" class="card"></div>
+
+<div class="card">
+  <div class="row"><span>Chunk size</span><span><code id="chunk">20</code> MB / tap</span></div>
+  <div class="row"><span>Currently held</span><span class="big" id="held">0 MB</span></div>
+  <div class="row"><span>Last attempt before reload</span><span id="lastatt">—</span></div>
+  <div class="step" id="log"></div>
+</div>
+
+<button id="grow">Allocate +20 MB &amp; touch</button>
+<button id="auto" class="ghost">Auto-step every 1.5s (until it dies)</button>
+<button id="reset" class="ghost">Reset / new run</button>
+
+<div class="card">
+  <div class="row"><span>deviceMemory</span><span id="dm">—</span></div>
+  <div class="row"><span>measure API</span><span id="api">—</span></div>
+  <div class="row"><span>UA</span></div>
+  <div class="step" id="ua"></div>
+</div>
+
+<div class="card">
+  <strong style="font-size:13px">How to read it</strong>
+  <ol>
+    <li>Tap <b>Allocate</b> (or <b>Auto-step</b>) and watch <b>Currently held</b> climb.</li>
+    <li>When the page suddenly blanks &amp; reloads, that's the kill. The verdict shows the size that died.</li>
+    <li>That number is this device's per-page ceiling. Subtract a margin → the seatbelt budget.</li>
+    <li>Run it once on a <b>blank</b> load (device ceiling), then later inside the app (headroom). ceiling − headroom = app baseline.</li>
+  </ol>
+  <p class="note">int16 chunks, every 4 KB page touched so iOS actually commits them (untouched allocations don't count).</p>
+</div>
+
+<script>
+const MB = 1024 * 1024;
+const CHUNK_MB = 20;
+const held = [];           // keep refs so GC can't reclaim
+let heldMB = 0;
+const K = {
+  survived: 'htlprobe.survivedMB',   // highest size we came back from
+  attempt:  'htlprobe.attemptMB',    // size we were attempting when (maybe) killed
+};
+
+document.getElementById('chunk').textContent = CHUNK_MB;
+document.getElementById('dm').textContent = (navigator.deviceMemory ?? 'unavailable') + (navigator.deviceMemory ? ' GB (bucketed, caps at 8)' : '');
+document.getElementById('api').textContent =
+  (performance.measureUserAgentSpecificMemory ? 'measureUserAgentSpecificMemory ✓' :
+   (performance.memory ? 'performance.memory ✓' : 'NONE (expected on iOS)'));
+document.getElementById('ua').textContent = navigator.userAgent;
+
+// On load: did a previous run get killed? attempt > survived means the attempt crashed us.
+function renderVerdict() {
+  const att = +localStorage.getItem(K.attempt) || 0;
+  const surv = +localStorage.getItem(K.survived) || 0;
+  const v = document.getElementById('verdict');
+  document.getElementById('lastatt').textContent = att ? att + ' MB' : '—';
+  if (att > surv && att > 0) {
+    v.innerHTML = `<div class="step">This device most likely died at:</div>
+      <div class="big dead">💀 ~${att} MB</div>
+      <div class="step">Last size it came back from alive: ${surv} MB. Per-page ceiling is between ${surv} and ${att} MB.</div>`;
+  } else if (surv > 0) {
+    v.innerHTML = `<div class="step">Survived so far:</div><div class="big alive">${surv} MB</div>
+      <div class="step">Keep going until it reloads to find the ceiling.</div>`;
+  } else {
+    v.innerHTML = `<div class="step">No run yet — tap Allocate to begin.</div>`;
+  }
+}
+renderVerdict();
+
+function grow() {
+  const nextMB = heldMB + CHUNK_MB;
+  // Record the attempt BEFORE allocating — if this kills us, the reload shows nextMB.
+  localStorage.setItem(K.attempt, String(nextMB));
+  const arr = new Int16Array(CHUNK_MB * MB / 2);
+  // Touch every 4KB page so iOS commits real RAM (lazy/untouched pages don't count).
+  for (let i = 0; i < arr.length; i += 2048) arr[i] = (i & 0x7fff) | 1;
+  held.push(arr);
+  heldMB = nextMB;
+  // We survived this size → record it.
+  localStorage.setItem(K.survived, String(heldMB));
+  document.getElementById('held').textContent = heldMB + ' MB';
+  const log = document.getElementById('log');
+  log.textContent = `+${CHUNK_MB} → ${heldMB} MB held (survived)\n` + log.textContent;
+  renderVerdict();
+}
+
+document.getElementById('grow').onclick = grow;
+
+let auto = null;
+document.getElementById('auto').onclick = (e) => {
+  if (auto) { clearInterval(auto); auto = null; e.target.textContent = 'Auto-step every 1.5s (until it dies)'; return; }
+  e.target.textContent = 'Stop auto-step';
+  auto = setInterval(grow, 1500);
+};
+
+document.getElementById('reset').onclick = () => {
+  localStorage.removeItem(K.survived);
+  localStorage.removeItem(K.attempt);
+  held.length = 0; heldMB = 0;
+  document.getElementById('held').textContent = '0 MB';
+  document.getElementById('log').textContent = '';
+  renderVerdict();
+};
+</script>
+</body>
+</html>

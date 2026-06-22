@@ -28,7 +28,8 @@ the tab reloads):
 |----------|-------------------------|-------------------------------|-----------------|
 | iPhone SE-class | **~100 MB** page | ~80 MB | **none** (no measure*, no performance.memory) |
 | iPhone 13/14 | **~400–450 MB** page | **~300 MB** | **none** |
-| iPhone 15+ | **~1 GB** page | ~700 MB | **none** |
+| iPhone 15+ | **~1 GB** page (estimate) | ~700 MB | **none** |
+| iPhone 17 Pro Max (12 GB) | **≥2 GB MEASURED** (survived 2 GB touched, didn't die; 2026-06) | generous — holds 2 full stem sets (~920 MB) w/o paging | **none** |
 | Android Chrome (4 GB) | renderer OOM-kill ~0.5–1.5 GB + 4 GB V8 cage | tier by `deviceMemory` | `measureUserAgentSpecificMemory()` ✓ |
 | desktop Chromium/FF/Safari | multi-GB | generous | Chromium ✓, FF/Safari ✗ |
 
@@ -282,8 +283,16 @@ throwaway IDB step).**
 
 ## 12. Open questions
 
-- Exact `windowBytes` per platform — the §1a/§4 numbers are researched estimates; confirm by
-  self-accounting on a real iPhone 13/14 + SE + an Android 4 GB device.
+- Exact `windowBytes` per platform — the §1a/§4 numbers are researched estimates EXCEPT the
+  17 Pro Max (measured ≥2 GB, 2026-06, engine/test/iphone-mem-probe.html). Flagship end is roomy;
+  still need a real **SE/base-model/3–4 GB** measurement — that's where the budget actually binds
+  and where paging earns its keep.
+- **WHICH DEVICE did the original 2-deadmau5 crash happen on?** Decides the whole diagnosis: an
+  older phone → steady-state OOM, paging is the fix (proceed). The 17 Pro Max itself → ~920 MB
+  resident can't kill a phone that survived 2 GB, so it's a **transient pack-time spike** (float32
+  ~460 MB + int16 ~230 MB coexisting per track during the int16 pack) or a single >2 GB Gigacage
+  allocation — a different bug with a different fix than windowing. Resolve via Run B (load 2
+  tracks on the crashing device + the probe, watch the PEAK, not steady state).
 - Floor rate: 24 kHz vs 22.05 vs 16 — perceptual test on earbuds; trade RAM vs fade-up audibility.
   (Floor is the MIX, so it's cheap either way.)
 - App baseline footprint on iOS (React + stem WASM + canvas + LOD) — measure it, because it eats

@@ -194,6 +194,33 @@ export async function fetchLiveRooms(signal?: AbortSignal): Promise<LiveRoom[]> 
   return ((await res.json()) as { rooms: LiveRoom[] }).rooms;
 }
 
+/** A durable notification event (the bell's "Recent" feed — new follower, …). The actor is
+ *  resolved server-side to a fresh card. `kind` is open-ended for forward-compat. */
+export interface NotifEvent {
+  id: number;
+  kind: string;
+  createdAt: number;
+  actor: { handle: string | null; displayName: string | null; avatar: string | null };
+  payload: string | null;
+}
+export interface NotificationsPayload {
+  rooms: LiveRoom[]; // people you follow who are live right now
+  events: NotifEvent[]; // the durable feed
+  seenAt: number; // read cursor — anything newer is "unread"
+}
+/** The notification bell payload (authed). Empty for a signed-out viewer. */
+export async function fetchNotifications(signal?: AbortSignal): Promise<NotificationsPayload> {
+  const res = await fetch("/api/me/notifications", { signal, credentials: "same-origin" });
+  if (!res.ok) return { rooms: [], events: [], seenAt: 0 };
+  return (await res.json()) as NotificationsPayload;
+}
+/** Stamp the read cursor (clears the unread badge across the account's devices). */
+export async function markNotificationsSeen(): Promise<number> {
+  const res = await fetch("/api/me/notifications/seen", { method: "POST", credentials: "same-origin" });
+  if (!res.ok) return Date.now();
+  return ((await res.json()) as { seenAt: number }).seenAt;
+}
+
 /** A minimal public card from a follower/following list. */
 export interface FollowCard {
   handle: string | null;

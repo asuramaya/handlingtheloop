@@ -14,6 +14,7 @@ import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
+import { NotificationsBell } from "./components/social/NotificationsBell";
 import { type Me, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
@@ -4058,6 +4059,16 @@ export function App() {
         >
           <span className="chin-discover-i" aria-hidden="true">🧭</span>
         </button>
+        <NotificationsBell
+          signedIn={!!room.user}
+          self={room.user?.handle ?? null}
+          tunedTo={room.listeningTo}
+          onListen={(h) => {
+            setDiscoverOpen(false);
+            room.tuneIn(h);
+          }}
+          onSeeAll={toggleDiscover}
+        />
         <RoomBar room={room} onExpand={toggleSocial} />
       </nav>
 

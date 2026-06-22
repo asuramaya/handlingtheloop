@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { type LiveRoom, type SetCard, fetchDiscoverSets, fetchFollowing, fetchLiveRooms } from "@htl/account";
 import { DockResizer } from "./DockResizer";
+import { LiveRoomRow } from "./social/LiveRoomRow";
 import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
 
@@ -74,27 +75,7 @@ export function DiscoverScreen({
   const followed = self ? live.filter((r) => following.has(r.handle)) : [];
   const rest = followed.length ? live.filter((r) => !following.has(r.handle)) : live;
 
-  const renderRoom = (r: LiveRoom) => (
-    <li key={r.handle} className={`live-room ${r.handle === tunedTo ? "tuned" : ""}`} onClick={() => tap(r.handle)}>
-      {r.avatar ? (
-        <img className="live-room-avatar" src={r.avatar} alt="" loading="lazy" />
-      ) : (
-        <span className="live-room-avatar fallback" aria-hidden="true">
-          {(r.displayName || r.handle).slice(0, 1).toUpperCase()}
-        </span>
-      )}
-      <span className="live-room-main">
-        <span className="live-room-name">
-          {r.displayName || `@${r.handle}`}
-          {r.handle === self && <span className="live-room-you"> (you)</span>}
-        </span>
-        <span className="live-room-np">
-          {r.npTitle ? `${r.npArtist ? `${r.npArtist} — ` : ""}${r.npTitle}` : `@${r.handle}`}
-        </span>
-      </span>
-      <span className="live-room-count">{r.listeners} 🎧</span>
-    </li>
-  );
+  const renderRoom = (r: LiveRoom) => <LiveRoomRow key={r.handle} room={r} self={self} tunedTo={tunedTo} onTap={tap} />;
 
   return (
     <div className="modal-backdrop dock-right" onPointerDown={onClose}>

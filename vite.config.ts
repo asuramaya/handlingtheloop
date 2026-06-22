@@ -1,9 +1,53 @@
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { handleApi } from "./server/api";
 
 const htlDir = fileURLToPath(new URL("./src/htl", import.meta.url));
+
+// Self-host the onnxruntime-web runtime (the stem-separation worker loads it). Vendored
+// into public/ort/ at build time and served SAME-ORIGIN, so the browser never trusts a
+// third-party CDN at runtime. Each file is HASH-PINNED here — the integrity check a dynamic
+// import() can't carry — so a tampered/compromised CDN fails the build instead of shipping
+// code into the COI-isolated worker. Idempotent: files already present with the right hash
+// are skipped, so only the first build needs network. Runs for every Vite entry (dev /
+// build / worker / deploy) via buildStart. public/ort/ is gitignored (33 MB of wasm).
+const ORT_VER = "1.22.0";
+const ORT_FILES: Record<string, string> = {
+  "ort.webgpu.min.mjs": "e131e81c9324807e1e6f9103e8f8e936112827dcc9993cde9407a333b1f07ae0",
+  "ort.wasm.min.mjs": "6ef726f355b791129f7ddf3f62e7877a16b9b777abe87004b8ab306e6b9cf265",
+  "ort-wasm-simd-threaded.jsep.mjs": "1cbcba8f2c769c1eecbab66a1b1e55ef11704515bf4306373e3db3c37cf6dcd8",
+  "ort-wasm-simd-threaded.mjs": "30dd851d9c00622940500f71ddd2ff8820c5cb65270816080175b958705385a8",
+  "ort-wasm-simd-threaded.jsep.wasm": "b45970d0632383a057c27ca5b660b216f8e00c17cf8db9f6207b5e4abc839368",
+  "ort-wasm-simd-threaded.wasm": "71aef04959c5c1b6de461b6538e2058e306610034a85aad2742d0c7fd4533fe4",
+};
+function ortVendor() {
+  return {
+    name: "htl-ort-vendor",
+    async buildStart() {
+      const outDir = fileURLToPath(new URL("./public/ort/", import.meta.url));
+      await mkdir(outDir, { recursive: true });
+      const base = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist`;
+      for (const [name, want] of Object.entries(ORT_FILES)) {
+        const dest = outDir + name;
+        try {
+          if (createHash("sha256").update(await readFile(dest)).digest("hex") === want) continue;
+        } catch {
+          /* missing → fetch below */
+        }
+        const res = await fetch(`${base}/${name}`);
+        if (!res.ok) throw new Error(`[ort-vendor] ${name}: HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const got = createHash("sha256").update(buf).digest("hex");
+        if (got !== want) throw new Error(`[ort-vendor] ${name}: hash mismatch (want ${want}, got ${got})`);
+        await writeFile(dest, buf);
+        console.log(`[ort-vendor] vendored ${name} (${(buf.length / 1048576).toFixed(1)} MB)`);
+      }
+    },
+  };
+}
 
 // Dev-time /api/*: YouTube search / playlist / metadata / audio, all via yt-dlp.
 // DEV-ONLY: this dispatcher (server/api.ts) runs solely as Vite middleware and fakes
@@ -31,7 +75,7 @@ function xxitApi() {
 }
 
 export default defineConfig({
-  plugins: [react(), xxitApi()],
+  plugins: [react(), xxitApi(), ortVendor()],
   resolve: {
     alias: { "@htl": htlDir },
   },
@@ -39,7 +83,8 @@ export default defineConfig({
     port: 5173,
     // Cross-origin isolation → multi-threaded wasm (fast on-device stem separation).
     // `credentialless` keeps cross-origin <img> thumbnails (i.ytimg.com) working
-    // without CORP headers, and the jsdelivr ORT import/wasm still load (CORS).
+    // without CORP headers. ORT is now self-hosted (same-origin), so it needs no
+    // cross-origin allowance at all.
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
       "Cross-Origin-Embedder-Policy": "credentialless",

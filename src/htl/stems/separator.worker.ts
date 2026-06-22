@@ -29,8 +29,11 @@ const WIN = hannPeriodic(NFFT);
 // 1.22.0, NOT 1.20.1: the 1.20 WebGPU EP miscomputes the demucs freq branch
 // (Conv2d/InstanceNorm/ConvTranspose2d) → garbage spectrogram stems. Fixed in 1.21+
 // (verified maxErr 3e-6 vs PyTorch). Open-Unmix (wasm EP) is unaffected by the bump.
-const ORT_VER = "1.22.0";
-const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+// Self-hosted (SAME-ORIGIN) — onnxruntime-web 1.22.0 vendored into public/ort/ at build
+// time and hash-pinned (see vite.config.ts `ortVendor`). NOT a third-party CDN: the browser
+// never trusts an external host at runtime, and same-origin satisfies COEP without any CORS
+// dance. Bump the version in vite.config.ts (path + hashes) when upgrading.
+const ORT_BASE = `/ort/`;
 // We only drive the WebGPU (JSEP) execution provider on CHROMIUM. Outside it, JSEP is
 // unreliable: on Safari/WebKit the JSEP build triggers a severe JSC wasm-compile leak
 // (onnxruntime#26827 — CPU pegs, memory climbs past 10 GB, the tab is killed; still

@@ -189,13 +189,14 @@ export async function allow(rl: RateLimiter | undefined, key: string): Promise<b
 // 'unsafe-inline' (so an injected <script> can't run), object-src 'none', and
 // base-uri 'self'. img/style/connect stay permissive to avoid breaking the app's
 // cross-origin thumbnails, inline React styles, and model/runtime downloads.
-//   - script-src: app bundle ('self') + onnxruntime from jsdelivr; 'wasm-unsafe-eval'
-//     for the in-browser stem WASM; blob: for the worker/AudioWorklet bootstraps.
-//   - connect-src https: — model weights (huggingface.co + its LFS CDNs) and the
-//     ORT wasm fetch land on shifting hosts; the real guard is script-src.
+//   - script-src: app bundle + onnxruntime ('self' — ORT is now self-hosted under
+//     /ort/, no third-party CDN); 'wasm-unsafe-eval' for the in-browser stem WASM;
+//     blob: for the worker/AudioWorklet bootstraps. NO external script origin.
+//   - connect-src https: — model weights (huggingface.co + its LFS CDNs) land on
+//     shifting hosts; the ORT wasm is same-origin now. The real guard is script-src.
 export const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net",
+  "script-src 'self' 'wasm-unsafe-eval' blob:",
   "worker-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",

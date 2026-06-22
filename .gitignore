@@ -29,3 +29,6 @@ public/models/
 
 # Dev account store (stands in for D1 locally — see server/devStore.ts)
 .dev-data/
+
+# Self-hosted onnxruntime-web runtime (vendored at build time, hash-pinned in vite.config.ts)
+public/ort/

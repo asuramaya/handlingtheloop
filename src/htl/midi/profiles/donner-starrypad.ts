@@ -23,13 +23,32 @@ function focusBtn(deck: "A" | "B", data: number): MidiBinding {
   return { control: { kind: "focus", deck }, status: CC, data, type: "cc" };
 }
 
-// The 16 pads (notes 0x5C..0x6B, contiguous): 1-8 = hot cues, 9-16 = the 8 beat-loop
-// sizes. Deckless → focused deck. (Note-off 0x89 misses the 0x99 index = a clean no-op,
-// since pads act on press.)
+// The 16 pads report as note-on (0x99 press / 0x89 release) over a SPLIT range —
+// 0x3A..0x3F then 0x40..0x49 (verified via the in-app MIDI monitor; the first guess at
+// 0x5C was wrong). Deckless → focused deck; pads act on press (note-off is a clean no-op).
+// Layout:
+//   1-8   → the mode-routed pad triggers (hotcue1..8 — App routes by the deck's pad mode:
+//           hot cue / beat loop / sampler region / FX throw, so the bank follows CUE/LOOP/SMP/FX)
+//   9-12  → pad-mode switch: CUE / LOOP / SMP / FX
+//   13-14 → loop IN / loop OUT
+//   15-16 → up / down grid-locked nudges (skip-size, same as the ↑/↓ arrow keys)
+const PAD_NOTES = [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49];
+
+function padNote(action: string, slot: number): MidiBinding {
+  return { control: { kind: "action", action }, status: PAD, data: PAD_NOTES[slot], type: "note" };
+}
+
 function padBindings(): MidiBinding[] {
   const out: MidiBinding[] = [];
-  for (let i = 0; i < 8; i++) out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, status: PAD, data: 0x5c + i, type: "note" });
-  for (let i = 0; i < 8; i++) out.push({ control: { kind: "action", action: `beatLoop${i}` }, status: PAD, data: 0x64 + i, type: "note" });
+  for (let i = 0; i < 8; i++) out.push(padNote(`hotcue${i + 1}`, i)); // 1-8 · mode-routed pad triggers
+  out.push(padNote("padModeCue", 8)); // 9
+  out.push(padNote("padModeLoop", 9)); // 10
+  out.push(padNote("padModeSampler", 10)); // 11
+  out.push(padNote("padModeFx", 11)); // 12
+  out.push(padNote("loopIn", 12)); // 13
+  out.push(padNote("loopOut", 13)); // 14
+  out.push(padNote("jogFwd", 14)); // 15 · ↑ grid-locked skip
+  out.push(padNote("jogBack", 15)); // 16 · ↓ grid-locked skip
   return out;
 }
 
@@ -97,7 +116,7 @@ export const DONNER_STARRYPAD: DeviceProfile = {
     // RECORD is a LATCHING hardware toggle (7F on / 00 off) → use it as a shift latch
     // for the focused deck.
     { control: { kind: "shift" }, status: CC, data: 0x3e, type: "cc" },
-    // 16 pads: 1-8 hot cues, 9-16 beat loops.
+    // 16 pads: 1-8 mode-routed triggers, 9-12 mode switch, 13-14 loop in/out, 15-16 nudge.
     ...padBindings(),
   ],
 };

@@ -443,7 +443,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 disabled={pad.kind === "empty" && !pad.hasTrack}
                 title={
                   pad.kind === "empty"
-                    ? pad.hasTrack ? `Grab a region from deck ${id}` : `Load a track on deck ${id} first`
+                    ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
                     : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
                 }
                 onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
@@ -451,8 +451,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerLeave={() => smpUp(pad)}
                 onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
               >
-                {pad.kind === "empty" ? (pad.hasTrack ? "grab" : "—") : pad.name || slot + 1}
+                {pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || slot + 1}
                 {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+                <span className="kbd">{slot + 1}</span>
               </button>
             );
           })}
@@ -464,19 +465,22 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         {deck.padMode === "fx" && (
         <div className="hotcues fx-bank">
           {FX_PADS.map((pad, i) => {
-            const dis = pad.enabled ? !pad.enabled(deck) : false;
+            // A pad whose backend isn't in the rack is HIDDEN (not greyed) — the live pads
+            // fill the row and grow wider; more appear as effects are added. The keyboard
+            // mapping stays index-stable (1-8 = FX_PADS slot), so the kbd marker is honest.
+            if (pad.enabled && !pad.enabled(deck)) return null;
             return (
               <button
                 key={pad.label}
                 className={`pad fx ${pad.active?.(deck) ? "playing" : ""} ${pad.hold ? "" : "oneshot"}`}
                 data-cue={i + 1}
-                disabled={dis}
                 title={`${pad.label} — ${pad.hint}`}
                 onPointerDown={(e) => fxDown(e, i)}
                 onPointerUp={() => fxUp(i)}
                 onPointerLeave={() => fxUp(i)}
               >
                 {pad.label}
+                <span className="kbd">{i + 1}</span>
               </button>
             );
           })}
@@ -511,7 +515,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 </>
               )}
               <div className="ctx-sep" />
-              <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-grab from deck</button>
+              <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-slice from deck</button>
               <button className="ctx-danger" onClick={() => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); }}>✕ Clear pad</button>
             </div>
           </>

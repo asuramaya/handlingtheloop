@@ -25,6 +25,7 @@
 }
 .pad-mode button {
   flex: 1;
+  position: relative; /* anchor the U/I/O/P .kbd marker to the button, not a far ancestor */
   border: 1px solid var(--btn-border, var(--line));
   background: var(--panel-2);
   color: var(--muted);
@@ -116,6 +117,22 @@
 .pad.fx:disabled {
   opacity: 0.4;
   cursor: default;
+}
+/* FX bank: disabled pads are hidden (not greyed), so the live pads flow and stretch to fill
+   the row — one device → one wide pad, more appear as effects are added to the rack. */
+.hotcues.fx-bank {
+  display: flex;
+  gap: 5px;
+}
+.fx-bank .pad.fx {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* Pad shortcut markers sit bottom-LEFT so they never collide with the bottom-right stem
+   letter on a chopped sampler pad. */
+.pad .kbd {
+  left: 3px;
+  right: auto;
 }
 .pad-clear {
   position: absolute;

@@ -51,6 +51,10 @@ import {
   getUserLibrary,
   putUserLibrary,
   purgeAccount,
+  liveFollowedRooms,
+  listNotifications,
+  getNotifSeenAt,
+  setNotifSeenAt,
   handleTaken,
   relationship,
   unblockUser,
@@ -675,6 +679,34 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         return json(200, { ok: true, updatedAt: ts });
       }
       return json(405, { error: "GET or PUT only" });
+    }
+
+    case "/api/me/notifications": {
+      // The notification bell (Epic I). Viewer-specific → authed. Two halves in one payload:
+      // `rooms` = people you follow who are live NOW (fan-out-on-read JOIN, ephemeral), `events`
+      // = the durable feed (new followers, …). `seenAt` is the read cursor — the client badges
+      // anything newer than it. POST .../seen stamps it (clears the badge across devices).
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      if (req.method === "GET") {
+        await ensureRoomsTable(env.DB);
+        await ensureGraphTables(env.DB);
+        const [rooms, events, seenAt] = await Promise.all([
+          liveFollowedRooms(env.DB, user.id),
+          listNotifications(env.DB, user.id),
+          getNotifSeenAt(env.DB, user.id),
+        ]);
+        return json(200, { rooms, events, seenAt });
+      }
+      return json(405, { error: "GET only" });
+    }
+    case "/api/me/notifications/seen": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const ts = Date.now();
+      await setNotifSeenAt(env.DB, user.id, ts);
+      return json(200, { ok: true, seenAt: ts });
     }
 
     case "/api/me/delete": {

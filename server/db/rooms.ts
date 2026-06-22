@@ -89,6 +89,32 @@ export async function liveRooms(db: D1Database, limit = 100, freshMs = 90_000): 
   return r.results ?? [];
 }
 
+/** The notifications "Live now" source: rooms that the VIEWER follows that are broadcasting
+ *  + fresh, newest-live first. Fan-out-on-read — a celebrity going live costs one room row,
+ *  readers pay O(following ∩ live). Blocks-gated both directions (defense-in-depth: a block
+ *  already deletes the follow edge, but enforce at read so the bell can never leak a blocker's
+ *  live status). `startedAt` drives the client's "new since I last looked" badge. */
+export async function liveFollowedRooms(db: D1Database, viewerId: string, freshMs = 90_000): Promise<LiveRoom[]> {
+  const cutoff = now() - freshMs;
+  const r = await db
+    .prepare(
+      `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+              r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
+       FROM follows f
+       JOIN rooms r ON r.host_id = f.followee_id
+       JOIN users u ON u.id = r.host_id
+       WHERE f.follower_id = ? AND r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_id = f.follower_id AND b.blocked_id = f.followee_id)
+              OR (b.blocker_id = f.followee_id AND b.blocked_id = f.follower_id))
+       ORDER BY r.started_at DESC LIMIT 50`,
+    )
+    .bind(viewerId, cutoff)
+    .all<LiveRoom>();
+  return r.results ?? [];
+}
+
 // --- Shared-session invites -------------------------------------------------
 // An invite code is an opaque handle to a host's session. Guests open
 // /?join=<code>; the Worker resolves the code to the host's user id and routes the

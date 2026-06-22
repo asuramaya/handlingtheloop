@@ -1,5 +1,6 @@
 // Social graph: follows + blocks (migration 0013).
 import { type D1Database, now } from "./core";
+import { addNotification } from "./notifications";
 
 let graphReady = false;
 /** Create the graph tables/indexes on an older/local DB that predates 0013. */
@@ -42,10 +43,15 @@ export type GraphResult = { ok: true } | { ok: false; reason: string };
 export async function followUser(db: D1Database, followerId: string, followeeId: string): Promise<GraphResult> {
   if (followerId === followeeId) return { ok: false, reason: "can't follow yourself" };
   if (await blockedEither(db, followerId, followeeId)) return { ok: false, reason: "unavailable" };
-  await db
+  const res = await db
     .prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?,?,?)")
     .bind(followerId, followeeId, now())
     .run();
+  // Notify the followee — but ONLY on a genuinely new edge (changes>0), so a re-affirm of an
+  // existing follow doesn't spam them. Best-effort: a notify failure never fails the follow.
+  if ((res.meta?.changes ?? 0) > 0) {
+    await addNotification(db, { userId: followeeId, kind: "follow", actorId: followerId }).catch(() => {});
+  }
   return { ok: true };
 }
 

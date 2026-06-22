@@ -6,6 +6,7 @@
 export interface D1Result<T = unknown> {
   results?: T[];
   success: boolean;
+  meta?: { changes?: number; last_row_id?: number };
 }
 export interface D1PreparedStatement {
   bind(...vals: unknown[]): D1PreparedStatement;

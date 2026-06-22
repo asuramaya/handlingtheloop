@@ -17,7 +17,7 @@ import { acoustidLookup } from "../server/acoustid";
 import { getValidToken } from "../server/connections";
 import { getTidalTrackRadio, tidalTrackIdByIsrc, searchTidalTracks, tidalProbe } from "../server/tidalData";
 import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/tidalAuth";
-import { audioChunks, diagnoseAudio, fetchCaptions, fetchMeta, resolveAudio, type TrackMeta, type YtAuth } from "../server/youtube";
+import { audioChunks, diagnoseAudio, fetchCaptions, fetchMeta, makeRelayFetch, resolveAudio, type Fetcher, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
 import { handleSampleRoute } from "../server/samples";
@@ -145,6 +145,11 @@ interface Env extends AccountEnv {
   ROOM?: DurableObjectNamespace;
   RELAY?: DurableObjectNamespace; // D2: RelayRoom crowd shards (only used when RELAY_SHARDS>0)
   RELAY_SHARDS?: string; // number of relay shards per room (0/unset = relay tier OFF)
+  // Residential YouTube-fetch relay (a FortiGate over cloudflared). When BOTH are set, a cold
+  // resolve that the datacenter egress can't get (bot wall, after retries) is retried through
+  // the relay's residential IP. Unset → feature inert (the cold path just 502s as before).
+  YT_RELAY_URL?: string; // e.g. https://relay-b.handlingtheloop.com
+  YT_RELAY_SECRET?: string; // shared secret the relay enforces
   // Cloudflare Workers Rate Limiting bindings (wrangler.jsonc unsafe.bindings).
   // Per-IP caps on the unauthenticated write/resolve paths. Optional → absent in
   // plain `vite` dev, where `allow()` no-ops. RL_WRITE: catalog/analysis/stem
@@ -285,12 +290,23 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           return json(429, { error: "rate limited — try again shortly" });
         }
         let r;
+        let via: Fetcher | undefined; // the fetcher that resolved — reused for the byte stream
         try {
           r = await resolveAudio(v, readAuth(req));
         } catch (e) {
-          // Surface YouTube's own reason (LOGIN_REQUIRED / bot-check / no format) so a cold
-          // failure is legible instead of an opaque 500. See /api/audio/diag for the full read.
-          return json(502, { error: "could not load from YouTube", reason: e instanceof Error ? e.message : String(e) });
+          // Datacenter egress is bot-walled for this cold track. If a residential relay is
+          // configured (YT_RELAY_*), retry the resolve — and, below, the byte stream — through
+          // it; its IP isn't flagged. BOTH hops go via the relay so googlevideo's IP-lock holds.
+          const relay = env.YT_RELAY_URL && env.YT_RELAY_SECRET ? makeRelayFetch(env.YT_RELAY_URL, env.YT_RELAY_SECRET) : null;
+          if (!relay) {
+            return json(502, { error: "could not load from YouTube", reason: e instanceof Error ? e.message : String(e) });
+          }
+          try {
+            r = await resolveAudio(v, readAuth(req), relay);
+            via = relay;
+          } catch (e2) {
+            return json(502, { error: "could not load from YouTube", reason: e2 instanceof Error ? e2.message : String(e2) });
+          }
         }
 
         // Oversized (long mixes): stream chunk-by-chunk, skip caching to protect
@@ -299,7 +315,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           const stream = new ReadableStream<Uint8Array>({
             async start(controller) {
               try {
-                for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) controller.enqueue(chunk);
+                for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req), via), via)) controller.enqueue(chunk);
                 controller.close();
               } catch (e) {
                 controller.error(e);
@@ -315,7 +331,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // background (waitUntil) so it doesn't delay playback.
         const parts: Uint8Array[] = [];
         let total = 0;
-        for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req)))) {
+        for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req), via), via)) {
           parts.push(chunk);
           total += chunk.byteLength;
         }

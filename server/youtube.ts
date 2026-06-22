@@ -33,6 +33,29 @@ function withTimeout(ms: number, init?: RequestInit): RequestInit {
   return { ...init, signal: AbortSignal.timeout(ms) };
 }
 
+// A fetch-shaped function. Threaded through the resolve + byte-stream chain so a single call
+// site can route everything through the residential FortiGate relay instead of egressing from
+// the (bot-walled) Cloudflare IP. Defaults to direct fetch everywhere → no behaviour change.
+export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
+const directFetch: Fetcher = (url, init) => fetch(url, init);
+
+/** A Fetcher that tunnels each request through the residential relay (`relayUrl` = the
+ *  cloudflared hostname). The relay forwards ONLY YouTube hosts and pins IPv4, so a resolve
+ *  and its IP-locked googlevideo URL share the relay's IP. Used as the cold-load FALLBACK when
+ *  the datacenter egress is bot-walled — see worker/index.ts. */
+export function makeRelayFetch(relayUrl: string, secret: string): Fetcher {
+  const endpoint = relayUrl.replace(/\/+$/, "") + "/fetch";
+  return (url, init) => {
+    const h: Record<string, string> = {
+      "X-Relay-Secret": secret,
+      "X-Relay-Target": url,
+      "X-Relay-Method": (init?.method ?? "GET").toUpperCase(),
+    };
+    new Headers(init?.headers).forEach((v, k) => (h["X-Fwd-" + k] = v));
+    return fetch(endpoint, { method: "POST", headers: h, body: init?.body, signal: init?.signal });
+  };
+}
+
 // Optional per-request YouTube credentials, supplied BY THE USER from their own
 // browser session (see the privacy notice in the app). YouTube blocks the
 // player API from datacenter IPs with LOGIN_REQUIRED ("confirm you're not a
@@ -110,10 +133,10 @@ interface RawFormat {
 let visitorCache: { value: string; expires: number } | null = null;
 const VISITOR_TTL_MS = 6 * 60 * 60 * 1000;
 
-async function getVisitorData(force = false): Promise<string> {
+async function getVisitorData(force = false, fx: Fetcher = directFetch): Promise<string> {
   if (!force && visitorCache && visitorCache.expires > Date.now()) return visitorCache.value;
   // Lightweight source: the service-worker data blob carries VISITOR_DATA.
-  const res = await fetch(
+  const res = await fx(
     "https://www.youtube.com/sw.js_data",
     withTimeout(VISITOR_TIMEOUT_MS, { headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US,en;q=0.9" } }),
   );
@@ -123,7 +146,7 @@ async function getVisitorData(force = false): Promise<string> {
   if (!value) {
     // Fallback: the watch page always has it.
     const html = await (
-      await fetch(
+      await fx(
         "https://www.youtube.com/watch?v=jNQXAC9IVRw&hl=en",
         withTimeout(VISITOR_TIMEOUT_MS, { headers: { "user-agent": "Mozilla/5.0", "accept-language": "en-US" } }),
       )
@@ -204,7 +227,7 @@ interface PlayerOpts {
 
 // One raw player call. Returns the HTTP status alongside the parsed body (never
 // throws on a non-2xx) so callers can diagnose / cascade across clients.
-async function rawPlayer(videoId: string, o: PlayerOpts): Promise<{ http: number; body: PlayerResponse }> {
+async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFetch): Promise<{ http: number; body: PlayerResponse }> {
   const client: Record<string, unknown> = {
     ...o.client.extra,
     clientName: o.client.name,
@@ -235,7 +258,7 @@ async function rawPlayer(videoId: string, o: PlayerOpts): Promise<{ http: number
   if (o.bearer) headers.authorization = `Bearer ${o.bearer}`;
   else if (o.cookie) Object.assign(headers, await authHeaders(o.cookie));
 
-  const res = await fetch(
+  const res = await fx(
     PLAYER_ENDPOINT,
     withTimeout(PLAYER_TIMEOUT_MS, { method: "POST", headers, body: JSON.stringify(body) }),
   );
@@ -250,13 +273,13 @@ async function rawPlayer(videoId: string, o: PlayerOpts): Promise<{ http: number
 
 // Thin ANDROID_VR wrapper preserving the original throw-on-error contract used
 // by the anonymous / cookie path.
-async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth): Promise<PlayerResponse> {
+async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
   const { http, body } = await rawPlayer(videoId, {
     client: CLIENTS.ANDROID_VR,
     visitorData,
     cookie: auth?.cookie,
     poToken: auth?.poToken,
-  });
+  }, fx);
   if (http !== 200) {
     // Surface YouTube's own reason (e.g. "Origin doesn't match Host",
     // "invalid argument", "Precondition check failed") so a 400 is diagnosable
@@ -275,15 +298,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // visitorData on the next try is the lever that clears it (verified: rotating visitors
 // rides out the bursts). So retry generously with jittered backoff. The latency cost is
 // paid only on the rare fully-walled video; most resolve on attempt 0-1.
-async function playerWithRetry(videoId: string, attempts = 6, auth?: YtAuth): Promise<PlayerResponse> {
+async function playerWithRetry(videoId: string, attempts = 6, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       // Prefer the user's browser-minted visitorData (it pairs with their PO token / cookie
       // and must stay fixed for that binding); otherwise fetch our own and ROTATE it every
       // retry (force=true once past attempt 0) so a burned token can't wall every attempt.
-      const visitor = auth?.visitorData || (await getVisitorData(i > 0));
-      const pr = await playerRequest(videoId, visitor, auth);
+      const visitor = auth?.visitorData || (await getVisitorData(i > 0, fx));
+      const pr = await playerRequest(videoId, visitor, auth, fx);
       if (pr.playabilityStatus?.status === "OK") return pr;
       lastErr = new Error(
         `not playable: ${pr.playabilityStatus?.status ?? "unknown"}${pr.playabilityStatus?.reason ? ` (${pr.playabilityStatus.reason})` : ""}`,
@@ -317,8 +340,8 @@ function pickAudio(formats: RawFormat[]): RawFormat | null {
 // Premium formats on this client, so none are used — `auth` only ever carries a
 // browser-minted visitorData / PO token that hardens the anonymous request against
 // datacenter bot-blocks. `playerWithRetry` already retries with a fresh visitorData.
-export async function resolveAudio(videoId: string, auth?: YtAuth): Promise<ResolvedAudio> {
-  const pr = await playerWithRetry(videoId, 6, auth);
+export async function resolveAudio(videoId: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<ResolvedAudio> {
+  const pr = await playerWithRetry(videoId, 6, auth, fx);
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
   if (!fmt || !fmt.url) throw new Error("no playable audio format");
   const d = pr.videoDetails;
@@ -586,11 +609,11 @@ const MAX_CHUNKS = 24;
 // Fetch one byte range, retrying transient failures (intermittent 403/429/5xx
 // from datacenter IPs, or a timeout) so a single flaky chunk doesn't fail the
 // whole track.
-async function fetchRange(url: string, start: number, end: number, attempts = 3): Promise<Uint8Array> {
+async function fetchRange(url: string, start: number, end: number, attempts = 3, fx: Fetcher = directFetch): Promise<Uint8Array> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      const r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS, { headers: { range: `bytes=${start}-${end}` } }));
+      const r = await fx(url, withTimeout(CHUNK_TIMEOUT_MS, { headers: { range: `bytes=${start}-${end}` } }));
       if (r.ok || r.status === 206) return new Uint8Array(await r.arrayBuffer());
       lastErr = new Error(`chunk ${r.status}`);
       if (r.status !== 403 && r.status !== 429 && r.status < 500) throw lastErr; // non-transient
@@ -613,6 +636,7 @@ async function fetchRange(url: string, start: number, end: number, attempts = 3)
 export async function* audioChunks(
   resolved: Pick<ResolvedAudio, "url" | "contentLength" | "itag">,
   reresolve?: () => Promise<ResolvedAudio>,
+  fx: Fetcher = directFetch,
 ): AsyncGenerator<Uint8Array> {
   let { url } = resolved;
   const { contentLength, itag } = resolved;
@@ -629,10 +653,10 @@ export async function* audioChunks(
   // If contentLength is unknown, fall back to a single streamed GET (re-resolved once if
   // the initial GET is rejected outright).
   if (!contentLength) {
-    let r = await fetch(url, withTimeout(CHUNK_TIMEOUT_MS));
+    let r = await fx(url, withTimeout(CHUNK_TIMEOUT_MS));
     if (!r.ok || !r.body) {
       const u = await freshUrl(new Error(`audio ${r.status}`));
-      r = await fetch(u, withTimeout(CHUNK_TIMEOUT_MS));
+      r = await fx(u, withTimeout(CHUNK_TIMEOUT_MS));
       if (!r.ok || !r.body) throw new Error(`audio ${r.status}`);
     }
     const reader = r.body.getReader();
@@ -647,9 +671,9 @@ export async function* audioChunks(
   for (let start = 0; start < contentLength; start += chunkSize) {
     const end = Math.min(contentLength - 1, start + chunkSize - 1);
     try {
-      yield await fetchRange(url, start, end);
+      yield await fetchRange(url, start, end, 3, fx);
     } catch (e) {
-      yield await fetchRange(await freshUrl(e), start, end);
+      yield await fetchRange(await freshUrl(e), start, end, 3, fx);
     }
   }
 }

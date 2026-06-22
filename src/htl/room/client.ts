@@ -29,6 +29,7 @@ export interface RoomHandlers {
   chat?: (msg: ChatMsg) => void; // a live chat line (F5)
   chatHistory?: (list: ChatMsg[]) => void; // recent chat backlog on join
   chatSlow?: (seconds: number) => void; // slow-mode interval (<0 off, 0 normal, >0 N-sec)
+  chatFollowers?: (on: boolean) => void; // followers-only chat toggle (rides presence)
   muted?: (on: boolean) => void; // the host muted/unmuted THIS device
   mutedList?: (ids: string[]) => void; // HOST: the set of muted device ids (drives the unmute toggle)
   engine?: (stale: boolean, roomVersion: number) => void; // D5: room's engine version differs from ours → unfaithful mix
@@ -312,6 +313,10 @@ export class RoomClient {
   setChatSlow(seconds: number): void {
     this.send({ t: "chat-slow", seconds });
   }
+  /** HOST: toggle followers-only chat (only the host's followers + host/stage may post). */
+  setChatFollowers(on: boolean): void {
+    this.send({ t: "chat-followers", on });
+  }
   /** HOST: mute/unmute a device's chat, or ban it (evict + block re-entry). */
   muteDevice(to: string, on: boolean): void {
     this.send({ t: "mute", to, on });
@@ -435,6 +440,7 @@ export class RoomClient {
         this.applyHostColor(msg.hostColor);
         if (msg.requests) this.h.requests?.(msg.requests);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
+        if (msg.chatFollowers !== undefined) this.h.chatFollowers?.(msg.chatFollowers);
         if (msg.muted) this.h.mutedList?.(msg.muted);
         // A PUBLIC read-only listener is auto-joined server-side and never drives — skip the
         // engage restore entirely (it has no switches to assert).
@@ -473,6 +479,7 @@ export class RoomClient {
         this.applyEngineVersion(msg.engineVersion);
         this.applyHostColor(msg.hostColor);
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
+        if (msg.chatFollowers !== undefined) this.h.chatFollowers?.(msg.chatFollowers);
         if (msg.muted) this.h.mutedList?.(msg.muted);
         break;
       case "role":

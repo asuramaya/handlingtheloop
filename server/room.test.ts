@@ -65,10 +65,11 @@ class FakeState implements DurableObjectState {
 function makeRoom() {
   const state = new FakeState();
   const room = new DjRoom(state as unknown as ConstructorParameters<typeof DjRoom>[0]);
-  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean }) {
+  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean; follows?: boolean }) {
     const qs = new URLSearchParams({ device: p.device, name: p.name ?? p.device, kind: "Mac" });
     if (p.host) qs.set("host", "1");
     if (p.pub) qs.set("pub", "1");
+    if (p.follows) qs.set("fol", "1"); // Worker-resolved follow flag (un-forgeable)
     const req = new Request(`https://x/api/room?${qs}`, { headers: { Upgrade: "websocket" } });
     let status = 101;
     try {
@@ -264,6 +265,39 @@ describe("DjRoom crowd guard + requests", () => {
     expect(a.closed).toBe(true);
     const rejoin = await h.connect({ device: "A", pub: true });
     expect(rejoin.status).toBe(403);
+  });
+
+  it("followers-only chat: only the host's followers (+ the host) may post", async () => {
+    const host = await liveHost();
+    const fan = (await h.connect({ device: "F", name: "Fan", pub: true, follows: true })).ws!;
+    const rando = (await h.connect({ device: "R", name: "Rando", pub: true })).ws!;
+    await h.send(host, { t: "chat-followers", on: true }); // host gates chat to followers
+
+    // a follower posts fine
+    await h.send(fan, { t: "chat", text: "love this" });
+    expect((host.last("chat")?.msg as { text: string })?.text).toBe("love this");
+
+    // a non-follower is refused (error to them, nothing fanned out)
+    const before = host.msgs().filter((m) => m.t === "chat").length;
+    await h.send(rando, { t: "chat", text: "let me in" });
+    expect(host.msgs().filter((m) => m.t === "chat").length).toBe(before);
+    expect(rando.got("error")).toBe(true);
+
+    // the host themselves can always post
+    await h.send(host, { t: "chat", text: "hey all" });
+    expect((host.last("chat")?.msg as { text: string })?.text).toBe("hey all");
+
+    // a non-host can't flip the gate: rando tries to turn it OFF, but it stays on —
+    // a fresh non-follower is still blocked, proving the toggle was ignored
+    await h.send(rando, { t: "chat-followers", on: false });
+    const rando2 = (await h.connect({ device: "R2", pub: true })).ws!;
+    await h.send(rando2, { t: "chat", text: "sneak in" });
+    expect(rando2.got("error")).toBe(true);
+
+    // the HOST turns it off → the non-follower finally gets in
+    await h.send(host, { t: "chat-followers", on: false });
+    await h.send(rando2, { t: "chat", text: "hi now" });
+    expect((host.last("chat")?.msg as { text: string })?.text).toBe("hi now");
   });
 
   it("a ban survives a DO eviction (reconstruct over the same storage)", async () => {

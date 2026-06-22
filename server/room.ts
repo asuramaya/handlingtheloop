@@ -125,6 +125,7 @@ export class DjRoom {
   // (host setting, persisted) and the session-ephemeral `muted`/`banned` device sets.
   private chat = new Chat();
   private chatSlow = 0; // <0 chat off, 0 normal, >0 slow-mode seconds
+  private chatFollowers = false; // followers-only chat: only host followers (+ host/stage) may post
   private muted = new Set<string>();
   private banned = new Set<string>();
 
@@ -156,6 +157,7 @@ export class DjRoom {
     this.isPublic = (await this.state.storage.get<boolean>("public")) ?? false;
     this.stageGate = (await this.state.storage.get<StageGate>("stageGate")) ?? "request";
     this.chatSlow = (await this.state.storage.get<number>("chatSlow")) ?? 0;
+    this.chatFollowers = (await this.state.storage.get<boolean>("chatFollowers")) ?? false;
     // Moderation (L1) survives a DO eviction — a ban that evaporated when the room idled wasn't
     // a ban. Mute persists too so a re-muted spammer stays muted across a cold restart.
     this.muted = new Set((await this.state.storage.get<string[]>("muted")) ?? []);
@@ -232,6 +234,7 @@ export class DjRoom {
     const pub = url.searchParams.get("pub") === "1"; // anon read-only listener (un-forgeable; the Worker sets it)
     const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
     const ev = Math.max(0, Math.min(9999, Number(url.searchParams.get("ev")) || 0)); // reconstruction-engine version (D5)
+    const follows = url.searchParams.get("fol") === "1"; // this account follows the host (Worker-resolved, un-forgeable)
 
     // A host-banned device can't re-enter the session (L1). Device ids are non-secret, so this
     // is best-effort — the same posture as the rest of this anon system.
@@ -272,8 +275,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev };
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -495,6 +498,12 @@ export class DjRoom {
           ws.send(JSON.stringify({ t: "error", message: "You're muted." } satisfies ServerMsg));
           break;
         }
+        // Followers-only chat (uses the Worker-resolved follow flag on the attachment — the DO
+        // has no DB). The host and stage performers are always allowed; everyone else must follow.
+        if (this.chatFollowers && !(a.host || a.stage || a.follows)) {
+          ws.send(JSON.stringify({ t: "error", message: "Followers-only chat — follow the host to join in." } satisfies ServerMsg));
+          break;
+        }
         const r = this.chat.post(self, a.name, msg.text, this.chatSlow);
         if (r.ok) this.broadcast({ t: "chat", msg: r.msg });
         else if (r.error) ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
@@ -507,6 +516,16 @@ export class DjRoom {
         if (s === this.chatSlow) break;
         this.chatSlow = s;
         await this.state.storage.put("chatSlow", s);
+        this.broadcastPresence();
+        break;
+      }
+      case "chat-followers": {
+        // HOST toggles followers-only chat. Persisted; rides presence so every client reflects it.
+        if (!this.isHostDevice(self)) break;
+        const on = !!msg.on;
+        if (on === this.chatFollowers) break;
+        this.chatFollowers = on;
+        await this.state.storage.put("chatFollowers", on);
         this.broadcastPresence();
         break;
       }
@@ -1084,6 +1103,7 @@ export class DjRoom {
       stageGate: this.stageGate,
       stage: this.stageReqs(),
       chatSlow: this.chatSlow,
+      chatFollowers: this.chatFollowers,
       muted: [...this.muted],
       engineVersion: this.engineVersion(),
       hostColor: this.hostColor(),

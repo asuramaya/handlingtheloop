@@ -30,6 +30,7 @@ import {
   getAnalysisByIds,
   getIdentity,
   upsertIdentity,
+  isFollowing,
   getOrCreateInvite,
   inviteOwner,
   ensureIdentityColumns,
@@ -965,6 +966,18 @@ async function handleRoom(req: Request, env: Env): Promise<Response> {
   url.searchParams.delete("pub");
   if (isHost) url.searchParams.set("host", "1");
   if (asPublic) url.searchParams.set("pub", "1");
+
+  // Follow edge for the DO (which has no DB): does THIS authenticated connection follow the
+  // room's host? Resolved here once, handed down as an un-forgeable `fol` flag (stripped like
+  // host/pub), so the DO can gate follower-only features (e.g. chat) without a DB binding.
+  url.searchParams.delete("fol");
+  if (user && user.id !== hostId && env.DB) {
+    try {
+      if (await isFollowing(env.DB, user.id, hostId)) url.searchParams.set("fol", "1");
+    } catch {
+      /* graph unavailable → treat as non-follower */
+    }
+  }
 
   // D2 relay tier: when RELAY_SHARDS>0, an anonymous pub-listener is sharded onto one of R
   // RelayRoom DOs (by hash(device)) instead of piling onto the master — the master pushes the

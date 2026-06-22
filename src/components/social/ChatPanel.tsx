@@ -103,8 +103,22 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
 
       <div className="social-section-head chat-head">
         💬 Chat
+        {/* A listener sees WHY the room may refuse them; the host gets the toggle. */}
+        {!room.host && room.chatFollowers && (
+          <span className="chat-mode-badge" title="Only the host's followers can chat right now">
+            👥 Followers only
+          </span>
+        )}
         {room.host && (
           <span className="chat-slow-sel" role="group" aria-label="Chat mode">
+            <button
+              className={`chat-slow-opt chat-followers-opt ${room.chatFollowers ? "on" : ""}`}
+              onClick={() => room.setChatFollowers(!room.chatFollowers)}
+              title="Followers-only chat — only people who follow you can post"
+              aria-pressed={room.chatFollowers}
+            >
+              👥
+            </button>
             {SLOW_OPTS.map((o) => (
               <button
                 key={o.v}

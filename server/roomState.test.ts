@@ -6,7 +6,7 @@ function att(over: Partial<Attachment>): Attachment {
   return {
     device: "d1", name: "Dev", kind: "Mac", host: false, joined: false, listening: false,
     controlling: false, pending: false, pub: false, decks: "", stageReq: "", stage: false,
-    joinedAt: 0, color: "", ev: 0, ...over,
+    joinedAt: 0, color: "", ev: 0, follows: false, ...over,
   };
 }
 
@@ -60,6 +60,7 @@ describe("welcomeFor / presenceFor", () => {
     stageGate: "open",
     stage: [{ id: "x", name: "X", deck: "A" }],
     chatSlow: 0,
+    chatFollowers: false,
     muted: [],
     engineVersion: 1,
     hostColor: "",

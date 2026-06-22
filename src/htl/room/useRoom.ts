@@ -80,10 +80,12 @@ export interface RoomState {
   // Chat (F5) + moderation (L1).
   chatLog: ChatMsg[]; // the running chat (history + live)
   chatSlow: number; // slow-mode: <0 chat off, 0 normal, >0 N-second gate
+  chatFollowers: boolean; // followers-only chat: only the host's followers (+ host/stage) may post
   iAmMuted: boolean; // the host muted THIS device
   mutedDevices: Set<string>; // HOST: device ids currently muted (to flip the row mute⇄unmute)
   sendChat: (text: string) => void; // post a chat line
   setChatSlow: (seconds: number) => void; // HOST: set slow-mode / turn chat off
+  setChatFollowers: (on: boolean) => void; // HOST: toggle followers-only chat
   muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
   banDevice: (to: string) => void; // HOST: ban a device (evict + block re-entry)
   error: string | null;
@@ -164,6 +166,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [votedRequests, setVotedRequests] = useState<Set<string>>(new Set());
   const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
   const [chatSlow, setChatSlowState] = useState(0);
+  const [chatFollowers, setChatFollowersState] = useState(false);
   const [iAmMuted, setIAmMuted] = useState(false);
   const [mutedDevices, setMutedDevices] = useState<Set<string>>(new Set());
   // Only the session OWNER (a host device) announces the room to the directory — a
@@ -260,6 +263,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       chat: (m) => setChatLog((l) => [...l.slice(-119), m]),
       chatHistory: (list) => setChatLog(list),
       chatSlow: (s) => setChatSlowState(s),
+      chatFollowers: (on) => setChatFollowersState(on),
       muted: (on) => setIAmMuted(on),
       mutedList: (ids) => setMutedDevices(new Set(ids)),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
@@ -297,6 +301,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setVotedRequests(new Set());
       setChatLog([]);
       setChatSlowState(0);
+      setChatFollowersState(false);
       setIAmMuted(false);
       setMutedDevices(new Set());
     };
@@ -400,6 +405,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const clearRequests = useCallback(() => clientRef.current?.clearRequests(), []);
   const sendChat = useCallback((text: string) => clientRef.current?.sendChat(text), []);
   const setChatSlow = useCallback((seconds: number) => clientRef.current?.setChatSlow(seconds), []);
+  const setChatFollowers = useCallback((on: boolean) => clientRef.current?.setChatFollowers(on), []);
   const muteDevice = useCallback((to: string, on: boolean) => clientRef.current?.muteDevice(to, on), []);
   const banDevice = useCallback((to: string) => clientRef.current?.banDevice(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
@@ -521,10 +527,12 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     clearRequests,
     chatLog,
     chatSlow,
+    chatFollowers,
     iAmMuted,
     mutedDevices,
     sendChat,
     setChatSlow,
+    setChatFollowers,
     muteDevice,
     banDevice,
     error,

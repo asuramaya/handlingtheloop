@@ -97,6 +97,16 @@ export async function relationship(db: D1Database, viewerId: string, targetId: s
   return { following, followedBy, mutual: following && followedBy, blocking, blockedBy };
 }
 
+/** Lean single-query "does follower → followee?" — used on the WS upgrade hot path (the room
+ *  DO has no DB, so the Worker resolves the follow edge once and hands it to the DO as a flag). */
+export async function isFollowing(db: D1Database, followerId: string, followeeId: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1")
+    .bind(followerId, followeeId)
+    .first();
+  return !!row;
+}
+
 /** Followers of a user (most recent first), as public cards. */
 export async function followersOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
   const r = await db

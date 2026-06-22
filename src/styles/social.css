@@ -1981,6 +1981,21 @@ span.profile-handle:hover {
   border-color: var(--accent);
   color: #08111a;
 }
+/* Followers-only toggle — set slightly apart from the slow-mode steps it sits beside. */
+.chat-followers-opt {
+  margin-right: 4px;
+}
+/* Listener-facing "followers only" mode badge in the chat head. */
+.chat-mode-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .chat-log {
   display: flex;
   flex-direction: column;

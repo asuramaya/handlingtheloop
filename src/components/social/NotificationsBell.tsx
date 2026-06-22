@@ -141,7 +141,8 @@ export function NotificationsBell({
                           </span>
                         )}
                         <span className="notif-text">
-                          <b>{actorName(e.actor)}</b> {e.kind === "follow" ? "followed you" : e.kind}
+                          <b>{actorName(e.actor)}</b>{" "}
+                          {e.kind === "follow" ? "followed you" : e.kind === "mention" ? "mentioned you in chat" : e.kind}
                         </span>
                       </li>
                     ))}

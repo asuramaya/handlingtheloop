@@ -2,7 +2,7 @@
 // Cloudflare runtime (no workerd). The fake records sent messages + holds each socket's
 // attachment so we can assert the membership transitions: knock→approve/deny, control grants,
 // the public/stage gates, step-down, request relay, and the pub read-only guard.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { DjRoom } from "./room";
 import type { Attachment, Ws, DurableObjectState } from "./roomState";
 
@@ -62,14 +62,15 @@ class FakeState implements DurableObjectState {
   }
 }
 
-function makeRoom() {
+function makeRoom(env?: Record<string, unknown>) {
   const state = new FakeState();
-  const room = new DjRoom(state as unknown as ConstructorParameters<typeof DjRoom>[0]);
-  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean; follows?: boolean }) {
+  const room = new DjRoom(state as unknown as ConstructorParameters<typeof DjRoom>[0], env as ConstructorParameters<typeof DjRoom>[1]);
+  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean; follows?: boolean; acct?: string }) {
     const qs = new URLSearchParams({ device: p.device, name: p.name ?? p.device, kind: "Mac" });
     if (p.host) qs.set("host", "1");
     if (p.pub) qs.set("pub", "1");
     if (p.follows) qs.set("fol", "1"); // Worker-resolved follow flag (un-forgeable)
+    if (p.acct) qs.set("acct", p.acct); // Worker-resolved account id (server-only; mention attribution)
     const req = new Request(`https://x/api/room?${qs}`, { headers: { Upgrade: "websocket" } });
     let status = 101;
     try {
@@ -340,5 +341,53 @@ describe("DjRoom crowd guard + requests", () => {
     await h.send(b, { t: "request-vote", id: firstId });
     const list = host.last("requests")!.list as { text: string; votes: number }[];
     expect(list[0]).toMatchObject({ text: "first", votes: 2 }); // 1 auto + 1 Bo (not 3)
+  });
+});
+
+describe("DjRoom @mention notify bridge (Slice 7)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let origFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    fetchMock = vi.fn(() => Promise.resolve(new Response(null)));
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  async function livePublic(h: ReturnType<typeof makeRoom>) {
+    const host = (await h.connect({ device: "host1", host: true, acct: "u-host" })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true });
+    return host;
+  }
+  const notifyCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/internal/notify"));
+
+  it("bridges a chat @mention to /internal/notify, attributed to the sender's account", async () => {
+    const h = makeRoom({ TOKEN_ENC_KEY: "sek" });
+    await livePublic(h);
+    const fan = (await h.connect({ device: "F", name: "Fan", pub: true, acct: "u-fan" })).ws!;
+    await h.send(fan, { t: "chat", text: "yo @nina this is fire @nina" }); // dup mention
+    const calls = notifyCalls();
+    expect(calls).toHaveLength(1); // deduped
+    const init = calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toMatchObject({ toHandle: "nina", actorId: "u-fan", kind: "mention" });
+    expect(init.headers).toMatchObject({ "x-htl-internal": "sek" });
+  });
+
+  it("does not bridge for an anon sender (no account) or without the secret", async () => {
+    const h = makeRoom({ TOKEN_ENC_KEY: "sek" });
+    await livePublic(h);
+    const anon = (await h.connect({ device: "A", pub: true })).ws!; // no acct
+    await h.send(anon, { t: "chat", text: "@nina hi" });
+    expect(notifyCalls()).toHaveLength(0);
+
+    const h2 = makeRoom(); // no TOKEN_ENC_KEY → bridge inert
+    await livePublic(h2);
+    const fan = (await h2.connect({ device: "F", pub: true, acct: "u-fan" })).ws!;
+    await h2.send(fan, { t: "chat", text: "@nina hi" });
+    expect(notifyCalls()).toHaveLength(0);
   });
 });

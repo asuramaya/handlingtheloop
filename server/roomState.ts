@@ -46,6 +46,7 @@ export interface Attachment {
   color: string; // this device's account accent (hex) — the room "vibe" is the host's color
   ev: number; // the device's reconstruction-engine version (D5; 0 = didn't report). The anchor's is the room's.
   follows: boolean; // this device's account follows the host (resolved by the Worker on connect, un-forgeable). Gates follower-only features; NEVER exposed in the roster (privacy).
+  acct: string; // this device's account id ("" if anon), set un-forgeably by the Worker. SERVER-ONLY (never in a Peer) — used solely to attribute a room event (chat @mention) when bridging a notification.
 }
 
 // The single derived "what is this device" — used for the roster, debugging, and tests. host

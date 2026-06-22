@@ -31,6 +31,8 @@ import {
   getIdentity,
   upsertIdentity,
   isFollowing,
+  blockedEither,
+  addNotification,
   getOrCreateInvite,
   inviteOwner,
   ensureIdentityColumns,
@@ -978,6 +980,12 @@ async function handleRoom(req: Request, env: Env): Promise<Response> {
       /* graph unavailable → treat as non-follower */
     }
   }
+  // The connecting account id, handed to the DO un-forgeably (stripped + re-set). SERVER-ONLY on
+  // the attachment, NEVER in the broadcast roster (a Peer stays device-scoped) — it exists solely
+  // so the DO can attribute a room event (e.g. a chat @mention) to an account when it bridges a
+  // notification back to the Worker. Anon connections carry none.
+  url.searchParams.delete("acct");
+  if (user) url.searchParams.set("acct", user.id);
 
   // D2 relay tier: when RELAY_SHARDS>0, an anonymous pub-listener is sharded onto one of R
   // RelayRoom DOs (by hash(device)) instead of piling onto the master — the master pushes the
@@ -1054,6 +1062,27 @@ async function ogMetaFor(url: URL, env: Env): Promise<string | null> {
   return null;
 }
 
+// DO→Worker notification bridge (Epic I, Slice 7). The room DjRoom has no D1, so when a room
+// event needs to write a notification (a chat @mention) it POSTs here. Guarded by an internal
+// shared secret (TOKEN_ENC_KEY, already provisioned for both the Worker and its DOs) — an
+// external caller can't forge it. Resolves @handle→user, refuses self + either-way blocks, and
+// records the event. Inert if the secret isn't configured (plain `vite` dev, no rooms anyway).
+async function handleInternalNotify(req: Request, env: Env): Promise<Response> {
+  if (req.method !== "POST") return json(405, { error: "POST only" });
+  const secret = env.TOKEN_ENC_KEY;
+  if (!secret || req.headers.get("x-htl-internal") !== secret) return json(403, { error: "forbidden" });
+  if (!env.DB) return json(200, { ok: false });
+  const b = (await req.json().catch(() => ({}))) as { toHandle?: string; actorId?: string; kind?: string };
+  const kind = b.kind === "mention" ? "mention" : null;
+  if (!kind || !b.toHandle) return json(400, { error: "bad request" });
+  const recipient = await userByHandle(env.DB, foldHandle(b.toHandle));
+  if (!recipient?.handle) return json(200, { ok: false }); // unknown handle → no-op
+  if (b.actorId && b.actorId === recipient.id) return json(200, { ok: false }); // don't notify yourself
+  if (b.actorId && (await blockedEither(env.DB, b.actorId, recipient.id))) return json(200, { ok: false });
+  await addNotification(env.DB, { userId: recipient.id, kind, actorId: b.actorId ?? null }).catch(() => {});
+  return json(200, { ok: true });
+}
+
 // The DjRoom Durable Object must be exported from the Worker entry so the runtime
 // can find the class named in wrangler.jsonc's durable_objects binding.
 export { DjRoom } from "../server/room";
@@ -1063,6 +1092,7 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/api/room") return handleRoom(req, env);
+    if (url.pathname === "/internal/notify") return handleInternalNotify(req, env);
     if (url.pathname.startsWith("/api/")) return handleApi(url, req, env, ctx);
     // Static SPA — but stamp every response with cross-origin-isolation headers so
     // `crossOriginIsolated` is true in the browser. That unlocks SharedArrayBuffer

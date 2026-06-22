@@ -43,6 +43,7 @@ interface RelayNs {
 interface RoomEnv {
   RELAY?: RelayNs;
   RELAY_SHARDS?: string | number;
+  TOKEN_ENC_KEY?: string; // shared secret for the DO→Worker notification bridge (Epic I, Slice 7)
 }
 // Map a crowd frame to its catch-up cache key (so a late joiner on a relay rebuilds `now`).
 function cacheKindOf(msg: ServerMsg): "welcome" | "state" | "automix" | "stemview" | "lyrics" | "live" {
@@ -135,11 +136,14 @@ export class DjRoom {
   private readonly relayNs?: RelayNs;
   private roomHostId = ""; // this room's host account id (Worker passes ?rid=) — to address relays
   private relayCounts = new Map<number, number>(); // shard idx → listener count (aggregate = the crowd)
+  private origin = ""; // captured from the connect URL — the base for the DO→Worker notify bridge
+  private notifySecret = ""; // TOKEN_ENC_KEY; empty → the notify bridge is inert
 
   constructor(state: DurableObjectState, env?: RoomEnv) {
     this.state = state;
     this.relayShards = Math.max(0, Math.min(64, Number(env?.RELAY_SHARDS) || 0));
     this.relayNs = env?.RELAY;
+    this.notifySecret = env?.TOKEN_ENC_KEY ?? "";
   }
   private get relayOn(): boolean {
     return this.relayShards > 0 && !!this.relayNs;
@@ -244,6 +248,8 @@ export class DjRoom {
     const color = (url.searchParams.get("color") || "").slice(0, 9); // account accent (hex) for the room vibe
     const ev = Math.max(0, Math.min(9999, Number(url.searchParams.get("ev")) || 0)); // reconstruction-engine version (D5)
     const follows = url.searchParams.get("fol") === "1"; // this account follows the host (Worker-resolved, un-forgeable)
+    const acct = (url.searchParams.get("acct") || "").slice(0, 64); // this device's account id (server-only; mention attribution)
+    if (!this.origin) this.origin = url.origin; // base for the notify bridge (same Worker)
 
     // A host-banned device can't re-enter the session (L1). Device ids are non-secret, so this
     // is best-effort — the same posture as the rest of this anon system.
@@ -284,8 +290,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows };
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -514,8 +520,12 @@ export class DjRoom {
           break;
         }
         const r = this.chat.post(self, a.name, msg.text, this.chatSlow);
-        if (r.ok) this.broadcast({ t: "chat", msg: r.msg });
-        else if (r.error) ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
+        if (r.ok) {
+          this.broadcast({ t: "chat", msg: r.msg });
+          this.bridgeMentions(r.msg.text, a.acct); // notify any @mentioned accounts (Slice 7)
+        } else if (r.error) {
+          ws.send(JSON.stringify({ t: "error", message: r.error } satisfies ServerMsg));
+        }
         break;
       }
       case "chat-slow": {
@@ -1146,6 +1156,26 @@ export class DjRoom {
       } catch {
         /* socket gone — skip it, never break the fan-out */
       }
+    }
+  }
+
+  // Notify any accounts @mentioned in a chat line. The DB-less DO can't write a notification,
+  // so it bridges the event back to the Worker (which has D1). Best-effort + fire-and-forget +
+  // secret-guarded; deduped and capped so one line can't fan out a storm. Inert if the sender is
+  // anon (no acct) or the bridge secret isn't configured. The Worker enforces blocks + no-self.
+  private bridgeMentions(text: string, actorId: string): void {
+    if (!this.notifySecret || !this.origin || !actorId) return;
+    const handles = new Set<string>();
+    for (const m of text.matchAll(/@([a-z0-9_]{3,20})/gi)) {
+      handles.add(m[1].toLowerCase());
+      if (handles.size >= 3) break; // cap the per-line fan-out
+    }
+    for (const h of handles) {
+      void fetch(`${this.origin}/internal/notify`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-htl-internal": this.notifySecret },
+        body: JSON.stringify({ toHandle: h, actorId, kind: "mention" }),
+      }).catch(() => {});
     }
   }
 

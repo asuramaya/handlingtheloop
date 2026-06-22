@@ -261,6 +261,10 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
       case "/api/audio/diag": {
         const v = url.searchParams.get("v");
         if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
+        // Auth-gate the diagnostic: it fires real YouTube requests and reports the egress IP +
+        // client cascade, so it's not for anonymous hits (YouTube-budget burn + info disclosure).
+        // No client calls this — only a signed-in operator hits it in a browser to debug cold loads.
+        if (!(await sessionUser(req, env))) return json(401, { error: "sign in to run diagnostics" });
         if (!(await allow(env.RL_AUDIO, clientIp(req)))) return json(429, { error: "rate limited — try again shortly" });
         return json(200, await diagnoseAudio(v, readAuth(req)));
       }

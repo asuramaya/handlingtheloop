@@ -6,8 +6,12 @@ import { handleApi } from "./server/api";
 const htlDir = fileURLToPath(new URL("./src/htl", import.meta.url));
 
 // Dev-time /api/*: YouTube search / playlist / metadata / audio, all via yt-dlp.
-// In production the same server/api dispatcher runs behind the serverless
-// handlers in api/*.ts.
+// DEV-ONLY: this dispatcher (server/api.ts) runs solely as Vite middleware and fakes
+// auth via devStore — it must NEVER be bundled into the Worker. In production the
+// Cloudflare Worker (worker/index.ts, the wrangler `main`) serves /api/* with real
+// D1 + session auth; it does not import server/api.ts. (There is no api/*.ts prod
+// layer — `DEV_AUTH` there is fail-open when process.env.NODE_ENV is absent, as in a
+// Worker, so keeping api.ts out of the Worker bundle is load-bearing.)
 function xxitApi() {
   return {
     name: "xxit-api",

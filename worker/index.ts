@@ -150,6 +150,8 @@ interface Env extends AccountEnv {
   // the relay's residential IP. Unset → feature inert (the cold path just 502s as before).
   YT_RELAY_URL?: string; // e.g. https://relay-b.handlingtheloop.com
   YT_RELAY_SECRET?: string; // shared secret the relay enforces
+  CF_ACCESS_CLIENT_ID?: string; // Cloudflare Access service-token id — gates the relay hostname at the edge
+  CF_ACCESS_CLIENT_SECRET?: string; // Cloudflare Access service-token secret (paired with the id above)
   // Cloudflare Workers Rate Limiting bindings (wrangler.jsonc unsafe.bindings).
   // Per-IP caps on the unauthenticated write/resolve paths. Optional → absent in
   // plain `vite` dev, where `allow()` no-ops. RL_WRITE: catalog/analysis/stem
@@ -301,7 +303,11 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           // Datacenter egress is bot-walled for this cold track. If a residential relay is
           // configured (YT_RELAY_*), retry the resolve — and, below, the byte stream — through
           // it; its IP isn't flagged. BOTH hops go via the relay so googlevideo's IP-lock holds.
-          const relay = env.YT_RELAY_URL && env.YT_RELAY_SECRET ? makeRelayFetch(env.YT_RELAY_URL, env.YT_RELAY_SECRET) : null;
+          const relayAccess =
+            env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET
+              ? { clientId: env.CF_ACCESS_CLIENT_ID, clientSecret: env.CF_ACCESS_CLIENT_SECRET }
+              : undefined;
+          const relay = env.YT_RELAY_URL && env.YT_RELAY_SECRET ? makeRelayFetch(env.YT_RELAY_URL, env.YT_RELAY_SECRET, relayAccess) : null;
           if (!relay) {
             return json(502, { error: "could not load from YouTube", reason: e instanceof Error ? e.message : String(e) });
           }

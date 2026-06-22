@@ -43,7 +43,11 @@ const directFetch: Fetcher = (url, init) => fetch(url, init);
  *  cloudflared hostname). The relay forwards ONLY YouTube hosts and pins IPv4, so a resolve
  *  and its IP-locked googlevideo URL share the relay's IP. Used as the cold-load FALLBACK when
  *  the datacenter egress is bot-walled — see worker/index.ts. */
-export function makeRelayFetch(relayUrl: string, secret: string): Fetcher {
+export function makeRelayFetch(
+  relayUrl: string,
+  secret: string,
+  access?: { clientId: string; clientSecret: string },
+): Fetcher {
   const endpoint = relayUrl.replace(/\/+$/, "") + "/fetch";
   return (url, init) => {
     const h: Record<string, string> = {
@@ -51,6 +55,13 @@ export function makeRelayFetch(relayUrl: string, secret: string): Fetcher {
       "X-Relay-Target": url,
       "X-Relay-Method": (init?.method ?? "GET").toUpperCase(),
     };
+    // Cloudflare Access service token (when configured): the relay hostname sits behind an Access
+    // policy, so the Worker must present the service token or the edge blocks the request before it
+    // reaches the tunnel. Absent creds → headers omitted (Access not enabled yet → secret-only).
+    if (access) {
+      h["CF-Access-Client-Id"] = access.clientId;
+      h["CF-Access-Client-Secret"] = access.clientSecret;
+    }
     new Headers(init?.headers).forEach((v, k) => (h["X-Fwd-" + k] = v));
     return fetch(endpoint, { method: "POST", headers: h, body: init?.body, signal: init?.signal });
   };

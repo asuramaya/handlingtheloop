@@ -31,7 +31,10 @@ Worker (/api/audio cold path)
 
 ## The relay (`htl-relay`, Go, on fgb `/usr/bin/htl-relay`)
 
-Source: `/tmp/relay/main.go` on the dev box (cross-compiled `GOOS=linux GOARCH=arm GOARM=7`).
+Source: `relay/main.go` in the repo (cross-compiled `GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0`;
+build `go build -trimpath -ldflags="-s -w" -o htl-relay`). Push to fgb with
+`cat htl-relay | ssh fortigate-b 'cat > /usr/bin/htl-relay.new'` then swap + `/etc/init.d/htl-relay restart`
+(keep `/usr/bin/htl-relay.bak` for rollback — OpenWrt has no sftp-server, so scp won't work).
 A thin, locked-down forward relay — **all resolve logic stays in the Worker**:
 - `POST /fetch` with headers `X-Relay-Secret` (auth), `X-Relay-Target` (URL), `X-Relay-Method`,
   and `X-Fwd-<name>` (forwarded to upstream, prefix stripped). Body forwarded for POST.
@@ -40,6 +43,9 @@ A thin, locked-down forward relay — **all resolve logic stays in the Worker**:
 - **IPv4-pinned** dialer (resolve + byte-fetch must share the family the googlevideo URL is
   locked to).
 - **Concurrency cap** 6 (protect the home upstream). Runs as `nobody`, localhost-only.
+- **Rate limit** — token bucket, default `RELAY_RPM=120` (2/s, burst ~30), starts full. Real volume
+  is tens/day (cache tail), so it never trips legit traffic; it caps a leaked-secret / runaway-Worker
+  storm. Checked right after the secret, before any upstream work. Tunable via the `RELAY_RPM` env.
 - `/healthz` → `ok`.
 
 ## fgb (FortiGate-b) state
@@ -90,7 +96,20 @@ tr -d '\n\r' < /tmp/relay/secret.txt | npx wrangler secret put YT_RELAY_SECRET  
 - Add **fga** as exit #2 (failover): fga (`76.142.104.241`, proven-clean, OpenWrt 24.10, has
   curl) — same steps; Worker would round-robin/failover between relays.
 
-## Security follow-ups (see docs/security-handoff.md Tier 2)
+## Security hardening (Tier 2)
 
-Add Cloudflare Access (service token) on the hostname; add a per-time rate-limit to the relay;
-secret-rotation runbook.
+- ✅ **Per-time rate limit** — DONE (token bucket in `relay/main.go`, `RELAY_RPM`, verified on fgb 2026-06-22).
+- **Cloudflare Access (service token)** on `relay-b.handlingtheloop.com` — the second gate so the
+  hostname isn't reachable with the shared secret alone. Setup (Zero Trust dashboard):
+  1. Access → Applications → Add → **Self-hosted**, domain `relay-b.handlingtheloop.com` (path `/`).
+  2. Access → Service Auth → **Service Tokens** → create one → copy the **Client ID** + **Client Secret**.
+  3. On the app, add a policy: Action = **Service Auth**, Include = the service token. (Optionally also a
+     short "Bypass" off; service-auth-only means a browser with no token is blocked.)
+  4. Set the Worker secrets so its relay calls carry the token:
+     `printf %s "<client-id>" | npx wrangler secret put CF_ACCESS_CLIENT_ID`
+     `printf %s "<client-secret>" | npx wrangler secret put CF_ACCESS_CLIENT_SECRET`
+  The Worker hook (`server/youtube.ts makeRelayFetch`) sends `CF-Access-Client-Id/Secret` when both
+  secrets are set; absent → secret-only (prior behaviour). After Access is on, `curl …/fetch` with no
+  token gets an Access challenge instead of the relay's 403.
+- **Secret rotation runbook**: regen on fgb → update `/etc/htl-relay.env` → `/etc/init.d/htl-relay restart`
+  → re-put `YT_RELAY_SECRET`. Same for the Access service token (rotate in dashboard → re-put both secrets).

@@ -490,6 +490,41 @@ span.profile-handle:hover {
   color: #e0617a;
 }
 
+/* Danger zone — account deletion. Set apart from the routine plumbing above it. */
+.profile-danger {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.profile-delete {
+  align-self: flex-start;
+  padding: 8px 16px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, #e0617a 55%, var(--line));
+  background: transparent;
+  color: #e0617a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.profile-delete:hover {
+  background: #e0617a;
+  color: #fff;
+  border-color: #e0617a;
+}
+.profile-danger-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.profile-danger-err {
+  font-size: 11px;
+  color: #e0617a;
+}
+
 /* --- Inline edit panel (handle + display/bio), revealed under the hero by "Edit" --- */
 .profile-edit-panel {
   display: flex;

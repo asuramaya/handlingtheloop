@@ -42,6 +42,19 @@ export async function logout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
 }
 
+/** Permanently delete the signed-in account (M3). `confirm` must echo the user's @handle
+ *  (or "DELETE" for a handle-less account) — the server rejects a mismatch. Irreversible. */
+export async function deleteMyAccount(confirm: string): Promise<{ ok: boolean; error?: string }> {
+  const r = await fetch("/api/me/delete", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirm }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  return { ok: r.ok, error: j.error };
+}
+
 export async function disconnectService(provider: Provider): Promise<void> {
   await fetch("/api/connections/disconnect", {
     method: "POST",

@@ -1,5 +1,6 @@
 // Admin: takedown audit + account control.
 import { type D1Database, now } from "./core";
+import { purgeAccount } from "./account";
 
 export interface Takedown {
   id: number;
@@ -39,13 +40,12 @@ export interface AdminUser {
   providers: string;
 }
 
-/** Fully remove an account: its sessions, service connections, syncs, then the user. */
+/** Fully remove an account (admin takedown). Delegates to the same complete cascade the
+ *  self-serve delete uses (purgeAccount) so an admin delete no longer orphans the social
+ *  tables — follows/blocks/rooms/sets/settings/library/stats/samples — the way the old
+ *  four-table version did. R2 blob purge (set logs / samples) is the caller's concern. */
 export async function deleteUser(db: D1Database, userId: string): Promise<void> {
-  await db.prepare("DELETE FROM connections WHERE user_id = ?").bind(userId).run();
-  await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
-  await db.prepare("DELETE FROM sync_log WHERE pair_id IN (SELECT id FROM sync_pairs WHERE user_id = ?)").bind(userId).run();
-  await db.prepare("DELETE FROM sync_pairs WHERE user_id = ?").bind(userId).run();
-  await db.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  await purgeAccount(db, userId);
 }
 
 // NOTE: server-side storage of the user's YouTube *streaming cookie* (the

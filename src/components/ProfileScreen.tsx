@@ -13,9 +13,11 @@ import {
   startTidalConnect,
   logout as accountLogout,
   disconnectService,
+  deleteMyAccount,
 } from "@htl/account";
 import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
 import { DockResizer } from "./DockResizer";
+import { PromptModal } from "./Dialog";
 import { ProfilePublicView } from "./ProfilePublicView";
 import { RecordingsPanel } from "./social/RecordingsPanel";
 
@@ -75,6 +77,23 @@ export function ProfileScreen({
   const signOut = async () => {
     await accountLogout();
     load();
+  };
+  const [confirmDelete, setConfirmDelete] = useState(false); // delete-account typed-confirmation modal
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const deleteAccount = async (confirm: string) => {
+    setDeleteErr(null);
+    const r = await deleteMyAccount(confirm);
+    if (r.ok) {
+      // The account (and this session) are gone — drop every local trace and start fresh.
+      try {
+        localStorage.clear();
+      } catch {
+        /* ignore */
+      }
+      window.location.href = "/";
+    } else {
+      setDeleteErr(r.error || "Could not delete the account.");
+    }
   };
   const disconnect = async (p: Provider) => {
     await disconnectService(p);
@@ -210,12 +229,37 @@ export function ProfileScreen({
                   <button className="profile-signout" onClick={signOut}>
                     Sign out
                   </button>
+                  {/* Danger zone — irreversible. A typed confirmation (your @handle) gates it. */}
+                  <div className="profile-danger">
+                    <button
+                      className="profile-delete"
+                      onClick={() => {
+                        setDeleteErr(null);
+                        setConfirmDelete(true);
+                      }}
+                    >
+                      Delete account
+                    </button>
+                    <span className="profile-danger-hint">
+                      Permanently removes your profile, follows, sets and synced library. This can’t be undone.
+                    </span>
+                    {deleteErr && <span className="profile-danger-err">{deleteErr}</span>}
+                  </div>
                 </div>
               )}
             </div>
           </div>
         )}
       </div>
+      {confirmDelete && (
+        <PromptModal
+          title={`Type ${user?.handle ? `@${user.handle}` : "DELETE"} to permanently delete your account`}
+          placeholder={user?.handle ? `@${user.handle}` : "DELETE"}
+          submitLabel="Delete forever"
+          onSubmit={(v) => deleteAccount(v.replace(/^@/, ""))}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }

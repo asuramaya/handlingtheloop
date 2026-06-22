@@ -50,6 +50,7 @@ import {
   getUserSettings,
   getUserLibrary,
   putUserLibrary,
+  purgeAccount,
   handleTaken,
   relationship,
   unblockUser,
@@ -649,6 +650,25 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         return json(200, { ok: true, updatedAt: ts });
       }
       return json(405, { error: "GET or PUT only" });
+    }
+
+    case "/api/me/delete": {
+      // Self-serve account deletion (M3) — irreversible. Cascades across every per-user
+      // table + the user's R2 blobs, then signs the dead session out. The @handle frees
+      // immediately (the users row is gone), per policy. Guarded by a deliberate
+      // confirmation token so it can't fire by accident: the body must echo the user's
+      // own @handle (or the literal "DELETE" for a handle-less account).
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const body = (await req.json().catch(() => ({}))) as { confirm?: string };
+      const expect = user.handle ?? "DELETE";
+      if ((body.confirm ?? "").trim().toLowerCase() !== expect.toLowerCase()) {
+        return json(400, { error: "confirmation does not match" });
+      }
+      const { r2Keys } = await purgeAccount(env.DB, user.id);
+      await Promise.allSettled(r2Keys.map((k) => env.AUDIO?.delete?.(k)));
+      return json(200, { ok: true }, { "set-cookie": clearSessionCookie() });
     }
 
     // DEV-ONLY shortcut login. Active ONLY when env.DEV_LOGIN is set — a secret that

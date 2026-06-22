@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchNotifications, markNotificationsSeen, type NotificationsPayload } from "@htl/account";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { fetchNotifications, follow, markNotificationsSeen, type NotificationsPayload } from "@htl/account";
 import { LiveRoomRow } from "./LiveRoomRow";
 import { goToHandle } from "./util";
 
@@ -31,6 +31,7 @@ export function NotificationsBell({
 }) {
   const [data, setData] = useState<NotificationsPayload>(EMPTY);
   const [open, setOpen] = useState(false);
+  const [followedBack, setFollowedBack] = useState<Set<string>>(new Set()); // optimistic follow-back, by handle
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Poll while signed in (mirrors Discover's 30 s live-rooms cadence). Signed-out → no bell.
@@ -94,6 +95,11 @@ export function NotificationsBell({
     if (handle) goToHandle(handle);
     setOpen(false);
   };
+  const followBack = (e: MouseEvent, handle: string) => {
+    e.stopPropagation(); // don't trigger the row's go-to-profile
+    setFollowedBack((s) => new Set(s).add(handle)); // optimistic — flip to ✓ Following
+    void follow(handle);
+  };
 
   return (
     <div className="notif-wrap" ref={wrapRef}>
@@ -144,6 +150,15 @@ export function NotificationsBell({
                           <b>{actorName(e.actor)}</b>{" "}
                           {e.kind === "follow" ? "followed you" : e.kind === "mention" ? "mentioned you in chat" : e.kind}
                         </span>
+                        {e.kind === "follow" &&
+                          e.actor.handle &&
+                          (e.followsBack || followedBack.has(e.actor.handle) ? (
+                            <span className="notif-following">✓ Following</span>
+                          ) : (
+                            <button className="notif-followback" onClick={(ev) => followBack(ev, e.actor.handle!)}>
+                              Follow back
+                            </button>
+                          ))}
                       </li>
                     ))}
                   </ul>

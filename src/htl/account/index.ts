@@ -202,6 +202,7 @@ export interface NotifEvent {
   createdAt: number;
   actor: { handle: string | null; displayName: string | null; avatar: string | null };
   payload: string | null;
+  followsBack: boolean; // recipient already follows the actor → show "✓ Following" instead of "Follow back"
 }
 export interface NotificationsPayload {
   rooms: LiveRoom[]; // people you follow who are live right now

@@ -87,9 +87,32 @@
   font-size: 12px;
   color: var(--text);
   min-width: 0;
+  flex: 1;
 }
 .notif-text b {
   font-weight: 700;
+}
+.notif-followback {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.notif-followback:hover {
+  filter: brightness(1.08);
+}
+.notif-following {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .notif-seeall {
   width: 100%;

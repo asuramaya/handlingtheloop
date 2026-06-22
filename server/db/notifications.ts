@@ -27,6 +27,7 @@ export interface NotifEvent {
   createdAt: number;
   actor: { handle: string | null; displayName: string | null; avatar: string | null };
   payload: string | null;
+  followsBack: boolean; // does the RECIPIENT already follow the actor? (drives the bell's Follow-back affordance)
 }
 
 /** Record a notification for `userId`. Best-effort — a notify failure must never break the
@@ -48,18 +49,20 @@ export async function listNotifications(db: D1Database, userId: string, limit = 
   const r = await db
     .prepare(
       `SELECT n.id, n.kind, n.created_at AS createdAt, n.payload,
-              u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+              u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+              EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = n.user_id AND f.followee_id = n.actor_id) AS followsBack
        FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
        WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?`,
     )
     .bind(userId, Math.max(1, Math.min(limit, 100)))
-    .all<{ id: number; kind: string; createdAt: number; payload: string | null; handle: string | null; displayName: string | null; avatar: string | null }>();
+    .all<{ id: number; kind: string; createdAt: number; payload: string | null; handle: string | null; displayName: string | null; avatar: string | null; followsBack: number }>();
   return (r.results ?? []).map((x) => ({
     id: x.id,
     kind: x.kind,
     createdAt: x.createdAt,
     payload: x.payload,
     actor: { handle: x.handle, displayName: x.displayName, avatar: x.avatar },
+    followsBack: !!x.followsBack,
   }));
 }
 

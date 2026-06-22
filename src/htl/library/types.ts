@@ -18,10 +18,10 @@ export interface TrackMeta {
   providerId?: string | null; // the track's id within that provider
 }
 
-// Global length cap: a track longer than this is a mix/compilation/livestream, never
-// something to load on a deck. Mirrors server/innertube.ts MAX_TRACK_SECONDS; the
-// server filters lists, this blocks any long track that still reaches a load.
-export const MAX_TRACK_SECONDS = 15 * 60;
+// SOFT length backstop: keeps hour-long mixes/livestreams/loops off a deck. Mirrors
+// server/innertube.ts MAX_TRACK_SECONDS. No longer the "is this a song" filter — that's
+// YouTube Music's typed `song` shelf now (server searchYouTube), so legit long songs load.
+export const MAX_TRACK_SECONDS = 30 * 60;
 
 export interface Playlist {
   id: string;

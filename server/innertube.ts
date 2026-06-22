@@ -19,12 +19,25 @@ interface AnyNode {
   short_view_count?: { text?: string };
 }
 
-// Hard global cap: anything longer than this is a mix/compilation/livestream, never a
-// mixable track. Enforced at the PARSER level so it's filtered out of EVERY list
-// (search, watch-next, recommendations) — duration-based, since titles are unreliable
-// ("… (1080p) || HD"). 0 = unknown duration, which we keep (the client load guard
-// catches any that slip through).
-export const MAX_TRACK_SECONDS = 15 * 60;
+// YouTube Music search shapes (youtubei.js MusicResponsiveListItem). Read loosely — we map only
+// the few fields we need; `item_type === 'song'` is the structural "this is a song" filter.
+interface MusicItem {
+  item_type?: string;
+  id?: string;
+  title?: string;
+  duration?: { seconds?: number };
+  artists?: { name?: string }[];
+}
+interface MusicSearchResult {
+  songs?: { contents?: MusicItem[] };
+}
+
+// SOFT sanity backstop (was a hard 15-min "is this a song" filter). Songs-only now comes from
+// YouTube Music's typed `song` shelf (searchYouTube), so a legit long song — a 10-min prog/trance
+// track, an artist's own extended cut — passes. This just keeps hour-long DJ-mixes / livestreams /
+// "1 hour loop" uploads out of EVERY list (search, watch-next, recommendations). Enforced at the
+// PARSER level; 0 = unknown duration, which we keep (the client load guard catches stragglers).
+export const MAX_TRACK_SECONDS = 30 * 60;
 
 function tooLong(durationSec: number): boolean {
   return durationSec > MAX_TRACK_SECONDS;
@@ -62,10 +75,34 @@ function normalize(n: AnyNode): TrackMeta | null {
   };
 }
 
+// Map a YouTube Music `song`-typed row → TrackMeta. Only real songs (not album / video / playlist /
+// podcast rows) survive, so the result is structurally a song regardless of length.
+function fromMusicItem(it: MusicItem): TrackMeta | null {
+  if (it.item_type !== "song") return null;
+  const id = it.id;
+  if (!id || !/^[\w-]{11}$/.test(id)) return null;
+  const title = it.title;
+  if (!title) return null;
+  const duration = it.duration?.seconds ?? 0;
+  if (tooLong(duration)) return null; // soft backstop only
+  const artist = (it.artists ?? []).map((a) => a.name).filter(Boolean).join(", ");
+  return {
+    videoId: id,
+    title,
+    artist,
+    duration,
+    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    views: null,
+  };
+}
+
 // An Innertube instance exposes the search / playlist / watch-next endpoints.
 // Typed loosely — youtubei.js's node shapes vary by version.
 interface InnertubeInstance {
   search(q: string, opts: { type: string }): Promise<{ results?: unknown[] }>;
+  // YouTube Music search (WEB_REMIX). Present on both youtubei.js builds (`get music()`); typed
+  // optional so a hypothetical build without it degrades gracefully to the video search.
+  music?: { search(query: string, filters?: { type?: string }): Promise<MusicSearchResult> };
   getPlaylist(id: string): Promise<{ info?: { title?: string }; videos?: unknown[] }>;
   getPlaylists?(): Promise<{ playlists?: unknown[] }>;
   // Raw endpoint executor — the same Actions API in both youtubei.js builds. We
@@ -274,13 +311,40 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
 
   return {
     async searchYouTube(query, limit = 25) {
-      const res = await withRetry((yt) => yt.search(query, { type: "video" }));
       const out: TrackMeta[] = [];
-      for (const r of res.results ?? []) {
-        if ((r as { type?: string }).type !== "Video") continue;
-        const t = normalize(r as AnyNode);
-        if (t) out.push(t);
-        if (out.length >= limit) break;
+      const seen = new Set<string>();
+      const add = (t: TrackMeta | null) => {
+        if (t && !seen.has(t.videoId)) {
+          seen.add(t.videoId);
+          out.push(t);
+        }
+      };
+      // 1) YouTube Music's typed `song` shelf FIRST — structurally songs (any length), so a long
+      //    legit song passes and mixes / albums / livestreams / podcasts don't. THIS (not the
+      //    duration cap) is the "songs only" filter now.
+      try {
+        const m = await withRetry((yt) =>
+          yt.music ? yt.music.search(query, { type: "song" }) : Promise.reject(new Error("no music client")),
+        );
+        for (const it of m.songs?.contents ?? []) {
+          add(fromMusicItem(it));
+          if (out.length >= limit) return out;
+        }
+      } catch {
+        /* music search flaky / unavailable → fall through to the video search */
+      }
+      // 2) Regular video + music-tag search for COVERAGE (bootlegs / edits / remixes that live only
+      //    on plain YouTube, not in the Music catalog). De-duped against the songs above; only runs
+      //    when the song shelf didn't already fill the page.
+      try {
+        const res = await withRetry((yt) => yt.search(query, { type: "video" }));
+        for (const r of res.results ?? []) {
+          if ((r as { type?: string }).type !== "Video") continue;
+          add(normalize(r as AnyNode));
+          if (out.length >= limit) break;
+        }
+      } catch (e) {
+        if (out.length === 0) throw e; // both sources failed → surface it
       }
       return out;
     },

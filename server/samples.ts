@@ -7,6 +7,7 @@
 import { readSessionId } from "./session";
 import { userBySession, type D1Database, type User } from "./db";
 import { json } from "./http";
+import { STEM_DOWNLOAD_CONTENT_TYPE, DOWNLOAD_SAFE_HEADERS } from "./security";
 
 export const MAX_SAMPLE_BYTES = 12 * 1024 * 1024; // 12 MB — fits a 30s 48k/24-bit lossless clip
 export const MAX_SAMPLE_MS = 30_000;
@@ -88,12 +89,17 @@ export async function handleSampleRoute(url: URL, req: Request, env: SampleEnv):
       if (req.method !== "GET") return json(405, { error: "GET only" });
       const obj = await bucket.get(row.r2_key);
       if (!obj) return json(404, { error: "audio missing" });
+      // Never replay the uploader's stored Content-Type. A sample is owner-scoped, but it's still
+      // served from our origin, so a clip stored as text/html or image/svg+xml would be self-XSS.
+      // Pin a fixed opaque type + nosniff + attachment (the same posture as cached stems —
+      // server/security.ts); the client fetches the bytes and decodes via Web Audio, which sniffs
+      // the container header and ignores the Content-Type entirely (see useSampler.ts).
       return new Response(obj.body, {
         headers: {
-          "content-type": obj.httpMetadata?.contentType || row.content_type || "audio/wav",
+          "content-type": STEM_DOWNLOAD_CONTENT_TYPE,
           "content-length": String(obj.size),
           "cache-control": "private, max-age=31536000",
-          "x-content-type-options": "nosniff",
+          ...DOWNLOAD_SAFE_HEADERS,
         },
       });
     }

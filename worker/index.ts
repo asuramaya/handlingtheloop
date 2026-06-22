@@ -987,7 +987,7 @@ function hashStr(s: string): number {
 // link shows a rich card (title + cover + description) on social/chat, then escapes htl. The SPA
 // is otherwise meta-blind (one static index.html); we inject these tags server-side per URL.
 function ogEsc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function ogBlock(o: { title: string; desc: string; img: string; url: string; large: boolean }): string {
   const tags = [

@@ -80,9 +80,21 @@ import {
   stateCookie,
 } from "./session";
 
+// Minimal structural view of the DjRoom DO namespace — just enough to ask a room for its
+// authoritative live listener count (L4). The worker's real DurableObjectNamespace satisfies it.
+interface RoomStub {
+  fetch(input: Request | string): Promise<Response>;
+}
+interface RoomNs {
+  idFromName(name: string): unknown;
+  get(id: unknown): RoomStub;
+}
+
 export interface AccountEnv {
   DB: D1Database;
   AUDIO?: R2Bucket; // R2 bucket — stores recorded-set recipe logs (G1) alongside the audio cache
+  ROOM?: RoomNs; // DjRoom DO namespace — the authoritative source of a room's live listener count
+
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   SPOTIFY_CLIENT_ID?: string;
@@ -438,13 +450,26 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const b = (await req.json().catch(() => ({}))) as {
         title?: string;
         genre?: string;
-        listeners?: number;
         nowPlaying?: { title?: string; artist?: string; videoId?: string };
       };
+      // L4: the listener count is the DO's real socket count, NOT a client-supplied number
+      // (which a tampered host could inflate). Ask the host's own room DO; 0 if unreachable —
+      // we never fall back to a self-reported figure.
+      let listeners = 0;
+      try {
+        const ns = env.ROOM;
+        if (ns) {
+          const stub = ns.get(ns.idFromName(`home:${user.id}`));
+          const cr = await stub.fetch("https://room/internal/count");
+          if (cr.ok) listeners = Math.floor(Number(((await cr.json()) as { listeners?: number }).listeners) || 0);
+        }
+      } catch {
+        /* DO unreachable → 0 (never trust the client) */
+      }
       await announceRoom(env.DB, user.id, {
         title: cleanText(b.title ?? "", 80) || null,
         genre: cleanText(b.genre ?? "", 32) || null,
-        listeners: Math.max(0, Math.min(1_000_000, Math.floor(Number(b.listeners) || 0))),
+        listeners: Math.max(0, Math.min(1_000_000, listeners)),
         npTitle: cleanText(b.nowPlaying?.title ?? "", 200) || null,
         npArtist: cleanText(b.nowPlaying?.artist ?? "", 120) || null,
         npVideo: /^[\w-]{11}$/.test(b.nowPlaying?.videoId ?? "") ? b.nowPlaying!.videoId! : null,

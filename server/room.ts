@@ -221,6 +221,15 @@ export class DjRoom {
       this.broadcastPresence();
       return new Response(null, { status: 204 });
     }
+    // The AUTHORITATIVE live listener count (L4 anti-sybil). The directory announce reads it
+    // straight from the DO instead of trusting the host client's self-reported number, which a
+    // tampered client could inflate to climb Discover / the follows-are-live ranking.
+    if (url.pathname === "/internal/count") {
+      await this.load();
+      return new Response(JSON.stringify({ listeners: this.listenerCount(), public: this.isPublic }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }

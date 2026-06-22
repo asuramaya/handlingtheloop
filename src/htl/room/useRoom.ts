@@ -152,8 +152,6 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [engineStale, setEngineStale] = useState(false);
   const [streamedHostColor, setStreamedHostColor] = useState(""); // room vibe off welcome/presence (works for listeners)
   const [setsRev, setSetsRev] = useState(0); // bumped when a captured set is persisted (G1b)
-  const listenerCountRef = useRef(0);
-  listenerCountRef.current = listenerCount;
   // HOST: the pending floor→stage hand-raises. LISTENER (optimistic): the deck I asked for
   // while still on the floor — set on tap, cleared when the host brings me up (onStage) or
   // declines (the stage-self signal) or I cancel.
@@ -351,7 +349,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // HOST: open/close the broadcast plane. Tells the DO (admits anon listeners) AND the
   // D1 directory shadow (so the room shows in "live now") — kept in sync here.
   const announce = useCallback(
-    () => announceRoom({ listeners: listenerCountRef.current, nowPlaying: nowPlayingRef.current ?? undefined }),
+    () => announceRoom({ nowPlaying: nowPlayingRef.current ?? undefined }),
     [],
   );
   const goPublic = useCallback(

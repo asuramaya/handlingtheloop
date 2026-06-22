@@ -300,6 +300,14 @@ describe("DjRoom crowd guard + requests", () => {
     expect((host.last("chat")?.msg as { text: string })?.text).toBe("hi now");
   });
 
+  it("reports the authoritative live listener count over /internal/count (L4)", async () => {
+    await liveHost();
+    await h.connect({ device: "L1", pub: true });
+    await h.connect({ device: "L2", pub: true });
+    const res = await h.room.fetch(new Request("https://x/internal/count"));
+    expect(await res.json()).toMatchObject({ listeners: 2, public: true }); // real sockets, not self-reported
+  });
+
   it("a ban survives a DO eviction (reconstruct over the same storage)", async () => {
     const host = await liveHost();
     await h.connect({ device: "A", pub: true });

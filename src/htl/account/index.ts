@@ -211,7 +211,8 @@ export async function fetchFollowing(handle: string, signal?: AbortSignal): Prom
 export interface RoomAnnounce {
   title?: string;
   genre?: string;
-  listeners?: number;
+  // NOTE: the listener count is NOT sent — the server reads it authoritatively from the room
+  // DO (L4 anti-sybil), so a client number would just be ignored.
   nowPlaying?: { title?: string; artist?: string; videoId?: string };
 }
 /** HOST: announce/heartbeat the live room into the directory (call on go-public + periodically). */

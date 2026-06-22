@@ -227,16 +227,29 @@ one-liner ("deck B: host mix — phone memory"), and keep the floor so audio nev
 
 ## 10. Migration / phasing
 
-- **v0 (proof):** page from **IndexedDB chunked into ~1 s records** (reuse the store
-  `trackCache` already has) to prove window mechanics + SAB feed + floor cover, without the OPFS
-  plumbing. Slower seeks (IDB overhead) but validates the design.
-- **v1:** OPFS hot tier (`createSyncAccessHandle`) for the latency win; pager Worker; planar
-  layout; tiered backing.
-- **v2:** dev/CI forced-paging mode + the bit-exact assertion; retire
+**Order by RISK, not by layer — the storage tier is mechanical; the iOS real-time ring is the
+keystone. Build the cheap crash-stopper first, prove the keystone, then go straight to OPFS (no
+throwaway IDB step).**
+
+- **Step 0 (now, shippable, no new infra): the iOS self-accounting seatbelt.** Convert the crash
+  into graceful degradation (second deck → mix-only when the byte tally would exceed the §1a
+  budget). No ring, no OPFS, no Worker — pure accounting + the existing demote path. Stops the
+  bleeding independent of everything below.
+- **Step 1 (keystone spike, ~1 day, GO/NO-GO): RAM-fed pager → SAB ring → AudioWorklet, on a
+  PHYSICAL iPhone.** Proves the one fact the whole architecture rests on (glitch-free cross-thread
+  audio on iOS 18/26 — the owed smoke test in §12) plus the window/seek/floor orchestration. No
+  storage backend yet. If this glitches, stop and rethink before any OPFS work. **This replaces
+  the old IDB v0** — a RAM-fed pager proves the mechanics faster and cleaner than IDB (whose
+  per-txn overhead would inject glitches that aren't the architecture's fault), and IDB would be
+  thrown away for OPFS regardless.
+- **Step 2 (the real thing): OPFS hot tier** (`createSyncAccessHandle`, Worker-only, one
+  long-lived handle); planar int16 layout; pack-time decode+write; tiered backing (RAM-if-fits /
+  OPFS-else). The storage backend slots in behind the Step-1 pager interface.
+- **Step 3: dev/CI forced-paging mode + bit-exact assertion** (paged == hold-everything); retire
   `DESKTOP_FREE_STEMS_SECONDS`; delete the seconds cap entirely.
-- **v3 (optional):** per-stem content-matched rates (bass at ~12 kHz etc.) — bigger memory win
-  but breaks the worklet's single-rate read loop (per-group rate scaling in the hot path).
-  Defer unless budgets still bite after windowing.
+- **Step 4 (optional): per-stem content-matched rates** (bass ~12 kHz etc.) — bigger memory win
+  but breaks the worklet's single-rate read loop (per-group rate scaling in the hot path). Defer
+  unless budgets still bite after windowing.
 
 ## 11. Edge cases / failure modes
 

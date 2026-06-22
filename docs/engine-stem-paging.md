@@ -15,7 +15,30 @@ to stem count, sample rate, channels, and how many decks are loaded. A 4-stem st
 at 11:59 sails under a 12-min cap and still OOMs; deadmau5 at 10:30 "should" be fine and
 isn't. **Any seconds cap is a guess that content you don't control will eventually falsify.**
 
-The constraint is **bytes**, so ration bytes.
+The constraint is **bytes**, so ration bytes — and the byte ceiling is much lower than "jetsam"
+(see §4a).
+
+## 1a. Verified platform limits (researched 2026-06, cited)
+
+The number that kills an iPhone is **not** system Jetsam (~1.5 GB) — it's the **WebKit per-page
+limit, which bites first**, silently, no catchable error (the WebContent process is killed and
+the tab reloads):
+
+| platform | hard ceiling that kills | binding budget (leave margin) | live memory API |
+|----------|-------------------------|-------------------------------|-----------------|
+| iPhone SE-class | **~100 MB** page | ~80 MB | **none** (no measure*, no performance.memory) |
+| iPhone 13/14 | **~400–450 MB** page | **~300 MB** | **none** |
+| iPhone 15+ | **~1 GB** page | ~700 MB | **none** |
+| Android Chrome (4 GB) | renderer OOM-kill ~0.5–1.5 GB + 4 GB V8 cage | tier by `deviceMemory` | `measureUserAgentSpecificMemory()` ✓ |
+| desktop Chromium/FF/Safari | multi-GB | generous | Chromium ✓, FF/Safari ✗ |
+
+- iOS also has a **~2 GB Gigacage single-allocation cap** (RAM-independent; an 8 GB iPad gives
+  only ~1.88 GB to one typed array) — never make one giant SAB/WASM heap; partition.
+- **A single 10-min full-rate int16 stem set is ~460 MB — that alone exceeds the iPhone-13/14
+  page limit.** So paging is *mandatory to play even one long track* on iOS, not an optimization.
+  (The current code survives only short tracks: a 5-min set ~230 MB squeaks under.)
+- Sources: lapcatsoftware.com/articles/2026/1/7.html (measured kill floors), WebKit bug 268816
+  (Gigacage), caniuse measureUserAgentSpecificMemory (Chromium-only), WebKit blog 14403 (storage).
 
 ## 2. The core idea
 
@@ -59,14 +82,19 @@ bytesPerSecond = nStems * channels * sampleRate * 2  // int16
 
 `DESKTOP_FREE_STEMS_SECONDS` is deleted; the policy is now a budget table:
 
-| platform        | windowBytes/deck | backing tier            | notes                              |
-|-----------------|------------------|-------------------------|------------------------------------|
-| desktop         | large (e.g. whole track up to ~256 MB) | RAM if ≤budget, else OPFS | normal tracks never touch disk |
-| mobile          | tight (e.g. ~24 MB ≈ 30 s) | OPFS (almost always)    | + low-rate floor resident          |
-| dev/CI forced   | tiny (e.g. ~6 MB ≈ 8 s) | OPFS                    | forces the paging branch (§9)      |
+| platform | windowBytes/deck | floor/deck | backing | total resident (2 decks) vs ceiling |
+|----------|------------------|-----------|---------|-------------------------------------|
+| desktop | whole track ≤ ~256 MB | none (window=track) | RAM if ≤budget else OPFS | well under multi-GB |
+| iPhone 15+ | ~24 MB ≈ 30 s | ~25 MB mix | OPFS | ~100 MB + app vs ~700 MB ✓ |
+| iPhone 13/14 | ~12 MB ≈ 16 s | ~25 MB mix | OPFS | ~75 MB + app(~150) vs ~300 MB ✓ |
+| iPhone SE-class | ~8 MB ≈ 10 s | ~20 MB mix, **1 deck only** | OPFS | degrade: deck B mix-paged (§11) |
+| Android (tier by deviceMemory) | ~24 MB low / larger high | ~25 MB mix | OPFS | live-checked via measure API |
+| dev/CI forced | ~6 MB ≈ 8 s | ~20 MB | OPFS | forces the paging branch (§9) |
 
-Numbers are starting points; tune against real device measurement
-(`measureUserAgentSpecificMemory()`).
+Numbers are starting points; tune against real device measurement — **but only Android/desktop
+have a live API (`measureUserAgentSpecificMemory()`); iOS has none, so iOS budgets are enforced
+by self-accounting (§9).** The SE-class can't hold two full stem decks under ~100 MB by any
+design — it degrades honestly (§11), it doesn't pretend.
 
 ## 5. Architecture
 
@@ -82,7 +110,7 @@ load → decode → int16 stems ──┐
                               ▲                    reads groups from the ring window,
                   seek/loop/cue commands           runs WSOLA/vocoder unchanged
                               │
-                     low-rate FLOOR (always-resident ~24 kHz full track) — miss cover
+                  low-rate FLOOR (always-resident ~16–24 kHz full-track MIX, ~20–25 MB) — miss cover
 ```
 
 - **Pager Worker** owns the OPFS `FileSystemSyncAccessHandle` and does all disk reads. The
@@ -94,8 +122,12 @@ load → decode → int16 stems ──┐
   arrays, it reads the current group samples from the SAB window. Its FIFO/ring (`RING`,
   `wHead`/`rHead`) and the WSOLA search are unchanged — it already consumes a stream, not an
   addressable whole-track buffer.
-- **Floor:** a low-rate (~24 kHz) full-track int16 set, ~75 MB/track, always resident. Covers
-  a page miss with *zero onset latency* while the full-rate page loads (§8).
+- **Floor:** a low-rate (~16–24 kHz) full-track **MIX** (1 group, **not** 4 stems — a miss is a
+  *seek*, which needs the mix at that point, not independent stem gains; you're rarely mid-stem-
+  gesture *and* wild-seeking). ~20–25 MB/track (4× smaller than a 4-stem floor — this is what
+  fits the ~300 MB iPhone budget). Always resident; covers a page miss with *zero onset latency*
+  while the full-rate page loads (§8). A miss that lands during an active stem gesture briefly
+  falls to the mix for the few-ms page load — acceptable, and rare.
 
 ## 6. OPFS file layout
 
@@ -175,6 +207,24 @@ Counter-measures, both required:
    hold-everything playback sample-for-sample (within int16 quantization) — that's the 1:1
    contract as a test, kept from rotting.
 
+### The seatbelt — platform-split, because iOS has no memory API
+
+The seatbelt (predict-before-you-crash → degrade gracefully) **cannot be one mechanism**, because
+the platform that actually crashes — iOS — has **no live memory API** (`measureUserAgentSpecific
+Memory()` is Chromium-only; `performance.memory` likewise absent on Safari):
+
+- **iOS: self-accounting.** Maintain a running byte tally of everything the engine allocates
+  (OPFS pages resident + SAB rings + floor buffers + decoded LOD). Trip against the §1a budget
+  (~300 MB iPhone 13/14, ~80 MB SE-class) BEFORE allocating. You will never get a real reading —
+  the budget is a number *you* enforce, conservatively, with margin for the app's own ~100–150 MB.
+- **Android / desktop Chromium: real API.** Use `measureUserAgentSpecificMemory()` (needs COI —
+  already satisfied) as a live check; `navigator.deviceMemory` for tiering only (caps at 8 on
+  Android — a 6 GB and 12 GB phone both report 8, so it's a low/high *tier*, not a budget).
+
+Degradation when the budget would be exceeded is **never a crash and never a capability loss
+mid-gesture** — it's: don't promote the second deck to full stems (mix-paged), surface a visible
+one-liner ("deck B: host mix — phone memory"), and keep the floor so audio never stops.
+
 ## 10. Migration / phasing
 
 - **v0 (proof):** page from **IndexedDB chunked into ~1 s records** (reuse the store
@@ -190,9 +240,23 @@ Counter-measures, both required:
 
 ## 11. Edge cases / failure modes
 
-- **OPFS eviction under storage pressure** → `navigator.storage.persist()`; on eviction,
-  re-derive from the `trackCache` IndexedDB encoded bytes (re-decode + re-write). Floor stays
-  resident so audio never stops.
+- **SE-class (~100 MB budget) — honest hard limit.** Two full stem decks cannot fit under ~100 MB
+  by any design. Documented degradation: one deck holds full stems, the other is **mix-paged**
+  (window of the mix, no 4-group materialize), re-promotable only if the first demotes. Visible,
+  not silent. This is the one device where the 1:1 promise yields — stated upfront as a rule, not
+  sprung mid-set.
+- **OPFS rules (Safari/iOS):** **Worker-only**; open **one long-lived `SyncAccessHandle` per
+  file** and never churn it (iPad re-invoke bug + exclusive-lock cost); **no `createWritable()`
+  on Safari** — write via the sync handle. Range read `read(view,{at})` is first-class. (Shipped
+  iOS 15.4 — min-iOS floor can be 15.4 / SAB 15.2, lower than first assumed.)
+- **OPFS eviction under storage pressure** → `navigator.storage.persist()` — but on iOS it's
+  **honored only for an installed Home-Screen PWA**; in a plain Safari tab, OPFS is evicted after
+  7 idle days or under disk pressure. So OPFS is always a **rebuildable cache**, never source of
+  truth: on eviction, re-derive from the `trackCache` IndexedDB encoded bytes (re-decode +
+  re-write). Floor stays resident so audio never stops. (Lever: shipping as an installable PWA
+  extends OPFS durability on iOS.)
+- **Gigacage ~2 GB single-allocation cap (iOS)** — never one giant SAB/WASM buffer; partition
+  rings/backing per deck (our sizes are far below this, but it's a hard rule).
 - **Quota** — ~460 MB/track on OPFS; two tracks ≈ 1 GB, fine vs phone tens-to-hundreds of GB;
   evict on track unload.
 - **Page miss during a fast scratch** — scratch can outrun `back`; the floor covers, and the
@@ -205,10 +269,17 @@ Counter-measures, both required:
 
 ## 12. Open questions
 
-- Exact `windowBytes` per platform — measure on real iPhone (small/old) + Android UFS 3.1.
+- Exact `windowBytes` per platform — the §1a/§4 numbers are researched estimates; confirm by
+  self-accounting on a real iPhone 13/14 + SE + an Android 4 GB device.
 - Floor rate: 24 kHz vs 22.05 vs 16 — perceptual test on earbuds; trade RAM vs fade-up audibility.
+  (Floor is the MIX, so it's cheap either way.)
+- App baseline footprint on iOS (React + stem WASM + canvas + LOD) — measure it, because it eats
+  ~100–150 MB of the ~300 MB budget before the engine allocates anything.
 - SAB ring sizing + the pager service cadence vs worst-case scrub velocity.
 - Does the WSOLA mono search need the floor or the full-rate window as its reference during a
   miss? (Probably floor, to stay click-free — verify.)
 - One OPFS file per track vs one per (track,deck) when both decks load the same track.
+- **OWED: physical-iPhone smoke test of the SAB→AudioWorklet ring on iOS 18/26** — the old
+  WebKit bugs (237144/220038) are years-fixed and `ringbuf.js` lists Safari supported, but no
+  2025–26 retest exists. Verify before relying on the cross-thread ring.
 ```

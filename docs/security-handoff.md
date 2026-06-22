@@ -1,9 +1,25 @@
 # Security Handoff — xxit / Handling The Loop
 
 **Audience:** a security-focused agent picking up where the engine/audio agent left off.
-**Date:** 2026-06-22. **Reviewer:** prior agent did a *grounded but shallow* pass (greps + spot-reads), not a full audit.
+**Date:** 2026-06-22. **History:** the FIRST pass was *grounded but shallow* (greps + spot-reads). A SECOND pass (also 2026-06-22) deep-read the whole credential + authz surface and **verified it clean** — see the "2026-06-22 DEEP AUDIT" block below, which supersedes the original Tier-1 worry.
 
 This app is a serverless DJ web app on Cloudflare (Worker + R2 + D1 + Durable Objects), browser-heavy (Web Audio + local wasm DSP), with accounts (Google/Spotify/Tidal OAuth), a social/multi-user layer (profiles, follow graph, live broadcast, crowd chat, moderation), a public community audio cache, and a **new residential YouTube-fetch relay** running on a home FortiGate (see `docs/youtube-relay.md`).
+
+## 2026-06-22 DEEP AUDIT — VERIFIED CLEAN (supersedes the Tier-1 worry below)
+
+A full read of every credential + authorization surface. The shallow pass had the risk map **backwards**: the multi-user layer it flagged as the likely bug-home is the *strongest* part. All verified with evidence:
+
+- **Room / Durable Object authz** (the headline worry) — **SOUND.** `host`/`pub` are stripped from the client URL and set server-side from the authed session (`worker/index.ts:949-957` `isHost = !!user && user.id === hostId && !asPublic`), so they're un-forgeable. Cross-site WS hijack is blocked by an Origin allowlist (`:914-919`) on top of SameSite. `PUB_ALLOWED` is enforced server-side (`room.ts:306`); a guest can't self-grant control (`control` rejects `!a.host`, `:336`); `canDrive` enforces per-deck permission on the hot intent path (`:878`); listeners/stage devices can't become the anchor (`nextAnchor`/`settle` exclude them). Every host action gates on `isHostDevice(self)` (reads the attachment, not a client claim).
+- **OAuth token-at-rest** — **SOUND.** AES-GCM with a fresh random 12-byte IV per encryption (`server/crypto.ts:33` — no nonce reuse), SHA-256 key derivation from `TOKEN_ENC_KEY`. Refresh tokens never sit in D1 as plaintext. Token rows scoped `WHERE user_id=? AND provider=?` (`server/db/connections.ts`) — no IDOR.
+- **Admin worker** — **SOUND.** Every route behind `verifyAccess` (fails closed). The JWT check verifies aud/exp/iss + email allowlist AND **hardcodes `RSASSA-PKCS1-v1_5`** rather than trusting the token `alg` header → immune to alg-confusion / `alg:none` (`server/access.ts:77-87`). Admin page uses a per-request nonce CSP, all DOM via `textContent`/`addEventListener`. (One `innerHTML` at `admin.ts:349` interpolates only server-computed numbers — not exploitable.)
+- **accounts.ts / samples.ts** — **SOUND.** Every mutation: method gate + session-derived actor + ownership check (`viewer.id !== row.hostId → 403`; samples scoped `AND user_id=?`). OAuth `state` validated on all three providers; Tidal PKCE validated.
+- **R2 key path** — **SOUND.** `isVideoId` is strict `/^[\w-]{11}$/`, so `a/${v}` can't traverse into `samples/` etc. No IDOR/traversal.
+- **Invite codes** — **SOUND.** 96-bit CSPRNG (`crypto.getRandomValues(12)`); a code only lets you *knock* (host approves).
+- **Dev fake-auth** — **NOT reachable in prod.** `server/api.ts` (DEV_AUTH + devStore) is imported ONLY by `vite.config.ts` (Vite middleware); the Worker entry `worker/index.ts` does not import it, and `handleApi(req,res)` uses Node `http` types the Worker can't invoke. Caveat documented: `DEV_AUTH` is fail-open if `process.env.NODE_ENV` is absent (as in a Worker), so keeping `api.ts` out of the Worker bundle is load-bearing.
+
+**Fixes landed this pass** (commits `02ff036`, `261f62a`, build-green, UNDEPLOYED): pinned sample-audio Content-Type (was replaying the uploader's — self-XSS ceiling); escaped `'` in OG meta (`ogEsc`); auth-gated `/api/audio/diag` (was anon — YouTube-budget burn + egress-IP disclosure); corrected the stale `vite.config.ts` prod-path comment.
+
+**Remaining (NOT live code bugs — infra hardening or product decisions):** ① Tier 2 relay — add Cloudflare Access + per-time rate limit (infra, gated on relay activation). ② Tier 3 — remove the cookie-paste path (a product decision; deletes a credential class once the relay is live; it's already client-side memory/sessionStorage-only, never persisted server-side). ③ ORT from jsdelivr without integrity verification (version-pinned, loaded in a worker so classic SRI N/A — self-host or hash-verify someday, low priority). ④ Optional: make `DEV_AUTH` fail-closed (requires opt-in env var; would change the `pnpm dev` workflow — left as-is, documented).
 
 ## Scope & rules of engagement
 
@@ -24,8 +40,10 @@ This app is a serverless DJ web app on Cloudflare (Worker + R2 + D1 + Durable Ob
 
 ## FINDINGS & OPEN QUESTIONS (the actual audit)
 
-### Tier 1 — multi-user authorization (highest value, NOT yet audited)
-The social/room layer is the most code, newest, built fast by a concurrent agent. The room state machine has the right *shape* (`server/roomState.ts:54` `roleOf`, `PUB_ALLOWED`, `canDriveIntent`) but completeness is unverified.
+### Tier 1 — multi-user authorization — ✅ RESOLVED (see the 2026-06-22 DEEP AUDIT block above)
+**The questions below were the shallow pass's open worries. The deep audit answered all of them: every path checks the method, derives the actor from the session, and authorizes against it; `host`/`pub` are un-forgeable; listeners can't drive/anchor; mod is host-gated. Kept here as the checklist that was walked, not as open work.**
+
+The social/room layer is the most code, newest, built fast by a concurrent agent. The room state machine has the right *shape* (`server/roomState.ts:54` `roleOf`, `PUB_ALLOWED`, `canDriveIntent`) — and the deep audit confirmed the *completeness* too.
 
 Audit every state-changing path and confirm it (a) checks `req.method`, (b) derives the actor from the **session** (not a client-supplied id), (c) authorizes the action against that actor:
 - **Sets** — `server/accounts.ts:252` DELETE, `:261` publish/unpublish, `:265` rename, `:270` trim. Q: does each confirm the set's `hostId === session user.id`? (IDOR: edit/delete another user's set by id.)

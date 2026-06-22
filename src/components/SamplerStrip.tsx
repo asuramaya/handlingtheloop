@@ -35,7 +35,6 @@ export function SamplerStrip({
   const [duck, setDuck] = useState(0.6);
   const [monitor, setMonitor] = useState(false); // PFL — hear the mic in the cue/headphone bus
   const [micDest, setMicDest] = useState<"master" | "A" | "B">("master"); // PA, or into a deck's FX rack
-  const [showMic, setShowMic] = useState(false); // vol/duck expander
   const [recSrc, setRecSrc] = useState<CapSource>("master");
   const [recording, setRecording] = useState(false);
   const [grabbing, setGrabbing] = useState(false);
@@ -70,7 +69,6 @@ export function SamplerStrip({
     const next = !micOn;
     setMicOn(next);
     engine.setMicOn(next);
-    setShowMic(next);
   };
 
   // Monitor (PFL): hear the mic in the cue device. First use acquires the mic.
@@ -85,7 +83,6 @@ export function SamplerStrip({
     const next = !monitor;
     setMonitor(next);
     engine.setMicMonitor(next);
-    if (next) setShowMic(true);
   };
 
   // Cycle the mic destination: PA (master, ducks) → into deck A's FX rack → deck B's.
@@ -96,15 +93,15 @@ export function SamplerStrip({
     engine.setMicRoute(next);
   };
 
-  // Retroactive grab: lift the last 4 bars of the master out of the ring → next free pad.
+  // Retroactive catch: lift the last 4 bars of the master out of the ring → next free pad.
   const doGrab = async () => {
     if (grabbing) return;
     setGrabbing(true);
     setIoErr(null);
     const take = await engine.grabBars(4);
     setGrabbing(false);
-    if (take) await s.captureToGlobal(take, "Grab");
-    else setIoErr("Nothing to grab yet — let some audio play first.");
+    if (take) await s.captureToGlobal(take, "Catch");
+    else setIoErr("Nothing to catch yet — let some audio play first.");
   };
 
   const cycleSrc = () => {
@@ -233,7 +230,7 @@ export function SamplerStrip({
             onDrop={(e) => onDrop(e, pad.index)}
           >
             {pad.kind === "empty" ? (
-              <span className="smp-hint">{pad.route === "master" ? "＋" : pad.hasTrack ? "grab" : "—"}</span>
+              <span className="smp-hint">{pad.route === "master" ? "＋" : pad.hasTrack ? "slice" : "—"}</span>
             ) : (
               <>
                 <span className="smp-name">{pad.name || "sample"}</span>
@@ -251,39 +248,61 @@ export function SamplerStrip({
       <div className="smp-io">
         {engine.canMic && (
           <div className="smp-io-grp">
-            <button className={`smp-io-btn smp-io-pill ${micOn ? "on" : ""}`} onClick={() => void toggleMic()} disabled={micBusy} title="Talkover — your mic into the mix; the music ducks while you talk">
-              🎙 {micBusy ? "…" : micOn ? "ON" : "OFF"}
+            {/* The talkover toggle IS a buttonoid: TAP = mic on/off, DRAG/SCROLL = talkover VOL
+                (double-tap resets). The live input meter rides the bottom edge. */}
+            <ValueCell
+              className={`smp-io-cell smp-io-mic ${micOn ? "on" : ""}`}
+              label={micBusy ? "MIC …" : micOn ? "MIC ON" : "MIC OFF"}
+              value={micVol}
+              min={0}
+              max={1}
+              step={0.02}
+              reset={0.85}
+              active={micOn}
+              disabled={micBusy}
+              format={(v) => `${Math.round(v * 100)}`}
+              onTap={() => void toggleMic()}
+              onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }}
+            >
               <span className="smp-io-meter"><span ref={meterRef} /></span>
+            </ValueCell>
+            {/* DUCK is a pure AMOUNT — how far the music drops under talkover. A knob, no tap
+                toggle, so it never pretends to switch something on/off it can't. */}
+            <ValueCell
+              className="smp-io-cell smp-io-duck"
+              label="DUCK"
+              value={duck}
+              min={0}
+              max={1}
+              step={0.02}
+              reset={0.6}
+              format={(v) => `${Math.round(v * 100)}`}
+              onChange={(v) => { setDuck(v); engine.setMicDuck(v); }}
+            />
+            {/* Monitor (PFL) is on/off only — an honest plain toggle, NOT a fake knob borrowing
+                an unrelated value. (Renamed from CUE so "cue" means only the deck cue point.) */}
+            <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Monitor — hear your own mic in the headphone/cue device (needs a cue device set)">
+              MON
             </button>
-            <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Cue — hear your own mic in the headphone/cue device (needs a cue device set)">
-              CUE
-            </button>
-            <button className="smp-io-sel" onClick={cycleDest} title="Where the mic goes — the PA (talkover, ducks the music) or through Deck A/B's FX rack">
-              <b>OUT</b> {micDest === "master" ? "PA" : `DECK ${micDest}`}
+            <button className="smp-io-sel" onClick={cycleDest} title="Where the mic GOES — the PA (talkover, ducks the music) or through Deck A/B's FX rack">
+              <span className="smp-io-arrow">→</span>{micDest === "master" ? "PA" : micDest}
             </button>
           </div>
         )}
         <div className="smp-io-grp">
-          <button className="smp-io-sel" onClick={cycleSrc} title="What ● REC records (the live grab below always takes the master)">
-            <b>FROM</b> {SRC_LABEL[recSrc]}
+          <button className="smp-io-sel" onClick={cycleSrc} title="What ● REC PULLS FROM — the mix or a deck (⟲ CATCH always takes the master)">
+            <span className="smp-io-arrow">←</span>{SRC_LABEL[recSrc]}
           </button>
           <button className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → the take drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
             {recording ? "■ STOP" : "● REC"}
           </button>
           {engine.canRingCapture && (
-            <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Grab the last 4 bars that just played (from the master) → next free pad">
-              {grabbing ? "…" : "⟲ GRAB"}
+            <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Catch the last 4 bars that just played (from the master) → next free pad">
+              {grabbing ? "…" : "⟲ CATCH"}
             </button>
           )}
         </div>
       </div>
-
-      {showMic && (micOn || monitor) && (
-        <div className="smp-mic-ctl">
-          <ValueCell label="VOL" value={micVol} min={0} max={1} step={0.02} reset={0.85} onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }} format={(v) => `${Math.round(v * 100)}`} />
-          <ValueCell label="DUCK" value={duck} min={0} max={1} step={0.02} reset={0.6} onChange={(v) => { setDuck(v); engine.setMicDuck(v); }} format={(v) => `${Math.round(v * 100)}`} />
-        </div>
-      )}
 
       {(s.error || ioErr) && (
         <div className="smp-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
@@ -321,7 +340,7 @@ export function SamplerStrip({
             {routeIsMaster(menu.i) ? (
               <button onClick={() => { openPicker(menu.i); setMenu(null); }}>↻ Replace file…</button>
             ) : (
-              <button onClick={() => { s.assignRegion(menu.i); setMenu(null); }}>↻ Re-grab from deck</button>
+              <button onClick={() => { s.assignRegion(menu.i); setMenu(null); }}>↻ Re-slice from deck</button>
             )}
             <button className="ctx-danger" onClick={() => { s.clearPad(menu.i); setMenu(null); }}>
               ✕ Clear pad
@@ -338,7 +357,7 @@ const routeIsMaster = (i: number) => i < GLOBAL_COUNT; // the strip only shows t
 function padTitle(pad: SamplerPad): string {
   if (pad.kind === "empty") {
     if (pad.route === "master") return "Drop or click to load a global sample (→ master)";
-    return pad.hasTrack ? `Grab a region from deck ${pad.route}` : `Load a track on deck ${pad.route} first`;
+    return pad.hasTrack ? `Slice a region from deck ${pad.route}` : `Load a track on deck ${pad.route} first`;
   }
   const where = pad.route === "master" ? "global → master" : `deck ${pad.route}`;
   return `${pad.name || "sample"} · ${MODE_LABEL[pad.mode]} · ${where} — right-click for options`;

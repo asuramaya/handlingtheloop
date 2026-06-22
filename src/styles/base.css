@@ -515,18 +515,24 @@ body {
 .smp-io {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 0;
   flex: 0 0 auto;
   padding-left: 8px;
   margin-left: 4px;
   border-left: 1px solid var(--line);
 }
 /* A group (mic / capture): a plain row of buttons, no box — they read as one even
-   strip with the sampler pads beside them. */
+   strip with the sampler pads beside them. A thin rule splits the two zones (no header
+   labels — those would cost a whole row of height). */
 .smp-io-grp {
   display: flex;
   align-items: stretch;
   gap: 3px;
+}
+.smp-io-grp + .smp-io-grp {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
 }
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;
@@ -538,15 +544,31 @@ body {
   cursor: pointer;
   padding: 3px 8px;
   white-space: nowrap;
+  /* Constant width as the inner text flips (● REC ↔ ■ STOP, →PA ↔ →A) — no reflow. */
+  min-width: 50px;
+  text-align: center;
+}
+.smp-io-rec {
+  min-width: 60px;
+}
+/* The mic ON / CUE buttonoids: fixed-width knob cells (TAP toggles, drag = VOL / DUCK). */
+.smp-io .vcell {
+  width: 56px;
+  flex: 0 0 auto;
+}
+.smp-io-cell.on {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
 }
 .smp-io button:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
-/* Labelled selector chips (OUT·PA / FROM·MIX) — bold grey prefix, accent value. */
-.smp-io-sel b {
+/* Routing chips (→PA / ←MIX): a muted direction arrow disambiguates output (mic GOES to)
+   from input (REC PULLS from) with no width-eating "OUT"/"FROM" word; accent value. */
+.smp-io-arrow {
   color: var(--muted, color-mix(in srgb, var(--text) 50%, transparent));
   font-weight: 800;
-  margin-right: 3px;
+  margin-right: 2px;
+  opacity: 0.85;
 }
 .smp-io-sel {
   color: var(--accent);
@@ -554,10 +576,6 @@ body {
 .smp-io-btn.on {
   background: color-mix(in srgb, var(--accent) 26%, var(--panel));
   border-color: var(--accent);
-}
-.smp-io-pill {
-  min-width: 64px;
-  position: relative;
 }
 .smp-io-rec.armed {
   background: color-mix(in srgb, #c0334e 40%, var(--panel));
@@ -589,24 +607,6 @@ body {
 }
 .smp-io-btn {
   position: relative;
-}
-/* Mic VOL/DUCK cells (the buttonoid ValueCells) — overlay below the strip like the error toast. */
-.smp-mic-ctl {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  z-index: 5;
-  display: flex;
-  gap: 8px;
-  padding: 7px 9px;
-  border-radius: 6px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-}
-.smp-mic-ctl .vcell {
-  width: 52px;
-  height: 40px;
 }
 /* Pad context menu (reuses .ctx-menu): mode picker + level + clear. */
 .smp-menu .smp-modes {

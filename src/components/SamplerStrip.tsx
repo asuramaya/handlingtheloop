@@ -21,10 +21,14 @@ export function SamplerStrip({
   sampler,
   ctlRef,
   engine,
+  phones,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
   engine: AudioEngine;
+  // Master headphone (cue-device) controls — joins the IO zone only when a 2nd output is set.
+  // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
+  phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
 }) {
   const s = sampler;
 
@@ -302,6 +306,32 @@ export function SamplerStrip({
             </button>
           )}
         </div>
+        {phones && (
+          // Master HEADPHONE monitoring — sits with MON/REC since it's the same zone. MIX = the
+          // CUE↔MST blend in the cue device, LVL = its output level. Only here in 2-device mode.
+          <div className="smp-io-grp">
+            <ValueCell
+              className="smp-io-cell"
+              label="🎧 MIX"
+              value={phones.mix}
+              min={0}
+              max={1}
+              pivot={0.5}
+              format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
+              onChange={phones.onMix}
+            />
+            <ValueCell
+              className="smp-io-cell"
+              label="🎧 LVL"
+              value={phones.level}
+              min={0}
+              max={1}
+              reset={1}
+              format={(v) => `${Math.round(v * 100)}`}
+              onChange={phones.onLevel}
+            />
+          </div>
+        )}
       </div>
 
       {(s.error || ioErr) && (

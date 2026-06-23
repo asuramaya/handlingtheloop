@@ -556,17 +556,6 @@ body {
   width: 56px;
   flex: 0 0 auto;
 }
-/* Master headphone (cue-device) cells under the crossfader — CUE↔MST mix + level. */
-.phones-cells {
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  margin: 4px 0 2px;
-}
-.phones-cells .vcell.phones-cell {
-  width: 60px;
-  flex: 0 0 auto;
-}
 .smp-io-cell.on {
   background: color-mix(in srgb, var(--accent) 20%, var(--bg));
 }

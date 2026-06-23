@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
-import { ValueCell } from "./components/ValueCell";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
@@ -4266,7 +4265,21 @@ export function App() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <SamplerStrip sampler={sampler} ctlRef={samplerCtl} engine={engine} />
+          <SamplerStrip
+            sampler={sampler}
+            ctlRef={samplerCtl}
+            engine={engine}
+            phones={
+              !!settings.audioCueOutputId && engine.canCueDevice
+                ? {
+                    mix: cueMix,
+                    level: cueLevel,
+                    onMix: (v) => { engine.setCueMix(v); setCueMixSt(v); },
+                    onLevel: (v) => { engine.setCueLevel(v); setCueLevelSt(v); },
+                  }
+                : null
+            }
+          />
           <Crossfader
             deckA={engine.deckA}
             deckB={engine.deckB}
@@ -4276,32 +4289,6 @@ export function App() {
             onCrossfade={applyCrossfade}
             locked={boardLocked || !xfaderEnabled}
           />
-          {/* Master HEADPHONE controls — only meaningful with a second (cue) output device.
-              MIX = CUE↔MST blend, LVL = headphone master level. The FLX 🎧 MIX knob drives MIX. */}
-          {!!settings.audioCueOutputId && engine.canCueDevice && (
-            <div className="phones-cells">
-              <ValueCell
-                className="phones-cell"
-                label="🎧 MIX"
-                value={cueMix}
-                min={0}
-                max={1}
-                pivot={0.5}
-                format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
-                onChange={(v) => { engine.setCueMix(v); setCueMixSt(v); }}
-              />
-              <ValueCell
-                className="phones-cell"
-                label="🎧 LVL"
-                value={cueLevel}
-                min={0}
-                max={1}
-                reset={1}
-                format={(v) => `${Math.round(v * 100)}`}
-                onChange={(v) => { engine.setCueLevel(v); setCueLevelSt(v); }}
-              />
-            </div>
-          )}
           <div className="decks-row">
           <DeckControls
             id="A"

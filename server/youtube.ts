@@ -48,7 +48,7 @@ export function makeRelayFetch(
   access?: { clientId: string; clientSecret: string },
 ): Fetcher {
   const endpoint = relayUrl.replace(/\/+$/, "") + "/fetch";
-  return (url, init) => {
+  return async (url, init) => {
     const h: Record<string, string> = {
       "X-Relay-Secret": secret,
       "X-Relay-Target": url,
@@ -62,7 +62,17 @@ export function makeRelayFetch(
       h["CF-Access-Client-Secret"] = access.clientSecret;
     }
     new Headers(init?.headers).forEach((v, k) => (h["X-Fwd-" + k] = v));
-    return fetch(endpoint, { method: "POST", headers: h, body: init?.body, signal: init?.signal });
+    const res = await fetch(endpoint, { method: "POST", headers: h, body: init?.body, signal: init?.signal });
+    // If Access REJECTS the service token (missing policy, wrong/expired token, or a stray newline in
+    // a CF_ACCESS_* secret) the edge 302s to the Access login and `fetch` follows it → `res.url` lands
+    // on cloudflareaccess.com. Without this guard the caller parses that login HTML into a misleading
+    // "not playable: unknown" (this exact silent failure cost an hour to diagnose). Surface the cause.
+    if (/cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(res.url)) {
+      throw new Error(
+        "relay blocked by Cloudflare Access — service token rejected (check the relay-b Access policy / CF_ACCESS_* secrets / token expiry)",
+      );
+    }
+    return res;
   };
 }
 

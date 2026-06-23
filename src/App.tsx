@@ -7,7 +7,7 @@ import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { searchYouTube } from "@htl/media";
-import { LibraryPanel } from "./components/LibraryPanel";
+import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
 import { ProfileScreen } from "./components/ProfileScreen";
@@ -476,6 +476,9 @@ export function App() {
   // there, so it's a layout preference). On mobile they're full-screen modals, so we
   // always start closed regardless of what was stored.
   const [libOpen, setLibOpen] = useState(() => window.innerWidth >= 769 && localStorage.getItem("htl:libOpen") === "1");
+  // Imperative handle into the library so a hardware browse encoder (FLX4 wheel) can step
+  // a row cursor and the LOAD A/B buttons load it — see the browse/load cases in onMidiEvent.
+  const libRef = useRef<LibraryHandle>(null);
   useEffect(() => {
     try {
       localStorage.setItem("htl:libOpen", libOpen ? "1" : "0");
@@ -3247,9 +3250,14 @@ export function App() {
           // Browse-encoder press → open/close the library panel.
           setLibOpen((v) => !v);
           break;
-        case "load":
         case "browse":
-          // Library cursor nav (move selection / load selected) — wired separately.
+          // Browse encoder → step the library row cursor (opens the panel if it was shut).
+          libRef.current?.browse(ev.delta);
+          break;
+        case "load":
+          // LOAD A / LOAD B → load the cursor row onto that deck (canDriveDeck already gated
+          // this above, so a session passenger can't load over a deck they don't control).
+          libRef.current?.load(ev.deck);
           break;
       }
     },
@@ -3282,6 +3290,7 @@ export function App() {
           sync: d.syncRole === "slave",
           loop: !!d.loop?.active,
           hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
+          padMode: d.padMode,
         };
         midi.setFeedback(id, fb);
       });
@@ -4248,6 +4257,7 @@ export function App() {
       </main>
 
       <LibraryPanel
+        ref={libRef}
         library={library}
         onLoad={loadAndShare}
         loadedIds={loadedIds}

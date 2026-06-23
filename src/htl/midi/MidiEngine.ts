@@ -567,6 +567,15 @@ export class MidiEngine {
         if (on !== prev?.hotcues?.[i]) this.send([padStatus, f.hotcues[i], on ? 0x7f : 0x00]);
       }
     }
+    // Pad-mode bank LEDs: when the active mode changed, light the new button and clear the
+    // one we were on. (A no-op on a board whose firmware owns these LEDs — the send is
+    // simply ignored — but lights the rest of the world for boards that accept it.)
+    if (f.padModes && noteStatus != null && fb.padMode !== prev?.padMode) {
+      const lit = f.padModes[fb.padMode];
+      const off = prev ? f.padModes[prev.padMode] : undefined;
+      if (off != null && off !== lit) this.send([noteStatus, off, 0x00]);
+      if (lit != null) this.send([noteStatus, lit, 0x7f]);
+    }
     this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues] };
   }
 

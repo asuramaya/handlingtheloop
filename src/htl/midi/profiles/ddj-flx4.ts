@@ -120,6 +120,16 @@ export const DDJ_FLX4: DeviceProfile = {
     // so force shift:false or the held SHIFT would suppress it.
     { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x60, type: "note", shift: false },
     { control: { kind: "action", action: "keyMatch" }, deck: "B", status: NOTE_B, data: 0x60, type: "note", shift: false },
+    // Performance-pad MODE buttons → HTL pad banks. The FLX4's four UNSHIFTED bank-select
+    // buttons (note status, deck A 0x90 / deck B 0x91) switch which pad mode that DECK shows,
+    // positionally 1:1 with our on-screen CUE · FX · LOOP · SMP row. Notes from the Mixxx map:
+    //   HOT CUE 0x1B → cue · PAD FX1 0x1E → fx · BEAT JUMP 0x20 → loop · SAMPLER 0x22 → sampler.
+    // (loop sits on the unshifted BEAT JUMP, not the shifted BEAT LOOP 0x6D, so all four live
+    //  on the buttons you actually press — and the four LEDs the firmware toggles.)
+    ...btn("padModeCue", 0x1b),
+    ...btn("padModeFx", 0x1e),
+    ...btn("padModeLoop", 0x20),
+    ...btn("padModeSampler", 0x22),
     // SHIFT button (per deck, note 0x3F — verified on hardware via the MIDI monitor).
     // A plain momentary modifier: the FLX4 keeps sending each button's normal note while
     // SHIFT is held, so HTL's own shift logic applies the alt action (shift+cue clears
@@ -180,6 +190,10 @@ export const DDJ_FLX4: DeviceProfile = {
     sync: 0x58,
     loop: 0x4d,
     hotcues: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
+    // Mode-button LEDs (same notes as the inputs). Lit when our software is in that bank,
+    // so changing mode by keyboard / screen / gamepad / session reflects on the board —
+    // IF the unit accepts incoming note-on for these (verify with the Debug output prober).
+    padModes: { cue: 0x1b, fx: 0x1e, loop: 0x20, sampler: 0x22 },
   },
   initSysex: FLX4_HANDSHAKE,
   keepAliveMs: 200,

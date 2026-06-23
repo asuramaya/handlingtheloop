@@ -38,10 +38,12 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "loopExit", label: "Loop Exit / Reloop", group: "Loops", defaultKey: "KeyE" },
 
   // Pad-mode selectors: switch what the 8 pads (and the keyboard 1-8) do. U=cue, I=loop.
+  // U·I·O·P read left-to-right across the on-screen mode row, which is ordered to mirror
+  // the FLX4's physical bank buttons: CUE · FX · LOOP · SMP (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER).
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
-  { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyI" },
-  { id: "padModeSampler", label: "Pad mode: Sampler", group: "Pads", defaultKey: "KeyO" },
-  { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyP" },
+  { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI" },
+  { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO" },
+  { id: "padModeSampler", label: "Pad mode: Sampler", group: "Pads", defaultKey: "KeyP" },
   // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated
   // keys are FREED — 1-8 now fire them when the pad bank is in Loop mode.
   { id: "beatLoop0", label: "Beat loop 1/16", group: "Pads", defaultKey: "" },

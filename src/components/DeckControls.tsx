@@ -330,11 +330,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
 
         {/* Pad bank: a CUE / LOOP mode selector swaps ONLY these 8 pads — hot cues, or the
             beat-loop sizes (folds the old separate loop-size row in). */}
+        {/* Order mirrors the FLX4's physical bank buttons left-to-right: CUE · FX · LOOP · SMP
+            (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER); U·I·O·P read across in the same order. */}
         <div className="pad-mode">
           <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE<span className="kbd">U</span></button>
-          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">I</span></button>
-          {sampler && <button className={deck.padMode === "sampler" ? "on" : ""} onClick={() => changePadMode("sampler")}>SMP<span className="kbd">O</span></button>}
-          <button className={deck.padMode === "fx" ? "on" : ""} onClick={() => changePadMode("fx")}>FX<span className="kbd">P</span></button>
+          <button className={deck.padMode === "fx" ? "on" : ""} onClick={() => changePadMode("fx")}>FX<span className="kbd">I</span></button>
+          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">O</span></button>
+          {sampler && <button className={deck.padMode === "sampler" ? "on" : ""} onClick={() => changePadMode("sampler")}>SMP<span className="kbd">P</span></button>}
         </div>
 
         {deck.padMode === "loop" && (

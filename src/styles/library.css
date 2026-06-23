@@ -738,6 +738,15 @@ th.col-thumb {
 .track-table tbody tr {
   user-select: none;
 }
+/* Hardware browse cursor (FLX4 wheel) — a left accent bar + tint so the row the LOAD
+   buttons will grab is unmistakable, distinct from click multi-selection. */
+.track-table tbody tr.tt-cursor {
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 3px 0 0 0 var(--neon-lime);
+}
+.track-table tbody tr.tt-cursor.selected {
+  background: rgba(0, 229, 255, 0.16);
+}
 
 /* NARROW docked Library (desktop side panel, ≤520px): the full 8-column table is
    too wide, crushing Title/Artist to nothing ("can't read it"). So shrink the

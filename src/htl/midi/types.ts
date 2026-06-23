@@ -70,6 +70,10 @@ export interface MidiFeedbackMap {
   sync?: number;
   loop?: number; // loop in/out lamp
   hotcues?: number[]; // pad data bytes for hot cues 1..8 (lit on the `padStatus`)
+  // Pad-bank MODE buttons (FLX4: HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER). One note per
+  // mode, lit on `noteStatus`; the active mode lights, the rest clear. Lets the board
+  // reflect a mode change made anywhere (keyboard / on-screen / gamepad / session sync).
+  padModes?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
 }
 
 export interface DeviceProfile {
@@ -112,6 +116,7 @@ export interface DeckFeedback {
   sync: boolean;
   loop: boolean;
   hotcues: boolean[]; // length 8, true = slot set
+  padMode: "cue" | "loop" | "sampler" | "fx"; // active pad bank → lights the matching mode button
 }
 
 // Live connection status for the settings UI.

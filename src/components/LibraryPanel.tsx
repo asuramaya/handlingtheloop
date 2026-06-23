@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { canonicalVideoId, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -13,7 +13,7 @@ import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type MixQueue }
 import { MixQueuePanel } from "./MixQueuePanel";
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
-import { TRACK_DND_MIME, TrackTable } from "./TrackTable";
+import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import { ConfirmModal, PromptModal } from "./Dialog";
 import { DockResizer } from "./DockResizer";
 import { cleanPlaylistName, withCached } from "./lib/libraryUtils";
@@ -60,7 +60,15 @@ interface LibraryPanelProps {
 
 type View = "collection" | "community" | { playlistId: string };
 
-export function LibraryPanel({
+// What a hardware controller can drive on the library from outside: a browse encoder
+// steps a row cursor, the LOAD A/B buttons load the cursor row. Forwarded from App to
+// the FLX4 browse wheel + LOAD buttons (see onMidiEvent).
+export interface LibraryHandle {
+  browse: (delta: number) => void; // step the cursor (and open the panel if it was shut)
+  load: (deck: "A" | "B") => void; // load the cursor row onto a deck
+}
+
+export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(function LibraryPanel({
   library,
   onLoad,
   loadedIds,
@@ -69,7 +77,22 @@ export function LibraryPanel({
   open = true,
   onOpenChange = () => {},
   auto,
-}: LibraryPanelProps) {
+}: LibraryPanelProps, ref) {
+  // The TrackTable that's the active main view (Collection / Community / a playlist) — a
+  // single ref because they're mutually exclusive, so only the mounted one holds it. The
+  // Explorer/Queue views don't forward a cursor yet, so the wheel no-ops there.
+  const activeTableRef = useRef<TrackTableHandle>(null);
+  useImperativeHandle(
+    ref,
+    () => ({
+      browse: (delta: number) => {
+        onOpenChange(true); // a spin on a closed library opens it so the cursor is visible
+        activeTableRef.current?.moveCursor(delta);
+      },
+      load: (deck: "A" | "B") => activeTableRef.current?.loadCursor(deck),
+    }),
+    [onOpenChange],
+  );
   // ＋ Queue / ↑ Play next on every track row — the obvious "play later" alongside Load A/B.
   // ALWAYS exposed; queueEdit self-gates the BEHAVIOUR (host/co-DJ → real edit, anon listener →
   // gated song request, otherwise no-op), so the action is never silently missing for a role.
@@ -767,6 +790,7 @@ export function LibraryPanel({
         <>
         {view === "collection" && (
           <TrackTable
+            ref={activeTableRef}
             tracks={library.collection.map(withCached)}
             onLoad={onLoad}
             onQueue={queueAdd}
@@ -785,6 +809,7 @@ export function LibraryPanel({
         )}
         {view === "community" && (
           <TrackTable
+            ref={activeTableRef}
             tracks={community.map(withCached)}
             onLoad={onLoad}
             onQueue={queueAdd}
@@ -811,6 +836,7 @@ export function LibraryPanel({
               .map(withCached);
             return (
               <TrackTable
+                ref={activeTableRef}
                 tracks={tracks}
                 onLoad={onLoad}
                 onQueue={queueAdd}
@@ -883,4 +909,4 @@ export function LibraryPanel({
       )}
     </>
   );
-}
+});

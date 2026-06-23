@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TrackMeta } from "@htl/library";
 import { cacheState } from "@htl/media";
 import { fmtTime } from "../util/format";
@@ -54,12 +54,21 @@ interface TrackTableProps {
   cacheFilter?: boolean; // show Cached / Stemmed toggle chips that narrow the view by pool state
 }
 
+// Imperative surface a hardware controller drives: a browse encoder moves a row cursor,
+// and the deck LOAD buttons load whatever the cursor sits on. The parent (LibraryPanel)
+// hands this ref to whichever table is the active view so the FLX4 wheel + LOAD A/B work.
+export interface TrackTableHandle {
+  moveCursor: (delta: number) => void; // step the highlight (encoder detents); opens nothing
+  loadCursor: (deck: "A" | "B") => void; // load the cursor row onto a deck
+  hasRows: () => boolean;
+}
+
 // rekordbox-style track list with desktop-grade interaction: click selects,
 // ⌘/Ctrl-click toggles, Shift-click range-selects; right-click or long-press
 // opens a context menu; rows drag onto sidebar playlists. Double-click loads to A.
 // Headers sort (click to toggle asc/desc); column borders drag to resize; the −/＋
 // stepper scales row size.
-export function TrackTable({
+export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function TrackTable({
   tracks,
   onLoad,
   onQueue,
@@ -84,7 +93,7 @@ export function TrackTable({
   deckLoaded,
   deckColors,
   cacheFilter,
-}: TrackTableProps) {
+}: TrackTableProps, ref) {
   const searchMode = !!onSubmitSearch; // toolbar field submits a YouTube search instead of filtering
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -187,6 +196,58 @@ export function TrackTable({
   const vStart = virtualize ? Math.min(range.start, Math.max(0, view.length)) : 0;
   const vEnd = virtualize ? Math.min(range.end, view.length) : view.length;
   const colCount = 7 + (extraCol ? 1 : 0);
+
+  // ----- Hardware browse cursor (FLX4 wheel + LOAD A/B) -----
+  // A highlighted row the browse encoder steps through and the LOAD buttons act on. The
+  // ref is the source of truth so a burst of encoder detents in one frame accumulates
+  // correctly (state would read stale); `cursor` only drives the highlight render.
+  const cursorRef = useRef(-1);
+  const [cursor, setCursor] = useState(-1);
+  // Keep the cursor in range as the filter/sort/length of the view changes underneath it.
+  useEffect(() => {
+    if (cursorRef.current >= view.length) {
+      cursorRef.current = view.length - 1;
+      setCursor(cursorRef.current);
+    }
+  }, [view.length]);
+  // Scroll a (possibly virtualized, unrendered) row into view by nudging the scroller —
+  // the spacers keep full height, so logical row `idx` sits at row0 + idx*rowH regardless
+  // of the rendered window. Math is in live viewport coords, so adjusting scrollTop is exact.
+  const scrollCursorIntoView = useCallback(
+    (idx: number) => {
+      const sc = scrollerRef.current;
+      const table = tableRef.current;
+      if (!sc || !table) return;
+      const theadH = table.tHead?.offsetHeight ?? 0;
+      const scRect = sc.getBoundingClientRect();
+      const row0 = table.getBoundingClientRect().top + theadH;
+      const rowTop = row0 + idx * rowH;
+      const rowBot = rowTop + rowH;
+      const viewTop = scRect.top + theadH; // keep clear of the sticky header
+      if (rowTop < viewTop) sc.scrollTop -= viewTop - rowTop + rowH;
+      else if (rowBot > scRect.bottom) sc.scrollTop += rowBot - scRect.bottom + rowH;
+    },
+    [rowH],
+  );
+  useImperativeHandle(
+    ref,
+    () => ({
+      moveCursor: (delta: number) => {
+        if (view.length === 0) return;
+        const cur = cursorRef.current;
+        const next = cur < 0 ? (delta > 0 ? 0 : view.length - 1) : Math.max(0, Math.min(view.length - 1, cur + delta));
+        cursorRef.current = next;
+        setCursor(next);
+        scrollCursorIntoView(next);
+      },
+      loadCursor: (deck: "A" | "B") => {
+        const t = view[cursorRef.current];
+        if (t) onLoad(deck, t);
+      },
+      hasRows: () => view.length > 0,
+    }),
+    [view, onLoad, scrollCursorIntoView],
+  );
 
   // Close the menu on any escape hatch.
   useEffect(() => {
@@ -395,7 +456,7 @@ export function TrackTable({
               <tr
                 ref={k === 0 ? firstRowRef : undefined}
                 key={`${t.videoId}:${i}`}
-                className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(t.videoId) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""}`}
+                className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(t.videoId) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
                 draggable
                 onClick={(e) => {
                   // Left click → the "Load to Deck A / B" menu (pick a deck). Modifier-
@@ -525,4 +586,4 @@ export function TrackTable({
       )}
     </>
   );
-}
+});

@@ -3200,6 +3200,13 @@ export function App() {
           // frame-search when paused). Latch the mode from whichever arrives.
           const deck = engine.deck(ev.deck);
           const sec = ev.delta * SEC_PER_TICK;
+          // Loop-edge fine-adjust armed (Shift+IN / Shift+OUT) → the platter repositions
+          // the loop head rekordbox-style instead of scratching the track. The snap follows
+          // the grid magnet (quantize on = lands on beats, off = surgical sub-beat).
+          if (deck.adjusting) {
+            deck.adjustBy(sec);
+            break;
+          }
           if (ev.scratch) {
             jogVinyl.current[ev.deck] = true;
             // Grab lazily if the touch landed before we knew it was vinyl mode.
@@ -3227,7 +3234,14 @@ export function App() {
         }
         case "jogBend": {
           // Outer ring (never touched) → momentary pitch-bend / paused frame-search.
-          engine.deck(ev.deck).bend(ev.delta * SEC_PER_TICK);
+          // When loop-edge adjust is armed it repositions the loop head too (parity with
+          // the top plate), so either rim or platter nudges the boundary rekordbox-style.
+          const deck = engine.deck(ev.deck);
+          if (deck.adjusting) {
+            deck.adjustBy(ev.delta * SEC_PER_TICK);
+            break;
+          }
+          deck.bend(ev.delta * SEC_PER_TICK);
           break;
         }
         case "jogSearch": {

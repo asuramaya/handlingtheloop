@@ -979,7 +979,15 @@ export function App() {
         // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
         setSettings((s) => ({ ...s, slip: !s.slip }));
       },
-      // FLX SMART CFX → bypass/restore the colour filter on BOTH decks at once (global button).
+      // FLX SMART CFX → A/B the EQ (the permanent channel-strip device) on BOTH decks at once.
+      // More useful than a colour-filter kill: drop/restore the whole EQ curve instantly.
+      eqBypass: () => {
+        const on = !engine.deck("A").eqBypassed;
+        engine.deck("A").setEqBypass(on);
+        engine.deck("B").setEqBypass(on);
+        refresh();
+      },
+      // (kept available for MIDI-learn) bypass/restore the colour filter on both decks.
       filterToggle: () => {
         const on = !engine.deck("A").filterBypassed;
         engine.deck("A").setFilterBypass(on);

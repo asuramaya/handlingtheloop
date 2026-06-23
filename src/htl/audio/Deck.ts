@@ -1795,7 +1795,10 @@ export class Deck {
     return d;
   }
   removeFxAt(i: number) {
-    this.rack.remove(i); // the EQ has no dispose() → it survives, ready to re-add
+    // The EQ is a PERMANENT channel-strip device (always present, one per channel, never
+    // removable) — only the optional effects below it come and go. A/B it with setEqBypass.
+    if (this.rack.deviceAt(i)?.kind === "eq") return;
+    this.rack.remove(i);
   }
   moveFx(from: number, to: number) {
     this.rack.move(from, to);

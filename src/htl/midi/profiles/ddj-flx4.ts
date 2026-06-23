@@ -144,9 +144,9 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "cueMix" }, status: CC_MIX, data: 0x0c, type: "cc14" },
     { control: { kind: "fader", target: "cueLevel" }, status: CC_MIX, data: 0x0d, type: "cc14" },
     // SMART CFX / SMART FADER buttons (browse-section channel 0x96, notes 0x00/0x01 — verified
-    // on hardware). CFX → bypass the colour filter on both decks; FADER → enable/disable the
-    // crossfader + recentre. NOTE: 0x00↔CFX / 0x01↔FADER assignment is a best guess; swap if reversed.
-    { control: { kind: "action", action: "filterToggle" }, status: 0x96, data: 0x00, type: "note" },
+    // on hardware). CFX → A/B the EQ on both decks; FADER → enable/disable the crossfader +
+    // recentre. NOTE: 0x00↔CFX / 0x01↔FADER assignment is a best guess; swap if reversed.
+    { control: { kind: "action", action: "eqBypass" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     // Jog wheels — the FLX4 top plate is capacitive and the hardware VINYL button
     // decides scratch-vs-bend by switching which CC the top emits (verified against the

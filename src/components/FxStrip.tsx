@@ -205,7 +205,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           </button>
         ))}
         <div className="fx-add-wrap">
-          {selDev && (
+          {selDev && !isEq && (
+            // The EQ is the permanent channel strip — no remove. Optional effects below it do.
             <button className="fx-tab fx-remove" onClick={() => removeAt(cur)} title="Remove the selected effect" aria-label="Remove the selected effect">
               −
             </button>

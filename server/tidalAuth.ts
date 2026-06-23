@@ -19,20 +19,23 @@ const TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const ME_URL = "https://openapi.tidal.com/v2/users/me";
 
 // Exactly the scopes the code actually exercises, no more:
-//   user.read      → /users/me (the provider_user_id every playlist call is scoped by)
 //   collection.read→ /userCollections/{id}/relationships/playlists (how we list playlists)
 //   playlists.read → read a playlist's tracks (getTidalPlaylistTracks)
 //   playlists.write→ create the synced playlist + add tracks (createTidalPlaylist/addTidalTracks)
 //   search.read    → match tracks during sync (searchTidalTracks/tidalTrackIdByIsrc) — sync
 //                    silently fails at the matching step without it
-// We deliberately DON'T request collection.write (we never touch favorites), playback (TIDAL
-// is catalog/metadata-only here — DRM-locked, never streamed), entitlements.read, search.write,
-// or recommendations.read (track-radio is unused). TIDAL rejects the WHOLE authorize request
-// (hosted login shows "Something went wrong" / error 11102) if the app asks for a scope its
-// registered client isn't provisioned for — AND requires the redirect_uri to EXACTLY match a
-// registered one (scheme+host+path, no trailing slash, www vs apex matters). Overridable via the
-// TIDAL_SCOPES env (e.g. to add recommendations.read for radio, or bisect an unapproved scope).
-const SCOPES = ["user.read", "collection.read", "playlists.read", "playlists.write", "search.read"].join(" ");
+// ⚠ We do NOT request `user.read`: the registered handlingtheloop app is NOT provisioned for it
+// (its allowed scopes are collection.read / entitlements.read / playlists.read / playlists.write /
+// recommendations.read / search.read), and TIDAL rejects the WHOLE authorize request — hosted
+// login shows "Something went wrong" / error 1002 — the moment we ask for a scope outside that set.
+// The provider_user_id (every playlist call is scoped by it) comes from the token-exchange response
+// (`user_id`, see toTokenSet); the /users/me backfill is only a best-effort fallback and is allowed
+// to fail without user.read. We also deliberately DON'T request collection.write (we never touch
+// favorites), playback (TIDAL is catalog/metadata-only here — DRM-locked, never streamed),
+// entitlements.read, search.write, or recommendations.read (track-radio uses the app token). TIDAL
+// also requires the redirect_uri to EXACTLY match a registered one (scheme+host+path, no trailing
+// slash, www vs apex matters). Overridable via the TIDAL_SCOPES env (e.g. to bisect a scope).
+const SCOPES = ["collection.read", "playlists.read", "playlists.write", "search.read"].join(" ");
 
 /** The scope string to request — the TIDAL_SCOPES env override, else the default set. */
 export function tidalScopes(env?: { TIDAL_SCOPES?: string }): string {

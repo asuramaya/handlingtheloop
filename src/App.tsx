@@ -3023,7 +3023,12 @@ export function App() {
           }
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
-          const sh = ev.shift || midiShift[id] || (focused === id && (focusShift || shiftLatched || shiftHeld));
+          // Effective shift. A DECK-ADDRESSED hardware button (FLX, ev.deck set) uses ONLY its
+          // own shift (its SHIFT byte or that deck's latch) — never the focus-model/keyboard
+          // shift. Otherwise a latched/held shift would silently turn the FOCUSED deck's ▶ into
+          // move-loop, so "jog forward" died intermittently on whichever deck had focus (deck B).
+          // The focus-model shift (focusShift/latch/keyboard) only applies to a DECKLESS board.
+          const sh = ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
           // Pad workflow: triggering an EXISTING hot cue or a beat loop WHILE PAUSED drops
           // into playback (a pad press "launches"). Velocity-sensitive: a SOFT tap just
           // jumps (audition the spot, stay paused), a FIRM hit plays. Saving a new cue

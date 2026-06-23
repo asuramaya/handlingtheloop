@@ -54,36 +54,22 @@ function knob(target: "tempo" | "level" | "trim" | "eqHi" | "eqMid" | "eqLow" | 
   ];
 }
 
-// FLX4 hot-cue pads (mode default) — pads 1..8 on data 0x00..0x07.
-function hotcuePads(): MidiBinding[] {
+// Performance pads. Each UNSHIFTED bank emits its own contiguous block of 8 notes on the
+// pad status (deck A 0x97 / deck B 0x99): HOT CUE 0x00, BEAT JUMP 0x20, SAMPLER 0x30,
+// PAD FX1 0x40 (verified on hardware + the Mixxx FLX4 map). We deliberately do NOT bind a
+// bank to a fixed action — the FLX bank stays in lock-step with HTL's pad mode (the bank
+// buttons switch both), so EVERY block maps the same way the keyboard 1-8 do: pad position
+// i → `hotcue${i+1}`, the single generic handler that routes by the deck's pad mode
+// (cue → hot cue, loop → beat-loop size, sampler → region pad, fx → Pad-FX). One source of
+// truth means switching banks can never desync the pad's action from the on-screen mode.
+const PAD_BANKS = [0x00, 0x20, 0x30, 0x40];
+function padBanks(): MidiBinding[] {
   const out: MidiBinding[] = [];
-  for (let i = 0; i < 8; i++) {
-    out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "A", status: PAD_A, data: 0x00 + i, type: "note" });
-    out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "B", status: PAD_B, data: 0x00 + i, type: "note" });
-  }
-  return out;
-}
-
-// Beat-loop pads — FLX4 sizes 0.25,0.5,1,2,4,8,16,32 beats on data 0x60..0x67.
-// Mapped onto our beat-loop ladder (1/16…8); the two largest clamp to 8.
-function beatLoopPads(): MidiBinding[] {
-  const ours = ["beatLoop2", "beatLoop3", "beatLoop4", "beatLoop5", "beatLoop6", "beatLoop7", "beatLoop7", "beatLoop7"];
-  const out: MidiBinding[] = [];
-  for (let i = 0; i < 8; i++) {
-    out.push({ control: { kind: "action", action: ours[i] }, deck: "A", status: PAD_A, data: 0x60 + i, type: "note" });
-    out.push({ control: { kind: "action", action: ours[i] }, deck: "B", status: PAD_B, data: 0x60 + i, type: "note" });
-  }
-  return out;
-}
-
-// Beat-jump pads — data 0x20..0x27 → −1,+1,−2,+2,−4,+4,−8,+8 beats.
-function beatJumpPads(): MidiBinding[] {
-  const beats = [-1, 1, -2, 2, -4, 4, -8, 8];
-  const out: MidiBinding[] = [];
-  for (let i = 0; i < 8; i++) {
-    out.push({ control: { kind: "beatjump", beats: beats[i] }, deck: "A", status: PAD_A, data: 0x20 + i, type: "note" });
-    out.push({ control: { kind: "beatjump", beats: beats[i] }, deck: "B", status: PAD_B, data: 0x20 + i, type: "note" });
-  }
+  for (const base of PAD_BANKS)
+    for (let i = 0; i < 8; i++) {
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "A", status: PAD_A, data: base + i, type: "note" });
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "B", status: PAD_B, data: base + i, type: "note" });
+    }
   return out;
 }
 
@@ -177,10 +163,8 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "selector" }, status: 0x96, data: 0x41, type: "note" },
     { control: { kind: "load" }, deck: "A", status: 0x96, data: 0x46, type: "note" },
     { control: { kind: "load" }, deck: "B", status: 0x96, data: 0x47, type: "note" },
-    // Performance pads
-    ...hotcuePads(),
-    ...beatLoopPads(),
-    ...beatJumpPads(),
+    // Performance pads — every unshifted bank → generic position pads (see padBanks).
+    ...padBanks(),
   ],
   noteStatus: { A: NOTE_A, B: NOTE_B },
   padStatus: { A: PAD_A, B: PAD_B },

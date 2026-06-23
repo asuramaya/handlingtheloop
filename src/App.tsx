@@ -354,6 +354,9 @@ export function App() {
   // holds the truth, these mirror it so the FLX 🎧 MIX knob and the on-screen cells agree.
   const [cueMix, setCueMixSt] = useState(0); // 0 = full CUE (PFL) … 1 = full MST (master)
   const [cueLevel, setCueLevelSt] = useState(1); // headphone master output level
+  // The sampler-strip MIC cell owns its level state; this ref lets the FLX MIC LEVEL knob
+  // push the display value into it (the knob already drives engine.setMicLevel directly).
+  const micVolSetRef = useRef<((v: number) => void) | null>(null);
   const [zoom, setZoom] = useState<Record<DeckId, number>>({ A: 8, B: 8 }); // per-deck waveform zoom (real seconds)
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
@@ -3102,6 +3105,7 @@ export function App() {
           }
           if (ev.target === "micLevel") {
             engine.setMicLevel(ev.value);
+            micVolSetRef.current?.(ev.value); // mirror to the sampler-strip MIC cell display
             break;
           }
           const id = ev.deck ?? focused;
@@ -4269,6 +4273,7 @@ export function App() {
             sampler={sampler}
             ctlRef={samplerCtl}
             engine={engine}
+            micSetRef={micVolSetRef}
             phones={
               !!settings.audioCueOutputId && engine.canCueDevice
                 ? {

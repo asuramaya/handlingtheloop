@@ -21,11 +21,13 @@ export function SamplerStrip({
   sampler,
   ctlRef,
   engine,
+  micSetRef,
   phones,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
   engine: AudioEngine;
+  micSetRef?: MutableRefObject<((v: number) => void) | null>; // App pushes the FLX MIC knob value into the cell
   // Master headphone (cue-device) controls — joins the IO zone only when a 2nd output is set.
   // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
@@ -36,6 +38,14 @@ export function SamplerStrip({
   const [micOn, setMicOn] = useState(false);
   const [micBusy, setMicBusy] = useState(false);
   const [micVol, setMicVol] = useState(0.85); // talkover VOLUME (engine.setMicLevel)
+  // Let App push the FLX MIC LEVEL knob value into this cell (the knob drives the engine
+  // directly; this only keeps the display in step). setMicVol is stable.
+  useEffect(() => {
+    if (micSetRef) micSetRef.current = setMicVol;
+    return () => {
+      if (micSetRef) micSetRef.current = null;
+    };
+  }, [micSetRef]);
   const [duck, setDuck] = useState(0.6);
   const [monitor, setMonitor] = useState(false); // PFL — hear the mic in the cue/headphone bus
   const [micDest, setMicDest] = useState<"master" | "A" | "B">("master"); // PA, or into a deck's FX rack

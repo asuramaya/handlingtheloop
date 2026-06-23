@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
+import { ValueCell } from "./components/ValueCell";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { FX_PADS, fireFxPad } from "./components/fxPads";
@@ -350,6 +351,10 @@ export function App() {
   useEffect(() => {
     xfaderEnabledRef.current = xfaderEnabled;
   }, [xfaderEnabled]);
+  // Headphone (cue-device) master controls — display state for the buttonoids; the engine
+  // holds the truth, these mirror it so the FLX 🎧 MIX knob and the on-screen cells agree.
+  const [cueMix, setCueMixSt] = useState(0); // 0 = full CUE (PFL) … 1 = full MST (master)
+  const [cueLevel, setCueLevelSt] = useState(1); // headphone master output level
   const [zoom, setZoom] = useState<Record<DeckId, number>>({ A: 8, B: 8 }); // per-deck waveform zoom (real seconds)
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
@@ -3088,10 +3093,12 @@ export function App() {
           // Global headphone / mic knobs (no deck): the FLX 🎧 MIX + 🎧 LEVEL + a mappable mic level.
           if (ev.target === "cueMix") {
             engine.setCueMix(ev.value);
+            setCueMixSt(ev.value); // keep the on-screen buttonoid in step with the knob
             break;
           }
           if (ev.target === "cueLevel") {
             engine.setCueLevel(ev.value);
+            setCueLevelSt(ev.value);
             break;
           }
           if (ev.target === "micLevel") {
@@ -4267,8 +4274,34 @@ export function App() {
             accentB={ACCENT.B}
             crossfade={crossfade}
             onCrossfade={applyCrossfade}
-            locked={boardLocked}
+            locked={boardLocked || !xfaderEnabled}
           />
+          {/* Master HEADPHONE controls — only meaningful with a second (cue) output device.
+              MIX = CUE↔MST blend, LVL = headphone master level. The FLX 🎧 MIX knob drives MIX. */}
+          {!!settings.audioCueOutputId && engine.canCueDevice && (
+            <div className="phones-cells">
+              <ValueCell
+                className="phones-cell"
+                label="🎧 MIX"
+                value={cueMix}
+                min={0}
+                max={1}
+                pivot={0.5}
+                format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
+                onChange={(v) => { engine.setCueMix(v); setCueMixSt(v); }}
+              />
+              <ValueCell
+                className="phones-cell"
+                label="🎧 LVL"
+                value={cueLevel}
+                min={0}
+                max={1}
+                reset={1}
+                format={(v) => `${Math.round(v * 100)}`}
+                onChange={(v) => { engine.setCueLevel(v); setCueLevelSt(v); }}
+              />
+            </div>
+          )}
           <div className="decks-row">
           <DeckControls
             id="A"

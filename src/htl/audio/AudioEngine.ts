@@ -49,7 +49,13 @@ export class AudioEngine {
   // which — when a separate cue device is chosen — bridges through a MediaStream into a
   // hidden <audio> element pinned to that device via setSinkId (the only way to drive a
   // SECOND physical output from one AudioContext). Built lazily; dangling = silent.
-  private readonly cueMaster: GainNode;
+  private readonly cueMaster: GainNode; // the PFL program (cue sends + mic monitor)
+  // Headphone blend: cueMaster (PFL) and a tap of the master mix crossfade into cueOut by
+  // the CUE↔MST knob (constant-power); cueOut.gain is the headphone master LEVEL. cueOut is
+  // what bridges to the second device, so the blend + level are heard only on the cue device.
+  private readonly cuePflGain: GainNode; // PFL side of the cue/master blend (1 at full CUE)
+  private readonly cueMasterSend: GainNode; // master side of the blend (1 at full MST, 0 default)
+  private readonly cueOut: GainNode; // headphone master level → the cue-device bridge
   private cueStreamDest: MediaStreamAudioDestinationNode | null = null;
   private cueEl: HTMLAudioElement | null = null;
   private cueDeviceId = ""; // currently routed cue device ("" = none / single output)
@@ -113,6 +119,16 @@ export class AudioEngine {
     // rack/EQ/fader then process the voice — no separate mic rack needed).
     this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.input, B: this.deckB.rack.input }, this.musicBus.gain);
     this.mic.monitorOut.connect(this.cueMaster); // PFL — hear the mic in the headphone/cue device
+    // Cue/master headphone blend. cueMaster (PFL) → cuePflGain, master → cueMasterSend, both
+    // sum into cueOut (the headphone master level). cueOut is what setCueSinkId bridges to the
+    // second device. Defaults: full CUE (pfl=1, master=0), level unity. The master tap is
+    // permanent but silent until the MIX knob opens it — no master leaks to the cue at full CUE.
+    this.cuePflGain = this.ctx.createGain();
+    this.cueMasterSend = this.ctx.createGain();
+    this.cueMasterSend.gain.value = 0;
+    this.cueOut = this.ctx.createGain();
+    this.cueMaster.connect(this.cuePflGain).connect(this.cueOut);
+    this.master.connect(this.cueMasterSend).connect(this.cueOut);
     this.recorder = new Recorder(this.ctx);
     // Sync follow/release: any tempo change routes through the state machine.
     this.deckA.onTempoChange = () => this.onDeckTempo("A");
@@ -490,7 +506,7 @@ export class AudioEngine {
     try {
       if (!this.cueStreamDest) {
         this.cueStreamDest = this.ctx.createMediaStreamDestination();
-        this.cueMaster.connect(this.cueStreamDest);
+        this.cueOut.connect(this.cueStreamDest); // post blend + headphone-level
       }
       if (!this.cueEl) {
         const el = document.createElement("audio");
@@ -531,10 +547,21 @@ export class AudioEngine {
     }
   }
 
+  /** Headphone CUE↔MST blend, 0 = full PFL cue … 1 = full master mix (constant-power). */
+  setCueMix(v: number) {
+    const x = Math.max(0, Math.min(1, v));
+    this.cuePflGain.gain.value = Math.cos((x * Math.PI) / 2);
+    this.cueMasterSend.gain.value = Math.sin((x * Math.PI) / 2);
+  }
+  /** Headphone master (cue-device) output level, 0..1. */
+  setCueLevel(v: number) {
+    this.cueOut.gain.value = Math.max(0, Math.min(1, v));
+  }
+
   private teardownCueBus(): void {
     if (this.cueStreamDest) {
       try {
-        this.cueMaster.disconnect(this.cueStreamDest);
+        this.cueOut.disconnect(this.cueStreamDest);
       } catch {
         /* wasn't connected — ignore */
       }

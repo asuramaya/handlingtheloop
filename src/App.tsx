@@ -343,6 +343,13 @@ export function App() {
   const [, setLoading] = useState<Record<DeckId, boolean>>({ A: false, B: false });
   const [status, setStatus] = useState<Record<DeckId, StemStatus | null>>({ A: null, B: null });
   const [crossfade, setCrossfade] = useState(0);
+  // Crossfader enabled (FLX SMART FADER toggles it). Disabled = the crossfader is ignored and
+  // parked at centre (both decks full). A ref mirrors it for the MIDI fader gate.
+  const [xfaderEnabled, setXfaderEnabled] = useState(true);
+  const xfaderEnabledRef = useRef(true);
+  useEffect(() => {
+    xfaderEnabledRef.current = xfaderEnabled;
+  }, [xfaderEnabled]);
   const [zoom, setZoom] = useState<Record<DeckId, number>>({ A: 8, B: 8 }); // per-deck waveform zoom (real seconds)
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
@@ -964,6 +971,20 @@ export function App() {
       slip: () => {
         // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
         setSettings((s) => ({ ...s, slip: !s.slip }));
+      },
+      // FLX SMART CFX → bypass/restore the colour filter on BOTH decks at once (global button).
+      filterToggle: () => {
+        const on = !engine.deck("A").filterBypassed;
+        engine.deck("A").setFilterBypass(on);
+        engine.deck("B").setFilterBypass(on);
+        refresh();
+      },
+      // FLX SMART FADER → enable/disable the crossfader and recentre it to 50% on each press.
+      xfaderToggle: () => {
+        setXfaderEnabled((e) => !e);
+        setCrossfade(0);
+        engine.setCrossfade(0);
+        emitRef.current({ kind: "crossfade", value: 0 }); // sync the recentre to a session
       },
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
@@ -3057,10 +3078,24 @@ export function App() {
         }
         case "fader": {
           if (ev.target === "crossfader") {
+            if (!xfaderEnabledRef.current) break; // SMART FADER disabled → ignore the crossfader
             const x = (ev.value - 0.5) * 2;
             setCrossfade(x);
             engine.setCrossfade(x);
             if (room.controlling) room.sendIntent({ kind: "crossfade", value: x });
+            break;
+          }
+          // Global headphone / mic knobs (no deck): the FLX 🎧 MIX + 🎧 LEVEL + a mappable mic level.
+          if (ev.target === "cueMix") {
+            engine.setCueMix(ev.value);
+            break;
+          }
+          if (ev.target === "cueLevel") {
+            engine.setCueLevel(ev.value);
+            break;
+          }
+          if (ev.target === "micLevel") {
+            engine.setMicLevel(ev.value);
             break;
           }
           const id = ev.deck ?? focused;

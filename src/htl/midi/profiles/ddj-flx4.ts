@@ -136,6 +136,15 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "filter" }, deck: "B", status: CC_MIX, data: 0x18, type: "cc14" },
     // Crossfader (mixer-global, 14-bit)
     { control: { kind: "fader", target: "crossfader" }, status: CC_MIX, data: 0x1f, type: "cc14" },
+    // Headphone CUE↔MST MIX knob (mixer-global, 14-bit, MSB 0x0C / LSB 0x2C — verified on
+    // hardware) → the cue/master blend. The MIC LEVEL + 🎧 LEVEL knobs are ANALOG on the FLX
+    // (no MIDI), so they stay hardware-only; the 🎧 LEVEL CC is TBD if a unit transmits it.
+    { control: { kind: "fader", target: "cueMix" }, status: CC_MIX, data: 0x0c, type: "cc14" },
+    // SMART CFX / SMART FADER buttons (browse-section channel 0x96, notes 0x00/0x01 — verified
+    // on hardware). CFX → bypass the colour filter on both decks; FADER → enable/disable the
+    // crossfader + recentre. NOTE: 0x00↔CFX / 0x01↔FADER assignment is a best guess; swap if reversed.
+    { control: { kind: "action", action: "filterToggle" }, status: 0x96, data: 0x00, type: "note" },
+    { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     // Jog wheels — the FLX4 top plate is capacitive and the hardware VINYL button
     // decides scratch-vs-bend by switching which CC the top emits (verified against the
     // Mixxx mapping). Four streams:

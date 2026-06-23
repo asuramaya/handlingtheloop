@@ -650,6 +650,10 @@ export function App() {
   // the unit's real mode. Kept in sync by the settings effect below.
   const jogVinyl = useRef<Record<DeckId, boolean>>({ A: settings.jogVinylDefault, B: settings.jogVinylDefault });
   const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
+  // Accumulated jog motion (seconds) while editing a loop edge under GRID LOCK — the
+  // continuous wheel is integrated and spent one whole beat at a time (see the jogTurn
+  // handler), since a per-tick adjustBy would just re-snap to the same beat and stick.
+  const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // The videoId we've already kicked off a room-driven load for (per deck), so a
   // repeated snapshot never aborts + restarts an in-flight decode.
   const roomLoadTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
@@ -2966,6 +2970,25 @@ export function App() {
       // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
       // track to find a cue (Mixxx uses ~×150 vs scratch; we ride sensitivity too).
       const SEARCH_SEC_PER_TICK = 0.05 * settings.jogSensitivity;
+      // Jog (platter or ring) editing a loop edge. GRID LOCK on → integrate the motion and
+      // spend it one beat at a time via adjustStep (a per-tick adjustBy snaps to the same
+      // beat and never advances). Grid lock off → smooth continuous sub-beat adjustBy. One
+      // beat per beat-interval of platter motion, so it tracks tempo.
+      const loopAdjustJog = (deck: Deck, did: DeckId, sec: number) => {
+        if (!deck.quantizing) {
+          deck.adjustBy(sec);
+          return;
+        }
+        const interval = deck.beatgrid?.interval || 0.5;
+        const acc = (loopAdjAcc.current[did] ?? 0) + sec;
+        const steps = Math.trunc(acc / interval);
+        if (steps !== 0) {
+          for (let k = 0; k < Math.abs(steps); k++) deck.adjustStep(Math.sign(steps));
+          loopAdjAcc.current[did] = acc - steps * interval;
+        } else {
+          loopAdjAcc.current[did] = acc;
+        }
+      };
       switch (ev.type) {
         case "shift": {
           // A per-deck controller SHIFT (FLX4) → that deck's shift. A DECKLESS shift
@@ -3205,10 +3228,10 @@ export function App() {
           const deck = engine.deck(ev.deck);
           const sec = ev.delta * SEC_PER_TICK;
           // Loop-edge fine-adjust armed (Shift+IN / Shift+OUT) → the platter repositions
-          // the loop head rekordbox-style instead of scratching the track. The snap follows
-          // the grid magnet (quantize on = lands on beats, off = surgical sub-beat).
+          // the loop head rekordbox-style instead of scratching the track. Snap follows the
+          // grid magnet (quantize on = whole-beat steps, off = surgical sub-beat).
           if (deck.adjusting) {
-            deck.adjustBy(sec);
+            loopAdjustJog(deck, ev.deck, sec);
             break;
           }
           if (ev.scratch) {
@@ -3242,7 +3265,7 @@ export function App() {
           // the top plate), so either rim or platter nudges the boundary rekordbox-style.
           const deck = engine.deck(ev.deck);
           if (deck.adjusting) {
-            deck.adjustBy(ev.delta * SEC_PER_TICK);
+            loopAdjustJog(deck, ev.deck, ev.delta * SEC_PER_TICK);
             break;
           }
           deck.bend(ev.delta * SEC_PER_TICK);

@@ -798,9 +798,8 @@ export function App() {
         return;
       }
       // With a live loop, a jog TRAVELS the whole loop (rekordbox beat-jump-with-loop)
-      // rather than skipping the playhead — shift forces it too. Otherwise a FORWARD skip
-      // lands past loop.end and position()'s loop-wrap eats it, so only backward (which
-      // escapes below loop.start) appeared to work. Moving the loop is visible either way.
+      // rather than skipping the playhead — shift forces it too. Otherwise it's a plain
+      // beat-jump by the deck's skip (beatJump moves relative, so sub-beat skips advance).
       if (s || deck.loop?.active) deck.moveLoop(beats);
       else {
         deck.beatJump(beats);

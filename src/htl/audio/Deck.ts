@@ -1508,11 +1508,19 @@ export class Deck {
   /** Jump by N beats from the current position, landing on the real grid beat. */
   beatJump(beats: number) {
     const g = this.beatgrid;
+    const pos = this.position();
     if (!g) {
-      this.seek(this.position() + beats * (60 / 120));
+      this.seek(pos + beats * (60 / 120));
       return;
     }
-    this.seek(beatTimeOffset(g, this.position(), beats));
+    // Move `beats` RELATIVE to the current position (phase-preserving), not to an absolute
+    // grid offset from the preceding beat. beatTimeOffset(...,n) lands on beat[floor]+n, so a
+    // sub-beat skip (e.g. skip = 0.5) snaps to the half-beat point of the CURRENT beat — which
+    // can equal where we already are, leaving the jump stuck (the deck-B "jog forward dead"
+    // bug: its skip was 0.5). The local interval = the gap between this beat and the next,
+    // valid on a dynamic grid too; scaling it by `beats` always advances by the skip amount.
+    const interval = beatTimeOffset(g, pos, 1) - beatTimeOffset(g, pos, 0);
+    this.seek(pos + beats * interval);
   }
 
   /** Jump to the next (dir>0) / previous (dir<0) phrase boundary — an 8/16/32-bar

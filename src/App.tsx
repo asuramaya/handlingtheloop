@@ -3292,8 +3292,10 @@ export function App() {
           break;
         }
         case "selector":
-          // Browse-encoder press → open/close the library panel.
-          setLibOpen((v) => !v);
+          // Browse-encoder PRESS → jump the browse cursor between the track list and the
+          // source list (Collection / Community / playlists), rekordbox tree↔list — not
+          // open/close the library (the chin's Library button / Alt already do that).
+          libRef.current?.toggleSourceNav();
           break;
         case "browse":
           // Browse encoder → step the library row cursor (opens the panel if it was shut).

@@ -61,11 +61,12 @@ interface LibraryPanelProps {
 type View = "collection" | "community" | { playlistId: string };
 
 // What a hardware controller can drive on the library from outside: a browse encoder
-// steps a row cursor, the LOAD A/B buttons load the cursor row. Forwarded from App to
-// the FLX4 browse wheel + LOAD buttons (see onMidiEvent).
+// steps a row cursor (or, after a press, the source list), the LOAD A/B buttons load the
+// cursor row. Forwarded from App to the FLX4 browse wheel + selector + LOAD buttons.
 export interface LibraryHandle {
-  browse: (delta: number) => void; // step the cursor (and open the panel if it was shut)
+  browse: (delta: number) => void; // rotate: step the track cursor, OR the source if nav-mode
   load: (deck: "A" | "B") => void; // load the cursor row onto a deck
+  toggleSourceNav: () => void; // encoder PRESS: jump the cursor between track list and sources
 }
 
 export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(function LibraryPanel({
@@ -82,17 +83,9 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   // single ref because they're mutually exclusive, so only the mounted one holds it. The
   // Explorer/Queue views don't forward a cursor yet, so the wheel no-ops there.
   const activeTableRef = useRef<TrackTableHandle>(null);
-  useImperativeHandle(
-    ref,
-    () => ({
-      browse: (delta: number) => {
-        onOpenChange(true); // a spin on a closed library opens it so the cursor is visible
-        activeTableRef.current?.moveCursor(delta);
-      },
-      load: (deck: "A" | "B") => activeTableRef.current?.loadCursor(deck),
-    }),
-    [onOpenChange],
-  );
+  // Browse cursor target: the track list, or the source list (Collection / Community /
+  // playlists) in the sidebar. The encoder PRESS flips between them (rekordbox tree/list).
+  const [sourceNav, setSourceNav] = useState(false);
   // ＋ Queue / ↑ Play next on every track row — the obvious "play later" alongside Load A/B.
   // ALWAYS exposed; queueEdit self-gates the BEHAVIOUR (host/co-DJ → real edit, anon listener →
   // gated song request, otherwise no-op), so the action is never silently missing for a role.
@@ -310,6 +303,45 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
 
   const isPlaylist = typeof view === "object";
   const activePlaylistId = isPlaylist ? view.playlistId : null;
+
+  // The ordered list of track SOURCES the encoder steps through in source-nav mode — the
+  // same set the sidebar shows that drives the main table (Collection, Community, playlists).
+  const sameView = (a: View, b: View) =>
+    typeof a === "object" || typeof b === "object"
+      ? typeof a === "object" && typeof b === "object" && a.playlistId === b.playlistId
+      : a === b;
+  const browseSources = useMemo<View[]>(
+    () => ["collection", "community", ...library.playlists.map((p) => ({ playlistId: p.id }))],
+    [library.playlists],
+  );
+  // Hardware browse surface. Rotate steps the track cursor — unless source-nav is armed
+  // (after an encoder PRESS), where it cycles the source and swaps the table live. PRESS
+  // toggles between the two (replacing the old open/close-library mapping).
+  useImperativeHandle(
+    ref,
+    () => ({
+      browse: (delta: number) => {
+        onOpenChange(true); // a spin on a closed library opens it so the cursor is visible
+        if (sourceNav) {
+          // Cycle the source list and apply it live; the main table re-mounts under the cursor.
+          const i = browseSources.findIndex((s) => sameView(s, view));
+          const next = Math.max(0, Math.min(browseSources.length - 1, (i < 0 ? 0 : i) + (delta > 0 ? 1 : -1)));
+          setSearchView(false);
+          setSyncOpen(false);
+          if (auto?.queueOpen) auto.onToggleQueue();
+          setView(browseSources[next]);
+        } else {
+          activeTableRef.current?.moveCursor(delta);
+        }
+      },
+      load: (deck: "A" | "B") => activeTableRef.current?.loadCursor(deck),
+      toggleSourceNav: () => {
+        onOpenChange(true);
+        setSourceNav((v) => !v);
+      },
+    }),
+    [onOpenChange, sourceNav, browseSources, view, auto],
+  );
 
   const [dialog, setDialog] = useState<DialogState>(null);
 
@@ -551,7 +583,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
             <>
-            <aside className="lib-sidebar">
+            <aside className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}>
         {auto && (
           <button
             className={`lib-nav lib-queue-nav ${auto.queueOpen ? "active" : ""}`}

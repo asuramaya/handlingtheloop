@@ -462,7 +462,11 @@ export class MidiEngine {
       const delta = val - 64;
       if (delta !== 0) this.opts.onEvent({ type: "jogSearch", deck: b.deck, delta });
     } else if (c.kind === "browse") {
-      const delta = val - 64;
+      // Pioneer rotary selector is a 2's-COMPLEMENT relative encoder: 0x01..0x3F = +1..+63
+      // (forward), 0x7F..0x41 = -1..-63 (back, 0x7F = -1). It is NOT centred on 0x40 like
+      // the jog platter — decoding it as val-64 leapt the browse cursor ±63 rows per detent
+      // instead of stepping one at a time.
+      const delta = val < 64 ? val : val - 128;
       if (delta !== 0) this.opts.onEvent({ type: "browse", delta });
     } else if (c.kind === "zoom") {
       const delta = val - 64;

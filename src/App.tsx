@@ -91,6 +91,7 @@ import {
   type MixQueue,
   useQueuePrefetch,
   AutoMixer,
+  SmartFader,
   type AutoMixStatus,
   type AutoMixMirror,
 } from "@htl";
@@ -342,6 +343,13 @@ export function App() {
   const [, setLoading] = useState<Record<DeckId, boolean>>({ A: false, B: false });
   const [status, setStatus] = useState<Record<DeckId, StemStatus | null>>({ A: null, B: null });
   const [crossfade, setCrossfade] = useState(0);
+  // Smart Fader: a crossfader-driven auto-transition (tempo morph + bass swap) armed by the FLX
+  // SMART FADER button. Stateful → keep one instance for the session. armedRef lets the crossfader
+  // event handler check it without re-subscribing.
+  const smartFaderRef = useRef<SmartFader | null>(null);
+  if (smartFaderRef.current === null) smartFaderRef.current = new SmartFader(engine);
+  const smartFader = smartFaderRef.current;
+  const [smartFaderArmed, setSmartFaderArmed] = useState(false);
   // Crossfader enabled (FLX SMART FADER toggles it). Disabled = the crossfader is ignored and
   // parked at centre (both decks full). A ref mirrors it for the MIDI fader gate.
   const [xfaderEnabled, setXfaderEnabled] = useState(true);
@@ -1033,8 +1041,22 @@ export function App() {
         engine.deck("B").setEqBypass(on);
         refresh();
       },
-      // FLX SMART FADER → enable/disable the crossfader and recentre it to 50% on each press.
+      // FLX SMART FADER (unshifted) → arm/disarm OUR Smart Fader (crossfader-driven transition).
+      // Always force the HW Smart-Fader off first so only our software version runs.
+      smartFaderToggle: () => {
+        midiSendRef.current?.([0x96, 0x01, 0x00]); // force the HW Smart-Fader off immediately
+        if (smartFader.isArmed) {
+          smartFader.disarm();
+          setSmartFaderArmed(false);
+        } else {
+          const ok = smartFader.arm(crossfadeRef.current);
+          setSmartFaderArmed(ok); // false if a deck lacks a beatgrid → nothing to morph
+          refresh();
+        }
+      },
+      // SHIFT + SMART FADER → enable/disable the crossfader entirely and recentre it.
       xfaderToggle: () => {
+        if (smartFader.isArmed) { smartFader.disarm(); setSmartFaderArmed(false); }
         setXfaderEnabled((e) => !e);
         setCrossfade(0);
         engine.setCrossfade(0);
@@ -3137,8 +3159,19 @@ export function App() {
         }
         case "fader": {
           if (ev.target === "crossfader") {
-            if (!xfaderEnabledRef.current) break; // SMART FADER disabled → ignore the crossfader
             const x = (ev.value - 0.5) * 2;
+            // Smart Fader armed → the fader scrubs the auto-transition (tempo morph + bass swap);
+            // it drives engine.setCrossfade itself + manipulates both decks, so don't double-apply.
+            // Gate on the live instance flag (always current), not the React-mirror ref.
+            if (smartFader.isArmed) {
+              smartFader.onCrossfade(x);
+              setCrossfade(x);
+              if (!smartFader.isArmed) setSmartFaderArmed(false); // throw completed → stood down
+              if (room.controlling) room.sendIntent({ kind: "crossfade", value: x });
+              refresh();
+              break;
+            }
+            if (!xfaderEnabledRef.current) break; // SMART FADER (shift) disabled → ignore the crossfader
             setCrossfade(x);
             engine.setCrossfade(x);
             if (room.controlling) room.sendIntent({ kind: "crossfade", value: x });
@@ -3547,6 +3580,24 @@ export function App() {
       if (room.controlling) room.sendIntent({ kind: "crossfade", value: v });
     },
     [engine, room],
+  );
+  // The ON-SCREEN crossfader drag: when Smart Fader is armed it scrubs the auto-transition
+  // (same as the hardware fader); otherwise it's a plain crossfade. (applyCrossfade stays pure so
+  // the AutoMixer, which also calls it, is never routed through Smart Fader.)
+  const dragCrossfade = useCallback(
+    (x: number) => {
+      if (smartFader.isArmed) {
+        const v = x < -1 ? -1 : x > 1 ? 1 : x;
+        smartFader.onCrossfade(v);
+        setCrossfade(v);
+        if (!smartFader.isArmed) setSmartFaderArmed(false);
+        if (room.controlling) room.sendIntent({ kind: "crossfade", value: v });
+        refresh();
+        return;
+      }
+      applyCrossfade(x);
+    },
+    [smartFader, applyCrossfade, room, refresh],
   );
 
   // Load a track onto a deck for the auto-mixer (shares the load in a session) and
@@ -4401,8 +4452,9 @@ export function App() {
             accentA={ACCENT.A}
             accentB={ACCENT.B}
             crossfade={crossfade}
-            onCrossfade={applyCrossfade}
-            locked={boardLocked || !xfaderEnabled}
+            onCrossfade={dragCrossfade}
+            locked={boardLocked || (!xfaderEnabled && !smartFaderArmed)}
+            smart={smartFaderArmed}
           />
           <div className="decks-row">
           <DeckControls

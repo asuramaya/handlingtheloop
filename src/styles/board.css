@@ -624,6 +624,7 @@
 /* The A↔B crossfader as a HORIZONTAL bar at the top of the middle section — the
    track spans the full width (no side gaps) and sits flush at the bottom. */
 .xfader-bar {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -631,6 +632,25 @@
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+.xfader-bar.smart-armed {
+  background: color-mix(in srgb, var(--accent, #4ad) 14%, var(--panel));
+}
+.xbar-smart {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  z-index: 3;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #fff;
+  background: var(--accent, #4ad);
+  pointer-events: none;
+  animation: smart-pulse 1.1s ease-in-out infinite;
+}
+@keyframes smart-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .xbar-track {
   position: relative;
   flex: 1;

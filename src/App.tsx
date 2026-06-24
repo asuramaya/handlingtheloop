@@ -3120,9 +3120,14 @@ export function App() {
           }
           // Global headphone / mic knobs (no deck): the FLX 🎧 MIX + 🎧 LEVEL + a mappable mic level.
           if (ev.target === "fxWetDry") {
-            // BEAT FX LEVEL/DEPTH → the focused deck's SELECTED effect wet/dry (its "mix" param).
+            // BEAT FX LEVEL/DEPTH → the focused deck's SELECTED effect wet/dry ("mix"). Mirror
+            // the on-screen knob exactly: set + broadcast the param + refresh so the MIX cell
+            // (which reads the live param) actually moves. (No-op if the EQ tab is selected.)
             const fid = ev.deck ?? focused;
-            engine.deck(fid).setFxParam(fxSelRef.current[fid], "mix", ev.value);
+            const slot = fxSelRef.current[fid];
+            engine.deck(fid).setFxParam(slot, "mix", ev.value);
+            emitRef.current({ kind: "fxParam", deck: fid, slot, param: "mix", value: ev.value });
+            refresh();
             break;
           }
           if (ev.target === "cueMix") {

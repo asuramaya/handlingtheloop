@@ -143,9 +143,10 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "micLevel" }, status: CC_MIX, data: 0x05, type: "cc14" },
     { control: { kind: "fader", target: "cueMix" }, status: CC_MIX, data: 0x0c, type: "cc14" },
     { control: { kind: "fader", target: "cueLevel" }, status: CC_MIX, data: 0x0d, type: "cc14" },
-    // SMART FADER button (browse-section channel 0x96, note 0x01) → enable/disable the crossfader
-    // + recentre. SMART CFX (0x96/0x00) is intentionally UNMAPPED for now (TBD). NOTE: if SMART
-    // FADER does nothing, the 0x00/0x01 pair is swapped — move xfaderToggle to 0x00.
+    // SMART CFX (0x96/0x00) → toggle the HI/MID/LOW knobs between EQ and STEM volume.
+    // SMART FADER (0x96/0x01) → enable/disable the crossfader + recentre.
+    // NOTE: if these are swapped on your unit, swap the two data bytes.
+    { control: { kind: "action", action: "eqStemToggle" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     // BEAT FX section (all verified on hardware). The section drives the FOCUSED deck; the
     // 1·2 switch moves focus. LEVEL/DEPTH (14-bit, MSB 0x02 / LSB 0x22 — also mirrored on 0xB5,

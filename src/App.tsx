@@ -639,6 +639,11 @@ export function App() {
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
+  // SMART CFX toggles the HI/MID/LOW knobs between EQ and STEM VOLUME (HI→other, MID→vocals,
+  // LOW→drums+bass). Ref drives the fader handler; state lets the on-screen EQ show the mode.
+  const [eqStemMode, setEqStemMode] = useState(false);
+  const eqStemModeRef = useRef(false);
+  useEffect(() => { eqStemModeRef.current = eqStemMode; }, [eqStemMode]);
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -924,6 +929,8 @@ export function App() {
       fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(1) : c?.navSel(1); },
       // FX SELECT → arm add-mode / commit. SHIFT+FX SELECT → remove the selected effect.
       fxSelectPress: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.removeSel() : c?.selectPress(); },
+      // SMART CFX → flip the HI/MID/LOW knobs between EQ and stem-volume control (both decks).
+      eqStemToggle: () => { setEqStemMode((v) => !v); },
       tempoRange: (deck, id, s) => {
         if (s) {
           matchGain(id);
@@ -3198,15 +3205,20 @@ export function App() {
               deck.setTrim(ev.value * 2);
               ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
               break;
+            // In STEM mode (SMART CFX) the HI/MID/LOW knobs ride stem volumes instead of EQ —
+            // HI→other, MID→vocals, LOW→drums+bass. Needs separated stems (else a no-op).
             case "eqHi":
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); } break; }
               deck.setEqHigh(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqHigh", value: deck.eqHigh });
               break;
             case "eqMid":
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); } break; }
               deck.setEqMid(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqMid", value: deck.eqMid });
               break;
             case "eqLow":
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("drums", ev.value); deck.setStemGain("bass", ev.value); refresh(); } break; }
               deck.setEqLow(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
               break;

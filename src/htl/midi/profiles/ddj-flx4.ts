@@ -156,6 +156,12 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x63, type: "note" },
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x4a, type: "note" },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x4b, type: "note" },
+    // SHIFTED layer — the FLX sends its OWN notes when SHIFT is held (verified), so they carry
+    // shift:true and hit the shifted branch of the same handlers: remove / reorder / reset.
+    { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x64, type: "note", shift: true },
+    { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x66, type: "note", shift: true },
+    { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x6b, type: "note", shift: true },
+    { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x43, type: "note", shift: true },
     // 1·2·1&2 channel switch — pos 1 (note 0x94/0x10) → focus deck A, pos 2 (0x95/0x11) → deck B.
     // At 1&2 both notes fire; last wins for now (true "both" is deferred).
     { control: { kind: "focus", deck: "A" }, status: 0x94, data: 0x10, type: "note" },

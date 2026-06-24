@@ -68,7 +68,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     if (from === to) return;
     deck.moveFx(from, to);
     broadcastRack();
-    setSel(to);
+    setSel(from < to ? to - 1 : to); // follow the device to where it actually landed (insert-before)
     refresh();
   };
 
@@ -172,7 +172,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       <div className="fx-tabs" role="tablist">
         {devices.map((d, i) => (
           <button
-            key={i}
+            key={d.kind}
             className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dragOver === i && dragFrom !== i ? "drag-over" : ""} ${dragFrom === i ? "dragging" : ""}`}
             onClick={() => setSel(i)}
             onContextMenu={(e) => openPresetMenu(e, i)}

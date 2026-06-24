@@ -133,9 +133,14 @@ export class FxRack {
 
   /** Move a device from `from` to `to` (indices into the current list). */
   move(from: number, to: number) {
-    if (from === to || from < 0 || from >= this.devices.length) return;
+    const n = this.devices.length;
+    if (from === to || from < 0 || from >= n || to < 0 || to >= n) return;
     const [d] = this.devices.splice(from, 1);
-    const at = Math.max(0, Math.min(to, this.devices.length));
+    // Drop ONTO tab `to` → land immediately before it, BOTH directions. Removing the source
+    // first shifts every later index down one, so a rightward move (from < to) must target
+    // to-1; a leftward move keeps `to`. (The old code used `to` raw, so right-drags landed one
+    // slot too far while left-drags were fine — the "only works one way" bug.)
+    const at = from < to ? to - 1 : to;
     this.devices.splice(at, 0, d);
     this.rebuild();
   }

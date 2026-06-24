@@ -639,8 +639,8 @@ export function App() {
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
-  // SMART CFX toggles the HI/MID/LOW knobs between EQ and STEM VOLUME (HI→other, MID→vocals,
-  // LOW→drums+bass). Ref drives the fader handler; state lets the on-screen EQ show the mode.
+  // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
+  // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
   const eqStemModeRef = useRef(false);
   useEffect(() => { eqStemModeRef.current = eqStemMode; }, [eqStemMode]);
@@ -929,7 +929,7 @@ export function App() {
       fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(1) : c?.navSel(1); },
       // FX SELECT → arm add-mode / commit. SHIFT+FX SELECT → remove the selected effect.
       fxSelectPress: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.removeSel() : c?.selectPress(); },
-      // SMART CFX → flip the HI/MID/LOW knobs between EQ and stem-volume control (both decks).
+      // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
       eqStemToggle: () => { setEqStemMode((v) => !v); },
       tempoRange: (deck, id, s) => {
         if (s) {
@@ -3205,24 +3205,26 @@ export function App() {
               deck.setTrim(ev.value * 2);
               ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
               break;
-            // In STEM mode (SMART CFX) the HI/MID/LOW knobs ride stem volumes instead of EQ —
-            // HI→other, MID→vocals, LOW→drums+bass. Needs separated stems (else a no-op).
+            // In STEM mode (SMART CFX) the column of knobs rides stem volumes instead of EQ/filter,
+            // going DOWN the line: HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Needs stems.
             case "eqHi":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("drums", ev.value); refresh(); } break; }
               deck.setEqHigh(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqHigh", value: deck.eqHigh });
               break;
             case "eqMid":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("bass", ev.value); refresh(); } break; }
               deck.setEqMid(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqMid", value: deck.eqMid });
               break;
             case "eqLow":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("drums", ev.value); deck.setStemGain("bass", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); } break; }
               deck.setEqLow(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
               break;
             case "filter":
+              // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter.
+              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); } break; }
               deck.setFilter((ev.value - 0.5) * 2);
               ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
               break;

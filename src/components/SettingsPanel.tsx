@@ -17,7 +17,8 @@ interface SettingsPanelProps {
   onClose: () => void;
   loadedVideoIds?: string[]; // tracks currently on the decks (for per-model cache state)
   stemStatus?: Record<"A" | "B", StemStatus | null>; // live per-deck separation status/errors
-  onReanalyze?: (modelId: string) => void; // force a fresh separation of the loaded track(s)
+  loadedDecks?: { id: "A" | "B"; neural: boolean; hasStems: boolean; model: string | null }[];
+  onReanalyze?: (modelId: string, deck?: "A" | "B") => void; // fresh separation of one deck (or all)
   onGpuReenable?: () => void; // user opted to re-enable GPU after a crash auto-disabled it
   outputSupported?: boolean; // browser can route to a chosen output device (AudioContext.setSinkId)
   debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)
@@ -42,6 +43,7 @@ export function SettingsPanel({
   onChange,
   onClose,
   loadedVideoIds = [],
+  loadedDecks = [],
   stemStatus,
   onReanalyze,
   onGpuReenable,
@@ -82,6 +84,7 @@ export function SettingsPanel({
               onChange={onChange}
               outputSupported={outputSupported}
               loadedVideoIds={loadedVideoIds}
+              loadedDecks={loadedDecks}
               stemStatus={stemStatus}
               onReanalyze={onReanalyze}
               onGpuReenable={onGpuReenable}

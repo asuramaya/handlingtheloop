@@ -59,6 +59,7 @@ export function AudioTab({
   onChange,
   outputSupported,
   loadedVideoIds,
+  loadedDecks = [],
   stemStatus,
   onReanalyze,
   onGpuReenable,
@@ -68,8 +69,9 @@ export function AudioTab({
   onChange: (next: Settings) => void;
   outputSupported: boolean;
   loadedVideoIds: string[];
+  loadedDecks?: { id: "A" | "B"; neural: boolean; hasStems: boolean; model: string | null }[];
   stemStatus?: Record<"A" | "B", StemStatus | null>;
-  onReanalyze?: (modelId: string) => void;
+  onReanalyze?: (modelId: string, deck?: "A" | "B") => void;
   onGpuReenable?: () => void;
 }) {
   // Audio OUTPUT devices (speaker select). enumerateDevices only fills in `label`
@@ -569,22 +571,45 @@ export function AudioTab({
         {(() => {
           const sel = getStemModel(settings.stemModel);
           if (sel.kind === "dsp" || isMobileDevice()) return null;
-          const canReanalyze = modelSupport(sel) === "runs" && loadedVideoIds.length > 0 && !!onReanalyze;
+          const supported = modelSupport(sel) === "runs";
+          if (loadedDecks.length === 0) {
+            return <div className="stem-reanalyze-empty">Load a track to separate or re-analyze it with {sel.label}.</div>;
+          }
           return (
-            <button
-              className="stem-reanalyze"
-              disabled={!canReanalyze}
-              onClick={() => canReanalyze && onReanalyze?.(sel.id)}
-              title={
-                loadedVideoIds.length === 0
-                  ? "Load a track first"
-                  : modelSupport(sel) !== "runs"
-                    ? `${sel.label} can't be separated on this device`
-                    : `Re-run ${sel.label} on the loaded track(s), overwriting the cached stems`
-              }
-            >
-              ↻ Re-analyze loaded track{loadedVideoIds.length > 1 ? "s" : ""} with {sel.label}
-            </button>
+            <div className="stem-deck-list">
+              {loadedDecks.map((d) => {
+                // Steady per-deck stem state: which engine is on this deck right now.
+                const onSel = d.neural && d.model === sel.id; // already this exact neural model
+                const state = !d.hasStems
+                  ? "plain mix"
+                  : d.neural
+                    ? d.model
+                      ? getStemModel(d.model).label
+                      : "neural"
+                    : "DSP split";
+                const canRun = supported && !!onReanalyze;
+                return (
+                  <div className={`stem-deck-row${onSel ? " is-current" : ""}`} key={d.id}>
+                    <span className="stem-deck-id">{d.id}</span>
+                    <span className="stem-deck-state">{onSel ? `✓ ${state}` : state}</span>
+                    <button
+                      className="stem-deck-reanalyze"
+                      disabled={!canRun}
+                      onClick={() => canRun && onReanalyze?.(sel.id, d.id)}
+                      title={
+                        !supported
+                          ? `${sel.label} can't be separated on this device`
+                          : onSel
+                            ? `Re-run ${sel.label} on deck ${d.id}, overwriting its cached stems`
+                            : `Separate deck ${d.id} with ${sel.label}`
+                      }
+                    >
+                      ↻ {onSel ? "Re-analyze" : sel.label}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           );
         })()}
         {!isMobileDevice() && (() => {

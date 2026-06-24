@@ -639,8 +639,6 @@ export function App() {
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
-  const cfxLedRef = useRef<boolean | null>(null); // last SMART CFX lamp state sent (eq/stem mode, diff)
-  const xfaderLedRef = useRef<boolean | null>(null); // last SMART FADER lamp state sent (xfader on/off, diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -3457,18 +3455,10 @@ export function App() {
         // value for "on" and off for "bypass". ⚠️ values unconfirmed — adjust from the prober sweep.
         midi.send([0x94, 0x47, on ? 0x01 : 0x00]);
       }
-      // SMART CFX lamp = EQ/STEM knob mode (lit while the column rides stem volumes).
-      const cfxOn = eqStemModeRef.current;
-      if (cfxOn !== cfxLedRef.current) {
-        cfxLedRef.current = cfxOn;
-        midi.send([0x96, 0x00, cfxOn ? 0x7f : 0x00]);
-      }
-      // SMART FADER lamp = crossfader enabled.
-      const xfOn = xfaderEnabledRef.current;
-      if (xfOn !== xfaderLedRef.current) {
-        xfaderLedRef.current = xfOn;
-        midi.send([0x96, 0x01, xfOn ? 0x7f : 0x00]);
-      }
+      // SMART CFX (0x96/0x00) + SMART FADER (0x96/0x01) lamps are FIRMWARE-OWNED — the FLX
+      // toggles them itself on press and tracks its own internal on/off state. Writing those
+      // note addresses from here desyncs that internal toggle, so the next press emits the
+      // wrong state (the button starts firing eqStemToggle/focus). So we do NOT drive them.
     };
     push();
     const iv = setInterval(push, 150);

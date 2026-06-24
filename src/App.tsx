@@ -581,6 +581,8 @@ export function App() {
   const [focusShift, setFocusShift] = useState(false);
   // Which deck the keyboard drives (Tab toggles it; the focused deck is ringed).
   const [focused, setFocused] = useState<DeckId>("A");
+  const focusedRef = useRef<DeckId>("A"); // current focus for the ~7Hz feedback interval (no stale closure)
+  useEffect(() => { focusedRef.current = focused; }, [focused]);
   // Keyboard/on-screen shift is a property of the FOCUSED deck — never both. A deck's
   // shift is on when the keyboard Shift / latch (or a focus-model latch) is active AND
   // it's focused, OR that deck's own controller SHIFT button is held.
@@ -636,6 +638,7 @@ export function App() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
+  const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -894,13 +897,20 @@ export function App() {
         emitRef.current({ kind: "toggle", deck: id, param: "fx", value: deck.fxOn });
       },
       // Toggle bypass on the FX device currently selected in this deck's FX strip (gamepad R3).
-      fxBypassCur: (deck, id) => {
+      // ON/OFF → A/B the focused deck's selected effect. SHIFT+ON/OFF → reset it.
+      fxBypassCur: (deck, id, s) => {
         const i = fxSelRef.current[id];
+        if (!deck.fxDevices[i]) return;
+        if (s) {
+          deck.resetFxAt(i);
+          refresh();
+          return;
+        }
         const dev = deck.fxDevices[i];
-        if (!dev) return;
         const next = !dev.bypassed;
         deck.setFxBypass(i, next);
         emitRef.current({ kind: "fxBypass", deck: id, slot: i, value: next });
+        refresh();
       },
       // BEAT FX SMART CFX → reset the focused deck's SELECTED effect to its defaults (local).
       fxReset: (deck, id) => {
@@ -909,11 +919,11 @@ export function App() {
         deck.resetFxAt(i);
         refresh();
       },
-      // BEAT FX BEAT ◀▶ → move the focused strip's selection (or the add candidate in add-mode).
-      fxSelPrev: (_deck, id) => fxCtlFor(id)?.navSel(-1),
-      fxSelNext: (_deck, id) => fxCtlFor(id)?.navSel(1),
-      // BEAT FX FX SELECT → arm add-mode, then commit the candidate on the next press.
-      fxSelectPress: (_deck, id) => fxCtlFor(id)?.selectPress(),
+      // BEAT FX BEAT ◀▶ → move the selection (add candidate in add-mode). SHIFT → reorder the tab.
+      fxSelPrev: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(-1) : c?.navSel(-1); },
+      fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(1) : c?.navSel(1); },
+      // FX SELECT → arm add-mode / commit. SHIFT+FX SELECT → remove the selected effect.
+      fxSelectPress: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.removeSel() : c?.selectPress(); },
       tempoRange: (deck, id, s) => {
         if (s) {
           matchGain(id);
@@ -3423,11 +3433,21 @@ export function App() {
         };
         midi.setFeedback(id, fb);
       });
+      // BEAT FX ON/OFF lamp = the FOCUSED deck's SELECTED effect is active (not bypassed).
+      // Diffed so it's sent only on change. (Harmless if the FLX self-manages this LED.)
+      const fid = focusedRef.current;
+      const fdeck = engine.deck(fid);
+      const sd = fdeck.fxDevices[fxSelRef.current[fid]];
+      const on = sd ? (sd.kind === "eq" ? !fdeck.eqBypassed : !sd.bypassed) : false;
+      if (on !== beatFxLedRef.current) {
+        beatFxLedRef.current = on;
+        midi.send([0x94, 0x47, on ? 0x7f : 0x00]); // ON/OFF (RELEASE FX) button LED
+      }
     };
     push();
     const iv = setInterval(push, 150);
     return () => clearInterval(iv);
-  }, [engine, settings.midiEnabled, midi.status.state, midi.setFeedback]);
+  }, [engine, settings.midiEnabled, midi.status.state, midi.setFeedback, midi.send]);
   // A user picking a track hands it to the audio master via a load intent (the master
   // does the real streaming / decode / playback / stems); we also load locally for our
   // own waveform. Remote-driven loads go through applyIntent and DON'T re-emit.

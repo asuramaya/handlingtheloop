@@ -46,10 +46,12 @@ interface FxStripProps {
   ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
 }
 
-// What the FLX BEAT FX section drives on a strip: BEAT ◀▶ navigate, FX SELECT add-mode + commit.
+// What the FLX BEAT FX section drives on a strip. The SHIFTed layer = remove / reorder.
 export interface FxStripCtl {
   navSel: (dir: number) => void; // move the selected tab — or the add candidate while in add-mode
   selectPress: () => void; // FX SELECT: 1st press arms add-mode, 2nd commits the candidate
+  removeSel: () => void; // SHIFT+FX SELECT: remove the selected effect (no-op on the permanent EQ)
+  moveSel: (dir: number) => void; // SHIFT+BEAT ◀▶: reorder the selected effect left/right
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect, ctlRef }: FxStripProps) {
@@ -92,8 +94,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const [cand, setCand] = useState(0); // highlighted index into the open palette
   const addable = useMemo(() => ADDABLE.filter((a) => !deck.hasFxKind(a.kind)), [deck, devices.length]);
   // Refs so the imperative ctl always reads current values (no stale closure per render).
-  const live = useRef({ open: paletteOpen, cand, addable, len: devices.length });
-  live.current = { open: paletteOpen, cand, addable, len: devices.length };
+  const live = useRef({ open: paletteOpen, cand, addable, len: devices.length, cur });
+  live.current = { open: paletteOpen, cand, addable, len: devices.length, cur };
   useEffect(() => {
     if (!ctlRef) return;
     ctlRef.current = {
@@ -117,6 +119,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           if (pick) addDevice(pick.kind); // adds + selects the new tab + closes the palette
           else setPaletteOpen(false);
         }
+      },
+      removeSel: () => {
+        setPaletteOpen(false);
+        removeAt(live.current.cur); // no-ops on the EQ (guarded in Deck.removeFxAt)
+      },
+      moveSel: (dir) => {
+        const L = live.current;
+        reorder(L.cur, Math.max(0, Math.min(L.len - 1, L.cur + dir)));
       },
     };
     return () => {

@@ -641,41 +641,32 @@
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
-/* Smart Fader armed → the strip reads as "blendy": an A↔B accent gradient base, a glowing accent
-   ring, and a bright sheen that SWEEPS across (visible on top of the meter, unlike a flat bg). */
+/* Smart Fader armed → the whole strip BREATHES a soft glow that cycles between the two deck
+   accents (A↔B), reading as "blendy". A static A↔B gradient base gives the spatial blend; an
+   inset glow (above the meter, non-interactive) breathes the colour. */
 .xfader-bar.smart-armed {
   background:
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--xa, #4ad) 55%, var(--panel)) 0%,
-      color-mix(in srgb, var(--xa, #4ad) 18%, var(--panel)) 38%,
-      color-mix(in srgb, var(--xb, #d4a) 18%, var(--panel)) 62%,
-      color-mix(in srgb, var(--xb, #d4a) 55%, var(--panel)) 100%
+      color-mix(in srgb, var(--xa, #4ad) 40%, var(--panel)) 0%,
+      color-mix(in srgb, var(--xa, #4ad) 14%, var(--panel)) 40%,
+      color-mix(in srgb, var(--xb, #d4a) 14%, var(--panel)) 60%,
+      color-mix(in srgb, var(--xb, #d4a) 40%, var(--panel)) 100%
     );
-  box-shadow:
-    inset 0 0 0 2px color-mix(in srgb, var(--xa, #4ad) 55%, transparent),
-    0 0 12px color-mix(in srgb, var(--xb, #d4a) 45%, transparent);
-  overflow: hidden;
 }
-/* The sweeping highlight band — sits ABOVE the meter (z-index) but ignores pointer events. */
 .xfader-bar.smart-armed::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 4;
   pointer-events: none;
-  background: linear-gradient(
-    100deg,
-    transparent 35%,
-    color-mix(in srgb, var(--xa, #4ad) 70%, transparent) 48%,
-    color-mix(in srgb, var(--xb, #d4a) 70%, transparent) 52%,
-    transparent 65%
-  );
-  background-size: 220% 100%;
-  mix-blend-mode: screen;
-  animation: smart-sweep 1.6s linear infinite;
+  border-radius: inherit;
+  animation: smart-breathe 2.6s ease-in-out infinite;
 }
-@keyframes smart-sweep { from { background-position: 160% 0; } to { background-position: -60% 0; } }
+@keyframes smart-breathe {
+  0%, 100% { box-shadow: inset 0 0 16px 1px color-mix(in srgb, var(--xa, #4ad) 60%, transparent); }
+  50% { box-shadow: inset 0 0 16px 1px color-mix(in srgb, var(--xb, #d4a) 60%, transparent); }
+}
 .xbar-track {
   position: relative;
   flex: 1;

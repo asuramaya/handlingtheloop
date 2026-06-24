@@ -59,11 +59,12 @@ export class SmartFader {
   arm(cf: number): boolean {
     if (this.armed) return true;
     if (!this.setupDirection(cf)) return false;
-    // The pitch glide is intentional — drop key-lock so the tempo morph pitches the decks
-    // (turntable-style). Saved per-deck so disarm restores the user's setting. Kept across re-arms.
+    // The pitch glide is intentional — PIN key-lock off so the tempo morph pitches the decks
+    // (turntable-style) AND a manual KEY nudge mid-transition adds to the glide instead of
+    // re-engaging key-lock (which would freeze it). Saved per-deck so disarm restores the setting.
     this.keylockSaved = { A: this.engine.deck("A").keylock, B: this.engine.deck("B").keylock };
-    this.engine.deck("A").setKeylock(false);
-    this.engine.deck("B").setKeylock(false);
+    this.engine.deck("A").setKeylockPinnedOff(true);
+    this.engine.deck("B").setKeylockPinnedOff(true);
     this.armed = true;
     this.apply(cf);
     return true;
@@ -77,6 +78,7 @@ export class SmartFader {
       const d = this.engine.deck(id);
       d.setTempo(0);
       d.setEqLow(0);
+      d.setKeylockPinnedOff(false); // unpin first, then restore the user's saved key-lock
       const k = this.keylockSaved[id];
       if (k != null) d.setKeylock(k);
     }

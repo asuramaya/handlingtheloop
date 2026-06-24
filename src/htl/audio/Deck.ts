@@ -261,6 +261,7 @@ export class Deck {
   private _rate = 1;
   private _tempo = 0; // percent
   private _keylock = true; // keep pitch constant under tempo by default (modern DJ)
+  private _keylockPinnedOff = false; // Smart Fader pins keylock off so setPitch can't re-engage it
   private _pitchSemis = 0; // musical key shift, −12 … +12 semitones
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
@@ -617,6 +618,20 @@ export class Deck {
     this.updatePitch();
   }
 
+  /** Pin key-lock OFF (Smart Fader): keeps the tempo-pitch GLIDE alive AND stops setPitch from
+   *  silently re-enabling key-lock when the key is nudged mid-transition — so a manual KEY shift
+   *  rides ON TOP of the glide (additive) instead of killing it. Unpin restores normal behaviour. */
+  setKeylockPinnedOff(on: boolean) {
+    this._keylockPinnedOff = on;
+    if (on && this._keylock) {
+      this._keylock = false;
+      this.updatePitch();
+    }
+  }
+  get keylockPinnedOff() {
+    return this._keylockPinnedOff;
+  }
+
   /** Wire the scratch resampler in parallel with the source (into the channel input, raw
    *  pitch — scrubbing should pitch like vinyl). The JogEngine owns the node + its PCM. */
   attachScratchNode(node: AudioWorkletNode) {
@@ -641,7 +656,9 @@ export class Deck {
   }
   setPitch(semis: number) {
     this._pitchSemis = Math.max(-24, Math.min(24, Math.round(semis))); // up to ±2 octaves (PITCH_RANGES)
-    if (this._pitchSemis !== 0) this._keylock = true;
+    // A manual key shift normally engages key-lock (pitch-only) — UNLESS pinned off (Smart Fader),
+    // where the nudge must add to the live tempo-pitch glide rather than freeze it.
+    if (this._pitchSemis !== 0 && !this._keylockPinnedOff) this._keylock = true;
     this.updatePitch();
     this.onPitchChange?.(); // AudioEngine KEY hook: master→slave follow / release
   }

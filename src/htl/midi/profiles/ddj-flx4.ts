@@ -126,13 +126,12 @@ export const DDJ_FLX4: DeviceProfile = {
     // the on-screen tempo cell + how the FLX4 actually reports its pitch fader here.
     ...knob("tempo", 0x00, false),
     ...knob("level", 0x13),
+    ...knob("trim", 0x04), // TRIM/gain knob, deck channel B0/B1 0x04 (LSB 0x24) — verified live
     ...knob("eqHi", 0x07),
     ...knob("eqMid", 0x0b),
     ...knob("eqLow", 0x0f),
-    // NO per-channel TRIM/gain knob on the FLX4. The COLOR/filter knob DUPLICATES its output
-    // on the deck channel CC 0x04 (LSB 0x24) AND the mixer CC 0x17/0x18 (verified live: one
-    // knob emits BOTH `B0 04` and `B6 17`). Binding 0x04 to "trim" made the filter knob drag
-    // trim too — so we map only the mixer-channel pair below and leave 0x04 unbound.
+    // TRIM (B0/B1 0x04) and the COLOR/filter knob (B6 0x17/0x18) are SEPARATE knobs on distinct
+    // CCs — the earlier "filter drags trim" read was a misdiagnosis of the trim knob sweeping 0x04.
     // SMART CFX (filter) knobs — PER DECK on the mixer channel as 14-bit CCs:
     // deck A MSB 0x17, deck B MSB 0x18. Centre = off, right = high-pass, left = low-pass.
     { control: { kind: "fader", target: "filter" }, deck: "A", status: CC_MIX, data: 0x17, type: "cc14" },

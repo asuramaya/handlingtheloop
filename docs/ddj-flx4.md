@@ -46,8 +46,13 @@ notes get LED feedback (`feedback.padModes`).
 
 ## Faders / knobs (14-bit CC on the deck/mixer channel)
 
-tempo `0x00` · level `0x13` · trim `0x04` · eqHi `0x07` · eqMid `0x0B` · eqLow `0x0F` · CFX/filter
+tempo `0x00` · level `0x13` · eqHi `0x07` · eqMid `0x0B` · eqLow `0x0F` · CFX/filter
 deck A `0xB6/0x17`, deck B `0xB6/0x18` · crossfader `0xB6/0x1F`.
+
+**No TRIM/gain knob on the FLX4.** The COLOR/filter knob DUPLICATES its output on the deck
+channel CC `0x04` (LSB `0x24`) *and* the mixer CC `0x17/0x18` — one physical knob emits both
+`B0 04` and `B6 17` (verified live). `0x04` was mistakenly bound to `trim`, so turning filter
+dragged trim with it; `0x04` is now left unbound and only the mixer pair drives the filter.
 
 ## Left column — the "analog" knobs that aren't (mixer-global `0xB6`, 14-bit)
 

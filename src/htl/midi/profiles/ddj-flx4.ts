@@ -212,6 +212,8 @@ export const DDJ_FLX4: DeviceProfile = {
     cue: 0x0c,
     sync: 0x58,
     loop: 0x4d,
+    loopIn: 0x10, // manual loop IN button lamp (same note as its input)
+    loopOut: 0x11, // manual loop OUT button lamp
     hotcues: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
     // Mode-button LEDs (same notes as the inputs). Lit when our software is in that bank,
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —

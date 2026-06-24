@@ -567,6 +567,8 @@ export class MidiEngine {
     lamp(f.cue, fb.cue, prev?.cue);
     lamp(f.sync, fb.sync, prev?.sync);
     lamp(f.loop, fb.loop, prev?.loop);
+    lamp(f.loopIn, fb.loopIn, prev?.loopIn);
+    lamp(f.loopOut, fb.loopOut, prev?.loopOut);
     const padStatus = p.padStatus?.[deck];
     if (f.hotcues && padStatus != null) {
       for (let i = 0; i < f.hotcues.length; i++) {

@@ -3207,24 +3207,27 @@ export function App() {
               break;
             // In STEM mode (SMART CFX) the column of knobs rides stem volumes instead of EQ/filter,
             // going DOWN the line: HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Needs stems.
+            // In stem mode (SMART CFX) the knob rides a stem volume — but ONLY when this deck has
+            // separated stems. Without them, fall THROUGH to EQ/filter so the knob is never dead
+            // (a silent break here left filter/EQ unresponsive on a deck that wasn't stemmed).
             case "eqHi":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("drums", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("drums", ev.value); refresh(); break; }
               deck.setEqHigh(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqHigh", value: deck.eqHigh });
               break;
             case "eqMid":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("bass", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("bass", ev.value); refresh(); break; }
               deck.setEqMid(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqMid", value: deck.eqMid });
               break;
             case "eqLow":
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); break; }
               deck.setEqLow(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
               break;
             case "filter":
               // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter.
-              if (eqStemModeRef.current) { if (deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); } break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); break; }
               deck.setFilter((ev.value - 0.5) * 2);
               ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
               break;
@@ -3440,8 +3443,14 @@ export function App() {
         const fb: DeckFeedback = {
           play: d.playing,
           cue: !d.playing, // cue lamp lit while stopped (sitting on the cue), per DJ convention
-          sync: d.syncRole === "slave",
+          // SYNC lamp lit whenever the deck is sync-engaged — master OR slave (the master deck's
+          // SYNC button used to stay dark). "do the same for master" → the MASTER deck lights too.
+          sync: d.syncRole !== "off",
           loop: !!d.loop?.active,
+          // Manual loop IN/OUT button lamps: lit when that edge exists (loop active) or is armed
+          // for fine-adjust (Shift-IN/OUT → deck.adjusting). Off otherwise.
+          loopIn: !!d.loop?.active || d.adjusting === "in",
+          loopOut: !!d.loop?.active || d.adjusting === "out",
           hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
           padMode: d.padMode,
         };

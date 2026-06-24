@@ -72,7 +72,9 @@ export interface MidiFeedbackMap {
   play?: number; // data byte (status taken per-deck from `noteStatus`)
   cue?: number;
   sync?: number;
-  loop?: number; // loop in/out lamp
+  loop?: number; // loop-active lamp (e.g. the FLX4 reloop button)
+  loopIn?: number; // manual loop-IN button lamp (lit when in-point set / armed for adjust)
+  loopOut?: number; // manual loop-OUT button lamp
   hotcues?: number[]; // pad data bytes for hot cues 1..8 (lit on the `padStatus`)
   // Pad-bank MODE buttons (FLX4: HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER). One note per
   // mode, lit on `noteStatus`; the active mode lights, the rest clear. Lets the board
@@ -119,6 +121,8 @@ export interface DeckFeedback {
   cue: boolean;
   sync: boolean;
   loop: boolean;
+  loopIn: boolean; // manual loop in-point set / in-edge armed for adjust
+  loopOut: boolean; // manual loop out-point set / out-edge armed for adjust
   hotcues: boolean[]; // length 8, true = slot set
   padMode: "cue" | "loop" | "sampler" | "fx"; // active pad bank → lights the matching mode button
 }

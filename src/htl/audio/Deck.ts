@@ -214,7 +214,6 @@ export class Deck {
   // zeroes the other; the Starrypad's two knobs drive each side on its own.
   private _hp = 0; // high-pass amount 0..1
   private _lp = 0; // low-pass amount 0..1
-  private _fxOn = true; // FX master: when off the color filter is bypassed
   private _loudness: number | null = null; // cached integrated RMS of the track
   // Scalars that outlive `this.buffer`: on mobile we RELEASE the ~92 MB float32 mix once stems
   // are packed into the worklet (releaseMixBuffer) — the worklet is the audio source from then
@@ -2047,22 +2046,14 @@ export class Deck {
     this.applyFilter();
   }
 
-  // FX master: a bypass for the deck's color filter. Off pins it transparent
-  // while keeping the knob value, so flipping it back restores the same sweep.
-  get fxOn() {
-    return this._fxOn;
-  }
-  setFx(on: boolean) {
-    this._fxOn = on;
-    this.applyFilter();
-  }
-  // Drive the EQ's own HP/LP cut nodes (the curve's edge handles) INDEPENDENTLY from the
-  // two amounts: HP sweeps its cutoff up (20 → 2200 Hz), LP sweeps its cutoff down
-  // (20000 → 320 Hz); 0 on a side parks it open. Both can be engaged (band-pass).
-  // FX-off pins both transparent while keeping the amounts.
+  // Drive the EQ's own HP/LP cut nodes (the curve's edge handles) from the two filter amounts:
+  // HP sweeps its cutoff up (20 → 2200 Hz), LP sweeps its cutoff down (20000 → 320 Hz); 0 on a
+  // side parks it open. Both can be engaged (band-pass). The colour filter is ALWAYS live now —
+  // its old on/off master (fxOn) was a vestige of the SMART-CFX-turns-filter-on/off design and
+  // is gone; the knob's centre IS the off (both amounts 0 = transparent).
   private applyFilter() {
-    const hp = this._fxOn ? this._hp : 0;
-    const lp = this._fxOn ? this._lp : 0;
+    const hp = this._hp;
+    const lp = this._lp;
     this.eq.setHpFreq(hp > 0 ? EQ_HP.min * Math.pow(EQ_HP.max / EQ_HP.min, hp) : EQ_HP.min);
     this.eq.setLpFreq(lp > 0 ? EQ_LP.max * Math.pow(EQ_LP.min / EQ_LP.max, lp) : EQ_LP.max);
   }

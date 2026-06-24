@@ -218,7 +218,6 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqLpQ: deck.eqLpQ,
     eqBypass: deck.eqBypassed,
     filter: deck.filterValue,
-    fxOn: deck.fxOn,
     fx: deck.fxSnapshot(), // post-EQ effect chain (delay/reverb…) — EQ stays in the eq* fields
     keylock: deck.keylock,
     pitchSemis: deck.pitch,
@@ -304,7 +303,6 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   // Filter drives the EQ HP/LP nodes, so apply it BEFORE the explicit HP/LP positions
   // — otherwise a centred filter would reset manually-dragged cut handles.
   deck.setFilter(s.filter ?? 0);
-  deck.setFx(s.fxOn ?? true);
   if (s.eqHpFreq != null) deck.setEqHpFreq(s.eqHpFreq);
   if (s.eqHpQ != null) deck.setEqHpQ(s.eqHpQ);
   if (s.eqLpFreq != null) deck.setEqLpFreq(s.eqLpFreq);
@@ -900,10 +898,6 @@ export function App() {
         engine.toggleKey(id);
         emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
         emitRef.current({ kind: "key", slave: engine.keySlave }); // mirror the button on peers
-      },
-      fx: (deck, id) => {
-        deck.setFx(!deck.fxOn);
-        emitRef.current({ kind: "toggle", deck: id, param: "fx", value: deck.fxOn });
       },
       // Toggle bypass on the FX device currently selected in this deck's FX strip (gamepad R3).
       // ON/OFF → A/B the focused deck's selected effect. SHIFT+ON/OFF → reset it.
@@ -2115,7 +2109,6 @@ export function App() {
           setStatusFor(id, { phase: "downloading", detail: "Waiting for the host's stems…" });
         }, 7000);
       }
-      if (deck.fxOn !== (d.fxOn ?? true)) deck.setFx(d.fxOn ?? true);
       if (deck.keylock !== d.keylock) deck.setKeylock(d.keylock);
       if (deck.quantizing !== d.quantize) deck.setQuantize(d.quantize);
       // The FX RACK (Delay/Reverb/Saturator…) — reconcile it too, so a track loaded via a `load`
@@ -2329,10 +2322,10 @@ export function App() {
           else if (intent.param === "pitch") deck.setPitch(Math.round(intent.value));
           break;
         case "toggle":
-          if (intent.param === "fx") deck.setFx(intent.value);
-          else if (intent.param === "keylock") deck.setKeylock(intent.value);
+          if (intent.param === "keylock") deck.setKeylock(intent.value);
           else if (intent.param === "eqBypass") deck.setEqBypass(intent.value);
-          else deck.setQuantize(intent.value);
+          else if (intent.param === "quantize") deck.setQuantize(intent.value);
+          // (legacy "fx" filter-master toggle removed — ignored if an old peer sends it)
           break;
         case "fxParam":
           // A post-EQ effect knob moved on a controller — high-frequency live sync.
@@ -3227,11 +3220,9 @@ export function App() {
               ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
               break;
             case "filter":
-              // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter.
+              // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter
+              // (always live now — its old on/off master is gone, so the knob can't be stuck off).
               if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", stemKnobGain(ev.value)); refresh(); break; }
-              // The colour filter's on/off (fxOn) lost its dedicated control — a stuck-off deck left
-              // the knob dead. Sweeping the knob re-engages it (and syncs the toggle) so it's never dead.
-              if (!deck.fxOn) { deck.setFx(true); ctl({ kind: "toggle", deck: id, param: "fx", value: true }); }
               deck.setFilter((ev.value - 0.5) * 2);
               ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
               break;

@@ -44,7 +44,6 @@ export interface DeckSnapshot {
   eqLpQ?: number;
   eqBypass?: boolean; // EQ out of circuit
   filter: number; // -1..1 color filter
-  fxOn?: boolean; // FX master (filter) enabled
   // Channel-strip effects AFTER the EQ (delay/reverb/chorus…), in order. Optional so old
   // snapshots load fine (no effects). The EQ itself is the eq* fields above, not here.
   fx?: FxSlot[];

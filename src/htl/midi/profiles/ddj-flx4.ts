@@ -82,6 +82,9 @@ export const DDJ_FLX4: DeviceProfile = {
     ...btn("play", 0x0b),
     ...btn("cue", 0x0c),
     ...btn("sync", 0x58),
+    // Channel CUE buttons (the orange CUE 1/CUE 2 above the faders) → headphone PFL toggle per
+    // deck. Plain mixer buttons (note 0x54 on the deck status), LED reflects the PFL state.
+    ...btn("cuePfl", 0x54),
     // Loop
     ...btn("loopIn", 0x10),
     ...btn("loopOut", 0x11),
@@ -213,6 +216,7 @@ export const DDJ_FLX4: DeviceProfile = {
     loop: 0x4d,
     loopIn: 0x10, // manual loop IN button lamp (same note as its input)
     loopOut: 0x11, // manual loop OUT button lamp
+    cuePfl: 0x54, // channel CUE (headphone PFL) button lamp
     hotcues: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
     // Mode-button LEDs (same notes as the inputs). Lit when our software is in that bank,
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —

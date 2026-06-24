@@ -642,6 +642,7 @@ export function App() {
   // on connect + every toggle — see the feedback push. We NEVER send 0x7F (that latches the hardware
   // feature ON, which remaps the COLOR knob onto the trim CC and fights trim).
   const cfxLedRef = useRef<boolean | null>(null);
+  const beatFxLedRef = useRef<boolean | null>(null); // last FX-bypass (RELEASE FX) lamp state sent (diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -899,6 +900,12 @@ export function App() {
         engine.toggleKey(id);
         emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
         emitRef.current({ kind: "key", slave: engine.keySlave }); // mirror the button on peers
+      },
+      // Channel CUE (headphone PFL) toggle — pre-listen this deck in the cue device. LOCAL-ONLY
+      // (each DJ's headphone is their own → never emitted to a session). 0 ↔ full send.
+      cuePfl: (deck) => {
+        deck.setCueLevel(deck.cueLevel > 0 ? 0 : 1);
+        refresh();
       },
       // Toggle bypass on the FX device currently selected in this deck's FX strip (gamepad R3).
       // ON/OFF → A/B the focused deck's selected effect. SHIFT+ON/OFF → reset it.
@@ -3448,6 +3455,7 @@ export function App() {
           // for fine-adjust (Shift-IN/OUT → deck.adjusting). Off otherwise.
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
+          cuePfl: d.cueLevel > 0, // channel headphone PFL active
           hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
           padMode: d.padMode,
         };
@@ -3462,14 +3470,25 @@ export function App() {
         cfxLedRef.current = cfxOn;
         midi.send([0x96, 0x00, 0x00]);
       }
-      // SMART FADER lamp (0x96/0x01) = crossfader enabled.
+      // FORCE the FLX hardware SMART FADER OFF too — SAME pathology as Smart-CFX (host-controlled,
+      // latching, on 0x96/0x01): driving 0x7F engages the hardware feature and changes crossfader
+      // behaviour. We do the crossfader-enable in software, so keep the hardware feature disengaged:
+      // send 0x00 on connect + every toggle, NEVER 0x7F. Lamp stays dark.
       const xfOn = xfaderEnabledRef.current;
       if (xfOn !== xfaderLedRef.current) {
         xfaderLedRef.current = xfOn;
-        midi.send([0x96, 0x01, xfOn ? 0x7f : 0x00]);
+        midi.send([0x96, 0x01, 0x00]);
       }
-      // ON/OFF (RELEASE FX) lamp 0x94/0x47 is app-driven too, but 0x7F BLINKS — pending the
-      // solid-on value from the prober before we drive it on the feedback push.
+      // FX bypass (RELEASE FX ON/OFF) lamp 0x94/0x47 = the FOCUSED deck's SELECTED effect is active
+      // (not bypassed). Diffed. (0x7F may BLINK on this lamp; adjust the value if so.)
+      const fid = focusedRef.current;
+      const fdeck = engine.deck(fid);
+      const sd = fdeck.fxDevices[fxSelRef.current[fid]];
+      const fxLit = sd ? (sd.kind === "eq" ? !fdeck.eqBypassed : !sd.bypassed) : false;
+      if (fxLit !== beatFxLedRef.current) {
+        beatFxLedRef.current = fxLit;
+        midi.send([0x94, 0x47, fxLit ? 0x7f : 0x00]);
+      }
     };
     push();
     const iv = setInterval(push, 150);

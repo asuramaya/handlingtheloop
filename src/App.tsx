@@ -638,6 +638,11 @@ export function App() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
+  // FLX4 LED feedback (diffed, sent only on change). Addresses verified on hardware via the
+  // output prober: SMART CFX 0x96/0x00 and SMART FADER 0x96/0x01 light solid at 0x7F (no input
+  // echo). These ARE app-driven (the FLX does NOT self-light them).
+  const cfxLedRef = useRef<boolean | null>(null);
+  const xfaderLedRef = useRef<boolean | null>(null);
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -3442,12 +3447,20 @@ export function App() {
         };
         midi.setFeedback(id, fb);
       });
-      // BEAT FX ON/OFF (RELEASE FX) lamp + SMART CFX/FADER lamps are all FIRMWARE-OWNED — the
-      // FLX toggles them itself on press and tracks its own internal on/off state. Driving the
-      // ON/OFF note (0x94/0x47) made the FLX reflect it back as a stream of unmapped 0x95/0x47
-      // input; writing the SMART notes (0x96/0x00, 0x96/0x01) desynced their internal toggle so
-      // the next press emitted the wrong note. So we drive NONE of them — only the per-deck
-      // transport/hotcue lamps above, which the firmware does NOT own.
+      // SMART CFX lamp (0x96/0x00) = EQ/STEM knob mode; lit while the column rides stem volumes.
+      const cfxOn = eqStemModeRef.current;
+      if (cfxOn !== cfxLedRef.current) {
+        cfxLedRef.current = cfxOn;
+        midi.send([0x96, 0x00, cfxOn ? 0x7f : 0x00]);
+      }
+      // SMART FADER lamp (0x96/0x01) = crossfader enabled.
+      const xfOn = xfaderEnabledRef.current;
+      if (xfOn !== xfaderLedRef.current) {
+        xfaderLedRef.current = xfOn;
+        midi.send([0x96, 0x01, xfOn ? 0x7f : 0x00]);
+      }
+      // ON/OFF (RELEASE FX) lamp 0x94/0x47 is app-driven too, but 0x7F BLINKS — pending the
+      // solid-on value from the prober before we drive it on the feedback push.
     };
     push();
     const iv = setInterval(push, 150);

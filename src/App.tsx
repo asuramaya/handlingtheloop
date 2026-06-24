@@ -638,7 +638,6 @@ export function App() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
-  const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -3443,22 +3442,12 @@ export function App() {
         };
         midi.setFeedback(id, fb);
       });
-      // BEAT FX ON/OFF lamp = the FOCUSED deck's SELECTED effect is active (not bypassed).
-      // Diffed so it's sent only on change. (Harmless if the FLX self-manages this LED.)
-      const fid = focusedRef.current;
-      const fdeck = engine.deck(fid);
-      const sd = fdeck.fxDevices[fxSelRef.current[fid]];
-      const on = sd ? (sd.kind === "eq" ? !fdeck.eqBypassed : !sd.bypassed) : false;
-      if (on !== beatFxLedRef.current) {
-        beatFxLedRef.current = on;
-        // ON/OFF (RELEASE FX) LED. 0x7F made it BLINK (Pioneer LED-code), so try a solid-lit
-        // value for "on" and off for "bypass". ⚠️ values unconfirmed — adjust from the prober sweep.
-        midi.send([0x94, 0x47, on ? 0x01 : 0x00]);
-      }
-      // SMART CFX (0x96/0x00) + SMART FADER (0x96/0x01) lamps are FIRMWARE-OWNED — the FLX
-      // toggles them itself on press and tracks its own internal on/off state. Writing those
-      // note addresses from here desyncs that internal toggle, so the next press emits the
-      // wrong state (the button starts firing eqStemToggle/focus). So we do NOT drive them.
+      // BEAT FX ON/OFF (RELEASE FX) lamp + SMART CFX/FADER lamps are all FIRMWARE-OWNED — the
+      // FLX toggles them itself on press and tracks its own internal on/off state. Driving the
+      // ON/OFF note (0x94/0x47) made the FLX reflect it back as a stream of unmapped 0x95/0x47
+      // input; writing the SMART notes (0x96/0x00, 0x96/0x01) desynced their internal toggle so
+      // the next press emitted the wrong note. So we drive NONE of them — only the per-deck
+      // transport/hotcue lamps above, which the firmware does NOT own.
     };
     push();
     const iv = setInterval(push, 150);

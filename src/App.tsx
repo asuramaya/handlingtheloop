@@ -639,6 +639,8 @@ export function App() {
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   const beatFxLedRef = useRef<boolean | null>(null); // last BEAT FX ON/OFF lamp state sent (diff)
+  const cfxLedRef = useRef<boolean | null>(null); // last SMART CFX lamp state sent (eq/stem mode, diff)
+  const xfaderLedRef = useRef<boolean | null>(null); // last SMART FADER lamp state sent (xfader on/off, diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -1990,11 +1992,14 @@ export function App() {
   // "Re-analyze loaded track(s)" with `modelId` from Settings: switch to that model
   // and force a fresh separation on every loaded deck (ignoring any cached result).
   const reanalyze = useCallback(
-    (modelId: string) => {
+    (modelId: string, only?: DeckId) => {
       const model = getStemModel(modelId);
       if (model.kind === "dsp") return;
-      setSettings((s) => ({ ...s, stemModel: modelId }));
-      for (const id of ["A", "B"] as DeckId[]) {
+      // Only flip the global model when it ACTUALLY changes — returning the same `s` reference makes
+      // React bail out, so a per-deck re-analyze doesn't trip the model-change effect that would
+      // otherwise re-derive the OTHER deck too.
+      setSettings((s) => (s.stemModel === modelId ? s : { ...s, stemModel: modelId }));
+      for (const id of only ? [only] : (["A", "B"] as DeckId[])) {
         const vid = loaded[id];
         const deck = engine.deck(id);
         if (!vid || !deck.buffer) continue;
@@ -3452,6 +3457,18 @@ export function App() {
         // value for "on" and off for "bypass". ⚠️ values unconfirmed — adjust from the prober sweep.
         midi.send([0x94, 0x47, on ? 0x01 : 0x00]);
       }
+      // SMART CFX lamp = EQ/STEM knob mode (lit while the column rides stem volumes).
+      const cfxOn = eqStemModeRef.current;
+      if (cfxOn !== cfxLedRef.current) {
+        cfxLedRef.current = cfxOn;
+        midi.send([0x96, 0x00, cfxOn ? 0x7f : 0x00]);
+      }
+      // SMART FADER lamp = crossfader enabled.
+      const xfOn = xfaderEnabledRef.current;
+      if (xfOn !== xfaderLedRef.current) {
+        xfaderLedRef.current = xfOn;
+        midi.send([0x96, 0x01, xfOn ? 0x7f : 0x00]);
+      }
     };
     push();
     const iv = setInterval(push, 150);
@@ -4466,6 +4483,13 @@ export function App() {
           onChange={setSettings}
           onClose={() => setSettingsOpen(false)}
           loadedVideoIds={Array.from(loadedIds)}
+          loadedDecks={(["A", "B"] as DeckId[])
+            .filter((id) => loaded[id])
+            .map((id) => {
+              const dk = engine.deck(id);
+              const k = stemLoadedKey.current[id] ?? "";
+              return { id, neural: dk.stemsNeural, hasStems: dk.hasStems, model: k.includes(":") ? k.slice(k.lastIndexOf(":") + 1) : null };
+            })}
           stemStatus={status}
           onReanalyze={reanalyze}
           onGpuReenable={() => {

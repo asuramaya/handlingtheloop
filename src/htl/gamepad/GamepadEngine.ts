@@ -16,7 +16,7 @@ import type { MidiEvent } from "@htl/midi";
 //   LT / RT (hold)     → low-pass / high-pass filter (release = off)
 //   LB / RB            → beatgrid magnet (G) / SHIFT (held)
 //   View / Menu        → SYNC / KEY-match (focused)
-//   L3 / R3 (clicks)   → CUE / bypass the selected FX device (focused)
+//   L3 / R3 (clicks)   → CUE / arm-disarm Smart Fader
 //   …and the pad RUMBLES on every beat of the focused deck (harder on the bar line).
 
 export interface GamepadStatus {
@@ -59,7 +59,7 @@ const PRESS: Record<number, string> = {
   [VIEW]: "sync", // SYNC the focused deck
   [MENU]: "keyMatch", // KEY-match the focused deck
   [L3]: "cue", // left stick click → CUE
-  [R3]: "fxBypassCur", // right stick click → bypass the selected FX device
+  [R3]: "smartFaderToggle", // right stick click → arm / disarm Smart Fader
   [DUP]: "jogFwd", // ↑ jump forward (skip size)
   [DDOWN]: "jogBack", // ↓ jump back
   [DLEFT]: "jogBackBeat", // ← nudge back a beat

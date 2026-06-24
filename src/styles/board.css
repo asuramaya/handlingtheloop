@@ -641,31 +641,26 @@
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
-/* Smart Fader armed → the whole strip BREATHES a soft glow that cycles between the two deck
-   accents (A↔B), reading as "blendy". A static A↔B gradient base gives the spatial blend; an
-   inset glow (above the meter, non-interactive) breathes the colour. */
-.xfader-bar.smart-armed {
+/* Smart Fader armed → the strip is coloured PURELY by an A↔B blend gradient: the track's own
+   dark fill is replaced by the gradient and the level meter is hidden, so it reads as one smooth
+   blend. A soft inset glow breathes between the two deck colours on top. */
+.xfader-bar.smart-armed .xbar-track {
   background:
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--xa, #4ad) 40%, var(--panel)) 0%,
-      color-mix(in srgb, var(--xa, #4ad) 14%, var(--panel)) 40%,
-      color-mix(in srgb, var(--xb, #d4a) 14%, var(--panel)) 60%,
-      color-mix(in srgb, var(--xb, #d4a) 40%, var(--panel)) 100%
+      color-mix(in srgb, var(--xa, #4ad) 60%, var(--bg)) 0%,
+      color-mix(in srgb, var(--xa, #4ad) 34%, var(--bg)) 38%,
+      color-mix(in srgb, var(--xb, #d4a) 34%, var(--bg)) 62%,
+      color-mix(in srgb, var(--xb, #d4a) 60%, var(--bg)) 100%
     );
-}
-.xfader-bar.smart-armed::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-  border-radius: inherit;
   animation: smart-breathe 2.6s ease-in-out infinite;
 }
+.xfader-bar.smart-armed .xbip {
+  opacity: 0; /* hide the level meter so only the blend gradient shows */
+}
 @keyframes smart-breathe {
-  0%, 100% { box-shadow: inset 0 0 16px 1px color-mix(in srgb, var(--xa, #4ad) 60%, transparent); }
-  50% { box-shadow: inset 0 0 16px 1px color-mix(in srgb, var(--xb, #d4a) 60%, transparent); }
+  0%, 100% { box-shadow: inset 0 0 18px 2px color-mix(in srgb, var(--xa, #4ad) 55%, transparent); }
+  50% { box-shadow: inset 0 0 18px 2px color-mix(in srgb, var(--xb, #d4a) 55%, transparent); }
 }
 .xbar-track {
   position: relative;

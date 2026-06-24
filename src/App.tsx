@@ -3443,9 +3443,10 @@ export function App() {
         const fb: DeckFeedback = {
           play: d.playing,
           cue: !d.playing, // cue lamp lit while stopped (sitting on the cue), per DJ convention
-          // SYNC lamp lit whenever the deck is sync-engaged — master OR slave (the master deck's
-          // SYNC button used to stay dark). "do the same for master" → the MASTER deck lights too.
-          sync: d.syncRole !== "off",
+          // SYNC lamp = the MASTER indicator: lit ONLY on the deck that is the tempo master, so
+          // it marks which deck leads, swaps to the other deck when master hands over, and goes
+          // dark when sync is disengaged. (The slave follows but doesn't claim the lamp.)
+          sync: d.syncRole === "master",
           loop: !!d.loop?.active,
           // Manual loop IN/OUT button lamps: lit when that edge exists (loop active) or is armed
           // for fine-adjust (Shift-IN/OUT → deck.adjusting). Off otherwise.

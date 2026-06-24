@@ -455,8 +455,11 @@ export class MidiEngine {
       }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
+      // The FLX4's outer ring idles on 0x40 but JITTERS ±1 (0x3F/0x41) at rest — touching
+      // the unit (e.g. a SHIFT press) shakes out a stream of those. Deadzone ±1 so resting
+      // noise never bends; a real ring turn easily clears it.
       const delta = val - 64;
-      if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
+      if (Math.abs(delta) > 1) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
       const delta = val - 64;

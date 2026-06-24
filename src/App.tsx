@@ -3197,6 +3197,10 @@ export function App() {
               ctl({ kind: "control", deck: id, param: "level", value: deck.level });
               break;
             case "trim":
+              // In STEM mode the FLX's hardware Smart-CFX re-emits the COLOR knob on the trim CC
+              // (0x04) instead of the filter CC, so route trim → the 4th stem (other), matching the
+              // SMART CFX column. The real trim knob yields to stems in stem mode; restored in EQ mode.
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", stemKnobGain(ev.value)); refresh(); break; }
               deck.setTrim(ev.value * 2);
               ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
               break;

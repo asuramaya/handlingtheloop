@@ -3441,7 +3441,9 @@ export function App() {
       const on = sd ? (sd.kind === "eq" ? !fdeck.eqBypassed : !sd.bypassed) : false;
       if (on !== beatFxLedRef.current) {
         beatFxLedRef.current = on;
-        midi.send([0x94, 0x47, on ? 0x7f : 0x00]); // ON/OFF (RELEASE FX) button LED
+        // ON/OFF (RELEASE FX) LED. 0x7F made it BLINK (Pioneer LED-code), so try a solid-lit
+        // value for "on" and off for "bypass". ⚠️ values unconfirmed — adjust from the prober sweep.
+        midi.send([0x94, 0x47, on ? 0x01 : 0x00]);
       }
     };
     push();

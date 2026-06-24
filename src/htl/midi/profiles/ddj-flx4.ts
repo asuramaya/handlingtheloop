@@ -157,6 +157,11 @@ export const DDJ_FLX4: DeviceProfile = {
     // BEAT ◀▶ nav the selected tab (or the add candidate); ON/OFF bypasses; SMART CFX resets.
     { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc14" },
     { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x47, type: "note" },
+    // The ON/OFF (RELEASE FX) button has a firmware-toggled lamp; in its "lit" internal state it
+    // transmits the press on channel 0x95 instead of 0x94 (seen live after the lamp was driven).
+    // Bind BOTH channel states so bypass fires no matter which state the firmware is parked in.
+    { control: { kind: "action", action: "fxBypassCur" }, status: 0x95, data: 0x47, type: "note" },
+    { control: { kind: "action", action: "fxBypassCur" }, status: 0x95, data: 0x43, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x63, type: "note" },
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x4a, type: "note" },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x4b, type: "note" },

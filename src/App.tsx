@@ -636,10 +636,9 @@ export function App() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
-  // FLX4 LED feedback (diffed, sent only on change). Addresses verified on hardware via the
-  // output prober: SMART CFX 0x96/0x00 and SMART FADER 0x96/0x01 light solid at 0x7F (no input
-  // echo). These ARE app-driven (the FLX does NOT self-light them).
-  const cfxLedRef = useRef<boolean | null>(null);
+  // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed. (The SMART CFX lamp 0x96/0x00 is NOT
+  // driven: that message engages the hardware Smart-CFX, which remaps the COLOR knob onto the trim
+  // CC and fights trim in stem mode — not worth it. See the feedback push.)
   const xfaderLedRef = useRef<boolean | null>(null);
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
@@ -3197,10 +3196,6 @@ export function App() {
               ctl({ kind: "control", deck: id, param: "level", value: deck.level });
               break;
             case "trim":
-              // In STEM mode the FLX's hardware Smart-CFX re-emits the COLOR knob on the trim CC
-              // (0x04) instead of the filter CC, so route trim → the 4th stem (other), matching the
-              // SMART CFX column. The real trim knob yields to stems in stem mode; restored in EQ mode.
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", stemKnobGain(ev.value)); refresh(); break; }
               deck.setTrim(ev.value * 2);
               ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
               break;
@@ -3456,12 +3451,10 @@ export function App() {
         };
         midi.setFeedback(id, fb);
       });
-      // SMART CFX lamp (0x96/0x00) = EQ/STEM knob mode; lit while the column rides stem volumes.
-      const cfxOn = eqStemModeRef.current;
-      if (cfxOn !== cfxLedRef.current) {
-        cfxLedRef.current = cfxOn;
-        midi.send([0x96, 0x00, cfxOn ? 0x7f : 0x00]);
-      }
+      // NOTE: we do NOT drive the SMART CFX lamp (0x96/0x00). On the FLX that message engages the
+      // hardware Smart-CFX feature, which re-emits the COLOR knob onto the trim CC (0x04) and makes
+      // it fight trim in stem mode. The lamp isn't worth corrupting the knob mapping — eq/stem mode
+      // is shown on-screen instead.
       // SMART FADER lamp (0x96/0x01) = crossfader enabled.
       const xfOn = xfaderEnabledRef.current;
       if (xfOn !== xfaderLedRef.current) {

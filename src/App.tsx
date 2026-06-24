@@ -581,6 +581,9 @@ export function App() {
   const [focused, setFocused] = useState<DeckId>("A");
   const focusedRef = useRef<DeckId>("A"); // current focus for the ~7Hz feedback interval (no stale closure)
   useEffect(() => { focusedRef.current = focused; }, [focused]);
+  // Live midi.send (assigned once midi exists, far below) so toggle handlers can force the FLX
+  // hardware Smart-CFX/Fader OFF the instant they fire — not just on the next 150ms feedback tick.
+  const midiSendRef = useRef<((bytes: number[]) => void) | null>(null);
   // Keyboard/on-screen shift is a property of the FOCUSED deck — never both. A deck's
   // shift is on when the keyboard Shift / latch (or a focus-model latch) is active AND
   // it's focused, OR that deck's own controller SHIFT button is held.
@@ -936,7 +939,9 @@ export function App() {
       // FX SELECT → arm add-mode / commit. SHIFT+FX SELECT → remove the selected effect.
       fxSelectPress: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.removeSel() : c?.selectPress(); },
       // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
-      eqStemToggle: () => { setEqStemMode((v) => !v); },
+      // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down
+      // engaged it; close the COLOR-knob remap window now instead of waiting for the 150ms tick).
+      eqStemToggle: () => { setEqStemMode((v) => !v); midiSendRef.current?.([0x96, 0x00, 0x00]); },
       tempoRange: (deck, id, s) => {
         if (s) {
           matchGain(id);
@@ -1034,6 +1039,7 @@ export function App() {
         setCrossfade(0);
         engine.setCrossfade(0);
         emitRef.current({ kind: "crossfade", value: 0 }); // sync the recentre to a session
+        midiSendRef.current?.([0x96, 0x01, 0x00]); // force the HW Smart-Fader off immediately
       },
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
@@ -3438,6 +3444,7 @@ export function App() {
   // Light the controller from deck state (play/cue/sync/loop + hot-cue pads). Polled
   // at ~7 Hz; the engine diffs each lamp so only changes are actually sent. The mute
   // SysEx keep-alive is handled inside MidiEngine.
+  useEffect(() => { midiSendRef.current = midi.send; }, [midi.send]);
   useEffect(() => {
     if (!settings.midiEnabled || midi.status.state !== "connected") return;
     const push = () => {

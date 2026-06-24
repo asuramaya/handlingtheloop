@@ -636,10 +636,12 @@ export function App() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
-  // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed. (The SMART CFX lamp 0x96/0x00 is NOT
-  // driven: that message engages the hardware Smart-CFX, which remaps the COLOR knob onto the trim
-  // CC and fights trim in stem mode — not worth it. See the feedback push.)
+  // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed.
   const xfaderLedRef = useRef<boolean | null>(null);
+  // Tracks our last eqStemMode edge so we can FORCE the FLX hardware Smart-CFX off (0x96/0x00 0x00)
+  // on connect + every toggle — see the feedback push. We NEVER send 0x7F (that latches the hardware
+  // feature ON, which remaps the COLOR knob onto the trim CC and fights trim).
+  const cfxLedRef = useRef<boolean | null>(null);
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
@@ -3451,10 +3453,15 @@ export function App() {
         };
         midi.setFeedback(id, fb);
       });
-      // NOTE: we do NOT drive the SMART CFX lamp (0x96/0x00). On the FLX that message engages the
-      // hardware Smart-CFX feature, which re-emits the COLOR knob onto the trim CC (0x04) and makes
-      // it fight trim in stem mode. The lamp isn't worth corrupting the knob mapping — eq/stem mode
-      // is shown on-screen instead.
+      // FORCE the FLX hardware Smart-CFX OFF. That feature (host-controlled, LATCHING, on 0x96/0x00)
+      // remaps the COLOR knob onto the trim CC and fights trim. We do eq/stem entirely in SOFTWARE,
+      // so the hardware feature must stay disengaged — send 0x00 on connect (initial diff) and after
+      // every toggle, NEVER 0x7F. The lamp stays dark; eq/stem mode is shown on-screen.
+      const cfxOn = eqStemModeRef.current;
+      if (cfxOn !== cfxLedRef.current) {
+        cfxLedRef.current = cfxOn;
+        midi.send([0x96, 0x00, 0x00]);
+      }
       // SMART FADER lamp (0x96/0x01) = crossfader enabled.
       const xfOn = xfaderEnabledRef.current;
       if (xfOn !== xfaderLedRef.current) {

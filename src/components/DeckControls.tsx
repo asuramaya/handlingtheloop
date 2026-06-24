@@ -647,8 +647,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             max={pitchRange}
             step={1}
             pivot={0}
+            // Tap/scroll still set the integer manual shift, but the READOUT shows the LIVE sounding
+            // pitch (incl. the keylock-off Smart-Fader glide), so the cell isn't dead during a blend.
+            className={Math.abs(deck.livePitchSemis - deck.pitch) > 0.05 ? "gliding" : ""}
             onChange={(v) => { deck.setPitch(Math.round(v)); refresh(); emit({ kind: "control", deck: id, param: "pitch", value: Math.round(v) }); }}
-            format={(v) => `${v > 0 ? "+" : ""}${Math.round(v)}`}
+            format={() => {
+              const live = deck.livePitchSemis;
+              return Math.abs(live - deck.pitch) > 0.05
+                ? `${live > 0 ? "+" : ""}${live.toFixed(1)}`
+                : `${deck.pitch > 0 ? "+" : ""}${deck.pitch}`;
+            }}
           />
           <button
             className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}

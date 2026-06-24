@@ -641,21 +641,41 @@
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
-/* Smart Fader armed → the whole strip becomes a left-to-right A↔B blend gradient (the deck
-   accents) that breathes, to read as "blendy" — no pill needed. */
+/* Smart Fader armed → the strip reads as "blendy": an A↔B accent gradient base, a glowing accent
+   ring, and a bright sheen that SWEEPS across (visible on top of the meter, unlike a flat bg). */
 .xfader-bar.smart-armed {
   background:
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--xa, #4ad) 38%, var(--panel)) 0%,
-      color-mix(in srgb, var(--xa, #4ad) 12%, var(--panel)) 32%,
-      color-mix(in srgb, var(--xb, #d4a) 12%, var(--panel)) 68%,
-      color-mix(in srgb, var(--xb, #d4a) 38%, var(--panel)) 100%
+      color-mix(in srgb, var(--xa, #4ad) 55%, var(--panel)) 0%,
+      color-mix(in srgb, var(--xa, #4ad) 18%, var(--panel)) 38%,
+      color-mix(in srgb, var(--xb, #d4a) 18%, var(--panel)) 62%,
+      color-mix(in srgb, var(--xb, #d4a) 55%, var(--panel)) 100%
     );
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--xa, #4ad) 30%, transparent);
-  animation: smart-breathe 1.8s ease-in-out infinite;
+  box-shadow:
+    inset 0 0 0 2px color-mix(in srgb, var(--xa, #4ad) 55%, transparent),
+    0 0 12px color-mix(in srgb, var(--xb, #d4a) 45%, transparent);
+  overflow: hidden;
 }
-@keyframes smart-breathe { 0%, 100% { filter: saturate(1) brightness(1); } 50% { filter: saturate(1.35) brightness(1.12); } }
+/* The sweeping highlight band — sits ABOVE the meter (z-index) but ignores pointer events. */
+.xfader-bar.smart-armed::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 35%,
+    color-mix(in srgb, var(--xa, #4ad) 70%, transparent) 48%,
+    color-mix(in srgb, var(--xb, #d4a) 70%, transparent) 52%,
+    transparent 65%
+  );
+  background-size: 220% 100%;
+  mix-blend-mode: screen;
+  animation: smart-sweep 1.6s linear infinite;
+}
+@keyframes smart-sweep { from { background-position: 160% 0; } to { background-position: -60% 0; } }
 .xbar-track {
   position: relative;
   flex: 1;
@@ -1785,6 +1805,13 @@ body.no-glow .hw-btn.shift.on {
   line-height: 1.1;
   white-space: nowrap;
 }
+/* A cell whose readout is mid-glide (live sub-semitone pitch drift, e.g. KEY during Smart Fader) —
+   pulse the value so the live feedback is obvious vs a static manual setting. */
+.vcell.gliding .vcell-value {
+  color: var(--shift, #fc6);
+  animation: vcell-glide 1s ease-in-out infinite;
+}
+@keyframes vcell-glide { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 /* Pads — rubbery, light up in their cue color */
 .hotcues {

@@ -64,16 +64,25 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-tab.drop-after {
   box-shadow: inset -3px 0 0 0 var(--accent);
 }
-/* Trailing drop zone: fills the space after the last tab so the END slot is reachable. */
+/* Trailing drop zone: fills the gap after the last tab for hit-testing, but stays INVISIBLE
+   — only a thin insertion line at its left edge (right after the last tab) shows the target,
+   so dragging to the far right doesn't paint a giant empty box. */
 .fx-drop-end {
   flex: 1 1 24px;
   min-width: 24px;
   align-self: stretch;
-  border-radius: 4px;
+  position: relative;
 }
-.fx-drop-end.active {
-  box-shadow: inset 3px 0 0 0 var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.fx-drop-end.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 .fx-tab.fx-add,
 .fx-tab.fx-remove {

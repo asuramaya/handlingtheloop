@@ -58,7 +58,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const [sel, setSel] = useState(0); // selected rack index
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
-  const [dragOver, setDragOver] = useState<number | null>(null); // tab the drag is over
+  const [dropAt, setDropAt] = useState<number | null>(null); // INSERTION point 0..len (gap the drop lands in)
   const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
@@ -79,6 +79,16 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     broadcastRack();
     setSel(Math.max(0, Math.min(to, deck.fxDevices.length - 1))); // follow the device to its final index
     refresh();
+  };
+  // Commit a drag at the current INSERTION point. Removing the source first shifts later
+  // slots down one, so insertion point p maps to final index p-1 when dragging rightward.
+  const dropHere = () => {
+    if (dragFrom != null && dropAt != null) {
+      const finalIdx = Math.max(0, Math.min(dragFrom < dropAt ? dropAt - 1 : dropAt, deck.fxDevices.length - 1));
+      reorder(dragFrom, finalIdx);
+    }
+    setDragFrom(null);
+    setDropAt(null);
   };
 
   const addDevice = (kind: FxKind) => {
@@ -232,7 +242,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
         {devices.map((d, i) => (
           <button
             key={d.kind}
-            className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dragOver === i && dragFrom !== i ? "drag-over" : ""} ${dragFrom === i ? "dragging" : ""}`}
+            className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === i + 1 ? "drop-after" : ""} ${dragFrom === i ? "dragging" : ""}`}
             onClick={() => setSel(i)}
             onContextMenu={(e) => openPresetMenu(e, i)}
             draggable
@@ -244,17 +254,18 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
               if (dragFrom == null) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              if (dragOver !== i) setDragOver(i);
+              // Insertion point = before this tab, or after it (cursor past its midpoint).
+              const r = e.currentTarget.getBoundingClientRect();
+              const p = e.clientX > r.left + r.width / 2 ? i + 1 : i;
+              if (dropAt !== p) setDropAt(p);
             }}
             onDrop={(e) => {
               e.preventDefault();
-              if (dragFrom != null) reorder(dragFrom, i);
-              setDragFrom(null);
-              setDragOver(null);
+              dropHere();
             }}
             onDragEnd={() => {
               setDragFrom(null);
-              setDragOver(null);
+              setDropAt(null);
             }}
             role="tab"
             aria-selected={cur === i}
@@ -263,6 +274,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
           </button>
         ))}
+        {/* Trailing drop zone: lets a drag land AFTER the last tab (otherwise the end slot,
+            e.g. right of the EQ, has no tab to drop onto and is unreachable). Only live mid-drag. */}
+        {dragFrom != null && (
+          <div
+            className={`fx-drop-end ${dropAt === devices.length ? "active" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dropAt !== devices.length) setDropAt(devices.length);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              dropHere();
+            }}
+          />
+        )}
         <div className="fx-add-wrap">
           {selDev && !isEq && (
             // The EQ is the permanent channel strip — no remove. Optional effects below it do.

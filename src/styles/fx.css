@@ -57,10 +57,23 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-tab.dragging {
   opacity: 0.4;
 }
-/* Drop indicator — a bright left edge where the dragged tab will land. */
-.fx-tab.drag-over {
-  border-left: 3px solid var(--accent);
-  box-shadow: -2px 0 8px -2px color-mix(in srgb, var(--accent) 80%, transparent);
+/* Drop indicators — a bright edge marking the INSERTION point (gap) the drop lands in. */
+.fx-tab.drop-before {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.fx-tab.drop-after {
+  box-shadow: inset -3px 0 0 0 var(--accent);
+}
+/* Trailing drop zone: fills the space after the last tab so the END slot is reachable. */
+.fx-drop-end {
+  flex: 1 1 24px;
+  min-width: 24px;
+  align-self: stretch;
+  border-radius: 4px;
+}
+.fx-drop-end.active {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .fx-tab.fx-add,
 .fx-tab.fx-remove {

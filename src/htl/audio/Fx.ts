@@ -136,11 +136,11 @@ export class FxRack {
     const n = this.devices.length;
     if (from === to || from < 0 || from >= n || to < 0 || to >= n) return;
     const [d] = this.devices.splice(from, 1);
-    // Drop ONTO tab `to` → land immediately before it, BOTH directions. Removing the source
-    // first shifts every later index down one, so a rightward move (from < to) must target
-    // to-1; a leftward move keeps `to`. (The old code used `to` raw, so right-drags landed one
-    // slot too far while left-drags were fine — the "only works one way" bug.)
-    const at = from < to ? to - 1 : to;
+    // Land the device at FINAL index `to`. Symmetric for a drag (drop target) AND a ±1 step:
+    // after the splice the array is one shorter, so clamping `to` to the new length and
+    // inserting there puts it exactly at `to`. (An earlier insert-before compensation made a
+    // +1 step a no-op — to-1 == from — so reordering only worked one direction.)
+    const at = Math.max(0, Math.min(to, this.devices.length));
     this.devices.splice(at, 0, d);
     this.rebuild();
   }

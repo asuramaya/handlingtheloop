@@ -77,7 +77,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     if (from === to) return;
     deck.moveFx(from, to);
     broadcastRack();
-    setSel(from < to ? to - 1 : to); // follow the device to where it actually landed (insert-before)
+    setSel(Math.max(0, Math.min(to, deck.fxDevices.length - 1))); // follow the device to its final index
     refresh();
   };
 

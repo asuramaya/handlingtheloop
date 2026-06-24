@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
+import type { FxStripCtl } from "./components/FxStrip";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
@@ -630,6 +631,11 @@ export function App() {
   // Per-deck "current FX" index — the device selected in each deck's FX strip, mirrored up so
   // the gamepad's bypass-current action (R3) knows which device to flip.
   const fxSelRef = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // Imperative handles into each deck's FxStrip so the FLX BEAT FX section can drive its
+  // selection + add-mode (BEAT ◀▶ / FX SELECT). The section targets the focused deck.
+  const fxCtlA = useRef<FxStripCtl | null>(null);
+  const fxCtlB = useRef<FxStripCtl | null>(null);
+  const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -903,6 +909,11 @@ export function App() {
         deck.resetFxAt(i);
         refresh();
       },
+      // BEAT FX BEAT ◀▶ → move the focused strip's selection (or the add candidate in add-mode).
+      fxSelPrev: (_deck, id) => fxCtlFor(id)?.navSel(-1),
+      fxSelNext: (_deck, id) => fxCtlFor(id)?.navSel(1),
+      // BEAT FX FX SELECT → arm add-mode, then commit the candidate on the next press.
+      fxSelectPress: (_deck, id) => fxCtlFor(id)?.selectPress(),
       tempoRange: (deck, id, s) => {
         if (s) {
           matchGain(id);
@@ -4346,6 +4357,7 @@ export function App() {
             emitControls={emitDeckControls}
             sampler={sampler}
             onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}
+            fxCtlRef={fxCtlA}
           />
           <DeckControls
             id="B"
@@ -4377,6 +4389,7 @@ export function App() {
             emitControls={emitDeckControls}
             sampler={sampler}
             onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}
+            fxCtlRef={fxCtlB}
           />
           </div>
         </div>

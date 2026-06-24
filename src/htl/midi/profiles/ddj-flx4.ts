@@ -148,12 +148,19 @@ export const DDJ_FLX4: DeviceProfile = {
     // enable/disable the crossfader + recentre. NOTE: 0x00↔CFX / 0x01↔FADER is a best guess; swap if reversed.
     { control: { kind: "action", action: "fxReset" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x01, type: "note" },
-    // BEAT FX section. The LEVEL/DEPTH knob → selected-FX wet/dry; the ON/OFF (RELEASE FX) button
-    // → bypass the selected FX. ⚠️ VALUES FROM THE MIXXX MAP, NOT YET HARDWARE-VERIFIED (the map
-    // has been wrong this session) — confirm via the MIDI monitor: LEVEL/DEPTH CC 0xB4/0x02,
-    // ON/OFF note 0x94/0x47. The FX SELECT ▲▼, BEAT ◀▶ and 1·2·1&2 switch are still to wire.
-    { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc" },
+    // BEAT FX section (all verified on hardware). The section drives the FOCUSED deck; the
+    // 1·2 switch moves focus. LEVEL/DEPTH (14-bit, MSB 0x02 / LSB 0x22 — also mirrored on 0xB5,
+    // which we ignore) → selected-FX wet/dry. FX SELECT (one button) toggles add-mode + commits;
+    // BEAT ◀▶ nav the selected tab (or the add candidate); ON/OFF bypasses; SMART CFX resets.
+    { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc14" },
     { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x47, type: "note" },
+    { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x63, type: "note" },
+    { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x4a, type: "note" },
+    { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x4b, type: "note" },
+    // 1·2·1&2 channel switch — pos 1 (note 0x94/0x10) → focus deck A, pos 2 (0x95/0x11) → deck B.
+    // At 1&2 both notes fire; last wins for now (true "both" is deferred).
+    { control: { kind: "focus", deck: "A" }, status: 0x94, data: 0x10, type: "note" },
+    { control: { kind: "focus", deck: "B" }, status: 0x95, data: 0x11, type: "note" },
     // Jog wheels — the FLX4 top plate is capacitive and the hardware VINYL button
     // decides scratch-vs-bend by switching which CC the top emits (verified against the
     // Mixxx mapping). Four streams:

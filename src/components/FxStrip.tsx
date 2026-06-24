@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { Deck, FxKind } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset } from "@htl/audio";
 import type { Intent } from "@htl/room";
@@ -43,9 +43,16 @@ interface FxStripProps {
   emitControls: (id: "A" | "B") => void;
   refresh: () => void;
   onSelect?: (i: number) => void; // report the selected rack index up (so the gamepad can bypass it)
+  ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
 }
 
-export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect }: FxStripProps) {
+// What the FLX BEAT FX section drives on a strip: BEAT ◀▶ navigate, FX SELECT add-mode + commit.
+export interface FxStripCtl {
+  navSel: (dir: number) => void; // move the selected tab — or the add candidate while in add-mode
+  selectPress: () => void; // FX SELECT: 1st press arms add-mode, 2nd commits the candidate
+}
+
+export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect, ctlRef }: FxStripProps) {
   const [sel, setSel] = useState(0); // selected rack index
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
@@ -80,6 +87,48 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     setSel(deck.fxDevices.indexOf(added));
     refresh();
   };
+  // --- BEAT FX add-mode: FX SELECT arms it, BEAT ◀▶ cycle the effect to add, FX SELECT commits ---
+  const [addMode, setAddMode] = useState(false);
+  const [cand, setCand] = useState(0); // index into the addable list while in add-mode
+  const addable = useMemo(() => ADDABLE.filter((a) => !deck.hasFxKind(a.kind)), [deck, devices.length]);
+  // Refs so the imperative ctl always reads current values (no stale closure per render).
+  const live = useRef({ cur, addMode, cand, addable, len: devices.length });
+  live.current = { cur, addMode, cand, addable, len: devices.length };
+  useEffect(() => {
+    if (!ctlRef) return;
+    ctlRef.current = {
+      navSel: (dir) => {
+        const L = live.current;
+        if (L.addMode) {
+          if (L.addable.length) setCand((c) => (((c + dir) % L.addable.length) + L.addable.length) % L.addable.length);
+        } else {
+          setSel((s) => Math.max(0, Math.min(L.len - 1, s + dir)));
+        }
+      },
+      selectPress: () => {
+        const L = live.current;
+        if (!L.addMode) {
+          if (L.addable.length) {
+            setCand(0);
+            setAddMode(true);
+          }
+        } else {
+          const pick = L.addable[L.cand];
+          if (pick) addDevice(pick.kind); // selects the new tab
+          setAddMode(false);
+        }
+      },
+    };
+    return () => {
+      if (ctlRef) ctlRef.current = null;
+    };
+  }, [ctlRef]);
+  // If the addable set empties (all effects present) while armed, drop add-mode.
+  useEffect(() => {
+    if (addMode && addable.length === 0) setAddMode(false);
+    else if (cand >= addable.length) setCand(0);
+  }, [addMode, addable.length, cand]);
+
   const removeAt = (i: number) => {
     deck.removeFxAt(i);
     broadcastRack();
@@ -168,7 +217,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   };
 
   return (
-    <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
+    <div className={`fx-strip ${addMode ? "add-mode" : ""}`} style={{ ["--accent" as string]: accent }}>
+      {addMode && (
+        // BEAT FX add-mode banner: ◀ candidate ▶, FX SELECT to add. Hardware-driven; also clickable.
+        <div className="fx-addbar" role="status">
+          <button className="fx-addbar-arrow" onClick={() => ctlRef?.current?.navSel(-1)} aria-label="Previous effect">◀</button>
+          <button className="fx-addbar-pick" onClick={() => ctlRef?.current?.selectPress()} title="Add this effect">
+            ＋ {addable[cand]?.label ?? "—"}
+          </button>
+          <button className="fx-addbar-arrow" onClick={() => ctlRef?.current?.navSel(1)} aria-label="Next effect">▶</button>
+        </div>
+      )}
       <div className="fx-tabs" role="tablist">
         {devices.map((d, i) => (
           <button

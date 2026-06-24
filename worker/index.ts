@@ -99,7 +99,7 @@ interface R2Bucket {
   head(key: string): Promise<{ size: number } | null>;
   put(
     key: string,
-    value: ArrayBuffer | Uint8Array | string,
+    value: ArrayBuffer | Uint8Array | string | ReadableStream<Uint8Array>,
     opts?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> },
   ): Promise<unknown>;
   delete(key: string): Promise<void>;
@@ -110,6 +110,13 @@ interface R2Bucket {
     delimiter?: string;
     include?: ("customMetadata" | "httpMetadata")[];
   }): Promise<{ objects: R2Object[]; truncated: boolean; cursor?: string; delimitedPrefixes?: string[] }>;
+}
+// Cloudflare's identity TransformStream carrying a known Content-Length — lets us hand R2 a
+// streaming body (a tee branch) for a streamed put without buffering the whole track in RAM.
+declare class FixedLengthStream {
+  constructor(length: number);
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
 }
 
 // 4-stem model (Demucs order). Stems are cached in R2 by videoId so they're
@@ -322,10 +329,27 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           }
         }
 
-        // Oversized (long mixes): stream chunk-by-chunk, skip caching to protect
-        // Worker memory.
+        // Track metadata for the R2 object (lifted from the same player response, no extra
+        // request) so the Community list renders names + thumbnails from one R2 list() call.
+        const customMetadata = r.meta
+          ? {
+              title: r.meta.title.slice(0, 256),
+              artist: r.meta.artist.slice(0, 128),
+              duration: String(r.meta.duration),
+              thumbnail: r.meta.thumbnail.slice(0, 400),
+            }
+          : undefined;
+
+        // Oversized track (> MAX_CACHE_BYTES): stream to the listener AND cache to R2 at the same
+        // time, WITHOUT buffering the whole track in Worker RAM (the worker's ~128 MB ceiling is
+        // why big tracks used to skip the cache → the relay re-fired on EVERY play). `tee()` splits
+        // the source: one branch streams to the listener, the other feeds a streaming R2 put via a
+        // FixedLengthStream (R2 needs a known length for a stream put — we have it from
+        // contentLength). The listener is the slow consumer (network-bound); R2 (in-region) drains
+        // its branch faster, so the tee never backpressures playback. Now ANY size caches on first
+        // play → the relay still fires at most once per track, ever.
         if (r.contentLength > MAX_CACHE_BYTES) {
-          const stream = new ReadableStream<Uint8Array>({
+          const source = new ReadableStream<Uint8Array>({
             async start(controller) {
               try {
                 for await (const chunk of audioChunks(r, () => resolveAudio(v, readAuth(req), via), via)) controller.enqueue(chunk);
@@ -335,9 +359,25 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
               }
             },
           });
-          const h: Record<string, string> = { "content-type": r.contentType, "x-content-type-options": "nosniff", "x-htl-cache": "skip", ...NO_CACHE };
-          if (r.contentLength) h["content-length"] = String(r.contentLength);
-          return new Response(stream, { headers: h });
+          const [toUser, toR2] = source.tee();
+          // Cache in the background, best-effort. A length mismatch (e.g. a mid-stream re-resolve)
+          // or any R2 error rejects the put and pipeTo cancels its branch — `toUser` is independent,
+          // so playback is never affected. The put completes even if the listener disconnects.
+          const fls = new FixedLengthStream(r.contentLength);
+          ctx.waitUntil(
+            Promise.all([
+              toR2.pipeTo(fls.writable).catch(() => {}),
+              env.AUDIO.put(key, fls.readable, { httpMetadata: { contentType: r.contentType }, customMetadata }).catch(() => {}),
+            ]),
+          );
+          if (env.DB && r.meta) {
+            ctx.waitUntil(
+              upsertCommunityTrack(env.DB, { videoId: v, title: r.meta.title, artist: r.meta.artist, duration: r.meta.duration, thumbnail: r.meta.thumbnail }).catch(() => {}),
+            );
+          }
+          const h: Record<string, string> = { "content-type": r.contentType, "x-content-type-options": "nosniff", ...NO_CACHE };
+          h["content-length"] = String(r.contentLength);
+          return new Response(toUser, { headers: h });
         }
 
         // Buffer the whole track, return to the user, and cache to R2 in the
@@ -354,17 +394,6 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           buf.set(p, off);
           off += p.byteLength;
         }
-        // Tag the cached object with track metadata (lifted from the same player
-        // response, no extra request) so the Community list can render names +
-        // thumbnails straight from a single R2 list() call.
-        const customMetadata = r.meta
-          ? {
-              title: r.meta.title.slice(0, 256),
-              artist: r.meta.artist.slice(0, 128),
-              duration: String(r.meta.duration),
-              thumbnail: r.meta.thumbnail.slice(0, 400),
-            }
-          : undefined;
         ctx.waitUntil(env.AUDIO.put(key, buf, { httpMetadata: { contentType: r.contentType }, customMetadata }));
         // Index it in the community catalog (D1) so browse is an ordered query,
         // not a bucket scan. Best-effort; the table may not be migrated yet.

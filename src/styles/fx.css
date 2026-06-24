@@ -10,29 +10,10 @@
      aligned. Tall enough for the delay's viz-over-knobs-over-chips stack. */
   --fx-body-h: 192px;
 }
-/* BEAT FX add-mode banner (FX SELECT armed): ◀ candidate ▶ to pick, FX SELECT to commit. */
-.fx-addbar {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-}
-.fx-strip.add-mode {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-.fx-addbar-arrow {
-  flex: 0 0 auto;
-  padding: 2px 8px;
-}
-.fx-addbar-pick {
-  flex: 1 1 auto;
-  text-align: center;
-  font-weight: 600;
+/* The BEAT FX FX SELECT + ◀▶ highlight a row in the existing + palette (cand). */
+.fx-palette-item.cand {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
-  border: 1px solid var(--accent);
-  border-radius: 3px;
 }
 .fx-tabs {
   display: flex;

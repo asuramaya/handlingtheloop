@@ -87,19 +87,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     setSel(deck.fxDevices.indexOf(added));
     refresh();
   };
-  // --- BEAT FX add-mode: FX SELECT arms it, BEAT ◀▶ cycle the effect to add, FX SELECT commits ---
-  const [addMode, setAddMode] = useState(false);
-  const [cand, setCand] = useState(0); // index into the addable list while in add-mode
+  // --- BEAT FX add-mode = the existing + palette. FX SELECT opens it, BEAT ◀▶ highlight an
+  // entry (cand), FX SELECT again adds it. No separate UI — we just drive the +/dropdown. ---
+  const [cand, setCand] = useState(0); // highlighted index into the open palette
   const addable = useMemo(() => ADDABLE.filter((a) => !deck.hasFxKind(a.kind)), [deck, devices.length]);
   // Refs so the imperative ctl always reads current values (no stale closure per render).
-  const live = useRef({ cur, addMode, cand, addable, len: devices.length });
-  live.current = { cur, addMode, cand, addable, len: devices.length };
+  const live = useRef({ open: paletteOpen, cand, addable, len: devices.length });
+  live.current = { open: paletteOpen, cand, addable, len: devices.length };
   useEffect(() => {
     if (!ctlRef) return;
     ctlRef.current = {
       navSel: (dir) => {
         const L = live.current;
-        if (L.addMode) {
+        if (L.open) {
           if (L.addable.length) setCand((c) => (((c + dir) % L.addable.length) + L.addable.length) % L.addable.length);
         } else {
           setSel((s) => Math.max(0, Math.min(L.len - 1, s + dir)));
@@ -107,15 +107,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       },
       selectPress: () => {
         const L = live.current;
-        if (!L.addMode) {
+        if (!L.open) {
           if (L.addable.length) {
             setCand(0);
-            setAddMode(true);
+            setPaletteOpen(true);
           }
         } else {
           const pick = L.addable[L.cand];
-          if (pick) addDevice(pick.kind); // selects the new tab
-          setAddMode(false);
+          if (pick) addDevice(pick.kind); // adds + selects the new tab + closes the palette
+          else setPaletteOpen(false);
         }
       },
     };
@@ -123,11 +123,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
       if (ctlRef) ctlRef.current = null;
     };
   }, [ctlRef]);
-  // If the addable set empties (all effects present) while armed, drop add-mode.
+  // Keep the highlight valid as the palette set changes; close it if nothing's left to add.
   useEffect(() => {
-    if (addMode && addable.length === 0) setAddMode(false);
+    if (paletteOpen && addable.length === 0) setPaletteOpen(false);
     else if (cand >= addable.length) setCand(0);
-  }, [addMode, addable.length, cand]);
+  }, [paletteOpen, addable.length, cand]);
 
   const removeAt = (i: number) => {
     deck.removeFxAt(i);
@@ -217,17 +217,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   };
 
   return (
-    <div className={`fx-strip ${addMode ? "add-mode" : ""}`} style={{ ["--accent" as string]: accent }}>
-      {addMode && (
-        // BEAT FX add-mode banner: ◀ candidate ▶, FX SELECT to add. Hardware-driven; also clickable.
-        <div className="fx-addbar" role="status">
-          <button className="fx-addbar-arrow" onClick={() => ctlRef?.current?.navSel(-1)} aria-label="Previous effect">◀</button>
-          <button className="fx-addbar-pick" onClick={() => ctlRef?.current?.selectPress()} title="Add this effect">
-            ＋ {addable[cand]?.label ?? "—"}
-          </button>
-          <button className="fx-addbar-arrow" onClick={() => ctlRef?.current?.navSel(1)} aria-label="Next effect">▶</button>
-        </div>
-      )}
+    <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
       <div className="fx-tabs" role="tablist">
         {devices.map((d, i) => (
           <button
@@ -270,14 +260,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
               −
             </button>
           )}
-          <button className="fx-tab fx-add" onClick={() => setPaletteOpen((o) => !o)} title="Add an effect" aria-haspopup="menu" aria-expanded={paletteOpen}>
+          <button className="fx-tab fx-add" onClick={() => setPaletteOpen((o) => { if (!o) setCand(0); return !o; })} title="Add an effect" aria-haspopup="menu" aria-expanded={paletteOpen}>
             +
           </button>
           {paletteOpen && (
             <div className="fx-palette" role="menu">
-              {/* One of each kind per channel — hide any effect already in this rack. */}
-              {ADDABLE.filter((a) => !deck.hasFxKind(a.kind)).map((a) => (
-                <button key={a.kind} className="fx-palette-item" onClick={() => addDevice(a.kind)} role="menuitem">
+              {/* One of each kind per channel (already-present hidden). The BEAT FX FX SELECT +
+                  ◀▶ drive this same list: `cand` is the hardware-highlighted row. */}
+              {addable.map((a, i) => (
+                <button key={a.kind} className={`fx-palette-item ${i === cand ? "cand" : ""}`} onClick={() => addDevice(a.kind)} role="menuitem">
                   {a.label}
                 </button>
               ))}

@@ -44,7 +44,13 @@ const ORT_BASE = `/ort/`;
 // own `navigator`, so the UA check here matches the main thread's `isChromium()`.
 const UA = (typeof navigator !== "undefined" && navigator.userAgent) || "";
 const USE_WEBGPU = /Chrome\/|Chromium\//.test(UA); // Chromium family only (incl. new Edge/Brave/Opera)
-const ORT_CDN = `${ORT_BASE}${USE_WEBGPU ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs"}`;
+// Use an ABSOLUTE origin URL, not a bare `/ort/…` path: the vite DEV server's import-analysis
+// resolves a root-relative import to a source-module id, finds it under /public, and refuses it
+// ("this file is in /public … should not be imported from source code" overlay). An absolute URL is
+// treated as external → served statically, so dev works. Prod is unaffected (the worker's own origin
+// already serves /ort/ from the dist root, so this resolves to the same file).
+const ORT_ORIGIN = (typeof self !== "undefined" && self.location?.origin) || "";
+const ORT_CDN = `${ORT_ORIGIN}${ORT_BASE}${USE_WEBGPU ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs"}`;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let ortPromise: Promise<any> | null = null;
 function loadOrt(threads: number): Promise<any> {

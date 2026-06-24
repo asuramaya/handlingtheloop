@@ -3035,6 +3035,8 @@ export function App() {
       if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
+      // Stem-volume knob curve: bottom = 0%, CENTRE = 100% (unity), top = 150% (overdrive).
+      const stemKnobGain = (v: number) => (v <= 0.5 ? v * 2 : 1 + (v - 0.5));
       // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
       const SEC_PER_TICK = 0.0025 * settings.jogSensitivity;
       // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
@@ -3205,29 +3207,31 @@ export function App() {
               deck.setTrim(ev.value * 2);
               ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
               break;
-            // In STEM mode (SMART CFX) the column of knobs rides stem volumes instead of EQ/filter,
-            // going DOWN the line: HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Needs stems.
-            // In stem mode (SMART CFX) the knob rides a stem volume — but ONLY when this deck has
-            // separated stems. Without them, fall THROUGH to EQ/filter so the knob is never dead
-            // (a silent break here left filter/EQ unresponsive on a deck that wasn't stemmed).
+            // In stem mode (SMART CFX) the column of knobs rides stem volumes instead of EQ/filter,
+            // going DOWN the line: HI→drums, MID→bass, LOW→vocals, CFX/filter→other — but ONLY when
+            // this deck has separated stems; without them, fall THROUGH to EQ/filter so the knob is
+            // never dead. Stem curve: bottom 0% · centre 100% (unity) · top 150% (overdrive).
             case "eqHi":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("drums", ev.value); refresh(); break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("drums", stemKnobGain(ev.value)); refresh(); break; }
               deck.setEqHigh(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqHigh", value: deck.eqHigh });
               break;
             case "eqMid":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("bass", ev.value); refresh(); break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("bass", stemKnobGain(ev.value)); refresh(); break; }
               deck.setEqMid(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqMid", value: deck.eqMid });
               break;
             case "eqLow":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("vocals", ev.value); refresh(); break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("vocals", stemKnobGain(ev.value)); refresh(); break; }
               deck.setEqLow(eqDb(ev.value));
               ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
               break;
             case "filter":
               // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter.
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", ev.value); refresh(); break; }
+              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", stemKnobGain(ev.value)); refresh(); break; }
+              // The colour filter's on/off (fxOn) lost its dedicated control — a stuck-off deck left
+              // the knob dead. Sweeping the knob re-engages it (and syncs the toggle) so it's never dead.
+              if (!deck.fxOn) { deck.setFx(true); ctl({ kind: "toggle", deck: id, param: "fx", value: true }); }
               deck.setFilter((ev.value - 0.5) * 2);
               ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
               break;
@@ -3251,7 +3255,7 @@ export function App() {
             case "stemVocals":
             case "stemOther": {
               const stem = ({ stemDrums: "drums", stemBass: "bass", stemVocals: "vocals", stemOther: "other" } as const)[ev.target];
-              deck.setStemGain(stem, ev.value * 1.5);
+              deck.setStemGain(stem, stemKnobGain(ev.value)); // bottom 0% · centre 100% · top 150%
               ctl({ kind: "stemGain", deck: id, stem, value: deck.stemLevel(stem) });
               break;
             }

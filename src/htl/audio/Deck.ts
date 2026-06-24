@@ -2030,21 +2030,6 @@ export class Deck {
   get filteringThrow(): boolean {
     return this.filterSnapshot != null;
   }
-  // Latching filter bypass (FLX SMART CFX): off → remember the knob + zero it, on → restore.
-  // Distinct snapshot from the momentary throw so the two never clobber each other.
-  private filterBypassSnap: number | null = null;
-  setFilterBypass(on: boolean): void {
-    if (on && this.filterBypassSnap == null) {
-      this.filterBypassSnap = this.filterValue;
-      this.setFilter(0);
-    } else if (!on && this.filterBypassSnap != null) {
-      this.setFilter(this.filterBypassSnap);
-      this.filterBypassSnap = null;
-    }
-  }
-  get filterBypassed(): boolean {
-    return this.filterBypassSnap != null;
-  }
   // Independent high-pass / low-pass amount (0 = off … 1 = full) — the Starrypad's two
   // dedicated knobs, which can engage both at once (band-pass) instead of one-or-other.
   get hpAmount() {

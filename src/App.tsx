@@ -1022,13 +1022,6 @@ export function App() {
         engine.deck("B").setEqBypass(on);
         refresh();
       },
-      // (kept available for MIDI-learn) bypass/restore the colour filter on both decks.
-      filterToggle: () => {
-        const on = !engine.deck("A").filterBypassed;
-        engine.deck("A").setFilterBypass(on);
-        engine.deck("B").setFilterBypass(on);
-        refresh();
-      },
       // FLX SMART FADER → enable/disable the crossfader and recentre it to 50% on each press.
       xfaderToggle: () => {
         setXfaderEnabled((e) => !e);

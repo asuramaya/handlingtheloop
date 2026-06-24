@@ -23,6 +23,7 @@ export type FaderTarget =
   | "filterHp" // independent high-pass amount → setHpAmount (0..1)
   | "filterLp" // independent low-pass amount → setLpAmount (0..1)
   | "crossfader" // → engine.setCrossfade (−1..+1)
+  | "fxWetDry" // selected FX device's wet/dry "mix" on the focused deck (BEAT FX LEVEL/DEPTH knob)
   | "cueMix" // headphone CUE↔MST blend → engine.setCueMix (0..1)
   | "cueLevel" // headphone master level → engine.setCueLevel (0..1)
   | "micLevel" // mic input level → engine.setMicLevel (0..1)

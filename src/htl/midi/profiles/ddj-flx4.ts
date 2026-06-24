@@ -144,10 +144,16 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "cueMix" }, status: CC_MIX, data: 0x0c, type: "cc14" },
     { control: { kind: "fader", target: "cueLevel" }, status: CC_MIX, data: 0x0d, type: "cc14" },
     // SMART CFX / SMART FADER buttons (browse-section channel 0x96, notes 0x00/0x01 — verified
-    // on hardware). CFX → A/B the EQ on both decks; FADER → enable/disable the crossfader +
-    // recentre. NOTE: 0x00↔CFX / 0x01↔FADER assignment is a best guess; swap if reversed.
-    { control: { kind: "action", action: "eqBypass" }, status: 0x96, data: 0x00, type: "note" },
+    // on hardware). SMART CFX → reset the focused deck's selected BEAT-FX device; SMART FADER →
+    // enable/disable the crossfader + recentre. NOTE: 0x00↔CFX / 0x01↔FADER is a best guess; swap if reversed.
+    { control: { kind: "action", action: "fxReset" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x01, type: "note" },
+    // BEAT FX section. The LEVEL/DEPTH knob → selected-FX wet/dry; the ON/OFF (RELEASE FX) button
+    // → bypass the selected FX. ⚠️ VALUES FROM THE MIXXX MAP, NOT YET HARDWARE-VERIFIED (the map
+    // has been wrong this session) — confirm via the MIDI monitor: LEVEL/DEPTH CC 0xB4/0x02,
+    // ON/OFF note 0x94/0x47. The FX SELECT ▲▼, BEAT ◀▶ and 1·2·1&2 switch are still to wire.
+    { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc" },
+    { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x47, type: "note" },
     // Jog wheels — the FLX4 top plate is capacitive and the hardware VINYL button
     // decides scratch-vs-bend by switching which CC the top emits (verified against the
     // Mixxx mapping). Four streams:

@@ -896,6 +896,13 @@ export function App() {
         deck.setFxBypass(i, next);
         emitRef.current({ kind: "fxBypass", deck: id, slot: i, value: next });
       },
+      // BEAT FX SMART CFX → reset the focused deck's SELECTED effect to its defaults (local).
+      fxReset: (deck, id) => {
+        const i = fxSelRef.current[id];
+        if (!deck.fxDevices[i]) return;
+        deck.resetFxAt(i);
+        refresh();
+      },
       tempoRange: (deck, id, s) => {
         if (s) {
           matchGain(id);
@@ -3101,6 +3108,12 @@ export function App() {
             break;
           }
           // Global headphone / mic knobs (no deck): the FLX 🎧 MIX + 🎧 LEVEL + a mappable mic level.
+          if (ev.target === "fxWetDry") {
+            // BEAT FX LEVEL/DEPTH → the focused deck's SELECTED effect wet/dry (its "mix" param).
+            const fid = ev.deck ?? focused;
+            engine.deck(fid).setFxParam(fxSelRef.current[fid], "mix", ev.value);
+            break;
+          }
           if (ev.target === "cueMix") {
             engine.setCueMix(ev.value);
             setCueMixSt(ev.value); // keep the on-screen buttonoid in step with the knob

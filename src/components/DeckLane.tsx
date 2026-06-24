@@ -232,14 +232,21 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           <LaneTime deck={deck} duration={meta.duration} />
         </span>
         <span className="lane-bpm">{deck.effectiveBpm != null ? `${deck.effectiveBpm.toFixed(1)}` : "--"} BPM</span>
-        {deck.effectiveKey && (
-          <span
-            className="lane-key"
-            title={`Key ${deck.effectiveKey.name}${deck.pitch ? ` · pitch ${deck.pitch > 0 ? "+" : ""}${deck.pitch}` : ""}`}
-          >
-            {deck.effectiveKey.camelot} {deck.effectiveKey.name}
-          </span>
-        )}
+        {deck.liveKey && (() => {
+          // Live sounding key — tracks the keylock-off pitch glide (Smart Fader / vinyl), with the
+          // sub-semitone drift shown in cents so the continuous shift `pitch` hides is visible.
+          const semis = deck.livePitchSemis;
+          const cents = Math.round((semis - Math.round(semis)) * 100);
+          return (
+            <span
+              className={`lane-key${cents !== 0 ? " gliding" : ""}`}
+              title={`Key ${deck.liveKey.name} · pitch ${semis >= 0 ? "+" : ""}${semis.toFixed(2)} st`}
+            >
+              {deck.liveKey.camelot} {deck.liveKey.name}
+              {cents !== 0 && <span className="lane-key-cents"> {cents > 0 ? "+" : ""}{cents}¢</span>}
+            </span>
+          );
+        })()}
         {/* Beat-grid size — also the beat-jump / loop-move resolution. */}
         <span className="lane-grid" title="Beat-grid size (− / +)">
           <button

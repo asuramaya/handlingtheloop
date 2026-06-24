@@ -27,8 +27,11 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
   const { a: gainDbA, b: gainDbB } = crossfadeGainsDb(crossfade);
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   return (
-    <div className={`xfader-bar ${locked ? "locked" : ""} ${smart ? "smart-armed" : ""}`}>
-      {smart && <span className="xbar-smart" title="Smart Fader armed — throw the fader to auto-transition">SMART</span>}
+    <div
+      className={`xfader-bar ${locked ? "locked" : ""} ${smart ? "smart-armed" : ""}`}
+      style={{ ["--xa" as string]: accentA, ["--xb" as string]: accentB }}
+      title={smart ? "Smart Fader armed — throw the fader to auto-transition (tempo morph + bass swap)" : undefined}
+    >
       <div className="xbar-track">
         <span className="xbip">
           <StereoMeter deck={deckA} axis="h" accent={accentA} className="xb-a" gainDb={gainDbA} />

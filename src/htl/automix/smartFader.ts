@@ -4,18 +4,19 @@
 // throw the fader from the live deck to the other and the blend rides your hand.
 //
 // On each fader move (progress p, 0 = fully on the live deck … 1 = fully on the incoming):
-//   • Tempo morph — both decks are kept beat-locked at lerp(liveBpm, incBpm, p), so the pair
-//     stays matched while the common tempo migrates from the live track's BPM to the incoming
-//     track's natural BPM. That's the "bridge two genres with a big BPM gap" trick: at p=0 the
-//     incoming is pulled to the live tempo; at p=1 the live is pushed to the incoming tempo and
-//     the incoming sits at 0 % (its own BPM).
-//   • Bass swap — the live deck's LOW EQ is cut to the incoming's around the middle of the throw
-//     so the two basslines never stack and mud the mix.
+//   • Tempo morph — the LIVE (master) deck's tempo is moved to lerp(liveStartBpm, incBpm, p) and
+//     the incoming (a SYNC slave) follows, so the pair stays beat-locked while the common tempo
+//     migrates from the live track's current BPM to the incoming track's natural BPM. That's the
+//     "bridge two genres with a big BPM gap" trick — and with key-lock dropped it glides in pitch
+//     like a turntable (a deliberate effect; the live key/cents is surfaced in the deck badge).
+//   • Bass swap — the live LOW EQ is cut to the incoming's around the middle of the throw so the
+//     two basslines never stack and mud the mix.
 //   • Crossfade — the equal-power curve just follows the fader (we pass the position through).
 //
-// Reuses the engine primitives the AutoMixer already proved: setTempo (WSOLA-glided),
-// setEqLow (the low-shelf), the crossfader curve, and SYNC for phase-lock. Echo-tail on the
-// out-going deck is a deliberate v2 (needs an FxRack delay throw) — noted below.
+// Completing a throw RE-ARMS in the reverse direction (stays in Smart mode) so the strip keeps
+// its "blendy" look and the next throw blends back; toggle the button to exit. Reuses the engine
+// primitives the AutoMixer proved: setTempo (WSOLA-glided), SYNC (tempo + phase lock, half/double
+// folded), setEqLow, and the crossfader curve. Echo-tail on the out-going deck is a v2.
 
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
@@ -23,8 +24,7 @@ import { clamp, clamp01, lerp } from "../../util/math";
 
 const EQ_KILL = -26; // dB — the engine low-shelf floor (a full bass cut), matching AutoMixer
 
-// Bass-swap window: where in the throw the LOW EQ hands over. Centred on the middle of the
-// fader so basslines cross cleanly. (0.30 → 0.70 of progress.)
+// Bass-swap window: where in the throw the LOW EQ hands over (0.30 → 0.70 of progress).
 const BASS_LO = 0.3;
 const BASS_HI = 0.7;
 
@@ -39,65 +39,41 @@ export class SmartFader {
   private armed = false;
   private fromId: DeckId | null = null;
   private toId: DeckId | null = null;
-  private fromBpm = 0; // outgoing track's natural BPM (beatgrid)
-  private toBpm = 0; // incoming track's natural BPM
+  private fromStartBpm = 0; // live deck's effective BPM when the throw started (morph start)
+  private fromBaseBpm = 0; // live deck's natural (beatgrid) BPM — for the tempo-% conversion
+  private toBpm = 0; // incoming deck's natural BPM (morph target)
   private keylockSaved: Partial<Record<DeckId, boolean>> = {};
+  private lastProgress = 0;
 
   constructor(private engine: AudioEngine) {}
 
   get isArmed(): boolean {
     return this.armed;
   }
-
   state(): SmartFaderState {
     return { armed: this.armed, from: this.fromId, to: this.toId, progress: this.lastProgress };
   }
-  private lastProgress = 0;
 
-  /** Arm at the current crossfade position `cf` (−1 = full A … +1 = full B). Returns true if
-   *  a transition could be set up (both decks have a tempo to morph between). */
+  /** Arm at the current crossfade position `cf` (−1 = full A … +1 = full B). Returns false (→ plain
+   *  crossfader) if a deck lacks a beatgrid to morph between. */
   arm(cf: number): boolean {
-    // The LIVE deck is the side the fader currently favours; centre → whichever is playing
-    // (default A). We then transition live → other as the fader is thrown across.
-    let from: DeckId;
-    if (cf < -0.05) from = "A";
-    else if (cf > 0.05) from = "B";
-    else from = this.engine.deck("A").playing || !this.engine.deck("B").playing ? "A" : "B";
-    const to: DeckId = from === "A" ? "B" : "A";
-
-    const fromDeck = this.engine.deck(from);
-    const toDeck = this.engine.deck(to);
-    const fromBpm = fromDeck.beatgrid?.bpm ?? 0;
-    const toBpm = toDeck.beatgrid?.bpm ?? 0;
-    if (!fromBpm || !toBpm) return false; // need both grids to morph tempo — bail to plain fader
-
-    this.fromId = from;
-    this.toId = to;
-    this.fromBpm = fromBpm;
-    this.toBpm = toBpm;
-
-    // Beat-lock the incoming to the live deck so it enters in time, then start it rolling under
-    // the (still fully-live-side) crossfader. SYNC makes the slave follow the master's tempo.
-    if (this.engine.syncRole(to) !== "slave") this.engine.toggleSync(to);
-
-    // Tempo morph reads better as a pitch glide (turntable-style), like the AutoMixer's blend —
-    // save and drop keylock on both for the duration.
-    this.keylockSaved = { [from]: fromDeck.keylock, [to]: toDeck.keylock };
-    fromDeck.setKeylock(false);
-    toDeck.setKeylock(false);
-
-    if (!toDeck.playing) toDeck.play();
+    if (this.armed) return true;
+    if (!this.setupDirection(cf)) return false;
+    // The pitch glide is intentional — drop key-lock so the tempo morph pitches the decks
+    // (turntable-style). Saved per-deck so disarm restores the user's setting. Kept across re-arms.
+    this.keylockSaved = { A: this.engine.deck("A").keylock, B: this.engine.deck("B").keylock };
+    this.engine.deck("A").setKeylock(false);
+    this.engine.deck("B").setKeylock(false);
     this.armed = true;
-    this.apply(cf); // settle DSP to the current position immediately
+    this.apply(cf);
     return true;
   }
 
-  /** Cancel the transition, restoring tempo / EQ / keylock to neutral. Leaves the crossfade and
-   *  playback where they are (so disarming mid-throw doesn't lurch). */
+  /** Exit Smart mode: return both decks to neutral tempo / EQ / key-lock. (setTempo(0) on the slave
+   *  also releases SYNC.) Leaves the crossfade where it is. */
   disarm(): void {
     if (!this.armed) return;
-    for (const id of [this.fromId, this.toId]) {
-      if (!id) continue;
+    for (const id of ["A", "B"] as DeckId[]) {
       const d = this.engine.deck(id);
       d.setTempo(0);
       d.setEqLow(0);
@@ -108,14 +84,45 @@ export class SmartFader {
     this.fromId = this.toId = null;
   }
 
-  /** Drive the transition from a crossfade position `cf` (−1..+1). Call this from the crossfader
-   *  handler whenever Smart Fader is armed (instead of the plain setCrossfade). */
+  /** Drive the transition from a crossfade position `cf` (−1..+1). Call from the crossfader handler
+   *  whenever Smart Fader is armed (instead of the plain setCrossfade). */
   onCrossfade(cf: number): void {
     if (!this.armed) {
       this.engine.setCrossfade(cf);
       return;
     }
     this.apply(cf);
+  }
+
+  // Pick live (= the side the fader favours; centre → whichever is playing) + incoming, beat-lock
+  // the incoming to the live deck (SYNC: tempo + phase) and start it rolling. Records the morph
+  // endpoints. Returns false if either deck has no beatgrid. Also used to re-arm in reverse.
+  private setupDirection(cf: number): boolean {
+    let from: DeckId;
+    if (cf < -0.05) from = "A";
+    else if (cf > 0.05) from = "B";
+    else from = this.engine.deck("A").playing || !this.engine.deck("B").playing ? "A" : "B";
+    const to: DeckId = from === "A" ? "B" : "A";
+
+    const fromDeck = this.engine.deck(from);
+    const toDeck = this.engine.deck(to);
+    const fromBase = fromDeck.beatgrid?.bpm ?? 0;
+    const toBpm = toDeck.beatgrid?.bpm ?? 0;
+    if (!fromBase || !toBpm) return false;
+
+    this.fromId = from;
+    this.toId = to;
+    this.fromBaseBpm = fromBase;
+    // Start the morph from the live deck's CURRENT effective BPM (not its natural BPM) so arming
+    // never snaps a deck the DJ had pitched — the throw begins exactly where the deck is playing.
+    this.fromStartBpm = fromDeck.effectiveBpm ?? fromBase;
+    this.toBpm = toBpm;
+
+    // Beat-lock incoming → live (the incoming becomes the SYNC slave; the live deck is master and
+    // its tempo moves drive the slave via matchSlaveTempo). Then start it rolling under the fader.
+    if (this.engine.syncRole(to) !== "slave") this.engine.toggleSync(to);
+    if (!toDeck.playing) toDeck.play();
+    return true;
   }
 
   private apply(cf: number): void {
@@ -130,12 +137,12 @@ export class SmartFader {
     const fromDeck = this.engine.deck(from);
     const toDeck = this.engine.deck(to);
 
-    // Tempo morph: keep both beat-locked at the migrating common BPM.
-    const targetBpm = lerp(this.fromBpm, this.toBpm, p);
-    fromDeck.setTempo((targetBpm / this.fromBpm - 1) * 100);
-    toDeck.setTempo((targetBpm / this.toBpm - 1) * 100);
+    // Tempo morph: move ONLY the master (live) tempo; the SYNC slave (incoming) follows
+    // automatically (half/double folded for big gaps). Common BPM migrates fromStart → incoming.
+    const targetBpm = lerp(this.fromStartBpm, this.toBpm, p);
+    fromDeck.setTempo((targetBpm / this.fromBaseBpm - 1) * 100);
 
-    // Bass swap across the middle of the throw (smooth in/out of the window).
+    // Bass swap across the middle of the throw.
     const s = clamp01((p - BASS_LO) / (BASS_HI - BASS_LO));
     fromDeck.setEqLow(lerp(0, EQ_KILL, s));
     toDeck.setEqLow(lerp(EQ_KILL, 0, s));
@@ -143,17 +150,11 @@ export class SmartFader {
     // The crossfade itself just follows the fader (equal-power curve in the engine).
     this.engine.setCrossfade(clamp(cf, -1, 1));
 
-    // Throw complete → the incoming is now live at its own BPM; tidy the outgoing back to neutral
-    // tempo/EQ (still faded out) and stand down so the next move is a normal fader again.
+    // Throw complete → the incoming is now live at its own BPM. STAY in Smart mode: re-arm in the
+    // reverse direction (keeps key-lock off) so the next throw blends back. Tidy the ex-live bass.
     if (p >= 0.999) {
-      fromDeck.setTempo(0);
       fromDeck.setEqLow(0);
-      const k = this.keylockSaved[from];
-      if (k != null) fromDeck.setKeylock(k);
-      const kt = this.keylockSaved[to];
-      if (kt != null) toDeck.setKeylock(kt);
-      this.armed = false;
-      this.fromId = this.toId = null;
+      this.setupDirection(cf);
     }
   }
 }

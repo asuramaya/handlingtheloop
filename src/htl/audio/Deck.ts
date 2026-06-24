@@ -649,6 +649,18 @@ export class Deck {
   get effectiveKey(): KeyInfo | null {
     return this.key ? shiftKey(this.key, this._pitchSemis) : null;
   }
+  /** LIVE sounding pitch shift in semitones — the integer manual `pitch` PLUS the continuous
+   *  tempo-induced shift when key-lock is OFF (the Smart-Fader / vinyl glide). Equals `pitch`
+   *  when key-locked. Lets the UI surface the sub-semitone drift that `pitch` alone hides. */
+  get livePitchSemis(): number {
+    const r = this.effRate();
+    return this._pitchSemis + (this._keylock || r <= 0 ? 0 : 12 * Math.log2(r));
+  }
+  /** The track's key at the LIVE sounding pitch (nearest semitone) — tracks the glide, unlike
+   *  `effectiveKey` which counts only the integer manual shift. */
+  get liveKey(): KeyInfo | null {
+    return this.key ? shiftKey(this.key, Math.round(this.livePitchSemis)) : null;
+  }
   /** BPM after the tempo fader is applied. */
   get effectiveBpm(): number | null {
     return this.beatgrid ? this.beatgrid.bpm * this._rate : null;

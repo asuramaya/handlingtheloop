@@ -17,16 +17,24 @@ On **arm** (`SmartFader.arm(cf)`):
 - Bails (returns `false` → plain crossfader) if either deck lacks a beatgrid to morph between.
 
 On every **fader move** (`onCrossfade(cf)`), with progress `p` (0 = on live … 1 = on incoming):
-- **Tempo morph** — both decks held beat-locked at `lerp(liveBpm, incBpm, p)`, so the pair stays
-  matched while the common tempo migrates from the live track's BPM to the incoming track's own
-  BPM. (At `p=0` the incoming is pulled to the live tempo; at `p=1` the live is pushed up/down to
-  the incoming tempo and the incoming sits at its natural BPM.) This is the genre-bridge trick.
+- **Tempo morph** — only the **live (master)** deck's tempo is moved to `lerp(liveStartBpm, incBpm,
+  p)`; the incoming is a **SYNC slave** and follows (half/double folded for big gaps). The pair
+  stays beat-locked while the common tempo migrates from the live track's *current* BPM (so arming
+  never snaps a deck the DJ had pitched) to the incoming track's natural BPM. This is the
+  genre-bridge trick.
 - **Bass swap** — the live LOW EQ cuts to the incoming's across the middle of the throw
   (`BASS_LO=0.30 … BASS_HI=0.70`) so the two basslines never stack.
 - **Crossfade** — the equal-power curve just follows the fader.
 
-At `p≈1` the throw is complete: the incoming is live at its own BPM, the outgoing is reset to
-neutral tempo/EQ/keylock (still faded out), and Smart Fader stands down (next move = plain fader).
+**Pitch glide is deliberate.** Key-lock is dropped while armed, so the tempo morph pitches the
+decks like a turntable — the genre bridge *sounds* like one. That continuous, sub-semitone pitch
+shift is **surfaced** in each deck's key badge (`Deck.liveKey` / `livePitchSemis`): the Camelot key
+tracks the nearest semitone and a `±N¢` cents read-out shows the live drift (the integer `pitch`
+field can't). Disarm restores each deck's original key-lock.
+
+At `p≈1` the throw completes — the incoming is live at its own BPM — and Smart Fader **re-arms in
+the reverse direction** (stays in Smart mode) so the strip keeps its blend look and the next throw
+blends back. Toggle the button (or SHIFT+button) to exit; that returns both decks to neutral.
 
 ## Controls (DDJ-FLX4)
 
@@ -38,8 +46,9 @@ We always force the FLX's *hardware* Smart-CFX/Fader features **off** (we send `
 — the hardware feature would otherwise remap the COLOR knob onto trim and take over the channels.
 See [ddj-flx4.md](./ddj-flx4.md).
 
-On-screen: the crossfader bar shows a pulsing **SMART** badge and tints while armed; dragging it
-scrubs the transition just like the hardware fader.
+On-screen: while armed the whole crossfader strip becomes a breathing **A↔B blend gradient** (the
+deck accent colours) to read as "blendy"; dragging it scrubs the transition just like the hardware
+fader. Each deck's key badge highlights and shows live cents while the pitch glides.
 
 ## Why it was cheap to build
 
@@ -53,5 +62,7 @@ phase-lock, and beatgrid BPM. Smart Fader is a new **driver** for them, not new 
   one Pioneer flourish not yet built.
 - **Eased BPM curve** instead of linear `lerp` (e.g. hold the live tempo longer, then ramp).
 - **Bass-swap window** position/width (`BASS_LO`/`BASS_HI`).
+- **Key-match option** — pitch the incoming to the live deck's key on arm (the AutoMixer's
+  `toggleKey` path) so the blend is harmonic, not just beat-locked.
 - Phrase-aware arming (snap the transition length to the incoming track's phrasing, reusing
   `mixability.ts`).

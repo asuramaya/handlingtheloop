@@ -284,6 +284,15 @@
   color: var(--muted);
   white-space: nowrap;
 }
+/* The key is mid-glide (sub-semitone pitch drift, e.g. Smart Fader) → highlight + show cents. */
+.lane-key.gliding {
+  color: var(--accent, #4ad);
+}
+.lane-key-cents {
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.85;
+}
 .lane-status {
   color: var(--shift);
   font-weight: 600;
@@ -632,25 +641,21 @@
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+/* Smart Fader armed → the whole strip becomes a left-to-right A↔B blend gradient (the deck
+   accents) that breathes, to read as "blendy" — no pill needed. */
 .xfader-bar.smart-armed {
-  background: color-mix(in srgb, var(--accent, #4ad) 14%, var(--panel));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--xa, #4ad) 38%, var(--panel)) 0%,
+      color-mix(in srgb, var(--xa, #4ad) 12%, var(--panel)) 32%,
+      color-mix(in srgb, var(--xb, #d4a) 12%, var(--panel)) 68%,
+      color-mix(in srgb, var(--xb, #d4a) 38%, var(--panel)) 100%
+    );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--xa, #4ad) 30%, transparent);
+  animation: smart-breathe 1.8s ease-in-out infinite;
 }
-.xbar-smart {
-  position: absolute;
-  left: 6px;
-  top: 4px;
-  z-index: 3;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: #fff;
-  background: var(--accent, #4ad);
-  pointer-events: none;
-  animation: smart-pulse 1.1s ease-in-out infinite;
-}
-@keyframes smart-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes smart-breathe { 0%, 100% { filter: saturate(1) brightness(1); } 50% { filter: saturate(1.35) brightness(1.12); } }
 .xbar-track {
   position: relative;
   flex: 1;

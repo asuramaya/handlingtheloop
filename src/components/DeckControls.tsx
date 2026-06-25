@@ -384,11 +384,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               <button
                 key={s.n}
                 className={`loop-btn ${active || rolling.current === s.n ? "on" : ""}`}
-                title={deck.padMode === "roll" || shift ? `Loop roll ${s.label} — hold` : `Beat loop ${s.label}`}
+                title={deck.padMode === "roll" ? `Loop roll ${s.label} — hold` : `Beat loop ${s.label}`}
                 onPointerDown={(e) => {
-                  // ROLL mode (or Shift-HOLD in LOOP mode): momentary roll — engage the loop on
-                  // press, snap back on-beat on release. Plain press in LOOP mode latches (onClick).
-                  if (!(deck.padMode === "roll" || shift || e.shiftKey)) return;
+                  // Rolling lives ONLY in ROLL mode now (no more shift-hold-roll in LOOP — that
+                  // fought the LOOP→ROLL mode switch). Press engages the loop, release snaps back.
+                  if (deck.padMode !== "roll") return;
                   e.preventDefault();
                   e.currentTarget.setPointerCapture(e.pointerId);
                   rolling.current = s.n;
@@ -399,7 +399,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerUp={endRoll}
                 onPointerCancel={endRoll}
                 onClick={(e) => {
-                  if (deck.padMode === "roll" || shift || e.shiftKey) return; // handled as a roll by the pointer events
+                  if (deck.padMode === "roll") return; // ROLL handled by the pointer events above
+                  if (shift || e.shiftKey) return; // LOOP-mode pad+shift is freed (was roll) — no-op
                   // Re-clicking the ACTIVE size exits; a different size resizes; else set.
                   if (active) {
                     deck.exitLoop();
@@ -429,7 +430,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 key={i}
                 className={`pad ${set ? "set" : ""} ${isLoop ? "loop" : ""}`}
                 data-cue={i + 1}
-                title={shift ? (deck.loop && !set ? "Save loop here" : "Clear") : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to roll"}
+                title={shift ? "Clear cue" : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to preview"}
                 onPointerDown={(e) => {
                   // Set hot-cue (not a loop, no shift): hold = momentary roll/preview.
                   if (shift || e.shiftKey || !set || isLoop) return;
@@ -449,13 +450,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   if (padSuppress.current) { padSuppress.current = false; return; } // a hold already handled it
                   const shiftNow = shift || e.shiftKey;
                   if (shiftNow) {
-                    if (deck.loop && !set) {
-                      deck.saveLoop(i);
-                      emit({ kind: "hotcue", deck: id, slot: i, action: "save" });
-                    } else {
-                      deck.clearHotCue(i);
-                      emit({ kind: "hotcue", deck: id, slot: i, action: "clear" });
-                    }
+                    // SHIFT on a cue pad = clear, ALWAYS (the old shift=save-loop was the vestigial
+                    // hotLoops path — a saved region is a SONG sample now, not a cue-pad loop).
+                    deck.clearHotCue(i);
+                    emit({ kind: "hotcue", deck: id, slot: i, action: "clear" });
                   } else {
                     deck.hotCue(i);
                     emit({ kind: "hotcue", deck: id, slot: i, action: "press" });

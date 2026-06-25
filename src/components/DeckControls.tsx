@@ -1,6 +1,6 @@
 import { useRef, useState, type MutableRefObject } from "react";
 import type { Deck, PadMode } from "@htl/audio";
-import { HOT_CUE_COUNT, PAD_MODE_SHIFT } from "@htl/audio";
+import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, type SamplerApi, type SamplerPad } from "./useSampler";
 import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
@@ -359,11 +359,17 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {PAD_MODE_BTNS.map(({ base, label, shiftLabel, kbd }) => {
             if (base === "sampler" && !sampler) return null;
             const peer = PAD_MODE_SHIFT[base];
-            const hasPeer = peer !== base;
-            const eff = shift && hasPeer ? peer : base;
-            const lbl = shift && hasPeer ? shiftLabel : label;
+            const eff = shift ? peer : base; // every button reveals its shifted peer (like the board)
+            const reserved = shift && PAD_MODE_RESERVED.has(peer); // KEY / FX2 — labelled but not wired yet
+            const lbl = shift ? shiftLabel : label;
             return (
-              <button key={base} className={`${deck.padMode === eff ? "on" : ""} ${shift && hasPeer ? "alt" : ""}`} onClick={() => changePadMode(eff)}>
+              <button
+                key={base}
+                disabled={reserved}
+                className={`${deck.padMode === eff ? "on" : ""} ${shift ? "alt" : ""} ${reserved ? "reserved" : ""}`}
+                title={reserved ? `${shiftLabel} — coming soon` : undefined}
+                onClick={() => { if (!reserved) changePadMode(eff); }}
+              >
                 {lbl}<span className="kbd">{kbd}</span>
               </button>
             );

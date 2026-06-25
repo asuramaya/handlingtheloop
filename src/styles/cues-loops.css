@@ -58,6 +58,15 @@
   border-style: solid;
   color: #fff;
 }
+/* Revealed-but-not-wired shifted modes (KEY / FX2) — show the label, dimmed, like the board's
+   gray silkscreen, but unclickable until they're built. */
+.pad-mode button.alt.reserved {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+  opacity: 0.55;
+  cursor: default;
+}
 /* SONG source caption — what region the stem pads will grab (loop vs 4 bars). */
 .song-src {
   font-size: 10px;

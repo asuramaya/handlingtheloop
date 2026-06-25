@@ -485,6 +485,12 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         {/* SONG (SMP-shift) — the loaded track's STEMS, fired live over the running mix. Its own
             mode so the four parts read as one thing, not random pads jammed into the sampler. */}
         {deck.padMode === "song" && sampler && (
+        <>
+        {/* Tell the DJ exactly what region a stem pad will grab, so they're never sampling blind:
+            the active LOOP if there is one (visible on the waveform), else 4 bars from the playhead. */}
+        <div className={`song-src ${deck.loop?.active ? "from-loop" : ""}`}>
+          {deck.loop?.active ? "◆ firing the LOOP region" : "◆ firing 4 bars from ▸ — set a loop to pick the region"}
+        </div>
         <div className="hotcues smp-bank song-bank">
           {smpPads.filter((p) => p.kind === "stem").map((pad, i) => {
             const stemReady = pad.stem ? !!deck.stemBuffer(pad.stem) : false;
@@ -505,6 +511,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             );
           })}
         </div>
+        </>
         )}
 
         {/* FX pad-mode: 8 fixed performance effects (Throws + Motion). Hold-FX glow while held;

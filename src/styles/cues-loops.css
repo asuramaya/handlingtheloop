@@ -49,12 +49,28 @@
    shift-tinted so it's obvious you're looking at the alternate layer, not the base modes. */
 .pad-mode button.alt {
   border-style: dashed;
-  border-color: color-mix(in srgb, var(--shift, #fc6) 60%, var(--line));
+  border-color: var(--shift, #fc6);
+  background: color-mix(in srgb, var(--shift, #fc6) 16%, var(--panel-2));
   color: var(--shift, #fc6);
 }
 .pad-mode button.alt.on {
-  background: color-mix(in srgb, var(--shift, #fc6) 22%, var(--panel));
+  background: color-mix(in srgb, var(--shift, #fc6) 36%, var(--panel));
+  border-style: solid;
   color: #fff;
+}
+/* SONG source caption — what region the stem pads will grab (loop vs 4 bars). */
+.song-src {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  padding: 1px 2px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.song-src.from-loop {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
 }
 /* SMP (grabs) + SONG (stems) banks hold 4 pads — a 4-wide grid keeps the pads large instead of
    crowding into a half-width 8-col strip. */

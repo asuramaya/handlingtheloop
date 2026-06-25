@@ -3497,7 +3497,8 @@ export function App() {
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
           hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
-          padMode: d.padMode,
+          // The shifted peer modes light their BASE button's lamp (roll→loop, song→sampler).
+          padMode: d.padMode === "roll" ? "loop" : d.padMode === "song" ? "sampler" : d.padMode,
         };
         midi.setFeedback(id, fb);
       });

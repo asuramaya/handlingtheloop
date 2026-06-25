@@ -45,6 +45,41 @@
   border-color: var(--accent);
   color: #fff;
 }
+/* Holding SHIFT swaps the mode buttons to their shifted-layer peers (ROLL / SONG …) — dashed +
+   shift-tinted so it's obvious you're looking at the alternate layer, not the base modes. */
+.pad-mode button.alt {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--shift, #fc6) 60%, var(--line));
+  color: var(--shift, #fc6);
+}
+.pad-mode button.alt.on {
+  background: color-mix(in srgb, var(--shift, #fc6) 22%, var(--panel));
+  color: #fff;
+}
+/* SMP (grabs) + SONG (stems) banks hold 4 pads — a 4-wide grid keeps the pads large instead of
+   crowding into a half-width 8-col strip. */
+.smp-bank {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* SONG stem pads: ONE cohesive treatment (dark pad + a thin stem-colour top accent + a clear
+   label), not four loud fills — so the four parts read as one set at a glance. */
+.stem-pad {
+  --stem: var(--accent);
+  background: var(--panel-2);
+  border-color: color-mix(in srgb, var(--stem) 40%, var(--btn-border, var(--line)));
+  border-top: 3px solid var(--stem);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+.stem-pad.set { background: color-mix(in srgb, var(--stem) 13%, var(--panel-2)); }
+.stem-pad.playing { background: color-mix(in srgb, var(--stem) 40%, var(--panel)); color: #fff; }
+.stem-pad:disabled { opacity: 0.4; }
+.stem-pad.stem-vocals { --stem: #ff5c8a; }
+.stem-pad.stem-drums { --stem: #ffb53d; }
+.stem-pad.stem-bass { --stem: #5b8cff; }
+.stem-pad.stem-other { --stem: #43d6a0; }
 
 
 .hotcues {

@@ -1,6 +1,6 @@
 import { useRef, useState, type MutableRefObject } from "react";
-import type { Deck } from "@htl/audio";
-import { HOT_CUE_COUNT } from "@htl/audio";
+import type { Deck, PadMode } from "@htl/audio";
+import { HOT_CUE_COUNT, PAD_MODE_SHIFT } from "@htl/audio";
 import { deckPadBase, type SamplerApi, type SamplerPad } from "./useSampler";
 import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
@@ -68,6 +68,17 @@ const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
 // Tempo nudge step (percent) for SHIFT-clicking the ∓ pitch steppers.
 const TEMPO_NUDGE = 0.5;
 
+// SONG-pad stem labels — match the deck's own stem-mixer cells so they read consistently.
+const STEM_LABEL: Record<StemName, string> = { vocals: "VOICE", drums: "DRUM", bass: "BASS", other: "INST" };
+
+// The four mode buttons + their SHIFT-layer labels (peer mode in PAD_MODE_SHIFT). U·I·O·P.
+const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: string }[] = [
+  { base: "cue", label: "CUE", shiftLabel: "KEY", kbd: "U" },
+  { base: "fx", label: "FX", shiftLabel: "FX2", kbd: "I" },
+  { base: "loop", label: "LOOP", shiftLabel: "ROLL", kbd: "O" },
+  { base: "sampler", label: "SMP", shiftLabel: "SONG", kbd: "P" },
+];
+
 // One deck's performance controls: jog / loop section, hot-cue pads, then the
 // SYNC·KEY·FX·dB rack over the CUE·PLAY·SHIFT foot. A SHIFT modifier (also the
 // keyboard Shift key) remaps:
@@ -111,9 +122,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   if (!padRestored.current) {
     padRestored.current = true;
     const saved = localStorage.getItem(PAD_MODE_KEY);
-    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx") deck.setPadMode(saved);
+    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "song") deck.setPadMode(saved);
   }
-  const changePadMode = (m: "cue" | "loop" | "sampler" | "fx") => {
+  const changePadMode = (m: PadMode) => {
     deck.setPadMode(m);
     try {
       localStorage.setItem(PAD_MODE_KEY, m);
@@ -333,27 +344,36 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             beat-loop sizes (folds the old separate loop-size row in). */}
         {/* Order mirrors the FLX4's physical bank buttons left-to-right: CUE · FX · LOOP · SMP
             (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER); U·I·O·P read across in the same order. */}
-        <div className="pad-mode">
-          <button className={deck.padMode === "cue" ? "on" : ""} onClick={() => changePadMode("cue")}>CUE<span className="kbd">U</span></button>
-          <button className={deck.padMode === "fx" ? "on" : ""} onClick={() => changePadMode("fx")}>FX<span className="kbd">I</span></button>
-          <button className={deck.padMode === "loop" ? "on" : ""} onClick={() => changePadMode("loop")}>LOOP<span className="kbd">O</span></button>
-          {sampler && <button className={deck.padMode === "sampler" ? "on" : ""} onClick={() => changePadMode("sampler")}>SMP<span className="kbd">P</span></button>}
+        {/* Hold SHIFT and the four mode buttons reveal their shifted peers (LOOP→ROLL, SMP→SONG;
+            CUE/FX peers reserved) — more modes without overloading the pads. */}
+        <div className={`pad-mode ${shift ? "shifted" : ""}`}>
+          {PAD_MODE_BTNS.map(({ base, label, shiftLabel, kbd }) => {
+            if (base === "sampler" && !sampler) return null;
+            const peer = PAD_MODE_SHIFT[base];
+            const hasPeer = peer !== base;
+            const eff = shift && hasPeer ? peer : base;
+            const lbl = shift && hasPeer ? shiftLabel : label;
+            return (
+              <button key={base} className={`${deck.padMode === eff ? "on" : ""} ${shift && hasPeer ? "alt" : ""}`} onClick={() => changePadMode(eff)}>
+                {lbl}<span className="kbd">{kbd}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {deck.padMode === "loop" && (
-        <div className="loop-sizes">
+        {(deck.padMode === "loop" || deck.padMode === "roll") && (
+        <div className={`loop-sizes ${deck.padMode === "roll" ? "roll-mode" : ""}`}>
           {LOOP_SIZES.map((s, i) => {
             const active = deck.loop?.active && deck.loop.beats === s.n;
             return (
               <button
                 key={s.n}
                 className={`loop-btn ${active || rolling.current === s.n ? "on" : ""}`}
-                title={shift ? `Loop roll ${s.label} — hold` : `Beat loop ${s.label}`}
+                title={deck.padMode === "roll" || shift ? `Loop roll ${s.label} — hold` : `Beat loop ${s.label}`}
                 onPointerDown={(e) => {
-                  // All sizes show at once now, so SHIFT no longer swaps the bank —
-                  // instead Shift-HOLD rolls: engage the loop on press, snap back
-                  // on-beat on release. Plain press latches the loop (via onClick).
-                  if (!(shift || e.shiftKey)) return;
+                  // ROLL mode (or Shift-HOLD in LOOP mode): momentary roll — engage the loop on
+                  // press, snap back on-beat on release. Plain press in LOOP mode latches (onClick).
+                  if (!(deck.padMode === "roll" || shift || e.shiftKey)) return;
                   e.preventDefault();
                   e.currentTarget.setPointerCapture(e.pointerId);
                   rolling.current = s.n;
@@ -364,7 +384,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerUp={endRoll}
                 onPointerCancel={endRoll}
                 onClick={(e) => {
-                  if (shift || e.shiftKey) return; // handled as a roll by the pointer events
+                  if (deck.padMode === "roll" || shift || e.shiftKey) return; // handled as a roll by the pointer events
                   // Re-clicking the ACTIVE size exits; a different size resizes; else set.
                   if (active) {
                     deck.exitLoop();
@@ -435,37 +455,52 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
+        {/* SMP — the deck's GRAB sample pads (regions you captured). */}
         {deck.padMode === "sampler" && sampler && (
         <div className="hotcues smp-bank">
-          {smpPads.map((pad) => {
-            const slot = pad.index - smpBase; // 0..7
-            // The first 4 pads are LIVE STEM pads — fire that stem of the loaded track. They need
-            // the deck's separated stems to actually sound; gate them on the live stem buffer.
-            const stemReady = pad.kind === "stem" && pad.stem ? !!deck.stemBuffer(pad.stem) : false;
-            const disabled = pad.kind === "stem" ? !stemReady : pad.kind === "empty" && !pad.hasTrack;
+          {smpPads.filter((p) => p.kind !== "stem").map((pad, i) => (
+            <button
+              key={pad.index}
+              className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
+              data-cue={i + 1}
+              disabled={pad.kind === "empty" && !pad.hasTrack}
+              title={
+                pad.kind === "empty"
+                  ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
+                  : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
+              }
+              onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
+              onPointerUp={() => smpUp(pad)}
+              onPointerLeave={() => smpUp(pad)}
+              onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
+            >
+              {pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || i + 1}
+              {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+              <span className="kbd">{i + 1}</span>
+            </button>
+          ))}
+        </div>
+        )}
+
+        {/* SONG (SMP-shift) — the loaded track's STEMS, fired live over the running mix. Its own
+            mode so the four parts read as one thing, not random pads jammed into the sampler. */}
+        {deck.padMode === "song" && sampler && (
+        <div className="hotcues smp-bank song-bank">
+          {smpPads.filter((p) => p.kind === "stem").map((pad, i) => {
+            const stemReady = pad.stem ? !!deck.stemBuffer(pad.stem) : false;
             return (
               <button
                 key={pad.index}
-                className={`pad smp ${pad.kind === "stem" ? `stem-pad ${stemReady ? "set" : ""}` : pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
-                data-cue={slot + 1}
-                disabled={disabled}
-                title={
-                  pad.kind === "stem"
-                    ? stemReady
-                      ? `Fire the ${pad.stem} of deck ${id}'s track (live — from the loop, or 4 bars from the playhead)`
-                      : `Separate deck ${id}'s stems to fire its ${pad.stem}`
-                    : pad.kind === "empty"
-                      ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
-                      : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
-                }
+                className={`pad smp stem-pad stem-${pad.stem} ${stemReady ? "set" : ""} ${pad.playing ? "playing" : ""}`}
+                data-cue={i + 1}
+                disabled={!stemReady}
+                title={stemReady ? `Fire the ${pad.stem} of deck ${id}'s track (live — from the loop, or 4 bars from the playhead)` : `Separate deck ${id}'s stems first`}
                 onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
                 onPointerUp={() => smpUp(pad)}
                 onPointerLeave={() => smpUp(pad)}
-                onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty" && pad.kind !== "stem") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
               >
-                {pad.kind === "stem" ? pad.stem!.toUpperCase().slice(0, 4) : pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || slot + 1}
-                {pad.kind !== "stem" && pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
-                <span className="kbd">{slot + 1}</span>
+                {STEM_LABEL[pad.stem!]}
+                <span className="kbd">{i + 1}</span>
               </button>
             );
           })}

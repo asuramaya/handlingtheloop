@@ -189,6 +189,20 @@ function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
 // Directional: at most one master + one slave at a time (resolved by AudioEngine).
 export type SyncRole = "off" | "master" | "slave";
 
+// Performance-pad modes. Unshifted: cue / fx / loop / sampler. Shifted peers (SHIFT on the mode
+// row): roll (momentary loop) ↔ loop, song (the loaded track's stems) ↔ sampler. (keyboard ↔ cue
+// and a 2nd fx page ↔ fx are reserved.)
+export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "song";
+// Each unshifted mode's shifted peer (null = no peer yet → stays put under SHIFT).
+export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
+  cue: "cue", // keyboard — reserved
+  fx: "fx", // 2nd fx page — reserved
+  loop: "roll",
+  sampler: "song",
+  roll: "loop",
+  song: "sampler",
+};
+
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
@@ -272,8 +286,10 @@ export class Deck {
   // Performance-pad mode: the one 8-pad bank (+ the keyboard 1-8) acts as hot cues, beat
   // loops, the sampler, or performance FX (Pad-FX). Lives on the deck (not just the UI) so
   // the keymap + MIDI route 1-8 by it.
-  padMode: "cue" | "loop" | "sampler" | "fx" = "cue";
-  setPadMode(m: "cue" | "loop" | "sampler" | "fx") {
+  // Unshifted modes (CUE/FX/LOOP/SMP) + their shifted-layer peers, selected via SHIFT on the
+  // mode-selector row. ROLL = loop sizes that momentary-roll; SONG = the loaded track's stems.
+  padMode: PadMode = "cue";
+  setPadMode(m: PadMode) {
     this.padMode = m;
   }
   // --- Slip mode (the shadow-playhead primitive) ---

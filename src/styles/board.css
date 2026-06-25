@@ -655,9 +655,6 @@
     );
   animation: smart-breathe 2.6s ease-in-out infinite;
 }
-.xfader-bar.smart-armed .xbip {
-  opacity: 0; /* hide the level meter so only the blend gradient shows */
-}
 @keyframes smart-breathe {
   0%, 100% { box-shadow: inset 0 0 18px 2px color-mix(in srgb, var(--xa, #4ad) 55%, transparent); }
   50% { box-shadow: inset 0 0 18px 2px color-mix(in srgb, var(--xb, #d4a) 55%, transparent); }
@@ -679,24 +676,27 @@
   border-top: 1px solid var(--line);
   overflow: hidden;
 }
-/* Bipolar meter: deck A fills the left half growing OUT from the centre datum, deck
-   B fills the right half growing out to the right. */
-.xbip {
+/* Per-side LEVEL GLOW: instead of a discrete meter, each half brightens with that deck's
+   post-crossfade output (opacity = --a-lvl / --b-lvl, a 0..1 set per-frame by the Crossfader rAF).
+   Screen-blended over the blend gradient, so louder = brighter that colour — no fill to fight it. */
+.xglow {
   position: absolute;
-  inset: 3px;
-  pointer-events: none;
-}
-.xbip .smeter {
-  position: absolute;
-  inset: auto;
   top: 0;
   bottom: 0;
-  width: 50%;
+  width: 64%;
+  pointer-events: none;
+  mix-blend-mode: screen;
 }
-.xbip .smeter.xb-a { left: 0; }
-.xbip .smeter.xb-b { right: 0; }
-.xbip .smeter.xb-a .smeter-fill { right: 0; left: auto; }
-.xbip .smeter.xb-b .smeter-fill { left: 0; right: auto; }
+.xglow-a {
+  left: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--xa, #4ad) 85%, transparent), transparent 92%);
+  opacity: calc(var(--a-lvl, 0) * 0.95);
+}
+.xglow-b {
+  right: 0;
+  background: linear-gradient(270deg, color-mix(in srgb, var(--xb, #d4a) 85%, transparent), transparent 92%);
+  opacity: calc(var(--b-lvl, 0) * 0.95);
+}
 .xbar-input {
   position: absolute;
   inset: 0;

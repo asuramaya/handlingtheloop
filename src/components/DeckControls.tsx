@@ -439,24 +439,32 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         <div className="hotcues smp-bank">
           {smpPads.map((pad) => {
             const slot = pad.index - smpBase; // 0..7
+            // The first 4 pads are LIVE STEM pads — fire that stem of the loaded track. They need
+            // the deck's separated stems to actually sound; gate them on the live stem buffer.
+            const stemReady = pad.kind === "stem" && pad.stem ? !!deck.stemBuffer(pad.stem) : false;
+            const disabled = pad.kind === "stem" ? !stemReady : pad.kind === "empty" && !pad.hasTrack;
             return (
               <button
                 key={pad.index}
-                className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
+                className={`pad smp ${pad.kind === "stem" ? `stem-pad ${stemReady ? "set" : ""}` : pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
                 data-cue={slot + 1}
-                disabled={pad.kind === "empty" && !pad.hasTrack}
+                disabled={disabled}
                 title={
-                  pad.kind === "empty"
-                    ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
-                    : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
+                  pad.kind === "stem"
+                    ? stemReady
+                      ? `Fire the ${pad.stem} of deck ${id}'s track (live — from the loop, or 4 bars from the playhead)`
+                      : `Separate deck ${id}'s stems to fire its ${pad.stem}`
+                    : pad.kind === "empty"
+                      ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
+                      : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
                 }
                 onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
                 onPointerUp={() => smpUp(pad)}
                 onPointerLeave={() => smpUp(pad)}
-                onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
+                onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty" && pad.kind !== "stem") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
               >
-                {pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || slot + 1}
-                {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+                {pad.kind === "stem" ? pad.stem!.toUpperCase().slice(0, 4) : pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || slot + 1}
+                {pad.kind !== "stem" && pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
                 <span className="kbd">{slot + 1}</span>
               </button>
             );

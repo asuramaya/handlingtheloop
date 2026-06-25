@@ -22,6 +22,12 @@ import type { Me } from "@htl/account";
 
 export const GLOBAL_COUNT = 8;
 export const DECK_REGION_COUNT = 8;
+// A deck's 8 SONG pads split: the first 4 auto-hold the loaded track's STEMS (fire that stem
+// live from the playhead — the headline "the current song is an instrument" move), the last 4
+// are GRAB slots (capture a region/loop, like before). The stems are DERIVED (not stored); their
+// readiness is read live at render/trigger off the deck's stem buffers.
+const STEM_PAD_COUNT = 4;
+const STEM_ORDER: StemName[] = ["vocals", "drums", "bass", "other"];
 export const PAD_COUNT = GLOBAL_COUNT + DECK_REGION_COUNT * 2; // 28
 export const GLOBAL_PADS = Array.from({ length: GLOBAL_COUNT }, (_, i) => `g${i}`);
 const REGION_KEY = "htl:samplerRegions"; // { [videoId]: (RegionDesc|null)[8] }
@@ -59,7 +65,7 @@ type GlobalMeta = Record<string, { mode: SampleMode; gain: number }>;
 export interface SamplerPad {
   index: number;
   route: "A" | "master" | "B";
-  kind: "empty" | "region" | "file";
+  kind: "empty" | "region" | "file" | "stem"; // stem = a deck SONG pad that fires a live stem
   name: string;
   mode: SampleMode;
   gain: number;
@@ -192,21 +198,40 @@ export function useSampler(
         });
       } else {
         const vid = regionDeck(i) === "A" ? loaded.A : loaded.B;
-        const r = vid ? regions[vid]?.[regionSlot(i)] ?? null : null;
-        out.push({
-          index: i,
-          route,
-          kind: r ? "region" : "empty",
-          name: r?.name ?? "",
-          mode: r?.mode ?? "oneshot",
-          gain: r?.gain ?? 1,
-          start: r?.start,
-          end: r?.end,
-          playing,
-          ready: !!r,
-          hasTrack: !!vid,
-          stem: r?.stem,
-        });
+        const slot = regionSlot(i); // 0..7
+        if (slot < STEM_PAD_COUNT) {
+          // STEM pad — fire this stem of the loaded track live. Derived (not stored); the deck's
+          // stem buffer presence (checked at render/trigger) decides whether it's actually firable.
+          const stem = STEM_ORDER[slot];
+          out.push({
+            index: i,
+            route,
+            kind: "stem",
+            name: stem,
+            mode: "oneshot",
+            gain: 1,
+            playing,
+            ready: !!vid,
+            hasTrack: !!vid,
+            stem,
+          });
+        } else {
+          const r = vid ? regions[vid]?.[slot] ?? null : null;
+          out.push({
+            index: i,
+            route,
+            kind: r ? "region" : "empty",
+            name: r?.name ?? "",
+            mode: r?.mode ?? "oneshot",
+            gain: r?.gain ?? 1,
+            start: r?.start,
+            end: r?.end,
+            playing,
+            ready: !!r,
+            hasTrack: !!vid,
+            stem: r?.stem,
+          });
+        }
       }
     }
     return out;
@@ -229,12 +254,27 @@ export function useSampler(
       } else {
         const id = regionDeck(i);
         const d = engine.deck(id);
+        const slot = regionSlot(i);
+        const rate = d.rate; // tempo-sync the region voice to the live deck
+        if (slot < STEM_PAD_COUNT) {
+          // STEM pad — fire this stem of the loaded track from the live playhead (or the active
+          // loop region), layered over the running mix. The headline move.
+          const stem = STEM_ORDER[slot];
+          const buf = d.stemBuffer(stem);
+          if (!buf) return; // stems not separated yet → nothing to fire
+          const start = d.loop?.active ? d.loop.start : d.position();
+          const beat = d.beatgrid?.interval ?? 0.5;
+          const end = d.loop?.active ? d.loop.end : Math.min(d.duration, start + beat * 16); // 4 bars
+          if (end - start < 0.05) return;
+          engine.sampler.play(i, { buffer: buf, offset: start, duration: end - start, route, mode: "oneshot", gain: 1, rate });
+          emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start, end, mode: "oneshot", gain: 1, rate, stem } });
+          return;
+        }
         const vid = id === "A" ? loaded.A : loaded.B;
-        const r = vid ? regions[vid]?.[regionSlot(i)] : null;
+        const r = vid ? regions[vid]?.[slot] : null;
         if (!r) return;
         const buf = (r.stem && d.stemBuffer(r.stem)) || d.buffer; // stem-aware: chop one stem, else the full mix
         if (!buf) return;
-        const rate = d.rate; // tempo-sync the region voice to the live deck
         engine.sampler.play(i, { buffer: buf, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
         // Carry the slice — the guest plays it off ITS OWN copy of the deck's track (no audio on the wire).
         emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stem: r.stem } });
@@ -257,6 +297,7 @@ export function useSampler(
   // Capture a region from the deck: its active loop if set, else one bar from the playhead.
   const assignRegion = useCallback(
     (i: number) => {
+      if (regionSlot(i) < STEM_PAD_COUNT) return; // slots 0-3 are live stem pads — not grab slots
       const id = regionDeck(i);
       const d = engine.deck(id);
       const vid = id === "A" ? loaded.A : loaded.B;

@@ -241,7 +241,7 @@ export function useSampler(
   // ---- actions ----
 
   const trigger = useCallback(
-    (i: number) => {
+    (i: number, loop = false) => { // loop = SHIFT alt for stem pads: loop the stem instead of a one-shot stab
       engine.resume();
       const route = routeOf(i);
       if (route === "master") {
@@ -266,8 +266,9 @@ export function useSampler(
           const beat = d.beatgrid?.interval ?? 0.5;
           const end = d.loop?.active ? d.loop.end : Math.min(d.duration, start + beat * 16); // 4 bars
           if (end - start < 0.05) return;
-          engine.sampler.play(i, { buffer: buf, offset: start, duration: end - start, route, mode: "oneshot", gain: 1, rate });
-          emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start, end, mode: "oneshot", gain: 1, rate, stem } });
+          const mode: SampleMode = loop ? "loop" : "oneshot";
+          engine.sampler.play(i, { buffer: buf, offset: start, duration: end - start, route, mode, gain: 1, rate });
+          emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start, end, mode, gain: 1, rate, stem } });
           return;
         }
         const vid = id === "A" ? loaded.A : loaded.B;

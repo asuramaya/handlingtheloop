@@ -142,10 +142,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // hold, loop = toggle, one-shot = retrigger). Mirrors the global strip's pad behaviour.
   const smpDown = (pad: SamplerPad) => {
     if (!sampler) return;
-    if (pad.kind === "empty") {
-      if (pad.hasTrack) { sampler.assignRegion(pad.index); refresh(); }
+    if (pad.kind === "stem") {
+      // tap = one-shot stab; SHIFT = loop the stem continuously. Re-tap (or release in either)
+      // stops a sounding voice. The alt pad-function, parallel to hot-cue's shift=clear.
+      if (pad.playing) { sampler.stop(pad.index); refresh(); return; }
+      sampler.trigger(pad.index, shift);
+      refresh();
       return;
     }
+    if (pad.kind === "empty") {
+      if (pad.hasTrack && !shift) { sampler.assignRegion(pad.index); refresh(); }
+      return;
+    }
+    if (shift) { sampler.clearPad(pad.index); refresh(); return; } // SHIFT on a filled pad = clear it
     if (pad.mode === "loop" || pad.mode === "bounce") pad.playing ? sampler.stop(pad.index) : sampler.trigger(pad.index);
     else sampler.trigger(pad.index);
     refresh();
@@ -467,7 +476,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               title={
                 pad.kind === "empty"
                   ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
-                  : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play, right-click for options`
+                  : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play · SHIFT = clear · right-click for options`
               }
               onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
               onPointerUp={() => smpUp(pad)}
@@ -500,7 +509,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 className={`pad smp stem-pad stem-${pad.stem} ${stemReady ? "set" : ""} ${pad.playing ? "playing" : ""}`}
                 data-cue={i + 1}
                 disabled={!stemReady}
-                title={stemReady ? `Fire the ${pad.stem} of deck ${id}'s track (live — from the loop, or 4 bars from the playhead)` : `Separate deck ${id}'s stems first`}
+                title={stemReady ? `Fire the ${pad.stem} of deck ${id}'s track (live) — tap = one-shot · SHIFT = loop` : `Separate deck ${id}'s stems first`}
                 onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
                 onPointerUp={() => smpUp(pad)}
                 onPointerLeave={() => smpUp(pad)}

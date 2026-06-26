@@ -124,6 +124,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     const saved = localStorage.getItem(PAD_MODE_KEY);
     if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "song") deck.setPadMode(saved);
   }
+  // True when the deck is parked in a SHIFTED-layer mode (ROLL/SONG/…) — used to persistently tint
+  // the bank so it's obvious you're on the second layer even after releasing shift.
+  const inShiftedMode = deck.padMode === "roll" || deck.padMode === "song" || deck.padMode === "keyboard" || deck.padMode === "fx2";
   const changePadMode = (m: PadMode) => {
     deck.setPadMode(m);
     try {
@@ -259,7 +262,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main">
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
@@ -359,15 +362,21 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {PAD_MODE_BTNS.map(({ base, label, shiftLabel, kbd }) => {
             if (base === "sampler" && !sampler) return null;
             const peer = PAD_MODE_SHIFT[base];
-            const eff = shift ? peer : base; // every button reveals its shifted peer (like the board)
-            const reserved = shift && PAD_MODE_RESERVED.has(peer); // KEY / FX2 — labelled but not wired yet
-            const lbl = shift ? shiftLabel : label;
+            const activeIsPeer = deck.padMode === peer; // currently IN the shifted mode (e.g. ROLL)
+            const activeIsBase = deck.padMode === base;
+            // Show the shifted label when you're IN the peer mode (persists after releasing shift —
+            // so the button never lies about which layer you're in) OR while previewing via shift.
+            const showPeer = activeIsPeer || shift;
+            const eff = shift ? peer : base; // click: unshift → base, shift → peer (toggles the pair)
+            const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // KEY / FX2 — labelled, not wired
+            const lbl = showPeer ? shiftLabel : label;
+            const on = showPeer ? activeIsPeer : activeIsBase; // highlight tracks the ACTUAL active mode
             return (
               <button
                 key={base}
                 disabled={reserved}
-                className={`${deck.padMode === eff ? "on" : ""} ${shift ? "alt" : ""} ${reserved ? "reserved" : ""}`}
-                title={reserved ? `${shiftLabel} — coming soon` : undefined}
+                className={`${on ? "on" : ""} ${showPeer ? "alt" : ""} ${reserved ? "reserved" : ""}`}
+                title={reserved ? `${shiftLabel} — coming soon` : activeIsPeer ? `In ${shiftLabel} (shifted) mode` : undefined}
                 onClick={() => { if (!reserved) changePadMode(eff); }}
               >
                 {lbl}<span className="kbd">{kbd}</span>

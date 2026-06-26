@@ -123,6 +123,13 @@
   font-weight: 800;
   color: color-mix(in srgb, var(--shift, #fc6) 85%, #fff);
 }
+/* Parked on a SHIFTED layer (ROLL / SONG / …) with shift released — a persistent shift-accent
+   stripe across the pad area so the board never tricks you into thinking you're on the base layer. */
+.bank.in-shifted-mode .loop-sizes,
+.bank.in-shifted-mode .smp-bank {
+  box-shadow: inset 0 2px 0 var(--shift, #fc6);
+  border-radius: 4px;
+}
 
 
 .hotcues {

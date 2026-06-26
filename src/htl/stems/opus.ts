@@ -147,7 +147,20 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
     }
   }
   for (const d of frames) d.close();
-  return out;
+  // Opus is ALWAYS stored at OPUS_SR (48 kHz). The stretch engine plays every PCM source at
+  // the AudioContext's sample rate — the mix gets there via decodeAudioData — so if the
+  // context runs at a different rate, these stems would play pitched + sped by
+  // ctx.sampleRate / OPUS_SR. That's the "supplementary stems break pitch & tempo on mobile"
+  // bug: iOS follows the output route and is often 44.1 kHz (≈0.919× → ~1.5 semitones flat,
+  // ~8% slow), while desktop Chrome at 48 kHz happens to match. Resample to the context rate
+  // so the stems line up with the mix (the WAV path already does, via decodeAudioData).
+  if (sr === ctx.sampleRate) return out;
+  const off = new OfflineAudioContext(ch, Math.max(1, Math.ceil(out.duration * ctx.sampleRate)), ctx.sampleRate);
+  const node = off.createBufferSource();
+  node.buffer = out;
+  node.connect(off.destination);
+  node.start();
+  return off.startRendering();
 }
 
 // Minimal structural types for the WebCodecs surface we touch (avoids depending on

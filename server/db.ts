@@ -16,3 +16,4 @@ export * from "./db/reports";
 export * from "./db/userdata";
 export * from "./db/account";
 export * from "./db/notifications";
+export * from "./db/presence";

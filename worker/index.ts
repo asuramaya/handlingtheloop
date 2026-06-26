@@ -33,6 +33,7 @@ import {
   isFollowing,
   blockedEither,
   addNotification,
+  setPresenceOnline,
   getOrCreateInvite,
   inviteOwner,
   ensureIdentityColumns,
@@ -944,7 +945,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
 // same-origin), then routed to the per-account DjRoom DO. Kept out of handleApi so
 // the 101 upgrade response passes through untouched (no JSON wrapping). The DO
 // itself never sees credentials or audio — only control intents + track ids.
-async function handleRoom(req: Request, env: Env): Promise<Response> {
+async function handleRoom(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return json(426, { error: "expected a websocket upgrade" });
   }
@@ -1015,6 +1016,11 @@ async function handleRoom(req: Request, env: Env): Promise<Response> {
   // notification back to the Worker. Anon connections carry none.
   url.searchParams.delete("acct");
   if (user) url.searchParams.set("acct", user.id);
+
+  // Presence: any authenticated socket attaching (own rig, a jam, or a signed-in listen) means
+  // this user is online to their friends. Transition write, best-effort (never blocks the upgrade);
+  // the matching offline is bridged from the room DO when their last socket drops (/internal/presence).
+  if (user && env.DB) ctx.waitUntil(setPresenceOnline(env.DB, user.id).catch(() => {}));
 
   // D2 relay tier: when RELAY_SHARDS>0, an anonymous pub-listener is sharded onto one of R
   // RelayRoom DOs (by hash(device)) instead of piling onto the master — the master pushes the
@@ -1120,7 +1126,7 @@ export { RelayRoom } from "../server/relayRoom"; // D2 crowd shards (dormant unl
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
-    if (url.pathname === "/api/room") return handleRoom(req, env);
+    if (url.pathname === "/api/room") return handleRoom(req, env, ctx);
     if (url.pathname === "/internal/notify") return handleInternalNotify(req, env);
     if (url.pathname.startsWith("/api/")) return handleApi(url, req, env, ctx);
     // Static SPA — but stamp every response with cross-origin-isolation headers so

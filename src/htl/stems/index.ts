@@ -211,6 +211,17 @@ async function encodeWav(buffer: AudioBuffer): Promise<ArrayBuffer> {
 //     a capable device, separate in-browser and share the result back to R2; on a
 //     weak device with a cold cache, fall back to the DSP split so buttons still work.
 // All paths return the same `Stems` shape, so the deck/UI never changes.
+//
+// HONESTY TAG: a neural request that silently falls back to the DSP split (cold cache it
+// can't separate, or a separation that threw) returns a `dspStems` result — visually 4
+// lanes, but NOT the model the caller asked for. Tag those so the caller labels them "DSP"
+// instead of wearing a "✦ Demucs" chip over a DSP split (the "claims Demucs but isn't" bug).
+const DSP_FALLBACK = new WeakSet<Stems>();
+/** True when these stems are the instant DSP split, not the requested neural model. */
+export function isDspStems(s: Stems): boolean {
+  return DSP_FALLBACK.has(s);
+}
+
 export async function loadStems(
   ctx: BaseAudioContext,
   videoId: string,
@@ -258,7 +269,11 @@ export async function loadStems(
     const stems = await separate(mix, m, onProgress);
     void persistStems(videoId, m.id, stems); // cache locally (refresh) + share to R2
     return stems;
-  } catch {
+  } catch (err) {
+    // Don't break the deck — but DON'T swallow this silently either: log it (so a desktop
+    // separation failure is diagnosable) and return a DSP split TAGGED as a fallback, so the
+    // caller labels it honestly rather than claiming the neural engine ran.
+    console.warn(`[htl] neural separation failed (${m.id}) — falling back to DSP split:`, err);
     return dspStems(mix);
   }
 }
@@ -301,7 +316,9 @@ export async function dspStems(buffer: AudioBuffer): Promise<Stems> {
   });
   const vocals = upmix(voiceMono, buffer.numberOfChannels, buffer.sampleRate);
   const other = await residual(buffer, [bass, drums, vocals]);
-  return { vocals, drums, bass, other };
+  const out: Stems = { vocals, drums, bass, other };
+  DSP_FALLBACK.add(out); // tag: a DSP split, not a neural model → callers label it honestly
+  return out;
 }
 
 // PRE-PACKED stems: int16 PCM per group (in STEM_NAMES order, so the worklet's stemGain

@@ -18,6 +18,7 @@ interface CrossfaderProps {
   onCrossfade: (v: number) => void;
   locked?: boolean; // the crossfader is a whole-board move → blocked for non-full-controllers
   smart?: boolean; // Smart Fader armed → the throw scrubs an auto-transition (tempo morph + bass swap)
+  kbd?: string; // keyboard hint for the Smart Fader toggle (shown in the corner when show-keys is on)
 }
 
 const FLOOR_DB = -60; // dBFS floor for the glow brightness
@@ -26,7 +27,7 @@ const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballisti
 // The A↔B crossfader as a HORIZONTAL bar. The strip is always an A↔B blend gradient; instead of a
 // discrete level meter, each side's GLOW brightens with that deck's post-crossfade output (louder =
 // brighter), so position (handle), blend (gradient) and level (glow) never fight for the same pixels.
-export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart }: CrossfaderProps) {
+export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart, kbd }: CrossfaderProps) {
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   const trackRef = useRef<HTMLDivElement>(null);
   // Live crossfade attenuation per side, read each frame without re-running the rAF.
@@ -72,21 +73,26 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
         <input
           type="range" className="xbar-input" min={-1} max={1} step={0.01} value={crossfade}
           title="A ↔ B crossfade"
-          // Tint the handle the PURE colour of the side it's landed on (so it matches
-          // that deck's channel-fader handle exactly) — A left of centre, B right.
-          style={{
-            ["--xa" as string]: accentA,
-            ["--xb" as string]: accentB,
-            ["--xpct" as string]: crossfade > 0 ? "100%" : "0%",
-          }}
+          // The thumb is transparent now (the .xbar-val pill is the visible handle), so the colour
+          // vars live on the pill, not here — this input is just the drag hit-area.
           onChange={(e) => onCrossfade(Number(e.target.value))}
           onContextMenu={(e) => { e.preventDefault(); onCrossfade(0); }}
         />
-        {/* A↔B position (0 = full A, 50 = centre, 100 = full B) printed on the handle. */}
-        <div className="lfader-val xbar-val" style={{ left: `calc(${frac} * (100% - 38px) + 19px)` }}>
+        {/* A↔B position (0 = full A, 50 = centre, 100 = full B). The pill IS the handle now; --xpct
+            snaps its colour to the side it landed on (matches the old thumb). */}
+        <div
+          className="lfader-val xbar-val"
+          style={{
+            left: `calc(${frac} * (100% - 38px) + 19px)`,
+            ["--xpct" as string]: crossfade > 0 ? "100%" : "0%",
+          }}
+        >
           <span>{Math.round(frac * 100)}</span>
         </div>
       </div>
+      {/* Keyboard hint for the Smart Fader toggle (bare = arm, ⇧ = enable/disable) — corner marker,
+          shown only when key hints are on (body.show-keys). */}
+      {kbd && <span className="kbd xbar-kbd" aria-hidden="true">{kbd}</span>}
     </div>
   );
 }

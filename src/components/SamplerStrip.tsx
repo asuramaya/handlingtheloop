@@ -1,21 +1,19 @@
-import { useEffect, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent } from "react";
-import type { AudioEngine, SampleMode } from "@htl";
-import { GLOBAL_COUNT, type SamplerPad, type SamplerApi } from "./useSampler";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import type { AudioEngine } from "@htl";
+import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 
 // Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
 // exists. Each captures into the next free global pad (owned-audio tier).
 type CapSource = "master" | "deckA" | "deckB" | "mic";
-const SRC_LABEL: Record<CapSource, string> = { master: "MIX", deckA: "A", deckB: "B", mic: "MIC" };
-const SRC_TAKE: Record<CapSource, string> = { master: "Mix take", deckA: "Deck A take", deckB: "Deck B take", mic: "Mic take" };
+const SRC_LABEL: Record<CapSource, string> = { master: "MST", deckA: "A", deckB: "B", mic: "MIC" };
+const SRC_FULL: Record<CapSource, string> = { master: "Master mix", deckA: "Deck A", deckB: "Deck B", mic: "Mic" };
+const SRC_TAKE: Record<CapSource, string> = { master: "Master take", deckA: "Deck A take", deckB: "Deck B take", mic: "Mic take" };
+// Where the mic signal GOES (folded into the MIC buttonoid's right-click). Default = the room.
+const DEST_FULL: Record<"master" | "A" | "B", string> = { master: "Room (master / PA)", A: "Deck A — FX rack", B: "Deck B — FX rack" };
 
-// The 12 GLOBAL sample pads (master-routed) that sit over the A/B crossfader — uploaded
-// account clips that cut through the mix. The per-deck "play X→Y" region samples (8 each)
-// live in the decks' SAMPLER pad-mode now, not here.
-
-const MODE_LABEL: Record<SampleMode, string> = { oneshot: "1-shot", gate: "gate", loop: "loop", bounce: "bounce" };
-const MODE_DOT: Record<SampleMode, string> = { oneshot: "●", gate: "▣", loop: "↻", bounce: "⇄" };
-const MODES: SampleMode[] = ["oneshot", "gate", "loop", "bounce"];
+// Controls-only strip (MIC / capture / headphone). The GLOBAL sample pads moved into the decks'
+// GLBL pad-mode (SMP+shift); captures still land in the next free global pad, played from there.
 
 export function SamplerStrip({
   sampler,
@@ -51,9 +49,18 @@ export function SamplerStrip({
   const [micDest, setMicDest] = useState<"master" | "A" | "B">("master"); // PA, or into a deck's FX rack
   const [recSrc, setRecSrc] = useState<CapSource>("master");
   const [recording, setRecording] = useState(false);
-  const [grabbing, setGrabbing] = useState(false);
   const [ioErr, setIoErr] = useState<string | null>(null);
   const meterRef = useRef<HTMLSpanElement>(null);
+  // Capture-landed feedback: REC/CATCH deposit into a global pad that no longer sits beside the
+  // strip (it's in GLBL pad-mode now), so flash "→ GLBL n" briefly to show where the take went.
+  const [landed, setLanded] = useState<number | null>(null);
+  const landedTmr = useRef<number | undefined>(undefined);
+  const flashLanded = (gi: number) => {
+    setLanded(gi);
+    clearTimeout(landedTmr.current);
+    landedTmr.current = window.setTimeout(() => setLanded(null), 2600);
+  };
+  useEffect(() => () => clearTimeout(landedTmr.current), []);
 
   // Live input-level meter: drive a bar width from engine.micLevel while the mic is live.
   useEffect(() => {
@@ -99,35 +106,20 @@ export function SamplerStrip({
     engine.setMicMonitor(next);
   };
 
-  // Cycle the mic destination: PA (master, ducks) → into deck A's FX rack → deck B's.
-  const cycleDest = () => {
-    const order = ["master", "A", "B"] as const;
-    const next = order[(order.indexOf(micDest) + 1) % order.length];
-    setMicDest(next);
-    engine.setMicRoute(next);
-  };
-
-  // Retroactive catch: lift the last 4 bars of the master out of the ring → next free pad.
-  const doGrab = async () => {
-    if (grabbing) return;
-    setGrabbing(true);
-    setIoErr(null);
-    const take = await engine.grabBars(4);
-    setGrabbing(false);
-    if (take) await s.captureToGlobal(take, "Catch");
-    else setIoErr("Nothing to catch yet — let some audio play first.");
-  };
-
-  const cycleSrc = () => {
-    const order: CapSource[] = engine.canMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
-    setRecSrc((c) => order[(order.indexOf(c) + 1) % order.length]);
-  };
+  // The mic destination + REC source are no longer their own cells — they're folded into the MIC
+  // buttonoid (right-click → DEST) and the REC button (right-click / hold → SRC). A little popup
+  // picks the value directly.
+  const [routeMenu, setRouteMenu] = useState<{ kind: "dest" | "src"; x: number; y: number } | null>(null);
+  const recLong = useRef<number | undefined>(undefined);
+  const recSuppress = useRef(false);
+  const pickDest = (d: "master" | "A" | "B") => { setMicDest(d); engine.setMicRoute(d); setRouteMenu(null); };
+  const SRC_ORDER: CapSource[] = engine.canMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
   const toggleRec = async () => {
     if (recording) {
       setRecording(false);
       const take = await engine.stopCapture();
-      if (take) await s.captureToGlobal(take, SRC_TAKE[recSrc]);
+      if (take) { const gi = await s.captureToGlobal(take, SRC_TAKE[recSrc]); if (gi != null) flashLanded(gi); }
       else setIoErr("Nothing captured.");
       return;
     }
@@ -150,123 +142,23 @@ export function SamplerStrip({
       ctlRef.current = null;
     };
   }, [ctlRef, s.trigger, s.release]);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const pickPad = useRef<number | null>(null);
-  const [menu, setMenu] = useState<{ i: number; x: number; y: number } | null>(null);
-  const [dragOver, setDragOver] = useState<number | null>(null);
-  const longPress = useRef<number | undefined>(undefined);
-  const suppressClick = useRef(false);
-
-  const openPicker = (i: number) => {
-    pickPad.current = i;
-    fileInput.current?.click();
-  };
-
-  // Pad press. Empty pads ASSIGN (region → capture from the deck; global → file picker);
-  // filled pads TRIGGER (gate = hold; loop = toggle; one-shot = retrigger).
-  const onPadDown = (e: PointerEvent, pad: SamplerPad) => {
-    if (e.button !== 0) return; // right / middle button → context menu only, never trigger
-    if (suppressClick.current) return;
-    if (pad.kind === "empty") return; // assign happens on click, below
-    if (pad.mode === "gate") {
-      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-      s.trigger(pad.index);
-    } else if (pad.mode === "loop" || pad.mode === "bounce") {
-      pad.playing ? s.stop(pad.index) : s.trigger(pad.index); // continuous modes toggle
-    } else {
-      s.trigger(pad.index);
-    }
-  };
-  const onPadUp = (pad: SamplerPad) => {
-    if (pad.mode === "gate") s.release(pad.index);
-  };
-  const onPadClick = (pad: SamplerPad) => {
-    if (suppressClick.current) {
-      suppressClick.current = false;
-      return;
-    }
-    if (pad.kind !== "empty") return;
-    if (pad.route === "master") openPicker(pad.index);
-    else if (pad.hasTrack) s.assignRegion(pad.index);
-  };
-
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    const i = pickPad.current;
-    e.target.value = "";
-    if (f && i != null) void s.assignFile(i, f);
-  };
-
-  const onDrop = (e: DragEvent, i: number) => {
-    e.preventDefault();
-    setDragOver(null);
-    if (routeIsMaster(i)) {
-      const f = e.dataTransfer.files?.[0];
-      if (f) void s.assignFile(i, f);
-    }
-  };
 
   return (
-    <div className="sampler-strip" aria-label="Sampler">
-      <input ref={fileInput} type="file" accept="audio/*" hidden onChange={onFile} />
-      {s.pads.slice(0, GLOBAL_COUNT).map((pad) => {
-        return (
-          <button
-            key={pad.index}
-            className={`smp-pad smp-${pad.route} ${pad.kind === "empty" ? "empty" : "set"} ${pad.playing ? "playing" : ""} ${dragOver === pad.index ? "drag-over" : ""} ${pad.uploading ? "uploading" : ""}`}
-            disabled={pad.kind === "empty" && pad.route !== "master" && !pad.hasTrack}
-            title={padTitle(pad)}
-            onPointerDown={(e) => onPadDown(e, pad)}
-            onPointerUp={() => onPadUp(pad)}
-            onPointerLeave={() => onPadUp(pad)}
-            onClick={() => onPadClick(pad)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              if (pad.kind !== "empty") setMenu({ i: pad.index, x: e.clientX, y: e.clientY });
-            }}
-            onTouchStart={(e) => {
-              if (pad.kind === "empty") return;
-              const t = e.touches[0];
-              longPress.current = window.setTimeout(() => {
-                suppressClick.current = true;
-                setMenu({ i: pad.index, x: t.clientX, y: t.clientY });
-              }, 480);
-            }}
-            onTouchEnd={() => clearTimeout(longPress.current)}
-            onTouchMove={() => clearTimeout(longPress.current)}
-            onDragOver={(e) => {
-              if (routeIsMaster(pad.index) && e.dataTransfer.types.includes("Files")) {
-                e.preventDefault();
-                setDragOver(pad.index);
-              }
-            }}
-            onDragLeave={() => setDragOver((d) => (d === pad.index ? null : d))}
-            onDrop={(e) => onDrop(e, pad.index)}
-          >
-            {pad.kind === "empty" ? (
-              <span className="smp-hint">{pad.route === "master" ? "＋" : pad.hasTrack ? "slice" : "—"}</span>
-            ) : (
-              <>
-                <span className="smp-name">{pad.name || "sample"}</span>
-                <span className="smp-mode" aria-hidden="true">
-                  {MODE_DOT[pad.mode]}
-                </span>
-              </>
-            )}
-          </button>
-        );
-      })}
-
-      {/* IO — two labelled groups so the controls read at a glance. Captures drop into the
-          next free global pad above. */}
+    <div className="sampler-strip" aria-label="Sampler controls">
+      {/* The global sample PADS moved into the decks' GLBL pad-mode (SMP+shift); this strip is now
+          controls-only. REC still lands its take in the next free GLBL pad — play/manage it from
+          GLBL on either deck. */}
+      {/* One adaptive row, three functional zones split by thin dividers (mic · capture · monitor).
+          Consistent grammar: every SETTING is a static LABEL + value (knobs DUCK·60, selectors
+          DEST·PA / SRC·MIX read the same way); ACTIONS are single bold words (REC · CATCH · MON). */}
       <div className="smp-io">
         {engine.canMic && (
-          <div className="smp-io-grp">
-            {/* The talkover toggle IS a buttonoid: TAP = mic on/off, DRAG/SCROLL = talkover VOL
-                (double-tap resets). The live input meter rides the bottom edge. */}
+          <>
+            {/* AMOUNT (+ tap-toggle + right-click): TAP = mic on/off, DRAG = talkover VOL, RIGHT-CLICK =
+                destination (Room / Deck A·B FX). The mic is just "the mic"; its routing hides here. */}
             <ValueCell
               className={`smp-io-cell smp-io-mic ${micOn ? "on" : ""}`}
-              label={micBusy ? "MIC …" : micOn ? "MIC ON" : "MIC OFF"}
+              label={micBusy ? "MIC …" : "MIC"}
               value={micVol}
               min={0}
               max={1}
@@ -277,11 +169,11 @@ export function SamplerStrip({
               format={(v) => `${Math.round(v * 100)}`}
               onTap={() => void toggleMic()}
               onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }}
+              onContextMenu={(e) => setRouteMenu({ kind: "dest", x: e.clientX, y: e.clientY })}
             >
               <span className="smp-io-meter"><span ref={meterRef} /></span>
             </ValueCell>
-            {/* DUCK is a pure AMOUNT — how far the music drops under talkover. A knob, no tap
-                toggle, so it never pretends to switch something on/off it can't. */}
+            {/* AMOUNT — how far the music drops under talkover. */}
             <ValueCell
               className="smp-io-cell smp-io-duck"
               label="DUCK"
@@ -293,54 +185,63 @@ export function SamplerStrip({
               format={(v) => `${Math.round(v * 100)}`}
               onChange={(v) => { setDuck(v); engine.setMicDuck(v); }}
             />
-            {/* Monitor (PFL) is on/off only — an honest plain toggle, NOT a fake knob borrowing
-                an unrelated value. (Renamed from CUE so "cue" means only the deck cue point.) */}
-            <button className={`smp-io-btn ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="Monitor — hear your own mic in the headphone/cue device (needs a cue device set)">
-              MON
-            </button>
-            <button className="smp-io-sel" onClick={cycleDest} title="Where the mic GOES — the PA (talkover, ducks the music) or through Deck A/B's FX rack">
-              <span className="smp-io-arrow">→</span>{micDest === "master" ? "PA" : micDest}
-            </button>
-          </div>
+          </>
         )}
-        <div className="smp-io-grp">
-          <button className="smp-io-sel" onClick={cycleSrc} title="What ● REC PULLS FROM — the mix or a deck (⟲ CATCH always takes the master)">
-            <span className="smp-io-arrow">←</span>{SRC_LABEL[recSrc]}
-          </button>
-          <button className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`} onClick={() => void toggleRec()} title={recording ? "Stop → the take drops into the next free pad" : `Record ${SRC_LABEL[recSrc]} → next free pad`}>
-            {recording ? "■ STOP" : "● REC"}
-          </button>
-          {engine.canRingCapture && (
-            <button className="smp-io-btn" onClick={() => void doGrab()} disabled={grabbing} title="Catch the last 4 bars that just played (from the master) → next free pad">
-              {grabbing ? "…" : "⟲ CATCH"}
-            </button>
-          )}
-        </div>
-        {phones && (
-          // Master HEADPHONE monitoring — sits with MON/REC since it's the same zone. MIX = the
-          // CUE↔MST blend in the cue device, LVL = its output level. Only here in 2-device mode.
-          <div className="smp-io-grp">
-            <ValueCell
-              className="smp-io-cell"
-              label="🎧 MIX"
-              value={phones.mix}
-              min={0}
-              max={1}
-              pivot={0.5}
-              format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
-              onChange={phones.onMix}
-            />
-            <ValueCell
-              className="smp-io-cell"
-              label="🎧 LVL"
-              value={phones.level}
-              min={0}
-              max={1}
-              reset={1}
-              format={(v) => `${Math.round(v * 100)}`}
-              onChange={phones.onLevel}
-            />
-          </div>
+
+        {engine.canMic && <span className="smp-io-sep" aria-hidden="true" />}
+        {/* ACTION — TAP = record into the next free GLBL pad (armed = red pulse); RIGHT-CLICK / HOLD =
+            pick the SOURCE. The small tag under REC shows what you'll capture (no separate cell). */}
+        <button
+          className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`}
+          onClick={() => { if (recSuppress.current) { recSuppress.current = false; return; } void toggleRec(); }}
+          onContextMenu={(e) => { e.preventDefault(); setRouteMenu({ kind: "src", x: e.clientX, y: e.clientY }); }}
+          onTouchStart={(e) => { const t = e.touches[0]; recLong.current = window.setTimeout(() => { recSuppress.current = true; setRouteMenu({ kind: "src", x: t.clientX, y: t.clientY }); }, 480); }}
+          onTouchEnd={() => clearTimeout(recLong.current)}
+          onTouchMove={() => clearTimeout(recLong.current)}
+          title={recording ? "Stop → the take drops into the next free GLBL pad" : `Tap to record ${SRC_FULL[recSrc]} → next free GLBL pad · right-click / hold to change source`}
+        >
+          <span className="smp-io-rec-lab">{recording ? "STOP" : "REC"}</span>
+          {!recording && <span className="smp-io-rec-src">{SRC_LABEL[recSrc]}</span>}
+        </button>
+        {/* Where the take landed — it's in GLBL pad-mode now, not beside the strip. */}
+        {landed != null && <span className="smp-io-landed" role="status">→ GLBL {landed + 1}</span>}
+
+        {(engine.canMic || phones) && (
+          <>
+            <span className="smp-io-sep" aria-hidden="true" />
+            {/* ACTION (toggle) — hear your own mic in the cue device (lives with the monitor controls). */}
+            {engine.canMic && (
+              <button className={`smp-io-btn smp-io-toggle ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="MON — monitor your own mic in the cue/headphone device (needs a cue device set)">
+                MON
+              </button>
+            )}
+            {phones && (
+              <>
+                {/* AMOUNTS — cue-device blend + level. (BLEND, not "MIX", so it never collides with the
+                    REC source value MIX.) */}
+                <ValueCell
+                  className="smp-io-cell"
+                  label="BLEND"
+                  value={phones.mix}
+                  min={0}
+                  max={1}
+                  pivot={0.5}
+                  format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
+                  onChange={phones.onMix}
+                />
+                <ValueCell
+                  className="smp-io-cell"
+                  label="LVL"
+                  value={phones.level}
+                  min={0}
+                  max={1}
+                  reset={1}
+                  format={(v) => `${Math.round(v * 100)}`}
+                  onChange={phones.onLevel}
+                />
+              </>
+            )}
+          </>
         )}
       </div>
 
@@ -350,55 +251,29 @@ export function SamplerStrip({
         </div>
       )}
 
-      {menu && (
+      {/* DEST / SRC picker, opened by right-click/hold on MIC (dest) or REC (src). */}
+      {routeMenu && (
         <>
-          <div className="ctx-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => e.preventDefault()} />
-          <div className="ctx-menu smp-menu" style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 220) }}>
-            <div className="ctx-label">Mode</div>
-            <div className="smp-modes">
-              {MODES.map((m) => (
-                <button
-                  key={m}
-                  className={s.pads[menu.i].mode === m ? "active" : ""}
-                  onClick={() => s.setMode(menu.i, m)}
-                >
-                  {MODE_LABEL[m]}
-                </button>
-              ))}
-            </div>
-            <div className="ctx-label">Level</div>
-            <input
-              className="smp-gain"
-              type="range"
-              min={0}
-              max={1.5}
-              step={0.05}
-              value={s.pads[menu.i].gain}
-              onChange={(e) => s.setGain(menu.i, Number(e.target.value))}
-            />
-            <div className="ctx-sep" />
-            {routeIsMaster(menu.i) ? (
-              <button onClick={() => { openPicker(menu.i); setMenu(null); }}>↻ Replace file…</button>
+          <div className="ctx-backdrop" onClick={() => setRouteMenu(null)} onContextMenu={(e) => { e.preventDefault(); setRouteMenu(null); }} />
+          <div className="ctx-menu smp-route-menu" style={{ left: Math.min(routeMenu.x, window.innerWidth - 180), top: Math.min(routeMenu.y, window.innerHeight - 180) }}>
+            {routeMenu.kind === "dest" ? (
+              <>
+                <div className="ctx-label">Mic goes to</div>
+                {(["master", "A", "B"] as const).map((d) => (
+                  <button key={d} className={micDest === d ? "active" : ""} onClick={() => pickDest(d)}>{DEST_FULL[d]}</button>
+                ))}
+              </>
             ) : (
-              <button onClick={() => { s.assignRegion(menu.i); setMenu(null); }}>↻ Re-slice from deck</button>
+              <>
+                <div className="ctx-label">Record from</div>
+                {SRC_ORDER.map((srcOpt) => (
+                  <button key={srcOpt} className={recSrc === srcOpt ? "active" : ""} onClick={() => { setRecSrc(srcOpt); setRouteMenu(null); }}>{SRC_FULL[srcOpt]}</button>
+                ))}
+              </>
             )}
-            <button className="ctx-danger" onClick={() => { s.clearPad(menu.i); setMenu(null); }}>
-              ✕ Clear pad
-            </button>
           </div>
         </>
       )}
     </div>
   );
-}
-
-const routeIsMaster = (i: number) => i < GLOBAL_COUNT; // the strip only shows the global pads
-
-function padTitle(pad: SamplerPad): string {
-  if (pad.kind === "empty") {
-    if (pad.route === "master") return "Drop or click to load a global sample (→ master)";
-    return pad.hasTrack ? `Slice a region from deck ${pad.route}` : `Load a track on deck ${pad.route} first`;
-  }
-  const where = pad.route === "master" ? "global → master" : `deck ${pad.route}`;
-  return `${pad.name || "sample"} · ${MODE_LABEL[pad.mode]} · ${where} — right-click for options`;
 }

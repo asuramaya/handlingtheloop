@@ -22,13 +22,11 @@ import type { Me } from "@htl/account";
 
 export const GLOBAL_COUNT = 8;
 export const DECK_REGION_COUNT = 8;
-// A deck's 8 SONG pads split: the first 4 auto-hold the loaded track's STEMS (fire that stem
-// live from the playhead — the headline "the current song is an instrument" move), the last 4
-// are GRAB slots (capture a region/loop, like before). The stems are DERIVED (not stored); their
-// readiness is read live at render/trigger off the deck's stem buffers.
-const STEM_PAD_COUNT = 4;
-const STEM_ORDER: StemName[] = ["vocals", "drums", "bass", "other"];
-export const PAD_COUNT = GLOBAL_COUNT + DECK_REGION_COUNT * 2; // 28
+// A deck's 8 pads are all GRAB slots: capture a region/loop of the loaded track and trigger it
+// through the deck channel (the LOCAL sampler). The GLOBAL sampler (8 uploaded one-shots) is a
+// separate bank, shown as SMP's shift peer. (Stems are a MIX, not triggers — they live in the
+// stem mixer, never here.)
+export const PAD_COUNT = GLOBAL_COUNT + DECK_REGION_COUNT * 2; // 24
 export const GLOBAL_PADS = Array.from({ length: GLOBAL_COUNT }, (_, i) => `g${i}`);
 const REGION_KEY = "htl:samplerRegions"; // { [videoId]: (RegionDesc|null)[8] }
 const GLOBAL_META_KEY = "htl:samplerGlobalMeta"; // { g0:{mode,gain}, ... } (server holds the file+name)
@@ -65,7 +63,7 @@ type GlobalMeta = Record<string, { mode: SampleMode; gain: number }>;
 export interface SamplerPad {
   index: number;
   route: "A" | "master" | "B";
-  kind: "empty" | "region" | "file" | "stem"; // stem = a deck SONG pad that fires a live stem
+  kind: "empty" | "region" | "file";
   name: string;
   mode: SampleMode;
   gain: number;
@@ -199,39 +197,21 @@ export function useSampler(
       } else {
         const vid = regionDeck(i) === "A" ? loaded.A : loaded.B;
         const slot = regionSlot(i); // 0..7
-        if (slot < STEM_PAD_COUNT) {
-          // STEM pad — fire this stem of the loaded track live. Derived (not stored); the deck's
-          // stem buffer presence (checked at render/trigger) decides whether it's actually firable.
-          const stem = STEM_ORDER[slot];
-          out.push({
-            index: i,
-            route,
-            kind: "stem",
-            name: stem,
-            mode: "oneshot",
-            gain: 1,
-            playing,
-            ready: !!vid,
-            hasTrack: !!vid,
-            stem,
-          });
-        } else {
-          const r = vid ? regions[vid]?.[slot] ?? null : null;
-          out.push({
-            index: i,
-            route,
-            kind: r ? "region" : "empty",
-            name: r?.name ?? "",
-            mode: r?.mode ?? "oneshot",
-            gain: r?.gain ?? 1,
-            start: r?.start,
-            end: r?.end,
-            playing,
-            ready: !!r,
-            hasTrack: !!vid,
-            stem: r?.stem,
-          });
-        }
+        const r = vid ? regions[vid]?.[slot] ?? null : null;
+        out.push({
+          index: i,
+          route,
+          kind: r ? "region" : "empty",
+          name: r?.name ?? "",
+          mode: r?.mode ?? "oneshot",
+          gain: r?.gain ?? 1,
+          start: r?.start,
+          end: r?.end,
+          playing,
+          ready: !!r,
+          hasTrack: !!vid,
+          stem: r?.stem,
+        });
       }
     }
     return out;
@@ -241,7 +221,7 @@ export function useSampler(
   // ---- actions ----
 
   const trigger = useCallback(
-    (i: number, loop = false) => { // loop = SHIFT alt for stem pads: loop the stem instead of a one-shot stab
+    (i: number) => {
       engine.resume();
       const route = routeOf(i);
       if (route === "master") {
@@ -256,21 +236,6 @@ export function useSampler(
         const d = engine.deck(id);
         const slot = regionSlot(i);
         const rate = d.rate; // tempo-sync the region voice to the live deck
-        if (slot < STEM_PAD_COUNT) {
-          // STEM pad — fire this stem of the loaded track from the live playhead (or the active
-          // loop region), layered over the running mix. The headline move.
-          const stem = STEM_ORDER[slot];
-          const buf = d.stemBuffer(stem);
-          if (!buf) return; // stems not separated yet → nothing to fire
-          const start = d.loop?.active ? d.loop.start : d.position();
-          const beat = d.beatgrid?.interval ?? 0.5;
-          const end = d.loop?.active ? d.loop.end : Math.min(d.duration, start + beat * 16); // 4 bars
-          if (end - start < 0.05) return;
-          const mode: SampleMode = loop ? "loop" : "oneshot";
-          engine.sampler.play(i, { buffer: buf, offset: start, duration: end - start, route, mode, gain: 1, rate });
-          emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start, end, mode, gain: 1, rate, stem } });
-          return;
-        }
         const vid = id === "A" ? loaded.A : loaded.B;
         const r = vid ? regions[vid]?.[slot] : null;
         if (!r) return;
@@ -298,7 +263,6 @@ export function useSampler(
   // Capture a region from the deck: its active loop if set, else one bar from the playhead.
   const assignRegion = useCallback(
     (i: number) => {
-      if (regionSlot(i) < STEM_PAD_COUNT) return; // slots 0-3 are live stem pads — not grab slots
       const id = regionDeck(i);
       const d = engine.deck(id);
       const vid = id === "A" ? loaded.A : loaded.B;
@@ -377,12 +341,12 @@ export function useSampler(
 
   // Drop a recorded take (mic / deck / master capture) onto the FIRST FREE global pad — captures
   // are OWNED audio, so they join the global tier (always-available, master-routed, uploadable),
-  // never the per-song region pads. Returns the pad index used, or null if the strip is full.
+  // never the per-song region pads. Returns the pad index used, or null if every GLBL pad is full.
   const captureToGlobal = useCallback(
     async (take: { buffer: AudioBuffer; blob: Blob }, label = "Take"): Promise<number | null> => {
       const gi = globals.findIndex((g) => !g.sampleId && !g.uploading && !g.ready);
       if (gi < 0) {
-        setError("Sampler strip is full — clear a global pad to capture.");
+        setError(`All ${GLOBAL_COUNT} GLBL pads are full — clear one (SMP+shift) to capture.`);
         return null;
       }
       setError(null);

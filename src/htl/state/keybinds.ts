@@ -28,6 +28,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyD", shiftLabel: "Match gain (dB)" },
   { id: "pitchRange", label: "Cycle pitch range", group: "Mix", defaultKey: "KeyF" },
   { id: "grid", label: "Grid magnet (snap)", group: "Mix", defaultKey: "KeyG", shiftLabel: "Step skip size" },
+  { id: "smartFader", label: "Smart Fader (auto-transition)", group: "Mix", defaultKey: "KeyT", shiftLabel: "Enable / disable crossfader" },
 
   { id: "pitchDown", label: "Key down a semitone", group: "Pitch", defaultKey: "Minus", shiftLabel: "Nudge tempo down" },
   { id: "pitchUp", label: "Key up a semitone", group: "Pitch", defaultKey: "Equal", shiftLabel: "Nudge tempo up" },
@@ -41,8 +42,8 @@ export const KEY_ACTIONS: KeyAction[] = [
   // the FLX4's physical bank buttons: CUE · FX · LOOP · SMP (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER).
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
   { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI" },
-  { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO" },
-  { id: "padModeSampler", label: "Pad mode: Sampler", group: "Pads", defaultKey: "KeyP" },
+  { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO", shiftLabel: "Pad mode: Roll" },
+  { id: "padModeSampler", label: "Pad mode: Sampler (local)", group: "Pads", defaultKey: "KeyP", shiftLabel: "Pad mode: Global" },
   // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated
   // keys are FREED — 1-8 now fire them when the pad bank is in Loop mode.
   { id: "beatLoop0", label: "Beat loop 1/16", group: "Pads", defaultKey: "" },

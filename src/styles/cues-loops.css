@@ -67,68 +67,39 @@
   opacity: 0.55;
   cursor: default;
 }
-/* SONG source caption — what region the stem pads will grab (loop vs 4 bars). */
-.song-src {
+/* SMP (local) + GLOBAL banks are 8 pads in one row, like the hot-cue / loop bank — same footprint,
+   no extra height. (.hotcues already gives repeat(8); these inherit it.) */
+/* GLOBAL one-shots are master-routed uploads; the shift-mode tint (below) already colours the whole
+   bank, so a filled one just gets a slightly warmer fill + readable type. */
+.pad.glb {
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  color: var(--muted);
-  padding: 1px 2px 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
 }
-.song-src.from-loop {
-  color: color-mix(in srgb, var(--accent) 70%, var(--text));
-}
-/* SMP (grabs) + SONG (stems) banks hold 4 pads — a 4-wide grid keeps the pads large instead of
-   crowding into a half-width 8-col strip. */
-.smp-bank {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-/* SONG stem pads: ONE cohesive treatment (dark pad + a thin stem-colour top accent + a clear
-   label), not four loud fills — so the four parts read as one set at a glance. */
-.stem-pad {
-  --stem: var(--accent);
-  background: var(--panel-2);
-  border-color: color-mix(in srgb, var(--stem) 40%, var(--btn-border, var(--line)));
-  border-top: 3px solid var(--stem);
+.pad.glb.set {
+  background: color-mix(in srgb, var(--shift, #fc6) 16%, var(--panel-2));
   color: var(--text);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.5px;
 }
-.stem-pad.set { background: color-mix(in srgb, var(--stem) 13%, var(--panel-2)); }
-.stem-pad.playing { background: color-mix(in srgb, var(--stem) 40%, var(--panel)); color: #fff; }
-.stem-pad:disabled { opacity: 0.4; }
-.stem-pad.stem-vocals { --stem: #ff5c8a; }
-.stem-pad.stem-drums { --stem: #ffb53d; }
-.stem-pad.stem-bass { --stem: #5b8cff; }
-.stem-pad.stem-other { --stem: #43d6a0; }
+.pad.glb.uploading { opacity: 0.6; }
 
 /* Shift parity on the PADS: when shift is engaged, a pad shows its alternate action so the board
    reads as its second self (mirrors the mode-row flip + the FLX silkscreen). CLR = destructive
-   clear (cue / sample); ⟳ = loop (a stem). */
+   clear (cue / sample). */
 .pad-clr {
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.5px;
   color: #ff6b6b;
 }
-.pad-alt {
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  font-size: 11px;
-  font-weight: 800;
-  color: color-mix(in srgb, var(--shift, #fc6) 85%, #fff);
+/* Parked on a SHIFTED layer (ROLL / GLOBAL / …) — the PADS THEMSELVES take the shift colour so the
+   whole bank reads as the second layer at a glance (no stripe, no extra chrome). */
+.bank.in-shifted-mode .pad,
+.bank.in-shifted-mode .loop-btn:not(.on) {
+  border-color: color-mix(in srgb, var(--shift, #fc6) 50%, var(--btn-border, var(--line)));
 }
-/* Parked on a SHIFTED layer (ROLL / SONG / …) with shift released — a persistent shift-accent
-   stripe across the pad area so the board never tricks you into thinking you're on the base layer. */
-.bank.in-shifted-mode .loop-sizes,
-.bank.in-shifted-mode .smp-bank {
-  box-shadow: inset 0 2px 0 var(--shift, #fc6);
-  border-radius: 4px;
+.bank.in-shifted-mode .pad:not(.set):not(.playing),
+.bank.in-shifted-mode .loop-btn:not(.on) {
+  background: color-mix(in srgb, var(--shift, #fc6) 9%, var(--panel-2));
+  color: color-mix(in srgb, var(--shift, #fc6) 75%, var(--muted));
 }
 
 

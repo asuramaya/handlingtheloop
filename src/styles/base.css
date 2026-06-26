@@ -398,8 +398,13 @@ body {
   display: flex;
   align-items: stretch;
   gap: 4px;
-  width: 100%; /* fill the middle third's width — pads (flex 1) spread evenly */
+  width: 100%; /* fill the middle third's width — controls spread evenly */
   margin: 6px 0 2px;
+  /* This strip is the master/global zone — it must NOT borrow deck A's hue (which is what --accent
+     resolves to in this part of the tree). Re-point --accent at a bright NEUTRAL (interface text)
+     so active states (lit LED, selector value, on-fills) pop without a deck colour; resting borders
+     stay --line. */
+  --accent: color-mix(in srgb, var(--text) 68%, var(--line));
 }
 .smp-pad {
   flex: 1 1 0;
@@ -511,28 +516,32 @@ body {
   float: right;
   opacity: 0.7;
 }
-/* Mic + capture IO — two labelled groups at the end of the strip row, after the global pads. */
+/* Controls-only I/O strip: ONE adaptive row filling the full width, every control an equal-width
+   sibling that grows to share it. Three functional zones (mic · capture · monitor) split by thin
+   `.smp-io-sep` rules. Controls are TYPED: AMOUNT (.vcell knob, LABEL+value) · ACTION (single word;
+   TOGGLE carries an LED). The old DEST/SRC selector cells are FOLDED into the MIC/REC buttonoids
+   (right-click / hold opens the picker), so there's no standalone selector control on the strip. */
 .smp-io {
+  position: relative;
   display: flex;
   align-items: stretch;
-  gap: 0;
-  flex: 0 0 auto;
-  padding-left: 8px;
-  margin-left: 4px;
-  border-left: 1px solid var(--line);
+  flex-wrap: nowrap;
+  gap: 4px;
+  flex: 1 1 auto;
+  width: 100%;
 }
-/* A group (mic / capture): a plain row of buttons, no box — they read as one even
-   strip with the sampler pads beside them. A thin rule splits the two zones (no header
-   labels — those would cost a whole row of height). */
-.smp-io-grp {
-  display: flex;
-  align-items: stretch;
-  gap: 3px;
+.smp-io button,
+.smp-io .vcell {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
 }
-.smp-io-grp + .smp-io-grp {
-  margin-left: 8px;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
+/* A thin vertical rule between functional zones (mic | capture | monitor). */
+.smp-io-sep {
+  flex: 0 0 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 2px 4px;
 }
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;
@@ -544,17 +553,7 @@ body {
   cursor: pointer;
   padding: 3px 8px;
   white-space: nowrap;
-  /* Constant width as the inner text flips (● REC ↔ ■ STOP, →PA ↔ →A) — no reflow. */
-  min-width: 50px;
   text-align: center;
-}
-.smp-io-rec {
-  min-width: 60px;
-}
-/* The mic ON / CUE buttonoids: fixed-width knob cells (TAP toggles, drag = VOL / DUCK). */
-.smp-io .vcell {
-  width: 56px;
-  flex: 0 0 auto;
 }
 .smp-io-cell.on {
   background: color-mix(in srgb, var(--accent) 20%, var(--bg));
@@ -562,20 +561,81 @@ body {
 .smp-io button:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
-/* Routing chips (→PA / ←MIX): a muted direction arrow disambiguates output (mic GOES to)
-   from input (REC PULLS from) with no width-eating "OUT"/"FROM" word; accent value. */
-.smp-io-arrow {
-  color: var(--muted, color-mix(in srgb, var(--text) 50%, transparent));
-  font-weight: 800;
-  margin-right: 2px;
-  opacity: 0.85;
+/* REC button: the action label over a small SOURCE tag (the source picker folded in via right-click /
+   hold, so there's no separate SRC cell). Tag hides while recording (then it just says STOP). */
+.smp-io-rec {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  line-height: 1.05;
 }
-.smp-io-sel {
+.smp-io-rec-lab {
+  font-weight: 800;
+}
+.smp-io-rec-src {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+/* The DEST / SRC picker popup (reuses .ctx-menu). */
+.smp-route-menu {
+  min-width: 150px;
+}
+.smp-route-menu button.active {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* TOGGLE (MON): an LED that lights when on — unmistakably a switch, not a label or a cycler. */
+.smp-io-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  margin-right: 5px;
+  vertical-align: middle;
+  opacity: 0.5;
+}
+.smp-io-toggle.on {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  border-color: var(--accent);
+  color: var(--text);
+}
+.smp-io-toggle.on::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  opacity: 1;
 }
 .smp-io-btn.on {
   background: color-mix(in srgb, var(--accent) 26%, var(--panel));
   border-color: var(--accent);
+}
+/* Capture-landed flash — a transient chip showing where the take went (it's in GLBL pad-mode now,
+   off-strip). Absolutely placed so it never nudges the row; fades out on its own. */
+.smp-io-landed {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 800 10px ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  color: #06080c;
+  background: var(--neon-lime, #5dff9e);
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  animation: smp-landed 2.6s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes smp-landed {
+  0% { opacity: 0; transform: translate(-50%, 4px); }
+  12% { opacity: 1; transform: translate(-50%, 0); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
 }
 .smp-io-rec.armed {
   background: color-mix(in srgb, #c0334e 40%, var(--panel));
@@ -608,38 +668,64 @@ body {
 .smp-io-btn {
   position: relative;
 }
-/* Pad context menu (reuses .ctx-menu): mode picker + level + clear. */
-.smp-menu .smp-modes {
-  display: flex;
-  gap: 4px;
-  padding: 2px 4px 6px;
+/* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
+   carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no
+   "bou…" truncation); STEM = "full" across the top + the 4 parts in a 2×2 below. */
+.ctx-menu.smp-menu {
+  min-width: 212px;
+  border-color: var(--line);
+  padding: 6px;
 }
-.smp-menu .smp-modes button {
-  flex: 1;
-  padding: 5px 4px;
+.smp-menu .smp-modes,
+.smp-menu .smp-stems {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 2px 2px 8px;
+}
+.smp-menu .smp-stems button:first-child {
+  grid-column: 1 / -1; /* "full" spans the top row, the 4 stems fill the 2×2 under it */
+}
+.smp-menu .smp-modes button,
+.smp-menu .smp-stems button {
+  padding: 7px 4px;
   font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: capitalize;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--panel);
-  color: var(--text);
+  color: var(--muted);
   cursor: pointer;
 }
-.smp-menu .smp-modes button.active {
+.smp-menu .smp-modes button:hover,
+.smp-menu .smp-stems button:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.smp-menu .smp-modes button.active,
+.smp-menu .smp-stems button.active {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  color: var(--text);
 }
-/* The 5-way stem picker (full + 4 stems) wraps rather than crushing the buttons. */
-.smp-menu .smp-stems {
-  flex-wrap: wrap;
+/* LEVEL row: the label carries a live % on the right (the JSX adds the readout span). */
+.smp-menu .smp-lvl {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
 }
-.smp-menu .smp-stems button {
-  flex: 1 0 28%;
-  font-size: 10px;
-  padding: 4px 2px;
+.smp-menu .smp-lvl-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
 }
 .smp-menu .smp-gain {
-  width: calc(100% - 16px);
-  margin: 2px 8px 8px;
+  width: calc(100% - 8px);
+  margin: 2px 4px 8px;
   accent-color: var(--accent);
 }
 

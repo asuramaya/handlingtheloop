@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { KnobBorder } from "./KnobBorder";
 
 interface ValueCellProps {
@@ -19,6 +19,9 @@ interface ValueCellProps {
   onTap?: () => void; // a clean tap (no drag) fires this — e.g. a stem mute toggle
   kbd?: string; // keyboard hint shown bottom-right (when show-keys is on)
   active?: boolean; // false dims the cell as "off" (e.g. a muted stem)
+  // Right-click / long-press handler. When set, it REPLACES the default reset-on-right-click (e.g.
+  // a buttonoid that holds a mode picker — MIC right-click → destination menu). Double-click still resets.
+  onContextMenu?: (e: ReactMouseEvent) => void;
 }
 
 // Pixels of vertical drag that span the WHOLE range. Lower = more sensitive.
@@ -31,7 +34,7 @@ const TAP_SLOP = 4;
 // circle marker. Tapping SELECTS it (a ring, no value jump). Adjust by relative
 // vertical drag or scroll wheel; double-click / right-click resets. (Arrow keys
 // are intentionally NOT bound — they belong to the global deck keymap.)
-export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, onChange, format, className, disabled, children, onTap, kbd, active }: ValueCellProps) {
+export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, onChange, format, className, disabled, children, onTap, kbd, active, onContextMenu }: ValueCellProps) {
   const el = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startY: number; startVal: number; moved: boolean } | null>(null);
   const lastTap = useRef(0);
@@ -103,7 +106,7 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
         // A clean tap (pointer never moved past the slop) fires onTap — e.g. mute.
         if (d && !d.moved && onTap && !disabled) onTap();
       }}
-      onContextMenu={(e) => { e.preventDefault(); if (!disabled) onChange(resetTo); }}
+      onContextMenu={(e) => { e.preventDefault(); if (disabled) return; if (onContextMenu) onContextMenu(e); else onChange(resetTo); }}
     >
       <KnobBorder value={value} min={min} max={max} pivot={pivot} />
       {children}

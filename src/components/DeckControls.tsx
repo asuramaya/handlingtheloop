@@ -1,7 +1,7 @@
 import { useRef, useState, type MutableRefObject } from "react";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
-import { deckPadBase, type SamplerApi, type SamplerPad } from "./useSampler";
+import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
@@ -68,15 +68,14 @@ const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
 // Tempo nudge step (percent) for SHIFT-clicking the ∓ pitch steppers.
 const TEMPO_NUDGE = 0.5;
 
-// SONG-pad stem labels — match the deck's own stem-mixer cells so they read consistently.
-const STEM_LABEL: Record<StemName, string> = { vocals: "VOICE", drums: "DRUM", bass: "BASS", other: "INST" };
-
 // The four mode buttons + their SHIFT-layer labels (peer mode in PAD_MODE_SHIFT). U·I·O·P.
+// SMP = the deck's LOCAL sample pads (slices of this track); its shift peer GLBL = the account's
+// GLOBAL sample bank (uploaded one-shots).
 const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: string }[] = [
   { base: "cue", label: "CUE", shiftLabel: "KEY", kbd: "U" },
   { base: "fx", label: "FX", shiftLabel: "FX2", kbd: "I" },
   { base: "loop", label: "LOOP", shiftLabel: "ROLL", kbd: "O" },
-  { base: "sampler", label: "SMP", shiftLabel: "SONG", kbd: "P" },
+  { base: "sampler", label: "SMP", shiftLabel: "GLBL", kbd: "P" },
 ];
 
 // One deck's performance controls: jog / loop section, hot-cue pads, then the
@@ -122,11 +121,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   if (!padRestored.current) {
     padRestored.current = true;
     const saved = localStorage.getItem(PAD_MODE_KEY);
-    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "song") deck.setPadMode(saved);
+    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "global") deck.setPadMode(saved);
   }
-  // True when the deck is parked in a SHIFTED-layer mode (ROLL/SONG/…) — used to persistently tint
+  // True when the deck is parked in a SHIFTED-layer mode (ROLL/GLOBAL/…) — used to persistently tint
   // the bank so it's obvious you're on the second layer even after releasing shift.
-  const inShiftedMode = deck.padMode === "roll" || deck.padMode === "song" || deck.padMode === "keyboard" || deck.padMode === "fx2";
+  const inShiftedMode = deck.padMode === "roll" || deck.padMode === "global" || deck.padMode === "keyboard" || deck.padMode === "fx2";
   const changePadMode = (m: PadMode) => {
     deck.setPadMode(m);
     try {
@@ -137,22 +136,26 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     emit({ kind: "board", deck: id, id: "padMode", arg: m }); // sync + record the bank switch
     refresh();
   };
-  // SAMPLER pad-mode: this deck's 8 region pads (a slice of the shared sampler bank).
+  // SMP pad-mode: this deck's 8 LOCAL region pads (a slice of the shared sampler bank).
   const smpBase = deckPadBase(id);
   const smpPads: SamplerPad[] = sampler ? sampler.pads.slice(smpBase, smpBase + 8) : [];
+  // GLOBAL pad-mode (SMP-shift): the account's 8 GLOBAL one-shots (the bank that also lives on the
+  // top strip). Triggered/assigned right here so the strip can shed them.
+  const glbPads: SamplerPad[] = sampler ? sampler.pads.slice(0, GLOBAL_COUNT) : [];
   const [smpMenu, setSmpMenu] = useState<{ i: number; x: number; y: number } | null>(null);
-  // Press a sampler pad: empty (track loaded) → grab a region; filled → trigger (gate =
+  const glbFileInput = useRef<HTMLInputElement>(null);
+  const glbPickPad = useRef<number | null>(null);
+  const openGlbPicker = (i: number) => { glbPickPad.current = i; glbFileInput.current?.click(); };
+  const onGlbFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    const i = glbPickPad.current;
+    e.target.value = "";
+    if (f && i != null && sampler) void sampler.assignFile(i, f);
+  };
+  // Press a LOCAL sample pad: empty (track loaded) → grab a region; filled → trigger (gate =
   // hold, loop = toggle, one-shot = retrigger). Mirrors the global strip's pad behaviour.
   const smpDown = (pad: SamplerPad) => {
     if (!sampler) return;
-    if (pad.kind === "stem") {
-      // tap = one-shot stab; SHIFT = loop the stem continuously. Re-tap (or release in either)
-      // stops a sounding voice. The alt pad-function, parallel to hot-cue's shift=clear.
-      if (pad.playing) { sampler.stop(pad.index); refresh(); return; }
-      sampler.trigger(pad.index, shift);
-      refresh();
-      return;
-    }
     if (pad.kind === "empty") {
       if (pad.hasTrack && !shift) { sampler.assignRegion(pad.index); refresh(); }
       return;
@@ -164,6 +167,15 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
   const smpUp = (pad: SamplerPad) => {
     if (sampler && pad.mode === "gate") { sampler.release(pad.index); refresh(); }
+  };
+  // Press a GLOBAL pad: empty → file picker; filled → trigger (SHIFT = clear). Same grammar as SMP.
+  const glbDown = (pad: SamplerPad) => {
+    if (!sampler) return;
+    if (pad.kind === "empty") { openGlbPicker(pad.index); return; }
+    if (shift) { sampler.clearPad(pad.index); refresh(); return; }
+    if (pad.mode === "loop" || pad.mode === "bounce") pad.playing ? sampler.stop(pad.index) : sampler.trigger(pad.index);
+    else sampler.trigger(pad.index);
+    refresh();
   };
   // FX pad-mode (Pad-FX): press fires the effect (hold = momentary, capture the pointer so a
   // drift-off doesn't cut it early; one-shot = trigger-and-done). Release ends a hold.
@@ -477,10 +489,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* SMP — the deck's GRAB sample pads (regions you captured). */}
+        {/* SMP — the deck's LOCAL sample pads: 8 slices you grabbed from THIS track, routed through
+            its channel. Empty = ＋ (slice the active loop / 4 bars); filled = tap to play. */}
         {deck.padMode === "sampler" && sampler && (
         <div className="hotcues smp-bank">
-          {smpPads.filter((p) => p.kind !== "stem").map((pad, i) => (
+          {smpPads.map((pad, i) => (
             <button
               key={pad.index}
               className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
@@ -504,37 +517,32 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* SONG (SMP-shift) — the loaded track's STEMS, fired live over the running mix. Its own
-            mode so the four parts read as one thing, not random pads jammed into the sampler. */}
-        {deck.padMode === "song" && sampler && (
-        <>
-        {/* Tell the DJ exactly what region a stem pad will grab, so they're never sampling blind:
-            the active LOOP if there is one (visible on the waveform), else 4 bars from the playhead. */}
-        <div className={`song-src ${deck.loop?.active ? "from-loop" : ""}`}>
-          {deck.loop?.active ? "◆ firing the LOOP region" : "◆ firing 4 bars from ▸ — set a loop to pick the region"}
+        {/* GLOBAL (SMP-shift) — the account's 8 GLOBAL one-shots (master-routed, uploaded clips).
+            The same bank as the top strip; here so the strip can become controls-only. Empty = ＋
+            (file picker); filled = tap to play · SHIFT = clear · right-click for options. */}
+        {deck.padMode === "global" && sampler && (
+        <div className="hotcues smp-bank glb-bank">
+          <input ref={glbFileInput} type="file" accept="audio/*" hidden onChange={onGlbFile} />
+          {glbPads.map((pad, i) => (
+            <button
+              key={pad.index}
+              className={`pad smp glb ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.uploading ? "uploading" : ""}`}
+              data-cue={i + 1}
+              title={
+                pad.kind === "empty"
+                  ? "Load an audio file into this global pad"
+                  : `${pad.name || "sample"} · ${pad.mode} — tap to play · SHIFT = clear · right-click for options`
+              }
+              onPointerDown={(e) => { if (e.button === 0) glbDown(pad); }}
+              onPointerUp={() => smpUp(pad)}
+              onPointerLeave={() => smpUp(pad)}
+              onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
+            >
+              {shift && pad.kind !== "empty" ? <span className="pad-clr">CLR</span> : pad.kind === "empty" ? "＋" : pad.name || i + 1}
+              <span className="kbd">{i + 1}</span>
+            </button>
+          ))}
         </div>
-        <div className="hotcues smp-bank song-bank">
-          {smpPads.filter((p) => p.kind === "stem").map((pad, i) => {
-            const stemReady = pad.stem ? !!deck.stemBuffer(pad.stem) : false;
-            return (
-              <button
-                key={pad.index}
-                className={`pad smp stem-pad stem-${pad.stem} ${stemReady ? "set" : ""} ${pad.playing ? "playing" : ""}`}
-                data-cue={i + 1}
-                disabled={!stemReady}
-                title={stemReady ? `Fire the ${pad.stem} of deck ${id}'s track (live) — tap = one-shot · SHIFT = loop` : `Separate deck ${id}'s stems first`}
-                onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
-                onPointerUp={() => smpUp(pad)}
-                onPointerLeave={() => smpUp(pad)}
-              >
-                {STEM_LABEL[pad.stem!]}
-                {shift && stemReady && <span className="pad-alt" aria-hidden="true">⟳</span>}
-                <span className="kbd">{i + 1}</span>
-              </button>
-            );
-          })}
-        </div>
-        </>
         )}
 
         {/* FX pad-mode: 8 fixed performance effects (Throws + Motion). Hold-FX glow while held;
@@ -576,9 +584,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   </button>
                 ))}
               </div>
-              <div className="ctx-label">Level</div>
+              <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
               <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
-              {deck.hasStems && (
+              {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
                 <>
                   <div className="ctx-label">Stem</div>
                   <div className="smp-modes smp-stems">
@@ -592,7 +600,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 </>
               )}
               <div className="ctx-sep" />
-              <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-slice from deck</button>
+              {/* Re-slice only makes sense for a LOCAL region pad; global pads carry an uploaded file. */}
+              {sampler.pads[smpMenu.i].route !== "master" && (
+                <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-slice from deck</button>
+              )}
               <button className="ctx-danger" onClick={() => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); }}>✕ Clear pad</button>
             </div>
           </>

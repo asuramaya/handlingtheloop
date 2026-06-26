@@ -711,24 +711,20 @@
 }
 .xbar-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
 .xbar-input::-moz-range-track { background: transparent; }
+/* Transparent hit-area only — the visible handle is the `.xbar-val` pill (below). */
 .xbar-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 38px; /* wide enough to carry the A↔B position number */
+  width: 38px;
   height: 24px;
-  border-radius: 4px;
-  /* Pure colour of the side it landed on (--xpct snaps 0%→A, 100%→B). */
-  background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
-  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
+  background: transparent;
+  border: none;
   cursor: ew-resize;
 }
 .xbar-input::-moz-range-thumb {
   width: 38px;
   height: 24px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
-  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
+  background: transparent;
+  border: none;
   cursor: ew-resize;
 }
 
@@ -799,38 +795,40 @@
 }
 .lfader-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
 .lfader-input::-moz-range-track { background: transparent; }
+/* Transparent hit-area only — the visible handle is the `.lfader-val` pill (so the value is centred
+   ON it). Same 38px width so the grab zone + the pill's `left` math still line up. */
 .lfader-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 38px; /* wide enough to carry the deck letter + level % */
-  height: 20px; /* fits inside the 26px track */
-  border-radius: 4px;
-  background: var(--accent); /* the deck's colour */
-  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
-  /* Tight glow only — a big halo bled vertically and made the handle read as too tall. */
-  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
+  width: 38px;
+  height: 20px;
+  background: transparent;
+  border: none;
   cursor: ew-resize;
 }
 .lfader-input::-moz-range-thumb {
   width: 38px;
   height: 20px;
-  border-radius: 4px;
-  background: var(--accent);
-  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
+  background: transparent;
+  border: none;
   cursor: ew-resize;
 }
-/* Value printed over the handle — tracks the thumb centre, never eats pointer events. */
+/* The value pill IS the visible handle (the native thumb below is transparent — see the thumb rules).
+   This guarantees the number is centred ON the handle, instead of overlaying a native thumb whose
+   vertical metrics webkit/firefox don't render at the same offset. Tracks the thumb x via `left`. */
 .lfader-val {
   position: absolute;
   top: 50%;
-  /* Sized to the 38×20 handle and centred so the number sits dead-centre and fills
-     it (not a small glyph floating in the square). */
   width: 38px;
   height: 20px;
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Handle look (moved off the native thumb): deck-coloured pill + soft glow. */
+  background: var(--accent);
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 75%, transparent);
   pointer-events: none;
   z-index: 3;
   font-size: 14px;
@@ -846,9 +844,19 @@
   display: inline-block;
   transform: scaleX(-1); /* counter deck A's mirrored track so the text reads normally */
 }
-/* The crossfader handle is a touch taller (24px) — match it so the number fills it. */
+/* The crossfader handle is a touch taller (24px); its pill carries the A↔B blend colour of the side
+   it landed on (--xpct snaps 0%→A, 100%→B), set inline on the value div. */
 .xbar-val {
   height: 24px;
+  background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
+  box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
+}
+/* Smart-Fader keybind hint, tucked in the crossfader's top-right corner (above the track). */
+.xbar-kbd {
+  top: 2px;
+  right: 4px;
+  bottom: auto;
+  z-index: 4;
 }
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first
@@ -1533,22 +1541,17 @@ body.no-glow .hw-btn.shift.on {
   color: var(--shift);
   box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 22%, transparent);
 }
-/* …and the two remapped pad rows light up so their alt mode is obvious: loop-size
-   pads → loop ROLL (cyan), hot-cue pads → SAVE-LOOP (green). A pad mid-roll (.on)
-   or already-set (.set) keeps its own lit colour, so the tint only marks the
-   "available" pads in that mode. */
-.bank.shifted .loop-sizes .loop-btn:not(.on) {
-  border-color: color-mix(in srgb, #36c2ff 65%, var(--line));
-  color: #36c2ff;
-  box-shadow: inset 0 0 9px color-mix(in srgb, #36c2ff 20%, transparent);
+/* …and the available pads take the SHIFT colour while shift is held, so the alt action (clear)
+   reads as one consistent grammar — not the old random cyan/green from retired roll/save-loop hints.
+   A pad mid-roll (.on) or already-set (.set) keeps its own lit colour. */
+.bank.shifted .loop-sizes .loop-btn:not(.on),
+.bank.shifted .hotcues .pad:not(.set) {
+  border-color: color-mix(in srgb, var(--shift) 65%, var(--line));
+  color: var(--shift);
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 20%, transparent);
 }
 .bank.shifted .loop-sizes .loop-btn:not(.on):hover {
-  background: color-mix(in srgb, #36c2ff 16%, transparent);
-}
-.bank.shifted .hotcues .pad:not(.set) {
-  border-color: color-mix(in srgb, #6ee7a8 65%, var(--line));
-  color: #6ee7a8;
-  box-shadow: inset 0 0 9px color-mix(in srgb, #6ee7a8 20%, transparent);
+  background: color-mix(in srgb, var(--shift) 16%, transparent);
 }
 /* The pitch ∓ steppers and the IN / OUT / EXIT loop buttons keep their label when
    shifted (unlike CUE→START / PLAY→RESET), so they'd give no hint of their alt mode.

@@ -189,19 +189,19 @@ function peakDb(an: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
 // Directional: at most one master + one slave at a time (resolved by AudioEngine).
 export type SyncRole = "off" | "master" | "slave";
 
-// Performance-pad modes. Unshifted: cue / fx / loop / sampler. Shifted peers (SHIFT on the mode
-// row): roll (momentary loop) ↔ loop, song (the loaded track's stems) ↔ sampler. (keyboard ↔ cue
-// and a 2nd fx page ↔ fx are reserved.)
-export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "song" | "keyboard" | "fx2";
+// Performance-pad modes. Unshifted: cue / fx / loop / sampler (the deck's LOCAL sample pads).
+// Shifted peers (SHIFT on the mode row): roll (momentary loop) ↔ loop, global (the account's
+// GLOBAL sample bank) ↔ sampler. (keyboard ↔ cue and a 2nd fx page ↔ fx are reserved.)
+export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "keyboard" | "fx2";
 // Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). keyboard / fx2 are
 // REVEALED under SHIFT but not yet wired (see PAD_MODE_RESERVED) — shown dimmed, like the board.
 export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
   cue: "keyboard",
   fx: "fx2",
   loop: "roll",
-  sampler: "song",
+  sampler: "global",
   roll: "loop",
-  song: "sampler",
+  global: "sampler",
   keyboard: "cue",
   fx2: "fx",
 };

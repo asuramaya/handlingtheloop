@@ -59,6 +59,7 @@ import {
   type ColorValue,
   mergeBindings,
   bindingIndex,
+  codeLabel,
   TEMPO_RANGES,
   PITCH_RANGES,
   nextSkip,
@@ -93,6 +94,8 @@ import {
   useQueuePrefetch,
   AutoMixer,
   SmartFader,
+  PAD_MODE_RESERVED,
+  type PadMode,
   type AutoMixStatus,
   type AutoMixMirror,
 } from "@htl";
@@ -836,7 +839,8 @@ export function App() {
       fireFxPad(deck, i, on);
       emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: i });
     };
-    const padModeKey = (deck: DeckRef, id: DeckId, m: "cue" | "loop" | "sampler" | "fx") => {
+    const padModeKey = (deck: DeckRef, id: DeckId, m: PadMode) => {
+      if (PAD_MODE_RESERVED.has(m)) return; // KEY / FX2 aren't built — match the on-screen disabled state
       deck.setPadMode(m);
       emitRef.current({ kind: "board", deck: id, id: "padMode", arg: m });
     };
@@ -1070,12 +1074,17 @@ export function App() {
         emitRef.current({ kind: "crossfade", value: 0 }); // sync the recentre to a session
         midiSendRef.current?.([0x96, 0x01, 0x00]); // force the HW Smart-Fader off immediately
       },
+      // Keyboard Smart Fader: ONE shift-aware key — bare = arm/disarm Smart Fader, SHIFT = enable/
+      // disable the crossfader. Mirrors the FLX SMART FADER button's unshifted/shifted split.
+      smartFader: (d, i, s) => (s ? HANDLERS.xfaderToggle(d, i, s) : HANDLERS.smartFaderToggle(d, i, s)),
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
-      padModeCue: (deck, id) => padModeKey(deck, id, "cue"),
-      padModeLoop: (deck, id) => padModeKey(deck, id, "loop"),
-      padModeSampler: (deck, id) => padModeKey(deck, id, "sampler"),
-      padModeFx: (deck, id) => padModeKey(deck, id, "fx"),
+      // SHIFT switches to the peer mode (mirrors the on-screen mode row + the FLX shift layer):
+      // loop→roll, sampler→global; cue→keyboard / fx→fx2 are RESERVED so padModeKey no-ops them.
+      padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "keyboard" : "cue"),
+      padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),
+      padModeSampler: (deck, id, s) => padModeKey(deck, id, s ? "global" : "sampler"),
+      padModeFx: (deck, id, s) => padModeKey(deck, id, s ? "fx2" : "fx"),
     };
     // The 8 pads (keys 1-8) route by the deck's pad mode: Hot Cue → cue, Loop → beat-loop
     // size, Sampler → that deck's region pad (via the sampler bridge ref), FX → a Pad-FX.
@@ -1087,9 +1096,11 @@ export function App() {
           ? beatLoop(deck, id, i)
           : deck.padMode === "sampler"
             ? samplerCtl.current?.trigger(deckPadBase(id) + i)
-            : deck.padMode === "fx"
-              ? fxKey(deck, id, i)
-              : hotcue(deck, id, s, i);
+            : deck.padMode === "global"
+              ? samplerCtl.current?.trigger(i) // global pads are flat index 0-7
+              : deck.padMode === "fx"
+                ? fxKey(deck, id, i)
+                : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 
@@ -3555,10 +3566,10 @@ export function App() {
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
           hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
-          // The shifted peer modes light their BASE button's lamp (roll→loop, song→sampler, …).
+          // The shifted peer modes light their BASE button's lamp (roll→loop, global→sampler, …).
           padMode:
             d.padMode === "roll" ? "loop"
-            : d.padMode === "song" ? "sampler"
+            : d.padMode === "global" ? "sampler"
             : d.padMode === "keyboard" ? "cue"
             : d.padMode === "fx2" ? "fx"
             : d.padMode,
@@ -4524,6 +4535,7 @@ export function App() {
             onCrossfade={dragCrossfade}
             locked={boardLocked || (!xfaderEnabled && !smartFaderArmed)}
             smart={smartFaderArmed}
+            kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
           />
           <div className="decks-row">
           <DeckControls

@@ -35,6 +35,8 @@ import {
   addNotification,
   setPresenceOnline,
   setPresenceOffline,
+  consumeSessionInvite,
+  relationship,
   getOrCreateInvite,
   inviteOwner,
   ensureIdentityColumns,
@@ -971,18 +973,33 @@ async function handleRoom(req: Request, env: Env, ctx: ExecutionContext): Promis
   // derived server-side, so a raw user id never appears in a URL.
   const url = new URL(req.url);
   const roomHandle = (url.searchParams.get("room") || "").trim(); // public listen by @handle (broadcast plane)
+  const jamHandle = (url.searchParams.get("jam") || "").trim(); // PARTICIPATE by @handle (friend co-play)
   const code = (url.searchParams.get("join") || "").trim();
   let hostId: string | null = user ? user.id : null;
   // PUBLIC listen: resolve @handle → the host's home room. Anyone (incl. anonymous) may
   // tune in; the DO admits them read-only only if the host opened the room (its `public`
   // flag). The owner opening their OWN handle stays a normal host connection (full control).
   let asPublic = false;
+  let invited = false; // a push-invite grant was consumed → the DO auto-admits (no second approval)
   if (roomHandle && env.DB) {
     await ensureIdentityColumns(env.DB);
     const u = await userByHandle(env.DB, foldHandle(roomHandle));
     if (!u || !u.handle) return json(404, { error: "no such room" });
     hostId = u.id;
     asPublic = !(user && user.id === u.id);
+  } else if (jamHandle && env.DB && user) {
+    // JAM by @handle: participate in a FRIEND's session (not a public read-only listen). Gated on
+    // MUTUAL follow — only friends can knock. A consumed push-invite grant auto-admits; otherwise
+    // they land as a knock (the host approves). Jamming your OWN handle is just a host connection.
+    await ensureIdentityColumns(env.DB);
+    const u = await userByHandle(env.DB, foldHandle(jamHandle));
+    if (!u || !u.handle) return json(404, { error: "no such room" });
+    hostId = u.id;
+    if (user.id !== u.id) {
+      const rel = await relationship(env.DB, user.id, u.id);
+      if (!rel.mutual || rel.blocking || rel.blockedBy) return json(403, { error: "you can only jam with friends (mutual follow)" });
+      invited = await consumeSessionInvite(env.DB, u.id, user.id);
+    }
   } else if (code && env.DB) {
     const owner = await inviteOwner(env.DB, code);
     if (owner) hostId = owner;
@@ -1017,6 +1034,11 @@ async function handleRoom(req: Request, env: Env, ctx: ExecutionContext): Promis
   // notification back to the Worker. Anon connections carry none.
   url.searchParams.delete("acct");
   if (user) url.searchParams.set("acct", user.id);
+
+  // Un-forgeable auto-admit grant (push-invite): the friend the host invited skips the knock.
+  // Stripped + only set when a real grant was just consumed above — a client can't fake it.
+  url.searchParams.delete("invited");
+  if (invited) url.searchParams.set("invited", "1");
 
   // Presence: any authenticated socket attaching (own rig, a jam, or a signed-in listen) means
   // this user is online to their friends. Transition write, best-effort (never blocks the upgrade);

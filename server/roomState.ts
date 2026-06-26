@@ -50,6 +50,7 @@ export interface Attachment {
   ev: number; // the device's reconstruction-engine version (D5; 0 = didn't report). The anchor's is the room's.
   follows: boolean; // this device's account follows the host (resolved by the Worker on connect, un-forgeable). Gates follower-only features; NEVER exposed in the roster (privacy).
   acct: string; // this device's account id ("" if anon), set un-forgeably by the Worker. SERVER-ONLY (never in a Peer) — used solely to attribute a room event (chat @mention) when bridging a notification.
+  invited: boolean; // a push-invite grant was consumed on connect (Worker-set, un-forgeable) → auto-admit on join, skipping the knock. SERVER-ONLY, never in a Peer.
 }
 
 // The single derived "what is this device" — used for the roster, debugging, and tests. host

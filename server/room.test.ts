@@ -69,12 +69,13 @@ class FakeState implements DurableObjectState {
 function makeRoom(env?: Record<string, unknown>) {
   const state = new FakeState();
   const room = new DjRoom(state as unknown as ConstructorParameters<typeof DjRoom>[0], env as ConstructorParameters<typeof DjRoom>[1]);
-  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean; follows?: boolean; acct?: string }) {
+  async function connect(p: { device: string; name?: string; host?: boolean; pub?: boolean; follows?: boolean; acct?: string; invited?: boolean }) {
     const qs = new URLSearchParams({ device: p.device, name: p.name ?? p.device, kind: "Mac" });
     if (p.host) qs.set("host", "1");
     if (p.pub) qs.set("pub", "1");
     if (p.follows) qs.set("fol", "1"); // Worker-resolved follow flag (un-forgeable)
     if (p.acct) qs.set("acct", p.acct); // Worker-resolved account id (server-only; mention attribution)
+    if (p.invited) qs.set("invited", "1"); // Worker-resolved push-invite grant (un-forgeable)
     const req = new Request(`https://x/api/room?${qs}`, { headers: { Upgrade: "websocket" } });
     let status = 101;
     try {
@@ -123,6 +124,25 @@ describe("DjRoom membership", () => {
     expect(guest.a.joined).toBe(true);
     expect(guest.a.listening).toBe(true);
     expect(guest.a.controlling).toBe(false); // approval ≠ control
+  });
+
+  it("an INVITED guest auto-joins (skips the knock), no host approval needed", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const friend = (await h.connect({ device: "g1", host: false, invited: true })).ws!;
+    await h.send(friend, { t: "join" });
+    expect(friend.a.pending).toBe(false); // no knock
+    expect(friend.a.joined).toBe(true); // straight in
+    expect(friend.a.controlling).toBe(false); // admitted ≠ control (still needs a host grant)
+  });
+
+  it("a NON-invited guest still knocks (pending) — the grant is what auto-admits", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", host: false })).ws!; // no invite
+    await h.send(guest, { t: "join" });
+    expect(guest.a.pending).toBe(true);
+    expect(guest.a.joined).toBe(false);
   });
 
   it("a guest can't self-grant control; the host grant gives full decks", async () => {

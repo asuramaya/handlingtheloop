@@ -257,6 +257,7 @@ export class DjRoom {
     const ev = Math.max(0, Math.min(9999, Number(url.searchParams.get("ev")) || 0)); // reconstruction-engine version (D5)
     const follows = url.searchParams.get("fol") === "1"; // this account follows the host (Worker-resolved, un-forgeable)
     const acct = (url.searchParams.get("acct") || "").slice(0, 64); // this device's account id (server-only; mention attribution)
+    const invited = url.searchParams.get("invited") === "1"; // a push-invite grant was consumed → auto-admit (Worker-set, un-forgeable)
     if (!this.origin) {
       this.origin = url.origin; // base for the notify/presence bridge (same Worker)
       void this.state.storage.put("origin", this.origin); // survive eviction (presence alarm needs it)
@@ -301,8 +302,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct };
+      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct, invited: false }
+      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct, invited };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -346,7 +347,7 @@ export class DjRoom {
         // approves (case "approve"). This is the door to the session.
         const aj = ws.deserializeAttachment() as Attachment | null;
         if (!aj) break;
-        if (aj.host || this.approved.has(self)) {
+        if (aj.host || this.approved.has(self) || aj.invited) {
           this.patch(ws, { joined: true, pending: false, joinedAt: aj.joinedAt || Date.now() });
           await this.settle(self);
         } else {

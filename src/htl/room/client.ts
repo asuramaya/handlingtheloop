@@ -44,6 +44,7 @@ export interface RoomOptions {
   joinCode?: string; // invite code → the Worker routes us into that host's session
   color?: string; // this device's account accent (hex) — the room vibe is the host's
   listenHandle?: string; // tune into a PUBLIC room by the host's @handle (read-only listener, no invite)
+  jamHandle?: string; // PARTICIPATE in a FRIEND's session by their @handle (mutual-gated; knock or auto-admit)
 }
 
 const DEVICE_KEY = "htl_device_id";
@@ -129,6 +130,9 @@ export class RoomClient {
   // When set, this client is a PUBLIC read-only listener tuned into someone's @handle —
   // it never drives, never auto-engages the join/control switches.
   private readonly listenHandle: string | null;
+  // When set, we're participating in a friend's session by their @handle (not a passive listen) —
+  // auto-engages join like an invite-link guest (→ knock, or auto-admit if the host invited us).
+  private readonly jamHandle: string | null;
   anchorId: string | null = null;
   peers: Peer[] = [];
   status: RoomStatus = "offline";
@@ -157,6 +161,7 @@ export class RoomClient {
     this.joinCode = opts.joinCode ?? joinCodeFromUrl();
     this.color = opts.color ?? "";
     this.listenHandle = opts.listenHandle ?? null;
+    this.jamHandle = opts.jamHandle ?? null;
     const e = loadEngage();
     this.wantJoined = e.joined;
     this.wantControl = e.control;
@@ -364,6 +369,7 @@ export class RoomClient {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const params = new URLSearchParams({ device: this.you, name: this.name, kind: this.kind });
     if (this.listenHandle) params.set("room", this.listenHandle); // public read-only listener
+    else if (this.jamHandle) params.set("jam", this.jamHandle); // participate in a friend's session
     else if (this.joinCode) params.set("join", this.joinCode);
     if (this.color) params.set("color", this.color);
     params.set("ev", String(ENGINE_VERSION)); // D5: report our reconstruction-engine version
@@ -452,11 +458,11 @@ export class RoomClient {
         // refresh), or, for a fresh invite link, join HEARING the mix but not driving.
         // Capture the wants first since join()/control()/listen() mutate them.
         {
-          const wj = this.wantJoined || !!this.joinCode;
+          const wj = this.wantJoined || !!this.joinCode || !!this.jamHandle;
           const wc = this.wantControl;
-          // A fresh invite-link guest (joinCode present, nothing persisted) hears the mix
+          // A fresh invite-link guest OR a friend jamming in (nothing persisted) hears the mix
           // by default; a restored session keeps whatever it had (it may have self-muted).
-          const wl = this.wantListen || (!!this.joinCode && !this.wantJoined);
+          const wl = this.wantListen || ((!!this.joinCode || !!this.jamHandle) && !this.wantJoined);
           if (wj) {
             this.join(); // → joined, but silent + not driving until restored below
             if (wc) this.control(true); // host re-asserts its own drive (guests: server grants)

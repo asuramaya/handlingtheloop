@@ -53,8 +53,11 @@ export interface RoomState {
   setsRev: number; // G1b: bumps when a broadcast ends + its recipe is saved → the recordings panel refetches
   goPublic: (on: boolean) => void; // HOST: open/close the broadcast plane (+ directory announce)
   listeningTo: string | null; // a host @handle if we've tuned into their public broadcast (else null)
+  jammingWith: string | null; // a friend's @handle if we've jammed into their session (else null)
   tuneIn: (handle: string) => void; // tune into a public room by @handle (read-only listener)
   tuneOut: () => void; // leave the broadcast, back to our own session
+  jam: (handle: string) => void; // participate in a friend's session by @handle (knock or auto-admit)
+  leaveJam: () => void; // leave the friend's session, back to our own
   // Floor → stage (E3–E6): a broadcast listener steps up to the decks, the host approves.
   stageRequests: StageReq[]; // HOST: listeners raising a hand to step up (approve/deny)
   onStage: boolean; // am I a stepped-up listener currently driving a deck?
@@ -180,6 +183,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // listener (instead of our own session). Anon-capable. null = our own session.
   const [listenHandle, setListenHandle] = useState<string | null>(null);
   const isPublicListener = !!listenHandle;
+  // When set, we're PARTICIPATING in a friend's session by their @handle (mutual-gated co-play),
+  // not passively listening. Mutually exclusive with listenHandle. null = our own session.
+  const [jamHandle, setJamHandle] = useState<string | null>(null);
+  const isJamming = !!jamHandle;
   const clientRef = useRef<RoomClient | null>(null);
 
   // Latest callbacks read via a ref so they can change (they close over engine /
@@ -209,14 +216,16 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   useEffect(() => {
     if (!meLoaded) return;
     const tuning = !!listenHandle;
+    const jamming = !!jamHandle;
     const anonGuest = !user && isGuest;
-    // Connect when: TUNING into a public room (anyone, incl. anonymous), OR signed in
-    // (our own session), OR an anon invite guest. Else there's nothing to connect to.
-    if (!tuning && !user && !anonGuest) return;
+    // Connect when: TUNING into a public room (anyone, incl. anonymous), JAMMING into a friend's
+    // session (signed in), signed in (our own session), OR an anon invite guest.
+    if (!tuning && !jamming && !user && !anonGuest) return;
     const c = new RoomClient({
       name: user ? labelFor(user) : guestName(),
-      joinCode: tuning ? undefined : (joinCode ?? undefined),
+      joinCode: tuning || jamming ? undefined : (joinCode ?? undefined),
       listenHandle: tuning ? listenHandle : undefined,
+      jamHandle: jamming ? jamHandle : undefined,
       color: colorRef.current,
     });
     clientRef.current = c;
@@ -305,9 +314,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     };
     // Keyed on userId (stable string), not the user object, so an identical /api/me
     // re-fetch never tears down + reopens the socket (which looked like a "drop").
-    // listenHandle flips us between our own session and a tuned-in public room.
+    // listenHandle/jamHandle flip us between our own session, a tuned-in public room, and a
+    // friend's jam — each reconnects to the right room.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meLoaded, userId, isGuest, listenHandle]);
+  }, [meLoaded, userId, isGuest, listenHandle, jamHandle]);
 
   // Server-side rejections (e.g. a guest tapping a locked 🎛️) arrive as transient
   // notices — show them, then clear so the popup doesn't carry a stale warning (#10).
@@ -371,10 +381,23 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   );
   // Tune into a public room by @handle as a read-only listener (swaps our connection),
   // or tune back out to our own session. Accepts a bare or @-prefixed handle.
-  const tuneIn = useCallback((handle: string) => setListenHandle(handle.replace(/^@/, "") || null), []);
+  const tuneIn = useCallback((handle: string) => {
+    setJamHandle(null); // listening and jamming are mutually exclusive
+    setListenHandle(handle.replace(/^@/, "") || null);
+  }, []);
   const tuneOut = useCallback(() => {
     setMyStageDeck(null);
     setListenHandle(null);
+  }, []);
+  // Jam INTO a friend's session by @handle (participate, not listen): swaps our connection to
+  // their room → knock (or auto-admit if they invited us). `leaveJam` returns to our own session.
+  const jam = useCallback((handle: string) => {
+    setListenHandle(null); // mutually exclusive with passive listening
+    setJamHandle(handle.replace(/^@/, "") || null);
+  }, []);
+  const leaveJam = useCallback(() => {
+    setMyStageDeck(null);
+    setJamHandle(null);
   }, []);
   // Floor → stage. requestStage is optimistic (the floor crowd gets no stage echo, so we
   // remember our own ask locally); stepDown covers both "cancel my pending request" and
@@ -477,7 +500,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // (snapshot-restore, queue-edit policy) build on it. NOT the same as `autoIsRemote`, which
   // is anchor-based (a non-anchor device on my OWN rig is still a queue-remote).
   const attachment: Attachment =
-    isPublicListener || isGuest ? { to: "rig", host: listenHandle ?? "" } : { to: "home" };
+    isPublicListener || isJamming || isGuest ? { to: "rig", host: jamHandle ?? listenHandle ?? "" } : { to: "home" };
 
   return {
     enabled: joined,
@@ -502,8 +525,11 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     setsRev,
     goPublic,
     listeningTo: listenHandle,
+    jammingWith: jamHandle,
     tuneIn,
     tuneOut,
+    jam,
+    leaveJam,
     stageRequests,
     onStage,
     myDeck,

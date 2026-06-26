@@ -461,7 +461,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   refresh();
                 }}
               >
-                {isLoop ? "↻" : i + 1}
+                {shift && set ? <span className="pad-clr">CLR</span> : isLoop ? "↻" : i + 1}
               </button>
             );
           })}
@@ -487,8 +487,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               onPointerLeave={() => smpUp(pad)}
               onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
             >
-              {pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || i + 1}
-              {pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+              {shift && pad.kind !== "empty" ? <span className="pad-clr">CLR</span> : pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || i + 1}
+              {!shift && pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
               <span className="kbd">{i + 1}</span>
             </button>
           ))}
@@ -519,6 +519,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerLeave={() => smpUp(pad)}
               >
                 {STEM_LABEL[pad.stem!]}
+                {shift && stemReady && <span className="pad-alt" aria-hidden="true">⟳</span>}
                 <span className="kbd">{i + 1}</span>
               </button>
             );

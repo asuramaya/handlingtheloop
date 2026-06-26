@@ -106,6 +106,24 @@
 .stem-pad.stem-bass { --stem: #5b8cff; }
 .stem-pad.stem-other { --stem: #43d6a0; }
 
+/* Shift parity on the PADS: when shift is engaged, a pad shows its alternate action so the board
+   reads as its second self (mirrors the mode-row flip + the FLX silkscreen). CLR = destructive
+   clear (cue / sample); ⟳ = loop (a stem). */
+.pad-clr {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #ff6b6b;
+}
+.pad-alt {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--shift, #fc6) 85%, #fff);
+}
+
 
 .hotcues {
   display: grid;

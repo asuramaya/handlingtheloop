@@ -4370,6 +4370,10 @@ export function App() {
             setDiscoverOpen(false);
             room.tuneIn(h);
           }}
+          onJam={(h) => {
+            setDiscoverOpen(false);
+            room.jam(h);
+          }}
           onSeeAll={toggleDiscover}
         />
         <RoomBar room={room} onExpand={toggleSocial} />

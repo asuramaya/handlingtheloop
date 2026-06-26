@@ -55,6 +55,8 @@ import {
   listNotifications,
   getNotifSeenAt,
   setNotifSeenAt,
+  addNotification,
+  addSessionInvite,
   handleTaken,
   relationship,
   unblockUser,
@@ -707,6 +709,27 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const ts = Date.now();
       await setNotifSeenAt(env.DB, user.id, ts);
       return json(200, { ok: true, seenAt: ts });
+    }
+
+    case "/api/invite": {
+      // Push-invite a FRIEND to jam (the outbound door). Authed; gated on MUTUAL follow so only
+      // friends can be pulled in. Records a short-lived auto-admit grant (consumed when they tap
+      // Join → ?jam=@me lets them in with no second approval) + a durable "invite" bell event.
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const body = (await req.json().catch(() => null)) as { toHandle?: string } | null;
+      const toHandle = body?.toHandle ? foldHandle(body.toHandle) : "";
+      if (!toHandle) return json(400, { error: "toHandle required" });
+      await ensureGraphTables(env.DB);
+      const target = await userByHandle(env.DB, toHandle);
+      if (!target?.handle) return json(404, { error: "no such user" });
+      if (target.id === user.id) return json(400, { error: "can't invite yourself" });
+      const rel = await relationship(env.DB, user.id, target.id);
+      if (!rel.mutual || rel.blocking || rel.blockedBy) return json(403, { error: "you can only invite friends (mutual follow)" });
+      await addSessionInvite(env.DB, user.id, target.id);
+      await addNotification(env.DB, { userId: target.id, kind: "invite", actorId: user.id }).catch(() => {});
+      return json(200, { ok: true });
     }
 
     case "/api/me/delete": {

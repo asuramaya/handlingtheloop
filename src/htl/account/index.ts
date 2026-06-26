@@ -236,6 +236,30 @@ export async function fetchFollowing(handle: string, signal?: AbortSignal): Prom
   return ((await res.json()) as { list: FollowCard[] }).list;
 }
 
+/** A friend (mutual follow) who's online right now. `live` = broadcasting. */
+export interface FriendPresence {
+  handle: string;
+  displayName: string | null;
+  avatar: string | null;
+  live: boolean;
+}
+/** Friends online now (authed; mutual-follow + presence). Drives Discover's "Friends online". */
+export async function fetchFriendsOnline(signal?: AbortSignal): Promise<FriendPresence[]> {
+  const res = await fetch("/api/me/friends-online", { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { friends: FriendPresence[] }).friends;
+}
+/** Push-invite a friend (by @handle) to jam — they get a bell event with a one-tap Join. */
+export async function sendInvite(toHandle: string): Promise<boolean> {
+  const res = await fetch("/api/invite", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ toHandle: toHandle.replace(/^@/, "") }),
+  });
+  return res.ok;
+}
+
 export interface RoomAnnounce {
   title?: string;
   genre?: string;

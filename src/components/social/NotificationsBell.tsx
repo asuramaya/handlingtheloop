@@ -21,12 +21,14 @@ export function NotificationsBell({
   self,
   tunedTo,
   onListen,
+  onJam,
   onSeeAll,
 }: {
   signedIn: boolean;
   self: string | null;
   tunedTo: string | null;
   onListen: (handle: string) => void;
+  onJam: (handle: string) => void; // accept a jam invite → participate in their session
   onSeeAll: () => void;
 }) {
   const [data, setData] = useState<NotificationsPayload>(EMPTY);
@@ -100,6 +102,11 @@ export function NotificationsBell({
     setFollowedBack((s) => new Set(s).add(handle)); // optimistic — flip to ✓ Following
     void follow(handle);
   };
+  const acceptJam = (e: MouseEvent, handle: string) => {
+    e.stopPropagation(); // don't open their profile — go straight into the session
+    onJam(handle);
+    setOpen(false);
+  };
 
   return (
     <div className="notif-wrap" ref={wrapRef}>
@@ -148,7 +155,13 @@ export function NotificationsBell({
                         )}
                         <span className="notif-text">
                           <b>{actorName(e.actor)}</b>{" "}
-                          {e.kind === "follow" ? "followed you" : e.kind === "mention" ? "mentioned you in chat" : e.kind}
+                          {e.kind === "follow"
+                            ? "followed you"
+                            : e.kind === "mention"
+                              ? "mentioned you in chat"
+                              : e.kind === "invite"
+                                ? "invited you to jam"
+                                : e.kind}
                         </span>
                         {e.kind === "follow" &&
                           e.actor.handle &&
@@ -159,6 +172,11 @@ export function NotificationsBell({
                               Follow back
                             </button>
                           ))}
+                        {e.kind === "invite" && e.actor.handle && (
+                          <button className="notif-join" onClick={(ev) => acceptJam(ev, e.actor.handle!)}>
+                            Join
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>

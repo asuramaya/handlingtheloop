@@ -114,6 +114,23 @@
   color: var(--muted);
   white-space: nowrap;
 }
+/* "Join" on a jam invite — green to read as a live, go-now action (distinct from the accent
+   Follow-back). */
+.notif-join {
+  flex: none;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid #2ecc71;
+  background: #2ecc71;
+  color: #08111a;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.notif-join:hover {
+  filter: brightness(1.08);
+}
 .notif-seeall {
   width: 100%;
   margin-top: 2px;

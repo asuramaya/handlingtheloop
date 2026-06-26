@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { type LiveRoom, type SetCard, fetchDiscoverSets, fetchFollowing, fetchLiveRooms } from "@htl/account";
+import { type FriendPresence, type LiveRoom, type SetCard, fetchDiscoverSets, fetchFollowing, fetchLiveRooms, sendInvite } from "@htl/account";
 import { DockResizer } from "./DockResizer";
+import { FriendRow } from "./social/FriendRow";
 import { LiveRoomRow } from "./social/LiveRoomRow";
 import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
@@ -15,19 +16,29 @@ import { goToHandle } from "./social/util";
 export function DiscoverScreen({
   self,
   tunedTo,
+  friends,
   onListen,
+  onJam,
   onClose,
   onPlaySet,
 }: {
   self: string | null;
   tunedTo: string | null;
+  friends: FriendPresence[]; // mutual-follows online now (polled by App for the chin dot, passed in)
   onListen: (handle: string) => void;
+  onJam: (handle: string) => void; // knock / join a friend's session (participate)
   onClose: () => void;
   onPlaySet?: (id: string) => void; // G1c/G1d: replay a published set on the decks
 }) {
   const [rooms, setRooms] = useState<LiveRoom[] | null>(null); // null = first load not back yet
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [sets, setSets] = useState<SetCard[]>([]);
+  const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
+
+  const invite = (handle: string) => {
+    setInvited((s) => new Set(s).add(handle)); // optimistic
+    void sendInvite(handle);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -84,6 +95,29 @@ export function DiscoverScreen({
         <div className="discover-head">
           <span className="discover-title">Discover</span>
         </div>
+
+        {/* FRIENDS ONLINE — mutual follows who are on right now. The "play with a friend" door:
+            Invite pulls them into your session; Knock/Join takes you into theirs. Above the public
+            live directory because it's the higher-intent, co-play surface. */}
+        {friends.length > 0 && (
+          <div className="discover-section">
+            <div className="social-section-head friends-online-head">
+              ● Friends online <span className="friends-count">· {friends.length}</span>
+            </div>
+            <ul className="friends-online-list">
+              {friends.map((f) => (
+                <FriendRow
+                  key={f.handle}
+                  friend={f}
+                  invited={invited.has(f.handle)}
+                  onInvite={invite}
+                  onJam={onJam}
+                  onOpen={goToHandle}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
 
         {rooms === null ? (
           <p className="discover-empty">Loading…</p>

@@ -2351,5 +2351,115 @@ span.profile-handle:hover {
   box-shadow: none;
 }
 
-
+/* ============================================================================
+   Presence — friends online (the "play with a friend" door): the chin dot + the
+   Discover "Friends online" section + its rows. Green = a live, reachable signal.
+   ============================================================================ */
+.chin-presence-dot {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2ecc71;
+  box-shadow: 0 0 0 2px var(--panel, #0b1118);
+}
+.friends-online-head {
+  color: #2ecc71;
+}
+.friends-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+.friends-online-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.friend-row:hover {
+  border-color: #2ecc71;
+}
+.friend-avatar-wrap {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+/* The status dot, lower-right of the avatar. Online = soft green, live = brighter + a ring. */
+.presence-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--panel-2, #0b1118);
+}
+.presence-dot.online {
+  background: #2ecc71;
+}
+.presence-dot.live {
+  background: #2ecc71;
+  box-shadow: 0 0 5px #2ecc71;
+}
+.friend-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.friend-invite,
+.friend-knock,
+.friend-join {
+  flex: none;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* Invite (push them to me) = accent; Knock (go to them) = outline; Join (live) = solid green. */
+.friend-invite {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #08111a;
+}
+.friend-knock {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text, #e8eef5);
+}
+.friend-join {
+  border: 1px solid #2ecc71;
+  background: #2ecc71;
+  color: #08111a;
+}
+.friend-invite:hover,
+.friend-join:hover {
+  filter: brightness(1.08);
+}
+.friend-knock:hover {
+  border-color: #2ecc71;
+}
+.friend-invited {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
 

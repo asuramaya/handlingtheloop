@@ -16,7 +16,7 @@ import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileS
 import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
 import { NotificationsBell } from "./components/social/NotificationsBell";
-import { type Me, fetchMe, logPlay, trimSet } from "@htl/account";
+import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
@@ -1233,7 +1233,6 @@ export function App() {
   // Same for the Collection + Playlists — curation follows the user across devices (audio
   // itself doesn't need syncing: R2 is a shared cache and anything missing re-resolves).
   useLibrarySync(library);
-
 
   const loadedIds = new Set([loaded.A, loaded.B].filter((v): v is string => v !== null));
 
@@ -2772,6 +2771,28 @@ export function App() {
   }, [profileOpen, room.refreshUser]);
 
   // Contextual room colour: while CONNECTED to a session (and opted in), wear the HOST's
+  // Friends (mutual follows) online now — owned here (not in Discover) because the chin presence
+  // dot must show even when the Discover panel is closed. Polled while signed in; Discover gets
+  // the list as a prop so there's one poll, not two.
+  const [friendsOnline, setFriendsOnline] = useState<FriendPresence[]>([]);
+  useEffect(() => {
+    if (!room.signedIn) {
+      setFriendsOnline([]);
+      return;
+    }
+    let alive = true;
+    const load = () =>
+      fetchFriendsOnline()
+        .then((f) => alive && setFriendsOnline(f))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [room.signedIn]);
+
   // accent so the whole room shares a vibe. Gated on being connected (status online) rather
   // than fully joined, so a guest catches the vibe the moment they're in the room — even
   // mid-handshake — instead of only after approval. Override ONLY the global --accent (not
@@ -4357,10 +4378,11 @@ export function App() {
         <button
           className={`chin-btn chin-discover ${discoverOpen ? "active" : ""}`}
           onClick={toggleDiscover}
-          aria-label="Discover"
-          title="Discover — who's live now"
+          aria-label={friendsOnline.length > 0 ? `Discover — ${friendsOnline.length} friends online` : "Discover"}
+          title={friendsOnline.length > 0 ? `${friendsOnline.length} friends online` : "Discover — who's live now"}
         >
           <span className="chin-discover-i" aria-hidden="true">🧭</span>
+          {friendsOnline.length > 0 && <span className="chin-presence-dot" aria-hidden="true" />}
         </button>
         <NotificationsBell
           signedIn={!!room.user}
@@ -4597,11 +4619,17 @@ export function App() {
         <DiscoverScreen
           self={room.user?.handle ?? null}
           tunedTo={room.listeningTo}
+          friends={friendsOnline}
           onClose={() => setDiscoverOpen(false)}
           onListen={(h) => {
             engine.unlock(); // tune-in is a user gesture → prime iOS audio
             room.tuneIn(h);
             setDiscoverOpen(false); // hand off to the Session dock's "Listening to @X" banner
+          }}
+          onJam={(h) => {
+            engine.unlock(); // jamming is a user gesture → prime iOS audio
+            room.jam(h);
+            setDiscoverOpen(false);
           }}
           onPlaySet={playRecordedSet}
         />

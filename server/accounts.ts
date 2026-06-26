@@ -57,6 +57,7 @@ import {
   setNotifSeenAt,
   addNotification,
   addSessionInvite,
+  friendsOnline,
   handleTaken,
   relationship,
   unblockUser,
@@ -709,6 +710,16 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const ts = Date.now();
       await setNotifSeenAt(env.DB, user.id, ts);
       return json(200, { ok: true, seenAt: ts });
+    }
+
+    case "/api/me/friends-online": {
+      // Friends (MUTUAL follows) who are online right now — drives Discover's "Friends online"
+      // section + the chin presence dot. Viewer-specific → authed.
+      if (req.method !== "GET") return json(405, { error: "GET only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      const friends = await friendsOnline(env.DB, user.id);
+      return json(200, { friends });
     }
 
     case "/api/invite": {

@@ -34,6 +34,7 @@ import {
   blockedEither,
   addNotification,
   setPresenceOnline,
+  setPresenceOffline,
   getOrCreateInvite,
   inviteOwner,
   ensureIdentityColumns,
@@ -1118,6 +1119,21 @@ async function handleInternalNotify(req: Request, env: Env): Promise<Response> {
   return json(200, { ok: true });
 }
 
+// Presence-offline bridge: the room DO posts here when an account's last socket dropped and stayed
+// gone past the grace. Same internal secret guard as /internal/notify. The write is LWW-guarded on
+// `closedAt` (setPresenceOffline only lands if nothing newer happened), so an account that
+// reconnected on another DO in the meantime can't be stomped offline.
+async function handleInternalPresence(req: Request, env: Env): Promise<Response> {
+  if (req.method !== "POST") return json(405, { error: "POST only" });
+  const secret = env.TOKEN_ENC_KEY;
+  if (!secret || req.headers.get("x-htl-internal") !== secret) return json(403, { error: "forbidden" });
+  if (!env.DB) return json(200, { ok: false });
+  const b = (await req.json().catch(() => ({}))) as { acct?: string; closedAt?: number };
+  if (!b.acct) return json(400, { error: "bad request" });
+  await setPresenceOffline(env.DB, b.acct, b.closedAt ?? Date.now()).catch(() => {});
+  return json(200, { ok: true });
+}
+
 // The DjRoom Durable Object must be exported from the Worker entry so the runtime
 // can find the class named in wrangler.jsonc's durable_objects binding.
 export { DjRoom } from "../server/room";
@@ -1128,6 +1144,7 @@ export default {
     const url = new URL(req.url);
     if (url.pathname === "/api/room") return handleRoom(req, env, ctx);
     if (url.pathname === "/internal/notify") return handleInternalNotify(req, env);
+    if (url.pathname === "/internal/presence") return handleInternalPresence(req, env);
     if (url.pathname.startsWith("/api/")) return handleApi(url, req, env, ctx);
     // Static SPA — but stamp every response with cross-origin-isolation headers so
     // `crossOriginIsolated` is true in the browser. That unlocks SharedArrayBuffer

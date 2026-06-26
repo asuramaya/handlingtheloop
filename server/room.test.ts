@@ -49,9 +49,13 @@ class FakePair {
 class FakeState implements DurableObjectState {
   sockets: FakeWs[] = [];
   store = new Map<string, unknown>();
+  alarmAt: number | null = null;
   storage = {
     get: async <T>(k: string) => this.store.get(k) as T | undefined,
     put: async (k: string, v: unknown) => void this.store.set(k, v),
+    delete: async (k: string) => this.store.delete(k),
+    getAlarm: async () => this.alarmAt,
+    setAlarm: async (t: number) => void (this.alarmAt = t),
   };
   acceptWebSocket(ws: Ws, tags: string[] = []): void {
     (ws as FakeWs).tags = tags;
@@ -82,7 +86,13 @@ function makeRoom(env?: Record<string, unknown>) {
     return { ws: status === 101 ? ws : undefined, status };
   }
   const send = (ws: FakeWs, msg: unknown) => room.webSocketMessage(ws, JSON.stringify(msg));
-  return { room, state, connect, send };
+  // Mark a socket closed (so getWebSockets excludes it) then drive the DO's close handler.
+  const close = async (ws: FakeWs) => {
+    ws.closed = true;
+    await room.webSocketClose(ws);
+  };
+  const runAlarm = () => room.alarm();
+  return { room, state, connect, send, close, runAlarm };
 }
 
 describe("DjRoom membership", () => {
@@ -389,5 +399,53 @@ describe("DjRoom @mention notify bridge (Slice 7)", () => {
     const fan = (await h2.connect({ device: "F", pub: true, acct: "u-fan" })).ws!;
     await h2.send(fan, { t: "chat", text: "@nina hi" });
     expect(notifyCalls()).toHaveLength(0);
+  });
+});
+
+describe("DjRoom presence-offline bridge (Slice 2)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let origFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    fetchMock = vi.fn(() => Promise.resolve(new Response(null)));
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+  const presenceCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/internal/presence"));
+
+  it("last socket close arms the alarm; the alarm bridges offline for that account", async () => {
+    const h = makeRoom({ TOKEN_ENC_KEY: "sek" });
+    const host = (await h.connect({ device: "h1", host: true, acct: "alice" })).ws!;
+    await h.send(host, { t: "join" });
+    await h.close(host);
+    expect(h.state.alarmAt).not.toBeNull(); // armed
+    expect(presenceCalls()).toHaveLength(0); // not yet — only on the alarm
+    await h.runAlarm();
+    const calls = presenceCalls();
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0][1]!.body as string)).toMatchObject({ acct: "alice" });
+    expect((calls[0][1] as RequestInit).headers).toMatchObject({ "x-htl-internal": "sek" });
+  });
+
+  it("does not bridge offline if the account reconnected before the alarm fired", async () => {
+    const h = makeRoom({ TOKEN_ENC_KEY: "sek" });
+    const d1 = (await h.connect({ device: "d1", host: true, acct: "bob" })).ws!;
+    await h.send(d1, { t: "join" });
+    await h.close(d1); // last socket gone → alarm armed
+    await h.connect({ device: "d2", host: true, acct: "bob" }); // same account, another device
+    await h.runAlarm();
+    expect(presenceCalls()).toHaveLength(0); // still online here → no offline
+  });
+
+  it("is inert without the bridge secret", async () => {
+    const h = makeRoom(); // no TOKEN_ENC_KEY
+    const host = (await h.connect({ device: "h1", host: true, acct: "alice" })).ws!;
+    await h.send(host, { t: "join" });
+    await h.close(host);
+    expect(h.state.alarmAt).toBeNull(); // never armed
+    await h.runAlarm();
+    expect(presenceCalls()).toHaveLength(0);
   });
 });

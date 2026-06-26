@@ -15,6 +15,9 @@ export interface Ws {
 export interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number): Promise<void>;
 }
 export interface DurableObjectState {
   acceptWebSocket(ws: Ws, tags?: string[]): void;

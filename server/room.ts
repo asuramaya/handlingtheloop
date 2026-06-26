@@ -109,6 +109,11 @@ export class DjRoom {
   private static MAX_LISTENERS = 500;
   private static ANCHOR_GRACE_MS = 8000;
   private anchorGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Social presence: when a user's LAST socket here drops we don't declare them offline to their
+  // friends immediately (a refresh would flap) — we arm the DO alarm and bridge "offline" up to
+  // the Worker only if they're still gone after the grace. Separate concern from the 8s anchor
+  // grace above (that's the clock); this is the first real storage alarm in the codebase.
+  private static PRESENCE_GRACE_MS = 20_000;
   // Digest roll-up (D1): WRITERS get every intent immediately (instant mixing feel); the
   // LISTENER crowd gets a curated stream — gestural jog dropped, continuous SWEEPS coalesced
   // to ~20Hz (last value per control), discrete events passed straight through. As the FX
@@ -166,6 +171,9 @@ export class DjRoom {
     // a ban. Mute persists too so a re-muted spammer stays muted across a cold restart.
     this.muted = new Set((await this.state.storage.get<string[]>("muted")) ?? []);
     this.banned = new Set((await this.state.storage.get<string[]>("banned")) ?? []);
+    // Persisted so the presence-offline alarm can still reach the Worker after a DO eviction (the
+    // alarm fires exactly when all sockets are gone, i.e. when the in-memory origin would be lost).
+    this.origin = (await this.state.storage.get<string>("origin")) ?? this.origin;
     this.loaded = true;
   }
 
@@ -249,7 +257,10 @@ export class DjRoom {
     const ev = Math.max(0, Math.min(9999, Number(url.searchParams.get("ev")) || 0)); // reconstruction-engine version (D5)
     const follows = url.searchParams.get("fol") === "1"; // this account follows the host (Worker-resolved, un-forgeable)
     const acct = (url.searchParams.get("acct") || "").slice(0, 64); // this device's account id (server-only; mention attribution)
-    if (!this.origin) this.origin = url.origin; // base for the notify bridge (same Worker)
+    if (!this.origin) {
+      this.origin = url.origin; // base for the notify/presence bridge (same Worker)
+      void this.state.storage.put("origin", this.origin); // survive eviction (presence alarm needs it)
+    }
 
     // A host-banned device can't re-enter the session (L1). Device ids are non-secret, so this
     // is best-effort — the same posture as the rest of this anon system.
@@ -734,6 +745,13 @@ export class DjRoom {
     // A reconnect REPLACES the old socket: if the device still has another live socket,
     // this close is just the stale one — ignore it (don't churn presence / the anchor).
     if (dev && this.hasOtherSocket(dev, ws)) return;
+    // Social presence: if this was the LAST socket of a signed-in account here, that account may
+    // have just gone offline. Don't decide now (a refresh would flap) — arm the alarm; it bridges
+    // "offline" to the Worker only if they're still gone after the grace.
+    const closing = ws.deserializeAttachment() as Attachment | null;
+    if (closing?.acct && !this.acctHasLiveSocket(closing.acct, ws)) {
+      await this.schedulePresenceOffline(closing.acct);
+    }
     if (dev && dev === this.anchorId) {
       const next = this.nextAnchor(dev, ws);
       if (next) {
@@ -769,6 +787,48 @@ export class DjRoom {
         }
       }
     }, DjRoom.ANCHOR_GRACE_MS);
+  }
+
+  // Is `acct` still attached here (any socket other than `except`)? An account may hold several
+  // devices; presence is per-account, so the offline check is per-account, not per-device.
+  private acctHasLiveSocket(acct: string, except?: Ws): boolean {
+    for (const ws of this.state.getWebSockets()) {
+      if (except && ws === except) continue;
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.acct === acct) return true;
+    }
+    return false;
+  }
+
+  // Queue an account for an offline sweep and arm the alarm (if not already pending). The alarm
+  // re-checks live sockets before bridging, so a quick reconnect cancels the offline. Inert if the
+  // bridge isn't configured (no Worker origin / secret) — same posture as the mention bridge.
+  private async schedulePresenceOffline(acct: string): Promise<void> {
+    if (!this.notifySecret || !this.origin) return;
+    const pending = (await this.state.storage.get<Record<string, number>>("presenceOff")) ?? {};
+    pending[acct] = Date.now();
+    await this.state.storage.put("presenceOff", pending);
+    if ((await this.state.storage.getAlarm()) == null) {
+      await this.state.storage.setAlarm(Date.now() + DjRoom.PRESENCE_GRACE_MS);
+    }
+  }
+
+  // The DO's first real storage alarm: sweep accounts whose last socket dropped and, for any STILL
+  // gone, bridge "offline" to the Worker (which has D1). The Worker's write is LWW-guarded on the
+  // close timestamp, so an account that reconnected on another DO can't be stomped offline.
+  async alarm(): Promise<void> {
+    await this.load();
+    const pending = (await this.state.storage.get<Record<string, number>>("presenceOff")) ?? {};
+    await this.state.storage.delete("presenceOff");
+    if (!this.notifySecret || !this.origin) return;
+    for (const [acct, closedAt] of Object.entries(pending)) {
+      if (this.acctHasLiveSocket(acct)) continue; // reconnected here → still online, skip
+      void fetch(`${this.origin}/internal/presence`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-htl-internal": this.notifySecret },
+        body: JSON.stringify({ acct, closedAt }),
+      }).catch(() => {});
+    }
   }
 
   // End the public broadcast: clear the flag (persisted) + evict the anonymous crowd AND any

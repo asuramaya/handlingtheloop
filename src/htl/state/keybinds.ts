@@ -41,7 +41,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   // U·I·O·P read left-to-right across the on-screen mode row, which is ordered to mirror
   // the FLX4's physical bank buttons: CUE · FX · LOOP · SMP (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER).
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
-  { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI" },
+  { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI", shiftLabel: "Pad mode: FX2 (latch)" },
   { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO", shiftLabel: "Pad mode: Roll" },
   { id: "padModeSampler", label: "Pad mode: Sampler (local)", group: "Pads", defaultKey: "KeyP", shiftLabel: "Pad mode: Global" },
   // The 8 beat-loop sizes still exist as actions (MIDI / rebindable), but their dedicated

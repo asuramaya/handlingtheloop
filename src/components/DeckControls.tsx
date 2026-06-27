@@ -182,11 +182,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const fxDown = (e: React.PointerEvent, slot: number) => {
     if (e.button !== 0) return;
     const pad = FX_PADS[slot];
-    if (!pad || (pad.enabled && !pad.enabled(deck))) return;
+    if (!pad) return;
     if (pad.hold) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     pad.on(deck);
     emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot }); // sync + record the throw
     refresh();
+  };
+  // Right-click an FX pad = REVEAL its effect's control surface in the rack below (tweak / "mode
+  // making"). No load — the device is already a live resident; this just selects its tab. CENS has
+  // no backing device, so it has nothing to reveal. (Touch reveals via the rack tabs directly.)
+  const fxReveal = (e: React.MouseEvent, slot: number) => {
+    e.preventDefault();
+    const kind = FX_PADS[slot]?.kind;
+    if (kind) fxCtlRef?.current?.selectKind(kind);
   };
   const fxUp = (slot: number) => {
     const pad = FX_PADS[slot];
@@ -195,6 +203,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
       emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
       refresh();
     }
+  };
+  // FX2 pad-mode = the LATCH layer of the same bank: tap toggles the effect's throw on/off and
+  // leaves it. The device's own throw state IS the latch (read pad.active), so there's no extra
+  // state to track. No hold; right-click still reveals the panel. Mirrors over the board bus.
+  const fx2Toggle = (e: React.PointerEvent, slot: number) => {
+    if (e.button !== 0) return;
+    const pad = FX_PADS[slot];
+    if (!pad) return;
+    const on = !(pad.active?.(deck) ?? false);
+    if (on) pad.on(deck);
+    else pad.off?.(deck);
+    emit({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: slot });
+    refresh();
   };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
@@ -380,7 +401,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             // so the button never lies about which layer you're in) OR while previewing via shift.
             const showPeer = activeIsPeer || shift;
             const eff = shift ? peer : base; // click: unshift → base, shift → peer (toggles the pair)
-            const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // KEY / FX2 — labelled, not wired
+            const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // KEY — labelled, not wired yet
             const lbl = showPeer ? shiftLabel : label;
             const on = showPeer ? activeIsPeer : activeIsBase; // highlight tracks the ACTUAL active mode
             return (
@@ -545,30 +566,46 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* FX pad-mode: 8 fixed performance effects (Throws + Motion). Hold-FX glow while held;
-            one-shots flash. ECHO/VERB dim until a delay/reverb is in the rack. */}
+        {/* FX pad-mode: 8 fixed performance effects (Throws + Motion). All 8 are ALWAYS armed —
+            every backing effect is a permanent dormant resident of the rack. Tap = throw (hold-FX
+            glow while held); right-click = reveal that effect's panel below to dial it in. */}
         {deck.padMode === "fx" && (
         <div className="hotcues fx-bank">
-          {FX_PADS.map((pad, i) => {
-            // A pad whose backend isn't in the rack is HIDDEN (not greyed) — the live pads
-            // fill the row and grow wider; more appear as effects are added. The keyboard
-            // mapping stays index-stable (1-8 = FX_PADS slot), so the kbd marker is honest.
-            if (pad.enabled && !pad.enabled(deck)) return null;
-            return (
-              <button
-                key={pad.label}
-                className={`pad fx ${pad.active?.(deck) ? "playing" : ""} ${pad.hold ? "" : "oneshot"}`}
-                data-cue={i + 1}
-                title={`${pad.label} — ${pad.hint}`}
-                onPointerDown={(e) => fxDown(e, i)}
-                onPointerUp={() => fxUp(i)}
-                onPointerLeave={() => fxUp(i)}
-              >
-                {pad.label}
-                <span className="kbd">{i + 1}</span>
-              </button>
-            );
-          })}
+          {FX_PADS.map((pad, i) => (
+            <button
+              key={pad.label}
+              className={`pad fx ${pad.active?.(deck) ? "playing" : ""} ${pad.hold ? "" : "oneshot"}`}
+              data-cue={i + 1}
+              title={`${pad.label} — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
+              onPointerDown={(e) => fxDown(e, i)}
+              onPointerUp={() => fxUp(i)}
+              onPointerLeave={() => fxUp(i)}
+              onContextMenu={(e) => fxReveal(e, i)}
+            >
+              {pad.label}
+              <span className="kbd">{i + 1}</span>
+            </button>
+          ))}
+        </div>
+        )}
+
+        {/* FX2 pad-mode (FX shifted): the LATCH layer of the same 8 effects. Tap to engage-and-hold,
+            tap again to release — build a sound hands-free. Lit = latched on. Right-click reveals. */}
+        {deck.padMode === "fx2" && (
+        <div className="hotcues fx-bank fx2-bank">
+          {FX_PADS.map((pad, i) => (
+            <button
+              key={pad.label}
+              className={`pad fx fx2 ${pad.active?.(deck) ? "playing latched" : ""}`}
+              data-cue={i + 1}
+              title={`${pad.label} (latch) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
+              onPointerDown={(e) => fx2Toggle(e, i)}
+              onContextMenu={(e) => fxReveal(e, i)}
+            >
+              {pad.label}
+              <span className="kbd">{i + 1}</span>
+            </button>
+          ))}
         </div>
         )}
 

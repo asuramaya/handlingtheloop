@@ -191,9 +191,10 @@ export type SyncRole = "off" | "master" | "slave";
 
 // Performance-pad modes. Unshifted: cue / fx / loop / sampler (the deck's LOCAL sample pads).
 // Shifted peers (SHIFT on the mode row): roll (momentary loop) ↔ loop, global (the account's
-// GLOBAL sample bank) ↔ sampler. (keyboard ↔ cue and a 2nd fx page ↔ fx are reserved.)
+// GLOBAL sample bank) ↔ sampler, fx2 (the LATCH layer of the FX bank) ↔ fx. (keyboard ↔ cue is
+// still reserved.)
 export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "keyboard" | "fx2";
-// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). keyboard / fx2 are
+// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). keyboard is
 // REVEALED under SHIFT but not yet wired (see PAD_MODE_RESERVED) — shown dimmed, like the board.
 export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
   cue: "keyboard",
@@ -206,7 +207,7 @@ export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
   fx2: "fx",
 };
 // Shifted peers that are labelled but not yet functional (dimmed/disabled in the selector).
-export const PAD_MODE_RESERVED = new Set<PadMode>(["keyboard", "fx2"]);
+export const PAD_MODE_RESERVED = new Set<PadMode>(["keyboard"]);
 
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
@@ -1797,6 +1798,15 @@ export class Deck {
   private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise"]);
   // Effects driven by a momentary pad-throw — added DORMANT (bypassed) so the pad is the trigger.
   private static readonly PAD_THROW_KINDS: ReadonlySet<string> = new Set<FxKind>(["saturator", "crush", "mod", "gate", "noise"]);
+  // The permanent pad-FX bank: every FX pad's backing device is ALWAYS resident, in pad-layout
+  // order (ECHO·VERB·SAT·CRUSH / —·GATE·NOISE; CENS is transport-reverse, no device). They sit
+  // DORMANT (bypassed → wet pruned, zero CPU) until thrown, so every pad is one tap from firing
+  // AND one right-click from its control surface. "Opening" an effect just reveals an always-live
+  // device — nothing is loaded on demand (DSP is decoupled from display).
+  private static readonly PAD_FX_ORDER: readonly FxKind[] = ["delay", "reverb", "saturator", "crush", "mod", "gate", "noise"];
+  // Devices that can never be removed/added at runtime (fixed-membership rack): the EQ channel
+  // strip + the whole pad-FX bank. Reorder still applies (chain order is musical); presence doesn't.
+  private static readonly PERMANENT_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", ...Deck.PAD_FX_ORDER]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1844,10 +1854,25 @@ export class Deck {
     return d;
   }
   removeFxAt(i: number) {
-    // The EQ is a PERMANENT channel-strip device (always present, one per channel, never
-    // removable) — only the optional effects below it come and go. A/B it with setEqBypass.
-    if (this.rack.deviceAt(i)?.kind === "eq") return;
+    // Fixed-membership rack: the EQ channel strip AND the whole pad-FX bank are permanent
+    // residents (always present, one per kind, never removable) — A/B them with bypass, dial
+    // them in the panel. Only reorder moves them. Nothing here ever leaves the chain.
+    if (Deck.PERMANENT_KINDS.has(this.rack.deviceAt(i)?.kind ?? "")) return;
     this.rack.remove(i);
+  }
+  /** Provision the permanent pad-FX bank (delay…noise) as DORMANT residents so every FX pad is
+   *  always armed and every effect is one right-click from its panel. Idempotent + re-runnable.
+   *  MUST run AFTER the worklets load — ReverbFx/CrushFx/ModFx build AudioWorkletNodes in their
+   *  constructors, and before addModule() those throw and the device degrades to its native
+   *  fallback for good. AudioEngine calls this once ensureWorklets() resolves (see its ctor). */
+  ensurePadFx() {
+    for (const kind of Deck.PAD_FX_ORDER) {
+      if (this.rack.indexOf(kind) >= 0) continue; // already resident (re-run guard)
+      const d = this.makeFx(kind);
+      if (!d) continue;
+      this.rack.add(d);
+      d.setBypass(true); // dormant: wet pruned (zero CPU) until a pad throws or you un-bypass it
+    }
   }
   moveFx(from: number, to: number) {
     this.rack.move(from, to);
@@ -1867,13 +1892,15 @@ export class Deck {
   // repeats decay naturally and ring out — pair it with a brake / fader pull into silence.
   // No-op when no delay is in the chain (canEchoOut gates the UI). OWES a real-device ear-test
   // (the 0.85/0.85 throw is a starting point, not eared-in).
-  private echoSnapshot: { fb: number; mix: number } | null = null;
+  private echoSnapshot: { fb: number; mix: number; wasBypassed: boolean } | null = null;
+  private echoRingTimer: ReturnType<typeof setTimeout> | null = null;
   echoOut(on: boolean): void {
     const dev = this.rack.deviceAt(this.rack.indexOf("delay"));
     if (!dev) return;
     if (on) {
+      if (this.echoRingTimer) { clearTimeout(this.echoRingTimer); this.echoRingTimer = null; }
       if (this.echoSnapshot) return; // already thrown
-      this.echoSnapshot = { fb: dev.getParam("feedback"), mix: dev.getParam("mix") };
+      this.echoSnapshot = { fb: dev.getParam("feedback"), mix: dev.getParam("mix"), wasBypassed: dev.bypassed };
       if (dev.bypassed) dev.setBypass(false);
       dev.setParam("feedback", 0.85); // long, slowly-decaying tail (FB cap is 0.95)
       dev.setParam("mix", 0.85); // mostly-wet throw
@@ -1881,8 +1908,12 @@ export class Deck {
       const s = this.echoSnapshot;
       if (!s) return;
       this.echoSnapshot = null;
-      dev.setParam("feedback", s.fb); // back to the user's setting → the tail decays out
+      dev.setParam("feedback", s.fb); // back to the user's setting → the captured repeats decay out
       dev.setParam("mix", s.mix);
+      // The delay is a permanent resident: if it was DORMANT before the throw, let the tail ring
+      // then return it to dormant so it never colours the dry signal at rest. If the user had it
+      // dialled in (un-bypassed) we leave it exactly as they set it.
+      if (s.wasBypassed) this.echoRingTimer = setTimeout(() => { dev.setBypass(true); this.echoRingTimer = null; }, 2400);
     }
   }
   /** A delay device is present to throw an echo from (gates the ECHO control). */
@@ -1895,13 +1926,15 @@ export class Deck {
   // REVERB OUT — the wet-throw twin of echoOut for the rack's reverb device: snapshot the
   // mix, un-bypass, drench it (mix → 0.85) while held; release restores so the tail blooms
   // and decays. No-op without a reverb in the chain (canReverbOut gates the FX pad).
-  private reverbSnapshot: { mix: number } | null = null;
+  private reverbSnapshot: { mix: number; wasBypassed: boolean } | null = null;
+  private reverbRingTimer: ReturnType<typeof setTimeout> | null = null;
   reverbOut(on: boolean): void {
     const dev = this.rack.deviceAt(this.rack.indexOf("reverb"));
     if (!dev) return;
     if (on) {
+      if (this.reverbRingTimer) { clearTimeout(this.reverbRingTimer); this.reverbRingTimer = null; }
       if (this.reverbSnapshot) return;
-      this.reverbSnapshot = { mix: dev.getParam("mix") };
+      this.reverbSnapshot = { mix: dev.getParam("mix"), wasBypassed: dev.bypassed };
       if (dev.bypassed) dev.setBypass(false);
       dev.setParam("mix", 0.85);
     } else {
@@ -1909,6 +1942,8 @@ export class Deck {
       if (!s) return;
       this.reverbSnapshot = null;
       dev.setParam("mix", s.mix);
+      // Permanent resident → bloom the tail, then re-dormant if it wasn't dialled in (see echoOut).
+      if (s.wasBypassed) this.reverbRingTimer = setTimeout(() => { dev.setBypass(true); this.reverbRingTimer = null; }, 2400);
     }
   }
   get canReverbOut(): boolean {
@@ -1999,29 +2034,31 @@ export class Deck {
       params: d.kind === "eq" ? {} : d.snapshotParams(),
     }));
   }
-  /** Reconcile the chain to `slots` (kinds + order); keep devices when the shape already
-   *  matches (no glitch, just retune), else rebuild. The EQ slot reuses `this.eq` (never
-   *  re-created) and its params come from the eq* path. `undefined` slots = an older
-   *  snapshot with no FX info → keep the default rack (do NOT wipe the EQ). Unknown skipped. */
+  /** Reconcile the rack to `slots`. Membership is now FIXED (EQ + the permanent pad-FX bank are
+   *  always resident), so this never adds or removes — it syncs each matching device's params +
+   *  bypass BY KIND, then reconciles chain ORDER to the snapshot. The EQ reuses `this.eq` and its
+   *  params ride the eq* path (skipped here). `undefined` = an older snapshot with no FX info →
+   *  leave the bank at its defaults. Kinds the snapshot omits (e.g. an older, smaller chain) keep
+   *  their dormant defaults; unknown kinds are ignored. */
   applyFxSnapshot(slots: ReadonlyArray<{ kind: string; bypassed: boolean; params: Record<string, number> }> | undefined) {
     if (!slots) return;
+    // Guarantee the bank is resident before syncing — covers a restore/room-intent that lands
+    // BEFORE the AudioEngine ctor's post-worklet provisioning (early boot). Idempotent: a no-op
+    // once provisioned, so the common path just syncs. (On a very-early restore this provisions
+    // exactly as the old rebuild did — same worklet-availability characteristics, never param loss.)
+    this.ensurePadFx();
     const known = slots.filter((s) => Deck.FX_KINDS.has(s.kind));
-    const cur = this.rack.list;
-    const sameShape = cur.length === known.length && cur.every((d, i) => d.kind === known[i].kind);
-    if (!sameShape) {
-      for (let i = cur.length - 1; i >= 0; i--) this.rack.remove(i);
-      for (const s of known) {
-        const d = this.makeFx(s.kind as FxKind);
-        if (d) this.rack.add(d);
-      }
+    for (const s of known) {
+      const idx = this.rack.indexOf(s.kind as FxKind);
+      if (idx < 0) continue; // not resident (shouldn't happen post-provision) — never re-create
+      const d = this.rack.deviceAt(idx);
+      if (!d || d.kind === "eq") continue; // EQ params come from the eq* ControlParams
+      for (const k in s.params) d.setParam(k, s.params[k]);
+      d.setBypass(s.bypassed);
     }
-    const now = this.rack.list;
-    for (let i = 0; i < now.length && i < known.length; i++) {
-      const d = now[i];
-      if (d.kind === "eq") continue; // EQ params come from the eq* ControlParams
-      for (const k in known[i].params) d.setParam(k, known[i].params[k]);
-      d.setBypass(known[i].bypassed);
-    }
+    // Match the chain order to the snapshot (listed kinds first, in order; residents the snapshot
+    // omits keep their relative tail position). No-op when the order already matches.
+    this.rack.orderByKinds(known.map((s) => s.kind));
   }
 
   /** Combined EQ magnitude (dB) at each frequency in `freqHz`, into `outDb` — the

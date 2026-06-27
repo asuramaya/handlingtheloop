@@ -653,7 +653,7 @@ export function App() {
   // the gamepad's bypass-current action (R3) knows which device to flip.
   const fxSelRef = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // Imperative handles into each deck's FxStrip so the FLX BEAT FX section can drive its
-  // selection + add-mode (BEAT ◀▶ / FX SELECT). The section targets the focused deck.
+  // selection / reorder (BEAT ◀▶). The section targets the focused deck.
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
@@ -840,7 +840,7 @@ export function App() {
       emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: i });
     };
     const padModeKey = (deck: DeckRef, id: DeckId, m: PadMode) => {
-      if (PAD_MODE_RESERVED.has(m)) return; // KEY / FX2 aren't built — match the on-screen disabled state
+      if (PAD_MODE_RESERVED.has(m)) return; // KEY isn't built yet — match the on-screen disabled state
       deck.setPadMode(m);
       emitRef.current({ kind: "board", deck: id, id: "padMode", arg: m });
     };
@@ -955,8 +955,28 @@ export function App() {
       // BEAT FX BEAT ◀▶ → move the selection (add candidate in add-mode). SHIFT → reorder the tab.
       fxSelPrev: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(-1) : c?.navSel(-1); },
       fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(1) : c?.navSel(1); },
-      // FX SELECT → arm add-mode / commit. SHIFT+FX SELECT → remove the selected effect.
-      fxSelectPress: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.removeSel() : c?.selectPress(); },
+      // FX SELECT → LATCH the selected effect's throw (slam-lock; press again to release) — the
+      // same gesture as an FX2 pad, just targeting the BEAT-FX-selected effect. The device's own
+      // throw state IS the latch (read pad.active), so there's no separate state. SHIFT+FX SELECT
+      // → clear every active throw on this deck (one-button panic). Press-only (action buttons
+      // don't fire on release), so this is the momentary-FX gesture made a toggle. Emits over the
+      // board bus so a hardware latch syncs + records like the on-screen pad.
+      fxSelectPress: (deck, id, s) => {
+        if (s) {
+          FX_PADS.forEach((p, i) => { if (p.active?.(deck)) { p.off?.(deck); emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: i }); } });
+          refresh();
+          return;
+        }
+        const dev = deck.fxDevices[fxSelRef.current[id]];
+        const slot = dev ? FX_PADS.findIndex((p) => p.kind === dev.kind) : -1;
+        if (slot < 0) return; // EQ / an effect with no throw → nothing to latch
+        const pad = FX_PADS[slot];
+        const on = !(pad.active?.(deck) ?? false);
+        if (on) pad.on(deck);
+        else pad.off?.(deck);
+        emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: slot });
+        refresh();
+      },
       // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
       // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down
       // engaged it; close the COLOR-knob remap window now instead of waiting for the 150ms tick).
@@ -1080,7 +1100,7 @@ export function App() {
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
       // SHIFT switches to the peer mode (mirrors the on-screen mode row + the FLX shift layer):
-      // loop→roll, sampler→global; cue→keyboard / fx→fx2 are RESERVED so padModeKey no-ops them.
+      // loop→roll, sampler→global, fx→fx2 (the FX latch layer); cue→keyboard is RESERVED so padModeKey no-ops it.
       padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "keyboard" : "cue"),
       padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),
       padModeSampler: (deck, id, s) => padModeKey(deck, id, s ? "global" : "sampler"),
@@ -1098,8 +1118,8 @@ export function App() {
             ? samplerCtl.current?.trigger(deckPadBase(id) + i)
             : deck.padMode === "global"
               ? samplerCtl.current?.trigger(i) // global pads are flat index 0-7
-              : deck.padMode === "fx"
-                ? fxKey(deck, id, i)
+              : deck.padMode === "fx" || deck.padMode === "fx2"
+                ? fxKey(deck, id, i) // fx + fx2 both toggle on the keyboard (no key-up); fx2 IS the latch
                 : hotcue(deck, id, s, i);
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));

@@ -156,10 +156,12 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "action", action: "eqStemToggle" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "smartFaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x09, type: "note", shift: true },
-    // BEAT FX section (all verified on hardware). The section drives the FOCUSED deck; the
-    // 1·2 switch moves focus. LEVEL/DEPTH (14-bit, MSB 0x02 / LSB 0x22 — also mirrored on 0xB5,
-    // which we ignore) → selected-FX wet/dry. FX SELECT (one button) toggles add-mode + commits;
-    // BEAT ◀▶ nav the selected tab (or the add candidate); ON/OFF bypasses; SMART CFX resets.
+    // BEAT FX section (all verified on hardware). The rack is fixed-membership now (EQ + the
+    // permanent pad-FX bank — no add/remove), so the section is a SINGLE-EFFECT unit over the
+    // focused deck's chain. The 1·2 switch moves focus. LEVEL/DEPTH (14-bit, MSB 0x02 / LSB 0x22
+    // — also mirrored on 0xB5, which we ignore) → selected-FX wet/dry. BEAT ◀▶ select the effect
+    // tab (SHIFT → reorder it); ON/OFF engage/bypass it (SHIFT → reset); FX SELECT latch the
+    // selected effect's throw (SHIFT → clear the latch); SMART CFX resets.
     { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc14" },
     { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x47, type: "note" },
     // The ON/OFF (RELEASE FX) button has a firmware-toggled lamp; in its "lit" internal state it
@@ -171,7 +173,7 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x4a, type: "note" },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x4b, type: "note" },
     // SHIFTED layer — the FLX sends its OWN notes when SHIFT is held (verified), so they carry
-    // shift:true and hit the shifted branch of the same handlers: remove / reorder / reset.
+    // shift:true and hit the shifted branch of the same handlers: clear-latch / reorder / reset.
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x64, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x66, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x6b, type: "note", shift: true },

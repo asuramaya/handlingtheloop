@@ -66,7 +66,7 @@ export class SmartFader {
     this.engine.deck("A").setKeylockPinnedOff(true);
     this.engine.deck("B").setKeylockPinnedOff(true);
     this.armed = true;
-    this.apply(cf);
+    this.apply(cf, false); // arm only — never auto-plays (so you can set the blend up while paused)
     return true;
   }
 
@@ -93,7 +93,7 @@ export class SmartFader {
       this.engine.setCrossfade(cf);
       return;
     }
-    this.apply(cf);
+    this.apply(cf, true); // a real fader move (the throw) → may start the incoming rolling
   }
 
   // Pick live (= the side the fader favours; centre → whichever is playing) + incoming, beat-lock
@@ -121,13 +121,16 @@ export class SmartFader {
     this.toBpm = toBpm;
 
     // Beat-lock incoming → live (the incoming becomes the SYNC slave; the live deck is master and
-    // its tempo moves drive the slave via matchSlaveTempo). Then start it rolling under the fader.
+    // its tempo moves drive the slave via matchSlaveTempo). Sync only — playback starts on the
+    // first THROW (see apply), never on arm, so the smart fader can be set up while paused.
     if (this.engine.syncRole(to) !== "slave") this.engine.toggleSync(to);
-    if (!toDeck.playing) toDeck.play();
     return true;
   }
 
-  private apply(cf: number): void {
+  /** Apply the transition at fader position `cf`. `started` = this came from a real fader move
+   *  (a throw), so the incoming deck may begin rolling as it's brought in; arm passes false so
+   *  merely enabling Smart Fader never starts playback. */
+  private apply(cf: number, started: boolean): void {
     const from = this.fromId;
     const to = this.toId;
     if (!from || !to) return;
@@ -138,6 +141,10 @@ export class SmartFader {
 
     const fromDeck = this.engine.deck(from);
     const toDeck = this.engine.deck(to);
+
+    // The throw is bringing the incoming in (and it's a user fader move, not the arm) → start it
+    // rolling under the fader. Deferred to here so arming during pause stays silent.
+    if (started && p > 0.001 && !toDeck.playing) toDeck.play();
 
     // Tempo morph: move ONLY the master (live) tempo; the SYNC slave (incoming) follows
     // automatically (half/double folded for big gaps). Common BPM migrates fromStart → incoming.

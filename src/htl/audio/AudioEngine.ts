@@ -145,7 +145,14 @@ export class AudioEngine {
     }
 
     this.setCrossfade(0);
-    void this.ensureWorklets();
+    // Provision each deck's permanent pad-FX bank only AFTER the worklets are attached — the
+    // reverb/crush/mod devices build AudioWorkletNodes in their constructors, so provisioning
+    // before addModule() would degrade them to the native fallback for good. ensurePadFx is
+    // idempotent, so a later re-run of ensureWorklets (iOS re-attach) needs no re-provision.
+    void this.ensureWorklets().then(() => {
+      this.deckA.ensurePadFx();
+      this.deckB.ensurePadFx();
+    });
   }
 
   // Modules we've successfully addModule()'d — so a re-run never double-registers (which

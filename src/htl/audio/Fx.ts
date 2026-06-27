@@ -131,6 +131,23 @@ export class FxRack {
     return d;
   }
 
+  /** Reorder the chain so the kinds in `order` come first, in that order; any device whose kind
+   *  isn't listed keeps its current relative position after them. Stable, one rebuild. Used to
+   *  reconcile a fixed-membership rack to a snapshot/peer's chain order without add/remove. */
+  orderByKinds(order: ReadonlyArray<string>) {
+    const rank = (k: string) => {
+      const i = order.indexOf(k);
+      return i < 0 ? order.length : i;
+    };
+    const orig = new Map(this.devices.map((d, i) => [d, i] as const));
+    this.devices.sort((a, b) => {
+      const ra = rank(a.kind);
+      const rb = rank(b.kind);
+      return ra !== rb ? ra - rb : (orig.get(a) ?? 0) - (orig.get(b) ?? 0); // stable tiebreak
+    });
+    this.rebuild();
+  }
+
   /** Move a device from `from` to `to` (indices into the current list). */
   move(from: number, to: number) {
     const n = this.devices.length;

@@ -174,8 +174,17 @@
   opacity: 0.4;
   cursor: default;
 }
-/* FX bank: disabled pads are hidden (not greyed), so the live pads flow and stretch to fill
-   the row — one device → one wide pad, more appear as effects are added to the rack. */
+/* FX2 = the latch layer. A latched-on pad reads as a SOLID filled chip — "locked in the mix",
+   distinct from FX's momentary inset-glow throw. (Both share .playing for the lit border.) */
+.pad.fx2.latched {
+  background: color-mix(in srgb, var(--accent) 32%, var(--surface));
+}
+body:not(.no-glow) .pad.fx2.latched {
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 42%, transparent),
+    0 0 10px -1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* FX bank: all 8 effects are permanent residents, so the row is always the full 8 — the pads
+   flex evenly to fill the width. (FX2 shares the layout via .fx-bank.) */
 .hotcues.fx-bank {
   display: flex;
   gap: 5px;

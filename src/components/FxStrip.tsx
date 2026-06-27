@@ -20,19 +20,6 @@ import { PromptModal } from "./Dialog";
 // the fxRack intent. One device's surface shows at a time.
 
 const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE" };
-// Effects the palette can add (label shown in the + menu). EQ is only offered when absent
-// (single instance); others can stack.
-const ADDABLE: { kind: FxKind; label: string }[] = [
-  { kind: "eq", label: "EQ" },
-  { kind: "delay", label: "Delay" },
-  { kind: "reverb", label: "Reverb" },
-  { kind: "saturator", label: "Saturator" },
-  { kind: "crush", label: "Bitcrusher" },
-  { kind: "mod", label: "Modulation" },
-  { kind: "gate", label: "Gate" },
-  { kind: "noise", label: "Noise" },
-];
-
 interface FxStripProps {
   deck: Deck;
   id: "A" | "B";
@@ -46,17 +33,16 @@ interface FxStripProps {
   ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
 }
 
-// What the FLX BEAT FX section drives on a strip. The SHIFTed layer = remove / reorder.
+// What the FLX BEAT FX section drives on a strip. Fixed-membership rack → no add/remove; the
+// section is a single-effect unit (select / reorder / wet-dry / engage / latch-throw).
 export interface FxStripCtl {
-  navSel: (dir: number) => void; // move the selected tab — or the add candidate while in add-mode
-  selectPress: () => void; // FX SELECT: 1st press arms add-mode, 2nd commits the candidate
-  removeSel: () => void; // SHIFT+FX SELECT: remove the selected effect (no-op on the permanent EQ)
+  navSel: (dir: number) => void; // BEAT ◀▶: move the selected effect tab
   moveSel: (dir: number) => void; // SHIFT+BEAT ◀▶: reorder the selected effect left/right
+  selectKind: (kind: FxKind) => void; // reveal a device's panel by kind (FX pad right-click)
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect, ctlRef }: FxStripProps) {
   const [sel, setSel] = useState(0); // selected rack index
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
   const [dropAt, setDropAt] = useState<number | null>(null); // INSERTION point 0..len (gap the drop lands in)
   const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu
@@ -67,7 +53,29 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
   const devices = deck.fxDevices; // the whole chain, in order
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = devices[cur];
+  const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => onSelect?.(cur), [cur, onSelect]); // keep App's per-deck "current FX" ref in sync
+  // Bring the selected tab into view in the scrollable row — so revealing an off-screen effect
+  // (right-click its FX pad → selectKind) actually surfaces its tab. block:nearest = no page jump.
+  useEffect(() => {
+    (tabsRef.current?.children[cur] as HTMLElement | undefined)?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [cur]);
+  // Mouse wheel → horizontal slide on the (scrollbar-less) tab row. Touch drags natively; this
+  // just lets a vertical wheel push the row sideways. Non-passive listener so preventDefault can
+  // stop the page from scrolling while the cursor's over the row and there's overflow to consume.
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return; // nothing to slide
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      el.scrollLeft += delta;
+      e.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
   const otherId: "A" | "B" = id === "A" ? "B" : "A";
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
@@ -91,70 +99,30 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     setDropAt(null);
   };
 
-  const addDevice = (kind: FxKind) => {
-    const added = deck.addFx(kind);
-    setPaletteOpen(false);
-    if (!added) return; // unknown, or the single EQ is already present
-    broadcastRack();
-    setSel(deck.fxDevices.indexOf(added));
-    refresh();
-  };
-  // --- BEAT FX add-mode = the existing + palette. FX SELECT opens it, BEAT ◀▶ highlight an
-  // entry (cand), FX SELECT again adds it. No separate UI — we just drive the +/dropdown. ---
-  const [cand, setCand] = useState(0); // highlighted index into the open palette
-  const addable = useMemo(() => ADDABLE.filter((a) => !deck.hasFxKind(a.kind)), [deck, devices.length]);
-  // Refs so the imperative ctl always reads current values (no stale closure per render).
-  const live = useRef({ open: paletteOpen, cand, addable, len: devices.length, cur });
-  live.current = { open: paletteOpen, cand, addable, len: devices.length, cur };
+  // The FLX BEAT FX section drives this strip over `ctlRef`. The rack is fixed-membership now
+  // (EQ + the permanent pad-FX bank — no add/remove), so the section is a SINGLE-EFFECT unit over
+  // the chain: BEAT ◀▶ select / reorder, DEPTH wet/dry, ON/OFF engage, FX SELECT latch-throw
+  // (handled in App via the resident bank). The ctl only exposes nav / reorder / reveal here.
+  // A ref so the imperative ctl always reads current values (no stale closure per render).
+  const live = useRef({ len: devices.length, cur });
+  live.current = { len: devices.length, cur };
   useEffect(() => {
     if (!ctlRef) return;
     ctlRef.current = {
-      navSel: (dir) => {
-        const L = live.current;
-        if (L.open) {
-          if (L.addable.length) setCand((c) => (((c + dir) % L.addable.length) + L.addable.length) % L.addable.length);
-        } else {
-          setSel((s) => Math.max(0, Math.min(L.len - 1, s + dir)));
-        }
-      },
-      selectPress: () => {
-        const L = live.current;
-        if (!L.open) {
-          if (L.addable.length) {
-            setCand(0);
-            setPaletteOpen(true);
-          }
-        } else {
-          const pick = L.addable[L.cand];
-          if (pick) addDevice(pick.kind); // adds + selects the new tab + closes the palette
-          else setPaletteOpen(false);
-        }
-      },
-      removeSel: () => {
-        setPaletteOpen(false);
-        removeAt(live.current.cur); // no-ops on the EQ (guarded in Deck.removeFxAt)
-      },
+      navSel: (dir) => setSel((s) => Math.max(0, Math.min(live.current.len - 1, s + dir))),
       moveSel: (dir) => {
         const L = live.current;
         reorder(L.cur, Math.max(0, Math.min(L.len - 1, L.cur + dir)));
+      },
+      selectKind: (kind) => {
+        const idx = deck.fxDevices.findIndex((d) => d.kind === kind);
+        if (idx >= 0) setSel(idx);
       },
     };
     return () => {
       if (ctlRef) ctlRef.current = null;
     };
   }, [ctlRef]);
-  // Keep the highlight valid as the palette set changes; close it if nothing's left to add.
-  useEffect(() => {
-    if (paletteOpen && addable.length === 0) setPaletteOpen(false);
-    else if (cand >= addable.length) setCand(0);
-  }, [paletteOpen, addable.length, cand]);
-
-  const removeAt = (i: number) => {
-    deck.removeFxAt(i);
-    broadcastRack();
-    setSel(Math.max(0, i - 1));
-    refresh();
-  };
 
   // --- presets (right-click an effect tab) ---
   const menuDev = menu ? deck.fxDeviceAt(menu.slot) : null;
@@ -238,7 +206,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
 
   return (
     <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
-      <div className="fx-tabs" role="tablist">
+      <div className="fx-tabs" role="tablist" ref={tabsRef}>
         {devices.map((d, i) => (
           <button
             key={d.kind}
@@ -290,33 +258,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
             }}
           />
         )}
-        <div className="fx-add-wrap">
-          {selDev && !isEq && (
-            // The EQ is the permanent channel strip — no remove. Optional effects below it do.
-            <button className="fx-tab fx-remove" onClick={() => removeAt(cur)} title="Remove the selected effect" aria-label="Remove the selected effect">
-              −
-            </button>
-          )}
-          <button className="fx-tab fx-add" onClick={() => setPaletteOpen((o) => { if (!o) setCand(0); return !o; })} title="Add an effect" aria-haspopup="menu" aria-expanded={paletteOpen}>
-            +
-          </button>
-          {paletteOpen && (
-            <div className="fx-palette" role="menu">
-              {/* One of each kind per channel (already-present hidden). The BEAT FX FX SELECT +
-                  ◀▶ drive this same list: `cand` is the hardware-highlighted row. */}
-              {addable.map((a, i) => (
-                <button key={a.kind} className={`fx-palette-item ${i === cand ? "cand" : ""}`} onClick={() => addDevice(a.kind)} role="menuitem">
-                  {a.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Fixed-membership rack: the EQ + the pad-FX bank are permanent residents — no add/remove.
+            Reorder by dragging a tab; dial / save presets by right-clicking one. */}
       </div>
 
       <div className="fx-stage">
         {!selDev ? (
-          <div className="fx-panel fx-unknown">No effects — add one with +</div>
+          <div className="fx-panel fx-unknown">Loading effects…</div>
         ) : selDev.kind === "eq" ? (
           <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} />
         ) : selDev.kind === "delay" ? (

@@ -11,18 +11,27 @@
   --fx-body-h: 192px;
 }
 /* The BEAT FX FX SELECT + ◀▶ highlight a row in the existing + palette (cand). */
-.fx-palette-item.cand {
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
-  color: var(--accent);
-}
 .fx-tabs {
   display: flex;
   gap: 4px;
   align-items: stretch;
   flex: 0 0 auto;
+  /* The fixed bank (EQ + 7 effects) can outrun a narrow deck — slide the row instead of
+     squishing the chips. The scrollbar is HIDDEN: touch drags natively, the mouse wheel is
+     mapped to horizontal scroll in JS (see FxStrip), and the selected tab is scrolled into
+     view on select so a right-click-reveal of an off-screen effect always surfaces it. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+  scroll-padding-inline: 6px;
+}
+.fx-tabs::-webkit-scrollbar {
+  display: none; /* WebKit/Blink */
 }
 /* A tab chip — same neon language as .eq-tool, but only the SELECTED one is filled. */
 .fx-tab {
+  flex: 0 0 auto; /* never shrink — overflow scrolls rather than compressing the labels */
   padding: 3px 9px;
   font-size: 9.5px;
   font-weight: 800;
@@ -84,22 +93,6 @@ body:not(.no-glow) .fx-tab.sel {
   background: var(--accent);
   box-shadow: 0 0 8px -1px color-mix(in srgb, var(--accent) 80%, transparent);
 }
-.fx-tab.fx-add,
-.fx-tab.fx-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  padding: 3px 0;
-  font-size: 14px;
-  line-height: 1;
-}
-.fx-add-wrap {
-  position: relative;
-  margin-left: auto; /* push the −/+ group to the right end of the tab row */
-  display: flex;
-  gap: 4px;
-}
 .fx-palette {
   position: absolute;
   top: calc(100% + 4px);
@@ -129,20 +122,6 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-palette-item:hover {
   color: #08111a;
   background: var(--accent);
-}
-/* The − (remove) sits beside the + in the tab row — same chip as a tab, tinted danger-red,
-   removes the selected effect. */
-.fx-tab.fx-remove {
-  color: #ff5470;
-  border-color: color-mix(in srgb, #ff5470 50%, var(--panel));
-}
-body:not(.no-glow) .fx-tab.fx-remove {
-  box-shadow: 0 0 9px -3px color-mix(in srgb, #ff5470 55%, transparent);
-}
-.fx-tab.fx-remove:hover {
-  color: #fff;
-  background: #ff5470;
-  border-color: #ff5470;
 }
 /* Preset menu — reuses the .fx-palette look, but fixed at the cursor (right-click a tab). */
 .fx-menu-backdrop {

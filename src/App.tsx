@@ -4757,6 +4757,11 @@ export function App() {
             room.tuneIn(h);
             closePublic(); // hand off to the Session dock's "Listening to @X" banner
           }}
+          onJam={(h) => {
+            engine.unlock(); // jam is a user gesture → prime iOS audio
+            room.jam(h);
+            closePublic();
+          }}
           onPlaySet={playRecordedSet}
         />
       )}

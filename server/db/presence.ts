@@ -48,6 +48,14 @@ export async function setPresenceOffline(db: D1Database, userId: string, since: 
     .run();
 }
 
+/** Is one user online right now? (Any authed socket attached — i.e. reachable for a jam knock.)
+ *  Drives the /@handle profile's "Knock to jam" affordance when the host is in a private session. */
+export async function isPresenceOnline(db: D1Database, userId: string): Promise<boolean> {
+  await ensurePresenceTables(db);
+  const r = await db.prepare("SELECT online FROM presence WHERE user_id = ?").bind(userId).first<{ online: number }>();
+  return !!r && r.online === 1;
+}
+
 export interface FriendPresence {
   handle: string;
   displayName: string | null;

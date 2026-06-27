@@ -31,11 +31,13 @@ export function PublicProfileScreen({
   handle,
   onClose,
   onListen,
+  onJam,
   onPlaySet,
 }: {
   handle: string;
   onClose: () => void;
   onListen?: (handle: string) => void;
+  onJam?: (handle: string) => void; // mutual-friend co-play (knock / step-up)
   onPlaySet?: (id: string) => void; // G1d: replay one of this DJ's published sets
 }) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
@@ -96,9 +98,18 @@ export function PublicProfileScreen({
               friends={rel?.mutual}
               topTracks={top}
               live={
-                profile.live && !profile.isSelf && onListen ? (
-                  <button className="listen-live-btn" onClick={() => onListen(profile.handle)}>
-                    ● Listen live · {profile.liveListeners} tuned in
+                // The one state×relationship CTA — the whole landing in a single tap (which is
+                // also the iOS audio-unlock gesture). Live → everyone joins the audience; a mutual
+                // friend gets the "you can step up" hint. Private but reachable + mutual → knock to
+                // jam. Otherwise nothing here (Follow lives in `actions`).
+                profile.isSelf ? null : profile.live ? (
+                  <button className="listen-live-btn" onClick={() => onListen?.(profile.handle)}>
+                    ● {rel?.mutual ? "Join live" : "Listen live"} · {profile.liveListeners} tuned in
+                    {rel?.mutual && <span className="listen-live-sub"> · you can step up</span>}
+                  </button>
+                ) : rel?.mutual && profile.online ? (
+                  <button className="jam-knock-btn" onClick={() => onJam?.(profile.handle)}>
+                    ✋ Knock to jam
                   </button>
                 ) : null
               }

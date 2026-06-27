@@ -147,6 +147,7 @@ export interface PublicProfile {
   counts: FollowCounts;
   live: boolean; // broadcasting a public room right now?
   liveListeners: number;
+  online: boolean; // any session open (reachable for a friend's jam knock), even if private
   isSelf: boolean;
   relationship: Relationship | null; // null when signed out or viewing self
 }

@@ -353,3 +353,26 @@
 .listen-live-btn:hover {
   filter: brightness(1.08);
 }
+/* The mutual-friend "you can step up" hint inside the live join button. */
+.listen-live-sub {
+  font-weight: 500;
+  opacity: 0.85;
+}
+/* Knock-to-jam: the friend CTA when a host is in a PRIVATE session (online, not broadcasting).
+   Green to match the presence/co-play language, distinct from the red live button. */
+.jam-knock-btn {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #2ecc71;
+  background: #2ecc71;
+  color: #08111a;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.jam-knock-btn:hover {
+  filter: brightness(1.08);
+}

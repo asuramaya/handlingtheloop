@@ -58,6 +58,7 @@ import {
   addNotification,
   addSessionInvite,
   friendsOnline,
+  isPresenceOnline,
   handleTaken,
   relationship,
   unblockUser,
@@ -223,10 +224,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       return json(404, { error: "no such handle" });
     }
     await ensureRoomsTable(env.DB);
-    const [topTracks, counts, live] = await Promise.all([
+    const [topTracks, counts, live, online] = await Promise.all([
       getTopTracks(env.DB, u.id, 12),
       followCounts(env.DB, u.id),
       liveRoomStatus(env.DB, u.id),
+      isPresenceOnline(env.DB, u.id),
     ]);
     const rel = viewer && viewer.id !== u.id ? await relationship(env.DB, viewer.id, u.id) : null;
     return json(200, {
@@ -239,8 +241,9 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       memberSince: u.created_at,
       topTracks,
       counts,
-      live: live.live, // broadcasting right now?
+      live: live.live, // broadcasting a PUBLIC room right now?
       liveListeners: live.listeners,
+      online, // any session open (reachable for a friend's jam knock) — not necessarily public
       isSelf: !!viewer && viewer.id === u.id,
       relationship: rel, // null when signed out or viewing self
     });

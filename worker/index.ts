@@ -17,7 +17,7 @@ import { acoustidLookup } from "../server/acoustid";
 import { getValidToken } from "../server/connections";
 import { getTidalTrackRadio, tidalTrackIdByIsrc, searchTidalTracks, tidalProbe } from "../server/tidalData";
 import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../server/tidalAuth";
-import { audioChunks, diagnoseAudio, fetchCaptions, fetchMeta, makeRelayFetch, resolveAudio, type Fetcher, type TrackMeta, type YtAuth } from "../server/youtube";
+import { audioChunks, diagnoseAudio, diagnoseRelay, fetchCaptions, fetchMeta, makeRelayFetch, resolveAudio, type Fetcher, type TrackMeta, type YtAuth } from "../server/youtube";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "../server/oauth";
 import { type AccountEnv, handleAccountRoute } from "../server/accounts";
 import { handleSampleRoute } from "../server/samples";
@@ -282,7 +282,22 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         // No client calls this — only a signed-in operator hits it in a browser to debug cold loads.
         if (!(await sessionUser(req, env))) return json(401, { error: "sign in to run diagnostics" });
         if (!(await allow(env.RL_AUDIO, clientIp(req)))) return json(429, { error: "rate limited — try again shortly" });
-        return json(200, await diagnoseAudio(v, readAuth(req)));
+        const diag = await diagnoseAudio(v, readAuth(req));
+        // ?relay=1 → ALSO force a resolve + byte-probe through the residential relay, so an operator
+        // can prove the whole chain (worker → Access → tunnel → fgb → YouTube) on demand, without
+        // waiting for the datacenter egress to actually be bot-walled. `relay.resolve.ok === true`
+        // is definitive (makeRelayFetch has no direct fallback — success means every hop is healthy).
+        if (url.searchParams.get("relay")) {
+          const relayAccess =
+            env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET
+              ? { clientId: env.CF_ACCESS_CLIENT_ID, clientSecret: env.CF_ACCESS_CLIENT_SECRET }
+              : undefined;
+          const relay = env.YT_RELAY_URL && env.YT_RELAY_SECRET ? makeRelayFetch(env.YT_RELAY_URL, env.YT_RELAY_SECRET, relayAccess) : null;
+          diag.relay = relay
+            ? await diagnoseRelay(v, readAuth(req), relay, !!relayAccess)
+            : { configured: false, accessConfigured: !!relayAccess };
+        }
+        return json(200, diag);
       }
       case "/api/audio": {
         const v = url.searchParams.get("v");
@@ -311,6 +326,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
         }
         let r;
         let via: Fetcher | undefined; // the fetcher that resolved — reused for the byte stream
+        let usedRelay = false; // observability: did this cold load fall through to the residential relay?
         try {
           r = await resolveAudio(v, readAuth(req));
         } catch (e) {
@@ -328,6 +344,11 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
           try {
             r = await resolveAudio(v, readAuth(req), relay);
             via = relay;
+            usedRelay = true;
+            // Visible in `wrangler tail` — this is the ONLY signal that the residential relay
+            // actually fired in production (it only fires on the cold-miss tail when the
+            // datacenter egress is bot-walled). The served response also carries x-htl-via: relay.
+            console.log(`[htl] relay served ${v} — datacenter egress was bot-walled (${e instanceof Error ? e.message : String(e)})`);
           } catch (e2) {
             return json(502, { error: "could not load from YouTube", reason: e2 instanceof Error ? e2.message : String(e2) });
           }
@@ -379,7 +400,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
               upsertCommunityTrack(env.DB, { videoId: v, title: r.meta.title, artist: r.meta.artist, duration: r.meta.duration, thumbnail: r.meta.thumbnail }).catch(() => {}),
             );
           }
-          const h: Record<string, string> = { "content-type": r.contentType, "x-content-type-options": "nosniff", ...NO_CACHE };
+          const h: Record<string, string> = { "content-type": r.contentType, "x-content-type-options": "nosniff", "x-htl-cache": "miss", "x-htl-via": usedRelay ? "relay" : "direct", ...NO_CACHE };
           h["content-length"] = String(r.contentLength);
           return new Response(toUser, { headers: h });
         }
@@ -412,6 +433,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
             "content-length": String(total),
             "x-content-type-options": "nosniff",
             "x-htl-cache": "miss",
+            "x-htl-via": usedRelay ? "relay" : "direct",
             ...NO_CACHE,
           },
         });

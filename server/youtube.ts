@@ -64,10 +64,17 @@ export function makeRelayFetch(
     new Headers(init?.headers).forEach((v, k) => (h["X-Fwd-" + k] = v));
     const res = await fetch(endpoint, { method: "POST", headers: h, body: init?.body, signal: init?.signal });
     // If Access REJECTS the service token (missing policy, wrong/expired token, or a stray newline in
-    // a CF_ACCESS_* secret) the edge 302s to the Access login and `fetch` follows it → `res.url` lands
-    // on cloudflareaccess.com. Without this guard the caller parses that login HTML into a misleading
+    // a CF_ACCESS_* secret) it blocks the request before it reaches the tunnel — in TWO shapes:
+    //   • a 302 to the Access login that `fetch` follows → `res.url` lands on cloudflareaccess.com
+    //     (happens when the app also has an interactive identity policy), OR
+    //   • a direct 403 carrying a `cf-access-domain` header + the "Cloudflare Access" error page
+    //     (a Service-Auth-ONLY app, which ours is — verified token-less → 403, not 302).
+    // Either way the body is Access HTML, which the caller would otherwise parse into a misleading
     // "not playable: unknown" (this exact silent failure cost an hour to diagnose). Surface the cause.
-    if (/cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(res.url)) {
+    if (
+      /cloudflareaccess\.com|\/cdn-cgi\/access\//i.test(res.url) ||
+      (res.status === 403 && res.headers.has("cf-access-domain"))
+    ) {
       throw new Error(
         "relay blocked by Cloudflare Access — service token rejected (check the relay-b Access policy / CF_ACCESS_* secrets / token expiry)",
       );
@@ -369,6 +376,51 @@ export interface AudioDiag {
   visitor: { ok: boolean; prefix: string; supplied: boolean };
   clients: Array<{ name: string; http: number; status: string; reason: string; error: string; formats: number; audioWithUrl: number; ciphered: number; firstItag: number | null }>;
   byteProbe: { client: string; itag: number; status: number; contentLength: string | null } | { error: string } | null;
+  relay?: RelayDiag; // present only when /api/audio/diag is hit with ?relay=1
+}
+
+// On-demand proof that the residential relay works END-TO-END (worker → Cloudflare Access →
+// cloudflared tunnel → fgb's residential IP → YouTube), independent of whether the datacenter
+// egress is currently bot-walled. Because makeRelayFetch has NO direct-fetch fallback (it only
+// POSTs to /fetch and throws on an Access rejection), a SUCCESSFUL resolve here inherently means
+// every hop is healthy: the Access token was admitted, the shared secret matched, the host passed
+// the allowlist, and YouTube answered from the relay's IP. `configured` distinguishes "relay off"
+// (secrets unset → feature inert) from "relay on but failing".
+export interface RelayDiag {
+  configured: boolean; // YT_RELAY_URL + YT_RELAY_SECRET both set
+  accessConfigured: boolean; // CF_ACCESS_CLIENT_ID + _SECRET both set (Access service token presented)
+  resolve?: { ok: boolean; itag?: number; contentType?: string; contentLength?: number; reason?: string };
+  byteProbe?: { status: number; contentLength: string | null } | { error: string } | null;
+}
+
+// Force a resolve + 1 KB byte-probe THROUGH the relay (the byte hop must also go via the relay —
+// googlevideo IP-locks the URL to the resolving IP). Non-throwing: every failure becomes a reason
+// string so /api/audio/diag always renders.
+export async function diagnoseRelay(
+  videoId: string,
+  auth: YtAuth | undefined,
+  relay: Fetcher,
+  accessConfigured: boolean,
+): Promise<RelayDiag> {
+  let resolved: ResolvedAudio;
+  try {
+    resolved = await resolveAudio(videoId, auth, relay);
+  } catch (e) {
+    return { configured: true, accessConfigured, resolve: { ok: false, reason: e instanceof Error ? e.message : String(e) }, byteProbe: null };
+  }
+  let byteProbe: RelayDiag["byteProbe"];
+  try {
+    const r = await relay(resolved.url, withTimeout(PLAYER_TIMEOUT_MS, { headers: { range: "bytes=0-1023" } }));
+    byteProbe = { status: r.status, contentLength: r.headers.get("content-length") };
+  } catch (e) {
+    byteProbe = { error: e instanceof Error ? e.message : String(e) };
+  }
+  return {
+    configured: true,
+    accessConfigured,
+    resolve: { ok: true, itag: resolved.itag, contentType: resolved.contentType, contentLength: resolved.contentLength },
+    byteProbe,
+  };
 }
 
 // Report the worker's own egress IP (what YouTube sees) so a diag run is self-identifying —

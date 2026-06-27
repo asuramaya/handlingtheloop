@@ -137,6 +137,20 @@ export function ProfileScreen({
               counts={profile?.counts ?? null}
               topTracks={top}
               emptyTopMsg="No plays yet — load tracks onto the decks and your most-played show up here."
+              shareTitle="Handling The Loop"
+              shareText={live ? "🔴 I'm live on Handling The Loop — come listen" : "Catch my sets on Handling The Loop"}
+              shareNote={
+                user?.handle ? (
+                  <>
+                    Your link →{" "}
+                    {live ? (
+                      <b className="share-state live">🔴 Live · anyone can listen</b>
+                    ) : (
+                      <b className="share-state private">🔒 Private · friends can jam</b>
+                    )}
+                  </>
+                ) : null
+              }
               live={
                 live ? (
                   <button className="profile-live-badge" onClick={onGoToSession} title="Open the session">

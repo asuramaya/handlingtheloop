@@ -320,6 +320,22 @@ span.profile-handle:hover {
   white-space: pre-wrap;
   opacity: 0.9;
 }
+/* "Your link → 🔴 Live / 🔒 Private" — legible state next to the host's share button, so flipping
+   Go-live visibly changes what the link does. Owner-only (shareNote is unset for visitors). */
+.profile-share-note {
+  font-size: 11px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.share-state {
+  font-weight: 700;
+}
+.share-state.live {
+  color: #e0617a;
+}
+.share-state.private {
+  color: #2ecc71;
+}
 /* Own-profile public-fields block: bio + edit / view-public actions + the editor. */
 .profile-public {
   display: flex;

@@ -38,6 +38,9 @@ export function ProfilePublicView({
   actions,
   headerAside,
   maskedAvatar,
+  shareText,
+  shareTitle,
+  shareNote,
 }: {
   avatar?: string | null;
   avatarLetter: string;
@@ -53,6 +56,9 @@ export function ProfilePublicView({
   actions?: ReactNode;
   headerAside?: ReactNode;
   maskedAvatar?: boolean; // own streaming-safe mode dims the avatar
+  shareText?: string; // share-sheet body (host-state-aware: "I'm live…") — owner only; visitors share the bare url
+  shareTitle?: string;
+  shareNote?: ReactNode; // legible "what your link does right now" line under the share button (owner only)
 }) {
   return (
     <>
@@ -74,8 +80,10 @@ export function ProfilePublicView({
                 title="Copy share link"
                 onClick={() => {
                   const url = `${location.origin}/@${handle}`;
-                  const nav = navigator as Navigator & { share?: (d: { url: string }) => Promise<void> };
-                  if (nav.share) void nav.share({ url }).catch(() => {});
+                  const nav = navigator as Navigator & {
+                    share?: (d: { url: string; title?: string; text?: string }) => Promise<void>;
+                  };
+                  if (nav.share) void nav.share({ url, ...(shareTitle && { title: shareTitle }), ...(shareText && { text: shareText }) }).catch(() => {});
                   else void navigator.clipboard?.writeText(url).catch(() => {});
                 }}
               >
@@ -83,6 +91,7 @@ export function ProfilePublicView({
               </button>
             </span>
           )}
+          {shareNote && <div className="profile-share-note">{shareNote}</div>}
           {bio && <div className="profile-bio">{bio}</div>}
           {memberSince != null && <div className="profile-since">Member since {formatDate(memberSince)}</div>}
         </div>

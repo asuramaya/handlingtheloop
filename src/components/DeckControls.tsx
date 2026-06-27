@@ -405,7 +405,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             // Show the shifted label when you're IN the peer mode (persists after releasing shift —
             // so the button never lies about which layer you're in) OR while previewing via shift.
             const showPeer = hasPeer && (activeIsPeer || shift);
-            const eff = showPeer ? peer : base; // click: unshift / no-peer → base, shift → peer
+            // Click target: a PLAIN click always lands on the base (so it RETURNS from the peer, e.g.
+            // FX2→FX); only shift goes to the peer. (`showPeer` drives the label/highlight, NOT this —
+            // using it here trapped you in the peer, since showPeer stays true while you're in it.)
+            const eff = shift && hasPeer ? peer : base;
             const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // a labelled-but-unwired peer
             const lbl = showPeer ? shiftLabel : label;
             const on = showPeer ? activeIsPeer : activeIsBase; // highlight tracks the ACTUAL active mode

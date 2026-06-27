@@ -41,6 +41,7 @@ import {
   inviteOwner,
   ensureIdentityColumns,
   userByHandle,
+  liveRoomStatus,
   ensureSetsTable,
   getSet,
   getCachedCaptions,
@@ -1127,7 +1128,18 @@ async function ogMetaFor(url: URL, env: Env): Promise<string | null> {
     const u = await userByHandle(env.DB, foldHandle(handleM[1]));
     if (!u || !u.handle) return null;
     const name = u.display_name || `@${u.handle}`;
-    return ogBlock({ title: name, desc: u.bio || `${name} on Handling The Loop`, img: u.avatar_url || "", url: `${url.origin}/@${u.handle}`, large: false });
+    const here = `${url.origin}/@${u.handle}`;
+    const img = u.avatar_url || "";
+    // State-aware: a crawler is anonymous, so the card reflects the HOST's state only (live vs
+    // profile) — never the viewer ("X invited you" lives in the bell, not an OG card). Live → the
+    // "join the set" card; otherwise the static profile card.
+    const room = await liveRoomStatus(env.DB, u.id).catch(() => null);
+    if (room?.live) {
+      const track = room.npTitle ? `${room.npArtist ? `${room.npArtist} — ` : ""}${room.npTitle}` : "now playing";
+      const desc = `${track} · ${room.listeners} listening — tune in on Handling The Loop`;
+      return ogBlock({ title: `🔴 ${name} is live`, desc, img, url: here, large: true });
+    }
+    return ogBlock({ title: name, desc: u.bio || `${name} on Handling The Loop`, img, url: here, large: false });
   }
   const setM = path.match(/^\/set\/([A-Za-z0-9-]{6,40})$/);
   if (setM) {

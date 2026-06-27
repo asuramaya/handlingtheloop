@@ -46,18 +46,24 @@ export async function closeRoom(db: D1Database, hostId: string): Promise<void> {
 }
 
 /** Is a specific host broadcasting right now (live + heartbeating within freshMs)? For the
- *  /@handle profile's "Listen live" affordance. */
+ *  /@handle profile's "Listen live" affordance + the share-link OG card. Carries the now-playing
+ *  fields so a crawler can render "🔴 @X is live — <track>" from this single read. */
 export async function liveRoomStatus(
   db: D1Database,
   hostId: string,
   freshMs = 90_000,
-): Promise<{ live: boolean; listeners: number }> {
+): Promise<{ live: boolean; listeners: number; npTitle: string | null; npArtist: string | null }> {
   const r = await db
-    .prepare("SELECT live, listeners, last_seen FROM rooms WHERE host_id=?")
+    .prepare("SELECT live, listeners, last_seen, np_title, np_artist FROM rooms WHERE host_id=?")
     .bind(hostId)
-    .first<{ live: number; listeners: number; last_seen: number }>();
+    .first<{ live: number; listeners: number; last_seen: number; np_title: string | null; np_artist: string | null }>();
   const live = !!r && r.live === 1 && now() - r.last_seen < freshMs;
-  return { live, listeners: live ? r!.listeners : 0 };
+  return {
+    live,
+    listeners: live ? r!.listeners : 0,
+    npTitle: live ? r!.np_title : null,
+    npArtist: live ? r!.np_artist : null,
+  };
 }
 
 export interface LiveRoom {

@@ -2479,3 +2479,27 @@ span.profile-handle:hover {
   white-space: nowrap;
 }
 
+/* Direct-invite-a-friend list in the Session console (InviteFriends). */
+.invite-friends-empty {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0;
+}
+.invite-friends-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.invite-friend-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 4px;
+}
+.invite-link-sub {
+  margin-top: 10px;
+}
+

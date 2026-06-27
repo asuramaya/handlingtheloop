@@ -7,6 +7,7 @@ import { StageBar } from "./social/StageBar";
 import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
+import { InviteFriends } from "./social/InviteFriends";
 import { SetSavedPrompt } from "./social/SetSavedPrompt";
 import { deviceIcon } from "./social/util";
 
@@ -277,14 +278,17 @@ export function SocialScreen({
                 {!room.isGuest && room.signedIn && (
                   <div className="share-mode private">
                     <button className="share-mode-head as-toggle" onClick={() => setInviteOpen((o) => !o)} aria-expanded={inviteOpen}>
-                      <span className="share-mode-title">🎚 Invite a co-DJ</span>
+                      <span className="share-mode-title">＋ Invite to your session</span>
                       <span className="share-mode-caret">{inviteOpen ? "▾" : "▸"}</span>
                     </button>
                     {inviteOpen && (
                       <>
-                        <span className="share-mode-sub">A private link for someone to play the decks WITH you — they knock, you approve, then they can mix. (To invite an audience, Go live above.)</span>
+                        {/* Primary: direct-invite a friend (works live OR private — the landing adapts). */}
+                        <InviteFriends live={room.roomPublic} />
+                        {/* Secondary: an anonymous link for someone WITHOUT an account / a one-off. */}
+                        <span className="share-mode-sub invite-link-sub">Or share a link (no account needed):</span>
                         <button className="room-invite" onClick={makeInvite} disabled={inviting}>
-                          {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Create co-DJ link"}
+                          {inviting ? "Creating link…" : copied ? "Link copied ✓" : "Create invite link"}
                         </button>
                         {inviteUrl && (
                           <div className="room-invite-share">

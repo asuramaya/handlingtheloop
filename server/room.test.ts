@@ -243,6 +243,20 @@ describe("DjRoom public lobby + stage gate", () => {
     expect(lis.a.controlling).toBe(false);
     expect(lis.a.decks).toBe("");
   });
+
+  // Invite-to-LIVE rollup: a host can direct-invite a friend while broadcasting. The invited friend
+  // (jam + grant) lands as a roster PARTICIPANT (not the anon crowd), hears the set, and the host
+  // can hand them the decks — co-DJing the live set. Proves the unified invite works while public.
+  it("an invited friend joins a LIVE room as a participant (not the crowd), grantable to co-DJ", async () => {
+    const host = await liveHost(); // public broadcast
+    const friend = (await h.connect({ device: "F", invited: true })).ws!; // jam w/ grant — NOT pub
+    await h.send(friend, { t: "join" });
+    expect(friend.a.joined).toBe(true);
+    expect(friend.a.pub).toBe(false); // in the roster, not the anonymous crowd count
+    expect(friend.a.controlling).toBe(false); // hears the mix, doesn't drive yet
+    await h.send(host, { t: "grant", to: "F", on: true }); // host hands them the decks
+    expect(friend.a.controlling).toBe(true);
+  });
 });
 
 describe("DjRoom crowd guard + requests", () => {

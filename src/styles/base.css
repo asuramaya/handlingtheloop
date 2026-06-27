@@ -59,6 +59,9 @@ body {
      in via the input/textarea rule below. */
   user-select: none;
   -webkit-user-select: none;
+  /* Suppress the iOS long-press callout (the copy/share bubble on buttons) — long-press is OUR
+     gesture for the touch alt-action (config / reveal / route menus), see useLongPress. */
+  -webkit-touch-callout: none;
   /* Fixed three-thirds board: the chin + equal lanes / controls / mixer fill the
      viewport. Each third scrolls internally if its content is taller. */
   overflow: hidden;

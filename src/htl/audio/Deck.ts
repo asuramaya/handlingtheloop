@@ -191,23 +191,23 @@ export type SyncRole = "off" | "master" | "slave";
 
 // Performance-pad modes. Unshifted: cue / fx / loop / sampler (the deck's LOCAL sample pads).
 // Shifted peers (SHIFT on the mode row): roll (momentary loop) ↔ loop, global (the account's
-// GLOBAL sample bank) ↔ sampler, fx2 (the LATCH layer of the FX bank) ↔ fx. (keyboard ↔ cue is
-// still reserved.)
-export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "keyboard" | "fx2";
-// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). keyboard is
-// REVEALED under SHIFT but not yet wired (see PAD_MODE_RESERVED) — shown dimmed, like the board.
+// GLOBAL sample bank) ↔ sampler, fx2 (the LATCH layer of the FX bank) ↔ fx. CUE has NO shift peer
+// (the old KEY/keyboard slot was retired — pitched playback now lives as a per-pad sampler param).
+export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2";
+// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). cue → cue = no
+// peer (the slot is blank); the UI shows no shifted label for CUE and shift+CUE stays in cue.
 export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
-  cue: "keyboard",
+  cue: "cue", // no shift peer (blank slot)
   fx: "fx2",
   loop: "roll",
   sampler: "global",
   roll: "loop",
   global: "sampler",
-  keyboard: "cue",
   fx2: "fx",
 };
-// Shifted peers that are labelled but not yet functional (dimmed/disabled in the selector).
-export const PAD_MODE_RESERVED = new Set<PadMode>(["keyboard"]);
+// Shifted peers that are labelled but not yet functional (dimmed/disabled). None currently — kept
+// for the next reserved mode (was KEY, now retired).
+export const PAD_MODE_RESERVED = new Set<PadMode>();
 
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)

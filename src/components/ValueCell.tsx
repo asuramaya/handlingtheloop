@@ -38,6 +38,8 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
   const el = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startY: number; startVal: number; moved: boolean } | null>(null);
   const lastTap = useRef(0);
+  const longPress = useRef<number | undefined>(undefined); // touch long-press → onContextMenu (the menu)
+  const clearLong = () => { if (longPress.current) clearTimeout(longPress.current); longPress.current = undefined; };
   const bipolar = pivot != null;
   const resetTo = bipolar ? (pivot as number) : reset ?? min;
 
@@ -90,22 +92,36 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
         }
         lastTap.current = e.timeStamp;
         drag.current = { startY: e.clientY, startVal: value, moved: false };
+        // Touch has no right-click: a long-press opens the cell's menu (e.g. MIC → destination).
+        // Cancelled by a drag (onPointerMove) or release; cancels the pending tap/drag when it fires.
+        if (e.pointerType === "touch" && onContextMenu) {
+          const px = e.clientX, py = e.clientY;
+          clearLong();
+          longPress.current = window.setTimeout(() => {
+            navigator.vibrate?.(8);
+            drag.current = null; // swallow the tap/drag that was in progress
+            onContextMenu({ preventDefault() {}, clientX: px, clientY: py } as unknown as ReactMouseEvent);
+          }, 460);
+        }
       }}
       onPointerMove={(e) => {
         const d = drag.current;
         if (!d) return;
         const dy = d.startY - e.clientY; // up = increase
         if (!d.moved && Math.abs(dy) < TAP_SLOP) return; // still a tap
+        clearLong(); // a real drag → not a long-press
         d.moved = true;
         onChange(clampStep(d.startVal + (dy / DRAG_SPAN_PX) * span));
       }}
       onPointerUp={(e) => {
+        clearLong();
         const d = drag.current;
         drag.current = null;
         e.currentTarget.releasePointerCapture(e.pointerId);
         // A clean tap (pointer never moved past the slop) fires onTap — e.g. mute.
         if (d && !d.moved && onTap && !disabled) onTap();
       }}
+      onPointerCancel={clearLong}
       onContextMenu={(e) => { e.preventDefault(); if (disabled) return; if (onContextMenu) onContextMenu(e); else onChange(resetTo); }}
     >
       <KnobBorder value={value} min={min} max={max} pivot={pivot} />

@@ -7,6 +7,7 @@ import type { StemName } from "@htl/stems";
 import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
 import { ValueCell } from "./ValueCell";
+import { useLongPress } from "./useLongPress";
 import { FxStrip, type FxStripCtl } from "./FxStrip";
 import { LevelFader } from "./LevelFader";
 
@@ -72,7 +73,7 @@ const TEMPO_NUDGE = 0.5;
 // SMP = the deck's LOCAL sample pads (slices of this track); its shift peer GLBL = the account's
 // GLOBAL sample bank (uploaded one-shots).
 const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: string }[] = [
-  { base: "cue", label: "CUE", shiftLabel: "KEY", kbd: "U" },
+  { base: "cue", label: "CUE", shiftLabel: "", kbd: "U" }, // no shift peer (KEY retired)
   { base: "fx", label: "FX", shiftLabel: "FX2", kbd: "I" },
   { base: "loop", label: "LOOP", shiftLabel: "ROLL", kbd: "O" },
   { base: "sampler", label: "SMP", shiftLabel: "GLBL", kbd: "P" },
@@ -125,7 +126,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   }
   // True when the deck is parked in a SHIFTED-layer mode (ROLL/GLOBAL/…) — used to persistently tint
   // the bank so it's obvious you're on the second layer even after releasing shift.
-  const inShiftedMode = deck.padMode === "roll" || deck.padMode === "global" || deck.padMode === "keyboard" || deck.padMode === "fx2";
+  const inShiftedMode = deck.padMode === "roll" || deck.padMode === "global" || deck.padMode === "fx2";
   const changePadMode = (m: PadMode) => {
     deck.setPadMode(m);
     try {
@@ -168,6 +169,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const smpUp = (pad: SamplerPad) => {
     if (sampler && pad.mode === "gate") { sampler.release(pad.index); refresh(); }
   };
+  // Touch long-press on a sample pad opens its config menu — the right-click equivalent, which was
+  // desktop-only (so inaccessible on touch). Shared by SMP + GLBL; tap still triggers immediately.
+  const smpLong = useLongPress<SamplerPad>((pad, x, y) => { if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x, y }); });
   // Press a GLOBAL pad: empty → file picker; filled → trigger (SHIFT = clear). Same grammar as SMP.
   const glbDown = (pad: SamplerPad) => {
     if (!sampler) return;
@@ -395,13 +399,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {PAD_MODE_BTNS.map(({ base, label, shiftLabel, kbd }) => {
             if (base === "sampler" && !sampler) return null;
             const peer = PAD_MODE_SHIFT[base];
-            const activeIsPeer = deck.padMode === peer; // currently IN the shifted mode (e.g. ROLL)
+            const hasPeer = peer !== base; // cue maps to itself = no shift peer (blank slot)
+            const activeIsPeer = hasPeer && deck.padMode === peer; // currently IN the shifted mode (e.g. ROLL)
             const activeIsBase = deck.padMode === base;
             // Show the shifted label when you're IN the peer mode (persists after releasing shift —
             // so the button never lies about which layer you're in) OR while previewing via shift.
-            const showPeer = activeIsPeer || shift;
-            const eff = shift ? peer : base; // click: unshift → base, shift → peer (toggles the pair)
-            const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // KEY — labelled, not wired yet
+            const showPeer = hasPeer && (activeIsPeer || shift);
+            const eff = showPeer ? peer : base; // click: unshift / no-peer → base, shift → peer
+            const reserved = showPeer && PAD_MODE_RESERVED.has(peer); // a labelled-but-unwired peer
             const lbl = showPeer ? shiftLabel : label;
             const on = showPeer ? activeIsPeer : activeIsBase; // highlight tracks the ACTUAL active mode
             return (
@@ -528,6 +533,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
               onPointerUp={() => smpUp(pad)}
               onPointerLeave={() => smpUp(pad)}
+              {...smpLong.bind(pad)}
               onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
             >
               {shift && pad.kind !== "empty" ? <span className="pad-clr">CLR</span> : pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || i + 1}
@@ -557,6 +563,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               onPointerDown={(e) => { if (e.button === 0) glbDown(pad); }}
               onPointerUp={() => smpUp(pad)}
               onPointerLeave={() => smpUp(pad)}
+              {...smpLong.bind(pad)}
               onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
             >
               {shift && pad.kind !== "empty" ? <span className="pad-clr">CLR</span> : pad.kind === "empty" ? "＋" : pad.name || i + 1}
@@ -623,6 +630,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               </div>
               <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
               <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
+              {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
+              <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
+              <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
               {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
                 <>
                   <div className="ctx-label">Stem</div>

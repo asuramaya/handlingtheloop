@@ -1106,8 +1106,8 @@ export function App() {
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
       // SHIFT switches to the peer mode (mirrors the on-screen mode row + the FLX shift layer):
-      // loop→roll, sampler→global, fx→fx2 (the FX latch layer); cue→keyboard is RESERVED so padModeKey no-ops it.
-      padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "keyboard" : "cue"),
+      // loop→roll, sampler→global, fx→fx2 (the FX latch layer). CUE has no shift peer (KEY retired).
+      padModeCue: (deck, id) => padModeKey(deck, id, "cue"),
       padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),
       padModeSampler: (deck, id, s) => padModeKey(deck, id, s ? "global" : "sampler"),
       padModeFx: (deck, id, s) => padModeKey(deck, id, s ? "fx2" : "fx"),
@@ -3604,7 +3604,6 @@ export function App() {
           padMode:
             d.padMode === "roll" ? "loop"
             : d.padMode === "global" ? "sampler"
-            : d.padMode === "keyboard" ? "cue"
             : d.padMode === "fx2" ? "fx"
             : d.padMode,
         };

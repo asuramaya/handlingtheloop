@@ -47,6 +47,7 @@ interface RegionDesc {
   name: string;
   mode: SampleMode;
   gain: number;
+  pitch?: number; // semitones (varispeed repitch on trigger); undefined/0 = original pitch
   stem?: StemName; // chop just this stem (desktop, neural stems resident); undefined = full mix
 }
 type RegionStore = Record<string, (RegionDesc | null)[]>;
@@ -55,10 +56,13 @@ interface GlobalPad {
   name: string;
   mode: SampleMode;
   gain: number;
+  pitch: number; // semitones (varispeed repitch)
   uploading?: boolean;
   ready: boolean; // decoded buffer present (triggerable)
 }
-type GlobalMeta = Record<string, { mode: SampleMode; gain: number }>;
+type GlobalMeta = Record<string, { mode: SampleMode; gain: number; pitch?: number }>;
+// Varispeed playback-rate factor for a semitone pitch offset (one source → any note).
+const pitchRate = (semitones: number | undefined) => 2 ** ((semitones ?? 0) / 12);
 
 export interface SamplerPad {
   index: number;
@@ -67,6 +71,7 @@ export interface SamplerPad {
   name: string;
   mode: SampleMode;
   gain: number;
+  pitch: number; // semitones (varispeed repitch)
   start?: number;
   end?: number;
   playing: boolean;
@@ -94,7 +99,7 @@ function saveJson(key: string, v: unknown) {
 
 const emptyRegionArr = (): (RegionDesc | null)[] => Array(DECK_REGION_COUNT).fill(null);
 const emptyGlobals = (meta: GlobalMeta): GlobalPad[] =>
-  GLOBAL_PADS.map((g) => ({ name: "", mode: meta[g]?.mode ?? "oneshot", gain: meta[g]?.gain ?? 1, ready: false }));
+  GLOBAL_PADS.map((g) => ({ name: "", mode: meta[g]?.mode ?? "oneshot", gain: meta[g]?.gain ?? 1, pitch: meta[g]?.pitch ?? 0, ready: false }));
 
 type SampleIntent = Extract<Intent, { kind: "sample" }>;
 
@@ -190,6 +195,7 @@ export function useSampler(
           name: g.name,
           mode: g.mode,
           gain: g.gain,
+          pitch: g.pitch ?? 0,
           playing,
           uploading: g.uploading,
           ready: g.ready,
@@ -205,6 +211,7 @@ export function useSampler(
           name: r?.name ?? "",
           mode: r?.mode ?? "oneshot",
           gain: r?.gain ?? 1,
+          pitch: r?.pitch ?? 0,
           start: r?.start,
           end: r?.end,
           playing,
@@ -228,17 +235,17 @@ export function useSampler(
         const buf = fileBuffers.current[globalSlot(i)];
         const g = globals[globalSlot(i)];
         if (!buf) return;
-        engine.sampler.play(i, { buffer: buf, route: "master", mode: g.mode, gain: g.gain });
+        engine.sampler.play(i, { buffer: buf, route: "master", mode: g.mode, gain: g.gain, rate: pitchRate(g.pitch) });
         // Guests fetch the clip by id (same-account today; cross-account once session-scoped audio lands).
-        emit?.({ kind: "sample", pad: i, route, action: "trigger", sampleId: g.sampleId, name: g.name, mode: g.mode, gain: g.gain });
+        emit?.({ kind: "sample", pad: i, route, action: "trigger", sampleId: g.sampleId, name: g.name, mode: g.mode, gain: g.gain, pitch: g.pitch });
       } else {
         const id = regionDeck(i);
         const d = engine.deck(id);
         const slot = regionSlot(i);
-        const rate = d.rate; // tempo-sync the region voice to the live deck
         const vid = id === "A" ? loaded.A : loaded.B;
         const r = vid ? regions[vid]?.[slot] : null;
         if (!r) return;
+        const rate = d.rate * pitchRate(r.pitch); // tempo-sync to the deck, then varispeed-repitch
         const buf = (r.stem && d.stemBuffer(r.stem)) || d.buffer; // stem-aware: chop one stem, else the full mix
         if (!buf) return;
         engine.sampler.play(i, { buffer: buf, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
@@ -402,7 +409,7 @@ export function useSampler(
         if (g.sampleId) void deleteSample(g.sampleId);
         setGlobals((prev) => {
           const next = [...prev];
-          next[gi] = { name: "", mode: globalMeta.current[GLOBAL_PADS[gi]]?.mode ?? "oneshot", gain: globalMeta.current[GLOBAL_PADS[gi]]?.gain ?? 1, ready: false };
+          next[gi] = { name: "", mode: globalMeta.current[GLOBAL_PADS[gi]]?.mode ?? "oneshot", gain: globalMeta.current[GLOBAL_PADS[gi]]?.gain ?? 1, pitch: globalMeta.current[GLOBAL_PADS[gi]]?.pitch ?? 0, ready: false };
           return next;
         });
       } else {
@@ -424,7 +431,7 @@ export function useSampler(
     (i: number, mode: SampleMode) => {
       if (routeOf(i) === "master") {
         const gi = globalSlot(i);
-        globalMeta.current[GLOBAL_PADS[gi]] = { mode, gain: globals[gi].gain };
+        globalMeta.current[GLOBAL_PADS[gi]] = { mode, gain: globals[gi].gain, pitch: globals[gi].pitch };
         persistGlobalMeta();
         setGlobals((prev) => {
           const next = [...prev];
@@ -450,7 +457,7 @@ export function useSampler(
       engine.sampler.setGain(i, gain); // live-adjust if sounding
       if (routeOf(i) === "master") {
         const gi = globalSlot(i);
-        globalMeta.current[GLOBAL_PADS[gi]] = { mode: globals[gi].mode, gain };
+        globalMeta.current[GLOBAL_PADS[gi]] = { mode: globals[gi].mode, gain, pitch: globals[gi].pitch };
         persistGlobalMeta();
         setGlobals((prev) => {
           const next = [...prev];
@@ -469,6 +476,33 @@ export function useSampler(
       doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "gain", gain });
     },
     [engine, globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
+  );
+
+  // Per-pad PITCH (semitones, varispeed). Persisted like gain/mode; applies on the next trigger
+  // (a sounding voice isn't re-pitched mid-flight). Works on both banks (region + global).
+  const setPitch = useCallback(
+    (i: number, pitch: number) => {
+      if (routeOf(i) === "master") {
+        const gi = globalSlot(i);
+        globalMeta.current[GLOBAL_PADS[gi]] = { mode: globals[gi].mode, gain: globals[gi].gain, pitch };
+        persistGlobalMeta();
+        setGlobals((prev) => {
+          const next = [...prev];
+          next[gi] = { ...next[gi], pitch };
+          return next;
+        });
+      } else {
+        const vid = regionDeck(i) === "A" ? loaded.A : loaded.B;
+        if (!vid || !regions[vid]?.[regionSlot(i)]) return;
+        const next: RegionStore = { ...regions };
+        const arr = [...next[vid]];
+        arr[regionSlot(i)] = { ...(arr[regionSlot(i)] as RegionDesc), pitch };
+        next[vid] = arr;
+        persistRegions(next);
+      }
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "pitch", pitch });
+    },
+    [globals, regions, loaded.A, loaded.B, persistRegions, persistGlobalMeta],
   );
 
   // Pick which stem a REGION pad chops (undefined = full mix). Master pads have no stems → no-op.
@@ -505,13 +539,14 @@ export function useSampler(
       if (action === "stop") return engine.sampler.stop(pad);
       // Pad CONFIG changes — re-run the local mutator with its emit muted (the wire already
       // carried it). assign re-derives the region off the watcher's own (synced) deck.
-      if (action === "assign" || action === "clear" || action === "mode" || action === "gain" || action === "stem") {
+      if (action === "assign" || action === "clear" || action === "mode" || action === "gain" || action === "stem" || action === "pitch") {
         muteEmit.current = true;
         try {
           if (action === "assign") assignRegion(pad);
           else if (action === "clear") clearPad(pad);
           else if (action === "mode") setMode(pad, intent.mode ?? "oneshot");
           else if (action === "gain") setGain(pad, intent.gain ?? 1);
+          else if (action === "pitch") setPitch(pad, intent.pitch ?? 0);
           else setStem(pad, intent.stem);
         } finally {
           muteEmit.current = false;
@@ -523,7 +558,7 @@ export function useSampler(
         const id = intent.sampleId;
         if (!id) return;
         const play = (buffer: AudioBuffer) =>
-          engine.sampler.play(pad, { buffer, route: "master", mode: intent.mode ?? "oneshot", gain: intent.gain ?? 1 });
+          engine.sampler.play(pad, { buffer, route: "master", mode: intent.mode ?? "oneshot", gain: intent.gain ?? 1, rate: pitchRate(intent.pitch) });
         const cached = remoteGlobalBuf.current.get(id);
         if (cached) return play(cached);
         void (async () => {
@@ -546,10 +581,10 @@ export function useSampler(
         engine.sampler.play(pad, { buffer: buf, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
       }
     },
-    [engine, assignRegion, clearPad, setMode, setGain, setStem],
+    [engine, assignRegion, clearPad, setMode, setGain, setStem, setPitch],
   );
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStem };
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStem, setPitch };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

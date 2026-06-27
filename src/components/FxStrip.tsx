@@ -11,6 +11,7 @@ import { ModPanel } from "./ModPanel";
 import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
 import { PromptModal } from "./Dialog";
+import { useLongPress } from "./useLongPress";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
 // the EQ curve keeps its full height) and a shared BYPASS / RESET / COPY toolbar that acts
@@ -132,6 +133,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
     setSel(slot);
     setMenu({ slot, x: e.clientX, y: e.clientY });
   };
+  // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
+  const tabLong = useLongPress<number>((slot, x, y) => { setSel(slot); setMenu({ slot, x, y }); });
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
@@ -211,8 +214,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
           <button
             key={d.kind}
             className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === i + 1 ? "drop-after" : ""} ${dragFrom === i ? "dragging" : ""}`}
-            onClick={() => setSel(i)}
+            onClick={() => { if (tabLong.fired.current) return; setSel(i); }}
             onContextMenu={(e) => openPresetMenu(e, i)}
+            {...tabLong.bind(i)}
             draggable
             onDragStart={(e) => {
               setDragFrom(i);

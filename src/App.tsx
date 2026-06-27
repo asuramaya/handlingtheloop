@@ -190,6 +190,12 @@ const PROMOTE_ORDER = ["htdemucs-onnx", "umxl-int8"];
 
 const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null, videoId: null, thumbnail: null };
 
+// <input> types that are NOT text entry. A focused slider / checkbox / button must NOT swallow the
+// board keyboard shortcuts — only an actual typing target (text field / textarea / contentEditable)
+// should. This is the "an open menu hijacks the board" pathology: a range slider (sampler-pad gain,
+// a fader, a panel knob) keeps focus after you drag it, and a blanket INPUT guard then ate every key.
+const NON_TEXT_INPUT_TYPES = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "file", "color", "image"]);
+
 // Wait until the browser is idle (with a timeout) so the heavy stem pass runs
 // AFTER the freshly-loaded deck UI has painted, instead of stalling the load.
 function whenIdle(): Promise<void> {
@@ -1125,14 +1131,22 @@ export function App() {
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 
     const onKey = (e: KeyboardEvent) => {
-      // Never hijack typing or a modal that owns the screen.
+      // Never hijack genuine TEXT entry — but ONLY text entry. A focused slider/checkbox/button
+      // (e.g. a menu's range slider, a fader, a panel knob) must keep letting the board keys
+      // through, or interacting with one silently kills every shortcut until you click away (the
+      // "an open menu hijacks the board" pathology). So bail only for a real typing target.
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+      const typingTarget =
+        !!el &&
+        (el.tagName === "TEXTAREA" ||
+          el.isContentEditable ||
+          (el.tagName === "INPUT" && !NON_TEXT_INPUT_TYPES.has((el as HTMLInputElement).type)));
+      if (typingTarget) {
         // …but give the keyboard a way OUT of a lingering field (e.g. the Library filter box,
         // which keeps focus after you click it and otherwise swallows every board key with no
         // escape). Escape blurs it → focus returns to the body and the deck keys work again.
         if (e.key === "Escape") {
-          el.blur();
+          el!.blur();
           e.preventDefault();
         }
         return;

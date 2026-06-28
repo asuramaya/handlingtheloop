@@ -5,6 +5,7 @@
 // which the app routes into its existing action handlers + deck setters.
 
 import { matchProfile } from "./profiles";
+import { centeredDelta, twosComplementDelta, wrappingStep } from "./decode";
 import type { ControlSpec, DeckId, DeckFeedback, DeviceProfile, LearnedBinding, MidiBinding, MidiEvent, MidiLearnMap, MidiStatus } from "./types";
 
 // --- minimal Web MIDI typings (avoid depending on lib.dom having them) ---
@@ -445,7 +446,7 @@ export class MidiEngine {
       // Relative tick centred on 64; sign = direction, magnitude = speed. `scratch`
       // tells App which stream this is: the dedicated SCRATCH CC (vinyl mode) vs the
       // top-plate BEND CC (non-vinyl). App latches vinyl-mode + gates the grab off it.
-      const delta = val - 64;
+      const delta = centeredDelta(val);
       if (delta !== 0) {
         if (typeof performance !== "undefined") {
           this.jogLog.push({ t: performance.now(), d: delta });
@@ -458,21 +459,20 @@ export class MidiEngine {
       // The FLX4's outer ring idles on 0x40 but JITTERS ±1 (0x3F/0x41) at rest — touching
       // the unit (e.g. a SHIFT press) shakes out a stream of those. Deadzone ±1 so resting
       // noise never bends; a real ring turn easily clears it.
-      const delta = val - 64;
+      const delta = centeredDelta(val);
       if (Math.abs(delta) > 1) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
-      const delta = val - 64;
+      const delta = centeredDelta(val);
       if (delta !== 0) this.opts.onEvent({ type: "jogSearch", deck: b.deck, delta });
     } else if (c.kind === "browse") {
-      // Pioneer rotary selector is a 2's-COMPLEMENT relative encoder: 0x01..0x3F = +1..+63
-      // (forward), 0x7F..0x41 = -1..-63 (back, 0x7F = -1). It is NOT centred on 0x40 like
+      // Pioneer rotary selector is a 2's-COMPLEMENT relative encoder, NOT centred on 0x40 like
       // the jog platter — decoding it as val-64 leapt the browse cursor ±63 rows per detent
-      // instead of stepping one at a time.
-      const delta = val < 64 ? val : val - 128;
+      // instead of stepping one at a time. See decode.twosComplementDelta.
+      const delta = twosComplementDelta(val);
       if (delta !== 0) this.opts.onEvent({ type: "browse", delta });
     } else if (c.kind === "zoom") {
-      const delta = val - 64;
+      const delta = centeredDelta(val);
       if (delta !== 0) this.opts.onEvent({ type: "zoom", deck: b.deck, delta });
     }
   }
@@ -491,11 +491,7 @@ export class MidiEngine {
   private encoderStep(key: number, val: number): number {
     const last = this.lastAbs.get(key);
     this.lastAbs.set(key, val);
-    if (last == null) return 0; // first sample only seeds the reference (no jump)
-    let raw = val - last;
-    if (raw > 64) raw -= 128;
-    else if (raw < -64) raw += 128;
-    return raw;
+    return wrappingStep(last, val); // pure circular-fold step (first sample → 0); see decode.ts
   }
 
   // Endless encoder → relative parameter nudge. Treating it as an absolute fader would

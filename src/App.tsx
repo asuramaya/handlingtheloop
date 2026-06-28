@@ -1612,12 +1612,14 @@ function AppBody() {
         if ((e as Error).name === "AbortError" || stale()) return;
         setStatusFor(id, { phase: "failed", detail: (e as Error).message ?? String(e) });
       } finally {
-        if (!stale()) {
-          setLoading((l) => ({ ...l, [id]: false }));
-          // This load is the current one but never landed (failed) → release the in-flight
-          // claim so a room snapshot / retry can load this track. On success keep it.
-          if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
-        }
+        if (!stale()) setLoading((l) => ({ ...l, [id]: false }));
+        // Release the in-flight claim whenever it never landed AND it's still OURS — the
+        // `=== claimedVid` check proves no newer load took it over, so this is safe even when we
+        // were SUPERSEDED (stale). The old code only released on !stale(), so a superseded load
+        // whose successor bailed early stranded this claim → a later snapshot read it as "still
+        // loading" and skipped the reload forever (the guest stayed on the wrong track). On a
+        // successful land we KEEP the claim as the per-deck dedupe key.
+        if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
       }
     },
     [engine, library, setStatusFor, refresh, deriveStems],

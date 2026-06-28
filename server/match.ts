@@ -20,7 +20,7 @@ const NOISE = /\b(official|video|audio|lyrics?|hd|hq|mv|m\/v|visuali[sz]er|remas
 // Variant markers — if the candidate has one the source lacks, it's probably the wrong version.
 const VARIANT = /\b(live|remix|cover|acoustic|instrumental|karaoke|sped\s?up|slowed|reverb|8d|nightcore|edit|mix|version|demo)\b/gi;
 
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return (s || "")
     .toLowerCase()
     .normalize("NFKD")
@@ -33,18 +33,18 @@ function normalize(s: string): string {
     .trim();
 }
 
-function tokens(s: string): Set<string> {
+export function tokens(s: string): Set<string> {
   return new Set(normalize(s).split(" ").filter(Boolean));
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0;
   let inter = 0;
   for (const t of a) if (b.has(t)) inter++;
   return inter / (a.size + b.size - inter);
 }
 
-function variants(s: string): Set<string> {
+export function variants(s: string): Set<string> {
   const out = new Set<string>();
   for (const m of (s || "").toLowerCase().matchAll(VARIANT)) out.add(m[0].replace(/\s+/g, ""));
   return out;

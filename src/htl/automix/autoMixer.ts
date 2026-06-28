@@ -895,10 +895,10 @@ export class AutoMixer {
   }
 }
 
-function other(id: DeckId): DeckId {
+export function other(id: DeckId): DeckId {
   return id === "A" ? "B" : "A";
 }
-function barsToSeconds(bars: number, bpm: number): number {
+export function barsToSeconds(bars: number, bpm: number): number {
   if (!bpm || bpm <= 0) return bars * 2;
   return (bars * BEATS_PER_BAR * 60) / bpm;
 }

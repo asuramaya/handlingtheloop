@@ -242,7 +242,7 @@ export function detectBeatgrid(buffer: AudioLike): Beatgrid | null {
 
 /** Index of the beat at-or-before time `t` in the dynamic array (binary search).
  *  Returns -1 if `t` precedes the first tracked beat. */
-function beatIndexBefore(beats: Float32Array, t: number): number {
+export function beatIndexBefore(beats: Float32Array, t: number): number {
   let lo = 0;
   let hi = beats.length - 1;
   if (t < beats[0]) return -1;
@@ -355,7 +355,7 @@ export function barPhase(g: Beatgrid, t: number): number {
 // are the SAME, RELATIVE (same number, swap ring), or ADJACENT on the same ring
 // (±1 = a perfect fifth) — i.e. distance ≤ 1 here.
 
-function camelotParts(c: string): { num: number; major: boolean } {
+export function camelotParts(c: string): { num: number; major: boolean } {
   return { num: parseInt(c, 10) || 0, major: c.endsWith("B") };
 }
 
@@ -507,7 +507,7 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", 
 const CAMELOT_MAJOR = ["8B", "3B", "10B", "5B", "12B", "7B", "2B", "9B", "4B", "11B", "6B", "1B"];
 const CAMELOT_MINOR = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", "3A", "10A"];
 
-function keyName(tonic: number, mode: "major" | "minor"): string {
+export function keyName(tonic: number, mode: "major" | "minor"): string {
   return mode === "major" ? NOTE_NAMES[tonic] : `${NOTE_NAMES[tonic]}m`;
 }
 

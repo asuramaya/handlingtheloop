@@ -60,7 +60,7 @@ const MAX_APPEND = 8;
 const MAX_QUEUE = 14; // cap the radio queue so it never grows unbounded
 const PLAYED_CAP = 100; // remember only the last N plays — older ones can resurface
 
-function dedupeByVideoId(list: TrackMeta[]): TrackMeta[] {
+export function dedupeByVideoId(list: TrackMeta[]): TrackMeta[] {
   const seen = new Set<string>();
   const out: TrackMeta[] = [];
   for (const t of list) {

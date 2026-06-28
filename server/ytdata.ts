@@ -27,7 +27,7 @@ interface Thumbs {
   standard?: { url: string };
   maxres?: { url: string };
 }
-function bestThumb(t?: Thumbs): string | null {
+export function bestThumb(t?: Thumbs): string | null {
   return t?.maxres?.url ?? t?.standard?.url ?? t?.high?.url ?? t?.medium?.url ?? t?.default?.url ?? null;
 }
 
@@ -84,7 +84,7 @@ export async function addToYouTubePlaylist(token: string, playlistId: string, vi
 }
 
 // ISO-8601 duration (e.g. "PT4M13S", "PT1H2M") -> seconds.
-function parseISODuration(iso?: string): number {
+export function parseISODuration(iso?: string): number {
   if (!iso) return 0;
   const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
   if (!m) return 0;

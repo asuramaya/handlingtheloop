@@ -43,14 +43,14 @@ function tooLong(durationSec: number): boolean {
   return durationSec > MAX_TRACK_SECONDS;
 }
 
-function parseDuration(text?: string): number {
+export function parseDuration(text?: string): number {
   if (!text) return 0;
   const parts = text.split(":").map(Number);
   if (parts.some((n) => Number.isNaN(n))) return 0;
   return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
-function parseViews(text?: string): number | null {
+export function parseViews(text?: string): number | null {
   if (!text) return null;
   const m = text.replace(/,/g, "").match(/([\d.]+)\s*([KMB])?/i);
   if (!m) return null;
@@ -58,7 +58,7 @@ function parseViews(text?: string): number | null {
   return Math.round(Number(m[1]) * mult);
 }
 
-function normalize(n: AnyNode): TrackMeta | null {
+export function normalize(n: AnyNode): TrackMeta | null {
   if (!n.id || !/^[\w-]{11}$/.test(n.id)) return null;
   const duration = n.duration?.seconds ?? parseDuration(n.duration?.text);
   if (tooLong(duration)) return null;
@@ -77,7 +77,7 @@ function normalize(n: AnyNode): TrackMeta | null {
 
 // Map a YouTube Music `song`-typed row → TrackMeta. Only real songs (not album / video / playlist /
 // podcast rows) survive, so the result is structurally a song regardless of length.
-function fromMusicItem(it: MusicItem): TrackMeta | null {
+export function fromMusicItem(it: MusicItem): TrackMeta | null {
   if (it.item_type !== "song") return null;
   const id = it.id;
   if (!id || !/^[\w-]{11}$/.test(id)) return null;
@@ -155,7 +155,7 @@ export interface InnertubeApi {
 // Rather than chase the exact path (which shifts by client/version), we walk the
 // raw JSON and collect every compactVideoRenderer — robust across shapes.
 
-function runsText(runs: unknown): string | undefined {
+export function runsText(runs: unknown): string | undefined {
   if (!Array.isArray(runs)) return undefined;
   const s = runs.map((r) => (r as { text?: string }).text ?? "").join("");
   return s || undefined;
@@ -172,7 +172,7 @@ interface CompactRenderer {
   thumbnail?: { thumbnails?: { url: string }[] };
 }
 
-function fromCompact(r: CompactRenderer): TrackMeta | null {
+export function fromCompact(r: CompactRenderer): TrackMeta | null {
   const id = r.videoId;
   if (!id || !/^[\w-]{11}$/.test(id)) return null;
   const duration = parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs));
@@ -209,7 +209,7 @@ interface LockupVM {
 // YouTube's own "this is music" tag (Content-ID derived): a thumbnail badge with a
 // MUSIC icon. It cleanly separates real tracks from non-music slop (gameplay,
 // reactions, podcasts, "try not to laugh") in the watch-next feed — no title regex.
-function lockupIsMusic(node: unknown, depth = 0): boolean {
+export function lockupIsMusic(node: unknown, depth = 0): boolean {
   if (!node || depth > 25) return false;
   if (Array.isArray(node)) return node.some((x) => lockupIsMusic(x, depth + 1));
   if (typeof node !== "object") return false;
@@ -219,7 +219,7 @@ function lockupIsMusic(node: unknown, depth = 0): boolean {
   return false;
 }
 
-function fromLockup(l: LockupVM): TrackMeta | null {
+export function fromLockup(l: LockupVM): TrackMeta | null {
   const id = l.contentId;
   if (!id || !/^[\w-]{11}$/.test(id)) return null; // 11-char = a video (skips playlist/channel lockups)
   if (l.contentType && l.contentType !== "LOCKUP_CONTENT_TYPE_VIDEO") return null;
@@ -249,7 +249,7 @@ function fromLockup(l: LockupVM): TrackMeta | null {
   };
 }
 
-function collectVideos(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
+export function collectVideos(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
   if (!node || depth > 40) return;
   if (Array.isArray(node)) {
     for (const x of node) collectVideos(x, push, depth + 1);

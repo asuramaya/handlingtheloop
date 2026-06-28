@@ -12,6 +12,7 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
+import { decideFollowTick, decideSnapshotDeck, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import type { Settings } from "@htl/state";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
@@ -198,8 +199,15 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       (["A", "B"] as DeckId[]).forEach((id) => {
         const d = snap.decks[id];
         if (!d) return;
-        const loadedId = latest.current.loaded[id];
-        if (d.videoId && d.videoId !== loadedId && d.videoId !== roomLoadTarget.current[id] && d.videoId !== loadingVid.current[id]) {
+        // Load-once / reconcile-once / skip — the pure dedupe decision (see sessionFollow).
+        const action = decideSnapshotDeck({
+          snapVideoId: d.videoId,
+          loadedId: latest.current.loaded[id],
+          roomLoadTarget: roomLoadTarget.current[id],
+          loadingVid: loadingVid.current[id],
+          reconciledTarget: reconciledTarget.current[id],
+        });
+        if (action === "load" && d.videoId) {
           // New track for this deck → load it ONCE (self-healing dedupe). Both decks load
           // concurrently so neither waits on the other; each is guarded so a failed decode
           // can't crash the tree. (Stem sets, not base decodes, are the iOS memory hog and
@@ -217,7 +225,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
             bpm: d.bpm,
           };
           runRoomLoad(id, d.videoId, track, d);
-        } else if (d.videoId && d.videoId === loadedId && reconciledTarget.current[id] !== d.videoId) {
+        } else if (action === "reconcile") {
           // Reconcile a loaded track's discrete state ONCE (deduped per videoId) — so a
           // republished snapshot can't stomp a non-anchor controller's live cue/loop/stem
           // edits; ongoing changes cross as intents.
@@ -253,8 +261,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // from the now-stale snapshot position would get yanked forward an instant later —
         // the audible skip on join. Only start from the snapshot when no tick is driving.
         const deck = engine.deck(id);
-        const tickDriving = performance.now() - (lastTickAt.current[id] ?? 0) < 1000;
-        if (d.playing && !deck.playing && !tickDriving) {
+        if (shouldStartOnDecode({ snapPlaying: d.playing, deckPlaying: deck.playing, sinceLastTickMs: performance.now() - (lastTickAt.current[id] ?? 0) })) {
           engine.resume();
           deck.seek(d.position);
           deck.play();
@@ -469,34 +476,34 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         if (!t) return;
         lastTickAt.current[id] = now; // the anchor is ticking this deck (used by the join fallback)
         if (!deck.buffer || scrubbing.current[id]) return; // don't fight a local scrub
-        const drift = Math.abs(deck.position() - t.pos);
-        if (t.playing && !deck.playing) {
+        // The drift-correction decision (see sessionFollow) → perform the named side effect.
+        // A tick is a STALE snapshot of a moving clock and REAL rewinds arrive as seek INTENTS,
+        // so a steady-playing follower is only ever pulled FORWARD (a lead is just latency, or a
+        // momentarily-frozen suspended-mobile master clock; seeking BACK to it then replaying it
+        // every grace window was the "loops a ~second forever, never catches up" bug).
+        const action = decideFollowTick({
+          masterPlaying: t.playing,
+          deckPlaying: deck.playing,
+          deckPos: deck.position(),
+          masterPos: t.pos,
+          sinceFollowSeekMs: now - followSeekAt.current[id],
+        });
+        if (action.kind === "start") {
           engine.resume(); // iOS starts suspended
-          if (drift > 0.05) deck.seek(t.pos); // catch up cleanly BEFORE the source starts
+          if (action.seek) deck.seek(t.pos); // catch up cleanly BEFORE the source starts
           deck.play();
           followSeekAt.current[id] = now;
           flipped = true;
-        } else if (!t.playing && deck.playing) {
+        } else if (action.kind === "stop") {
           deck.pause();
-          if (drift > 0.05) deck.seek(t.pos); // land on the master's paused position
+          if (action.seek) deck.seek(t.pos); // land on the master's paused position
           followSeekAt.current[id] = now;
           flipped = true;
-        } else if (deck.playing) {
-          // Steady audible playback. The tick is a STALE snapshot of a moving clock and REAL
-          // rewinds arrive as seek INTENTS (see the transport handler) — so the tick must only
-          // ever pull a follower FORWARD, when it has genuinely fallen BEHIND (decoded late /
-          // drifted slow). A positive lead is just network latency, or an anchor whose audio
-          // clock is momentarily FROZEN (a suspended mobile master sends a non-advancing pos
-          // with playing:true); seeking BACKWARD to that stale pos — then replaying it every
-          // grace window — was the "loops a ~second forever, never catches up" bug. So correct
-          // only a real lag, never a lead. 1.2s grace prevents back-to-back catch-ups.
-          const behind = t.pos - deck.position(); // >0 = we're behind the already-stale tick
-          if (behind > 0.6 && now - followSeekAt.current[id] > 1200) {
-            deck.seek(t.pos);
-            followSeekAt.current[id] = now;
-          }
-        } else {
-          if (drift > 0.12) deck.seek(t.pos); // both paused → tight align is silent, no skip
+        } else if (action.kind === "catchup") {
+          deck.seek(t.pos); // genuinely behind past the grace window → pull forward, reset grace
+          followSeekAt.current[id] = now;
+        } else if (action.kind === "align") {
+          deck.seek(t.pos); // both paused → tight align is silent, no skip
         }
         // Reliable stem-state convergence: apply the anchor's authoritative per-stem mute/
         // gain when present, but SKIP a stem we ourselves touched in the last 400 ms so our

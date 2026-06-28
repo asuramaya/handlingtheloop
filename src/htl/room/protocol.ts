@@ -97,6 +97,13 @@ export interface DeckTick {
   // intent without re-sending it every tick. g = gains, m = mutes, both length-4 in the
   // fixed stem order [drums, bass, vocals, other]. Absent on most ticks.
   stems?: { g: number[]; m: boolean[] };
+  // The videoId the anchor has loaded on THIS deck, stamped every tick (cheap — 11 chars). A
+  // follower whose deck holds a DIFFERENT track (a `load` lost/failed on a flaky link) uses this
+  // to DETECT the divergence and refuse to drive the wrong buffer — the "shared board, wrong song"
+  // guard — then self-heals by reloading the anchor's track. null = deck empty; absent = an older
+  // anchor that doesn't stamp (→ the follower can't detect and behaves as before). See
+  // sessionFollow.decideTickResync.
+  vid?: string | null;
 }
 export type TickDecks = Record<DeckId, DeckTick>;
 

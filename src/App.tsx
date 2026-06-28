@@ -711,6 +711,7 @@ function AppBody() {
   // a tick is about to seek to the live one).
   const followSeekAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const lastTickAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  const resyncAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 }); // last tick-divergence reload attempt per deck
 
   const cycleTempoRange = useCallback(() => {
     const i = TEMPO_RANGES.indexOf(settings.tempoRange);
@@ -1807,6 +1808,7 @@ function AppBody() {
     lastSnapshotRef,
     lastTickAt,
     followSeekAt,
+    resyncAt,
     scrubbing,
     stemTouch,
     snapFollowRef,
@@ -2693,7 +2695,9 @@ function AppBody() {
       const key = `${g.map((x) => x.toFixed(3)).join(",")}|${m.map((x) => (x ? 1 : 0)).join("")}`;
       const include = lastStemKey.current[id] !== key || tickN.current % 4 === 0;
       lastStemKey.current[id] = key;
-      const tick: DeckTick = { pos: deck.position(), playing: deck.playing, rate: deck.effectiveRate };
+      // Stamp the loaded videoId every tick (cheap) so a follower can detect a diverged deck and
+      // refuse to drive the wrong track — the "shared board, wrong song" guard. See decideTickResync.
+      const tick: DeckTick = { pos: deck.position(), playing: deck.playing, rate: deck.effectiveRate, vid: latest.current.loaded[id] };
       if (include) tick.stems = { g, m };
       return tick;
     };

@@ -12,7 +12,7 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
-import { decideFollowTick, decideSnapshotDeck, decideStemConverge, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import { decideFollowTick, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import type { Settings } from "@htl/state";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
@@ -37,6 +37,7 @@ export interface SessionSyncDeps {
   lastSnapshotRef: MutableRefObject<SessionSnapshot | null>;
   lastTickAt: MutableRefObject<Record<DeckId, number>>;
   followSeekAt: MutableRefObject<Record<DeckId, number>>;
+  resyncAt: MutableRefObject<Record<DeckId, number>>; // last divergence-reload attempt per deck (tick guard)
   scrubbing: MutableRefObject<Record<DeckId, boolean>>;
   stemTouch: MutableRefObject<Record<DeckId, Record<string, number>>>;
   snapFollowRef: MutableRefObject<boolean>;
@@ -57,7 +58,7 @@ export interface SessionSync {
 }
 
 export function useSessionSync(deps: SessionSyncDeps): SessionSync {
-  const { engine, refresh } = useSpine();
+  const { engine, refresh, roomRef } = useSpine();
   const {
     setStatusFor,
     loadTrackToDeck,
@@ -76,6 +77,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     lastSnapshotRef,
     lastTickAt,
     followSeekAt,
+    resyncAt,
     scrubbing,
     stemTouch,
     snapFollowRef,
@@ -475,6 +477,26 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         const deck = engine.deck(id);
         if (!t) return;
         lastTickAt.current[id] = now; // the anchor is ticking this deck (used by the join fallback)
+        // Track-identity guard (the "shared board, wrong song" fix): the anchor stamps each tick
+        // with the videoId it holds on this deck. If ours differs, a load was lost/failed on a
+        // flaky link — DON'T drive the wrong buffer; freeze it and self-heal by reloading the
+        // anchor's track (throttled; force-load defeats a stuck load-guard). Also pulls a fresh
+        // snapshot so the new track's cue/loop/fx land. See sessionFollow.decideTickResync.
+        const vid = t.vid;
+        const loadingThis = vid != null && (roomLoadTarget.current[id] === vid || loadingVid.current[id] === vid);
+        const resync = decideTickResync({ tickVid: vid, loadedId: latest.current.loaded[id], loadingThisVid: loadingThis, sinceResyncMs: now - (resyncAt.current[id] ?? 0) });
+        if (resync !== "drive") {
+          if (resync === "load" || resync === "force-load") {
+            resyncAt.current[id] = now;
+            if (resync === "force-load") {
+              roomLoadTarget.current[id] = null; // defeat a stuck dedupe guard
+              loadingVid.current[id] = "";
+            }
+            runRoomLoad(id, vid!, { videoId: vid!, title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm: null });
+            roomRef.current?.requestState(); // pull the authoritative snapshot for the new track's discrete state
+          }
+          return; // diverged → never drive this deck
+        }
         if (!deck.buffer || scrubbing.current[id]) return; // don't fight a local scrub
         // The drift-correction decision (see sessionFollow) → perform the named side effect.
         // A tick is a STALE snapshot of a moving clock and REAL rewinds arrive as seek INTENTS,
@@ -544,7 +566,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       });
       if (flipped) refresh();
     },
-    [engine, refresh],
+    [engine, refresh, runRoomLoad],
   );
 
   return { runRoomLoad, applyRoomSnapshot, onRoomIntent, onRoomTick };

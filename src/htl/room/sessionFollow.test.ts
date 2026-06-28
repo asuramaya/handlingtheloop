@@ -3,6 +3,7 @@ import {
   decideFollowTick,
   decideSnapshotDeck,
   decideStemConverge,
+  decideTickResync,
   shouldStartOnDecode,
   BEHIND_THRESHOLD,
   SEEK_GRACE_MS,
@@ -10,8 +11,11 @@ import {
   FLIP_SEEK_DRIFT,
   TICK_DRIVING_MS,
   STEM_TOUCH_GRACE_MS,
+  RESYNC_RETRY_MS,
+  RESYNC_STUCK_MS,
   type FollowTickInput,
   type StemConvergeInput,
+  type TickResyncInput,
 } from "./sessionFollow";
 
 // The follower's drift-correction core. These cases lock the exact thresholds and the hard-won
@@ -177,5 +181,52 @@ describe("decideStemConverge", () => {
     // already agree → no flip
     expect(decideStemConverge({ ...settled, localActive: true, masterMuted: false }).setMute).toBe(false);
     expect(decideStemConverge({ ...settled, localActive: false, masterMuted: true }).setMute).toBe(false);
+  });
+});
+
+// The track-identity guard: the anchor stamps each tick with the videoId it holds on a deck; a
+// follower whose deck holds a DIFFERENT track must stop driving it and self-heal. This is the core
+// of the "shared board, wrong song" fix — only a POSITIVE mismatch acts; ambiguity drives normally.
+describe("decideTickResync", () => {
+  const match: TickResyncInput = { tickVid: "trackA00001", loadedId: "trackA00001", loadingThisVid: false, sinceResyncMs: 99999 };
+
+  it("drives when identity matches", () => {
+    expect(decideTickResync(match)).toBe("drive");
+  });
+
+  it("drives (no intervention) when the anchor doesn't stamp a vid — old build", () => {
+    expect(decideTickResync({ ...match, tickVid: undefined, loadedId: "anything" })).toBe("drive");
+  });
+
+  it("drives when the anchor's deck is empty (tickVid null) — only a positive mismatch acts", () => {
+    expect(decideTickResync({ ...match, tickVid: null, loadedId: "trackA00001" })).toBe("drive");
+  });
+
+  describe("diverged (anchor on a different track than us)", () => {
+    const diverged = { tickVid: "anchorVid01", loadedId: "ourOldVid01", loadingThisVid: false, sinceResyncMs: 99999 };
+
+    it("starts a reload when nothing is loading the anchor's track and the throttle elapsed", () => {
+      expect(decideTickResync(diverged)).toBe("load");
+      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS })).toBe("load"); // == throttle → fire
+    });
+
+    it("waits (holds, doesn't drive) within the retry throttle", () => {
+      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS - 1 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, sinceResyncMs: 0 })).toBe("wait");
+    });
+
+    it("a fresh divergence (loadedId null, never loaded) still triggers a load", () => {
+      expect(decideTickResync({ ...diverged, loadedId: null })).toBe("load");
+    });
+
+    it("waits while a load for the anchor's track is genuinely in flight (don't abort a slow 4G load)", () => {
+      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS - 1 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: 0 })).toBe("wait");
+    });
+
+    it("force-loads when an in-flight load has stalled past the stuck window (defeat a stuck guard)", () => {
+      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS })).toBe("force-load");
+      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS + 1 })).toBe("force-load");
+    });
   });
 });

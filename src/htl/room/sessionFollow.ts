@@ -95,6 +95,39 @@ export function shouldStartOnDecode(p: JoinStartInput): boolean {
   return p.snapPlaying && !p.deckPlaying && !tickDriving;
 }
 
+// ── Track-identity divergence (the "shared board, wrong song" guard) ──────────────────────────────
+// Between reload attempts while a deck is diverged and NOTHING is loading the anchor's track. The
+// first attempt is immediate (resyncAt starts at 0 → sinceResyncMs is large). Milliseconds.
+export const RESYNC_RETRY_MS = 3000;
+// How long to tolerate an in-flight load of the anchor's track before assuming a stuck load-guard
+// and forcing a fresh attempt — long enough that a genuine slow-link (4G) load completes first. Ms.
+export const RESYNC_STUCK_MS = 15000;
+
+// A follower's per-deck action once the anchor stamps track identity on the tick (DeckTick.vid).
+// `tickVid` is the videoId the anchor holds on this deck; `loadedId` is what the follower actually
+// has. Match (or an old anchor that doesn't stamp) → drive normally. Otherwise the deck has
+// DIVERGED — a load was lost/failed on a flaky link — and must NOT be driven (applying the anchor's
+// playhead/transport to the wrong buffer is the bug). Self-heal by reloading the anchor's track,
+// throttled, with a force path that defeats a stuck load-guard.
+export type TickResync =
+  | "drive" //       identity matches (or can't tell) → run the normal tick logic
+  | "wait" //        diverged, but a load is in flight / within the retry throttle → hold, don't drive
+  | "load" //        diverged, nothing loading this vid, throttle elapsed → start a reload
+  | "force-load"; // diverged, a load has been "in flight" too long (stuck guard) → reset + reload
+
+export interface TickResyncInput {
+  tickVid: string | null | undefined; // the anchor's loaded videoId for this deck (absent on old anchors)
+  loadedId: string | null; //           what the follower currently holds
+  loadingThisVid: boolean; //           a load for tickVid is already in flight on this deck
+  sinceResyncMs: number; //             now − the last resync attempt for this deck
+}
+
+export function decideTickResync(p: TickResyncInput): TickResync {
+  if (p.tickVid == null || p.tickVid === p.loadedId) return "drive"; // identity matches / can't tell
+  if (!p.loadingThisVid) return p.sinceResyncMs >= RESYNC_RETRY_MS ? "load" : "wait";
+  return p.sinceResyncMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
+}
+
 // A stem we ourselves touched within this window is left alone, so our own in-flight change isn't
 // briefly stomped by a slightly-stale echo of the anchor's authoritative state. Milliseconds.
 export const STEM_TOUCH_GRACE_MS = 400;

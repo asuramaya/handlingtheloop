@@ -169,6 +169,24 @@
 .keybinds-reset:hover {
   border-color: var(--accent);
 }
+.keybinds-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 2px 6px;
+  padding: 7px 9px;
+  border: 1px solid #c0683a;
+  border-radius: 6px;
+  background: rgba(192, 104, 58, 0.12);
+}
+.keybinds-conflict {
+  font-size: 11px;
+  color: var(--text);
+}
+.keybinds-conflict .bind-key {
+  font-weight: 600;
+  color: #e0905c;
+}
 .bind-group-title {
   margin: 10px 2px 2px;
   font-size: 10px;

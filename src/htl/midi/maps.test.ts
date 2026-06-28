@@ -92,22 +92,28 @@ describe("exportMap / parseMap round-trip", () => {
     expect(parsed!.name).toBe("Imported map");
   });
 
-  it("NOTE: parseMap does NOT validate individual binding entries — junk inside bindings survives", () => {
-    // POSSIBLE BUG / silent-data-loss inverse: unlike parseKeyProfile, parseMap casts
-    // `m.bindings as MidiLearnMap` wholesale with no per-entry shape check. So a
-    // malformed binding (missing status/data/control, wrong types) is passed through
-    // verbatim rather than being dropped or rejected. We assert the OBSERVED behaviour
-    // (it survives) so the test documents the gap rather than pretending it's filtered.
+  it("drops malformed binding entries on import, keeping the well-formed ones", () => {
+    // A shared map is untrusted: each binding must be {control:{kind}, status:number,
+    // data:number, type:note|cc|cc14}. Junk entries are filtered out (not passed to the
+    // dispatcher), mirroring the colour/key-profile whitelists.
     const text = JSON.stringify({
       name: "n",
-      bindings: { good: learn["deck.play.A"], garbage: { not: "a binding" }, alsoJunk: 42 },
+      bindings: {
+        good: learn["deck.play.A"],
+        alsoGood: learn["deck.tempo.A"],
+        noControl: { status: 0x90, data: 1, type: "note" },
+        badType: { control: { kind: "action", action: "x" }, status: 0x90, data: 1, type: "sysex" },
+        stringStatus: { control: { kind: "action", action: "x" }, status: "0x90", data: 1, type: "note" },
+        garbage: { not: "a binding" },
+        alsoJunk: 42,
+      },
     });
     const parsed = parseMap(text);
     expect(parsed).not.toBeNull();
     expect(parsed!.bindings.good).toEqual(learn["deck.play.A"]);
-    // junk passes straight through (no validation):
-    expect(parsed!.bindings.garbage).toEqual({ not: "a binding" });
-    expect((parsed!.bindings as Record<string, unknown>).alsoJunk).toBe(42);
+    expect(parsed!.bindings.alsoGood).toEqual(learn["deck.tempo.A"]);
+    // every malformed entry is gone:
+    expect(Object.keys(parsed!.bindings).sort()).toEqual(["alsoGood", "good"]);
   });
 });
 

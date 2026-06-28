@@ -69,12 +69,12 @@ describe("toCamelot — input parsing", () => {
     expect(toCamelot("  A  ", "minor")).toBe("8A");
   });
 
-  it("matches the scale by a case-insensitive 'min' prefix", () => {
+  it("matches the scale by a case-insensitive 'min' / 'maj' prefix", () => {
     expect(toCamelot("A", "MINOR")).toBe("8A");
     expect(toCamelot("A", "Min")).toBe("8A");
-    // anything not starting with 'min' is treated as major
     expect(toCamelot("A", "major")).toBe("11B");
     expect(toCamelot("A", "maj")).toBe("11B");
+    expect(toCamelot("A", "  Major  ")).toBe("11B"); // trimmed
   });
 
   it("resolves enharmonic flats to the same pitch class as the sharp", () => {
@@ -98,14 +98,13 @@ describe("toCamelot — invalid input → null", () => {
     expect(toCamelot("xyz", "minor")).toBeNull();
   });
 
-  // NOTE: the assignment expected "null scale → null", but the implementation
-  // (features.ts:41-42) treats any non-"min*" scale — including null/undefined —
-  // as MAJOR rather than returning null. So a valid note with a null scale yields
-  // the major Camelot code, NOT null. Documenting actual behavior here; if "unknown
-  // scale → null" is the intended contract this is a latent bug (features.ts:41).
-  it("null/unknown scale with a valid note falls through to MAJOR (documents actual behavior)", () => {
-    expect(toCamelot("C", null)).toBe("8B");
-    expect(toCamelot("C", undefined)).toBe("8B");
-    expect(toCamelot("A", 42)).toBe("11B");
+  // Mode must be explicitly known. An absent/non-string/unrecognized scale → null (not a silent
+  // assume-major), since 8A and 8B are different keys and a wrong mode corrupts harmonic mixing.
+  it("missing / unknown scale with a valid note → null", () => {
+    expect(toCamelot("C", null)).toBeNull();
+    expect(toCamelot("C", undefined)).toBeNull();
+    expect(toCamelot("A", 42)).toBeNull();
+    expect(toCamelot("A", "dorian")).toBeNull(); // a modal scale isn't major/minor → unknown
+    expect(toCamelot("A", "")).toBeNull();
   });
 });

@@ -4,6 +4,7 @@ import {
   DEFAULT_BINDINGS,
   mergeBindings,
   bindingIndex,
+  bindingConflicts,
   codeLabel,
   type KeyBindings,
 } from "./keybinds";
@@ -122,8 +123,41 @@ describe("bindingIndex", () => {
     });
     const idx = bindingIndex(b);
     // cue is later in KEY_ACTIONS and its secondary Space is written after play's primary.
-    // NOTE: footgun again — 'play' loses Space silently. keybinds.ts:99-100.
+    // 'play' loses Space — but it's no longer SILENT: bindingConflicts surfaces it (below).
     expect(idx.get("Space")).toBe("cue");
+  });
+});
+
+// --- bindingConflicts --------------------------------------------------------
+// The companion that makes a collision visible (the Keys editor renders a warning), so the
+// last-write-wins orphaning above is never silent.
+describe("bindingConflicts", () => {
+  test("the shipped DEFAULT map is collision-free", () => {
+    // A self-colliding default would silently orphan an action on a fresh install — guard it.
+    expect(bindingConflicts(DEFAULT_BINDINGS).size).toBe(0);
+  });
+
+  test("reports a code claimed by two different actions, in KEY_ACTIONS order", () => {
+    const b = mergeBindings({ sync: { primary: "F9", secondary: "" }, keyMatch: { primary: "F9", secondary: "" } });
+    const c = bindingConflicts(b);
+    expect(c.get("F9")).toEqual(["sync", "keyMatch"]); // sync earlier than keyMatch
+    expect(c.size).toBe(1);
+  });
+
+  test("catches the version-drift case: a saved binding colliding with a shipped default", () => {
+    // slip's DEFAULT primary is KeyZ; an older saved map bound spinback to KeyZ too.
+    const b = mergeBindings({ spinback: { primary: "KeyZ", secondary: "" } });
+    expect(bindingConflicts(b).get("KeyZ")).toEqual(["spinback", "slip"]);
+  });
+
+  test("an action reusing the SAME code for its own primary + secondary is NOT a conflict", () => {
+    const b = mergeBindings({ cue: { primary: "KeyC", secondary: "KeyC" } });
+    expect(bindingConflicts(b).has("KeyC")).toBe(false);
+  });
+
+  test("blank slots never count as a collision", () => {
+    // Every beatLoop default is "" — many actions share the empty string but it's not a conflict.
+    expect(bindingConflicts(DEFAULT_BINDINGS).has("")).toBe(false);
   });
 });
 

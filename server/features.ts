@@ -38,8 +38,14 @@ export function toCamelot(keyKey: unknown, keyScale: unknown): string | null {
   if (typeof keyKey !== "string") return null;
   const pc = PC[keyKey.trim().toUpperCase()];
   if (pc == null) return null;
-  const minor = typeof keyScale === "string" && keyScale.toLowerCase().startsWith("min");
-  return minor ? CAMELOT_MINOR[pc] : CAMELOT_MAJOR[pc];
+  // Mode must be explicitly known — 8A and 8B are different keys, so a missing/unknown
+  // scale can't be placed on the wheel. Don't silently assume major (that mislabels every
+  // minor track whose key_scale is absent and corrupts harmonic-mix suggestions).
+  if (typeof keyScale !== "string") return null;
+  const s = keyScale.trim().toLowerCase();
+  if (s.startsWith("min")) return CAMELOT_MINOR[pc];
+  if (s.startsWith("maj")) return CAMELOT_MAJOR[pc];
+  return null; // unrecognized scale → unknown
 }
 
 async function jget(url: string): Promise<Record<string, unknown> | null> {

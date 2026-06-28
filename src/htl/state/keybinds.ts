@@ -91,7 +91,11 @@ export function mergeBindings(saved: KeyBindings | undefined): KeyBindings {
   return out;
 }
 
-// code → actionId lookup for the keydown dispatcher (primary + secondary both map).
+// code → actionId lookup for the keydown dispatcher (primary + secondary both map). On a
+// collision the LAST writer (later in KEY_ACTIONS) wins — deterministic, but it orphans the
+// earlier action, so the Keys editor surfaces conflicts (bindingConflicts) rather than letting
+// a key silently drive the wrong action. The editor steals a code on edit, but a partial saved
+// map can still collide with a newly-shipped DEFAULT (version drift), so this stays defensive.
 export function bindingIndex(bindings: KeyBindings): Map<string, string> {
   const m = new Map<string, string>();
   for (const a of KEY_ACTIONS) {
@@ -100,6 +104,25 @@ export function bindingIndex(bindings: KeyBindings): Map<string, string> {
     if (b?.secondary) m.set(b.secondary, a.id);
   }
   return m;
+}
+
+// Codes bound to MORE THAN ONE action → the set the Keys editor warns about. A single action
+// reusing the same code for its own primary + secondary is NOT a conflict (it drives one action).
+// Empty map = clean. Keyed by code → the distinct action ids that claim it (in KEY_ACTIONS order).
+export function bindingConflicts(bindings: KeyBindings): Map<string, string[]> {
+  const byCode = new Map<string, string[]>();
+  for (const a of KEY_ACTIONS) {
+    const b = bindings[a.id];
+    for (const code of [b?.primary, b?.secondary]) {
+      if (!code) continue;
+      const ids = byCode.get(code) ?? [];
+      if (!ids.includes(a.id)) ids.push(a.id);
+      byCode.set(code, ids);
+    }
+  }
+  const out = new Map<string, string[]>();
+  for (const [code, ids] of byCode) if (ids.length > 1) out.set(code, ids);
+  return out;
 }
 
 // Human label for a key code shown on the binding chips.

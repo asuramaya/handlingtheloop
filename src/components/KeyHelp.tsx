@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { KEY_ACTIONS, mergeBindings, codeLabel, type KeyBindings } from "@htl/state";
+import { KEY_ACTIONS, mergeBindings, bindingConflicts, codeLabel, type KeyBindings } from "@htl/state";
 
 interface KeyMapProps {
   bindings: KeyBindings; // the user's saved overrides (settings.keyBindings)
@@ -16,6 +16,16 @@ type Slot = "primary" | "secondary";
 export function KeyMap({ bindings, onChange }: KeyMapProps) {
   const merged = useMemo(() => mergeBindings(bindings), [bindings]);
   const [capturing, setCapturing] = useState<string | null>(null); // `${id}:${slot}`
+
+  // Surface any key bound to more than one action so a collision is never silent — the
+  // dispatcher resolves it last-writer-wins (one action gets orphaned). Editing a chip steals
+  // the code, but a saved map can still collide with a newly-shipped default (version drift).
+  const conflicts = useMemo(() => bindingConflicts(merged), [merged]);
+  const actionLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of KEY_ACTIONS) m.set(a.id, a.label);
+    return m;
+  }, []);
 
   // While a chip is armed, the next key press becomes its binding. We capture on the
   // window in the capture phase so nothing else (incl. the deck handler) sees it.
@@ -100,6 +110,15 @@ export function KeyMap({ bindings, onChange }: KeyMapProps) {
           Reset all
         </button>
       </div>
+      {conflicts.size > 0 && (
+        <div className="keybinds-conflicts" role="alert">
+          {[...conflicts].map(([code, ids]) => (
+            <div className="keybinds-conflict" key={code}>
+              <span className="bind-key">{codeLabel(code)}</span> drives {ids.map((id) => actionLabel.get(id) ?? id).join(" + ")} — only the last takes effect; rebind one.
+            </div>
+          ))}
+        </div>
+      )}
       {groups.map(({ group, actions }) => (
         <div className="bind-group" key={group}>
           <div className="bind-group-title">{group}</div>

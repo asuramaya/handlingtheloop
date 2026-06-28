@@ -70,6 +70,7 @@ export {
   DEFAULT_BINDINGS,
   mergeBindings,
   bindingIndex,
+  bindingConflicts,
   codeLabel,
 } from "./keybinds";
 export {

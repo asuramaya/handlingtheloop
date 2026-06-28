@@ -7,6 +7,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# --- pre-deploy gate: never ship red ---
+# `pnpm run build` below already runs the src typecheck (tsc -b), so here we add the
+# worker project's typecheck + the full test suite. Any failure aborts before the edge
+# is touched. Skip with SKIP_TESTS=1 ./deploy.sh only for a known-green hotfix.
+if [ "${SKIP_TESTS:-0}" != "1" ]; then
+  echo "› pre-deploy gate: worker typecheck + tests"
+  pnpm exec tsc -p tsconfig.node.json
+  pnpm test
+fi
+
 pnpm run build
 
 rm -rf dist/models

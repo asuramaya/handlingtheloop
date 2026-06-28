@@ -14,7 +14,8 @@
     "worker:lan:https": "vite build && rm -rf dist/models && wrangler dev --ip 0.0.0.0 --local-protocol https",
     "deploy": "vite build && wrangler deploy",
     "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "tsc -b && tsc -p tsconfig.node.json && vitest run"
   },
   "dependencies": {
     "qrcode-generator": "^2.0.4",

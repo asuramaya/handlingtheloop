@@ -94,3 +94,27 @@ export function shouldStartOnDecode(p: JoinStartInput): boolean {
   const tickDriving = p.sinceLastTickMs < TICK_DRIVING_MS;
   return p.snapPlaying && !p.deckPlaying && !tickDriving;
 }
+
+// A stem we ourselves touched within this window is left alone, so our own in-flight change isn't
+// briefly stomped by a slightly-stale echo of the anchor's authoritative state. Milliseconds.
+export const STEM_TOUCH_GRACE_MS = 400;
+
+// Per-stem convergence on a tick that carries the anchor's authoritative stem mixer state. Decides,
+// for ONE stem, whether to re-apply the gain and/or the mute — idempotently (only when a value
+// actually moved) and never within the touch-grace. Pure: the caller reads/writes the deck.
+export interface StemConvergeInput {
+  sinceTouchMs: number; // ms since we last touched this stem (now - stemTouch[id][name])
+  masterGain: number | null | undefined; // the anchor's gain for this stem (absent on some ticks)
+  masterMuted: boolean; // the anchor's mute for this stem
+  localLevel: number; // our current stem gain (deck.stemLevel)
+  localActive: boolean; // our current state: true = audible (NOT muted) — deck.stemActive
+}
+
+export function decideStemConverge(p: StemConvergeInput): { setGain: boolean; setMute: boolean } {
+  if (p.sinceTouchMs < STEM_TOUCH_GRACE_MS) return { setGain: false, setMute: false };
+  const setGain = p.masterGain != null && p.localLevel !== p.masterGain;
+  // active === muted means our audible-state disagrees with the anchor's desired mute → flip it.
+  // (active=true & want-muted=true → mute; active=false & want-muted=false → unmute.)
+  const setMute = p.localActive === p.masterMuted;
+  return { setGain, setMute };
+}

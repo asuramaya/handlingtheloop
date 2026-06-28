@@ -12,7 +12,7 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
-import { decideFollowTick, decideSnapshotDeck, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import { decideFollowTick, decideSnapshotDeck, decideStemConverge, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import type { Settings } from "@htl/state";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
@@ -512,14 +512,21 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         if (t.stems) {
           const touched = stemTouch.current[id];
           STEM_KEYS.forEach((n, i) => {
-            if (now - (touched[n] ?? 0) < 400) return;
             const g = t.stems!.g[i];
             const muted = !!t.stems!.m[i];
-            if (g != null && deck.stemLevel(n) !== g) {
-              deck.setStemGain(n, g);
+            // Idempotent per-stem convergence with the 400 ms self-touch grace (see sessionFollow).
+            const dec = decideStemConverge({
+              sinceTouchMs: now - (touched[n] ?? 0),
+              masterGain: g,
+              masterMuted: muted,
+              localLevel: deck.stemLevel(n),
+              localActive: deck.stemActive(n),
+            });
+            if (dec.setGain) {
+              deck.setStemGain(n, g!);
               flipped = true;
             }
-            if (deck.stemActive(n) === muted) {
+            if (dec.setMute) {
               deck.setStemMute(n, muted);
               flipped = true;
             }

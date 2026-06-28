@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   decideFollowTick,
   decideSnapshotDeck,
+  decideStemConverge,
   shouldStartOnDecode,
   BEHIND_THRESHOLD,
   SEEK_GRACE_MS,
   PAUSED_ALIGN_DRIFT,
   FLIP_SEEK_DRIFT,
   TICK_DRIVING_MS,
+  STEM_TOUCH_GRACE_MS,
   type FollowTickInput,
+  type StemConvergeInput,
 } from "./sessionFollow";
 
 // The follower's drift-correction core. These cases lock the exact thresholds and the hard-won
@@ -137,5 +140,42 @@ describe("shouldStartOnDecode", () => {
   it("does nothing when the snapshot is paused or the deck already plays", () => {
     expect(shouldStartOnDecode({ snapPlaying: false, deckPlaying: false, sinceLastTickMs: 99999 })).toBe(false);
     expect(shouldStartOnDecode({ snapPlaying: true, deckPlaying: true, sinceLastTickMs: 99999 })).toBe(false);
+  });
+});
+
+// Per-stem convergence on a tick: idempotent (only flip what moved), with the 400 ms self-touch
+// grace, and the active===muted mute-disagreement encoding.
+describe("decideStemConverge", () => {
+  const settled: StemConvergeInput = { sinceTouchMs: 5000, masterGain: 0.8, masterMuted: false, localLevel: 0.8, localActive: true };
+
+  it("leaves a freshly self-touched stem entirely alone (the grace window)", () => {
+    const divergent = { ...settled, masterGain: 0.2, masterMuted: true }; // both would otherwise move
+    expect(decideStemConverge({ ...divergent, sinceTouchMs: STEM_TOUCH_GRACE_MS - 1 })).toEqual({ setGain: false, setMute: false });
+    // == grace boundary → no longer protected (strictly less-than guards it)
+    expect(decideStemConverge({ ...divergent, sinceTouchMs: STEM_TOUCH_GRACE_MS })).toEqual({ setGain: true, setMute: true });
+  });
+
+  it("is idempotent — no writes when already converged", () => {
+    expect(decideStemConverge(settled)).toEqual({ setGain: false, setMute: false });
+  });
+
+  it("sets the gain only when it differs and the anchor sent one", () => {
+    expect(decideStemConverge({ ...settled, masterGain: 0.3, localLevel: 0.8 }).setGain).toBe(true);
+    expect(decideStemConverge({ ...settled, masterGain: 0.8, localLevel: 0.8 }).setGain).toBe(false);
+    // anchor omitted the gain on this tick → never touch it
+    expect(decideStemConverge({ ...settled, masterGain: null, localLevel: 0.8 }).setGain).toBe(false);
+    expect(decideStemConverge({ ...settled, masterGain: undefined, localLevel: 0.8 }).setGain).toBe(false);
+    // a 0 gain is a real value, not "absent" — must converge
+    expect(decideStemConverge({ ...settled, masterGain: 0, localLevel: 0.8 }).setGain).toBe(true);
+  });
+
+  it("flips mute exactly when our audible-state disagrees with the anchor's want", () => {
+    // audible (active) but anchor wants muted → mute
+    expect(decideStemConverge({ ...settled, localActive: true, masterMuted: true }).setMute).toBe(true);
+    // muted but anchor wants audible → unmute
+    expect(decideStemConverge({ ...settled, localActive: false, masterMuted: false }).setMute).toBe(true);
+    // already agree → no flip
+    expect(decideStemConverge({ ...settled, localActive: true, masterMuted: false }).setMute).toBe(false);
+    expect(decideStemConverge({ ...settled, localActive: false, masterMuted: true }).setMute).toBe(false);
   });
 });

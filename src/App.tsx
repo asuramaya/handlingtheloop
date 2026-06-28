@@ -317,7 +317,8 @@ export function App() {
   const [, setTick] = useState(0);
   const refresh = useCallback(() => setTick((n) => n + 1), []);
   const emitRef = useRef<(intent: Intent) => void>(() => {});
-  const spine = useMemo<Spine>(() => ({ engine, refresh, emitRef }), [engine, refresh, emitRef]);
+  const roomRef = useRef<ReturnType<typeof useRoom> | null>(null); // filled in AppBody once useRoom has run
+  const spine = useMemo<Spine>(() => ({ engine, refresh, emitRef, roomRef }), [engine, refresh, emitRef, roomRef]);
   return (
     <SpineContext.Provider value={spine}>
       <AppBody />
@@ -326,7 +327,7 @@ export function App() {
 }
 
 function AppBody() {
-  const { engine, refresh, emitRef } = useSpine();
+  const { engine, refresh, emitRef, roomRef } = useSpine();
 
   const library = useLibrary();
 
@@ -2546,11 +2547,11 @@ function AppBody() {
   // Publish THIS device's stem envelopes to the session (host side) so stem-less
   // remotes can render the 4-lane display. Via a ref so the deck callback below reads
   // live room state without re-binding on every change.
-  const roomRef = useRef(room);
   roomRef.current = room;
   const sendHostStemView = useCallback(
     (id: DeckId) => {
       const r = roomRef.current;
+      if (!r) return;
       // Stream from whichever device actually holds the stems and speaks for the board
       // (the clock OR any controller). extractStemView returns null unless this deck has
       // REAL local stems, so a stem-less remote can never publish here.
@@ -2572,6 +2573,7 @@ function AppBody() {
   const lastLyricsSent = useRef<Record<DeckId, LyricsLine[] | null>>({ A: null, B: null });
   const sendHostLyrics = useCallback((id: DeckId, force = false) => {
     const r = roomRef.current;
+    if (!r) return;
     if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
     const lines = captionsRef.current[id];
     if (!lines || !lines.length) return;
@@ -2595,7 +2597,7 @@ function AppBody() {
   // 4-lane view back to the requester. If we already have neural stems, just (re)stream.
   const handleStemRequest = useCallback(
     (id: DeckId, modelId: string) => {
-      if (!roomRef.current.isAnchor) return;
+      if (!roomRef.current?.isAnchor) return;
       const vid = latest.current.loaded[id];
       const deck = engine.deck(id);
       if (!vid || !deck.buffer) return;

@@ -7,12 +7,16 @@
 import { createContext, useCallback, useContext } from "react";
 import type { MutableRefObject } from "react";
 import type { AudioEngine } from "@htl";
-import type { Intent } from "@htl/room";
+import type { Intent, useRoom } from "@htl/room";
 
 export interface Spine {
   engine: AudioEngine;
   refresh: () => void;
   emitRef: MutableRefObject<(intent: Intent) => void>;
+  // The live room, via a ref filled in AppBody once useRoom has run. Created up here (nullable,
+  // empty) so session code can read it WITHOUT the useRoom↔roomRef ordering cycle — that's the
+  // whole point: a session hook reads useSpine().roomRef instead of a ref declared after useRoom.
+  roomRef: MutableRefObject<ReturnType<typeof useRoom> | null>;
 }
 
 export const SpineContext = createContext<Spine | null>(null);

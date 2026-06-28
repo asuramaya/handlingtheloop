@@ -4,6 +4,7 @@ import {
   decideSnapshotDeck,
   decideStemConverge,
   decideTickResync,
+  isSocketStale,
   shouldStartOnDecode,
   BEHIND_THRESHOLD,
   SEEK_GRACE_MS,
@@ -228,5 +229,31 @@ describe("decideTickResync", () => {
       expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS })).toBe("force-load");
       expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS + 1 })).toBe("force-load");
     });
+  });
+});
+
+// Half-open socket detection: a joined follower that's heard nothing for staleMs is on a dead
+// socket and must reconnect. Only positive, unambiguous staleness trips it (no false reconnects).
+describe("isSocketStale", () => {
+  const live = { online: true, hasSocket: true, follower: true, lastRecvAt: 1000, now: 1000, staleMs: 6000 };
+
+  it("not stale while traffic is recent", () => {
+    expect(isSocketStale({ ...live, now: 1000 + 5999 })).toBe(false);
+  });
+
+  it("stale once silence reaches staleMs", () => {
+    expect(isSocketStale({ ...live, now: 1000 + 6000 })).toBe(true);
+    expect(isSocketStale({ ...live, now: 1000 + 9999 })).toBe(true);
+  });
+
+  it("never trips when offline, socketless, or not a joined follower", () => {
+    const longGap = { ...live, now: 1_000_000 };
+    expect(isSocketStale({ ...longGap, online: false })).toBe(false);
+    expect(isSocketStale({ ...longGap, hasSocket: false })).toBe(false);
+    expect(isSocketStale({ ...longGap, follower: false })).toBe(false); // anchor / lone / listener stays quiet legitimately
+  });
+
+  it("ignores a connection that hasn't received anything yet (let welcome land)", () => {
+    expect(isSocketStale({ ...live, lastRecvAt: 0, now: 1_000_000 })).toBe(false);
   });
 });

@@ -128,6 +128,27 @@ export function decideTickResync(p: TickResyncInput): TickResync {
   return p.sinceResyncMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
 }
 
+// ── Half-open socket detection (the 4G stall) ─────────────────────────────────────────────────────
+// A flaky link can STALL a socket without firing `onclose`: it looks online while silently dropping
+// everything the host sends. Only a JOINED FOLLOWER can rely on a steady inbound stream (the anchor
+// ticks ~4/s + presence), so silence for `staleMs` means the socket is dead and must be torn down
+// to force a reconnect → resync. The anchor itself, a lone session, or a passive listener may
+// legitimately be quiet, so they never trip this. `lastRecvAt === 0` = nothing received yet on this
+// connection (let `welcome` land first).
+export interface SocketStaleInput {
+  online: boolean; //      status === "online"
+  hasSocket: boolean; //   a live, non-closed socket exists
+  follower: boolean; //    joined AND a remote anchor exists (anchorId set and not us)
+  lastRecvAt: number; //   wall-clock ms of the last inbound message (0 = none yet)
+  now: number;
+  staleMs: number;
+}
+
+export function isSocketStale(p: SocketStaleInput): boolean {
+  if (!p.online || !p.hasSocket || !p.follower || p.lastRecvAt === 0) return false;
+  return p.now - p.lastRecvAt >= p.staleMs;
+}
+
 // A stem we ourselves touched within this window is left alone, so our own in-flight change isn't
 // briefly stomped by a slightly-stale echo of the anchor's authoritative state. Milliseconds.
 export const STEM_TOUCH_GRACE_MS = 400;

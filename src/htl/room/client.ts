@@ -5,6 +5,7 @@
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { ENGINE_VERSION } from "./protocol";
+import { isSocketStale } from "./sessionFollow";
 import { SetCapture, type CapturedSet } from "./setCapture";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
@@ -150,6 +151,14 @@ export class RoomClient {
   private retry = 0;
   private closed = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  // Half-open-socket watchdog: a flaky 4G link can STALL a socket (no data) without ever firing
+  // `onclose`, so the client believes it's online while silently dropping everything the host
+  // sends — the guest then drives a stale board. A joined follower hears the anchor's 4/s tick, so
+  // no inbound traffic for STALE_MS means the socket is dead → force a clean reconnect → resync.
+  private static STALE_MS = 6000;
+  private static WATCHDOG_MS = 2000;
+  private lastRecvAt = 0; // wall-clock of the last inbound message (0 = none yet this connection)
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   // Desired state (persisted), so a transient reconnect OR a page refresh re-engages
   // where we left off.
   private wantJoined: boolean;
@@ -178,6 +187,7 @@ export class RoomClient {
 
   connect(): void {
     this.closed = false;
+    if (!this.watchdog) this.watchdog = setInterval(() => this.checkLiveness(), RoomClient.WATCHDOG_MS);
     this.open();
   }
 
@@ -187,6 +197,10 @@ export class RoomClient {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
+    }
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = null;
     }
     this.ws?.close();
     this.ws = null;
@@ -385,6 +399,7 @@ export class RoomClient {
     this.ws = ws;
     ws.onopen = () => {
       this.retry = 0;
+      this.lastRecvAt = Date.now(); // give the fresh connection a full STALE_MS window for `welcome`
       this.setStatus("online");
     };
     ws.onmessage = (ev) => this.onMessage(ev);
@@ -422,7 +437,31 @@ export class RoomClient {
     this.h.status?.(s);
   }
 
+  // Detect a half-open socket: it looks "online" but no data has arrived for STALE_MS. Only a
+  // JOINED FOLLOWER can rely on a steady inbound stream (the anchor ticks 4/s + presence) — the
+  // anchor itself, a lone session, or a passive listener may legitimately be quiet, so we don't
+  // reconnect them on silence. Force-closing fires `onclose` → scheduleReconnect → welcome →
+  // requestState, which re-syncs the current track + board (closing the 4G-stall divergence).
+  private checkLiveness(): void {
+    const follower = this.wantJoined && this.anchorId !== null && this.anchorId !== this.you;
+    const stale = isSocketStale({
+      online: this.status === "online",
+      hasSocket: !!this.ws && !this.closed,
+      follower,
+      lastRecvAt: this.lastRecvAt,
+      now: Date.now(),
+      staleMs: RoomClient.STALE_MS,
+    });
+    if (!stale) return;
+    try {
+      this.ws?.close(); // half-open → tear it down; the reconnect path pulls a fresh snapshot
+    } catch {
+      /* close can throw on some states — onclose/scheduleReconnect still runs */
+    }
+  }
+
   private onMessage(ev: MessageEvent): void {
+    this.lastRecvAt = Date.now(); // any inbound proves the socket is alive (watchdog liveness)
     let msg: ServerMsg;
     try {
       msg = JSON.parse(typeof ev.data === "string" ? ev.data : "") as ServerMsg;

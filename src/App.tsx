@@ -3199,6 +3199,7 @@ function AppBody() {
             smart={smartFaderArmed}
             enabled={xfaderEnabled}
             canControl={!boardLocked}
+            shift={shift}
             kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
             onToggleSmart={() => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false)}
             onToggleEnabled={() => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false)}

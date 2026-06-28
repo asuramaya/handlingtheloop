@@ -851,12 +851,69 @@
   background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
 }
-/* Smart-Fader keybind hint, tucked in the crossfader's top-right corner (above the track). */
-.xbar-kbd {
-  top: 2px;
-  right: 4px;
-  bottom: auto;
-  z-index: 4;
+/* SMART chip — the on-screen / touch home for the Smart-Fader arm (tap) + crossfader enable (hold)
+   toggles. A real flex sibling of the track (so it never overlaps the drag hit-area), sized to the
+   bar. Reads as a small board buttonoid; lights up when armed, goes dashed-dim when the crossfader
+   is off. Carries the keybind letter inside it (shown only under body.show-keys, desktop). */
+.xbar-smart {
+  flex: 0 0 auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  margin: 1px 0 0 6px;
+  padding: 0 10px;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--text) 62%, var(--line));
+  background: color-mix(in srgb, var(--panel) 70%, var(--line));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.12s, background 0.12s, box-shadow 0.18s, border-color 0.12s;
+}
+.xbar-smart:hover:not(:disabled) { border-color: color-mix(in srgb, var(--text) 36%, var(--line)); }
+/* ARMED — tapped on. Filled with the A↔B blend + a steady glow, echoing the breathing bar. */
+.xbar-smart.armed {
+  color: var(--bg);
+  border-color: transparent;
+  background: linear-gradient(90deg, var(--xa, #4ad), var(--xb, #d4a));
+  box-shadow: 0 0 9px 1px color-mix(in srgb, var(--xb, #d4a) 55%, transparent);
+}
+/* OFF — crossfader disabled (held/right-clicked). Dashed, dim, label struck through; a ⃠ leads it. */
+.xbar-smart.off {
+  border-style: dashed;
+  color: color-mix(in srgb, var(--text) 40%, var(--line));
+  background: transparent;
+  box-shadow: none;
+}
+.xbar-smart.off .xbar-smart-lbl { text-decoration: line-through; }
+.xbar-smart.off::before {
+  content: "⃠";
+  font-size: 12px;
+  line-height: 1;
+}
+.xbar-smart:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+/* SHIFTED — board shift held/latched flips the chip to its alt action (enable/disable the
+   crossfader). Same yellow shift tint as the deck banks, so the remap reads in one grammar
+   (overrides armed/off colour while shift is active; the gradient/strike return on release). */
+.xbar-smart.shifted {
+  color: var(--shift);
+  border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
+  border-style: solid;
+  background: color-mix(in srgb, var(--shift) 14%, var(--panel));
+  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
+}
+.xbar-smart.shifted .xbar-smart-lbl { text-decoration: none; }
+.xbar-smart.shifted::before { content: none; }
+/* The keybind letter rides inside the chip; .kbd already hides itself off body.show-keys / mobile. */
+.xbar-smart .kbd {
+  position: static;
+  opacity: 0.7;
 }
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first

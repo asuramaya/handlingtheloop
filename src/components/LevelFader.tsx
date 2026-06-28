@@ -24,8 +24,9 @@ export function LevelFader({ deck, accent, level, gainDb, label, mirror, onLevel
         <StereoMeter deck={deck} axis="h" accent={accent} gainDb={gainDb} />
         <input
           type="range" className="lfader-input" min={0} max={2} step={0.01} value={level}
-          title={`Deck ${label} volume (centre = unity)`}
+          title={`Deck ${label} volume (centre = unity) — double-click / right-click resets`}
           onChange={(e) => onLevel(Number(e.target.value))}
+          onDoubleClick={() => onLevel(1)}
           onContextMenu={(e) => { e.preventDefault(); onLevel(1); }}
         />
         {/* Level % printed on the (widened) handle. Tracks the thumb; the inner span

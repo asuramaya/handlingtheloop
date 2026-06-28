@@ -16,8 +16,7 @@ import { SocialScreen } from "./components/SocialScreen";
 import { DiscoverScreen } from "./components/DiscoverScreen";
 import { NotificationsBell } from "./components/social/NotificationsBell";
 import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, trimSet } from "@htl/account";
-import { useRoom, type Intent, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
-import { useSetReplay } from "@htl/replay";
+import { useRoom, type Intent, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
 import { ReplayBar } from "./components/ReplayBar";
 import { useMidi, type DeckFeedback } from "@htl/midi";
 import { useGamepad } from "@htl/gamepad";
@@ -98,6 +97,7 @@ import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline"
 import { useSessionSync } from "./App/useSessionSync";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
+import { useReplay } from "./App/useReplay";
 import { useMidiRouting } from "./App/useMidiRouting";
 import { SpineContext, useSpine, type Spine } from "./App/spine";
 
@@ -1819,57 +1819,18 @@ function AppBody() {
     samplerApplyRef,
   });
 
-  // ── G1c: recorded-set replay ──────────────────────────────────────────────────
-  // A replay drives the SAME live-listener handlers from a local clock instead of the WS.
-  // replayDispatch routes a recipe message to its handler; pauseAudio halts both decks (they
-  // run their own clock once a transport intent starts them). The follow gates below are
-  // forced open while replay.active so the handlers don't no-op outside a session.
-  const replayDispatch = useCallback(
-    (m: ClientMsg) => {
-      if (m.t === "state") applyRoomSnapshot(m.snapshot);
-      else if (m.t === "intent") onRoomIntent(m.intent);
-      else if (m.t === "tick") onRoomTick(m.decks);
-      else if (m.t === "automix") setRemoteAutomix(m.state as AutoMixMirror | null);
-    },
-    [applyRoomSnapshot, onRoomIntent, onRoomTick],
-  );
-  const replay = useSetReplay({
-    dispatch: replayDispatch,
-    pauseAudio: () => {
-      engine.deck("A").pause();
-      engine.deck("B").pause();
-    },
+  // G1c recorded-set replay lives in ./App/useReplay (replayDispatch + useSetReplay + the play/
+  // edit-trim launchers). Returns drive the follow/lock gates + ReplayBar + Profile/Discover.
+  const { replay, playRecordedSet, editTrim, trimEdit, setTrimEdit } = useReplay({
+    applyRoomSnapshot,
+    onRoomIntent,
+    onRoomTick,
+    setRemoteAutomix,
+    setProfileOpen,
+    setDiscoverOpen,
+    setPublicHandle,
+    playSetRef,
   });
-  // Replay a recorded set on the decks (from Profile / Discover / a public profile). Tune out
-  // of a live broadcast-listen first (only real conflict), prime audio, then close the docks so
-  // the board is visible — the replay bar drives from there.
-  // Replay a set. `range` plays just the curated [start,end] (the set's trim); omit for full.
-  const playRecordedSet = useCallback(
-    (id: string, range?: { start: number; end: number }) => {
-      if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
-      engine.unlock();
-      setTrimEdit(null);
-      replay.play(id, range);
-      setProfileOpen(false);
-      setDiscoverOpen(false);
-      setPublicHandle(null);
-    },
-    [engine, replay],
-  );
-  playSetRef.current = playRecordedSet; // wire the /set/ deep-link launcher to the real handler
-  // The owner curates a set: replay the FULL recording + open trim controls (set in/out → save).
-  const [trimEdit, setTrimEdit] = useState<{ id: string; start: number; end: number } | null>(null);
-  const editTrim = useCallback(
-    (s: { id: string; trimStart?: number | null; trimEnd?: number | null; duration: number }) => {
-      if (roomRef.current?.listeningTo) roomRef.current.tuneOut();
-      engine.unlock();
-      replay.play(s.id); // full, so they can scrub the whole tape
-      setTrimEdit({ id: s.id, start: s.trimStart ?? 0, end: s.trimEnd ?? s.duration });
-      setProfileOpen(false);
-      setPublicHandle(null);
-    },
-    [engine, replay],
-  );
 
   // The session stem-view concern (inbound host-streamed 4-lane envelopes + the outbound host
   // streamers + the on-join publish) lives in ./App/useStemViewSync. Returns feed useRoom

@@ -3785,7 +3785,6 @@ function AppBody() {
           <SamplerStrip
             sampler={sampler}
             ctlRef={samplerCtl}
-            engine={engine}
             micSetRef={micVolSetRef}
             phones={
               !!settings.audioCueOutputId && engine.canCueDevice
@@ -3839,8 +3838,6 @@ function AppBody() {
             onKey={() => { engine.toggleKey("A"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             locked={deckLocked("A")}
-            refresh={refresh}
-            emit={emit}
             emitControls={emitDeckControls}
             sampler={sampler}
             onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}
@@ -3871,8 +3868,6 @@ function AppBody() {
             onKey={() => { engine.toggleKey("B"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             locked={deckLocked("B")}
-            refresh={refresh}
-            emit={emit}
             emitControls={emitDeckControls}
             sampler={sampler}
             onFxSelect={(d, i) => { fxSelRef.current[d] = i; }}

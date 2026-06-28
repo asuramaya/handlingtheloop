@@ -1,6 +1,6 @@
 import type { Deck, ModFx } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { MOD_MODES, MOD_WAVES, MOD_SOURCES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { ModViz } from "./ModViz";
 
@@ -13,11 +13,11 @@ interface ModPanelProps {
   id: "A" | "B";
   slot: number;
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function ModPanel({ deck, id, slot, accent, emit, refresh }: ModPanelProps) {
+export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as ModFx | undefined;
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);

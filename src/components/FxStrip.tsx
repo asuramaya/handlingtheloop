@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
@@ -27,9 +27,7 @@ interface FxStripProps {
   accent: string;
   otherDeck: Deck;
   otherAccent: string;
-  emit: (intent: Intent) => void;
   emitControls: (id: "A" | "B") => void;
-  refresh: () => void;
   onSelect?: (i: number) => void; // report the selected rack index up (so the gamepad can bypass it)
   ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
 }
@@ -42,7 +40,9 @@ export interface FxStripCtl {
   selectKind: (kind: FxKind) => void; // reveal a device's panel by kind (FX pad right-click)
 }
 
-export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitControls, refresh, onSelect, ctlRef }: FxStripProps) {
+export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, ctlRef }: FxStripProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const [sel, setSel] = useState(0); // selected rack index
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
   const [dropAt, setDropAt] = useState<number | null>(null); // INSERTION point 0..len (gap the drop lands in)
@@ -270,21 +270,21 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emit, emitCo
         {!selDev ? (
           <div className="fx-panel fx-unknown">Loading effects…</div>
         ) : selDev.kind === "eq" ? (
-          <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} />
+          <EqCurve deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} />
         ) : selDev.kind === "delay" ? (
-          <DelayPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <DelayPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "reverb" ? (
-          <ReverbPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <ReverbPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "saturator" ? (
-          <SatPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <SatPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "crush" ? (
-          <CrushPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <CrushPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "mod" ? (
-          <ModPanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <ModPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "gate" ? (
-          <GatePanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <GatePanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "noise" ? (
-          <NoisePanel deck={deck} id={id} slot={cur} accent={accent} emit={emit} refresh={refresh} />
+          <NoisePanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : (
           <div className="fx-panel fx-unknown">This effect isn’t available in this build.</div>
         )}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
-import type { AudioEngine } from "@htl";
+import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 
@@ -18,19 +18,18 @@ const DEST_FULL: Record<"master" | "A" | "B", string> = { master: "Room (master 
 export function SamplerStrip({
   sampler,
   ctlRef,
-  engine,
   micSetRef,
   phones,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
-  engine: AudioEngine;
   micSetRef?: MutableRefObject<((v: number) => void) | null>; // App pushes the FLX MIC knob value into the cell
   // Master headphone (cue-device) controls — joins the IO zone only when a 2nd output is set.
   // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
 }) {
   const s = sampler;
+  const engine = useEngine();
 
   // Mic (talkover) + capture-record controls. Captures land in the next free GLOBAL pad.
   const [micOn, setMicOn] = useState(false);

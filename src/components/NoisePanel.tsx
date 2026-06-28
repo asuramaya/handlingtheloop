@@ -1,6 +1,6 @@
 import type { Deck, NoiseFx } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { NOISE_TYPES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { NoiseViz } from "./NoiseViz";
 
@@ -12,11 +12,11 @@ interface NoisePanelProps {
   id: "A" | "B";
   slot: number;
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function NoisePanel({ deck, id, slot, accent, emit, refresh }: NoisePanelProps) {
+export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as NoiseFx | undefined;
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);

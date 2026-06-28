@@ -1,6 +1,6 @@
 import type { Deck } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { REVERB_STYLES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { ReverbViz } from "./ReverbViz";
 import { fmtPct } from "../util/format";
@@ -17,11 +17,11 @@ interface ReverbPanelProps {
   id: "A" | "B";
   slot: number;
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function ReverbPanel({ deck, id, slot, accent, emit, refresh }: ReverbPanelProps) {
+export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot);
   if (!dev) return null;
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEmit } from "../App/spine";
 import type { Deck } from "@htl/audio";
 import { EQ_MIN_DB, EQ_MAX_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { clamp } from "../util/math";
 import { fmtHz, fmtDb } from "../util/format";
@@ -82,10 +82,10 @@ interface EqCurveProps {
   accent: string;
   otherDeck: Deck;
   otherAccent: string;
-  emit: (intent: Intent) => void;
 }
 
-export function EqCurve({ deck, id, accent, otherDeck, otherAccent, emit }: EqCurveProps) {
+export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurveProps) {
+  const emit = useEmit();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);

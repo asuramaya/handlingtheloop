@@ -4,7 +4,7 @@
 // them as props or deps-bag entries. A new concern becomes a new file that reads context, never an
 // App.tsx edit to thread one more prop. `engine` is a lazy singleton; `emit` is built deep inside
 // AppBody (it needs the room), so descendants reach it through `emitRef`, a stable ref filled there.
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 import type { MutableRefObject } from "react";
 import type { AudioEngine } from "@htl";
 import type { Intent } from "@htl/room";
@@ -25,4 +25,15 @@ export function useSpine(): Spine {
 
 export function useEngine(): AudioEngine {
   return useSpine().engine;
+}
+
+// A stable emit fn for components/hooks — calls through the spine's ref (filled in AppBody once
+// `emit` exists), so a consumer never takes `emit` as a prop or a deps-bag entry.
+export function useEmit(): (intent: Intent) => void {
+  const { emitRef } = useSpine();
+  return useCallback((intent: Intent) => emitRef.current(intent), [emitRef]);
+}
+
+export function useRefresh(): () => void {
+  return useSpine().refresh;
 }

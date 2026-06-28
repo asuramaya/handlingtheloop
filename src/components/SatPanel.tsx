@@ -1,6 +1,6 @@
 import type { Deck } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { SAT_STYLES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { SatViz } from "./SatViz";
 
@@ -14,11 +14,11 @@ interface SatPanelProps {
   id: "A" | "B";
   slot: number; // rack index of this saturator device
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function SatPanel({ deck, id, slot, accent, emit, refresh }: SatPanelProps) {
+export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot);
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);

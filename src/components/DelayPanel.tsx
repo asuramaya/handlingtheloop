@@ -1,6 +1,6 @@
 import { useEffect } from "react";
+import { useEmit, useRefresh } from "../App/spine";
 import type { Deck } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { DelayViz } from "./DelayViz";
 import { clamp } from "../util/math";
@@ -34,11 +34,11 @@ interface DelayPanelProps {
   id: "A" | "B";
   slot: number; // rack index of this delay device
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function DelayPanel({ deck, id, slot, accent, emit, refresh }: DelayPanelProps) {
+export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot);
   if (!dev) return null;
 

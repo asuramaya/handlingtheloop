@@ -1,6 +1,6 @@
 import type { Deck, GateFx } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { GATE_SHAPES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { GateViz } from "./GateViz";
 
@@ -13,11 +13,11 @@ interface GatePanelProps {
   id: "A" | "B";
   slot: number;
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function GatePanel({ deck, id, slot, accent, emit, refresh }: GatePanelProps) {
+export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as GateFx | undefined;
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);

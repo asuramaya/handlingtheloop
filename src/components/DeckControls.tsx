@@ -1,10 +1,10 @@
 import { useRef, useState, type MutableRefObject } from "react";
+import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
-import type { Intent } from "@htl/room";
 import { nextSkip, skipLabel, skipTitle } from "@htl/state";
 import { ValueCell } from "./ValueCell";
 import { useLongPress } from "./useLongPress";
@@ -45,8 +45,6 @@ interface DeckControlsProps {
   onKey: () => void;
   cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
   locked?: boolean; // a watch-only / off-seat deck: the whole bank is non-interactive (control blocked)
-  refresh: () => void;
-  emit: (intent: Intent) => void; // broadcast one action to a shared session (no-op when off)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
   sampler?: SamplerApi; // shared sampler — this deck's 8 region pads fill the SAMPLER pad-mode
   onFxSelect?: (id: "A" | "B", i: number) => void; // surface this deck's selected FX index (for gamepad bypass)
@@ -86,7 +84,9 @@ const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: st
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, refresh, emit, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
   // beat-loop on press and snaps back on-beat on release (deck.rollOut).
   const rolling = useRef<number | null>(null);
@@ -862,7 +862,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             up/down = gain; mid wheel = bell width; right-click / double-click = reset).
             Further tabs are stacked effects (delay…); + adds one. */}
         <div className="eq-row">
-          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emit={emit} emitControls={emitControls} refresh={refresh} onSelect={(i) => onFxSelect?.(id, i)} ctlRef={fxCtlRef} />
+          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emitControls={emitControls} onSelect={(i) => onFxSelect?.(id, i)} ctlRef={fxCtlRef} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via

@@ -1,6 +1,6 @@
 import type { Deck, CrushFx } from "@htl/audio";
+import { useEmit, useRefresh } from "../App/spine";
 import { CRUSH_MODES } from "@htl/audio";
-import type { Intent } from "@htl/room";
 import { ValueCell } from "./ValueCell";
 import { CrushViz } from "./CrushViz";
 
@@ -13,11 +13,11 @@ interface CrushPanelProps {
   id: "A" | "B";
   slot: number;
   accent: string;
-  emit: (intent: Intent) => void;
-  refresh: () => void;
 }
 
-export function CrushPanel({ deck, id, slot, accent, emit, refresh }: CrushPanelProps) {
+export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
+  const emit = useEmit();
+  const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as CrushFx | undefined;
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);

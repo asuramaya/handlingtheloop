@@ -237,6 +237,13 @@ export async function fetchFollowing(handle: string, signal?: AbortSignal): Prom
   return ((await res.json()) as { list: FollowCard[] }).list;
 }
 
+/** The handles following a given @handle (the other half of the graph). Public, paginated. */
+export async function fetchFollowers(handle: string, signal?: AbortSignal): Promise<FollowCard[]> {
+  const res = await fetch(`/api/followers?h=${encodeURIComponent(handle)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { list: FollowCard[] }).list;
+}
+
 /** Global people search by @handle or display name (≥2 chars; public cards). Backs Discover's
  * search box — the directory door that works even when nobody's live. Returns [] on a short or
  * failed query so callers can render unconditionally. */

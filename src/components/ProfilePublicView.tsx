@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
+import { PeopleList } from "./social/PeopleList";
 
 // The public-facing profile card — the SINGLE render shared by the own-Profile hero
 // (ProfileScreen) and the public /@handle page (PublicProfileScreen), so the two can't
@@ -60,6 +61,9 @@ export function ProfilePublicView({
   shareTitle?: string;
   shareNote?: ReactNode; // legible "what your link does right now" line under the share button (owner only)
 }) {
+  // Tapping a count opens the ONE canonical people list (PeopleList) — same surface Discover's
+  // "People you follow" leads to. Only when we have a handle to scope the graph to.
+  const [graph, setGraph] = useState<"followers" | "following" | null>(null);
   return (
     <>
       <div className="profile-id">
@@ -104,12 +108,24 @@ export function ProfilePublicView({
         <div className="profile-graph">
           {counts && (
             <div className="profile-counts">
-              <span>
-                <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
-              </span>
-              <span>
-                <b>{counts.following}</b> following
-              </span>
+              {handle ? (
+                <button type="button" className="profile-count-btn" onClick={() => setGraph("followers")}>
+                  <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
+                </button>
+              ) : (
+                <span>
+                  <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
+                </span>
+              )}
+              {handle ? (
+                <button type="button" className="profile-count-btn" onClick={() => setGraph("following")}>
+                  <b>{counts.following}</b> following
+                </button>
+              ) : (
+                <span>
+                  <b>{counts.following}</b> following
+                </span>
+              )}
               {friends && <span className="profile-friend">· Friends</span>}
             </div>
           )}
@@ -142,6 +158,8 @@ export function ProfilePublicView({
           </ol>
         )}
       </div>
+
+      {graph && handle && <PeopleList handle={handle} mode={graph} onClose={() => setGraph(null)} />}
     </>
   );
 }

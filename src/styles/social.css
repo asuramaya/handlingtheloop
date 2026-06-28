@@ -242,6 +242,49 @@
   font-size: 13px;
 }
 
+/* People-you-follow entry in Discover → opens the shared PeopleList */
+.people-following-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 6px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 9px;
+}
+.people-following-link:hover {
+  background: var(--panel-2, rgba(255, 255, 255, 0.05));
+}
+.people-following-link .person-go {
+  margin-left: auto;
+}
+
+/* The shared PeopleList surface (profile counts + Discover roster land here) */
+.people-list-of {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Tappable follower/following counts on a profile → the same PeopleList */
+.profile-count-btn {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.profile-count-btn:hover {
+  text-decoration: underline;
+}
+
 /* --- Discover surface (live-now directory; Sets facet lands with Epic G) --- */
 .discover-section {
   display: flex;

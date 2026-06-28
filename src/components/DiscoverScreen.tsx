@@ -3,6 +3,7 @@ import { type FriendPresence, type LiveRoom, type SetCard, fetchDiscoverSets, fe
 import { DockResizer } from "./DockResizer";
 import { FriendRow } from "./social/FriendRow";
 import { LiveRoomRow } from "./social/LiveRoomRow";
+import { PeopleList } from "./social/PeopleList";
 import { PersonSearch } from "./social/PersonSearch";
 import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
@@ -35,6 +36,7 @@ export function DiscoverScreen({
   const [following, setFollowing] = useState<Set<string>>(new Set());
   const [sets, setSets] = useState<SetCard[]>([]);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
+  const [graphOpen, setGraphOpen] = useState(false); // "People you follow" → the shared PeopleList
 
   const invite = (handle: string) => {
     setInvited((s) => new Set(s).add(handle)); // optimistic
@@ -101,6 +103,14 @@ export function DiscoverScreen({
             live; a hit taps through to /@handle where Follow / Invite / Knock / Listen live. */}
         <PersonSearch />
 
+        {/* Your persistent roster — the SAME PeopleList a profile's "following" count opens. The
+            durable counterpart to Friends-online: reach anyone you follow, on or off. */}
+        {self && (
+          <button type="button" className="people-following-link" onClick={() => setGraphOpen(true)}>
+            People you follow <span className="person-go" aria-hidden="true">›</span>
+          </button>
+        )}
+
         {/* FRIENDS ONLINE — mutual follows who are on right now. The "play with a friend" door:
             Invite pulls them into your session; Knock/Join takes you into theirs. Above the public
             live directory because it's the higher-intent, co-play surface. */}
@@ -158,6 +168,8 @@ export function DiscoverScreen({
             <SetList sets={sets} onPlay={onPlaySet} showHost />
           </div>
         )}
+
+        {graphOpen && self && <PeopleList handle={self} mode="following" onClose={() => setGraphOpen(false)} />}
       </div>
     </div>
   );

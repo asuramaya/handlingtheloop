@@ -61,6 +61,7 @@ import {
   isPresenceOnline,
   handleTaken,
   relationship,
+  searchUsers,
   unblockUser,
   unfollowUser,
   userByHandle,
@@ -439,6 +440,19 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
           ? await followersOf(env.DB, target.id, 50, offset)
           : await followingOf(env.DB, target.id, 50, offset);
       return json(200, { list });
+    }
+
+    // Global people search (the directory door — find anyone by @handle or name, even when
+    // nobody's live). PUBLIC; a viewer (when signed in) drops self + blocked. ≥2 chars.
+    case "/api/users/search": {
+      if (req.method !== "GET") return json(405, { error: "GET only" });
+      if (!env.DB) return json(200, { list: [] });
+      await ensureIdentityColumns(env.DB);
+      await ensureGraphTables(env.DB);
+      const q = (url.searchParams.get("q") ?? "").trim();
+      if (q.length < 2) return json(200, { list: [] });
+      const viewer = await currentUser(env, req);
+      return json(200, { list: await searchUsers(env.DB, q, viewer?.id ?? "", 20) });
     }
 
     // The live public-room directory (E2). PUBLIC — anyone can browse what's on now.

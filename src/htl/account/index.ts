@@ -237,6 +237,17 @@ export async function fetchFollowing(handle: string, signal?: AbortSignal): Prom
   return ((await res.json()) as { list: FollowCard[] }).list;
 }
 
+/** Global people search by @handle or display name (≥2 chars; public cards). Backs Discover's
+ * search box — the directory door that works even when nobody's live. Returns [] on a short or
+ * failed query so callers can render unconditionally. */
+export async function searchUsers(q: string, signal?: AbortSignal): Promise<FollowCard[]> {
+  const term = q.trim();
+  if (term.length < 2) return [];
+  const res = await fetch(`/api/users/search?q=${encodeURIComponent(term)}`, { signal, credentials: "same-origin" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { list: FollowCard[] }).list;
+}
+
 /** A friend (mutual follow) who's online right now. `live` = broadcasting. */
 export interface FriendPresence {
   handle: string;

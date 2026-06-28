@@ -127,6 +127,40 @@ export async function followersOf(db: D1Database, userId: string, limit = 50, of
   return r.results ?? [];
 }
 
+/** Global people search by handle or display name (prefix-weighted substring match). Public
+ *  cards only; never surfaces a user without a claimed handle. `viewerId` (when signed in)
+ *  drops the viewer themselves and anyone in a block relationship either way. The query is
+ *  LIKE-escaped so a literal `%`/`_` in the term can't widen the match. */
+export async function searchUsers(db: D1Database, q: string, viewerId = "", limit = 20): Promise<PublicCard[]> {
+  const term = q.trim();
+  if (term.length < 2) return [];
+  const esc = term.replace(/[\\%_]/g, (c) => `\\${c}`); // neutralise LIKE wildcards
+  const sub = `%${esc}%`;
+  const pre = `${esc}%`;
+  const binds: (string | number)[] = [sub, sub, viewerId]; // handle LIKE, display LIKE, id != self
+  let blockClause = "";
+  if (viewerId) {
+    blockClause =
+      " AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?)" +
+      " AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)";
+    binds.push(viewerId, viewerId);
+  }
+  binds.push(pre, limit); // ORDER prefix-first, then LIMIT
+  const r = await db
+    .prepare(
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+       FROM users u
+       WHERE u.handle IS NOT NULL
+         AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
+         AND u.id != ?${blockClause}
+       ORDER BY CASE WHEN u.handle LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, u.handle
+       LIMIT ?`,
+    )
+    .bind(...binds)
+    .all<PublicCard>();
+  return r.results ?? [];
+}
+
 /** Who a user follows (most recent first), as public cards. */
 export async function followingOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
   const r = await db

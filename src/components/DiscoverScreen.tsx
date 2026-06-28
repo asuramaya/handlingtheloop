@@ -3,6 +3,7 @@ import { type FriendPresence, type LiveRoom, type SetCard, fetchDiscoverSets, fe
 import { DockResizer } from "./DockResizer";
 import { FriendRow } from "./social/FriendRow";
 import { LiveRoomRow } from "./social/LiveRoomRow";
+import { PersonSearch } from "./social/PersonSearch";
 import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
 
@@ -95,6 +96,10 @@ export function DiscoverScreen({
         <div className="discover-head">
           <span className="discover-title">Discover</span>
         </div>
+
+        {/* PEOPLE SEARCH — the directory door. Find anyone by @handle or name even when no one's
+            live; a hit taps through to /@handle where Follow / Invite / Knock / Listen live. */}
+        <PersonSearch />
 
         {/* FRIENDS ONLINE — mutual follows who are on right now. The "play with a friend" door:
             Invite pulls them into your session; Knock/Join takes you into theirs. Above the public

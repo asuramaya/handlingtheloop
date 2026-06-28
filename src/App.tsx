@@ -32,7 +32,6 @@ import {
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
-  dropCachedBuffer,
   useLibrary,
   useLibrarySync,
   type TrackMeta,
@@ -71,8 +70,6 @@ import {
   getAudio,
   putAudio,
   loadStems,
-  loadStemsPackedInt16,
-  loadStemsLocal,
   isDspStems,
   getStemModel,
   modelSupport,
@@ -80,7 +77,6 @@ import {
   isMobileDevice,
   isIOSDevice,
   isChromium,
-  fetchStemManifest,
   initGpuCrashGuard,
   armGpu,
   disarmGpu,
@@ -100,6 +96,8 @@ import {
   type AutoMixMirror,
 } from "@htl";
 import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { whenIdle } from "./util/idle";
+import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 
 type DeckId = "A" | "B";
 
@@ -176,17 +174,7 @@ function terseStem(s: StemStatus | null | undefined): StemBadge | null {
 const stemLoading = (s: StemStatus | null | undefined): boolean =>
   !!s && (s.phase === "downloading" || s.phase === "separating");
 
-// Short engine label for the deck chip: "HT-Demucs (GPU)"/"(CPU)" → "Demucs",
-// "Open-Unmix" stays, anything else → its label. (DSP never shows a chip.)
-function stemSrcLabel(modelId: string): string {
-  if (modelId.startsWith("htdemucs")) return "Demucs";
-  if (modelId.startsWith("umx")) return "Open-Unmix";
-  return getStemModel(modelId).label;
-}
 
-// Neural models to auto-promote a DSP deck to, best quality first: cached HT-Demucs
-// (GPU) result, else Open-Unmix.
-const PROMOTE_ORDER = ["htdemucs-onnx", "umxl-int8"];
 
 const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null, videoId: null, thumbnail: null };
 
@@ -196,15 +184,6 @@ const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyr
 // a fader, a panel knob) keeps focus after you drag it, and a blanket INPUT guard then ate every key.
 const NON_TEXT_INPUT_TYPES = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "file", "color", "image"]);
 
-// Wait until the browser is idle (with a timeout) so the heavy stem pass runs
-// AFTER the freshly-loaded deck UI has painted, instead of stalling the load.
-function whenIdle(): Promise<void> {
-  return new Promise((resolve) => {
-    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
-    if (typeof ric === "function") ric(() => resolve(), { timeout: 600 });
-    else setTimeout(resolve, 60);
-  });
-}
 
 // --- session snapshot <-> deck ---
 function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckSnapshot {
@@ -256,9 +235,6 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
   };
 }
 
-// Serialise mobile on-device DSP stem derives across decks — two full-track offline renders at
-// once is the memory spike that OOM-killed the tab. Chaining keeps the transient to one at a time.
-let mobileDeriveChain: Promise<unknown> = Promise.resolve();
 
 // A stable JSON signature of just the colour/theme settings — drives the instant cross-device
 // colour-sync de-dupe (an adopted change must not bounce straight back out as a fresh broadcast).
@@ -266,20 +242,6 @@ function colorSig(s: Settings): string {
   return JSON.stringify(COLOR_PROFILE_KEYS.map((k) => (s as unknown as Record<string, unknown>)[k]));
 }
 
-// Stem names in the fixed deck order — for snapshot apply.
-const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
-// Cross-device contract: the phone's on-device stem budget is AGGREGATE (combined length of
-// BOTH decks' stem'd tracks), NOT per-deck — so the time can be spent unevenly (one 10-min +
-// one 4-min, instead of forcing 6+6). Past this combined length, the deck that would push it
-// over stays mix-only. Tunable; the escalating crash-guard backstops the build PEAK (a single
-// very long track's float32 transient can still spike past this on an older phone). Desktop is
-// uncapped (the engine frees this.stems post-pyramid for long tracks instead).
-// Raised from 14→16 min now that the WINDOWED int16 path (dspStemsWindowedInt16) bounds the
-// build transient — without it a single long track OOMs at build; with it the limiter is the
-// resident int16 + mix input (~half the slope), so ~16 min combined fits a typical iPhone.
-// Per-track is anyway fetch-capped at 15 min (server MAX_TRACK_SECONDS), so one deck never
-// exceeds that; this aggregate just stops two long tracks from co-residing past budget.
-const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined — aggregate budget for DOWNLOADED int16 sets
 // The 8 beat-loop sizes, ascending — pad/key index → beats (shared by the keyboard
 // handlers and the MIDI pad dispatch so a loop pad can match the active loop's size).
 const LOOP_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8];
@@ -1359,385 +1321,6 @@ export function App() {
   // permanently skipped (the old per-deck guard never cleared on success, which left
   // the deck stuck on the DSP split after any model round-trip).
   const stemJobs = useRef<Map<string, Promise<Stems>>>(new Map());
-  // Auto-promotion: when the deck is on DSP (the default), look for a neural result
-  // that ALREADY exists for this track — first on local disk, then in the shared R2
-  // cache — and silently swap it in over the DSP split. It's a pure cache read (no
-  // separation, never crashes), best-quality-first, and it does NOT change the
-  // user's selected model. If nothing is cached anywhere, the DSP split just stays.
-  const promoteCachedStems = useCallback(
-    async (id: DeckId, videoId: string, mix: AudioBuffer, stale?: () => boolean) => {
-      // 1. Local disk first (instant, offline): the best neural stems we already have.
-      for (const mid of PROMOTE_ORDER) {
-        const local = await loadStemsLocal(engine.ctx, videoId, mid);
-        if (stale?.()) return false;
-        if (local) {
-          engine.deck(id).setStems(local, true); // neural → per-stem lanes
-          // Stamp the dedup key with the PROMOTED model so selecting that model later
-          // sees "already separated" (deriveStems' hasStems guard) instead of re-running
-          // a separation over the stems we just promoted. (The bug: promote never set this.)
-          stemLoadedKey.current[id] = `${videoId}:${mid}`;
-          refresh();
-          setStatusFor(id, {
-            phase: "promoted",
-            src: stemSrcLabel(mid),
-            detail: `Auto-enhanced with ${getStemModel(mid).label} (cached on disk) — your stem setting stays DSP.`,
-          });
-          return true;
-        }
-      }
-      // 2. Shared R2 cache: probe candidates best-first; first complete one wins.
-      for (const mid of PROMOTE_ORDER) {
-        const man = await fetchStemManifest(videoId, mid).catch(() => null);
-        if (stale?.()) return false;
-        if (!man?.complete) continue;
-        const m = getStemModel(mid);
-        const src = stemSrcLabel(mid);
-        stemTrace(`promote ${id}:download`, mid); // crash here ⇒ downloading/decoding a cached neural set OOMs
-        setStatusFor(id, { phase: "downloading", src, detail: `Enhanced stems found (${m.label}) — downloading…` });
-        try {
-          const key = `${videoId}:${mid}`;
-          let job = stemJobs.current.get(key);
-          if (!job) {
-            job = loadStems(engine.ctx, videoId, mix, m, (pct) => {
-              const p = Math.round(pct * 100);
-              setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Enhancing with ${m.label}… ${p}%` });
-            });
-            stemJobs.current.set(key, job);
-            void job.finally(() => {
-              if (stemJobs.current.get(key) === job) stemJobs.current.delete(key);
-            });
-          }
-          const neural = await job;
-          if (stale?.()) return false;
-          // The cached download fell back to a DSP split (download + re-separate both failed) →
-          // there's nothing to promote. Leave the existing DSP split as-is, don't claim an
-          // "Auto-enhanced" badge over a DSP result.
-          if (isDspStems(neural)) return false;
-          engine.deck(id).setStems(neural, true); // neural → per-stem lanes
-          stemLoadedKey.current[id] = `${videoId}:${mid}`; // promoted set → don't re-separate it
-          refresh();
-          setStatusFor(id, {
-            phase: "promoted",
-            src,
-            detail: `Auto-enhanced with ${m.label} (from the shared cache) — your stem setting stays DSP.`,
-          });
-          return true; // applied a cached neural set (one set — safe on mobile)
-        } catch {
-          /* promotion is best-effort — caller falls back to the DSP split */
-          return false;
-        }
-      }
-      // Nothing cached anywhere → caller shows the DSP split.
-      return false;
-    },
-    [engine, refresh, setStatusFor],
-  );
-
-  // Resolve a deck's stems: light the buttons instantly with the DSP split, then —
-  // if a neural model is selected — separate (R2 cache → on-device ONNX) in the
-  // background and swap the cleaner stems in. Both sum to the mix, so it's seamless.
-  // `stale()` (when given) drops results if the deck moved on to another track.
-  const deriveStems = useCallback(
-    async (id: DeckId, videoId: string, mix: AudioBuffer, stale?: () => boolean) => {
-      const model = getStemModel(stemModelRef.current);
-      // Idempotency: skip a repeat derive of the exact same (track, model) on this deck.
-      // deriveStems is re-fired by several effects; without this, a desktop load could
-      // cycle promote → setStems → promote… A fresh track load clears the guard (see
-      // loadTrackToDeck), and a model switch changes the key, so both still re-derive.
-      const guardKey = `${videoId}:${model.id}`;
-      if (deriveGuard.current[id] === guardKey) return;
-      deriveGuard.current[id] = guardKey;
-
-      // "Single" — the plain mix, no stem mixer. This is the no-stems path (the old DSP
-      // band/centre split was dropped: it's a poor approximation, so it's single OR neural).
-      // On DESKTOP, if auto-enhance is on and a neural set already exists for this track (on
-      // disk or pooled in R2), silently promote it — a free quality win with no separation.
-      // Otherwise the deck just plays the mix (lightest path, no 424 MB stem set held).
-      // In a SESSION whose host is using stems, a phone derives a local DSP set even when its OWN
-      // model is "Single" — otherwise a guest sees the host's stem moves but can't HEAR them (the
-      // original bug). It falls through to the mobile DSP path below; everyone else treats "off" as
-      // the plain no-stems mix.
-      const sessionWantsStems =
-        isMobileDevice() && snapFollowRef.current && !!lastSnapshotRef.current?.decks?.[id]?.hasStems;
-      // LAZY MOBILE-GUEST STEMS (the OOM fix): the deck holds per-stem gain/mute state
-      // buffer-free, so a phone session-follower only needs to MATERIALISE real stems once a
-      // stem control actually diverges from default (the host ducked/muted one, or a local
-      // touch). An idle "just listening" guest — the common case — stays mix-only and skips
-      // the ~370 MB resident + ~352 MB transition-transient DSP set that was jetsam-killing
-      // phones. `ensureGuestStems` re-invokes deriveStems the instant a value diverges, and
-      // this gate then falls through to the on-device DSP derive below. Desktop is unchanged
-      // (sessionWantsStems is mobile-only, so the second clause never fires there).
-      const stemDiverged = STEM_KEYS.some(
-        (n) => engine.deck(id).stemLevel(n) !== 1 || !engine.deck(id).stemActive(n),
-      );
-      // Mobile wants stems when the global toggle is on (Settings ▸ Stems) OR AUTO is running
-      // (a stem transition needs both decks) → fall through to the on-device DSP / cached-neural
-      // path regardless of the mix-only gate.
-      const mobileWantStems = isMobileDevice() && (mobileStemsRef.current || autoEnabledRef.current);
-      if (model.id === "off" && !mobileWantStems && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
-        if (!isMobileDevice() && autoEnhanceRef.current) {
-          await whenIdle();
-          if (stale?.()) return;
-          const enhanced = await promoteCachedStems(id, videoId, mix, stale);
-          if (stale?.()) return;
-          if (enhanced) return; // cached neural applied
-        }
-        engine.deck(id).setStems(null);
-        refresh();
-        setStatusFor(id, null);
-        return;
-      }
-
-      // Let the deck's UI render first — the stem split is background work.
-      await whenIdle();
-      if (stale?.()) return;
-
-      // MEMORY DISCIPLINE (the iPhone crash fix). A stem SET = 4 full-length stereo
-      // float32 buffers (~424 MB for a 5-min track). iOS Safari's ~1–1.5 GB per-tab
-      // budget holds ONE set but not TWO — holding the OLD set AND a new neural set at
-      // once is what jetsam-killed the tab. So on MOBILE we drop the current set before
-      // building a new one: decode/separate exactly one set at a time.
-      const mobile = isMobileDevice();
-      // On mobile, drop this deck's CURRENT stems before building a new set. On a
-      // model switch / re-analyze / cache-enhance there's no setBuffer to free them,
-      // so the old set (~424 MB) would be held through the whole new build → OOM. The
-      // buttons go inactive for the brief build; we'd rather that than a tab reload.
-      if (mobile) {
-        engine.deck(id).setStems(null);
-        refresh();
-      }
-      stemTrace(`derive ${id}`, `${model.id}${mobile ? " mobile" : ""}`);
-
-      // MOBILE BASELINE = the on-device DSP split. Phones can't run neural separation (OOM /
-      // mobile-WebGPU crash), so they used to fall back to a dead mix — the stem mixer lit up
-      // but nothing drove it, and a session guest couldn't HEAR the host's stem moves. The
-      // engine now holds stems as int16 with ONE shared-offset WSOLA (no per-stem stretch
-      // duplication), so four stems fit in a phone's budget. Derive them locally with the
-      // lightweight DSP separator (pure Web Audio, deterministic, sums back to the mix exactly):
-      // the per-stem mixer works and its mute/gain INTENTS sync per device, zero extra bandwidth.
-      // Neural stays a desktop/upgrade quality tier that swaps in seamlessly via setStems().
-      if (mobile) {
-        // MOBILE = FETCH + RENDER ONLY. Phones NEVER run on-device separation (neural or the
-        // DSP split): that heavy offline render competes with the audio thread and — once it
-        // packs int16 + frees the mix — can leave the deck silent if anything in the pack
-        // path hiccups. Instead: if a neural set is cached in R2 (the host warmed it, or a
-        // past listener), DOWNLOAD + render it; otherwise stay on the PLAIN MIX, which is
-        // already in the worklet from setBuffer (so we KEEP the buffer — never releaseMixBuffer
-        // on this path — and the deck just keeps playing the mix).
-        setStatusFor(id, { phase: "downloading", detail: "Checking for shared stems…" });
-        await whenIdle();
-        if (stale?.()) return;
-        try {
-          // Serialise across decks (one download/decode at a time) + the AGGREGATE stem budget,
-          // same as before — a 2-deck cached set is the same int16 footprint as a derived one.
-          const run = mobileDeriveChain.then(async () => {
-            const otherId: DeckId = id === "A" ? "B" : "A";
-            const otherSec = engine.deck(otherId).hasStems ? engine.deck(otherId).duration : 0;
-            if (mix.duration + otherSec > MOBILE_MAX_COMBINED_STEM_SECONDS) return { kind: "over" as const };
-            // SHARED NEURAL CACHE ONLY. Probe R2 best-first; the first complete set wins and is
-            // DOWNLOADED (loadStems takes the no-separation branch on a complete manifest).
-            for (const mid of PROMOTE_ORDER) {
-              const man = await fetchStemManifest(videoId, mid).catch(() => null);
-              if (stale?.()) return { kind: "stale" as const };
-              if (!man?.complete) continue;
-              const m = getStemModel(mid);
-              const src = stemSrcLabel(mid);
-              setStatusFor(id, { phase: "downloading", src, detail: `Host's ${m.label} stems — downloading…` });
-              try {
-                const onPct = (pct: number) => {
-                  const p = Math.round(pct * 100);
-                  setStatusFor(id, { phase: "downloading", src, pct: p, detail: `Downloading ${m.label} stems… ${p}%` });
-                };
-                // Decode+pack ONE stem at a time (never the full float32 set) → the OOM-safe path
-                // that fixes the 2-long-track crash-loop. null = cache incomplete → float32 fallback.
-                const packed = await loadStemsPackedInt16(engine.ctx, videoId, m, onPct);
-                if (packed) return { kind: "neuralPacked" as const, packed, mid };
-                const stems = await loadStems(engine.ctx, videoId, mix, m, onPct);
-                return { kind: "neural" as const, stems, mid };
-              } catch {
-                break; // download failed → plain mix
-              }
-            }
-            return { kind: "none" as const }; // nothing cached → plain mix (NO on-device separation)
-          });
-          mobileDeriveChain = run.catch(() => undefined);
-          const res = await run;
-          if (stale?.() || res?.kind === "stale") return;
-          if (res?.kind === "neural") {
-            // A cached-download failure inside loadStems can tag a silent DSP fallback — label
-            // it honestly (no "✦" lie). The DSP split is sum-exact to the mix, so freeing the
-            // float32 mix is still safe (the stems are the audio source either way).
-            const real = !isDspStems(res.stems);
-            engine.deck(id).setStems(res.stems, real); // packs int16 + builds lanes + frees float32
-            stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
-            // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
-            engine.deck(id).releaseMixBuffer();
-            dropCachedBuffer(videoId);
-            refresh();
-            const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
-            setStatusFor(
-              id,
-              real
-                ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` }
-                : { phase: "dsp", detail: `Couldn't load ${getStemModel(res.mid).label} stems — using a quick DSP split.` },
-            );
-          } else if (res?.kind === "neuralPacked") {
-            engine.deck(id).loadPackedStems(res.packed, true); // int16 direct — no float32 set ever held
-            stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
-            // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
-            engine.deck(id).releaseMixBuffer();
-            dropCachedBuffer(videoId);
-            refresh();
-            const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
-            setStatusFor(id, { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` });
-          } else {
-            // No cached stems (or over budget) → PLAIN MIX. The worklet already holds it from
-            // setBuffer; KEEP the buffer (do NOT releaseMixBuffer) so playback never goes silent.
-            engine.deck(id).setStems(null);
-            stemLoadedKey.current[id] = guardKey;
-            refresh();
-            setStatusFor(id, {
-              phase: "unavailable",
-              detail:
-                res?.kind === "over"
-                  ? "Both tracks exceed the on-device stem budget — this deck plays the mix."
-                  : "No shared stems for this track yet — playing the mix.",
-            });
-            setTimeout(() => !stale?.() && setStatusFor(id, null), 5000);
-          }
-        } catch (e) {
-          console.warn("[htl] mobile stem fetch failed:", e);
-          engine.deck(id).setStems(null); // plain mix; un-latch so a re-tap / reload can retry
-          deriveGuard.current[id] = "";
-          setStatusFor(id, { phase: "unavailable", detail: "Couldn't load shared stems — playing the mix." });
-          setTimeout(() => !stale?.() && setStatusFor(id, null), 5000);
-        }
-        return;
-      }
-
-      // Refresh-fast path: if THIS track's neural stems are already persisted in IndexedDB
-      // (from a previous separation/download), decode them straight from disk and apply —
-      // NO R2 re-download, NO re-separation. This is what stops a page refresh from redoing
-      // the work. (Every selectable model here is neural — "single" returned above.)
-      // Already separated + still on this deck (e.g. the model/auto-enhance effect cleared the
-      // guard, or the local persist hasn't landed yet) → DON'T re-separate; it's already here.
-      if (engine.deck(id).hasStems && stemLoadedKey.current[id] === guardKey) {
-        setStatusFor(id, null);
-        return;
-      }
-
-      // Refresh-fast path: if THIS track's neural stems are already persisted in IndexedDB
-      // (from a previous separation/download), decode them straight from disk and apply —
-      // NO R2 re-download, NO re-separation. This is what stops a page refresh from redoing
-      // the work. (Every selectable model here is neural — "single" returned above.)
-      {
-        const local = await loadStemsLocal(engine.ctx, videoId, model.id);
-        if (local) {
-          if (stale?.()) return;
-          engine.deck(id).setStems(local, true); // neural → per-stem lanes
-          stemLoadedKey.current[id] = guardKey;
-          refresh();
-          // Make a cache hit OBVIOUS (green), so it reads differently from a fresh
-          // separation — these stems came straight off disk, no work was done. The
-          // chip persists (it's the active-stems indicator), clearing on next load.
-          setStatusFor(id, {
-            phase: "cached",
-            src: stemSrcLabel(model.id),
-            detail: `${model.label} — cached (loaded from disk).`,
-          });
-          return;
-        }
-      }
-
-      const key = `${videoId}:${model.id}`;
-      const support = modelSupport(model); // "runs" here | "desktop" | "needs-gpu"
-
-      // Is this model's result already shared in R2? If so, ANY device — phone
-      // included — can DOWNLOAD it, even when it can't separate locally.
-      const manifest = await fetchStemManifest(videoId, model.id).catch(() => null);
-      if (stale?.()) return;
-      const cached = !!manifest?.complete;
-
-      // Can't separate here and nobody has yet → stay on the plain mix and say exactly why,
-      // instead of a silent fallback or a "Separating…" that never finishes.
-      // (Light int8 models already report support==="runs" on phones, so phones DO
-      // contribute those; heavy fp32 / GPU stay desktop-gated — forcing them on mobile
-      // OOM-kills the tab.)
-      if (!cached && support !== "runs") {
-        engine.deck(id).setStems(null); // no stems → plain mix
-        // In a session, a controlling remote that can't make these (no GPU, etc.) asks the
-        // host to separate + stream them instead of a dead end.
-        if (requestStemsFromHost(id, model)) return;
-        const detail =
-          support === "blocked"
-            ? `${model.label}: GPU separation was disabled after a crash. Re-enable it in Settings ▸ Stems, or pick a CPU model. Playing the mix.`
-            : `${model.label}: separate on ${support === "needs-gpu" ? "a GPU desktop" : "a desktop"} first — playing the mix for now.`;
-        setStatusFor(id, { phase: "unavailable", detail });
-        setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
-        return;
-      }
-
-      // The deck stays on the single mix waveform while the neural set downloads/separates
-      // (the "stems incoming" overlay communicates it); the per-stem lanes swap in when the
-      // set is ready. No throwaway split is shown first — single OR neural, nothing between.
-
-      // cached → DOWNLOAD the shared stems (any device); else → SEPARATE on-device.
-      const phase: StemPhase = cached ? "downloading" : "separating";
-      const verb = cached ? "Downloading" : "Separating with";
-      // Actual on-device GPU work (not a cached download) can HARD-crash the tab —
-      // arm the crash guard so a reload doesn't re-attempt and loop. Disarmed in
-      // `finally` (success or caught error both mean the tab survived).
-      // Any on-device GPU separation (legacy Burn "demucs" OR the ORT-WebGPU
-      // "demucs-core") can hard-crash the tab — on iPhone Safari especially (the
-      // ORT JSEP WebGPU memory leak). Guard the whole gpu tier so a crash can't loop.
-      // GPU work can hard-crash the tab — but ONLY the Chromium WebGPU path runs on the
-      // GPU; Safari/Firefox separate this same model on the stable wasm EP (no GPU, no
-      // crash class), so the GPU crash guard must not arm there or it would falsely
-      // block them after an interrupted (merely slow) wasm run.
-      const gpuSeparate = !cached && model.tier === "gpu" && isChromium();
-      if (gpuSeparate) armGpu(model.id);
-      setStatusFor(id, { phase, pct: 0, detail: `${verb} ${model.label}…` });
-      try {
-        // Share one job per (track, model): a model toggle, a StrictMode re-fire,
-        // or both decks on the same track reuse it instead of stacking heavy work.
-        let job = stemJobs.current.get(key);
-        if (!job) {
-          job = loadStems(engine.ctx, videoId, mix, model, (pct) => {
-            const p = Math.round(pct * 100);
-            setStatusFor(id, { phase, pct: p, detail: `${verb} ${model.label}… ${p}%` });
-          });
-          stemJobs.current.set(key, job);
-          void job.finally(() => {
-            if (stemJobs.current.get(key) === job) stemJobs.current.delete(key);
-          });
-        }
-        const neural = await job;
-        if (stale?.()) return;
-        // loadStems silently falls back to a DSP split on a separation failure (it tags it) —
-        // flag the deck + badge HONESTLY instead of wearing a "✦ Demucs" chip over a DSP split.
-        const real = !isDspStems(neural);
-        engine.deck(id).setStems(neural, real); // real neural → per-stem lanes; DSP → honest
-        stemLoadedKey.current[id] = guardKey; // remember it's loaded → never re-separate it
-        refresh();
-        // Persistent active-stems chip (clears on next track load).
-        setStatusFor(
-          id,
-          real
-            ? { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready.` }
-            : { phase: "dsp", detail: `${model.label} couldn't separate here — using a quick DSP split. Re-analyze to retry.` },
-        );
-      } catch (e) {
-        console.warn("[htl] neural stems failed:", e);
-        // The neural attempt is over (its memory freed) → fall back to the plain mix.
-        engine.deck(id).setStems(null);
-        setStatusFor(id, { phase: "failed", detail: `${model.label} failed — playing the mix. See console for details.` });
-        setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
-      } finally {
-        if (gpuSeparate) disarmGpu();
-      }
-    },
-    [engine, refresh, setStatusFor, promoteCachedStems, requestStemsFromHost],
-  );
 
   // LAZY MOBILE-GUEST STEMS trigger (pairs with the divergence gate in deriveStems above).
   // When a stem control diverges from default on a phone guest that's currently mix-only,
@@ -1769,6 +1352,25 @@ export function App() {
   // Latest UI state for snapshotting from intervals / unload without stale closures.
   const latest = useRef({ meta, loaded, crossfade, zoom, tempoRange: settings.tempoRange });
   latest.current = { meta, loaded, crossfade, zoom, tempoRange: settings.tempoRange };
+
+  // STEM PIPELINE — deriveStems + its promote/cache helpers live in ./App/useStemPipeline so a
+  // stems-agent owns that file instead of contending on App.tsx. The App spine (refs/engine/
+  // session) is handed in; deriveStems comes back out and feeds the load + session + mobile paths.
+  const { deriveStems } = useStemPipeline({
+    engine,
+    refresh,
+    setStatusFor,
+    requestStemsFromHost,
+    stemModelRef,
+    mobileStemsRef,
+    autoEnabledRef,
+    autoEnhanceRef,
+    deriveGuard,
+    stemLoadedKey,
+    stemJobs,
+    snapFollowRef,
+    lastSnapshotRef,
+  });
 
   // Periodic session save. The write is a SYNCHRONOUS localStorage.setItem of the
   // serialized snapshot — on the main thread it's a classic frame-jank source, and

@@ -42,6 +42,7 @@ export function PersonSearch() {
         className="person-search-input"
         type="search"
         placeholder="Search people — @handle or name"
+        maxLength={40}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         autoCapitalize="none"

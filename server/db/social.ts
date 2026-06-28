@@ -132,7 +132,10 @@ export async function followersOf(db: D1Database, userId: string, limit = 50, of
  *  drops the viewer themselves and anyone in a block relationship either way. The query is
  *  LIKE-escaped so a literal `%`/`_` in the term can't widen the match. */
 export async function searchUsers(db: D1Database, q: string, viewerId = "", limit = 20): Promise<PublicCard[]> {
-  const term = q.trim();
+  // Cap the term: handles are ≤20 chars and display names are short, so a longer query can never
+  // match more — and an overlong LIKE pattern trips SQLite's "pattern too complex" limit (~49
+  // chars), which would otherwise surface as an unhandled D1 throw → a 502 on plain user input.
+  const term = q.trim().slice(0, 40);
   if (term.length < 2) return [];
   const esc = term.replace(/[\\%_]/g, (c) => `\\${c}`); // neutralise LIKE wildcards
   const sub = `%${esc}%`;
@@ -146,19 +149,25 @@ export async function searchUsers(db: D1Database, q: string, viewerId = "", limi
     binds.push(viewerId, viewerId);
   }
   binds.push(pre, limit); // ORDER prefix-first, then LIMIT
-  const r = await db
-    .prepare(
-      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
-       FROM users u
-       WHERE u.handle IS NOT NULL
-         AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
-         AND u.id != ?${blockClause}
-       ORDER BY CASE WHEN u.handle LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, u.handle
-       LIMIT ?`,
-    )
-    .bind(...binds)
-    .all<PublicCard>();
-  return r.results ?? [];
+  try {
+    const r = await db
+      .prepare(
+        `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+         FROM users u
+         WHERE u.handle IS NOT NULL
+           AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
+           AND u.id != ?${blockClause}
+         ORDER BY CASE WHEN u.handle LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, u.handle
+         LIMIT ?`,
+      )
+      .bind(...binds)
+      .all<PublicCard>();
+    return r.results ?? [];
+  } catch {
+    // Defence in depth: any D1 hiccup (e.g. a pathological multibyte LIKE pattern that slips the
+    // length cap) yields no results, never a 5xx — search is a non-critical, best-effort surface.
+    return [];
+  }
 }
 
 /** Who a user follows (most recent first), as public cards. */

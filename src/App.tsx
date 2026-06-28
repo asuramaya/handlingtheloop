@@ -24,7 +24,6 @@ import { useGamepad } from "@htl/gamepad";
 import {
   AudioEngine,
   type Deck,
-  type StemView,
   EQ_MIN_DB,
   EQ_MAX_DB,
   analyzeTrackAsync,
@@ -72,7 +71,6 @@ import {
   isDspStems,
   getStemModel,
   modelSupport,
-  deviceSupportsModel,
   isMobileDevice,
   isIOSDevice,
   isChromium,
@@ -98,6 +96,7 @@ import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } 
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
+import { useStemViewSync } from "./App/useStemViewSync";
 import { useMidiRouting } from "./App/useMidiRouting";
 import { SpineContext, useSpine, type Spine } from "./App/spine";
 
@@ -1871,72 +1870,19 @@ function AppBody() {
     [engine, replay],
   );
 
-  // A stem view that arrived for a track this deck hasn't finished decoding yet (the
-  // catch-up burst on join races the deck load) — stashed here and re-applied the moment
-  // loaded[deck] catches up, so an anon/mobile listener doesn't lose stems forever.
-  const pendingStemView = useRef<Record<DeckId, { videoId: string; view: StemView } | null>>({ A: null, B: null });
-  // A peer's stem waveform envelopes arrived (the host streams them) → rebuild this
-  // deck's 4-lane display from them, even though we hold no local stem PCM (mobile).
-  const onRoomStemView = useCallback(
-    (deck: DeckId, view: unknown) => {
-      try {
-        const d = engine.deck(deck);
-        // Local stems (the on-device DSP baseline) win over a streamed remote view — keep this
-        // device's display and audio consistent instead of painting the host's envelopes over
-        // stems we actually play. Without local stems, mirror the host's view as before.
-        if (d.ownStems) return;
-        // Slot-vs-song guard: a stem view is keyed only by deck on the wire, so a view for
-        // the PREVIOUS track (a racing relay / stale DO catch-up) could paint over the song
-        // now loaded here. Drop it unless its videoId matches what's actually on this deck.
-        // (Older peers omit videoId → render best-effort, as before.)
-        const sv = view as StemView;
-        const here = latest.current.loaded[deck];
-        if (sv?.videoId && here && sv.videoId !== here) {
-          // Track still decoding (or a different track loading) — stash, don't drop. The
-          // flush effect re-applies it once loaded[deck] becomes this view's videoId.
-          pendingStemView.current[deck] = { videoId: sv.videoId, view: sv };
-          return;
-        }
-        pendingStemView.current[deck] = null;
-        d.setRemoteStemView(sv);
-        // The host's stems are now displayed here — cancel any pending "couldn't deliver"
-        // timer, clear the "Requesting…" chip, and show the view is live from the host.
-        if (stemReqTimers.current[deck]) {
-          clearTimeout(stemReqTimers.current[deck]);
-          stemReqTimers.current[deck] = undefined;
-        }
-        if (stemViewWaitTimers.current[deck]) {
-          clearTimeout(stemViewWaitTimers.current[deck]);
-          stemViewWaitTimers.current[deck] = undefined;
-        }
-        setStatusFor(deck, { phase: "ready", src: "host", detail: "Stems from the session host." });
-        refresh();
-      } catch {
-        /* malformed view — ignore */
-      }
-    },
-    [engine, refresh, setStatusFor],
-  );
+  // The session stem-view concern (inbound host-streamed 4-lane envelopes + the outbound host
+  // streamers + the on-join publish) lives in ./App/useStemViewSync. Returns feed useRoom
+  // (onStemView), the onStemsReady + join-publish effects, and stemReqRef below.
+  const { onRoomStemView, sendHostStemView, handleStemRequest } = useStemViewSync({
+    setStatusFor,
+    forceSeparate,
+    loaded,
+    latest,
+    stemReqTimers,
+    stemViewWaitTimers,
+    reqSepGuard,
+  });
 
-  // Flush a stashed stem view once this deck finishes decoding its matching track (the join
-  // catch-up streamed the view before the deck had loaded — without this, a mobile/anon
-  // listener that races the load loses the host's stems permanently). Keyed on `loaded`.
-  useEffect(() => {
-    (["A", "B"] as DeckId[]).forEach((id) => {
-      const p = pendingStemView.current[id];
-      if (!p || loaded[id] !== p.videoId) return;
-      const d = engine.deck(id);
-      pendingStemView.current[id] = null;
-      if (d.ownStems) return; // grew its own stems meanwhile → local wins
-      d.setRemoteStemView(p.view);
-      if (stemViewWaitTimers.current[id]) {
-        clearTimeout(stemViewWaitTimers.current[id]);
-        stemViewWaitTimers.current[id] = undefined;
-      }
-      setStatusFor(id, { phase: "ready", src: "host", detail: "Stems from the session host." });
-      refresh();
-    });
-  }, [loaded, engine, refresh, setStatusFor]);
 
   // Instant cross-device colour sync (inbound): a same-account device re-themed → adopt its
   // colours here too. The DO relays this ONLY between the owner's own devices, so it never
@@ -2125,23 +2071,8 @@ function AppBody() {
     return () => clearTimeout(t);
   }, [kickedNotice]);
 
-  // Publish THIS device's stem envelopes to the session (host side) so stem-less
-  // remotes can render the 4-lane display. Via a ref so the deck callback below reads
-  // live room state without re-binding on every change.
+  // Fill the spine room ref (read lazily by the host stem-view / lyrics streamers below).
   roomRef.current = room;
-  const sendHostStemView = useCallback(
-    (id: DeckId) => {
-      const r = roomRef.current;
-      if (!r) return;
-      // Stream from whichever device actually holds the stems and speaks for the board
-      // (the clock OR any controller). extractStemView returns null unless this deck has
-      // REAL local stems, so a stem-less remote can never publish here.
-      if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
-      const v = engine.deck(id).extractStemView(latest.current.loaded[id] ?? undefined);
-      if (v) r.sendStemView(id, v);
-    },
-    [engine],
-  );
 
   // HOST streams its resolved, word-timed lyrics to the room (the lyric twin of stem-view
   // streaming). Read via refs so the broadcast effect below isn't a dependency knot; reference-
@@ -2173,30 +2104,6 @@ function AppBody() {
     sendHostLyrics("B");
   }, [captions, captionSource, room.status, room.controlling, room.isAnchor, sendHostLyrics]);
 
-  // HOST side of a remote's stem request: only the audio authority (anchor) fulfills it —
-  // separate the deck with the asked-for model, which fires onStemsReady → streams the
-  // 4-lane view back to the requester. If we already have neural stems, just (re)stream.
-  const handleStemRequest = useCallback(
-    (id: DeckId, modelId: string) => {
-      if (!roomRef.current?.isAnchor) return;
-      const vid = latest.current.loaded[id];
-      const deck = engine.deck(id);
-      if (!vid || !deck.buffer) return;
-      if (deck.hasStems && deck.stemsNeural) {
-        sendHostStemView(id);
-        return;
-      }
-      const model = getStemModel(modelId);
-      if (model.kind === "dsp" || !deviceSupportsModel(model)) return; // host can't make these
-      const key = `${vid}:${model.id}`;
-      if (reqSepGuard.current[id] === key) return; // already separating this for a request
-      reqSepGuard.current[id] = key;
-      void forceSeparate(id, vid, deck.buffer, model).finally(() => {
-        if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
-      });
-    },
-    [engine, forceSeparate, sendHostStemView],
-  );
   stemReqRef.current = handleStemRequest;
 
   useEffect(() => {

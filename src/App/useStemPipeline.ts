@@ -21,11 +21,11 @@ import {
   dropCachedBuffer,
   type Stems,
   type StemModel,
-  type AudioEngine,
 } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { StemStatus, StemPhase } from "../App";
 import { whenIdle } from "../util/idle";
+import { useSpine } from "./spine";
 
 // Stem names in the fixed deck order. Shared with App (snapshot apply) + the session stem-sync.
 export const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
@@ -42,10 +42,9 @@ const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined — for DOWNLOA
 // Serializes mobile derive passes so two decks never build float32 sets concurrently (iOS OOM).
 let mobileDeriveChain: Promise<unknown> = Promise.resolve();
 
-// The App-owned state the stem pipeline reaches into — stable refs / singletons / callbacks.
+// The App-owned state the stem pipeline reaches into — stable refs / callbacks. `engine`/`refresh`
+// come from the spine context, not here.
 export interface StemPipelineDeps {
-  engine: AudioEngine;
-  refresh: () => void;
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
   requestStemsFromHost: (id: DeckId, model: StemModel) => boolean;
   stemModelRef: MutableRefObject<string>;
@@ -60,9 +59,8 @@ export interface StemPipelineDeps {
 }
 
 export function useStemPipeline(deps: StemPipelineDeps) {
+  const { engine, refresh } = useSpine();
   const {
-    engine,
-    refresh,
     setStatusFor,
     requestStemsFromHost,
     stemModelRef,

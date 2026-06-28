@@ -99,6 +99,7 @@ import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } 
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useMidiRouting } from "./App/useMidiRouting";
+import { SpineContext, useSpine, type Spine } from "./App/spine";
 
 type DeckId = "A" | "B";
 
@@ -309,9 +310,23 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
 }
 
 export function App() {
+  // Lazy singleton — the AudioContext is created on first render (post user-gesture), not at import.
   const engineRef = useRef<AudioEngine | null>(null);
   if (engineRef.current === null) engineRef.current = new AudioEngine();
   const engine = engineRef.current;
+  const [, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
+  const emitRef = useRef<(intent: Intent) => void>(() => {});
+  const spine = useMemo<Spine>(() => ({ engine, refresh, emitRef }), [engine, refresh, emitRef]);
+  return (
+    <SpineContext.Provider value={spine}>
+      <AppBody />
+    </SpineContext.Provider>
+  );
+}
+
+function AppBody() {
+  const { engine, refresh, emitRef } = useSpine();
 
   const library = useLibrary();
 
@@ -373,8 +388,6 @@ export function App() {
   const captionVidRef = useRef<Record<DeckId, string>>({ A: "", B: "" });
   // Lyric processing/failure tell per deck (model download %, "Transcribing…", "unavailable").
   const [lyricStatus, setLyricStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
-  const [, setTick] = useState(0);
-  const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   // Which right-dock panel was open last reload — restored DESKTOP-ONLY (like libOpen
@@ -584,7 +597,7 @@ export function App() {
   // Shared-session intent emitters, reached through refs so the keyboard handler
   // (set up before the room wiring below) can broadcast its actions too. Assigned
   // each render once `emit` / `emitDeckControls` exist.
-  const emitRef = useRef<(intent: Intent) => void>(() => {});
+  // emitRef now comes from the spine (filled below once `emit` exists). emitDeckRef stays local.
   const emitDeckRef = useRef<(id: DeckId) => void>(() => {});
   // A remote's "make these stems" request, routed to the host handler (assigned once the
   // room + separation wiring exist below). Lets onRoomIntent call it without an ordering cycle.
@@ -1356,8 +1369,6 @@ export function App() {
   // stems-agent owns that file instead of contending on App.tsx. The App spine (refs/engine/
   // session) is handed in; deriveStems comes back out and feeds the load + session + mobile paths.
   const { deriveStems } = useStemPipeline({
-    engine,
-    refresh,
     setStatusFor,
     requestStemsFromHost,
     stemModelRef,
@@ -2759,8 +2770,6 @@ export function App() {
   // board has full feature + session-sync parity. The dispatcher (value→real-range scaling, focus/
   // shift/room-sync/jog) lives in ./App/useMidiRouting so a control-surface agent owns that file.
   const { onMidiEvent } = useMidiRouting({
-    engine,
-    refresh,
     settings,
     room,
     focused,
@@ -2775,7 +2784,6 @@ export function App() {
     onJogEnd,
     emitJog,
     canDriveDeckRef,
-    emitRef,
     eqStemModeRef,
     fxSelRef,
     handlersRef,
@@ -3799,7 +3807,11 @@ export function App() {
             onCrossfade={dragCrossfade}
             locked={boardLocked || (!xfaderEnabled && !smartFaderArmed)}
             smart={smartFaderArmed}
+            enabled={xfaderEnabled}
+            canControl={!boardLocked}
             kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
+            onToggleSmart={() => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false)}
+            onToggleEnabled={() => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false)}
           />
           <div className="decks-row">
           <DeckControls

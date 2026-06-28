@@ -4,15 +4,14 @@
 // closure + its useCallback dep array are unchanged. Consumed by useMidi + useGamepad in App.
 import { useCallback, useRef } from "react";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
-import { EQ_MIN_DB, EQ_MAX_DB, type Deck, type DeckId, type AudioEngine, type SmartFader } from "@htl";
-import { useRoom, type Intent } from "@htl/room";
+import { EQ_MIN_DB, EQ_MAX_DB, type Deck, type DeckId, type SmartFader } from "@htl";
+import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
+import { useSpine } from "./spine";
 
 export interface MidiRoutingDeps {
-  engine: AudioEngine;
-  refresh: () => void;
   settings: Settings;
   room: ReturnType<typeof useRoom>;
   focused: DeckId;
@@ -27,7 +26,6 @@ export interface MidiRoutingDeps {
   onJogEnd: (id: DeckId) => void;
   emitJog: (id: DeckId, delta: number) => void;
   canDriveDeckRef: MutableRefObject<(id: DeckId) => boolean>;
-  emitRef: MutableRefObject<(intent: Intent) => void>;
   eqStemModeRef: MutableRefObject<boolean>;
   fxSelRef: MutableRefObject<Record<DeckId, number>>;
   handlersRef: MutableRefObject<Record<string, (deck: Deck, id: DeckId, s: boolean) => void>>;
@@ -49,9 +47,8 @@ export interface MidiRoutingDeps {
 }
 
 export function useMidiRouting(deps: MidiRoutingDeps) {
+  const { engine, refresh, emitRef } = useSpine();
   const {
-    engine,
-    refresh,
     settings,
     room,
     focused,
@@ -66,7 +63,6 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     onJogEnd,
     emitJog,
     canDriveDeckRef,
-    emitRef,
     eqStemModeRef,
     fxSelRef,
     handlersRef,

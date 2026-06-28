@@ -20,7 +20,7 @@ import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, tri
 import { useRoom, type Intent, type TickDecks, type DeckTick, type QueuedTrack, type NowPlaying, type ClientMsg } from "@htl/room";
 import { useSetReplay } from "@htl/replay";
 import { ReplayBar } from "./components/ReplayBar";
-import { useMidi, type MidiEvent, type DeckFeedback } from "@htl/midi";
+import { useMidi, type DeckFeedback } from "@htl/midi";
 import { useGamepad } from "@htl/gamepad";
 import {
   AudioEngine,
@@ -98,6 +98,7 @@ import {
 import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
+import { useMidiRouting } from "./App/useMidiRouting";
 
 type DeckId = "A" | "B";
 
@@ -670,11 +671,9 @@ export function App() {
   // (the saved starting mode); flips the first time a scratch/bend-stream tick reveals
   // the unit's real mode. Kept in sync by the settings effect below.
   const jogVinyl = useRef<Record<DeckId, boolean>>({ A: settings.jogVinylDefault, B: settings.jogVinylDefault });
-  const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
   // Accumulated jog motion (seconds) while editing a loop edge under GRID LOCK — the
   // continuous wheel is integrated and spent one whole beat at a time (see the jogTurn
   // handler), since a per-tick adjustBy would just re-snap to the same beat and stick.
-  const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // The videoId we've already kicked off a room-driven load for (per deck), so a
   // repeated snapshot never aborts + restarts an in-flight decode.
   const roomLoadTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
@@ -2741,7 +2740,6 @@ export function App() {
   // --- USB-MIDI controller routing ---
   // Sub-integer carry for relative encoders that drive an INTEGER param (pitch): a
   // single detent is a fraction of a semitone, so accumulate until it crosses ±1.
-  const knobAcc = useRef<Record<string, number>>({});
   // Soft-takeover state for ABSOLUTE pickup knobs (Starrypad), keyed by target. Each is
   // "caught" only once the knob value sweeps through the param's current value, so it
   // never jumps. Reset on focus change so re-grabbing the new deck re-catches (no jump).
@@ -2757,415 +2755,46 @@ export function App() {
   // Bridge to the sampler's trigger/release (set by SamplerStrip) so MIDI-learned + 1-8
   // keyboard pads fire the sampler without threading the api through the keymap effect.
   const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
-  // A decoded MidiEvent is fanned out to the SAME handlers the keyboard/buttons use,
-  // so a hardware board has full feature + session-sync parity. value is 0..1; we
-  // scale it to each control's real range here (where the live tempo range lives).
-  const onMidiEvent = useCallback(
-    (ev: MidiEvent) => {
-      if (lockedRef.current) return; // a watch-only participant can't drive the decks
-      // A stepped-up listener may drive ONLY their own deck — block control aimed at the
-      // other one (navigation/zoom stay free). A deck-less control event targets `focused`.
-      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector";
-      if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
-      // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
-      const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
-      // Stem-volume knob curve: bottom = 0%, CENTRE = 100% (unity), top = 150% (overdrive).
-      const stemKnobGain = (v: number) => (v <= 0.5 ? v * 2 : 1 + (v - 0.5));
-      // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
-      const SEC_PER_TICK = 0.0025 * settings.jogSensitivity;
-      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
-      // track to find a cue (Mixxx uses ~×150 vs scratch; we ride sensitivity too).
-      const SEARCH_SEC_PER_TICK = 0.05 * settings.jogSensitivity;
-      // Jog (platter or ring) editing a loop edge. GRID LOCK on → integrate the motion and
-      // spend it one beat at a time via adjustStep (a per-tick adjustBy snaps to the same
-      // beat and never advances). Grid lock off → smooth continuous sub-beat adjustBy. One
-      // beat per beat-interval of platter motion, so it tracks tempo.
-      const loopAdjustJog = (deck: Deck, did: DeckId, sec: number) => {
-        if (!deck.quantizing) {
-          deck.adjustBy(sec);
-          return;
-        }
-        const interval = deck.beatgrid?.interval || 0.5;
-        const acc = (loopAdjAcc.current[did] ?? 0) + sec;
-        const steps = Math.trunc(acc / interval);
-        if (steps !== 0) {
-          for (let k = 0; k < Math.abs(steps); k++) deck.adjustStep(Math.sign(steps));
-          loopAdjAcc.current[did] = acc - steps * interval;
-        } else {
-          loopAdjAcc.current[did] = acc;
-        }
-      };
-      switch (ev.type) {
-        case "shift": {
-          // A per-deck controller SHIFT (FLX4) → that deck's shift. A DECKLESS shift
-          // (the Starrypad's latching RECORD toggle) → a focus-following latch, so it
-          // moves to whichever deck is focused while it's on. Scoped per deck, never both.
-          if (ev.deck) {
-            const d = ev.deck;
-            setMidiShift((m) => (m[d] === ev.down ? m : { ...m, [d]: ev.down }));
-          } else {
-            setFocusShift(ev.down);
-          }
-          break;
-        }
-        case "focus": {
-          // A pad-style board (one control set, no per-deck duplication) switches which
-          // deck it drives — make ev.deck the focused deck (same ring the keyboard uses).
-          setFocused(ev.deck);
-          break;
-        }
-        case "button": {
-          // Deck omitted (focus-model board) → drive the focused deck. The effective
-          // shift folds in HTL's shift state so e.g. the Starrypad PLAY honours the
-          // record-latch (shift) → reset, even though its CC carries no shift bit.
-          // Sampler pads are global (route by position), not a deck handler — fire the
-          // strip directly. pressed=false releases (gate mode).
-          const smp = /^sampler(\d+)$/.exec(ev.action);
-          if (smp) {
-            const idx = Number(smp[1]);
-            if (ev.pressed) samplerCtl.current?.trigger(idx);
-            else samplerCtl.current?.release(idx);
-            break;
-          }
-          const id = ev.deck ?? focused;
-          const deck = engine.deck(id);
-          // Effective shift. A DECK-ADDRESSED hardware button (FLX, ev.deck set) uses ONLY its
-          // own shift (its SHIFT byte or that deck's latch) — never the focus-model/keyboard
-          // shift. Otherwise a latched/held shift would silently turn the FOCUSED deck's ▶ into
-          // move-loop, so "jog forward" died intermittently on whichever deck had focus (deck B).
-          // The focus-model shift (focusShift/latch/keyboard) only applies to a DECKLESS board.
-          const sh = ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
-          // Pad workflow: triggering an EXISTING hot cue or a beat loop WHILE PAUSED drops
-          // into playback (a pad press "launches"). Velocity-sensitive: a SOFT tap just
-          // jumps (audition the spot, stay paused), a FIRM hit plays. Saving a new cue
-          // (empty slot) or a shifted action (clear) never plays. Velocity-less buttons
-          // (CC) treat as firm. Scoped to the controller — keyboard unchanged.
-          const wasPaused = !deck.playing;
-          const cueSlot = /^hotcue(\d)$/.exec(ev.action);
-          const hadCue = cueSlot ? deck.hotCues[Number(cueSlot[1]) - 1] != null : false;
-          const isLoop = /^beatLoop\d$/.test(ev.action);
-          const firm = (ev.velocity ?? 127) >= 40; // soft tap < 40 = jump only
-          handlersRef.current[ev.action]?.(deck, id, sh); // sets / resizes / EXITS the loop (shared toggle)
-          // Triggering an existing cue, or NEWLY engaging a loop, while paused launches
-          // playback (firm hit only). EXITING a loop (now inactive) must not start it.
-          if (wasPaused && !sh && firm && !deck.playing && (hadCue || (isLoop && deck.loop?.active))) {
-            deck.play();
-            emitRef.current({ kind: "transport", deck: id, action: "play" });
-          }
-          refresh();
-          break;
-        }
-        case "beatjump": {
-          const deck = engine.deck(ev.deck);
-          deck.beatJump(ev.beats);
-          emitSeekTo(ev.deck, deck.position());
-          refresh();
-          break;
-        }
-        case "fader": {
-          if (ev.target === "crossfader") {
-            const x = (ev.value - 0.5) * 2;
-            // Smart Fader armed → the fader scrubs the auto-transition (tempo morph + bass swap);
-            // it drives engine.setCrossfade itself + manipulates both decks, so don't double-apply.
-            // Gate on the live instance flag (always current), not the React-mirror ref.
-            if (smartFader.isArmed) {
-              smartFader.onCrossfade(x);
-              setCrossfade(x);
-              if (!smartFader.isArmed) setSmartFaderArmed(false); // throw completed → stood down
-              if (room.controlling) room.sendIntent({ kind: "crossfade", value: x });
-              refresh();
-              break;
-            }
-            if (!xfaderEnabledRef.current) break; // SMART FADER (shift) disabled → ignore the crossfader
-            setCrossfade(x);
-            engine.setCrossfade(x);
-            if (room.controlling) room.sendIntent({ kind: "crossfade", value: x });
-            break;
-          }
-          // Global headphone / mic knobs (no deck): the FLX 🎧 MIX + 🎧 LEVEL + a mappable mic level.
-          if (ev.target === "fxWetDry") {
-            // BEAT FX LEVEL/DEPTH → the focused deck's SELECTED effect wet/dry ("mix"). Mirror
-            // the on-screen knob exactly: set + broadcast the param + refresh so the MIX cell
-            // (which reads the live param) actually moves. (No-op if the EQ tab is selected.)
-            const fid = ev.deck ?? focused;
-            const slot = fxSelRef.current[fid];
-            engine.deck(fid).setFxParam(slot, "mix", ev.value);
-            emitRef.current({ kind: "fxParam", deck: fid, slot, param: "mix", value: ev.value });
-            refresh();
-            break;
-          }
-          if (ev.target === "cueMix") {
-            engine.setCueMix(ev.value);
-            setCueMixSt(ev.value); // keep the on-screen buttonoid in step with the knob
-            break;
-          }
-          if (ev.target === "cueLevel") {
-            engine.setCueLevel(ev.value);
-            setCueLevelSt(ev.value);
-            break;
-          }
-          if (ev.target === "micLevel") {
-            engine.setMicLevel(ev.value);
-            micVolSetRef.current?.(ev.value); // mirror to the sampler-strip MIC cell display
-            break;
-          }
-          const id = ev.deck ?? focused;
-          const deck = engine.deck(id);
-          const ctl = emitRef.current;
-          // Soft-takeover for an ABSOLUTE pickup knob (Starrypad): don't move the param
-          // until the knob value sweeps THROUGH its current value — so switching focus /
-          // first touch never jumps. Once caught it tracks 1:1 (and reaches 0/max).
-          if (ev.pickup) {
-            const t = ev.target;
-            let cur01: number | null = null;
-            if (t === "level") cur01 = deck.level / 2;
-            else if (t === "trim") cur01 = deck.trim / 2;
-            else if (t === "pitch") cur01 = (deck.pitch + settings.pitchRange) / (2 * settings.pitchRange);
-            else if (t === "tempo") cur01 = deck.tempo / settings.tempoRange / 2 + 0.5;
-            else if (t === "stemDrums") cur01 = deck.stemLevel("drums") / 1.5;
-            else if (t === "stemBass") cur01 = deck.stemLevel("bass") / 1.5;
-            else if (t === "stemVocals") cur01 = deck.stemLevel("vocals") / 1.5;
-            else if (t === "stemOther") cur01 = deck.stemLevel("other") / 1.5;
-            else if (t === "filterHp") cur01 = deck.hpAmount;
-            else if (t === "filterLp") cur01 = deck.lpAmount;
-            if (cur01 != null) {
-              const st = knobPickup.current[t];
-              const caught = st?.caught === true || (st != null && ((st.last <= cur01 && ev.value >= cur01) || (st.last >= cur01 && ev.value <= cur01)));
-              knobPickup.current[t] = { caught, last: ev.value };
-              if (!caught) break; // not caught yet → ignore so it never jumps
-            }
-          }
-          switch (ev.target) {
-            case "tempo": {
-              const pct = (ev.value - 0.5) * 2 * settings.tempoRange;
-              deck.setTempo(pct);
-              ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
-              break;
-            }
-            case "level":
-              // The on-screen channel fader spans 0..2 (unity at centre), so map the
-              // physical fader 1:1 across that whole range — top of throw = full boost.
-              deck.setLevel(ev.value * 2);
-              ctl({ kind: "control", deck: id, param: "level", value: deck.level });
-              break;
-            case "trim":
-              deck.setTrim(ev.value * 2);
-              ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
-              break;
-            // In stem mode (SMART CFX) the column of knobs rides stem volumes instead of EQ/filter,
-            // going DOWN the line: HI→drums, MID→bass, LOW→vocals, CFX/filter→other — but ONLY when
-            // this deck has separated stems; without them, fall THROUGH to EQ/filter so the knob is
-            // never dead. Stem curve: bottom 0% · centre 100% (unity) · top 150% (overdrive).
-            case "eqHi":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("drums", stemKnobGain(ev.value)); refresh(); break; }
-              deck.setEqHigh(eqDb(ev.value));
-              ctl({ kind: "control", deck: id, param: "eqHigh", value: deck.eqHigh });
-              break;
-            case "eqMid":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("bass", stemKnobGain(ev.value)); refresh(); break; }
-              deck.setEqMid(eqDb(ev.value));
-              ctl({ kind: "control", deck: id, param: "eqMid", value: deck.eqMid });
-              break;
-            case "eqLow":
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("vocals", stemKnobGain(ev.value)); refresh(); break; }
-              deck.setEqLow(eqDb(ev.value));
-              ctl({ kind: "control", deck: id, param: "eqLow", value: deck.eqLow });
-              break;
-            case "filter":
-              // The CFX/filter knob is the 4th stem (other) in stem mode; otherwise the colour filter
-              // (always live now — its old on/off master is gone, so the knob can't be stuck off).
-              if (eqStemModeRef.current && deck.stemControlsReady) { deck.setStemGain("other", stemKnobGain(ev.value)); refresh(); break; }
-              deck.setFilter((ev.value - 0.5) * 2);
-              ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
-              break;
-            case "filterHp":
-              deck.setHpAmount(ev.value);
-              ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
-              break;
-            case "filterLp":
-              deck.setLpAmount(ev.value);
-              ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
-              break;
-            case "pitch":
-              // Span the configured KEY range (±settings.pitchRange semitones), same as
-              // the on-screen KEY cell — was hardcoded ±12, which capped a board's pitch
-              // knob at ±12 even when the range was widened to ±24.
-              deck.setPitch(Math.round((ev.value - 0.5) * 2 * settings.pitchRange));
-              ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-              break;
-            case "stemDrums":
-            case "stemBass":
-            case "stemVocals":
-            case "stemOther": {
-              const stem = ({ stemDrums: "drums", stemBass: "bass", stemVocals: "vocals", stemOther: "other" } as const)[ev.target];
-              deck.setStemGain(stem, stemKnobGain(ev.value)); // bottom 0% · centre 100% · top 150%
-              ctl({ kind: "stemGain", deck: id, stem, value: deck.stemLevel(stem) });
-              break;
-            }
-          }
-          refresh();
-          break;
-        }
-        case "knob": {
-          // A relative encoder (endless knob) → nudge the target on the focused deck
-          // from its CURRENT value by `delta` (a signed fraction of the full range).
-          const id = ev.deck ?? focused;
-          const deck = engine.deck(id);
-          const ctl = emitRef.current;
-          const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-          const d = ev.delta;
-          switch (ev.target) {
-            case "level":
-              deck.setLevel(clamp(deck.level + d * 2, 0, 2));
-              ctl({ kind: "control", deck: id, param: "level", value: deck.level });
-              break;
-            case "trim":
-              deck.setTrim(clamp(deck.trim + d * 2, 0, 2));
-              ctl({ kind: "control", deck: id, param: "trim", value: deck.trim });
-              break;
-            case "filter":
-              // One bipolar filter shared by two directional knobs: HP knob nudges +
-              // (high-pass), the LP knob is inverted so it nudges − (low-pass).
-              deck.setFilter(clamp(deck.filterValue + d, -1, 1));
-              ctl({ kind: "control", deck: id, param: "filter", value: deck.filterValue });
-              break;
-            case "tempo": {
-              const r = settings.tempoRange;
-              deck.setTempo(clamp(deck.tempo + d * 2 * r, -r, r));
-              ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
-              break;
-            }
-            case "pitch": {
-              // Integer semitones: carry the fractional part across detents (±pitchRange
-              // over a full sweep, matching the KEY range) so slow turns still resolve to
-              // whole-semitone steps. Was hardcoded ±12.
-              const k = `${id}:pitch`;
-              const acc = (knobAcc.current[k] ?? 0) + d * 2 * settings.pitchRange;
-              const step = Math.trunc(acc);
-              knobAcc.current[k] = acc - step;
-              if (step) {
-                deck.setPitch(deck.pitch + step);
-                ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-              }
-              break;
-            }
-            case "stemDrums":
-            case "stemBass":
-            case "stemVocals":
-            case "stemOther": {
-              const stem = ({ stemDrums: "drums", stemBass: "bass", stemVocals: "vocals", stemOther: "other" } as const)[ev.target];
-              deck.setStemGain(stem, clamp(deck.stemLevel(stem) + d * 1.5, 0, 1.5));
-              ctl({ kind: "stemGain", deck: id, stem, value: deck.stemLevel(stem) });
-              break;
-            }
-          }
-          refresh();
-          break;
-        }
-        case "jogTouch": {
-          // Touching the top plate only GRABS the platter (stops the deck dead, vinyl
-          // feel) when the unit is in vinyl/scratch mode. In non-vinyl mode the touch
-          // is inert — the top plate just bends (jogTurn scratch:false handles motion),
-          // so resting a finger to nudge no longer halts playback.
-          const deck = engine.deck(ev.deck);
-          jogTouched.current[ev.deck] = ev.down;
-          if (ev.down) {
-            if (jogVinyl.current[ev.deck]) {
-              deck.scrubBegin();
-              onJogStart(ev.deck);
-            }
-          } else if (deck.scrubbing) {
-            deck.scrubEnd();
-            onJogEnd(ev.deck);
-          }
-          break;
-        }
-        case "jogTurn": {
-          // Two top-plate streams, distinguished by ev.scratch (the FLX4 hardware VINYL
-          // button picks which CC it sends): the SCRATCH stream moves the platter
-          // (position); the BEND stream nudges the tempo (deck.bend self-routes to a
-          // frame-search when paused). Latch the mode from whichever arrives.
-          const deck = engine.deck(ev.deck);
-          const sec = ev.delta * SEC_PER_TICK;
-          // Loop-edge fine-adjust armed (Shift+IN / Shift+OUT) → the platter repositions
-          // the loop head rekordbox-style instead of scratching the track. Snap follows the
-          // grid magnet (quantize on = whole-beat steps, off = surgical sub-beat).
-          if (deck.adjusting) {
-            loopAdjustJog(deck, ev.deck, sec);
-            break;
-          }
-          if (ev.scratch) {
-            jogVinyl.current[ev.deck] = true;
-            // Grab lazily if the touch landed before we knew it was vinyl mode.
-            if (!deck.scrubbing && jogTouched.current[ev.deck]) {
-              deck.scrubBegin();
-              onJogStart(ev.deck);
-            }
-            if (deck.scrubbing) {
-              deck.scrubMove(sec);
-              emitJog(ev.deck, sec);
-            } else {
-              deck.bend(sec); // touch released mid-stream → fall back to a bend
-            }
-          } else {
-            // Non-vinyl top plate → bend. If we wrongly grabbed (mode just flipped),
-            // let the platter go first.
-            jogVinyl.current[ev.deck] = false;
-            if (deck.scrubbing) {
-              deck.scrubEnd();
-              onJogEnd(ev.deck);
-            }
-            deck.bend(sec);
-          }
-          break;
-        }
-        case "jogBend": {
-          // Outer ring (never touched) → momentary pitch-bend / paused frame-search.
-          // When loop-edge adjust is armed it repositions the loop head too (parity with
-          // the top plate), so either rim or platter nudges the boundary rekordbox-style.
-          const deck = engine.deck(ev.deck);
-          if (deck.adjusting) {
-            loopAdjustJog(deck, ev.deck, ev.delta * SEC_PER_TICK);
-            break;
-          }
-          deck.bend(ev.delta * SEC_PER_TICK);
-          break;
-        }
-        case "jogSearch": {
-          // SHIFT + jog → fast scan through the track (works playing or paused). A
-          // coarse needle-drop, coalesced/streamed to session peers like a scrub seek.
-          const deck = engine.deck(ev.deck);
-          const sec = ev.delta * SEARCH_SEC_PER_TICK;
-          deck.needleDrop(sec);
-          emitSeekTo(ev.deck, deck.position());
-          refresh();
-          break;
-        }
-        case "zoom": {
-          // Relative encoder → zoom the focused deck's waveform (in/out per detent).
-          const id = ev.deck ?? focused;
-          setZoomFor(id, latest.current.zoom[id] * (ev.delta > 0 ? 0.82 : 1.22));
-          break;
-        }
-        case "selector":
-          // Browse-encoder PRESS → jump the browse cursor between the track list and the
-          // source list (Collection / Community / playlists), rekordbox tree↔list — not
-          // open/close the library (the chin's Library button / Alt already do that).
-          libRef.current?.toggleSourceNav();
-          break;
-        case "browse":
-          // Browse encoder → step the library row cursor (opens the panel if it was shut).
-          libRef.current?.browse(ev.delta);
-          break;
-        case "load":
-          // LOAD A / LOAD B → load the cursor row onto that deck (canDriveDeck already gated
-          // this above, so a session passenger can't load over a deck they don't control).
-          libRef.current?.load(ev.deck);
-          break;
-      }
-    },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor],
-  );
+  // A decoded MidiEvent is fanned out to the SAME handlers the keyboard/buttons use, so a hardware
+  // board has full feature + session-sync parity. The dispatcher (value→real-range scaling, focus/
+  // shift/room-sync/jog) lives in ./App/useMidiRouting so a control-surface agent owns that file.
+  const { onMidiEvent } = useMidiRouting({
+    engine,
+    refresh,
+    settings,
+    room,
+    focused,
+    setFocused,
+    setZoomFor,
+    midiShift,
+    focusShift,
+    shiftLatched,
+    shiftHeld,
+    emitSeekTo,
+    onJogStart,
+    onJogEnd,
+    emitJog,
+    canDriveDeckRef,
+    emitRef,
+    eqStemModeRef,
+    fxSelRef,
+    handlersRef,
+    libRef,
+    lockedRef,
+    micVolSetRef,
+    xfaderEnabledRef,
+    knobPickup,
+    samplerCtl,
+    smartFader,
+    setMidiShift,
+    setFocusShift,
+    setCrossfade,
+    setSmartFaderArmed,
+    setCueMixSt,
+    setCueLevelSt,
+    jogVinyl,
+    latest,
+  });
 
   const midi = useMidi({
     enabled: settings.midiEnabled,

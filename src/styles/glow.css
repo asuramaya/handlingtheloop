@@ -84,23 +84,6 @@ body.no-glow .lane.focused::after {
   gap: 6px;
   align-items: stretch;
 }
-/* MOBILE Single↔Stems toggle: a compact pill above the stem foot. Off = plain mix
-   (the light default); on = on-device stems active (accent-lit). */
-.stem-mode-btn {
-  width: 100%;
-  padding: 5px 8px;
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.stem-mode-btn.on { color: #061018; background: var(--accent); border-color: var(--accent); }
-.stem-mode-btn:disabled { opacity: 0.55; cursor: default; }
 /* Let the cells/steppers shrink with their track on narrow widths (their 44px
    min-width would otherwise overflow the row off the right). */
 .pitch-row > *,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
+import { SmartChip } from "./SmartChip";
 
 // Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
 // exists. Each captures into the next free global pad (owned-audio tier).
@@ -20,6 +21,7 @@ export function SamplerStrip({
   ctlRef,
   micSetRef,
   phones,
+  smart,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
@@ -27,6 +29,8 @@ export function SamplerStrip({
   // Master headphone (cue-device) controls — joins the IO zone only when a 2nd output is set.
   // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
+  // The crossfader's SMART chip lives here (between the mic and capture zones) — see SmartChip.
+  smart?: { armed: boolean; enabled: boolean; canControl: boolean; shift: boolean; kbd: string; accentA: string; accentB: string; onToggleSmart: () => void; onToggleEnabled: () => void };
 }) {
   const s = sampler;
   const engine = useEngine();
@@ -188,6 +192,24 @@ export function SamplerStrip({
         )}
 
         {engine.canMic && <span className="smp-io-sep" aria-hidden="true" />}
+        {/* SMART chip — the crossfader's Smart-Fader arm + enable/disable toggles, surfaced here so
+            they're reachable on touch (between the mic and capture zones). */}
+        {smart && (
+          <>
+            <SmartChip
+              smart={smart.armed}
+              enabled={smart.enabled}
+              canControl={smart.canControl}
+              shift={smart.shift}
+              kbd={smart.kbd}
+              accentA={smart.accentA}
+              accentB={smart.accentB}
+              onToggleSmart={smart.onToggleSmart}
+              onToggleEnabled={smart.onToggleEnabled}
+            />
+            <span className="smp-io-sep" aria-hidden="true" />
+          </>
+        )}
         {/* ACTION — TAP = record into the next free GLBL pad (armed = red pulse); RIGHT-CLICK / HOLD =
             pick the SOURCE. The small tag under REC shows what you'll capture (no separate cell). */}
         <button

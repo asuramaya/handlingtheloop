@@ -3177,6 +3177,17 @@ function AppBody() {
             sampler={sampler}
             ctlRef={samplerCtl}
             micSetRef={micVolSetRef}
+            smart={{
+              armed: smartFaderArmed,
+              enabled: xfaderEnabled,
+              canControl: !boardLocked,
+              shift,
+              kbd: codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? ""),
+              accentA: ACCENT.A,
+              accentB: ACCENT.B,
+              onToggleSmart: () => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false),
+              onToggleEnabled: () => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false),
+            }}
             phones={
               !!settings.audioCueOutputId && engine.canCueDevice
                 ? {
@@ -3197,12 +3208,6 @@ function AppBody() {
             onCrossfade={dragCrossfade}
             locked={boardLocked || (!xfaderEnabled && !smartFaderArmed)}
             smart={smartFaderArmed}
-            enabled={xfaderEnabled}
-            canControl={!boardLocked}
-            shift={shift}
-            kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
-            onToggleSmart={() => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false)}
-            onToggleEnabled={() => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false)}
           />
           <div className="decks-row">
           <DeckControls

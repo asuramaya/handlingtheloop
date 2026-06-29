@@ -631,7 +631,8 @@
   flex-direction: column;
 }
 /* The A↔B crossfader as a HORIZONTAL bar at the top of the middle section — the
-   track spans the full width (no side gaps) and sits flush at the bottom. */
+   track spans the full width (no side gaps) and sits flush at the bottom. The SMART
+   chip is overlaid centred ON this row (same line as the handle). */
 .xfader-bar {
   position: relative;
   flex: 0 0 auto;
@@ -852,66 +853,62 @@
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
 }
 /* SMART chip — the on-screen / touch home for the Smart-Fader arm (tap) + crossfader enable (hold)
-   toggles. A real flex sibling of the track (so it never overlaps the drag hit-area), sized to the
-   bar. Reads as a small board buttonoid; lights up when armed, goes dashed-dim when the crossfader
-   is off. Carries the keybind letter inside it (shown only under body.show-keys, desktop). */
-.xbar-smart {
-  flex: 0 0 auto;
-  position: relative;
+   toggles. Lives in the I/O strip between the mic + capture zones, so it inherits the strip's
+   equal-width button sizing (.smp-io button = flex:1) and only adds its STATE styling here: lights
+   up (A↔B glow) when armed, goes dashed-dim when off, flips to the shift tint when board shift is
+   held. Carries the keybind letter inside it (shown only under body.show-keys, desktop). */
+.smart-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  height: 30px;
-  margin: 1px 0 0 6px;
-  padding: 0 10px;
-  font-weight: 600;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--text) 62%, var(--line));
-  background: color-mix(in srgb, var(--panel) 70%, var(--line));
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
   transition: color 0.12s, background 0.12s, box-shadow 0.18s, border-color 0.12s;
 }
-.xbar-smart:hover:not(:disabled) { border-color: color-mix(in srgb, var(--text) 36%, var(--line)); }
-/* ARMED — tapped on. Filled with the A↔B blend + a steady glow, echoing the breathing bar. */
-.xbar-smart.armed {
-  color: var(--bg);
-  border-color: transparent;
-  background: linear-gradient(90deg, var(--xa, #4ad), var(--xb, #d4a));
-  box-shadow: 0 0 9px 1px color-mix(in srgb, var(--xb, #d4a) 55%, transparent);
+/* ARMED — tapped on. The deck A↔B blend lives on the RING only: a gradient BORDER via the
+   padding-box/border-box background-clip trick (keeps the rounded corners, which a plain border-image
+   would square off), over the normal dark fill + text, with a soft A+B glow. --xa / --xb are set
+   inline from the live deck accents, so the ring tracks whatever the two decks are coloured. */
+.smart-chip.armed {
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(90deg, var(--xa, #4ad), var(--xb, #d4a)) border-box;
+  box-shadow:
+    0 0 7px color-mix(in srgb, var(--xa, #4ad) 42%, transparent),
+    0 0 7px color-mix(in srgb, var(--xb, #d4a) 42%, transparent);
 }
+/* A hair of the blend on the keybind hint so the chip still reads as "the A↔B control" up close. */
+.smart-chip.armed .kbd { color: color-mix(in srgb, var(--xb, #d4a) 70%, var(--text)); opacity: 0.9; }
 /* OFF — crossfader disabled (held/right-clicked). Dashed, dim, label struck through; a ⃠ leads it. */
-.xbar-smart.off {
+.smart-chip.off {
   border-style: dashed;
-  color: color-mix(in srgb, var(--text) 40%, var(--line));
+  color: color-mix(in srgb, var(--text) 45%, var(--line));
   background: transparent;
   box-shadow: none;
 }
-.xbar-smart.off .xbar-smart-lbl { text-decoration: line-through; }
-.xbar-smart.off::before {
+.smart-chip.off .smart-chip-lbl { text-decoration: line-through; }
+.smart-chip.off::before {
   content: "⃠";
   font-size: 12px;
   line-height: 1;
 }
-.xbar-smart:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.smart-chip:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 /* SHIFTED — board shift held/latched flips the chip to its alt action (enable/disable the
    crossfader). Same yellow shift tint as the deck banks, so the remap reads in one grammar
    (overrides armed/off colour while shift is active; the gradient/strike return on release). */
-.xbar-smart.shifted {
+.smart-chip.shifted {
   color: var(--shift);
   border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
   border-style: solid;
   background: color-mix(in srgb, var(--shift) 14%, var(--panel));
   box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
 }
-.xbar-smart.shifted .xbar-smart-lbl { text-decoration: none; }
-.xbar-smart.shifted::before { content: none; }
+.smart-chip.shifted .smart-chip-lbl { text-decoration: none; }
+.smart-chip.shifted::before { content: none; }
 /* The keybind letter rides inside the chip; .kbd already hides itself off body.show-keys / mobile. */
-.xbar-smart .kbd {
+.smart-chip .kbd {
   position: static;
   opacity: 0.7;
 }

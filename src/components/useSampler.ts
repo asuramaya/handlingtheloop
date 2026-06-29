@@ -39,7 +39,7 @@ const regionSlot = (i: number): number =>
 const globalSlot = (i: number): number => i; // 0..11
 /** First pad index of a deck's 8-pad region bank (so the deck's SAMPLER pad-mode slices it). */
 export const deckPadBase = (deckId: DeckId): number =>
-  deckId === "A" ? GLOBAL_COUNT : GLOBAL_COUNT + DECK_REGION_COUNT; // 12 | 20
+  deckId === "A" ? GLOBAL_COUNT : GLOBAL_COUNT + DECK_REGION_COUNT; // 8 | 16
 
 interface RegionDesc {
   start: number;
@@ -130,6 +130,16 @@ export function useSampler(
       engine.sampler.onChange = null;
     };
   }, [engine]);
+
+  // A deck loading a new track invalidates its region pads (they're slices of the OLD track, keyed
+  // by the old videoId). Stop that deck's region voices so a held loop/gate doesn't keep looping the
+  // previous track's slice over the new one. Global pads (master-routed, account-stored) are untouched.
+  useEffect(() => {
+    for (let i = deckPadBase("A"); i < deckPadBase("A") + DECK_REGION_COUNT; i++) engine.sampler.stop(i);
+  }, [engine, loaded.A]);
+  useEffect(() => {
+    for (let i = deckPadBase("B"); i < deckPadBase("B") + DECK_REGION_COUNT; i++) engine.sampler.stop(i);
+  }, [engine, loaded.B]);
 
   const persistRegions = useCallback((next: RegionStore) => {
     setRegions(next);

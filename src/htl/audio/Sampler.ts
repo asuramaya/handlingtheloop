@@ -104,10 +104,11 @@ export class Sampler {
     return this.voices.has(pad);
   }
 
-  /** Live-adjust a sounding voice's gain (e.g. while held). */
+  /** Live-adjust a sounding voice's gain (e.g. while held). Short ramp so a live move on a
+   *  sounding voice doesn't click. */
   setGain(pad: number, gain: number): void {
     const v = this.voices.get(pad);
-    if (v) v.g.gain.value = gain;
+    if (v) v.g.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.012);
   }
 
   /** Live-adjust a sounding voice's playback rate (a region voice following a deck tempo move). */

@@ -276,11 +276,15 @@ export function AudioTab({
             onChange={(e) => set({ audioCueOutputId: e.target.value })}
           >
             <option value="">None — single output</option>
-            {outputs.map((d, i) => (
-              <option key={d.deviceId || i} value={d.deviceId}>
-                {d.label || `Output ${i + 1}`}
-              </option>
-            ))}
+            {/* Exclude the main PA device — cueing to the SAME physical output double-plays the
+                master to it (the cue's master-tap + the main path), phasing/doubling the mix. */}
+            {outputs
+              .filter((d) => !settings.audioOutputId || d.deviceId !== settings.audioOutputId)
+              .map((d, i) => (
+                <option key={d.deviceId || i} value={d.deviceId}>
+                  {d.label || `Output ${i + 1}`}
+                </option>
+              ))}
           </select>
           {/* Bluetooth/wireless cue device → warn: A2DP adds large latency and can shift pitch
               (the cue routes through a MediaStream <audio> sink, unlike the native master). The

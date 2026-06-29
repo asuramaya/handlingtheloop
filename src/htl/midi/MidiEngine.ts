@@ -55,6 +55,15 @@ export interface OutMsg {
   seq: number;
 }
 const MON_MAX = 32;
+const CAPTURE_MAX = 8000; // ~minutes of jog before the golden capture self-caps
+
+// A GOLDEN CAPTURE: every incoming raw message recorded during a real-hardware session, exported
+// from MidiDebug and replayed by MidiEngine.test.ts — re-grounds the byte map without re-plugging.
+export interface MidiCapture {
+  device: string; // the matched profile (or "(no profile)")
+  capturedAt: number; // ms epoch the capture stopped (stamped by the caller / 0 in tests)
+  events: { s: number; d1: number; d2: number; t: number }[]; // status, data1, data2, ms-since-start
+}
 
 export interface MidiEngineOptions {
   onEvent: (e: MidiEvent) => void;
@@ -84,6 +93,10 @@ export class MidiEngine {
   // Live MIDI monitor ring (newest last).
   private mon: MonMsg[] = [];
   private monSeq = 0;
+  // Golden-capture buffer (unbounded vs the 32-deep monitor) — armed from MidiDebug.
+  private _capturing = false;
+  private captureBuf: { s: number; d1: number; d2: number; t: number }[] = [];
+  private captureT0 = 0;
   // Outgoing-message ring (LED feedback + manual probes) — the output side of the
   // monitor, so the debug panel can reverse-engineer a board's LED / RGB protocol.
   private outMon: OutMsg[] = [];
@@ -282,6 +295,22 @@ export class MidiEngine {
     return this.outMon.slice();
   }
 
+  // --- golden capture (MidiDebug → fixture → MidiEngine.test.ts replay) ---
+  get capturing(): boolean {
+    return this._capturing;
+  }
+  /** Begin recording every incoming raw message as a replayable golden capture. */
+  startCapture(): void {
+    this._capturing = true;
+    this.captureBuf = [];
+    this.captureT0 = typeof performance !== "undefined" ? performance.now() : 0;
+  }
+  /** Stop and return the capture (device + the raw event stream). */
+  stopCapture(): MidiCapture {
+    this._capturing = false;
+    return { device: this.profile?.name ?? "(no profile)", capturedAt: Date.now(), events: this.captureBuf.slice() };
+  }
+
   /** Jog-scratch cadence over the last `windowMs` — instrumentation for the scratch
    *  velocity model. A steady mouse reports ~1–8 ms apart; a hardware jog tends to be
    *  sparse + BURSTY (sub-1ms clusters then gaps), which a measured-interval velocity
@@ -354,6 +383,11 @@ export class MidiEngine {
     // a control's exact bytes while building a map.
     this.mon.push({ status, d1, d2, seq: ++this.monSeq });
     if (this.mon.length > MON_MAX) this.mon.shift();
+    // Golden capture: record every raw byte (with a relative ms stamp) for the replay tests.
+    if (this._capturing && this.captureBuf.length < CAPTURE_MAX) {
+      const now = typeof performance !== "undefined" ? performance.now() : 0;
+      this.captureBuf.push({ s: status, d1, d2, t: Math.round(now - this.captureT0) });
+    }
 
     if (this.learnArmed) {
       this.learnArmed = false;

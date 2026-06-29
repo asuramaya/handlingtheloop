@@ -1,7 +1,7 @@
 export { useMidi } from "./useMidi";
 export type { UseMidi } from "./useMidi";
 export { MidiEngine } from "./MidiEngine";
-export type { MonMsg, OutMsg } from "./MidiEngine";
+export type { MonMsg, OutMsg, MidiCapture } from "./MidiEngine";
 export { LEARN_CONTROLS, LEARN_GROUPS, learnControl } from "./controls";
 export type { LearnControl } from "./controls";
 export { PROFILES, matchProfile } from "./profiles";

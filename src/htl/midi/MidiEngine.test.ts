@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { MidiEngine } from "./MidiEngine";
+import { MidiEngine, type MidiCapture } from "./MidiEngine";
 import type { MidiEvent } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -107,5 +108,24 @@ describe("MidiEngine — FLX4 non-jog controls (profile breadth)", () => {
     const { events, send } = await flx();
     send(CC_A, 0x7e, 0x40); // a CC the FLX4 profile doesn't bind
     expect(events).toEqual([]);
+  });
+});
+
+// The full loop: a golden CAPTURE (recorded via MidiDebug ▸ ● Capture, exported as JSON) replayed
+// through the engine. This synthetic fixture proves the capture FORMAT round-trips end-to-end; a
+// real hardware capture dropped in fixtures/ re-grounds the byte map the same way, in CI.
+describe("MidiEngine — replay a captured fixture", () => {
+  it("decodes a recorded FLX4 jog gesture back to the expected event stream", async () => {
+    const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-jog-sample.json", import.meta.url), "utf8")) as MidiCapture;
+    const { events, send } = await flx();
+    for (const e of cap.events) send(e.s, e.d1, e.d2);
+    expect(events).toEqual([
+      { type: "jogTouch", deck: "A", down: true },
+      { type: "jogTurn", deck: "A", delta: 2, scratch: true },
+      { type: "jogTurn", deck: "A", delta: 3, scratch: true },
+      { type: "jogTurn", deck: "A", delta: -2, scratch: true },
+      { type: "jogTouch", deck: "A", down: false },
+      expect.objectContaining({ type: "button", action: "play", deck: "A", pressed: true }),
+    ]);
   });
 });

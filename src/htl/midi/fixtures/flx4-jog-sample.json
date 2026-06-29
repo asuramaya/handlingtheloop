@@ -1,0 +1,13 @@
+{
+  "device": "Pioneer DDJ-FLX4",
+  "capturedAt": 0,
+  "_note": "SYNTHETIC template in the MidiDebug capture format — proves the fixture round-trips through the replay test. Replace/augment with a REAL hardware capture (Settings ▸ Debug ▸ ● Capture) to re-ground the byte map. s=status d1=data1 d2=data2 t=ms-since-start.",
+  "events": [
+    { "s": 144, "d1": 54, "d2": 127, "t": 0 },
+    { "s": 176, "d1": 34, "d2": 66, "t": 12 },
+    { "s": 176, "d1": 34, "d2": 67, "t": 24 },
+    { "s": 176, "d1": 34, "d2": 62, "t": 38 },
+    { "s": 144, "d1": 54, "d2": 0, "t": 70 },
+    { "s": 144, "d1": 11, "d2": 127, "t": 250 }
+  ]
+}

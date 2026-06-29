@@ -6,9 +6,23 @@
 // Needs only the UseMidi hook; no audio-graph coupling.
 
 import { useEffect, useState } from "react";
-import type { UseMidi, MonMsg, OutMsg } from "@htl/midi";
+import type { UseMidi, MonMsg, OutMsg, MidiCapture } from "@htl/midi";
 
 const hex2 = (n: number) => n.toString(16).toUpperCase().padStart(2, "0");
+
+// Download a golden capture as a JSON fixture — drop it in src/htl/midi/fixtures/ and replay it
+// through MidiEngine.test.ts to re-ground the byte map without re-plugging the controller.
+function downloadCapture(cap: MidiCapture) {
+  const slug = cap.device.replace(/[^\w-]+/g, "-").toLowerCase() || "midi";
+  const stamp = new Date(cap.capturedAt).toISOString().slice(0, 19).replace(/[:T]/g, "");
+  const blob = new Blob([JSON.stringify(cap)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `capture-${slug}-${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function kind(status: number, d2: number): string {
   const hi = status & 0xf0;
@@ -37,6 +51,17 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
   const [outMon, setOutMon] = useState<OutMsg[]>([]);
   const [jog, setJog] = useState(() => midi.jogCadence());
   const [raw, setRaw] = useState("");
+  const [capturing, setCapturing] = useState(false);
+  const toggleCapture = () => {
+    if (capturing) {
+      const cap = midi.stopCapture();
+      setCapturing(false);
+      if (cap && cap.events.length) downloadCapture(cap);
+    } else {
+      midi.startCapture();
+      setCapturing(true);
+    }
+  };
   // Both rings are filled by the engine continuously — just mirror them on a timer.
   useEffect(() => {
     const iv = setInterval(() => {
@@ -83,6 +108,14 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">MIDI input</span>
+          <button
+            className="link-btn"
+            onClick={toggleCapture}
+            title="Record every incoming byte to a JSON fixture — replay it in MidiEngine.test.ts to re-ground the byte map without the controller"
+            style={capturing ? { color: "var(--accent, #e66)", borderColor: "var(--accent, #e66)" } : undefined}
+          >
+            {capturing ? "■ Stop & download" : "● Capture"}
+          </button>
           <span className="settings-hint" style={{ margin: 0 }}>
             press a control to read its bytes
           </span>

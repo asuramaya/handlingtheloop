@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { learnControl } from "./controls";
-import { MidiEngine, type MonMsg, type OutMsg } from "./MidiEngine";
+import { MidiEngine, type MonMsg, type OutMsg, type MidiCapture } from "./MidiEngine";
 import type { DeckId, DeckFeedback, MidiEvent, MidiLearnMap, MidiStatus } from "./types";
 
 export interface UseMidiArgs {
@@ -32,6 +32,9 @@ export interface UseMidi {
   send: (bytes: number[]) => void; // raw MIDI out (notes, CC, SysEx)
   outMonitor: () => OutMsg[]; // recent outgoing messages
   outputs: () => string[]; // names of connected output ports
+  // Golden capture — record raw incoming bytes for the byte-replay tests.
+  startCapture: () => void;
+  stopCapture: () => MidiCapture | null;
 }
 
 export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs): UseMidi {
@@ -118,6 +121,8 @@ export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs)
   const send = useCallback((bytes: number[]) => engineRef.current?.sendRaw(bytes), []);
   const outMonitor = useCallback(() => engineRef.current?.outMonitor() ?? [], []);
   const outputs = useCallback(() => engineRef.current?.outputNames() ?? [], []);
+  const startCapture = useCallback(() => engineRef.current?.startCapture(), []);
+  const stopCapture = useCallback(() => engineRef.current?.stopCapture() ?? null, []);
 
-  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback, info, monitor, describe, jogCadence, send, outMonitor, outputs };
+  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback, info, monitor, describe, jogCadence, send, outMonitor, outputs, startCapture, stopCapture };
 }

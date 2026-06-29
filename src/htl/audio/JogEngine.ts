@@ -168,6 +168,14 @@ export class JogEngine {
   get scrubbing() {
     return this.jogPhase !== "off";
   }
+  /** True ONLY while the finger actively holds the platter (the "grab" phase) — distinct from
+   *  `scrubbing`, which stays true through the release COAST and the Vinyl-Speed MOTOR ramps. A
+   *  fresh scratch must (re-)grab whenever this is false even if `scrubbing` is true: `scrubMove`
+   *  only applies in "grab", so otherwise the scratch is SWALLOWED while the platter coasts/ramps
+   *  on its own (the jog-layer freeze). */
+  get grabbing() {
+    return this.jogPhase === "grab";
+  }
   /** True while the platter is being dragged OR still coasting after release. */
   get jogging() {
     return this.jogPhase !== "off";

@@ -424,16 +424,20 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           }
           if (ev.scratch) {
             jogVinyl.current[ev.deck] = true;
-            // Grab lazily if the touch landed before we knew it was vinyl mode.
-            if (!deck.scrubbing && jogTouched.current[ev.deck]) {
-              deck.scrubBegin();
-              onJogStart(ev.deck);
-            }
-            if (deck.scrubbing) {
+            if (jogTouched.current[ev.deck]) {
+              // Finger down: a scratch turn drives the platter. (Re-)grab whenever we're NOT
+              // already in an active grab — even mid-COAST or mid-MOTOR ramp — so the scratch
+              // INTERRUPTS the platter's own motion. Gating on `scrubbing` (true through coast/
+              // motor) instead skipped the re-grab AND `scrubMove` (grab-only) swallowed the
+              // input, so the platter kept coasting and the jog "did nothing" — the freeze bug.
+              if (!deck.grabbing) {
+                deck.scrubBegin();
+                onJogStart(ev.deck);
+              }
               deck.scrubMove(sec);
               emitJog(ev.deck, sec);
             } else {
-              deck.bend(sec); // touch released mid-stream → fall back to a bend
+              deck.bend(sec); // no touch registered → fall back to a bend
             }
           } else {
             // Non-vinyl top plate → bend. If we wrongly grabbed (mode just flipped),

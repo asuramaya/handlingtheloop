@@ -1293,6 +1293,10 @@ export class Deck {
   get scrubbing() {
     return this.jog.scrubbing;
   }
+  /** True only while the finger holds the platter (the grab phase) — see JogEngine.grabbing. */
+  get grabbing() {
+    return this.jog.grabbing;
+  }
   /** True while the platter is being dragged OR still coasting after release. */
   get jogging() {
     return this.jog.jogging;

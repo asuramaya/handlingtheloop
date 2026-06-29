@@ -242,6 +242,15 @@ export class DjRoom {
         headers: { "content-type": "application/json" },
       });
     }
+    // Is a given ACCOUNT a JOINED participant of this room? Lets the Worker authorize a session
+    // GUEST fetching the HOST's global sample clip (#48) without making the clip public. The acct is
+    // un-forgeable (the Worker stamps it on every socket from the authed session — roomState.ts).
+    if (url.pathname === "/internal/ismember") {
+      const acct = (url.searchParams.get("acct") || "").slice(0, 64);
+      return new Response(JSON.stringify({ member: this.isAccountMember(acct) }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (req.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
@@ -869,6 +878,17 @@ export class DjRoom {
     for (const ws of this.state.getWebSockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.joined) return true;
+    }
+    return false;
+  }
+
+  // Membership by ACCOUNT (across that account's devices): any JOINED socket carrying this acct.
+  // Used to authorize a session guest fetching the host's global sample (#48). "" acct → never.
+  private isAccountMember(acct: string): boolean {
+    if (!acct) return false;
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attachment | null;
+      if (a?.joined && a.acct === acct) return true;
     }
     return false;
   }

@@ -136,6 +136,32 @@ describe("DjRoom membership", () => {
     expect(friend.a.controlling).toBe(false); // admitted ≠ control (still needs a host grant)
   });
 
+  // #48: /internal/ismember authorizes a session GUEST fetching the HOST's global sample clip.
+  // Only a JOINED participant (by un-forgeable account) matches — never a stranger or empty acct.
+  const askMember = async (h: ReturnType<typeof makeRoom>, acct: string) =>
+    ((await (await h.room.fetch(new Request(`https://x/internal/ismember?acct=${encodeURIComponent(acct)}`))).json()) as { member: boolean }).member;
+
+  it("answers /internal/ismember true for a JOINED account, false for a stranger / empty", async () => {
+    const host = (await h.connect({ device: "host1", host: true, acct: "u-host" })).ws!;
+    await h.send(host, { t: "join" });
+    const friend = (await h.connect({ device: "g1", host: false, invited: true, acct: "u-guest" })).ws!;
+    await h.send(friend, { t: "join" }); // invited → auto-joins
+    expect(await askMember(h, "u-host")).toBe(true);
+    expect(await askMember(h, "u-guest")).toBe(true);
+    expect(await askMember(h, "u-stranger")).toBe(false);
+    expect(await askMember(h, "")).toBe(false);
+  });
+
+  it("a KNOCKING (pending) guest is NOT a member until the host approves", async () => {
+    const host = (await h.connect({ device: "host1", host: true, acct: "u-host" })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", host: false, acct: "u-knock" })).ws!;
+    await h.send(guest, { t: "join" }); // knocks → pending, not joined
+    expect(await askMember(h, "u-knock")).toBe(false);
+    await h.send(host, { t: "approve", to: "g1" });
+    expect(await askMember(h, "u-knock")).toBe(true);
+  });
+
   it("a NON-invited guest still knocks (pending) — the grant is what auto-admits", async () => {
     const host = (await h.connect({ device: "host1", host: true })).ws!;
     await h.send(host, { t: "join" });

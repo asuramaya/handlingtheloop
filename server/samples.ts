@@ -22,13 +22,21 @@ interface SampleBucket {
   put(key: string, value: ArrayBuffer | Uint8Array, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
   delete(key: string): Promise<void>;
 }
+// Minimal DjRoom namespace surface (structurally satisfied by the Worker's env.ROOM) — just enough
+// to address a room by host id and ask whether a requester is a participant (#48).
+interface RoomNamespace {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(req: Request): Promise<Response> };
+}
 export interface SampleEnv {
   DB?: D1Database;
   AUDIO?: SampleBucket;
+  ROOM?: RoomNamespace; // to authorize a session GUEST fetching the HOST's clip (#48)
 }
 
 interface SampleRow {
   id: string;
+  user_id: string; // the clip's owner — needed to authorize a non-owner (session-guest) audio fetch
   pad: string;
   name: string;
   r2_key: string;
@@ -58,6 +66,22 @@ async function ensureUserSamples(db: D1Database): Promise<void> {
 
 const dto = (r: SampleRow) => ({ id: r.id, pad: r.pad, name: r.name, durationMs: r.duration_ms, bytes: r.bytes, createdAt: r.created_at });
 
+// A session GUEST may fetch the HOST's global sample clip: authorize by asking the host's DjRoom
+// whether the requester is a JOINED participant. The acct is un-forgeable (the Worker stamps it on
+// every socket from the authed session), so this can't be spoofed. Fails CLOSED on any error /
+// missing binding (e.g. plain `vite` dev with no ROOM) — the owner path is unaffected.
+async function isSessionMember(env: SampleEnv, ownerId: string, requesterId: string): Promise<boolean> {
+  if (!env.ROOM || !ownerId || !requesterId) return false;
+  try {
+    const stub = env.ROOM.get(env.ROOM.idFromName(`home:${ownerId}`));
+    const res = await stub.fetch(new Request(`https://room/internal/ismember?acct=${encodeURIComponent(requesterId)}`));
+    if (!res.ok) return false;
+    return !!((await res.json()) as { member?: boolean }).member;
+  } catch {
+    return false;
+  }
+}
+
 /** Routes under /api/samples (all account-gated). Returns null if the path isn't ours.
  *   GET    /api/samples            → list the signed-in user's global-pad samples
  *   POST   /api/samples?pad&name&durationMs  (raw audio body) → upload, replacing the pad
@@ -79,14 +103,21 @@ export async function handleSampleRoute(url: URL, req: Request, env: SampleEnv):
   if (sub) {
     const parts = sub.split("/").filter(Boolean); // [":id"] | [":id","audio"]
     const id = parts[0];
-    const row = await db
-      .prepare("SELECT id, pad, name, r2_key, content_type, duration_ms, bytes, created_at FROM user_samples WHERE id = ? AND user_id = ?")
-      .bind(id, user.id)
-      .first<SampleRow>();
+    const wantAudio = parts[1] === "audio";
+    // The audio BYTES may be served to a session GUEST (the host's clip), so look the row up
+    // owner-AGNOSTICALLY for that path and authorize via room membership below. Metadata + DELETE
+    // stay strictly owner-scoped — the user_id bind turns a non-owner's row into a 404.
+    const row = wantAudio
+      ? await db.prepare("SELECT id, user_id, pad, name, r2_key, content_type, duration_ms, bytes, created_at FROM user_samples WHERE id = ?").bind(id).first<SampleRow>()
+      : await db.prepare("SELECT id, user_id, pad, name, r2_key, content_type, duration_ms, bytes, created_at FROM user_samples WHERE id = ? AND user_id = ?").bind(id, user.id).first<SampleRow>();
     if (!row) return json(404, { error: "not found" });
 
-    if (parts[1] === "audio") {
+    if (wantAudio) {
       if (req.method !== "GET") return json(405, { error: "GET only" });
+      // Owner always; otherwise the requester must be a JOINED participant of the owner's session.
+      if (row.user_id !== user.id && !(await isSessionMember(env, row.user_id, user.id))) {
+        return json(403, { error: "not a participant of this clip's session" });
+      }
       const obj = await bucket.get(row.r2_key);
       if (!obj) return json(404, { error: "audio missing" });
       // Never replay the uploader's stored Content-Type. A sample is owner-scoped, but it's still
@@ -114,7 +145,7 @@ export async function handleSampleRoute(url: URL, req: Request, env: SampleEnv):
   // /api/samples
   if (req.method === "GET") {
     const res = await db
-      .prepare("SELECT id, pad, name, r2_key, content_type, duration_ms, bytes, created_at FROM user_samples WHERE user_id = ? ORDER BY pad")
+      .prepare("SELECT id, user_id, pad, name, r2_key, content_type, duration_ms, bytes, created_at FROM user_samples WHERE user_id = ? ORDER BY pad")
       .bind(user.id)
       .all<SampleRow>();
     return json(200, { samples: (res.results ?? []).map(dto) });

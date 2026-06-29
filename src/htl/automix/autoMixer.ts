@@ -108,6 +108,13 @@ export class AutoMixer {
   private barsSeconds = 0;
   private preloading = false;
   private nextTrack: TrackMeta | null = null;
+  // loadDeck (→ loadTrackToDeck) SWALLOWS failures — it resolves after setting a "failed" status,
+  // never throws. So a dead/blocked/undecodable next track resolves as if loaded; without a LANDING
+  // check the mixer latches a preload that isn't there and re-loads the same broken track every
+  // tick FOREVER. Count consecutive non-landings per videoId; after MAX_LOAD_FAILS, drop it from the
+  // queue so the next attempt gets a DIFFERENT track. A transient blip just retries (≤ MAX).
+  private loadFails = new Map<string, number>();
+  private static readonly MAX_LOAD_FAILS = 2;
   // EAGER PRELOAD: the next track is loaded onto the idle deck the moment the current
   // track starts playing — NOT at the ~30 s mix lead-in — so the (slow) stem separation
   // has the whole current track to finish before the blend. `preloadedTrack`/`preloadedId`
@@ -234,6 +241,26 @@ export class AutoMixer {
   private clearPreload(): void {
     this.preloadedId = null;
     this.preloadedTrack = null;
+  }
+
+  // Did a just-resolved loadDeck actually LAND the track on the deck? On a non-landing, count it
+  // and — after MAX_LOAD_FAILS consecutive misses of this videoId — drop the un-loadable track from
+  // the queue (+ clear any preload latch) so the next attempt moves on instead of re-loading it
+  // forever. A success clears the counter. Returns whether the track is safe to use.
+  private landed(videoId: string, deckHasIt: boolean): boolean {
+    if (deckHasIt) {
+      this.loadFails.delete(videoId);
+      return true;
+    }
+    const n = (this.loadFails.get(videoId) ?? 0) + 1;
+    if (n >= AutoMixer.MAX_LOAD_FAILS) {
+      this.loadFails.delete(videoId);
+      this.deps.queue.remove(videoId); // un-loadable → move past it
+      this.clearPreload();
+    } else {
+      this.loadFails.set(videoId, n);
+    }
+    return false;
   }
 
   // Reset all transition DSP on a deck back to neutral (EQ3, stems, AND the filter —
@@ -401,6 +428,7 @@ export class AutoMixer {
     try {
       await this.deps.loadDeck(target, next);
       if (!this.enabled || this.gen !== g) return;
+      if (!this.landed(next.videoId, this.deps.deckTrack(target)?.videoId === next.videoId)) return; // didn't land → drop + try a different track
       this.deps.engine.deck(target).play();
       const sign = target === "A" ? -1 : 1;
       this.deps.applyCrossfade(sign);
@@ -440,6 +468,7 @@ export class AutoMixer {
     try {
       await this.deps.loadDeck("A", first);
       if (!this.enabled || this.gen !== g) return;
+      if (!this.landed(first.videoId, this.deps.deckTrack("A")?.videoId === first.videoId)) return; // didn't land → drop + try a different track
       this.deps.engine.deck("A").play();
       this.deps.applyCrossfade(-1);
       this.lastXfade = -1;
@@ -503,8 +532,12 @@ export class AutoMixer {
     try {
       await this.deps.loadDeck(tgt, next); // decode + analysis + (desktop) neural stems — EARLY
       if (this.enabled && this.liveId != null && this.gen === g && !this.deps.engine.deck(tgt).playing) {
-        this.preloadedId = tgt;
-        this.preloadedTrack = next;
+        // Only latch if it actually LANDED — loadDeck resolves even on a failed load, so latching
+        // blind would re-load the same broken track every tick. landed() drops it after MAX misses.
+        if (this.landed(next.videoId, this.deps.deckTrack(tgt)?.videoId === next.videoId)) {
+          this.preloadedId = tgt;
+          this.preloadedTrack = next;
+        }
       }
     } catch {
       /* transient — retry next tick */
@@ -539,6 +572,12 @@ export class AutoMixer {
       // Bail if the world changed under us during the async load (incl. a skip/cancel/adopt
       // that bumped the generation — otherwise we'd cue the stale next track).
       if (!this.enabled || this.liveId == null || this.gen !== g || this.deps.engine.deck(idle).playing) {
+        this.phase = "armed";
+        return;
+      }
+      // A fresh (non-preloaded) load that didn't LAND → drop it (in landed) and retry a different
+      // track next cycle, rather than cueing a deck that never got the track.
+      if (!preloaded && !this.landed(next.videoId, this.deps.deckTrack(idle)?.videoId === next.videoId)) {
         this.phase = "armed";
         return;
       }

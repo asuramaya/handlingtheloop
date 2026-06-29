@@ -1,10 +1,12 @@
-// The sampler strip's audio engine. It owns nothing about pad assignments or
-// persistence (that's the React layer) — only voice playback + routing. The 12-pad
-// strip maps to three routes by position: pads 0-3 → deck A's channel input (so EQ /
-// filter / fader / crossfader shape them), 4-7 → master (global, cuts through), 8-11 →
-// deck B's channel. A "voice" is one AudioBufferSourceNode; each pad has at most one
-// live voice (retrigger replaces it). Deck-region pads pass the deck's own decoded
-// buffer with an {offset,duration} window; global pads pass an uploaded clip's buffer.
+// The sampler's audio engine. It owns nothing about pad assignments or persistence (that's the
+// React layer, useSampler.ts) — only voice playback + routing. It is ROUTE-AGNOSTIC: each play()
+// carries its own `route` ("A" | "master" | "B"), and the engine just connects the voice to that
+// node. The React layer maps the 24 pads to routes (0-7 → master / global, 8-15 → deck A, 16-23 →
+// deck B); "A"/"B" land in that deck's channel input (so EQ / filter / fader / crossfader shape
+// them), "master" cuts through post-crossfade. A "voice" is one AudioBufferSourceNode; each pad has
+// at most one live voice (retrigger replaces it). Deck-region voices pass the deck's own decoded
+// buffer with an {offset,duration} window; global voices pass an uploaded/captured clip's buffer.
+// See docs/audio-io.md for the full signal flow.
 
 export type SampleMode = "oneshot" | "gate" | "loop" | "bounce";
 export type SampleRoute = "A" | "master" | "B";

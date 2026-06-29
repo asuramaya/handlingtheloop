@@ -241,6 +241,64 @@
   color: var(--muted);
   font-size: 13px;
 }
+.person-search-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 2px 6px 0;
+}
+/* actionable person row: avatar+dot, name, then the one right action */
+.person-avatar-wrap {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+.person-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.person-actions .follow-btn {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.person-actions .follow-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.person-row.live .live-room-np {
+  color: #2ecc71;
+}
+/* Load more */
+.person-more {
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}
+.person-more-btn {
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.person-more-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.person-more-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 
 /* People-you-follow entry in Discover → opens the shared PeopleList */
 .people-following-link {

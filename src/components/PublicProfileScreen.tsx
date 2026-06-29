@@ -96,6 +96,8 @@ export function PublicProfileScreen({
               memberSince={profile.memberSince}
               counts={profile.counts}
               friends={rel?.mutual}
+              onJam={onJam}
+              onListen={onListen}
               topTracks={top}
               live={
                 // The one state×relationship CTA — the whole landing in a single tap (which is

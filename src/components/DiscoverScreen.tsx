@@ -76,7 +76,7 @@ export function DiscoverScreen({
     }
     let alive = true;
     fetchFollowing(self)
-      .then((cards) => alive && setFollowing(new Set(cards.map((c) => c.handle).filter((h): h is string => !!h))))
+      .then((p) => alive && setFollowing(new Set(p.list.map((c) => c.handle).filter((h): h is string => !!h))))
       .catch(() => {});
     return () => {
       alive = false;
@@ -101,7 +101,7 @@ export function DiscoverScreen({
 
         {/* PEOPLE SEARCH — the directory door. Find anyone by @handle or name even when no one's
             live; a hit taps through to /@handle where Follow / Invite / Knock / Listen live. */}
-        <PersonSearch />
+        <PersonSearch onJam={onJam} onListen={onListen} />
 
         {/* Your persistent roster — the SAME PeopleList a profile's "following" count opens. The
             durable counterpart to Friends-online: reach anyone you follow, on or off. */}
@@ -169,7 +169,9 @@ export function DiscoverScreen({
           </div>
         )}
 
-        {graphOpen && self && <PeopleList handle={self} mode="following" onClose={() => setGraphOpen(false)} />}
+        {graphOpen && self && (
+          <PeopleList handle={self} mode="following" onClose={() => setGraphOpen(false)} onJam={onJam} onListen={onListen} />
+        )}
       </div>
     </div>
   );

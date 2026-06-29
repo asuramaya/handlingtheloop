@@ -223,36 +223,55 @@ export async function markNotificationsSeen(): Promise<number> {
   return ((await res.json()) as { seenAt: number }).seenAt;
 }
 
-/** A minimal public card from a follower/following list. */
-export interface FollowCard {
+/** An ACTIONABLE person card: public identity PLUS the viewer-relative state every people row
+ * needs to render a presence dot and the right inline action (Follow / Knock / Invite / Join)
+ * without a second fetch. Mirrors the server's PersonCard (server/db/social.ts). */
+export interface PersonCard {
   handle: string | null;
   displayName: string | null;
   avatar: string | null;
+  online: boolean; // reachable for a jam knock
+  live: boolean; // broadcasting right now
+  following: boolean; // me → them
+  followsYou: boolean; // them → me
 }
-/** The handles a given @handle follows (used by Discover to surface "from people you
- * follow" out of the live directory). Public list endpoint, paginated server-side. */
-export async function fetchFollowing(handle: string, signal?: AbortSignal): Promise<FollowCard[]> {
-  const res = await fetch(`/api/following?h=${encodeURIComponent(handle)}`, { signal, credentials: "same-origin" });
-  if (!res.ok) return [];
-  return ((await res.json()) as { list: FollowCard[] }).list;
+/** Back-compat alias — older call sites typed list rows as FollowCard. */
+export type FollowCard = PersonCard;
+
+/** One page of a paginated people list. `more` = a full page came back, so another may follow. */
+export interface PersonPage {
+  list: PersonCard[];
+  more: boolean;
+}
+async function personPage(url: string, signal?: AbortSignal): Promise<PersonPage> {
+  const res = await fetch(url, { signal, credentials: "same-origin" });
+  if (!res.ok) return { list: [], more: false };
+  const j = (await res.json()) as Partial<PersonPage>;
+  return { list: j.list ?? [], more: !!j.more };
 }
 
-/** The handles following a given @handle (the other half of the graph). Public, paginated. */
-export async function fetchFollowers(handle: string, signal?: AbortSignal): Promise<FollowCard[]> {
-  const res = await fetch(`/api/followers?h=${encodeURIComponent(handle)}`, { signal, credentials: "same-origin" });
-  if (!res.ok) return [];
-  return ((await res.json()) as { list: FollowCard[] }).list;
+/** Who a given @handle follows — enriched, paginated. `offset` pages by 50. */
+export function fetchFollowing(handle: string, offset = 0, signal?: AbortSignal): Promise<PersonPage> {
+  return personPage(`/api/following?h=${encodeURIComponent(handle)}&offset=${offset}`, signal);
+}
+/** Who follows a given @handle — the other half of the graph. Enriched, paginated. */
+export function fetchFollowers(handle: string, offset = 0, signal?: AbortSignal): Promise<PersonPage> {
+  return personPage(`/api/followers?h=${encodeURIComponent(handle)}&offset=${offset}`, signal);
 }
 
-/** Global people search by @handle or display name (≥2 chars; public cards). Backs Discover's
- * search box — the directory door that works even when nobody's live. Returns [] on a short or
- * failed query so callers can render unconditionally. */
-export async function searchUsers(q: string, signal?: AbortSignal): Promise<FollowCard[]> {
+/** Global people search by @handle or display name (≥2 chars), enriched + paginated. Backs the
+ * Discover search box — the directory door that works even when nobody's live. */
+export function searchUsers(q: string, offset = 0, signal?: AbortSignal): Promise<PersonPage> {
   const term = q.trim();
-  if (term.length < 2) return [];
-  const res = await fetch(`/api/users/search?q=${encodeURIComponent(term)}`, { signal, credentials: "same-origin" });
+  if (term.length < 2) return Promise.resolve({ list: [], more: false });
+  return personPage(`/api/users/search?q=${encodeURIComponent(term)}&offset=${offset}`, signal);
+}
+
+/** "People you may know" — friends-of-friends (signed-in) or popular accounts (cold start). */
+export async function fetchSuggested(signal?: AbortSignal): Promise<PersonCard[]> {
+  const res = await fetch("/api/users/suggested", { signal, credentials: "same-origin" });
   if (!res.ok) return [];
-  return ((await res.json()) as { list: FollowCard[] }).list;
+  return ((await res.json()) as { list: PersonCard[] }).list;
 }
 
 /** A friend (mutual follow) who's online right now. `live` = broadcasting. */

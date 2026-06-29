@@ -42,6 +42,8 @@ export function ProfilePublicView({
   shareText,
   shareTitle,
   shareNote,
+  onJam,
+  onListen,
 }: {
   avatar?: string | null;
   avatarLetter: string;
@@ -60,6 +62,8 @@ export function ProfilePublicView({
   shareText?: string; // share-sheet body (host-state-aware: "I'm live…") — owner only; visitors share the bare url
   shareTitle?: string;
   shareNote?: ReactNode; // legible "what your link does right now" line under the share button (owner only)
+  onJam?: (handle: string) => void; // passed to the counts' PeopleList so its rows can knock/join
+  onListen?: (handle: string) => void;
 }) {
   // Tapping a count opens the ONE canonical people list (PeopleList) — same surface Discover's
   // "People you follow" leads to. Only when we have a handle to scope the graph to.
@@ -159,7 +163,9 @@ export function ProfilePublicView({
         )}
       </div>
 
-      {graph && handle && <PeopleList handle={handle} mode={graph} onClose={() => setGraph(null)} />}
+      {graph && handle && (
+        <PeopleList handle={handle} mode={graph} onClose={() => setGraph(null)} onJam={onJam} onListen={onListen} />
+      )}
     </>
   );
 }

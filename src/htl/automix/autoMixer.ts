@@ -70,6 +70,33 @@ function deckDescriptor(deck: Deck, fallback: TrackMeta | null): TrackMeta {
   };
 }
 
+// The radio SEED set for queue.ensureNext — the live deck + the vibe anchor + a GENUINELY
+// user-loaded other deck. It CRITICALLY excludes the idle deck when it holds our own eager-preload
+// (preloadedIsIdle) or the queue's own next track (idleTrack === queueNext): seeding from there
+// feeds the queue back into itself — the idle deck's loaded track flips the deck-seed signature
+// every tick, which bypasses the fill cooldown to refetch + replace the tail, evicting the preload,
+// so the next preload grabs a different head… the endless refetch→reload spiral. Pure + tested so
+// the guard can't drift again; every ensureNext caller routes through it. Returns ≤3 seeds.
+export function radioSeedSet(p: {
+  live: TrackMeta | null;
+  anchor: TrackMeta | null;
+  idleTrack: TrackMeta | null;
+  preloadedIsIdle: boolean; // the idle deck holds our eagerly-preloaded next track
+  queueNextId: string | null; // queue.peekNext()?.videoId — the idle may just be the queue's own next
+}): TrackMeta[] {
+  const fedBack = !!p.idleTrack && (p.preloadedIsIdle || p.idleTrack.videoId === p.queueNextId);
+  const other = fedBack ? null : p.idleTrack;
+  const seeds: TrackMeta[] = [];
+  const seen = new Set<string>();
+  for (const t of [p.live, p.anchor, other]) {
+    if (t?.videoId && !seen.has(t.videoId)) {
+      seen.add(t.videoId);
+      seeds.push(t);
+    }
+  }
+  return seeds;
+}
+
 export class AutoMixer {
   private enabled = false;
   private phase: AutoMixPhase = "idle";
@@ -288,24 +315,24 @@ export class AutoMixer {
 
   // Keep the queue full of suggestions that fit whatever is loaded right now.
   private async maybeFillRadio(): Promise<void> {
-    const live = this.liveId ? this.deps.deckTrack(this.liveId) : null;
-    const idle = this.liveId ? other(this.liveId) : null;
-    const idleTrack = idle ? this.deps.deckTrack(idle) : null;
-    // CRITICAL: the idle deck now holds our OWN eagerly-preloaded NEXT track — which came
-    // FROM this very queue. Seeding radio from it feeds the queue back into itself: loading
-    // the preload reads as a deck/context change, which in dynamic radio BYPASSES the fill
-    // cooldown to refetch AND replace the tail → it evicts the preloaded track → the next
-    // preload grabs a different head → the seed changes again → refetch… an endless
-    // refetch→reload loop. So when the idle deck is holding our preload (or just the queue's
-    // own next track), DON'T seed from it — the live deck + session anchor are the real vibe.
-    const fedBack =
-      !!idle && (this.preloadedId === idle || (!!idleTrack && idleTrack.videoId === this.deps.queue.peekNext()?.videoId));
-    const otherTrack = fedBack ? null : idleTrack;
-    // Live deck + the session anchor (+ a genuinely user-loaded other deck) → suggestions fit
-    // the current context AND the original vibe, so the set doesn't spiral away from start.
-    const seeds = [live, this.anchor, otherTrack].filter((t): t is TrackMeta => !!t?.videoId);
+    const seeds = this.radioSeeds();
     if (!seeds.length) return;
     await this.deps.queue.ensureNext(seeds);
+  }
+
+  // The fedBack-guarded radio seed set — the SINGLE source for EVERY ensureNext caller (fill +
+  // preload + advance), so none of them ever seed from the idle deck holding our own preload (the
+  // death spiral). The guard used to live only in maybeFillRadio; the preload/advance paths seeded
+  // from [both decks] raw and drove the loop the guard never covered. See radioSeedSet.
+  private radioSeeds(): TrackMeta[] {
+    const idle = this.liveId ? other(this.liveId) : null;
+    return radioSeedSet({
+      live: this.liveId ? this.deps.deckTrack(this.liveId) : null,
+      anchor: this.anchor,
+      idleTrack: idle ? this.deps.deckTrack(idle) : null,
+      preloadedIsIdle: idle != null && this.preloadedId === idle,
+      queueNextId: this.deps.queue.peekNext()?.videoId ?? null,
+    });
   }
 
   // Absorb anything the user did to the decks between ticks — GRACEFULLY, so a
@@ -365,7 +392,7 @@ export class AutoMixer {
   private async advanceToNext(): Promise<void> {
     if (this.preloading || !this.liveId) return;
     const g = this.gen;
-    const seeds = [this.deps.deckTrack("A"), this.deps.deckTrack("B")].filter((t): t is TrackMeta => !!t?.videoId);
+    const seeds = this.radioSeeds(); // fedBack-guarded — never seed from the idle deck's preload
     const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
     if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
     const target = other(this.liveId);
@@ -460,7 +487,7 @@ export class AutoMixer {
     const idle = other(this.liveId);
     if (this.deps.engine.deck(idle).playing) return; // user is on that deck — don't grab it
     const g = this.gen;
-    const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
+    const seeds = this.radioSeeds(); // fedBack-guarded — don't feed the preloaded idle deck back in
     const next = await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
     if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
     const tgt = other(this.liveId);
@@ -500,7 +527,7 @@ export class AutoMixer {
     const preloaded =
       this.preloadedId === idle && !!this.preloadedTrack && this.deps.deckTrack(idle)?.videoId === this.preloadedTrack.videoId;
     const g = this.gen;
-    const seeds = [this.deps.deckTrack(this.liveId), this.deps.deckTrack(idle)].filter((t): t is TrackMeta => !!t?.videoId);
+    const seeds = this.radioSeeds(); // fedBack-guarded — the idle deck's cued track isn't a radio seed
     const next = preloaded ? this.preloadedTrack! : await this.deps.queue.ensureNext(seeds.length ? seeds : this.deps.queue.getCurrent());
     if (!next) {
       this.phase = "armed"; // nothing queued yet — radio may fill, retry later

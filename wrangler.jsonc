@@ -54,7 +54,10 @@
       { "name": "RL_AUDIO", "type": "ratelimit", "namespace_id": "2002", "simple": { "limit": 60, "period": 60 } },
       // AcoustID's free tier is ~3 lookups/sec — cap outbound at 30/10s ACROSS the
       // whole account so we never leech their service (the D1 cache absorbs the rest).
-      { "name": "RL_ACOUSTID", "type": "ratelimit", "namespace_id": "2003", "simple": { "limit": 30, "period": 10 } }
+      { "name": "RL_ACOUSTID", "type": "ratelimit", "namespace_id": "2003", "simple": { "limit": 30, "period": 10 } },
+      // people-search per-IP cap. Debounced client → ≤1 req/250ms; 60/min is generous for a human
+      // but throttles enumeration/scraping. Read-path limiter, separate from RL_WRITE's budget.
+      { "name": "RL_SEARCH", "type": "ratelimit", "namespace_id": "2004", "simple": { "limit": 60, "period": 60 } }
     ]
   },
   "observability": { "enabled": true }

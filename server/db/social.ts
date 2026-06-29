@@ -113,25 +113,105 @@ export async function isFollowing(db: D1Database, followerId: string, followeeId
   return !!row;
 }
 
-/** Followers of a user (most recent first), as public cards. */
-export async function followersOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
-  const r = await db
-    .prepare(
-      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
-       FROM follows f JOIN users u ON u.id = f.follower_id
-       WHERE f.followee_id=? AND u.handle IS NOT NULL
-       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
-    )
-    .bind(userId, limit, offset)
-    .all<PublicCard>();
-  return r.results ?? [];
+/** An ACTIONABLE person card: the public identity PLUS the viewer-relative state every people
+ *  surface (search results, follower/following lists, suggestions) needs to render the right
+ *  inline action and a presence dot — without a second round-trip per row. `online`/`live` are
+ *  presence; `following`/`followsYou` are the viewer's edges (mutual = both). */
+export interface PersonCard {
+  handle: string | null;
+  displayName: string | null;
+  avatar: string | null;
+  online: boolean; // any authed session attached (reachable for a jam knock)
+  live: boolean; // broadcasting a fresh public room right now
+  following: boolean; // viewer → them
+  followsYou: boolean; // them → viewer
 }
 
-/** Global people search by handle or display name (prefix-weighted substring match). Public
- *  cards only; never surfaces a user without a claimed handle. `viewerId` (when signed in)
- *  drops the viewer themselves and anyone in a block relationship either way. The query is
- *  LIKE-escaped so a literal `%`/`_` in the term can't widen the match. */
-export async function searchUsers(db: D1Database, q: string, viewerId = "", limit = 20): Promise<PublicCard[]> {
+interface BaseRow {
+  id: string;
+  handle: string | null;
+  displayName: string | null;
+  avatar: string | null;
+}
+
+/** Phase 2 of every people query: take a page of base rows and decorate each with presence + the
+ *  viewer's follow edges in FOUR bulk set-membership queries (not N per-row lookups). Cheap for a
+ *  page ≤50; keeps the base queries simple (no correlated-subquery bind juggling). */
+async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promise<PersonCard[]> {
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  const ph = ids.map(() => "?").join(",");
+  const cutoff = now() - 90_000; // live-room freshness window (mirrors liveRooms/friendsOnline)
+  const setOf = async (sql: string, ...lead: (string | number)[]) => {
+    const r = await db
+      .prepare(sql)
+      .bind(...lead, ...ids)
+      .all<{ x: string }>();
+    return new Set((r.results ?? []).map((o) => o.x));
+  };
+  const [online, live, following, followsYou] = await Promise.all([
+    setOf(`SELECT user_id x FROM presence WHERE online=1 AND user_id IN (${ph})`),
+    setOf(`SELECT host_id x FROM rooms WHERE live=1 AND last_seen>? AND host_id IN (${ph})`, cutoff),
+    viewerId ? setOf(`SELECT followee_id x FROM follows WHERE follower_id=? AND followee_id IN (${ph})`, viewerId) : new Set<string>(),
+    viewerId ? setOf(`SELECT follower_id x FROM follows WHERE followee_id=? AND follower_id IN (${ph})`, viewerId) : new Set<string>(),
+  ]);
+  return rows.map((r) => ({
+    handle: r.handle,
+    displayName: r.displayName,
+    avatar: r.avatar,
+    online: online.has(r.id),
+    live: live.has(r.id),
+    following: following.has(r.id),
+    followsYou: followsYou.has(r.id),
+  }));
+}
+
+/** Followers of a user (most recent first), enriched + paginated. `viewerId` enriches each card
+ *  with the viewer's edges and drops anyone in a block relationship either way. */
+export async function followersOf(db: D1Database, userId: string, limit = 50, offset = 0, viewerId = ""): Promise<PersonCard[]> {
+  return listGraph(db, "follower", userId, limit, offset, viewerId);
+}
+
+/** Who a user follows (most recent first), enriched + paginated. */
+export async function followingOf(db: D1Database, userId: string, limit = 50, offset = 0, viewerId = ""): Promise<PersonCard[]> {
+  return listGraph(db, "followee", userId, limit, offset, viewerId);
+}
+
+async function listGraph(
+  db: D1Database,
+  side: "follower" | "followee",
+  userId: string,
+  limit: number,
+  offset: number,
+  viewerId: string,
+): Promise<PersonCard[]> {
+  // side=follower → people who follow userId; side=followee → people userId follows.
+  const joinCol = side === "follower" ? "f.follower_id" : "f.followee_id";
+  const whereCol = side === "follower" ? "f.followee_id" : "f.follower_id";
+  const binds: (string | number)[] = [userId];
+  let blockClause = "";
+  if (viewerId) {
+    blockClause =
+      " AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?) AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)";
+    binds.push(viewerId, viewerId);
+  }
+  binds.push(limit, offset);
+  const r = await db
+    .prepare(
+      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+       FROM follows f JOIN users u ON u.id = ${joinCol}
+       WHERE ${whereCol}=? AND u.handle IS NOT NULL${blockClause}
+       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .bind(...binds)
+    .all<BaseRow>();
+  return enrich(db, r.results ?? [], viewerId);
+}
+
+/** Global people search by handle or display name (prefix-weighted substring), enriched +
+ *  paginated. `viewerId` (when signed in) drops the viewer themselves and anyone blocked either
+ *  way, and ranks the page mutuals-first. LIKE-escaped so a literal `%`/`_` can't widen the match. */
+export async function searchUsers(db: D1Database, q: string, viewerId = "", limit = 20, offset = 0): Promise<PersonCard[]> {
   // Cap the term: handles are ≤20 chars and display names are short, so a longer query can never
   // match more — and an overlong LIKE pattern trips SQLite's "pattern too complex" limit (~49
   // chars), which would otherwise surface as an unhandled D1 throw → a 502 on plain user input.
@@ -148,38 +228,83 @@ export async function searchUsers(db: D1Database, q: string, viewerId = "", limi
       " AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)";
     binds.push(viewerId, viewerId);
   }
-  binds.push(pre, limit); // ORDER prefix-first, then LIMIT
+  binds.push(pre, limit, offset); // ORDER prefix-first, then page
   try {
     const r = await db
       .prepare(
-        `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+        `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
          FROM users u
          WHERE u.handle IS NOT NULL
            AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
            AND u.id != ?${blockClause}
          ORDER BY CASE WHEN u.handle LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, u.handle
-         LIMIT ?`,
+         LIMIT ? OFFSET ?`,
       )
       .bind(...binds)
-      .all<PublicCard>();
-    return r.results ?? [];
+      .all<BaseRow>();
+    const cards = await enrich(db, r.results ?? [], viewerId);
+    // Float relationships up WITHIN the page: mutuals first, then people who already follow you.
+    return cards.sort((a, b) => rankRel(b) - rankRel(a));
   } catch {
     // Defence in depth: any D1 hiccup (e.g. a pathological multibyte LIKE pattern that slips the
     // length cap) yields no results, never a 5xx — search is a non-critical, best-effort surface.
     return [];
   }
 }
+const rankRel = (c: PersonCard) => (c.following && c.followsYou ? 2 : c.followsYou ? 1 : 0);
 
-/** Who a user follows (most recent first), as public cards. */
-export async function followingOf(db: D1Database, userId: string, limit = 50, offset = 0): Promise<PublicCard[]> {
+/** "People you may know": 2nd-degree connections (friends-of-friends you don't yet follow),
+ *  ranked by how many of your follows lead to them, topped up with popular accounts when the
+ *  graph is sparse. Signed-out → popular only. Enriched like every other people card. */
+export async function suggestedUsers(db: D1Database, viewerId = "", limit = 12): Promise<PersonCard[]> {
+  if (!viewerId) return popularUsers(db, "", limit);
   const r = await db
     .prepare(
-      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar
-       FROM follows f JOIN users u ON u.id = f.followee_id
-       WHERE f.follower_id=? AND u.handle IS NOT NULL
-       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+              COUNT(DISTINCT f1.followee_id) AS via
+       FROM follows f1
+       JOIN follows f2 ON f2.follower_id = f1.followee_id
+       JOIN users u ON u.id = f2.followee_id
+       WHERE f1.follower_id=? AND u.id!=? AND u.handle IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM follows fe WHERE fe.follower_id=? AND fe.followee_id=u.id)
+         AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?)
+         AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)
+       GROUP BY u.id
+       ORDER BY via DESC LIMIT ?`,
     )
-    .bind(userId, limit, offset)
-    .all<PublicCard>();
-  return r.results ?? [];
+    .bind(viewerId, viewerId, viewerId, viewerId, viewerId, limit)
+    .all<BaseRow>();
+  let cards = await enrich(db, r.results ?? [], viewerId);
+  if (cards.length < limit) {
+    const seen = new Set(cards.map((c) => c.handle));
+    const pop = await popularUsers(db, viewerId, limit - cards.length, seen);
+    cards = cards.concat(pop);
+  }
+  return cards;
+}
+
+/** Most-followed accounts (the cold-start / sparse-graph fallback for suggestions), excluding the
+ *  viewer, anyone they already follow, blocks, and a caller-supplied exclude set. */
+async function popularUsers(db: D1Database, viewerId: string, limit: number, exclude = new Set<string | null>()): Promise<PersonCard[]> {
+  const binds: (string | number)[] = [];
+  let where = "u.handle IS NOT NULL";
+  if (viewerId) {
+    where +=
+      " AND u.id!=? AND NOT EXISTS (SELECT 1 FROM follows fe WHERE fe.follower_id=? AND fe.followee_id=u.id)" +
+      " AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?) AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)";
+    binds.push(viewerId, viewerId, viewerId, viewerId);
+  }
+  binds.push(limit + exclude.size); // over-fetch so the JS exclude-filter still returns `limit`
+  const r = await db
+    .prepare(
+      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+       FROM users u
+       WHERE ${where}
+       ORDER BY (SELECT COUNT(*) FROM follows ff WHERE ff.followee_id=u.id) DESC, u.created_at DESC
+       LIMIT ?`,
+    )
+    .bind(...binds)
+    .all<BaseRow>();
+  const rows = (r.results ?? []).filter((row) => !exclude.has(row.handle)).slice(0, limit);
+  return enrich(db, rows, viewerId);
 }

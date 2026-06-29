@@ -62,6 +62,8 @@ import {
   handleTaken,
   relationship,
   searchUsers,
+  suggestedUsers,
+  ensurePresenceTables,
   unblockUser,
   unfollowUser,
   userByHandle,
@@ -74,7 +76,7 @@ import {
   upsertGoogleUser,
   userBySession,
 } from "./db";
-import { cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
+import { type RateLimiter, allow, cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -116,6 +118,7 @@ export interface AccountEnv {
   // /api/auth/dev shortcut login so the DO/social features are testable under
   // `pnpm worker` without the Google OAuth round-trip. Absent in prod → route 404s.
   DEV_LOGIN?: string;
+  RL_SEARCH?: RateLimiter; // per-IP cap on people-search (enumeration/scrape guard); no-ops in dev
 }
 
 async function currentUser(env: AccountEnv, req: Request) {
@@ -432,27 +435,52 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/following": {
       if (!env.DB) return json(404, { error: "not found" });
       await ensureGraphTables(env.DB);
+      await ensureRoomsTable(env.DB);
+      await ensurePresenceTables(env.DB);
       const target = await userByHandle(env.DB, foldHandle(url.searchParams.get("h") ?? ""));
       if (!target || !target.handle) return json(404, { error: "no such handle" });
       const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+      const viewer = await currentUser(env, req);
+      const limit = 50;
       const list =
         path === "/api/followers"
-          ? await followersOf(env.DB, target.id, 50, offset)
-          : await followingOf(env.DB, target.id, 50, offset);
-      return json(200, { list });
+          ? await followersOf(env.DB, target.id, limit, offset, viewer?.id ?? "")
+          : await followingOf(env.DB, target.id, limit, offset, viewer?.id ?? "");
+      return json(200, { list, more: list.length === limit });
     }
 
     // Global people search (the directory door — find anyone by @handle or name, even when
-    // nobody's live). PUBLIC; a viewer (when signed in) drops self + blocked. ≥2 chars.
+    // nobody's live). PUBLIC; a viewer (when signed in) drops self + blocked. ≥2 chars. Per-IP
+    // rate-limited (enumeration/scrape guard). Paginated via ?offset=; cards are enriched with
+    // presence + the viewer's follow edges so the UI renders inline actions with no extra fetch.
     case "/api/users/search": {
+      if (req.method !== "GET") return json(405, { error: "GET only" });
+      if (!env.DB) return json(200, { list: [], more: false });
+      if (!(await allow(env.RL_SEARCH, clientIp(req)))) return json(429, { error: "slow down" });
+      await ensureIdentityColumns(env.DB);
+      await ensureGraphTables(env.DB);
+      await ensureRoomsTable(env.DB);
+      await ensurePresenceTables(env.DB);
+      const q = (url.searchParams.get("q") ?? "").trim();
+      if (q.length < 2) return json(200, { list: [], more: false });
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+      const viewer = await currentUser(env, req);
+      const limit = 20;
+      const list = await searchUsers(env.DB, q, viewer?.id ?? "", limit, offset);
+      return json(200, { list, more: list.length === limit });
+    }
+
+    // "People you may know" — friends-of-friends (signed-in) or popular accounts (cold start).
+    // Enriched cards; drives the search box's idle state + a Discover suggestions strip.
+    case "/api/users/suggested": {
       if (req.method !== "GET") return json(405, { error: "GET only" });
       if (!env.DB) return json(200, { list: [] });
       await ensureIdentityColumns(env.DB);
       await ensureGraphTables(env.DB);
-      const q = (url.searchParams.get("q") ?? "").trim();
-      if (q.length < 2) return json(200, { list: [] });
+      await ensureRoomsTable(env.DB);
+      await ensurePresenceTables(env.DB);
       const viewer = await currentUser(env, req);
-      return json(200, { list: await searchUsers(env.DB, q, viewer?.id ?? "", 20) });
+      return json(200, { list: await suggestedUsers(env.DB, viewer?.id ?? "", 12) });
     }
 
     // The live public-room directory (E2). PUBLIC — anyone can browse what's on now.

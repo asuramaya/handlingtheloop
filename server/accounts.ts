@@ -12,6 +12,7 @@ import { fetchPlaylistData, getMyPlaylistsData } from "./ytdata";
 import { getMySpotifyPlaylists } from "./spotifyData";
 import { getMyTidalPlaylists } from "./tidalData";
 import {
+  type AiBinding,
   type D1Database,
   type R2Bucket,
   type User,
@@ -82,6 +83,7 @@ import {
   userBySession,
 } from "./db";
 import { type RateLimiter, allow, cleanProfile, cleanText, clientIp, foldHandle, sniffImage, validateHandle } from "./security";
+import { imageIsUnsafe, textIsUnsafe } from "./moderation";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -125,6 +127,7 @@ export interface AccountEnv {
   DEV_LOGIN?: string;
   RL_SEARCH?: RateLimiter; // per-IP cap on people-search (enumeration/scrape guard); no-ops in dev
   RL_WRITE?: RateLimiter; // also keyed per-ACCOUNT here to cap mass-follow / invite-spam velocity
+  AI?: AiBinding; // Workers AI — content moderation on avatar/profile writes (fails open if absent)
 }
 
 async function currentUser(env: AccountEnv, req: Request) {
@@ -737,6 +740,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null; private?: number; hide_presence?: number } = {};
         if (b.displayName !== undefined) patch.display_name = cleanProfile(b.displayName, 48) || null;
         if (b.bio !== undefined) patch.bio = cleanProfile(b.bio, 300) || null;
+        // Llama Guard over the freeform identity text (one call) — slur-mask already ran; this
+        // catches threats/harassment/hate the blocklist can't. Fails open.
+        const idText = [patch.display_name, patch.bio].filter(Boolean).join(". ");
+        if (idText && (await textIsUnsafe(env.AI, idText))) return json(422, { error: "that text isn't allowed" });
         if (b.avatarUrl === null) patch.avatar_url = null; // avatars are upload-only (R2) — PUT can only CLEAR
         if (b.private !== undefined) patch.private = b.private ? 1 : 0;
         if (b.hidePresence !== undefined) patch.hide_presence = b.hidePresence ? 1 : 0;
@@ -778,8 +785,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!(await allow(env.RL_WRITE, `grw:${user.id}`))) return json(429, { error: "slow down" });
       const buf = await req.arrayBuffer();
       if (buf.byteLength === 0 || buf.byteLength > 2_000_000) return json(400, { error: "image must be 1 byte–2 MB" });
-      const ct = sniffImage(new Uint8Array(buf.slice(0, 12)));
+      const bytes = new Uint8Array(buf);
+      const ct = sniffImage(bytes.slice(0, 12));
       if (!ct) return json(400, { error: "not a supported image (jpg/png/gif/webp)" });
+      // Workers AI zero-shot NSFW/violence gate (fails open if AI is unbound or errors).
+      if (await imageIsUnsafe(env.AI, bytes)) return json(422, { error: "that image can't be used here" });
       await env.AUDIO.put(`avatars/${user.id}`, buf, { httpMetadata: { contentType: ct } });
       const avatarUrl = `/api/avatar/${user.id}?v=${Date.now()}`; // ?v busts the client cache on change
       await updateProfile(env.DB, user.id, { avatar_url: avatarUrl });

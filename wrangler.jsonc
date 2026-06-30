@@ -20,6 +20,9 @@
     "run_worker_first": true
   },
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "htl-audio" }],
+  // Workers AI — content moderation gate on avatar/profile writes (LLaVA NSFW + Llama Guard text).
+  // Write-time only (rare), fails open; runs within the 10k-neuron/day free tier at low volume.
+  "ai": { "binding": "AI" },
   // SaaS layer: accounts + playlist sync. Create with `wrangler d1 create htl-db`
   // and paste the returned database_id below.
   "d1_databases": [{ "binding": "DB", "database_name": "htl-db", "database_id": "51b1e56c-fd95-42ef-b7b4-ddbebcf0e311" }],

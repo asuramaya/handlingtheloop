@@ -34,6 +34,11 @@ export interface R2Bucket {
   delete?(key: string): Promise<void>;
 }
 
+// Minimal Workers AI surface (content-moderation gate). Same avoid-the-dep stance as D1/R2.
+export interface AiBinding {
+  run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
+}
+
 export const now = () => Date.now();
 export const uuid = () => crypto.randomUUID();
 

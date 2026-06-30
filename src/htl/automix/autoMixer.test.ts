@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsToSeconds, other, radioSeedSet } from "./autoMixer";
+import { barsToSeconds, decideLive, other, radioSeedSet } from "./autoMixer";
 import type { TrackMeta } from "../library/types";
 
 const track = (videoId: string): TrackMeta => ({ videoId, title: videoId, artist: "", duration: 0, thumbnail: null, views: null });
@@ -94,5 +94,58 @@ describe("radioSeedSet — the fedBack spiral guard", () => {
     expect(radioSeedSet({ live: null, anchor: null, idleTrack: null, preloadedIsIdle: false, queueNextId: null })).toEqual([]);
     const seeds = radioSeedSet({ live: A, anchor: A, idleTrack: A, preloadedIsIdle: false, queueNextId: null });
     expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001"]); // all the same track → one seed
+  });
+});
+
+// The stale-liveId stall: "deck B plays but it thinks A is live, stalls till A ends". decideLive
+// must ALWAYS resolve to a deck the user is actually hearing, and when the user starts a second
+// deck under the mixer it must FOLLOW the just-started one — not cling to the old liveId.
+describe("decideLive — which deck is the user actually hearing", () => {
+  test("nothing playing → null (caller decides end-vs-pause)", () => {
+    expect(decideLive({ aPlay: false, bPlay: false, aPlayPrev: false, bPlayPrev: false, liveId: "A" })).toBeNull();
+  });
+
+  test("only A playing → A", () => {
+    expect(decideLive({ aPlay: true, bPlay: false, aPlayPrev: true, bPlayPrev: false, liveId: "A" })).toBe("A");
+  });
+
+  test("only B playing → B (even when liveId still says A — the stall bug's recovery)", () => {
+    expect(decideLive({ aPlay: false, bPlay: true, aPlayPrev: false, bPlayPrev: true, liveId: "A" })).toBe("B");
+  });
+
+  test("THE FIX: armed on A, user starts B → both play, B just rose → follow B", () => {
+    // Previous tick only A played; now both play because the user dropped a track on B.
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: true, bPlayPrev: false, liveId: "A" })).toBe("B");
+  });
+
+  test("symmetric: live on B, user starts A → follow A", () => {
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: false, bPlayPrev: true, liveId: "B" })).toBe("A");
+  });
+
+  test("steady manual blend (both already playing, no new start) → keep the live deck", () => {
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: true, bPlayPrev: true, liveId: "B" })).toBe("B");
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: true, bPlayPrev: true, liveId: "A" })).toBe("A");
+  });
+
+  test("both rose together (rare) → keep live if valid, else default A", () => {
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: false, bPlayPrev: false, liveId: "B" })).toBe("B");
+    expect(decideLive({ aPlay: true, bPlay: true, aPlayPrev: false, bPlayPrev: false, liveId: null })).toBe("A");
+  });
+
+  test("result is always a deck that is actually playing", () => {
+    // Property: for every combination where something plays, the chosen deck is one that plays.
+    for (const aPlay of [true, false]) {
+      for (const bPlay of [true, false]) {
+        if (!aPlay && !bPlay) continue;
+        for (const aPlayPrev of [true, false]) {
+          for (const bPlayPrev of [true, false]) {
+            for (const liveId of ["A", "B", null] as const) {
+              const r = decideLive({ aPlay, bPlay, aPlayPrev, bPlayPrev, liveId });
+              expect(r === "A" ? aPlay : bPlay).toBe(true);
+            }
+          }
+        }
+      }
+    }
   });
 });

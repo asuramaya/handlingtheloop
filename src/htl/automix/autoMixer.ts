@@ -97,6 +97,35 @@ export function radioSeedSet(p: {
   return seeds;
 }
 
+// WHICH DECK IS LIVE — the single source of truth for "what is the user actually hearing",
+// pure + tested so the state machine can never again cling to a deck nobody started. Rules:
+//  • exactly one deck playing → that deck (unambiguous).
+//  • BOTH playing → follow whichever JUST STARTED this tick (a rising edge = the user dropped a
+//    new track under us). This is the bug fix: the old code kept the stale liveId, so starting
+//    deck B while the mixer was armed on A left it "mixing out" A — a deck nobody was hearing —
+//    with no recovery until A ended. A fresh start is an explicit "this is live now" signal.
+//  • both already playing with no new start (a steady manual blend) → keep the current live deck
+//    if it's one of the two; else default to A.
+//  • nothing playing → null (the caller decides end-of-track vs. paused).
+export function decideLive(p: {
+  aPlay: boolean;
+  bPlay: boolean;
+  aPlayPrev: boolean; // was A playing last tick? (rising-edge detection)
+  bPlayPrev: boolean;
+  liveId: DeckId | null;
+}): DeckId | null {
+  if (!p.aPlay && !p.bPlay) return null;
+  if (p.aPlay && !p.bPlay) return "A";
+  if (p.bPlay && !p.aPlay) return "B";
+  // Both playing — prefer the deck that just rose (user-started under us).
+  const aRose = !p.aPlayPrev;
+  const bRose = !p.bPlayPrev;
+  if (aRose && !bRose) return "A";
+  if (bRose && !aRose) return "B";
+  // No clear new-start (both steady, or both rose together) → keep live if valid, else A.
+  return p.liveId === "A" || p.liveId === "B" ? p.liveId : "A";
+}
+
 export class AutoMixer {
   private enabled = false;
   private phase: AutoMixPhase = "idle";
@@ -144,6 +173,10 @@ export class AutoMixer {
   private lastXfade: number | null = null;
   private lastTickMs: number | null = null;
   private lastEmitKey = "";
+  // Per-deck playing state from the PREVIOUS tick — lets reconcile() see a rising edge (a deck
+  // the user just started) and follow it instead of clinging to a stale liveId. Updated every
+  // tick (even mid-mix) so the edge is fresh the moment we return to a reconciling phase.
+  private wasPlaying: { A: boolean; B: boolean } = { A: false, B: false };
 
   constructor(private deps: AutoMixerDeps) {}
 
@@ -155,6 +188,9 @@ export class AutoMixer {
     if (this.enabled) return;
     this.enabled = true;
     this.lastTickMs = null;
+    // Seed the playing-edge snapshot to current reality so the first reconcile doesn't read a
+    // phantom rising edge (default-false → "everything just started").
+    this.wasPlaying = { A: this.deps.engine.deck("A").playing, B: this.deps.engine.deck("B").playing };
     this.liveId = this.playingDeck();
     this.liveVideoId = this.liveId ? this.deps.deckTrack(this.liveId)?.videoId ?? null : null;
     this.anchor = this.liveId ? this.deps.deckTrack(this.liveId) : null;
@@ -365,14 +401,20 @@ export class AutoMixer {
   // Absorb anything the user did to the decks between ticks — GRACEFULLY, so a
   // PAUSE or a manual LOAD is never mistaken for "skip to the next queued song".
   private reconcile(): void {
-    if (this.phase === "mixing" || this.phase === "settle" || this.phase === "manual") return;
     const e = this.deps.engine;
     const aPlay = e.deck("A").playing;
     const bPlay = e.deck("B").playing;
+    // Record the playing edge for NEXT tick's decideLive — always, even mid-mix, so the edge is
+    // accurate when we return to a reconciling phase. Read prev before overwriting.
+    const prev = this.wasPlaying;
+    this.wasPlaying = { A: aPlay, B: bPlay };
+    if (this.phase === "mixing" || this.phase === "settle" || this.phase === "manual") return;
 
-    // Something is playing → follow it (and adopt a track the user just loaded there).
+    // Something is playing → follow the deck the user actually has running. When BOTH play (the
+    // user started a second deck under us) decideLive follows whichever JUST started, never the
+    // stale liveId — the fix for "deck B plays but it thinks A is live, stalls till A ends".
     if (aPlay || bPlay) {
-      const playId: DeckId = aPlay && (this.liveId === "A" || !bPlay) ? "A" : "B";
+      const playId = decideLive({ aPlay, bPlay, aPlayPrev: prev.A, bPlayPrev: prev.B, liveId: this.liveId }) as DeckId;
       const vid = this.deps.deckTrack(playId)?.videoId ?? null;
       if (this.liveId !== playId || vid !== this.liveVideoId) this.adoptLive(playId);
       return;

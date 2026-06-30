@@ -30,13 +30,25 @@ export interface NotifEvent {
   followsBack: boolean; // does the RECIPIENT already follow the actor? (drives the bell's Follow-back affordance)
 }
 
+// Collapse repeat events from the same actor: an unfollow→refollow loop (or a spam-tap invite)
+// can't re-ring the bell more than once per window. Actor-less/system events are never deduped.
+const NOTIF_DEDUP_MS = 6 * 3_600_000;
+
 /** Record a notification for `userId`. Best-effort — a notify failure must never break the
- *  action that triggered it (e.g. the follow still succeeds if this throws). */
+ *  action that triggered it (e.g. the follow still succeeds if this throws). Deduped per
+ *  (recipient, actor, kind) within NOTIF_DEDUP_MS so it can't be used as a flooding vector. */
 export async function addNotification(
   db: D1Database,
   n: { userId: string; kind: string; actorId?: string | null; payload?: string | null },
 ): Promise<void> {
   await ensure(db);
+  if (n.actorId) {
+    const dup = await db
+      .prepare("SELECT 1 FROM notifications WHERE user_id=? AND kind=? AND actor_id=? AND created_at>? LIMIT 1")
+      .bind(n.userId, n.kind, n.actorId, now() - NOTIF_DEDUP_MS)
+      .first();
+    if (dup) return; // already rang for this actor+kind recently — suppress the repeat
+  }
   await db
     .prepare("INSERT INTO notifications (user_id, kind, actor_id, payload, created_at) VALUES (?,?,?,?,?)")
     .bind(n.userId, n.kind, n.actorId ?? null, n.payload ?? null, now())

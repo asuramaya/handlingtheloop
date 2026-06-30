@@ -109,6 +109,12 @@ async function handleRoom(req: Request, env: Env, ctx: ExecutionContext): Promis
     if (!u || !u.handle) return json(404, { error: "no such room" });
     hostId = u.id;
     asPublic = !(user && user.id === u.id);
+    // Block is universal — a blocked user can't tune into the blocker's PUBLIC room either
+    // (the jam branch already gates this; public-listen was the one surface that didn't).
+    if (asPublic && user) {
+      const rel = await relationship(env.DB, user.id, u.id);
+      if (rel.blocking || rel.blockedBy) return json(403, { error: "unavailable" });
+    }
   } else if (jamHandle && env.DB && user) {
     // JAM by @handle: participate in a FRIEND's session (not a public read-only listen). Gated on
     // MUTUAL follow — only friends can knock. A consumed push-invite grant auto-admits; otherwise

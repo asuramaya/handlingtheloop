@@ -119,6 +119,7 @@ export interface AccountEnv {
   // `pnpm worker` without the Google OAuth round-trip. Absent in prod → route 404s.
   DEV_LOGIN?: string;
   RL_SEARCH?: RateLimiter; // per-IP cap on people-search (enumeration/scrape guard); no-ops in dev
+  RL_WRITE?: RateLimiter; // also keyed per-ACCOUNT here to cap mass-follow / invite-spam velocity
 }
 
 async function currentUser(env: AccountEnv, req: Request) {
@@ -412,6 +413,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const target = await userByHandle(env.DB, foldHandle(String(b.handle ?? "")));
       if (!target || !target.handle) return json(404, { error: "no such handle" });
       if (target.id === user.id) return json(400, { error: "that's you" });
+      // Per-account velocity cap on the escalating actions (mass-follow / block churn). Keyed by
+      // account, distinct from the per-IP RL_SEARCH. unfollow/unblock (de-escalations) are exempt.
+      if ((path === "/api/follow" || path === "/api/block") && !(await allow(env.RL_WRITE, `grw:${user.id}`))) {
+        return json(429, { error: "slow down" });
+      }
       if (path === "/api/follow") {
         const r = await followUser(env.DB, user.id, target.id);
         if (!r.ok) return json(409, { error: r.reason });
@@ -789,6 +795,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (target.id === user.id) return json(400, { error: "can't invite yourself" });
       const rel = await relationship(env.DB, user.id, target.id);
       if (!rel.mutual || rel.blocking || rel.blockedBy) return json(403, { error: "you can only invite friends (mutual follow)" });
+      if (!(await allow(env.RL_WRITE, `grw:${user.id}`))) return json(429, { error: "slow down" });
       await addSessionInvite(env.DB, user.id, target.id);
       await addNotification(env.DB, { userId: target.id, kind: "invite", actorId: user.id }).catch(() => {});
       return json(200, { ok: true });

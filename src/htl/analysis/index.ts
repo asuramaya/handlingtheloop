@@ -12,6 +12,7 @@ export {
   detectKey,
   foldTempoOctave,
   harmonicDistance,
+  piTrim,
   serializeGrid,
   nearestBeat,
   shiftKey,

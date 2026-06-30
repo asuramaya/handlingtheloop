@@ -339,7 +339,7 @@ export class Deck {
   // so the clock + audio stay together and the slave imperceptibly speeds/slows to stay
   // locked. 0 whenever the deck isn't following.
   private _syncTrim = 0;
-  private static readonly SYNC_TRIM_MAX = 0.02; // ±2 % — enough to pull a sub-beat slip in seconds, inaudible
+  static readonly SYNC_TRIM_MAX = 0.02; // ±2 % — enough to pull a sub-beat slip in seconds, inaudible
   // Loop / cue / hot-cue subsystem (state + editing logic), constructed in the ctor.
   // Deck forwards `deck.loop` / `deck.cuePoint` etc. to it (getters below) and delegates
   // the public methods, so every existing reader/caller is unchanged. See LoopEngine.ts.

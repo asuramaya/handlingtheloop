@@ -21,6 +21,7 @@ import {
   barPhase,
   foldTempoOctave,
   commonPhaseError,
+  piTrim,
   serializeGrid,
   deserializeGrid,
   type Beatgrid,
@@ -552,5 +553,70 @@ describe("grid codec (serialize/deserialize)", () => {
     expect(deserializeGrid(JSON.stringify({ firstBeat: 0, interval: 0.5 }))).toBeNull(); // no bpm
     expect(deserializeGrid(JSON.stringify({ bpm: 0, firstBeat: 0, interval: 0.5 }))).toBeNull(); // bpm not positive
     expect(deserializeGrid(JSON.stringify({ bpm: NaN, firstBeat: 0, interval: 0.5 }))).toBeNull();
+  });
+});
+
+// piTrim — the PI controller for the SYNC phase-lock. The headline property: on an integrator
+// plant a PROPORTIONAL-only loop leaves a steady-state offset; the integral term drives it to ~0.
+describe("piTrim (PI phase-lock controller)", () => {
+  const CFG = { dt: 0.08, kp: 0.06, ki: 0.003, clamp: 0.02 };
+
+  it("zero error → zero trim, integral unchanged", () => {
+    const r = piTrim({ err: 0, integral: 0, ...CFG });
+    expect(r.trim).toBeCloseTo(0, 10); // -(0) can be -0; functionally zero
+    expect(r.integral).toBeCloseTo(0, 10);
+  });
+
+  it("ahead of the master (err>0) trims SLOWER (negative); behind trims faster", () => {
+    expect(piTrim({ err: 0.1, integral: 0, ...CFG }).trim).toBeLessThan(0);
+    expect(piTrim({ err: -0.1, integral: 0, ...CFG }).trim).toBeGreaterThan(0);
+  });
+
+  it("the integral accumulates a constant error over ticks (so trim grows toward the offset)", () => {
+    let I = 0;
+    for (let i = 0; i < 50; i++) I = piTrim({ err: 0.05, integral: I, ...CFG }).integral;
+    expect(I).toBeGreaterThan(0); // built up from the steady positive error
+  });
+
+  // Closed-loop simulation: plant is dε/dt = Δf + g·trim (rate→phase integrator) with a constant
+  // base-tempo mismatch Δf (the disturbance that leaves the residual). P-only parks at an offset;
+  // PI drives it to ~0.
+  function sim(ki: number, steps: number): number {
+    const g = 1.8; // trim → phase-frequency gain (~bpm/60)
+    const df = 0.005; // constant base-tempo mismatch (the disturbance)
+    let e = 0;
+    let I = 0;
+    for (let n = 0; n < steps; n++) {
+      const r = piTrim({ err: e, integral: I, dt: CFG.dt, kp: CFG.kp, ki, clamp: CFG.clamp });
+      I = r.integral;
+      e = e + (df + g * r.trim) * CFG.dt; // integrate the plant
+    }
+    return e;
+  }
+
+  it("P-only (ki=0) parks at a NON-zero steady-state offset", () => {
+    const e = sim(0, 3000);
+    expect(Math.abs(e)).toBeGreaterThan(0.02); // a real residual (≈ df/(g·kp))
+  });
+
+  it("PI (ki>0) drives the steady-state offset to ~zero", () => {
+    const e = sim(CFG.ki, 3000);
+    expect(Math.abs(e)).toBeLessThan(0.005); // the integral cancels the disturbance
+  });
+
+  it("anti-windup: a saturating error can't wind the integral past its limit, output stays clamped", () => {
+    let I = 0;
+    let last = { trim: 0, integral: 0, raw: 0 };
+    for (let i = 0; i < 2000; i++) {
+      last = piTrim({ err: 0.45, integral: I, ...CFG }); // huge sustained error → saturates
+      I = last.integral;
+    }
+    expect(Math.abs(last.trim)).toBeLessThanOrEqual(CFG.clamp + 1e-9); // output clamped
+    expect(Math.abs(I)).toBeLessThanOrEqual(CFG.clamp / CFG.ki + 1e-6); // integral bounded (no windup)
+  });
+
+  it("raw exposes the pre-clamp output so the diagnostic can flag saturation", () => {
+    const r = piTrim({ err: 0.5, integral: 0, ...CFG });
+    expect(Math.abs(r.raw)).toBeGreaterThan(Math.abs(r.trim)); // raw > clamped → saturated
   });
 });

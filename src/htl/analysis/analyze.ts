@@ -437,6 +437,29 @@ export function commonPhaseError(phaseSlave: number, phaseMaster: number, fold: 
   return err;
 }
 
+export interface PiResult {
+  trim: number; // clamped control output (rate trim, fraction) to apply
+  integral: number; // the updated integral accumulator to carry to the next tick
+  raw: number; // the pre-clamp P+I output (for a saturation indicator)
+}
+
+/** One step of the PI controller that drives the SYNC phase-lock. The plant (rate→phase) is itself
+ *  an integrator, so a PROPORTIONAL-only loop leaves a steady-state phase OFFSET proportional to the
+ *  base-tempo mismatch (the residual you can see settle in the diagnostic). Adding the integral term
+ *  cancels that offset → the lock tightens to ~0 over the integral's time constant. Anti-windup is
+ *  twofold: the accumulator is clamped so its contribution (ki·I) can't exceed the output clamp, and
+ *  when the OUTPUT saturates the integral is FROZEN (not grown into the wall) — no overshoot when a
+ *  big transient (catch-up, a fold) finally resolves. Pure + tested so the gains can't silently drift. */
+export function piTrim(p: { err: number; integral: number; dt: number; kp: number; ki: number; clamp: number }): PiResult {
+  const { err, integral, dt, kp, ki, clamp } = p;
+  const iLimit = ki > 0 ? clamp / ki : 0;
+  const nextI = Math.max(-iLimit, Math.min(iLimit, integral + err * dt));
+  const raw = -(kp * err + ki * nextI);
+  const trim = Math.max(-clamp, Math.min(clamp, raw));
+  // Conditional integration: keep the grown integral only if the output didn't saturate.
+  return raw === trim ? { trim, integral: nextI, raw } : { trim, integral, raw };
+}
+
 /** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
  *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —
  *  so they're converted to plain number arrays here and back in deserializeGrid. Round-trips. */

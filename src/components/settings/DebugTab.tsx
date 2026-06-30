@@ -12,8 +12,17 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
   // while this tab is mounted. `copied` flashes the Copy button (sharing the dump is the
   // only practical way to debug a phone).
   const [diag, setDiag] = useState<DebugSection[]>([]);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null); // which block (or "all") just copied
   const [traceTick, setTraceTick] = useState(0); // bump to re-read the separation trace
+  const sectionText = (s: DebugSection) => `[${s.title}]\n` + s.rows.map(([k, v]) => `  ${k}: ${v}`).join("\n");
+  const copy = (text: string, id: string) =>
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(id);
+        setTimeout(() => setCopied((c) => (c === id ? null : c)), 1200);
+      },
+      () => {},
+    );
   useEffect(() => {
     if (!debug) return;
     const tick = () => setDiag(debug());
@@ -35,25 +44,20 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">Live diagnostics</span>
-            <button
-              className="link-btn"
-              onClick={() => {
-                const text = diag
-                  .map((s) => `[${s.title}]\n` + s.rows.map(([k, v]) => `  ${k}: ${v}`).join("\n"))
-                  .join("\n\n");
-                void navigator.clipboard?.writeText(text).then(
-                  () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
-                  () => {},
-                );
-              }}
-            >
-              {copied ? "Copied ✓" : "Copy"}
+            <button className="link-btn" onClick={() => copy(diag.map(sectionText).join("\n\n"), "all")}>
+              {copied === "all" ? "Copied ✓" : "Copy all"}
             </button>
           </div>
           <div className="debug-grid">
             {diag.map((s) => (
               <div className="debug-block" key={s.title}>
-                <div className="debug-block-title">{s.title}</div>
+                <div className="debug-block-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span>{s.title}</span>
+                  {/* Per-section copy — grab just this block instead of the whole dump. */}
+                  <button className="link-btn" style={{ fontSize: "0.8em" }} onClick={() => copy(sectionText(s), s.title)}>
+                    {copied === s.title ? "✓" : "copy"}
+                  </button>
+                </div>
                 {s.rows.map(([k, v]) => (
                   <div className="debug-row" key={k}>
                     <span className="debug-key">{k}</span>

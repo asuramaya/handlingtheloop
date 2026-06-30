@@ -15,6 +15,18 @@ import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type Reser
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
 
+/** Live SYNC phase-lock telemetry for the Debug panel. */
+export interface SyncDiag {
+  active: boolean; // sync engaged + actively correcting (both decks playing, not jogging/looping)
+  slave: DeckId | null;
+  masterBpm: number | null;
+  slaveBpm: number | null;
+  fold: number | null; // grid-beat-frequency ratio slave/master — ~1 locked, ~2/~0.5 = density chase
+  errBeats: number | null; // live phase error in [−0.5, 0.5) beats
+  trim: number | null; // applied (clamped) rate trim, fraction
+  saturated: boolean; // the request exceeded the clamp — the loop can't follow (rubato)
+}
+
 // Master audio graph:
 //
 //   Deck A.output --> xfadeA --\
@@ -689,6 +701,16 @@ export class AudioEngine {
   private syncCorrectTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
   private static readonly SYNC_PHASE_K = 0.06; // P-gain: rate trim per beat of phase error (gentle, ~8 s time constant)
+  // Live phase-lock telemetry (Settings ▸ Debug). `fold` is the grid-beat-frequency ratio
+  // slave/master: ~1 = locked; ~2 or ~0.5 = the half/double DENSITY chase (err can never settle).
+  // `saturated` = the requested trim exceeded the ±clamp (rubato the loop can't follow).
+  private syncDiagState: SyncDiag = { active: false, slave: null, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, saturated: false };
+  get syncDiag(): SyncDiag {
+    return this.syncDiagState;
+  }
+  private idleSyncDiag(slave: DeckId | null): SyncDiag {
+    return { active: false, slave, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, saturated: false };
+  }
 
   private get masterId(): DeckId | null {
     return this.slaveId == null ? null : other(this.slaveId);
@@ -722,24 +744,45 @@ export class AudioEngine {
   // the slave's motion (jog / ear-bend) or a loop is deliberately offsetting the phase.
   private phaseCorrect() {
     const sid = this.slaveId;
-    if (sid == null) return;
+    if (sid == null) {
+      this.syncDiagState = this.idleSyncDiag(null);
+      return;
+    }
     const slave = this.deck(sid);
     const master = this.deck(other(sid));
     const sg = slave.beatgrid;
     const mg = master.beatgrid;
-    if (!sg || !mg) return;
-    if (!slave.playing || !master.playing) {
-      slave.setSyncTrim(0); // nothing to lock to while stopped
+    if (!sg || !mg) {
+      this.syncDiagState = this.idleSyncDiag(sid);
       return;
     }
-    if (slave.jogging || master.jogging || slave.bending || master.bending) return;
+    if (!slave.playing || !master.playing) {
+      slave.setSyncTrim(0); // nothing to lock to while stopped
+      this.syncDiagState = this.idleSyncDiag(sid);
+      return;
+    }
+    if (slave.jogging || master.jogging || slave.bending || master.bending) return; // keep last diag
     if (slave.loop?.active || master.loop?.active) return; // a loop intentionally breaks phase
     // Beat-phase error in [−0.5, 0.5) beats (positive = slave is ahead of master).
     let err = beatPhase(sg, slave.position()) - beatPhase(mg, master.position());
     if (err > 0.5) err -= 1;
     else if (err < -0.5) err += 1;
     // First-order correction: ahead → trim slower (negative), behind → trim faster.
-    slave.setSyncTrim(-err * AudioEngine.SYNC_PHASE_K);
+    const requested = -err * AudioEngine.SYNC_PHASE_K;
+    slave.setSyncTrim(requested);
+    // Telemetry: fold = ratio of the two grids' beat frequencies (effRate·bpm). ~1 = locked;
+    // ~2 / ~0.5 = the density chase. saturated = the clamp swallowed part of the request (rubato).
+    const fold = mg.bpm && master.rate ? (slave.rate * sg.bpm) / (master.rate * mg.bpm) : null;
+    this.syncDiagState = {
+      active: true,
+      slave: sid,
+      masterBpm: mg.bpm,
+      slaveBpm: sg.bpm,
+      fold,
+      errBeats: err,
+      trim: slave.syncTrim,
+      saturated: Math.abs(requested) - Math.abs(slave.syncTrim) > 1e-6,
+    };
   }
 
   /** Which deck is the SYNC slave (null = off) — the absolute setpoint to send over a

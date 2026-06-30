@@ -2996,6 +2996,8 @@ function AppBody() {
       };
     };
     const role = room.isAnchor ? "anchor" : room.controlling ? "controller" : room.listening ? "listener" : room.joined ? "watcher" : "—";
+    const sd = e.syncDiag;
+    const chase = sd.fold != null && Math.abs(Math.log2(sd.fold)) > 0.5; // fold >1.41× or <0.71× → density chase
     return [
       {
         title: "Audio context",
@@ -3006,6 +3008,20 @@ function AppBody() {
           ["clock", `${e.ctx.currentTime.toFixed(1)} s`],
           ["worklet error", e.workletError || "none"],
         ],
+      },
+      {
+        // SYNC phase-lock telemetry — the instrument for the rhythm-engine upgrade. Watch `fold`
+        // (~2 = the half/double DENSITY chase) and `trim` (SATURATED = rubato the loop can't follow).
+        title: "Sync (phase-lock)",
+        rows: sd.active
+          ? [
+              ["slave → master", `${sd.slave} → ${sd.slave === "A" ? "B" : "A"}`],
+              ["bpm slave / master", `${fmt(sd.slaveBpm, 1)} / ${fmt(sd.masterBpm, 1)}`],
+              ["fold factor", `${fmt(sd.fold, 3)}${chase ? "  ⚠ DENSITY CHASE" : ""}`],
+              ["phase err", `${fmt(sd.errBeats, 3)} beats`],
+              ["trim", `${((sd.trim ?? 0) * 100).toFixed(2)}%${sd.saturated ? "  ⚠ SATURATED (rubato)" : ""}`],
+            ]
+          : [["state", sd.slave ? "engaged · idle (a deck not playing)" : "off"]],
       },
       {
         title: "Shared session",

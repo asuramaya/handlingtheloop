@@ -1318,6 +1318,10 @@ export class Deck {
     this._syncTrim = t;
     this.pushRate();
   }
+  /** The applied (clamped) phase-lock trim — for the sync diagnostic (saturation = |requested|>this). */
+  get syncTrim() {
+    return this._syncTrim;
+  }
 
   /** Grip the platter (pointer/jog down) — stops it dead, then it follows the finger. */
   scrubBegin() {

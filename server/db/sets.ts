@@ -116,7 +116,7 @@ export async function discoverSets(db: D1Database, limit = 60): Promise<Discover
       `SELECT s.id, s.host_id AS hostId, s.title, s.genre, s.status, s.duration, s.tracks, s.tracklist,
               s.cover_video AS coverVideo, s.engine_ver AS engineVer, s.bytes, s.created_at AS createdAt,
               s.published_at AS publishedAt, s.trim_start AS trimStart, s.trim_end AS trimEnd,
-              u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+              u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM sets s JOIN users u ON u.id = s.host_id
        WHERE s.status = 'published' AND u.handle IS NOT NULL
        ORDER BY s.published_at DESC LIMIT ?`,

@@ -61,7 +61,7 @@ export async function listNotifications(db: D1Database, userId: string, limit = 
   const r = await db
     .prepare(
       `SELECT n.id, n.kind, n.created_at AS createdAt, n.payload,
-              u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+              u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = n.user_id AND f.followee_id = n.actor_id) AS followsBack
        FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
        WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?`,

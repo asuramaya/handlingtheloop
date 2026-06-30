@@ -158,16 +158,22 @@ async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promis
     viewerId ? setOf(`SELECT followee_id x FROM follows WHERE follower_id=? AND followee_id IN (${ph})`, viewerId) : new Set<string>(),
     viewerId ? setOf(`SELECT follower_id x FROM follows WHERE followee_id=? AND follower_id IN (${ph})`, viewerId) : new Set<string>(),
   ]);
-  return rows.map((r) => ({
-    handle: r.handle,
-    displayName: r.displayName,
-    avatar: r.avatar,
-    online: online.has(r.id),
-    live: live.has(r.id),
-    following: following.has(r.id),
-    followsYou: followsYou.has(r.id),
-    isSelf: viewerId !== "" && r.id === viewerId,
-  }));
+  return rows.map((r) => {
+    const followsHim = following.has(r.id);
+    const followsMe = followsYou.has(r.id);
+    return {
+      handle: r.handle,
+      displayName: r.displayName,
+      avatar: r.avatar,
+      // Presence is FRIENDS-ONLY: only a mutual sees "online" (the live public-room signal is
+      // separate + already public). A non-mutual / anonymous viewer never learns who's around.
+      online: online.has(r.id) && followsHim && followsMe,
+      live: live.has(r.id),
+      following: followsHim,
+      followsYou: followsMe,
+      isSelf: viewerId !== "" && r.id === viewerId,
+    };
+  });
 }
 
 /** Followers of a user (most recent first), enriched + paginated. `viewerId` enriches each card
@@ -202,7 +208,7 @@ async function listGraph(
   binds.push(limit, offset);
   const r = await db
     .prepare(
-      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+      `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM follows f JOIN users u ON u.id = ${joinCol}
        WHERE ${whereCol}=? AND u.handle IS NOT NULL${blockClause}
        ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
@@ -236,7 +242,7 @@ export async function searchUsers(db: D1Database, q: string, viewerId = "", limi
   try {
     const r = await db
       .prepare(
-        `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+        `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
          FROM users u
          WHERE u.handle IS NOT NULL
            AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
@@ -264,7 +270,7 @@ export async function suggestedUsers(db: D1Database, viewerId = "", limit = 12):
   if (!viewerId) return popularUsers(db, "", limit);
   const r = await db
     .prepare(
-      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+      `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               COUNT(DISTINCT f1.followee_id) AS via
        FROM follows f1
        JOIN follows f2 ON f2.follower_id = f1.followee_id
@@ -301,7 +307,7 @@ async function popularUsers(db: D1Database, viewerId: string, limit: number, exc
   binds.push(limit + exclude.size); // over-fetch so the JS exclude-filter still returns `limit`
   const r = await db
     .prepare(
-      `SELECT u.id, u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar
+      `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM users u
        WHERE ${where}
        ORDER BY (SELECT COUNT(*) FROM follows ff WHERE ff.followee_id=u.id) DESC, u.created_at DESC

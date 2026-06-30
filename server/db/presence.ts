@@ -84,7 +84,7 @@ export async function friendsOnline(db: D1Database, viewerId: string, freshMs = 
   const presenceCutoff = now() - PRESENCE_TTL_MS;
   const r = await db
     .prepare(
-      `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               (r.host_id IS NOT NULL) AS live
        FROM follows f1
        JOIN follows f2 ON f2.follower_id = f1.followee_id AND f2.followee_id = f1.follower_id

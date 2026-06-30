@@ -84,7 +84,7 @@ export async function liveRooms(db: D1Database, limit = 100, freshMs = 90_000): 
   const cutoff = now() - freshMs;
   const r = await db
     .prepare(
-      `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
        FROM rooms r JOIN users u ON u.id = r.host_id
        WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
@@ -104,7 +104,7 @@ export async function liveFollowedRooms(db: D1Database, viewerId: string, freshM
   const cutoff = now() - freshMs;
   const r = await db
     .prepare(
-      `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
+      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
        FROM follows f
        JOIN rooms r ON r.host_id = f.followee_id

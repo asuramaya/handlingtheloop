@@ -224,10 +224,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     const u = folded ? await userByHandle(env.DB, folded) : null;
     if (!u || !u.handle) return json(404, { error: "no such handle" });
     const viewer = await currentUser(env, req);
+    // Resolve the relationship ONCE (drives the block-gate AND friends-only fields below).
+    const isSelf = !!viewer && viewer.id === u.id;
+    const rel = viewer && !isSelf ? await relationship(env.DB, viewer.id, u.id) : null;
     // A blocker can't see the blockee's profile (and vice-versa) — treat as absent.
-    if (viewer && (await relationship(env.DB, viewer.id, u.id)).blockedBy) {
-      return json(404, { error: "no such handle" });
-    }
+    if (rel?.blockedBy) return json(404, { error: "no such handle" });
     await ensureRoomsTable(env.DB);
     const [topTracks, counts, live, online] = await Promise.all([
       getTopTracks(env.DB, u.id, 12),
@@ -235,7 +236,9 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       liveRoomStatus(env.DB, u.id),
       isPresenceOnline(env.DB, u.id),
     ]);
-    const rel = viewer && viewer.id !== u.id ? await relationship(env.DB, viewer.id, u.id) : null;
+    // Presence + listening habits are FRIENDS-ONLY: a non-mutual / anonymous viewer sees neither
+    // "online" nor the top-songs list (live public-room status stays public — it's a broadcast).
+    const friendsOrSelf = isSelf || !!rel?.mutual;
     return json(200, {
       handle: u.handle,
       // PUBLIC: never fall back to the Google legal name (B7). Unset display name →
@@ -244,12 +247,12 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       avatar: u.avatar_url ?? null,
       bio: u.bio ?? null,
       memberSince: u.created_at,
-      topTracks,
+      topTracks: friendsOrSelf ? topTracks : [],
       counts,
       live: live.live, // broadcasting a PUBLIC room right now?
       liveListeners: live.listeners,
-      online, // any session open (reachable for a friend's jam knock) — not necessarily public
-      isSelf: !!viewer && viewer.id === u.id,
+      online: friendsOrSelf ? online : false, // reachable for a friend's jam knock (friends-only)
+      isSelf,
       relationship: rel, // null when signed out or viewing self
     });
   }

@@ -378,6 +378,41 @@ describe("AutoMixer machine — full transition path", () => {
     expect(r.engine.A.playing).toBe(false); // outgoing paused at settle
   });
 
+  test("a non-key-matched glide pins keylock OFF during the blend, then restores it after", async () => {
+    const r = new Rig();
+    // Harmonically DISTANT keys → pickTransition keyMatch=false → the glide drops keylock for the
+    // vinyl pitch ride, and must PIN it off so a stray setPitch can't silently re-freeze the ramp.
+    const t1 = { ...mkTrack("t1"), key: "8A" };
+    const t2 = { ...mkTrack("t2"), key: "2A" };
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.engine.A.keylock = true; // baseline (the default) — restored after the transition
+    r.engine.B.keylock = true;
+    r.loadAndPlay("A", t1);
+    r.queue.upcoming = [t2];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let pinnedDuringMix = false;
+    let settledOnB = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing" && r.engine.A.keylockPinnedOff && r.engine.B.keylockPinnedOff) pinnedDuringMix = true;
+      if (r.live === "B" && r.phase === "armed") {
+        settledOnB = true;
+        break;
+      }
+    }
+
+    expect(settledOnB).toBe(true);
+    expect(pinnedDuringMix).toBe(true); // pinned off for the ride (blocks the setPitch re-engage freeze)
+    // After the transition: the pin is cleared and the pre-glide keylock (ON) is restored on both.
+    expect(r.engine.A.keylockPinnedOff).toBe(false);
+    expect(r.engine.B.keylockPinnedOff).toBe(false);
+    expect(r.engine.A.keylock).toBe(true);
+    expect(r.engine.B.keylock).toBe(true);
+  });
+
   test("user grabs the crossfader mid-mix → mixer hands off to manual, then re-adopts the survivor", async () => {
     const r = new Rig();
     const t2 = mkTrack("t2");

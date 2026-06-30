@@ -21,6 +21,7 @@ export function PersonRow({
   onListen?: (handle: string) => void; // tune into a public live set
 }) {
   const [following, setFollowing] = useState(card.following);
+  const [requested, setRequested] = useState(false); // pending request to a private account
   const [invited, setInvited] = useState(false);
   const [busy, setBusy] = useState(false);
   const h = card.handle ?? "";
@@ -33,8 +34,12 @@ export function PersonRow({
     setBusy(true);
     const next = !following;
     setFollowing(next); // optimistic
-    const ok = await (next ? follow(h) : unfollow(h)); // both return {...}|null (null = failed)
-    if (!ok) setFollowing(!next); // revert in EITHER direction on failure
+    const res = await (next ? follow(h) : unfollow(h)); // both return {relationship,counts}|null
+    if (!res) setFollowing(!next); // revert in EITHER direction on failure
+    else if (next && res.relationship?.requested) {
+      setFollowing(false); // a private account → a pending request, not an edge
+      setRequested(true);
+    }
     setBusy(false);
   };
   const invite = (e: MouseEvent) => {
@@ -103,9 +108,15 @@ export function PersonRow({
                 Listen
               </button>
             )}
-            <button className={`follow-btn ${following ? "on" : ""}`} onClick={toggleFollow} disabled={busy}>
-              {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
-            </button>
+            {requested ? (
+              <button className="follow-btn on" disabled>
+                Requested
+              </button>
+            ) : (
+              <button className={`follow-btn ${following ? "on" : ""}`} onClick={toggleFollow} disabled={busy}>
+                {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
+              </button>
+            )}
           </>
         )}
       </span>

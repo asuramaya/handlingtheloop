@@ -118,9 +118,15 @@ export function PublicProfileScreen({
               actions={
                 !profile.isSelf && rel ? (
                   <>
-                    <button className={`follow-btn ${rel.following ? "on" : ""}`} onClick={() => void onFollow()}>
-                      {rel.following ? "Following" : rel.followedBy ? "Follow back" : "Follow"}
-                    </button>
+                    {rel.requested ? (
+                      <button className="follow-btn on" disabled title="Waiting for approval">
+                        Requested
+                      </button>
+                    ) : (
+                      <button className={`follow-btn ${rel.following ? "on" : ""}`} onClick={() => void onFollow()}>
+                        {rel.following ? "Following" : rel.followedBy ? "Follow back" : profile.private ? "Request" : "Follow"}
+                      </button>
+                    )}
                     <button className="block-btn" onClick={() => void onBlock()}>
                       {rel.blocking ? "Unblock" : "Block"}
                     </button>
@@ -128,6 +134,11 @@ export function PublicProfileScreen({
                 ) : null
               }
             />
+
+            {/* Private account, and you're not a follower → their content is hidden. */}
+            {profile.private && !profile.isSelf && !rel?.following && (
+              <p className="profile-private-note">🔒 This account is private. {rel?.requested ? "Your request is pending." : "Follow to see their sets."}</p>
+            )}
 
             {/* This DJ's published sets (G1d) — tap to replay on your decks. */}
             {sets.length > 0 && (

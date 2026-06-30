@@ -14,6 +14,8 @@ export interface AccountUser {
   handle?: string | null;
   displayName?: string | null;
   bio?: string | null;
+  private?: boolean; // unlisted account + follow-approval (own profile only)
+  hidePresence?: boolean; // never expose `online`, even to friends
 }
 export interface Me {
   user: AccountUser | null;
@@ -112,8 +114,14 @@ export async function claimHandle(handle: string): Promise<{ ok: boolean; handle
   return res.ok ? { ok: true, handle: j.handle } : { ok: false, error: j.error };
 }
 
-/** Update the user-owned public profile fields (display name / bio / avatar URL). */
-export async function saveProfile(p: { displayName?: string; bio?: string; avatarUrl?: string | null }): Promise<boolean> {
+/** Update the user-owned public profile fields (display name / bio / avatar URL / privacy). */
+export async function saveProfile(p: {
+  displayName?: string;
+  bio?: string;
+  avatarUrl?: string | null;
+  private?: boolean;
+  hidePresence?: boolean;
+}): Promise<boolean> {
   const res = await fetch("/api/me/profile", {
     method: "PUT",
     credentials: "same-origin",
@@ -134,6 +142,7 @@ export interface Relationship {
   mutual: boolean; // friends
   blocking: boolean; // I blocked them
   blockedBy: boolean; // they blocked me
+  requested: boolean; // I have a pending follow request to their private account
 }
 
 /** Anyone's PUBLIC profile by @handle (no email/connections). Null if no such handle. */
@@ -148,6 +157,7 @@ export interface PublicProfile {
   live: boolean; // broadcasting a public room right now?
   liveListeners: number;
   online: boolean; // any session open (reachable for a friend's jam knock), even if private
+  private: boolean; // unlisted account → follow requires approval; content is follower-only
   isSelf: boolean;
   relationship: Relationship | null; // null when signed out or viewing self
 }
@@ -288,6 +298,25 @@ export async function fetchFriendsOnline(signal?: AbortSignal): Promise<FriendPr
   if (!res.ok) return [];
   return ((await res.json()) as { friends: FriendPresence[] }).friends;
 }
+/** Pending incoming follow requests (to your private account) + the count for a badge. */
+export async function fetchFollowRequests(signal?: AbortSignal): Promise<{ list: PersonCard[]; count: number }> {
+  const res = await fetch("/api/me/follow-requests", { signal, credentials: "same-origin" });
+  if (!res.ok) return { list: [], count: 0 };
+  const j = (await res.json()) as { list?: PersonCard[]; count?: number };
+  return { list: j.list ?? [], count: j.count ?? 0 };
+}
+/** Approve or deny a pending follow request from `handle`. Returns the remaining request count. */
+export async function respondFollowRequest(handle: string, approve: boolean): Promise<number> {
+  const res = await fetch(`/api/follow/${approve ? "approve" : "deny"}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  if (!res.ok) return -1;
+  return ((await res.json()) as { count?: number }).count ?? 0;
+}
+
 /** Push-invite a friend (by @handle) to jam — they get a bell event with a one-tap Join. */
 export async function sendInvite(toHandle: string): Promise<boolean> {
   const res = await fetch("/api/invite", {

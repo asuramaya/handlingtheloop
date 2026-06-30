@@ -19,6 +19,7 @@ import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/pr
 import { DockResizer } from "./DockResizer";
 import { PromptModal } from "./Dialog";
 import { ProfilePublicView } from "./ProfilePublicView";
+import { FollowRequests } from "./social/FollowRequests";
 import { RecordingsPanel } from "./social/RecordingsPanel";
 
 // The own Profile — PUBLIC-FIRST (Option B, docs/social-layer.md → "Surface architecture"):
@@ -119,6 +120,8 @@ export function ProfileScreen({
           </div>
         ) : (
           <div className="profile-body">
+            {/* Private-account approval inbox (renders nothing when empty). */}
+            <FollowRequests />
             {/* HERO — your public card, the SAME render as /@handle (no drift), edited in place. */}
             <ProfilePublicView
               avatar={user?.avatar}
@@ -213,6 +216,8 @@ export function ProfileScreen({
                         <ProfileEditor
                           displayName={user?.displayName ?? ""}
                           bio={user?.bio ?? ""}
+                          isPrivate={!!user?.private}
+                          hidePresence={!!user?.hidePresence}
                           onCancel={() => setEditing(false)}
                           onDone={() => {
                             setEditing(false);
@@ -361,21 +366,27 @@ function HandleEditor({
 function ProfileEditor({
   displayName,
   bio,
+  isPrivate,
+  hidePresence,
   onCancel,
   onDone,
 }: {
   displayName: string;
   bio: string;
+  isPrivate: boolean;
+  hidePresence: boolean;
   onCancel: () => void;
   onDone: () => void;
 }) {
   const [name, setName] = useState(displayName);
   const [bioText, setBioText] = useState(bio);
+  const [priv, setPriv] = useState(isPrivate);
+  const [hidePres, setHidePres] = useState(hidePresence);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true);
-    await saveProfile({ displayName: name, bio: bioText });
+    await saveProfile({ displayName: name, bio: bioText, private: priv, hidePresence: hidePres });
     setSaving(false);
     onDone();
   };
@@ -402,6 +413,18 @@ function ProfileEditor({
           placeholder="A line about you"
           onChange={(e) => setBioText(e.target.value)}
         />
+      </label>
+      <label className="profile-toggle">
+        <input type="checkbox" checked={priv} onChange={(e) => setPriv(e.target.checked)} />
+        <span>
+          <b>Private account</b> — unlisted from search; new followers need your approval; your sets are follower-only.
+        </span>
+      </label>
+      <label className="profile-toggle">
+        <input type="checkbox" checked={hidePres} onChange={(e) => setHidePres(e.target.checked)} />
+        <span>
+          <b>Hide my activity</b> — never show when you're online, even to friends.
+        </span>
       </label>
       <div className="handle-editor-actions">
         <button className="handle-save" disabled={saving} onClick={() => void save()}>

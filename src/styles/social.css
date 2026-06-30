@@ -281,6 +281,35 @@
   color: var(--muted);
   padding: 4px 8px;
 }
+/* privacy toggles in the profile editor */
+.profile-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  cursor: pointer;
+}
+.profile-toggle input {
+  margin-top: 2px;
+  flex: none;
+}
+.profile-toggle b {
+  color: var(--fg);
+  font-weight: 700;
+}
+.profile-private-note {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2, rgba(255, 255, 255, 0.03));
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
 /* Load more */
 .person-more {
   list-style: none;

@@ -1,4 +1,4 @@
-import { barAnchor, barPhase, beatPhase, beatTimeOffset, nearestBeat, smartKeyShift } from "../analysis/analyze";
+import { barAnchor, barPhase, beatPhase, beatTimeOffset, foldTempoOctave, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
@@ -786,9 +786,10 @@ export class AudioEngine {
     const sg = slave.beatgrid;
     const mg = master.beatgrid;
     if (!sg || !mg) return;
-    let target = master.effectiveBpm ?? mg.bpm;
-    while (target / sg.bpm > Math.SQRT2) target /= 2;
-    while (target / sg.bpm < 1 / Math.SQRT2) target *= 2;
+    // Fold the master's BPM into the slave's tempo octave. foldTempoOctave returns null (and we
+    // bail) on a degenerate 0/NaN BPM grid — the raw while-loop here used to hang the thread.
+    const target = foldTempoOctave(master.effectiveBpm ?? mg.bpm, sg.bpm);
+    if (target == null) return;
     this.propagating = true; // this setTempo is the echo — don't let it release sync
     slave.setTempo((target / sg.bpm - 1) * 100);
     this.propagating = false;

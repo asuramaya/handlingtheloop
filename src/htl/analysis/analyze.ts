@@ -398,6 +398,20 @@ export function smartKeyShift(me: KeyInfo, master: KeyInfo, range = 12): number 
   return compat ?? best;
 }
 
+/** Fold `target` BPM into the same tempo octave as `ref` (within ±√2) — the half/double match
+ *  every beatmatch uses (SYNC, the auto-mix glide). Returns the folded BPM, or `null` when either
+ *  input isn't a positive finite number. The null guard is load-bearing: a degenerate 0/NaN BPM
+ *  grid (or a deck stopped at −100% tempo → effectiveBpm 0) would otherwise spin `target/ref`
+ *  forever (Infinity/2 = Infinity, 0×2 = 0) and FREEZE the thread. The iteration caps are a second
+ *  belt — with valid finite inputs the loops settle in ≤ ~10 steps for any real BPM. */
+export function foldTempoOctave(target: number, ref: number): number | null {
+  if (!(Number.isFinite(target) && target > 0 && Number.isFinite(ref) && ref > 0)) return null;
+  let t = target;
+  for (let i = 0; i < 32 && t / ref > Math.SQRT2; i++) t /= 2;
+  for (let i = 0; i < 32 && t / ref < 1 / Math.SQRT2; i++) t *= 2;
+  return t;
+}
+
 /** Legacy single-tempo detector: onset-strength envelope → autocorrelation over
  *  60–180 BPM → best phase offset. Kept only as a fallback for clips too short for
  *  the DP tracker. Produces a uniform grid (no dynamic `beats[]`). */

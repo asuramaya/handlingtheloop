@@ -1,5 +1,5 @@
 import type { AudioEngine, DeckId } from "../audio";
-import { nearestBeat } from "../analysis";
+import { foldTempoOctave, nearestBeat } from "../analysis";
 import type { TrackMeta } from "../library/types";
 import { pickTransition } from "./mixability";
 import type { AutoMixPhase, MixMode, TransitionPlan } from "./types";
@@ -739,10 +739,9 @@ export class AutoMixer {
     const ig = this.deps.engine.deck(idle).beatgrid?.bpm;
     if (!og || !ig) return;
     // Fold the incoming BPM into the outgoing's tempo octave (half/double) — the same rule
-    // the sync slave uses — so the glide is the minimal ≤√2 move, not a 2× lurch.
-    let targetIn = ig;
-    while (targetIn / og > Math.SQRT2) targetIn /= 2;
-    while (targetIn / og < 1 / Math.SQRT2) targetIn *= 2;
+    // the sync slave uses (shared foldTempoOctave, guarded) — minimal ≤√2 move, not a 2× lurch.
+    const targetIn = foldTempoOctave(ig, og);
+    if (targetIn == null) return;
     const eased = p * p * (3 - 2 * p); // smoothstep — gentle at both ends
     const targetBpm = og + (targetIn - og) * eased;
     live.setTempo((targetBpm / og - 1) * 100); // master moves; slave follows automatically

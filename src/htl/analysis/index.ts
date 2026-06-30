@@ -8,6 +8,7 @@ export {
   computePyramid,
   detectBeatgrid,
   detectKey,
+  foldTempoOctave,
   harmonicDistance,
   nearestBeat,
   shiftKey,

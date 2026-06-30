@@ -19,6 +19,7 @@ import {
   beatTimeOffset,
   barAnchor,
   barPhase,
+  foldTempoOctave,
   type KeyInfo,
   type Beatgrid,
 } from "./analyze";
@@ -389,5 +390,57 @@ describe("barPhase", () => {
   it("uniform grid: quarter-bar in → 0.25", () => {
     const g = uniformGridNoBeats();
     expect(barPhase(g, 0.5)).toBeCloseTo(0.25, 6); // 0.5 / 2.0
+  });
+});
+
+// foldTempoOctave — the half/double BPM fold shared by SYNC (matchSlaveTempo) and the auto-mix
+// glide. The null guard is load-bearing: a degenerate 0/NaN BPM grid used to spin the raw
+// while-loop forever and FREEZE the thread (Infinity/2 = Infinity, 0×2 = 0).
+describe("foldTempoOctave", () => {
+  it("identical tempo folds to itself", () => {
+    expect(foldTempoOctave(128, 128)).toBeCloseTo(128, 6);
+  });
+
+  it("folds a double-tempo target DOWN into the reference octave (256 vs 128 → 128)", () => {
+    expect(foldTempoOctave(256, 128)).toBeCloseTo(128, 6);
+  });
+
+  it("folds a half-tempo target UP (64 vs 128 → 128)", () => {
+    expect(foldTempoOctave(64, 128)).toBeCloseTo(128, 6);
+  });
+
+  it("a genuine ≤√2 spread is left alone (140 vs 128 stays 140)", () => {
+    expect(foldTempoOctave(140, 128)).toBeCloseTo(140, 6);
+  });
+
+  it("result always lands in [ref/√2, ref·√2]", () => {
+    for (const t of [60, 75, 90, 128, 174, 200, 33.3]) {
+      const f = foldTempoOctave(t, 128)!;
+      expect(f).toBeGreaterThanOrEqual(128 / Math.SQRT2 - 1e-9);
+      expect(f).toBeLessThanOrEqual(128 * Math.SQRT2 + 1e-9);
+    }
+  });
+
+  it("the exact √2 boundary does not oscillate (returns finite)", () => {
+    const f = foldTempoOctave(128 * Math.SQRT2, 128)!;
+    expect(Number.isFinite(f)).toBe(true);
+  });
+
+  // The hang guards — each of these would spin the old raw while-loop forever.
+  it("returns null on a 0-BPM reference grid (the thread-freeze case)", () => {
+    expect(foldTempoOctave(128, 0)).toBeNull();
+  });
+
+  it("returns null on a 0-BPM target (master stopped at -100% tempo → effectiveBpm 0)", () => {
+    expect(foldTempoOctave(0, 128)).toBeNull();
+  });
+
+  it("returns null on NaN / Infinity / negative inputs", () => {
+    expect(foldTempoOctave(NaN, 128)).toBeNull();
+    expect(foldTempoOctave(128, NaN)).toBeNull();
+    expect(foldTempoOctave(Infinity, 128)).toBeNull();
+    expect(foldTempoOctave(128, Infinity)).toBeNull();
+    expect(foldTempoOctave(-128, 128)).toBeNull();
+    expect(foldTempoOctave(128, -1)).toBeNull();
   });
 });

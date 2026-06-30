@@ -46,6 +46,10 @@ import {
   followUser,
   followersOf,
   followingOf,
+  approveFollowRequest,
+  denyFollowRequest,
+  listFollowRequests,
+  followRequestCount,
   getTopTracks,
   getUserSettings,
   getUserLibrary,
@@ -220,6 +224,12 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     if (rest.endsWith("/sets")) {
       const owner = await userByHandle(env.DB, foldHandle(rest.slice(0, -"/sets".length)));
       if (!owner || !owner.handle) return json(404, { error: "no such handle" });
+      // A PRIVATE account's sets are follower-only (self or someone who already follows them).
+      if (owner.private) {
+        const viewer = await currentUser(env, req);
+        const allowed = viewer && (viewer.id === owner.id || (await relationship(env.DB, viewer.id, owner.id)).following);
+        if (!allowed) return json(200, { sets: [] });
+      }
       await ensureSetsTable(env.DB);
       const rows = await setsByHost(env.DB, owner.id, false); // published only
       return json(200, { sets: rows.map(setCard) });
@@ -256,6 +266,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       live: live.live, // broadcasting a PUBLIC room right now?
       liveListeners: live.listeners,
       online: friendsOrSelf ? online : false, // reachable for a friend's jam knock (friends-only)
+      private: !!u.private, // unlisted account → the client shows "Request" + a private notice
       isSelf,
       relationship: rel, // null when signed out or viewing self
     });
@@ -442,6 +453,30 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       return json(200, { ok: true, relationship: rel, counts });
     }
 
+    // Private-account follow-request inbox: list pending, approve, or deny. All authed (the
+    // owner acting on requests TO them). Approve moves the request into `follows`.
+    case "/api/me/follow-requests": {
+      if (req.method !== "GET") return json(405, { error: "GET only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureGraphTables(env.DB);
+      const [list, count] = await Promise.all([listFollowRequests(env.DB, user.id), followRequestCount(env.DB, user.id)]);
+      return json(200, { list, count });
+    }
+    case "/api/follow/approve":
+    case "/api/follow/deny": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureGraphTables(env.DB);
+      const b = (await req.json().catch(() => ({}))) as { handle?: string };
+      const requester = await userByHandle(env.DB, foldHandle(String(b.handle ?? "")));
+      if (!requester?.handle) return json(404, { error: "no such handle" });
+      if (path === "/api/follow/approve") await approveFollowRequest(env.DB, user.id, requester.id);
+      else await denyFollowRequest(env.DB, user.id, requester.id);
+      return json(200, { ok: true, count: await followRequestCount(env.DB, user.id) });
+    }
+
     // Followers / following lists for a handle (public cards; paginated ?offset=).
     // NOT under /api/u/ — that prefix is the public-profile catch above.
     case "/api/followers":
@@ -455,10 +490,12 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!target || !target.handle) return json(404, { error: "no such handle" });
       const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
       const viewer = await currentUser(env, req);
+      const isOwner = !!viewer && viewer.id === target.id;
+      const vrel = viewer && !isOwner ? await relationship(env.DB, viewer.id, target.id) : null;
       // A blocker hides their graph from the blockee too (mirror the /api/u 404).
-      if (viewer && (await relationship(env.DB, viewer.id, target.id)).blockedBy) {
-        return json(404, { error: "no such handle" });
-      }
+      if (vrel?.blockedBy) return json(404, { error: "no such handle" });
+      // A PRIVATE account's follower/following lists are visible only to itself + its followers.
+      if (target.private && !isOwner && !vrel?.following) return json(403, { error: "this account is private" });
       const limit = 50;
       const list =
         path === "/api/followers"
@@ -657,11 +694,15 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
           displayName?: string;
           bio?: string;
           avatarUrl?: string | null;
+          private?: boolean;
+          hidePresence?: boolean;
         };
-        const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null } = {};
+        const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null; private?: number; hide_presence?: number } = {};
         if (b.displayName !== undefined) patch.display_name = cleanProfile(b.displayName, 48) || null;
         if (b.bio !== undefined) patch.bio = cleanProfile(b.bio, 300) || null;
         if (b.avatarUrl !== undefined) patch.avatar_url = b.avatarUrl === null ? null : sanitizeHttpUrl(b.avatarUrl);
+        if (b.private !== undefined) patch.private = b.private ? 1 : 0;
+        if (b.hidePresence !== undefined) patch.hide_presence = b.hidePresence ? 1 : 0;
         await updateProfile(env.DB, user.id, patch);
         return json(200, { ok: true, ...patch });
       }
@@ -679,6 +720,8 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
           email: user.email,
           name: user.name,
           memberSince: user.created_at,
+          private: !!user.private,
+          hidePresence: !!user.hide_presence,
           ...publicIdentity(user),
         },
         connections,

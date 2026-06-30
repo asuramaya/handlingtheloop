@@ -61,10 +61,12 @@ export async function setPresenceOffline(db: D1Database, userId: string, since: 
 export async function isPresenceOnline(db: D1Database, userId: string): Promise<boolean> {
   await ensurePresenceTables(db);
   const r = await db
-    .prepare("SELECT online, updated_at FROM presence WHERE user_id = ?")
+    .prepare(
+      "SELECT p.online, p.updated_at, u.hide_presence AS hide FROM presence p JOIN users u ON u.id=p.user_id WHERE p.user_id = ?",
+    )
     .bind(userId)
-    .first<{ online: number; updated_at: number }>();
-  return !!r && r.online === 1 && r.updated_at > now() - PRESENCE_TTL_MS;
+    .first<{ online: number; updated_at: number; hide: number }>();
+  return !!r && r.online === 1 && !r.hide && r.updated_at > now() - PRESENCE_TTL_MS;
 }
 
 export interface FriendPresence {
@@ -91,7 +93,7 @@ export async function friendsOnline(db: D1Database, viewerId: string, freshMs = 
        JOIN presence p ON p.user_id = f1.followee_id
        JOIN users u ON u.id = f1.followee_id
        LEFT JOIN rooms r ON r.host_id = u.id AND r.live = 1 AND r.last_seen > ?
-       WHERE f1.follower_id = ? AND p.online = 1 AND p.updated_at > ? AND u.handle IS NOT NULL
+       WHERE f1.follower_id = ? AND p.online = 1 AND p.updated_at > ? AND u.hide_presence = 0 AND u.handle IS NOT NULL
          AND NOT EXISTS (
            SELECT 1 FROM blocks b
            WHERE (b.blocker_id = f1.follower_id AND b.blocked_id = f1.followee_id)

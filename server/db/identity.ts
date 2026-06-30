@@ -87,13 +87,15 @@ export async function setUserHandle(
 export async function updateProfile(
   db: D1Database,
   userId: string,
-  f: { display_name?: string | null; bio?: string | null; avatar_url?: string | null },
+  f: { display_name?: string | null; bio?: string | null; avatar_url?: string | null; private?: number; hide_presence?: number },
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [];
   if (f.display_name !== undefined) (sets.push("display_name=?"), vals.push(f.display_name));
   if (f.bio !== undefined) (sets.push("bio=?"), vals.push(f.bio));
   if (f.avatar_url !== undefined) (sets.push("avatar_url=?"), vals.push(f.avatar_url));
+  if (f.private !== undefined) (sets.push("private=?"), vals.push(f.private));
+  if (f.hide_presence !== undefined) (sets.push("hide_presence=?"), vals.push(f.hide_presence));
   if (!sets.length) return;
   vals.push(userId);
   await db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id=?`).bind(...vals).run();

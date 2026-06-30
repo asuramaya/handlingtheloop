@@ -19,6 +19,13 @@ export async function ensureGraphTables(db: D1Database): Promise<void> {
     )
     .run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id)").run();
+  // Pending follow requests to a PRIVATE account (0021). Approve → moved into follows.
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS follow_requests (requester_id TEXT NOT NULL, target_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (requester_id, target_id))",
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_follow_requests_target ON follow_requests(target_id, created_at)").run();
   graphReady = true;
 }
 
@@ -40,20 +47,82 @@ export async function blockedEither(db: D1Database, a: string, b: string): Promi
 
 export type GraphResult = { ok: true } | { ok: false; reason: string };
 
-/** follower follows followee. Rejects self-follow and either-way blocks. Idempotent. */
-export async function followUser(db: D1Database, followerId: string, followeeId: string): Promise<GraphResult> {
+export type FollowState = "following" | "requested";
+
+/** follower follows followee. Rejects self-follow and either-way blocks. Idempotent. If the
+ *  target is PRIVATE and not already followed, this records a pending follow_request (approval
+ *  queue) instead of an edge, and returns state:"requested". Otherwise it's an instant follow. */
+export async function followUser(
+  db: D1Database,
+  followerId: string,
+  followeeId: string,
+): Promise<{ ok: false; reason: string } | { ok: true; state: FollowState }> {
   if (followerId === followeeId) return { ok: false, reason: "can't follow yourself" };
   if (await blockedEither(db, followerId, followeeId)) return { ok: false, reason: "unavailable" };
+  const already = await db
+    .prepare("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1")
+    .bind(followerId, followeeId)
+    .first();
+  if (already) return { ok: true, state: "following" };
+  const target = await db.prepare("SELECT private FROM users WHERE id=?").bind(followeeId).first<{ private: number | null }>();
+  if (target?.private) {
+    await db
+      .prepare("INSERT OR IGNORE INTO follow_requests (requester_id, target_id, created_at) VALUES (?,?,?)")
+      .bind(followerId, followeeId, now())
+      .run();
+    await addNotification(db, { userId: followeeId, kind: "follow_request", actorId: followerId }).catch(() => {});
+    return { ok: true, state: "requested" };
+  }
   const res = await db
     .prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?,?,?)")
     .bind(followerId, followeeId, now())
     .run();
-  // Notify the followee — but ONLY on a genuinely new edge (changes>0), so a re-affirm of an
-  // existing follow doesn't spam them. Best-effort: a notify failure never fails the follow.
+  // Notify only on a genuinely new edge (changes>0); a notify failure never fails the follow.
   if ((res.meta?.changes ?? 0) > 0) {
     await addNotification(db, { userId: followeeId, kind: "follow", actorId: followerId }).catch(() => {});
   }
-  return { ok: true };
+  return { ok: true, state: "following" };
+}
+
+/** Approve a pending follow request → move it into `follows` + tell the requester. Returns false
+ *  if no such request (already handled / never existed). */
+export async function approveFollowRequest(db: D1Database, ownerId: string, requesterId: string): Promise<boolean> {
+  const has = await db
+    .prepare("SELECT 1 FROM follow_requests WHERE requester_id=? AND target_id=? LIMIT 1")
+    .bind(requesterId, ownerId)
+    .first();
+  if (!has) return false;
+  await db.prepare("DELETE FROM follow_requests WHERE requester_id=? AND target_id=?").bind(requesterId, ownerId).run();
+  await db
+    .prepare("INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at) VALUES (?,?,?)")
+    .bind(requesterId, ownerId, now())
+    .run();
+  await addNotification(db, { userId: requesterId, kind: "follow_accepted", actorId: ownerId }).catch(() => {});
+  return true;
+}
+
+/** Deny / withdraw a pending follow request (no notification — silent). */
+export async function denyFollowRequest(db: D1Database, ownerId: string, requesterId: string): Promise<void> {
+  await db.prepare("DELETE FROM follow_requests WHERE requester_id=? AND target_id=?").bind(requesterId, ownerId).run();
+}
+
+/** Pending incoming follow requests for an account (the approval inbox), enriched. */
+export async function listFollowRequests(db: D1Database, ownerId: string): Promise<PersonCard[]> {
+  const r = await db
+    .prepare(
+      `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
+       FROM follow_requests fr JOIN users u ON u.id = fr.requester_id
+       WHERE fr.target_id=? AND u.handle IS NOT NULL ORDER BY fr.created_at DESC LIMIT 100`,
+    )
+    .bind(ownerId)
+    .all<BaseRow>();
+  return enrich(db, r.results ?? [], ownerId);
+}
+
+/** Count of pending incoming follow requests (drives a badge). */
+export async function followRequestCount(db: D1Database, ownerId: string): Promise<number> {
+  const r = await db.prepare("SELECT COUNT(*) AS n FROM follow_requests WHERE target_id=?").bind(ownerId).first<{ n: number }>();
+  return Number(r?.n ?? 0);
 }
 
 export async function unfollowUser(db: D1Database, followerId: string, followeeId: string): Promise<void> {
@@ -92,16 +161,18 @@ export interface Relationship {
   mutual: boolean; // friends
   blocking: boolean; // viewer blocked target
   blockedBy: boolean; // target blocked viewer
+  requested: boolean; // viewer has a PENDING follow request to a private target
 }
 export async function relationship(db: D1Database, viewerId: string, targetId: string): Promise<Relationship> {
   const one = async (sql: string, ...b: string[]) => !!(await db.prepare(sql).bind(...b).first());
-  const [following, followedBy, blocking, blockedBy] = await Promise.all([
+  const [following, followedBy, blocking, blockedBy, requested] = await Promise.all([
     one("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1", viewerId, targetId),
     one("SELECT 1 FROM follows WHERE follower_id=? AND followee_id=? LIMIT 1", targetId, viewerId),
     one("SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=? LIMIT 1", viewerId, targetId),
     one("SELECT 1 FROM blocks WHERE blocker_id=? AND blocked_id=? LIMIT 1", targetId, viewerId),
+    one("SELECT 1 FROM follow_requests WHERE requester_id=? AND target_id=? LIMIT 1", viewerId, targetId),
   ]);
-  return { following, followedBy, mutual: following && followedBy, blocking, blockedBy };
+  return { following, followedBy, mutual: following && followedBy, blocking, blockedBy, requested };
 }
 
 /** Lean single-query "does follower → followee?" — used on the WS upgrade hot path (the room
@@ -153,7 +224,11 @@ async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promis
     return new Set((r.results ?? []).map((o) => o.x));
   };
   const [online, live, following, followsYou] = await Promise.all([
-    setOf(`SELECT user_id x FROM presence WHERE online=1 AND updated_at>? AND user_id IN (${ph})`, pCutoff),
+    setOf(
+      `SELECT p.user_id x FROM presence p JOIN users u ON u.id=p.user_id
+       WHERE p.online=1 AND p.updated_at>? AND u.hide_presence=0 AND p.user_id IN (${ph})`,
+      pCutoff,
+    ),
     setOf(`SELECT host_id x FROM rooms WHERE live=1 AND last_seen>? AND host_id IN (${ph})`, cutoff),
     viewerId ? setOf(`SELECT followee_id x FROM follows WHERE follower_id=? AND followee_id IN (${ph})`, viewerId) : new Set<string>(),
     viewerId ? setOf(`SELECT follower_id x FROM follows WHERE followee_id=? AND follower_id IN (${ph})`, viewerId) : new Set<string>(),
@@ -238,6 +313,9 @@ export async function searchUsers(db: D1Database, q: string, viewerId = "", limi
       " AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)";
     binds.push(viewerId, viewerId);
   }
+  // PRIVATE accounts are unlisted: only surfaced to themselves or to someone who already follows
+  // them. Anonymous viewer ("") never matches the self/follow exceptions → private fully hidden.
+  binds.push(viewerId, viewerId);
   binds.push(pre, limit, offset); // ORDER prefix-first, then page
   try {
     const r = await db
@@ -247,6 +325,7 @@ export async function searchUsers(db: D1Database, q: string, viewerId = "", limi
          WHERE u.handle IS NOT NULL
            AND (u.handle LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')
            AND u.id != ?${blockClause}
+           AND (u.private = 0 OR u.id = ? OR EXISTS (SELECT 1 FROM follows ff WHERE ff.follower_id = ? AND ff.followee_id = u.id))
          ORDER BY CASE WHEN u.handle LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, u.handle
          LIMIT ? OFFSET ?`,
       )
@@ -275,7 +354,7 @@ export async function suggestedUsers(db: D1Database, viewerId = "", limit = 12):
        FROM follows f1
        JOIN follows f2 ON f2.follower_id = f1.followee_id
        JOIN users u ON u.id = f2.followee_id
-       WHERE f1.follower_id=? AND u.id!=? AND u.handle IS NOT NULL
+       WHERE f1.follower_id=? AND u.id!=? AND u.handle IS NOT NULL AND u.private=0
          AND NOT EXISTS (SELECT 1 FROM follows fe WHERE fe.follower_id=? AND fe.followee_id=u.id)
          AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?)
          AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)
@@ -297,7 +376,7 @@ export async function suggestedUsers(db: D1Database, viewerId = "", limit = 12):
  *  viewer, anyone they already follow, blocks, and a caller-supplied exclude set. */
 async function popularUsers(db: D1Database, viewerId: string, limit: number, exclude = new Set<string | null>()): Promise<PersonCard[]> {
   const binds: (string | number)[] = [];
-  let where = "u.handle IS NOT NULL";
+  let where = "u.handle IS NOT NULL AND u.private=0"; // private accounts are never "suggested"
   if (viewerId) {
     where +=
       " AND u.id!=? AND NOT EXISTS (SELECT 1 FROM follows fe WHERE fe.follower_id=? AND fe.followee_id=u.id)" +

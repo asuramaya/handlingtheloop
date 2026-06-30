@@ -111,7 +111,7 @@ export async function userBySession(db: D1Database, sessionId: string): Promise<
   const row = await db
     .prepare(
       `SELECT u.id, u.google_sub, u.email, u.name, u.avatar, u.created_at,
-              u.handle, u.display_name, u.avatar_url, u.bio, u.status
+              u.handle, u.display_name, u.avatar_url, u.bio, u.status, u.private, u.hide_presence
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > ?`,
     )

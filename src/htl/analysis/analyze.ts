@@ -437,6 +437,50 @@ export function commonPhaseError(phaseSlave: number, phaseMaster: number, fold: 
   return err;
 }
 
+/** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
+ *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —
+ *  so they're converted to plain number arrays here and back in deserializeGrid. Round-trips. */
+export function serializeGrid(g: Beatgrid): string {
+  return JSON.stringify({
+    bpm: g.bpm,
+    firstBeat: g.firstBeat,
+    interval: g.interval,
+    beats: g.beats ? Array.from(g.beats) : undefined,
+    downbeat: g.downbeat,
+    beatsPerBar: g.beatsPerBar,
+    phrases: g.phrases ? Array.from(g.phrases) : undefined,
+    phraseBars: g.phraseBars,
+    firstSound: g.firstSound,
+    lastSound: g.lastSound,
+  });
+}
+
+/** Parse a serialized Beatgrid back (Float32Arrays restored). Returns null on malformed/empty
+ *  input or an implausible grid (no positive bpm) — callers then fall back to deriving it, so a
+ *  corrupt cache entry can never put a bad grid on a deck. */
+export function deserializeGrid(s: string | null | undefined): Beatgrid | null {
+  if (!s) return null;
+  try {
+    const o = JSON.parse(s) as Record<string, unknown>;
+    const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const bpm = num(o.bpm);
+    const firstBeat = num(o.firstBeat);
+    const interval = num(o.interval);
+    if (!(bpm != null && bpm > 0) || firstBeat == null || interval == null) return null;
+    const g: Beatgrid = { bpm, firstBeat, interval };
+    if (Array.isArray(o.beats)) g.beats = Float32Array.from(o.beats as number[]);
+    if (num(o.downbeat) != null) g.downbeat = o.downbeat as number;
+    if (num(o.beatsPerBar) != null) g.beatsPerBar = o.beatsPerBar as number;
+    if (Array.isArray(o.phrases)) g.phrases = Float32Array.from(o.phrases as number[]);
+    if (num(o.phraseBars) != null) g.phraseBars = o.phraseBars as number;
+    if (num(o.firstSound) != null) g.firstSound = o.firstSound as number;
+    if (num(o.lastSound) != null) g.lastSound = o.lastSound as number;
+    return g;
+  } catch {
+    return null;
+  }
+}
+
 /** Legacy single-tempo detector: onset-strength envelope → autocorrelation over
  *  60–180 BPM → best phase offset. Kept only as a fallback for clips too short for
  *  the DP tracker. Produces a uniform grid (no dynamic `beats[]`). */

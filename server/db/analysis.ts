@@ -14,8 +14,9 @@ export interface TrackAnalysisRow {
 /** Contribute/refresh a track's analysis (BPM/key/grid). Idempotent per video. */
 export async function upsertAnalysis(
   db: D1Database,
-  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; version?: number },
+  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; version?: number },
 ): Promise<void> {
+  // The BPM/key summary write — unchanged, so it can NEVER be broken by the grid column.
   await db
     .prepare(
       `INSERT INTO track_analysis (video_id, bpm, music_key, key_name, beat_offset, duration, version, updated_at)
@@ -27,6 +28,17 @@ export async function upsertAnalysis(
     )
     .bind(a.videoId, a.bpm ?? null, a.key ?? null, a.keyName ?? null, a.beatOffset ?? null, a.duration ?? null, a.version ?? 1, now())
     .run();
+  // The full grid is a SEPARATE, self-healing write: if migration 0023 (the `grid` column) hasn't
+  // applied yet, this throws and we swallow it — the summary above is already persisted. Once the
+  // column exists, the grid lands. Skip when no grid is offered so a summary-only contributor
+  // (e.g. the ISRC features path) never nulls a previously-stored grid.
+  if (a.grid != null) {
+    try {
+      await db.prepare(`UPDATE track_analysis SET grid=? WHERE video_id=?`).bind(a.grid, a.videoId).run();
+    } catch {
+      /* grid column not migrated yet — bpm/key already persisted, grid lands after the migration */
+    }
+  }
 }
 
 /** Fetch known analysis (BPM/key) for a batch of videoIds — lets the auto-mixer

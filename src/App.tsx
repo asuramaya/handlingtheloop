@@ -26,6 +26,7 @@ import {
   EQ_MIN_DB,
   EQ_MAX_DB,
   analyzeTrackAsync,
+  serializeGrid,
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
@@ -1607,6 +1608,9 @@ function AppBody() {
             keyName: cached.analysis.key?.name ?? null,
             beatOffset: cached.analysis.beatgrid?.firstBeat ?? null,
             duration: Math.round(cached.buffer.duration),
+            // Contribute the FULL grid too (Metadata B) so a later load can skip re-derivation and
+            // the dataset carries the dynamic beats/downbeat/phrases, not just the summary.
+            grid: cached.analysis.beatgrid ? serializeGrid(cached.analysis.beatgrid) : null,
           });
         }
         // Stems: light the buttons instantly with the DSP split, then (if a neural

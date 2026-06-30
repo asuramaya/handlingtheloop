@@ -136,6 +136,7 @@ export async function postAnalysis(a: {
   keyName?: string | null;
   beatOffset?: number | null;
   duration?: number | null;
+  grid?: string | null; // full serialized beatgrid (serializeGrid) — the cache-first/re-derivation seam
 }): Promise<void> {
   if (postedAnalysis.has(a.videoId)) return; // already contributed this session
   postedAnalysis.add(a.videoId);

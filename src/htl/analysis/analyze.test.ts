@@ -21,8 +21,10 @@ import {
   barPhase,
   foldTempoOctave,
   commonPhaseError,
-  type KeyInfo,
+  serializeGrid,
+  deserializeGrid,
   type Beatgrid,
+  type KeyInfo,
 } from "./analyze";
 
 // --- helpers ---------------------------------------------------------------
@@ -497,5 +499,58 @@ describe("commonPhaseError", () => {
 
   it("result always lands in [−0.5, 0.5)", () => {
     for (const f of [0.25, 0.5, 1, 2, 4]) for (let i = 0; i < 20; i++) for (let j = 0; j < 20; j++) expect(wrap(commonPhaseError(i / 20, j / 20, f))).toBe(true);
+  });
+});
+
+// serializeGrid / deserializeGrid — the analysis-cache codec. The crux: beats/phrases are
+// Float32Arrays, which JSON can't round-trip natively, and a corrupt entry must NEVER yield a
+// bad grid (→ null, caller re-derives).
+describe("grid codec (serialize/deserialize)", () => {
+  const full: Beatgrid = {
+    bpm: 128.04,
+    firstBeat: 0.123,
+    interval: 0.46875,
+    beats: new Float32Array([0.123, 0.59, 1.06, 1.53]),
+    downbeat: 0,
+    beatsPerBar: 4,
+    phrases: new Float32Array([0.123, 30.5]),
+    phraseBars: 16,
+    firstSound: 0.1,
+    lastSound: 200.4,
+  };
+
+  it("round-trips a full dynamic grid (Float32Arrays restored as Float32Arrays)", () => {
+    const g = deserializeGrid(serializeGrid(full))!;
+    expect(g.bpm).toBeCloseTo(full.bpm, 4);
+    expect(g.firstBeat).toBeCloseTo(full.firstBeat, 6);
+    expect(g.interval).toBeCloseTo(full.interval, 6);
+    expect(g.beats).toBeInstanceOf(Float32Array);
+    expect(Array.from(g.beats!)).toEqual(Array.from(full.beats!).map((x) => Math.fround(x)));
+    expect(g.downbeat).toBe(0);
+    expect(g.beatsPerBar).toBe(4);
+    expect(g.phrases).toBeInstanceOf(Float32Array);
+    expect(g.phraseBars).toBe(16);
+    expect(g.firstSound).toBeCloseTo(0.1, 6);
+    expect(g.lastSound).toBeCloseTo(200.4, 4);
+  });
+
+  it("round-trips a uniform grid with no beats[]/phrases (optional fields stay absent)", () => {
+    const uni: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5 };
+    const g = deserializeGrid(serializeGrid(uni))!;
+    expect(g.bpm).toBe(120);
+    expect(g.beats).toBeUndefined();
+    expect(g.phrases).toBeUndefined();
+    expect(g.downbeat).toBeUndefined();
+  });
+
+  it("returns null on empty / malformed / non-grid input (caller re-derives — never a bad grid)", () => {
+    expect(deserializeGrid(null)).toBeNull();
+    expect(deserializeGrid(undefined)).toBeNull();
+    expect(deserializeGrid("")).toBeNull();
+    expect(deserializeGrid("not json{")).toBeNull();
+    expect(deserializeGrid("[1,2,3]")).toBeNull(); // not an object with bpm
+    expect(deserializeGrid(JSON.stringify({ firstBeat: 0, interval: 0.5 }))).toBeNull(); // no bpm
+    expect(deserializeGrid(JSON.stringify({ bpm: 0, firstBeat: 0, interval: 0.5 }))).toBeNull(); // bpm not positive
+    expect(deserializeGrid(JSON.stringify({ bpm: NaN, firstBeat: 0, interval: 0.5 }))).toBeNull();
   });
 });

@@ -161,6 +161,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
         keyName?: string;
         beatOffset?: number;
         duration?: number;
+        grid?: string;
       };
       if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
       // This crowdsourced data is later published to a public HF dataset, so clamp
@@ -175,6 +176,9 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             keyName: b.keyName != null ? cleanText(b.keyName, 32) : null,
             beatOffset: clampNum(b.beatOffset, -600, 600),
             duration: clampNum(b.duration, 0, 86_400),
+            // Full serialized beatgrid — bounded (anonymous, HF-bound). A ~10-min track's grid is
+            // a few KB; 256 KB is a generous ceiling that rejects any absurd/oversized payload.
+            grid: typeof b.grid === "string" && b.grid.length > 0 && b.grid.length <= 262_144 ? b.grid : null,
           }).catch(() => {}),
         );
       }

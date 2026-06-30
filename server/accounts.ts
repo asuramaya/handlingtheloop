@@ -283,14 +283,26 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     if (!env.AUDIO) return new Response(null, { status: 404 });
     const uid = decodeURIComponent(path.slice("/api/avatar/".length)).replace(/[^\w-]/g, "");
     if (!uid) return new Response(null, { status: 404 });
+    // Serve THROUGH the Cloudflare edge cache (Cache API), not straight from the Worker. Two wins:
+    // R2 isn't hit on every view, AND the CSAM Scanning Tool — which only inspects CACHE-served
+    // images — now actually sees every avatar (a Worker response is otherwise cf-cache DYNAMIC).
+    // The ?v=<ts> in the avatar_url makes each new upload a distinct key → re-fetched + re-scanned.
+    const edge = (globalThis as { caches?: { default?: { match(r: Request): Promise<Response | undefined>; put(r: Request, resp: Response): Promise<void> } } }).caches?.default;
+    const cacheKey = new Request(url.toString());
+    if (edge) {
+      const hit = await edge.match(cacheKey);
+      if (hit) return hit;
+    }
     const obj = await env.AUDIO.get(`avatars/${uid}`);
     if (!obj) return new Response(null, { status: 404 });
     const buf = await obj.arrayBuffer();
     const ct = sniffImage(new Uint8Array(buf.slice(0, 12))) ?? "application/octet-stream";
-    return new Response(buf, {
+    const resp = new Response(buf, {
       status: 200,
       headers: { "content-type": ct, "x-content-type-options": "nosniff", "cache-control": "public, max-age=600" },
     });
+    if (edge) await edge.put(cacheKey, resp.clone());
+    return resp;
   }
 
   // A recorded set by id (G1): GET the card / `?log=1` recipe blob (G1c replay), or the

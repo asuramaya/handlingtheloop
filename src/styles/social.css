@@ -300,6 +300,33 @@
   color: var(--fg);
   font-weight: 700;
 }
+.avatar-upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.avatar-upload-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2, rgba(255, 255, 255, 0.04));
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.avatar-upload-btn:hover {
+  border-color: var(--accent, #6cf);
+}
+.avatar-upload-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+.avatar-upload-err {
+  margin: 4px 0 0;
+  color: #ff6b6b;
+  font-size: 12px;
+}
 .profile-private-note {
   margin: 10px 0;
   padding: 12px;

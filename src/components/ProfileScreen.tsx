@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 import {
   type Me,
   type Profile,
@@ -8,6 +8,7 @@ import {
   fetchMe,
   fetchProfile,
   saveProfile,
+  uploadAvatar,
   startGoogleSignIn,
   startSpotifyConnect,
   startTidalConnect,
@@ -383,6 +384,8 @@ function ProfileEditor({
   const [priv, setPriv] = useState(isPrivate);
   const [hidePres, setHidePres] = useState(hidePresence);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
 
   const save = async () => {
     setSaving(true);
@@ -391,8 +394,35 @@ function ProfileEditor({
     onDone();
   };
 
+  const onPickAvatar = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    if (file.size > 2_000_000) {
+      setUploadErr("Image must be under 2 MB.");
+      return;
+    }
+    setUploadErr(null);
+    setUploading(true);
+    const r = await uploadAvatar(file);
+    setUploading(false);
+    if (r.ok) onDone();
+    else setUploadErr(r.error || "Upload failed.");
+  };
+
   return (
     <div className="handle-editor profile-editor">
+      <label className="profile-field">
+        <span className="profile-field-label">Photo</span>
+        <span className="avatar-upload">
+          <label className="avatar-upload-btn">
+            {uploading ? "Uploading…" : "Upload photo"}
+            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={onPickAvatar} hidden disabled={uploading} />
+          </label>
+          <span className="avatar-upload-hint">JPG/PNG/GIF/WebP, ≤2 MB</span>
+        </span>
+      </label>
+      {uploadErr && <p className="avatar-upload-err">{uploadErr}</p>}
       <label className="profile-field">
         <span className="profile-field-label">Display name</span>
         <input

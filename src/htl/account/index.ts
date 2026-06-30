@@ -131,6 +131,19 @@ export async function saveProfile(p: {
   return res.ok;
 }
 
+/** Upload a new avatar image (jpg/png/gif/webp, ≤2 MB). Stored in R2, served from our origin —
+ *  returns the new avatar_url. The server validates by magic bytes, not the content-type. */
+export async function uploadAvatar(file: Blob): Promise<{ ok: boolean; avatarUrl?: string; error?: string }> {
+  const res = await fetch("/api/me/avatar", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  const j = (await res.json().catch(() => ({}))) as { avatarUrl?: string; error?: string };
+  return res.ok ? { ok: true, avatarUrl: j.avatarUrl } : { ok: false, error: j.error };
+}
+
 // --- Social graph (follow / block) -----------------------------------------
 export interface FollowCounts {
   followers: number;

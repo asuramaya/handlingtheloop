@@ -80,7 +80,7 @@ import {
   upsertGoogleUser,
   userBySession,
 } from "./db";
-import { type RateLimiter, allow, cleanProfile, cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
+import { type RateLimiter, allow, cleanProfile, cleanText, clientIp, foldHandle, sniffImage, validateHandle } from "./security";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -269,6 +269,23 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       private: !!u.private, // unlisted account → the client shows "Request" + a private notice
       isSelf,
       relationship: rel, // null when signed out or viewing self
+    });
+  }
+
+  // PUBLIC avatar serve (R2-backed, upload-only). Re-sniffs the bytes and serves by the REAL
+  // content-type with nosniff, so a polyglot can never execute; same-origin, so viewing a profile
+  // never leaks the viewer's IP to a third-party host (the whole point of upload-only avatars).
+  if (path.startsWith("/api/avatar/")) {
+    if (!env.AUDIO) return new Response(null, { status: 404 });
+    const uid = decodeURIComponent(path.slice("/api/avatar/".length)).replace(/[^\w-]/g, "");
+    if (!uid) return new Response(null, { status: 404 });
+    const obj = await env.AUDIO.get(`avatars/${uid}`);
+    if (!obj) return new Response(null, { status: 404 });
+    const buf = await obj.arrayBuffer();
+    const ct = sniffImage(new Uint8Array(buf.slice(0, 12))) ?? "application/octet-stream";
+    return new Response(buf, {
+      status: 200,
+      headers: { "content-type": ct, "x-content-type-options": "nosniff", "cache-control": "public, max-age=600" },
     });
   }
 
@@ -700,7 +717,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null; private?: number; hide_presence?: number } = {};
         if (b.displayName !== undefined) patch.display_name = cleanProfile(b.displayName, 48) || null;
         if (b.bio !== undefined) patch.bio = cleanProfile(b.bio, 300) || null;
-        if (b.avatarUrl !== undefined) patch.avatar_url = b.avatarUrl === null ? null : sanitizeHttpUrl(b.avatarUrl);
+        if (b.avatarUrl === null) patch.avatar_url = null; // avatars are upload-only (R2) — PUT can only CLEAR
         if (b.private !== undefined) patch.private = b.private ? 1 : 0;
         if (b.hidePresence !== undefined) patch.hide_presence = b.hidePresence ? 1 : 0;
         await updateProfile(env.DB, user.id, patch);
@@ -728,6 +745,25 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         topTracks,
         counts,
       });
+    }
+
+    // Avatar UPLOAD (R2). Raw image bytes in the body; we validate by magic bytes (not the
+    // client content-type), cap at 2 MB, store under avatars/<uid>, and point avatar_url at our
+    // own serve route. No external URLs → no viewer-IP leak, and only real images are stored.
+    case "/api/me/avatar": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      if (!env.AUDIO) return json(503, { error: "storage unavailable" });
+      if (!(await allow(env.RL_WRITE, `grw:${user.id}`))) return json(429, { error: "slow down" });
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength === 0 || buf.byteLength > 2_000_000) return json(400, { error: "image must be 1 byte–2 MB" });
+      const ct = sniffImage(new Uint8Array(buf.slice(0, 12)));
+      if (!ct) return json(400, { error: "not a supported image (jpg/png/gif/webp)" });
+      await env.AUDIO.put(`avatars/${user.id}`, buf, { httpMetadata: { contentType: ct } });
+      const avatarUrl = `/api/avatar/${user.id}?v=${Date.now()}`; // ?v busts the client cache on change
+      await updateProfile(env.DB, user.id, { avatar_url: avatarUrl });
+      return json(200, { ok: true, avatarUrl });
     }
 
     // Record one play of a track by the signed-in user (feeds the profile's top songs).

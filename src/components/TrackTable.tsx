@@ -1,8 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TrackMeta } from "@htl/library";
-import { cacheState } from "@htl/media";
+import { analysisState, cacheState } from "@htl/media";
 import { fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
+import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
 import { useColumnLayout } from "./lib/useColumnLayout";
 import {
@@ -114,6 +115,24 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   const byId = useMemo(() => new Map(tracks.map((t) => [t.videoId, t])), [tracks]);
   const canFile = !!onAddToPlaylist || !!onCreatePlaylistWith;
 
+  // Fill blank bpm/key from the pooled `track_analysis` (the crowdsourced metadata lane) so a
+  // track the user hasn't loaded this session still shows its bpm/key at a glance — and so sorting
+  // by bpm/key works across the whole list. Non-mutating: enriches the DISPLAY copy only; the deck
+  // load path still owns writing analysis into the persistent collection for the track playing.
+  const videoIds = useMemo(() => tracks.map((t) => t.videoId), [tracks]);
+  const analysisVer = useAnalysisStatus(videoIds);
+  const rows = useMemo(() => {
+    void analysisVer; // recompute when pooled analysis lands
+    return tracks.map((t) => {
+      if (t.bpm != null && t.key != null) return t;
+      const a = analysisState(t.videoId);
+      if (!a) return t;
+      const bpm = t.bpm ?? a.bpm;
+      const key = t.key ?? a.key;
+      return bpm === t.bpm && key === t.key ? t : { ...t, bpm, key };
+    });
+  }, [tracks, analysisVer]);
+
   // The rows as currently ordered + filtered. In SEARCH mode the field is a submit box,
   // not a live filter, so rows pass through as provided. Otherwise the filter (title /
   // artist substring) runs first; "index" keeps source order (reversed when descending),
@@ -124,8 +143,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // No live filter in search mode (the field submits a query) nor in reorder mode (the
     // Queue is a curated order — filtering would misalign the drag indices into it).
     let filtered = searchMode || onReorder || !q
-      ? tracks
-      : tracks.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q));
+      ? rows
+      : rows.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q));
     // Cache-state chips (Library / Community): narrow to pooled and/or stemmed tracks.
     // Both on ⇒ require both. Read live from the shared manifest; cacheVer forces the
     // recompute once it lands. Never applies to the reorderable queue (indices must hold).
@@ -137,7 +156,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     }
     if (onReorder || sortKey === "index") return sortDir === 1 || onReorder ? filtered : [...filtered].reverse();
     return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
-  }, [tracks, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
+  }, [rows, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
 
   // ----- Row windowing (only render the visible slice of a large list) -----
   // Reorder lists (the queue) are small and their drag math wants every index present, so

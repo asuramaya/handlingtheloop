@@ -16,6 +16,7 @@ import {
   listTakedowns,
   listUsers,
   deleteUser,
+  setAccountStatus,
   ensureReportsTable,
   listReports,
   resolveReport,
@@ -251,6 +252,13 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
     await deleteUser(env.DB, b.userId);
     return json(200, { ok: true });
   }
+  if (req.method === "POST" && p === "/api/user/status") {
+    const b = (await req.json().catch(() => ({}))) as { userId?: string; status?: string };
+    const status = b.status === "banned" || b.status === "suspended" || b.status === "active" ? b.status : null;
+    if (!b.userId || !status) return json(400, { error: "missing userId/status" });
+    await setAccountStatus(env.DB, b.userId, status);
+    return json(200, { ok: true });
+  }
   return json(404, { error: "not found" });
 }
 
@@ -341,8 +349,9 @@ async function resolveR(id){const r=await api('/api/report/resolve',{method:'POS
 async function loadUsers(){const {users}=await api('/api/users');const tb=$('#utbody');clear(tb);
   if(!users.length){tb.appendChild(emptyRow('No accounts.'));return;}
   for(const u of users){const tr=document.createElement('tr');tr.appendChild(cell(u.email||'—'));tr.appendChild(cell(u.name||''));tr.appendChild(cell(u.providers||'','muted'));tr.appendChild(cell(fmt(u.last_login),'muted'));
-    const tda=document.createElement('td');tda.appendChild(btn('Delete','act danger',()=>delUser(u.id,u.email||u.id)));tr.appendChild(tda);tb.appendChild(tr);}}
+    const tda=document.createElement('td');tda.appendChild(btn('Ban','act danger',()=>setStatus(u.id,'banned',u.email||u.id)));tda.appendChild(btn('Unban','act',()=>setStatus(u.id,'active',u.email||u.id)));tda.appendChild(btn('Delete','act danger',()=>delUser(u.id,u.email||u.id)));tr.appendChild(tda);tb.appendChild(tr);}}
 async function delUser(id,label){if(!confirm('Delete account '+label+'? Removes their sessions, connections and syncs. Cannot be undone.'))return;const r=await api('/api/user/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:id})});if(r.ok){alert('Deleted');loadUsers();}else alert('Failed: '+(r.error||''));}
+async function setStatus(id,status,label){if(status==='banned'&&!confirm('Ban '+label+'? They are locked out everywhere and their sessions are dropped.'))return;const r=await api('/api/user/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:id,status})});if(r.ok){alert(status==='banned'?'Banned':'Reactivated');}else alert('Failed: '+(r.error||''));}
 function parseId(s){s=(s||'').trim();if(/^[\\w-]{11}$/.test(s))return s;try{const u=new URL(s);if(u.hostname==='youtu.be')return u.pathname.slice(1,12);const v=u.searchParams.get('v');if(v)return v;const m=u.pathname.match(/\\/(?:shorts|embed|v|live)\\/([\\w-]{11})/);if(m)return m[1];}catch(e){}return null;}
 const fmtMB=b=>(b/1048576).toFixed(1)+' MB';
 async function loadStorage(){$('#storageout').textContent='Loading…';const s=await api('/api/storage');const tot=s.audio.bytes+s.meta.bytes+s.stems.bytes;

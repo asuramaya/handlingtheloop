@@ -48,6 +48,19 @@ export async function deleteUser(db: D1Database, userId: string): Promise<void> 
   await purgeAccount(db, userId);
 }
 
+/** Set an account's moderation status. 'banned'/'suspended' → currentUser() treats them as
+ *  signed-out everywhere (no follow/post/room/invite); 'active' restores. A ban also drops their
+ *  live sessions so the lock-out is immediate, not next-request. (0021) */
+export async function setAccountStatus(db: D1Database, userId: string, status: "active" | "suspended" | "banned"): Promise<void> {
+  try {
+    await db.prepare("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'").run();
+  } catch {
+    /* column exists */
+  }
+  await db.prepare("UPDATE users SET status = ? WHERE id = ?").bind(status, userId).run();
+  if (status !== "active") await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+}
+
 // NOTE: the YouTube *streaming cookie* path (the account-grade credential) was
 // REMOVED ENTIRELY (2026-06-22) — client paste UI, client store, the Worker's
 // x-htl-yt-cookie accept, and the server-side use are all gone. The residential

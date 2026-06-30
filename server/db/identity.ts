@@ -10,6 +10,10 @@ const IDENTITY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["avatar_url", "TEXT"],
   ["bio", "TEXT"],
   ["handle_set_at", "INTEGER"],
+  // 0021 — privacy + moderation
+  ["private", "INTEGER NOT NULL DEFAULT 0"],
+  ["hide_presence", "INTEGER NOT NULL DEFAULT 0"],
+  ["status", "TEXT NOT NULL DEFAULT 'active'"],
 ];
 
 /** Add the 0012 identity columns + unique index to an older/local DB that predates

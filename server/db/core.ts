@@ -51,6 +51,10 @@ export interface User {
   display_name?: string | null; // user-owned public name — overrides `name`
   avatar_url?: string | null; // user-owned public avatar — overrides `avatar`
   bio?: string | null; // user-owned public bio
+  // Privacy + moderation (migration 0021). Optional so pre-0021 code paths still build.
+  private?: number | null; // 1 = unlisted from discovery + follow-approval required
+  hide_presence?: number | null; // 1 = never expose `online`, even to mutuals
+  status?: string | null; // 'active' | 'suspended' | 'banned'
 }
 
 export interface GoogleProfile {
@@ -107,7 +111,7 @@ export async function userBySession(db: D1Database, sessionId: string): Promise<
   const row = await db
     .prepare(
       `SELECT u.id, u.google_sub, u.email, u.name, u.avatar, u.created_at,
-              u.handle, u.display_name, u.avatar_url, u.bio
+              u.handle, u.display_name, u.avatar_url, u.bio, u.status
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > ?`,
     )

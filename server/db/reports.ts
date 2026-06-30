@@ -8,6 +8,7 @@ export interface Report {
   room: string | null;
   target_dev: string | null;
   target_text: string | null;
+  target_user: string | null; // the reported ACCOUNT id (0021) — first-class, not free-text
   reporter: string;
   reason: string | null;
   ts: number;
@@ -22,6 +23,11 @@ export async function ensureReportsTable(db: D1Database): Promise<void> {
       "CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, room TEXT, target_dev TEXT, target_text TEXT, reporter TEXT NOT NULL, reason TEXT, ts INTEGER NOT NULL, resolved INTEGER NOT NULL DEFAULT 0, resolved_by TEXT, resolved_at INTEGER)",
     )
     .run();
+  try {
+    await db.prepare("ALTER TABLE reports ADD COLUMN target_user TEXT").run(); // 0021 — older DBs
+  } catch {
+    /* column already exists */
+  }
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_reports_open ON reports (resolved, ts)").run();
 }
 
@@ -33,11 +39,11 @@ export async function recentReportCount(db: D1Database, reporter: string, sinceM
 
 export async function fileReport(
   db: D1Database,
-  r: { kind: string; room: string | null; targetDev: string | null; targetText: string | null; reporter: string; reason: string | null },
+  r: { kind: string; room: string | null; targetDev: string | null; targetText: string | null; targetUser?: string | null; reporter: string; reason: string | null },
 ): Promise<void> {
   await db
-    .prepare("INSERT INTO reports (kind, room, target_dev, target_text, reporter, reason, ts) VALUES (?,?,?,?,?,?,?)")
-    .bind(r.kind, r.room, r.targetDev, r.targetText, r.reporter, r.reason, now())
+    .prepare("INSERT INTO reports (kind, room, target_dev, target_text, target_user, reporter, reason, ts) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(r.kind, r.room, r.targetDev, r.targetText, r.targetUser ?? null, r.reporter, r.reason, now())
     .run();
 }
 

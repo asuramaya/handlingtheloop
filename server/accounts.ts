@@ -125,7 +125,11 @@ export interface AccountEnv {
 async function currentUser(env: AccountEnv, req: Request) {
   if (!env.DB) return null;
   const sid = readSessionId(req);
-  return sid ? userBySession(env.DB, sid) : null;
+  const u = sid ? await userBySession(env.DB, sid) : null;
+  // A suspended/banned account is treated as signed-out everywhere — no follow, post, room,
+  // invite, or profile action. (Read-only public browsing as anonymous still works.)
+  if (u && u.status && u.status !== "active") return null;
+  return u;
 }
 
 /** The PUBLIC face of an account: the user-owned handle/display fields, falling
@@ -612,7 +616,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/report": {
       if (req.method !== "POST") return json(405, { error: "POST only" });
       await ensureReportsTable(env.DB);
-      const b = (await req.json().catch(() => ({}))) as { kind?: string; room?: string; dev?: string; text?: string; reason?: string };
+      const b = (await req.json().catch(() => ({}))) as { kind?: string; room?: string; dev?: string; text?: string; reason?: string; handle?: string };
       const kind = b.kind === "room" || b.kind === "chat" || b.kind === "user" ? b.kind : null;
       if (!kind) return json(400, { error: "bad report kind" });
       const user = await currentUser(env, req);
@@ -620,11 +624,18 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if ((await recentReportCount(env.DB, reporter, Date.now() - 3_600_000)) >= 20) {
         return json(429, { error: "too many reports — try again later" });
       }
+      // For a user report, resolve the @handle to the account id so a moderator can act on it.
+      let targetUser: string | null = null;
+      if (b.handle) {
+        await ensureIdentityColumns(env.DB);
+        targetUser = (await userByHandle(env.DB, foldHandle(b.handle)))?.id ?? null;
+      }
       await fileReport(env.DB, {
         kind,
         room: cleanText(b.room ?? "", 32) || null,
         targetDev: cleanText(b.dev ?? "", 64) || null,
         targetText: cleanText(b.text ?? "", 300) || null,
+        targetUser,
         reporter,
         reason: cleanText(b.reason ?? "", 200) || null,
       });

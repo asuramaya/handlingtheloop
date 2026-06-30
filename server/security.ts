@@ -66,9 +66,18 @@ export function sanitizeHttpUrl(s: unknown, maxLen = 400): string | null {
   }
 }
 
-/** Stored free-text (titles/artists): strip control chars, collapse, clamp length. */
+/** Identity/presentation text (display name, bio, room/set title) — cleanText PLUS the slur
+ *  blocklist mask, so harassment/doxx slurs don't render verbatim in public search/cards. */
+export function cleanProfile(s: unknown, maxLen: number): string {
+  return cleanChat(cleanText(s, maxLen));
+}
+
+/** Stored free-text (titles/artists): NFKC-normalize, strip control + zero-width/bidi chars,
+ *  collapse, clamp. NFKC + bidi-strip kill homoglyph/RTL display spoofing in names. */
 export function cleanText(s: unknown, maxLen: number): string {
   return String(s ?? "")
+    .normalize("NFKC")
+    .replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, "")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -131,7 +140,26 @@ export function validateHandle(raw: unknown): HandleResult {
   if (!/^[A-Za-z0-9_]+$/.test(handle)) return { ok: false, reason: "letters, numbers and _ only" };
   const folded = foldHandle(handle);
   if (RESERVED_HANDLES.has(folded)) return { ok: false, reason: "that handle is reserved" };
+  if (handleHasSlur(folded)) return { ok: false, reason: "that handle isn't allowed" };
   return { ok: true, handle, folded };
+}
+
+// Slurs unambiguous enough to match as a SUBSTRING of a handle (no innocent word contains them),
+// so "niggerbot"/"faggot69" are caught. Ambiguous terms (rape/coon/spic/cunt → grape/raccoon/
+// spice/scunthorpe) are matched whole-token-ish instead, to dodge the Scunthorpe problem.
+const HARD_SLURS = ["nigger", "nigga", "faggot", "kike", "tranny", "wetback", "chink"];
+
+/** Does a single token (handle/username) carry a slur? Two folds, because they catch different
+ *  evasions: the LEET fold (n1gg3r→nigger, f4gg0t→faggot) and a RAW letters-only strip
+ *  (rapist1→rapist, where leet would wrongly map the digit). Substring for the hard set,
+ *  whole-token (+plural) for the ambiguous rest so the Scunthorpe problem stays avoided. */
+export function handleHasSlur(token: string): boolean {
+  const leet = foldToken(token); // leetspeak un-substituted
+  const raw = token.toLowerCase().replace(/[^a-z]/g, ""); // digits/symbols dropped, no leet
+  if (!leet && !raw) return false;
+  if (HARD_SLURS.some((s) => leet.includes(s) || raw.includes(s))) return true;
+  const hit = (w: string) => !!w && (CHAT_BLOCKLIST.has(w) || CHAT_BLOCKLIST.has(w.replace(/s$/, "")));
+  return hit(leet) || hit(raw);
 }
 
 // Chat slur/profanity blocklist (L3). Severe terms only — masked, not dropped, so a line

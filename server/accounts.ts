@@ -76,7 +76,7 @@ import {
   upsertGoogleUser,
   userBySession,
 } from "./db";
-import { type RateLimiter, allow, cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
+import { type RateLimiter, allow, cleanProfile, cleanText, clientIp, foldHandle, sanitizeHttpUrl, validateHandle } from "./security";
 import {
   SESSION_TTL_MS,
   clearPkceCookie,
@@ -292,7 +292,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       }
       if (req.method === "POST" && action === "rename") {
         const b = (await req.json().catch(() => ({}))) as { title?: string };
-        await setSetTitle(env.DB, id, viewer.id, cleanText(b.title ?? "", 120) || null);
+        await setSetTitle(env.DB, id, viewer.id, cleanProfile(b.title ?? "", 120) || null);
         return json(200, { ok: true });
       }
       if (req.method === "POST" && action === "trim") {
@@ -531,8 +531,8 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
         /* DO unreachable → 0 (never trust the client) */
       }
       await announceRoom(env.DB, user.id, {
-        title: cleanText(b.title ?? "", 80) || null,
-        genre: cleanText(b.genre ?? "", 32) || null,
+        title: cleanProfile(b.title ?? "", 80) || null,
+        genre: cleanProfile(b.genre ?? "", 32) || null,
         listeners: Math.max(0, Math.min(1_000_000, listeners)),
         npTitle: cleanText(b.nowPlaying?.title ?? "", 200) || null,
         npArtist: cleanText(b.nowPlaying?.artist ?? "", 120) || null,
@@ -645,8 +645,8 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
           avatarUrl?: string | null;
         };
         const patch: { display_name?: string | null; bio?: string | null; avatar_url?: string | null } = {};
-        if (b.displayName !== undefined) patch.display_name = cleanText(b.displayName, 48) || null;
-        if (b.bio !== undefined) patch.bio = cleanText(b.bio, 300) || null;
+        if (b.displayName !== undefined) patch.display_name = cleanProfile(b.displayName, 48) || null;
+        if (b.bio !== undefined) patch.bio = cleanProfile(b.bio, 300) || null;
         if (b.avatarUrl !== undefined) patch.avatar_url = b.avatarUrl === null ? null : sanitizeHttpUrl(b.avatarUrl);
         await updateProfile(env.DB, user.id, patch);
         return json(200, { ok: true, ...patch });

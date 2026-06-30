@@ -53,6 +53,12 @@ export async function purgeAccount(db: D1Database, userId: string): Promise<{ r2
   await tryRun(db, "DELETE FROM sets WHERE host_id = ?", userId);
   // Reports the user FILED (privacy). Reports ABOUT them are moderation history → kept.
   await tryRun(db, "DELETE FROM reports WHERE reporter = ?", userId);
+  // Notifications: their own feed + read cursor, AND any event where THEY are the actor (else the
+  // deleted user lingers as a ghost actor in other people's bells). Presence + pending jam grants.
+  await tryRun(db, "DELETE FROM notifications WHERE user_id = ? OR actor_id = ?", userId, userId);
+  await tryRun(db, "DELETE FROM notif_seen WHERE user_id = ?", userId);
+  await tryRun(db, "DELETE FROM presence WHERE user_id = ?", userId);
+  await tryRun(db, "DELETE FROM session_invites WHERE host_id = ? OR guest_id = ?", userId, userId);
   // Shared contributions: keep the content, drop the attribution.
   await tryRun(db, "UPDATE lyrics SET contributor = NULL WHERE contributor = ?", userId);
 

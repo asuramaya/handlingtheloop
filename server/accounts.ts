@@ -64,6 +64,7 @@ import {
   friendsOnline,
   isPresenceOnline,
   handleTaken,
+  isHandleReserved,
   relationship,
   searchUsers,
   suggestedUsers,
@@ -414,7 +415,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       const v = validateHandle(url.searchParams.get("h"));
       if (!v.ok) return json(200, { available: false, reason: v.reason });
       const taken = await handleTaken(env.DB, v.folded, user.id);
-      return json(200, { available: !taken, handle: v.handle, reason: taken ? "taken" : undefined });
+      if (taken) return json(200, { available: false, handle: v.handle, reason: "taken" });
+      if (await isHandleReserved(env.DB, v.folded, user.id)) {
+        return json(200, { available: false, handle: v.handle, reason: "that handle was recently in use" });
+      }
+      return json(200, { available: true, handle: v.handle });
     }
 
     // Claim (or rename) the signed-in user's @handle.
@@ -429,7 +434,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       // No-op rename to the same handle the user already holds — succeed quietly.
       if (user.handle && foldHandle(user.handle) === v.folded) return json(200, { handle: user.handle });
       const res = await setUserHandle(env.DB, user.id, v.handle, v.folded);
-      if (!res.ok) return json(409, { error: res.reason === "taken" ? "that handle is taken" : res.reason });
+      if (!res.ok) {
+        const msg = res.reason === "taken" ? "that handle is taken" : res.reason === "reserved" ? "that handle was recently in use — try again later" : res.reason;
+        return json(409, { error: msg });
+      }
       return json(200, { handle: res.handle });
     }
 
@@ -492,6 +500,18 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (path === "/api/follow/approve") await approveFollowRequest(env.DB, user.id, requester.id);
       else await denyFollowRequest(env.DB, user.id, requester.id);
       return json(200, { ok: true, count: await followRequestCount(env.DB, user.id) });
+    }
+    // Requester withdraws their OWN pending request to a private account (`handle` = the target).
+    case "/api/follow/withdraw": {
+      if (req.method !== "POST") return json(405, { error: "POST only" });
+      const user = await currentUser(env, req);
+      if (!user) return json(401, { error: "sign in first" });
+      await ensureGraphTables(env.DB);
+      const b = (await req.json().catch(() => ({}))) as { handle?: string };
+      const target = await userByHandle(env.DB, foldHandle(String(b.handle ?? "")));
+      if (!target?.handle) return json(404, { error: "no such handle" });
+      await denyFollowRequest(env.DB, target.id, user.id); // delete (requester=me, target=them)
+      return json(200, { ok: true });
     }
 
     // Followers / following lists for a handle (public cards; paginated ?offset=).

@@ -330,6 +330,17 @@ export async function respondFollowRequest(handle: string, approve: boolean): Pr
   return ((await res.json()) as { count?: number }).count ?? 0;
 }
 
+/** Withdraw your own pending follow request to a private account (`handle` = that account). */
+export async function withdrawFollowRequest(handle: string): Promise<boolean> {
+  const res = await fetch("/api/follow/withdraw", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle }),
+  });
+  return res.ok;
+}
+
 /** Push-invite a friend (by @handle) to jam — they get a bell event with a one-tap Join. */
 export async function sendInvite(toHandle: string): Promise<boolean> {
   const res = await fetch("/api/invite", {

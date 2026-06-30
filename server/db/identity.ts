@@ -1,5 +1,5 @@
 // Public identity: handles + user-owned profile (migration 0012).
-import { HANDLE_RENAME_COOLDOWN_MS } from "../security";
+import { HANDLE_RENAME_COOLDOWN_MS, foldHandle } from "../security";
 import { type D1Database, type User, now } from "./core";
 
 let identityReady = false;
@@ -33,7 +33,36 @@ export async function ensureIdentityColumns(db: D1Database): Promise<void> {
   } catch {
     /* index already exists */
   }
+  try {
+    await db
+      .prepare("CREATE TABLE IF NOT EXISTS reserved_handles (folded TEXT PRIMARY KEY, until INTEGER NOT NULL, prev_user TEXT)")
+      .run();
+  } catch {
+    /* table already exists */
+  }
   identityReady = true;
+}
+
+// How long a freed/renamed @handle is held before anyone else can claim it (anti-impersonation).
+export const RESERVED_HANDLE_HOLD_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/** Tombstone a freed handle: hold `folded` for the window; `prevUser` may re-claim during it. */
+export async function reserveHandle(db: D1Database, folded: string, prevUser: string): Promise<void> {
+  if (!folded) return;
+  await db
+    .prepare("INSERT OR REPLACE INTO reserved_handles (folded, until, prev_user) VALUES (?,?,?)")
+    .bind(folded, now() + RESERVED_HANDLE_HOLD_MS, prevUser)
+    .run();
+}
+
+/** Is `folded` under a live reservation by someone OTHER than `exceptUser`? (Expired holds and
+ *  the prev-owner's own re-claim return false.) */
+export async function isHandleReserved(db: D1Database, folded: string, exceptUser: string): Promise<boolean> {
+  const r = await db
+    .prepare("SELECT prev_user FROM reserved_handles WHERE folded=? AND until > ?")
+    .bind(folded, now())
+    .first<{ prev_user: string | null }>();
+  return !!r && r.prev_user !== exceptUser;
 }
 
 /** True if any OTHER user already holds this folded handle. The DB UNIQUE index is
@@ -71,11 +100,16 @@ export async function setUserHandle(
     }
   }
   if (await handleTaken(db, folded, userId)) return { ok: false, reason: "taken" };
+  if (await isHandleReserved(db, folded, userId)) return { ok: false, reason: "reserved" };
   try {
     await db
       .prepare("UPDATE users SET handle=?, handle_folded=?, handle_set_at=? WHERE id=?")
       .bind(handle, folded, now(), userId)
       .run();
+    // Tombstone the handle they just left (a real rename) so it can't be re-claimed for impersonation;
+    // and clear any reservation on the one they just took (reclaiming your own held handle).
+    if (cur?.handle && foldHandle(cur.handle) !== folded) await reserveHandle(db, foldHandle(cur.handle), userId);
+    await db.prepare("DELETE FROM reserved_handles WHERE folded=?").bind(folded).run();
     return { ok: true, handle };
   } catch {
     return { ok: false, reason: "taken" }; // lost the race to the UNIQUE index

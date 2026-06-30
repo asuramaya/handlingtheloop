@@ -1,5 +1,5 @@
 import { type MouseEvent, useState } from "react";
-import { type PersonCard, follow, sendInvite, unfollow } from "@htl/account";
+import { type PersonCard, follow, sendInvite, unfollow, withdrawFollowRequest } from "@htl/account";
 import { goToHandle } from "./util";
 
 // One ACTIONABLE person row — shared by search results, follower/following lists, and
@@ -49,6 +49,12 @@ export function PersonRow({
     void sendInvite(h).then((ok) => {
       if (!ok) setInvited(false); // revert so a failed invite can be retried
     });
+  };
+  const withdraw = (e: MouseEvent) => {
+    stop(e);
+    if (!h) return;
+    setRequested(false); // optimistic
+    void withdrawFollowRequest(h);
   };
   const jam = (e: MouseEvent) => {
     stop(e);
@@ -109,8 +115,8 @@ export function PersonRow({
               </button>
             )}
             {requested ? (
-              <button className="follow-btn on" disabled>
-                Requested
+              <button className="follow-btn on requested" onClick={withdraw} title="Tap to cancel">
+                Requested ✕
               </button>
             ) : (
               <button className={`follow-btn ${following ? "on" : ""}`} onClick={toggleFollow} disabled={busy}>

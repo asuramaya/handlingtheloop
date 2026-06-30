@@ -7,7 +7,9 @@
 // immediately, per policy), and anonymizes shared contributions rather than destroying
 // them. Each auxiliary delete is best-effort: a table that a given DB never created
 // (the runtime-ensured ones) must not abort the core deletion.
-import type { D1Database } from "./core";
+import { type D1Database, now } from "./core";
+
+const RESERVED_HANDLE_HOLD_MS = 30 * 24 * 60 * 60 * 1000; // mirror identity.ts (avoid an import cycle)
 
 async function tryRun(db: D1Database, sql: string, ...binds: unknown[]): Promise<void> {
   try {
@@ -21,7 +23,7 @@ async function tryRun(db: D1Database, sql: string, ...binds: unknown[]): Promise
  *  Returns the user's set-log keys (`sets/<id>.json`) and sample keys (`samples/<uid>/<id>`). */
 export async function purgeAccount(db: D1Database, userId: string): Promise<{ r2Keys: string[] }> {
   // 1. Collect R2 keys before the rows go (best-effort; absent tables → no keys).
-  const r2Keys: string[] = [];
+  const r2Keys: string[] = [`avatars/${userId}`]; // uploaded avatar blob (no-op delete if none)
   try {
     const sets = await db.prepare("SELECT id FROM sets WHERE host_id = ?").bind(userId).all<{ id: string }>();
     for (const s of sets.results ?? []) r2Keys.push(`sets/${s.id}.json`);
@@ -62,7 +64,15 @@ export async function purgeAccount(db: D1Database, userId: string): Promise<{ r2
   // Shared contributions: keep the content, drop the attribution.
   await tryRun(db, "UPDATE lyrics SET contributor = NULL WHERE contributor = ?", userId);
 
-  // 3. Finally the account itself (this frees the @handle for immediate reuse).
+  // 3. Tombstone the @handle (30-day hold) so a re-claimer can't inherit the prior owner's old
+  //    links/mentions for impersonation; `prev_user` lets the (now-gone) id be matched, harmless.
+  await tryRun(
+    db,
+    "INSERT OR REPLACE INTO reserved_handles (folded, until, prev_user) SELECT handle_folded, ?, id FROM users WHERE id=? AND handle_folded IS NOT NULL",
+    now() + RESERVED_HANDLE_HOLD_MS,
+    userId,
+  );
+  // 4. Finally the account itself.
   await db.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
   return { r2Keys };
 }

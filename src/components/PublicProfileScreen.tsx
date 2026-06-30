@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type PublicProfile, type SetCard, block, fetchHandleSets, fetchPublicProfile, follow, unblock, unfollow } from "@htl/account";
+import { type PublicProfile, type SetCard, block, fetchHandleSets, fetchPublicProfile, follow, unblock, unfollow, withdrawFollowRequest } from "@htl/account";
 import { DockResizer } from "./DockResizer";
 import { ProfilePublicView } from "./ProfilePublicView";
 import { SetList } from "./social/SetList";
@@ -65,6 +65,12 @@ export function PublicProfileScreen({
     const r = await (rel?.following ? unfollow : follow)(profile.handle);
     if (r) setProfile({ ...profile, relationship: r.relationship, counts: r.counts });
   };
+  const onWithdraw = async () => {
+    if (!profile || !rel) return;
+    if (await withdrawFollowRequest(profile.handle)) {
+      setProfile({ ...profile, relationship: { ...rel, requested: false } });
+    }
+  };
   const onBlock = async () => {
     if (!profile) return;
     const r = await (rel?.blocking ? unblock : block)(profile.handle);
@@ -119,8 +125,8 @@ export function PublicProfileScreen({
                 !profile.isSelf && rel ? (
                   <>
                     {rel.requested ? (
-                      <button className="follow-btn on" disabled title="Waiting for approval">
-                        Requested
+                      <button className="follow-btn on requested" onClick={() => void onWithdraw()} title="Tap to cancel your request">
+                        Requested ✕
                       </button>
                     ) : (
                       <button className={`follow-btn ${rel.following ? "on" : ""}`} onClick={() => void onFollow()}>

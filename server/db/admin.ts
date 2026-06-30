@@ -44,8 +44,8 @@ export interface AdminUser {
  *  self-serve delete uses (purgeAccount) so an admin delete no longer orphans the social
  *  tables — follows/blocks/rooms/sets/settings/library/stats/samples — the way the old
  *  four-table version did. R2 blob purge (set logs / samples) is the caller's concern. */
-export async function deleteUser(db: D1Database, userId: string): Promise<void> {
-  await purgeAccount(db, userId);
+export async function deleteUser(db: D1Database, userId: string): Promise<{ r2Keys: string[] }> {
+  return purgeAccount(db, userId); // returns R2 keys (sets/samples/avatar) for the caller to purge
 }
 
 /** Set an account's moderation status. 'banned'/'suspended' → currentUser() treats them as
@@ -58,7 +58,12 @@ export async function setAccountStatus(db: D1Database, userId: string, status: "
     /* column exists */
   }
   await db.prepare("UPDATE users SET status = ? WHERE id = ?").bind(status, userId).run();
-  if (status !== "active") await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+  if (status !== "active") {
+    await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
+    // Pull their avatar from public surfaces (the R2 blob is deleted by the admin route). For an
+    // abuse ban this matters; reactivating won't restore it (they re-upload).
+    await db.prepare("UPDATE users SET avatar_url = NULL WHERE id = ?").bind(userId).run();
+  }
 }
 
 // NOTE: the YouTube *streaming cookie* path (the account-grade credential) was

@@ -642,6 +642,14 @@ span.profile-handle:hover {
   background: transparent;
   color: var(--accent);
 }
+.follow-btn.requested {
+  border-color: var(--line);
+  color: var(--muted);
+}
+.follow-btn.requested:hover {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+}
 .block-btn {
   padding: 6px 12px;
   border-radius: 6px;

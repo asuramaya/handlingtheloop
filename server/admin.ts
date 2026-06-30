@@ -249,7 +249,8 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
   if (req.method === "POST" && p === "/api/user/delete") {
     const b = (await req.json().catch(() => ({}))) as { userId?: string };
     if (!b.userId) return json(400, { error: "missing userId" });
-    await deleteUser(env.DB, b.userId);
+    const { r2Keys } = await deleteUser(env.DB, b.userId);
+    await Promise.allSettled(r2Keys.map((k) => env.AUDIO?.delete?.(k))); // sets/samples/avatar blobs
     return json(200, { ok: true });
   }
   if (req.method === "POST" && p === "/api/user/status") {
@@ -257,6 +258,7 @@ export async function handleAdmin(req: Request, env: AdminEnv, _ctx: ExecutionCo
     const status = b.status === "banned" || b.status === "suspended" || b.status === "active" ? b.status : null;
     if (!b.userId || !status) return json(400, { error: "missing userId/status" });
     await setAccountStatus(env.DB, b.userId, status);
+    if (status !== "active") await env.AUDIO?.delete?.(`avatars/${b.userId}`); // pull abuse avatar from R2
     return json(200, { ok: true });
   }
   return json(404, { error: "not found" });

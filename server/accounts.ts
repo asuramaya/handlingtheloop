@@ -434,6 +434,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/followers":
     case "/api/following": {
       if (!env.DB) return json(404, { error: "not found" });
+      if (!(await allow(env.RL_SEARCH, clientIp(req)))) return json(429, { error: "slow down" });
       await ensureGraphTables(env.DB);
       await ensureRoomsTable(env.DB);
       await ensurePresenceTables(env.DB);
@@ -441,6 +442,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       if (!target || !target.handle) return json(404, { error: "no such handle" });
       const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
       const viewer = await currentUser(env, req);
+      // A blocker hides their graph from the blockee too (mirror the /api/u 404).
+      if (viewer && (await relationship(env.DB, viewer.id, target.id)).blockedBy) {
+        return json(404, { error: "no such handle" });
+      }
       const limit = 50;
       const list =
         path === "/api/followers"
@@ -475,6 +480,7 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/users/suggested": {
       if (req.method !== "GET") return json(405, { error: "GET only" });
       if (!env.DB) return json(200, { list: [] });
+      if (!(await allow(env.RL_SEARCH, clientIp(req)))) return json(429, { error: "slow down" });
       await ensureIdentityColumns(env.DB);
       await ensureGraphTables(env.DB);
       await ensureRoomsTable(env.DB);

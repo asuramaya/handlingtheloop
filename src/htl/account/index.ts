@@ -234,6 +234,7 @@ export interface PersonCard {
   live: boolean; // broadcasting right now
   following: boolean; // me → them
   followsYou: boolean; // them → me
+  isSelf: boolean; // this row is me → no self-action
 }
 /** Back-compat alias — older call sites typed list rows as FollowCard. */
 export type FollowCard = PersonCard;

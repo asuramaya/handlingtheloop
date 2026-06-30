@@ -33,15 +33,17 @@ export function PersonRow({
     setBusy(true);
     const next = !following;
     setFollowing(next); // optimistic
-    const ok = await (next ? follow(h) : unfollow(h));
-    if (next && !ok) setFollowing(false); // follow failed → revert (unfollow returns void = ok)
+    const ok = await (next ? follow(h) : unfollow(h)); // both return {...}|null (null = failed)
+    if (!ok) setFollowing(!next); // revert in EITHER direction on failure
     setBusy(false);
   };
   const invite = (e: MouseEvent) => {
     stop(e);
-    if (!h) return;
+    if (!h || invited) return;
     setInvited(true); // optimistic
-    void sendInvite(h);
+    void sendInvite(h).then((ok) => {
+      if (!ok) setInvited(false); // revert so a failed invite can be retried
+    });
   };
   const jam = (e: MouseEvent) => {
     stop(e);
@@ -73,7 +75,9 @@ export function PersonRow({
         </span>
       </span>
       <span className="person-actions" onClick={stop}>
-        {mutual ? (
+        {card.isSelf ? (
+          <span className="person-you">You</span>
+        ) : mutual ? (
           <>
             {card.live && onJam ? (
               <button className="friend-join" onClick={jam}>

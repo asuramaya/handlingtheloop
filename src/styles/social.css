@@ -274,6 +274,13 @@
 .person-row.live .live-room-np {
   color: #2ecc71;
 }
+.person-you {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 4px 8px;
+}
 /* Load more */
 .person-more {
   list-style: none;

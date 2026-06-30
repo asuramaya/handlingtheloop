@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type PersonCard, fetchFollowers, fetchFollowing } from "@htl/account";
 import { DockResizer } from "../DockResizer";
 import { PersonRow } from "./PersonRow";
@@ -25,6 +25,8 @@ export function PeopleList({
   const [list, setList] = useState<PersonCard[] | null>(null); // null = loading
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => () => void (mounted.current = false), []);
 
   useEffect(() => {
     let alive = true;
@@ -47,11 +49,12 @@ export function PeopleList({
     const fetcher = mode === "followers" ? fetchFollowers : fetchFollowing;
     fetcher(handle, list.length)
       .then((p) => {
+        if (!mounted.current) return;
         setList((prev) => [...(prev ?? []), ...p.list]);
         setMore(p.more);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => mounted.current && setLoading(false));
   };
 
   const title = mode === "followers" ? "Followers" : "Following";
@@ -77,8 +80,8 @@ export function PeopleList({
           <p className="discover-empty">{emptyMsg}</p>
         ) : (
           <ul className="person-search-results" role="list">
-            {list.map((c) => (
-              <PersonRow key={c.handle} card={c} onJam={onJam} onListen={onListen} />
+            {list.map((c, i) => (
+              <PersonRow key={c.handle ?? `i${i}`} card={c} onJam={onJam} onListen={onListen} />
             ))}
             {more && (
               <li className="person-more">

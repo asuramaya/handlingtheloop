@@ -8,6 +8,14 @@
 // so this works before migration 0020 is applied. See migration 0020.
 import { type D1Database, now } from "./core";
 
+// Safety-net TTL for the transition-written `online` flag. Presence is deliberately NOT
+// heartbeated (it flips on socket-attach, off on the DO's last-close bridge — see the header) to
+// stay off the DO write-quota cliff, so `updated_at` is the attach time, not a liveness ping.
+// This window only reaps a row whose offline bridge never fired (DO evicted/crashed): a session
+// open >24h continuously is not a meaningful "active now" signal anyway, and any WS reconnect in
+// between bumps `updated_at`. Mirrors the rooms `last_seen` freshness pattern, just far looser.
+export const PRESENCE_TTL_MS = 24 * 3_600_000;
+
 let ensured = false;
 export async function ensurePresenceTables(db: D1Database): Promise<void> {
   if (ensured) return;
@@ -52,8 +60,11 @@ export async function setPresenceOffline(db: D1Database, userId: string, since: 
  *  Drives the /@handle profile's "Knock to jam" affordance when the host is in a private session. */
 export async function isPresenceOnline(db: D1Database, userId: string): Promise<boolean> {
   await ensurePresenceTables(db);
-  const r = await db.prepare("SELECT online FROM presence WHERE user_id = ?").bind(userId).first<{ online: number }>();
-  return !!r && r.online === 1;
+  const r = await db
+    .prepare("SELECT online, updated_at FROM presence WHERE user_id = ?")
+    .bind(userId)
+    .first<{ online: number; updated_at: number }>();
+  return !!r && r.online === 1 && r.updated_at > now() - PRESENCE_TTL_MS;
 }
 
 export interface FriendPresence {
@@ -70,6 +81,7 @@ export interface FriendPresence {
 export async function friendsOnline(db: D1Database, viewerId: string, freshMs = 90_000): Promise<FriendPresence[]> {
   await ensurePresenceTables(db);
   const cutoff = now() - freshMs;
+  const presenceCutoff = now() - PRESENCE_TTL_MS;
   const r = await db
     .prepare(
       `SELECT u.handle, u.display_name AS displayName, COALESCE(u.avatar_url, u.avatar) AS avatar,
@@ -79,14 +91,14 @@ export async function friendsOnline(db: D1Database, viewerId: string, freshMs = 
        JOIN presence p ON p.user_id = f1.followee_id
        JOIN users u ON u.id = f1.followee_id
        LEFT JOIN rooms r ON r.host_id = u.id AND r.live = 1 AND r.last_seen > ?
-       WHERE f1.follower_id = ? AND p.online = 1 AND u.handle IS NOT NULL
+       WHERE f1.follower_id = ? AND p.online = 1 AND p.updated_at > ? AND u.handle IS NOT NULL
          AND NOT EXISTS (
            SELECT 1 FROM blocks b
            WHERE (b.blocker_id = f1.follower_id AND b.blocked_id = f1.followee_id)
               OR (b.blocker_id = f1.followee_id AND b.blocked_id = f1.follower_id))
        ORDER BY live DESC, u.handle ASC LIMIT 100`,
     )
-    .bind(cutoff, viewerId)
+    .bind(cutoff, viewerId, presenceCutoff)
     .all<{ handle: string; displayName: string | null; avatar: string | null; live: number }>();
   return (r.results ?? []).map((x) => ({
     handle: x.handle,

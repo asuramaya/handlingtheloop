@@ -1,6 +1,7 @@
 // Social graph: follows + blocks (migration 0013).
 import { type D1Database, now } from "./core";
 import { addNotification } from "./notifications";
+import { PRESENCE_TTL_MS } from "./presence";
 
 let graphReady = false;
 /** Create the graph tables/indexes on an older/local DB that predates 0013. */
@@ -125,6 +126,7 @@ export interface PersonCard {
   live: boolean; // broadcasting a fresh public room right now
   following: boolean; // viewer → them
   followsYou: boolean; // them → viewer
+  isSelf: boolean; // this row IS the signed-in viewer (so the UI shows no self-action)
 }
 
 interface BaseRow {
@@ -142,6 +144,7 @@ async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promis
   const ids = rows.map((r) => r.id);
   const ph = ids.map(() => "?").join(",");
   const cutoff = now() - 90_000; // live-room freshness window (mirrors liveRooms/friendsOnline)
+  const pCutoff = now() - PRESENCE_TTL_MS; // stuck-online safety net (mirrors isPresenceOnline)
   const setOf = async (sql: string, ...lead: (string | number)[]) => {
     const r = await db
       .prepare(sql)
@@ -150,7 +153,7 @@ async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promis
     return new Set((r.results ?? []).map((o) => o.x));
   };
   const [online, live, following, followsYou] = await Promise.all([
-    setOf(`SELECT user_id x FROM presence WHERE online=1 AND user_id IN (${ph})`),
+    setOf(`SELECT user_id x FROM presence WHERE online=1 AND updated_at>? AND user_id IN (${ph})`, pCutoff),
     setOf(`SELECT host_id x FROM rooms WHERE live=1 AND last_seen>? AND host_id IN (${ph})`, cutoff),
     viewerId ? setOf(`SELECT followee_id x FROM follows WHERE follower_id=? AND followee_id IN (${ph})`, viewerId) : new Set<string>(),
     viewerId ? setOf(`SELECT follower_id x FROM follows WHERE followee_id=? AND follower_id IN (${ph})`, viewerId) : new Set<string>(),
@@ -163,6 +166,7 @@ async function enrich(db: D1Database, rows: BaseRow[], viewerId: string): Promis
     live: live.has(r.id),
     following: following.has(r.id),
     followsYou: followsYou.has(r.id),
+    isSelf: viewerId !== "" && r.id === viewerId,
   }));
 }
 

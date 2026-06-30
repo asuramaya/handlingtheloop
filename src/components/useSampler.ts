@@ -277,6 +277,32 @@ export function useSampler(
     [engine, pads, emit],
   );
 
+  // Region voices "ride the deck tempo" (the trigger rate = d.rate · pitchRate). But that rate was
+  // captured ONCE at trigger, so a held loop/gate region drifted out of sync when the deck tempo
+  // moved (fader or SYNC follow). Re-rate every live region voice on this deck when its tempo
+  // changes — Deck.setTempo fires onRateChange. Re-bound when regions/loaded change so the closure
+  // reads the current slice pitch. (Global/master pads aren't deck-synced — untouched.)
+  useEffect(() => {
+    const follow = (id: DeckId) => {
+      const d = engine.deck(id);
+      const vid = id === "A" ? loaded.A : loaded.B;
+      const arr = vid ? regions[vid] : null;
+      const base = deckPadBase(id);
+      for (let s = 0; s < DECK_REGION_COUNT; s++) {
+        const pad = base + s;
+        if (engine.sampler.isPlaying(pad)) engine.sampler.setRate(pad, d.rate * pitchRate(arr?.[s]?.pitch));
+      }
+    };
+    const a = () => follow("A");
+    const b = () => follow("B");
+    engine.deck("A").onRateChange = a;
+    engine.deck("B").onRateChange = b;
+    return () => {
+      if (engine.deck("A").onRateChange === a) engine.deck("A").onRateChange = undefined;
+      if (engine.deck("B").onRateChange === b) engine.deck("B").onRateChange = undefined;
+    };
+  }, [engine, regions, loaded.A, loaded.B]);
+
   // Capture a region from the deck: its active loop if set, else one bar from the playhead.
   const assignRegion = useCallback(
     (i: number) => {

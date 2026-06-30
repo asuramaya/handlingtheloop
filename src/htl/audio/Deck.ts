@@ -310,6 +310,7 @@ export class Deck {
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
   syncRole: SyncRole = "off";
   onTempoChange?: () => void; // AudioEngine hook, fired at the end of setTempo
+  onRateChange?: () => void; // Sampler hook — region voices ride the deck tempo; fired at the end of setTempo
   keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
   onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
 
@@ -1457,6 +1458,7 @@ export class Deck {
     this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
     this.updatePitch(); // vinyl mode (key-lock off) tracks the new tempo
     this.onTempoChange?.(); // AudioEngine sync hook: master→slave follow / release
+    this.onRateChange?.(); // Sampler hook: re-rate any live region voices to the new deck tempo
   }
 
   get quantizing() {

@@ -727,8 +727,11 @@ export class AutoMixer {
     this.glideActive = true;
     if (!this.plan?.keyMatch) {
       this.glideKeylock = { A: this.deps.engine.deck("A").keylock, B: this.deps.engine.deck("B").keylock };
-      live.setKeylock(false);
-      inc.setKeylock(false);
+      // PIN keylock off (not just setKeylock(false)) for the vinyl pitch ride: pinning also stops
+      // setPitch from silently re-engaging keylock on a user KEY-nudge mid-glide (Deck.setPitch),
+      // which would freeze the pitch ramp. endGlide unpins and restores the pre-glide snapshot.
+      live.setKeylockPinnedOff(true);
+      inc.setKeylockPinnedOff(true);
     }
   }
 
@@ -751,6 +754,10 @@ export class AutoMixer {
   // resets are handled by the caller — settle/cancel reset to natural, handoff keeps them.)
   private endGlide(): void {
     if (this.glideKeylock) {
+      // Clear the pin FIRST, then restore the pre-glide keylock on each deck (so the user's
+      // baseline — typically keylock ON — returns after the transition).
+      this.deps.engine.deck("A").setKeylockPinnedOff(false);
+      this.deps.engine.deck("B").setKeylockPinnedOff(false);
       this.deps.engine.deck("A").setKeylock(this.glideKeylock.A);
       this.deps.engine.deck("B").setKeylock(this.glideKeylock.B);
       this.glideKeylock = null;

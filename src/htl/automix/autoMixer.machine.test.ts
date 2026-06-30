@@ -59,8 +59,13 @@ class FakeDeck {
     this.tempo = v;
   }
   setPitch(): void {}
+  keylockPinnedOff = false;
   setKeylock(v: boolean): void {
     this.keylock = v;
+  }
+  setKeylockPinnedOff(on: boolean): void {
+    this.keylockPinnedOff = on;
+    if (on) this.keylock = false;
   }
   setEqLow(): void {}
   setEqHigh(): void {}

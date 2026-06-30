@@ -1,4 +1,4 @@
-import { barAnchor, barPhase, beatPhase, beatTimeOffset, foldTempoOctave, nearestBeat, smartKeyShift } from "../analysis/analyze";
+import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, foldTempoOctave, nearestBeat, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
@@ -763,16 +763,15 @@ export class AudioEngine {
     }
     if (slave.jogging || master.jogging || slave.bending || master.bending) return; // keep last diag
     if (slave.loop?.active || master.loop?.active) return; // a loop intentionally breaks phase
-    // Beat-phase error in [−0.5, 0.5) beats (positive = slave is ahead of master).
-    let err = beatPhase(sg, slave.position()) - beatPhase(mg, master.position());
-    if (err > 0.5) err -= 1;
-    else if (err < -0.5) err += 1;
+    // fold = ratio of the two grids' beat frequencies (effRate·bpm). ~1 = locked; ~2 / ~0.5 = a
+    // half/double DENSITY gap. commonPhaseError folds the phase onto the audible beat so the gap
+    // can't make the error cycle at 2× (the chase that never settled).
+    const fold = mg.bpm && master.rate ? (slave.rate * sg.bpm) / (master.rate * mg.bpm) : null;
+    const err = commonPhaseError(beatPhase(sg, slave.position()), beatPhase(mg, master.position()), fold);
     // First-order correction: ahead → trim slower (negative), behind → trim faster.
     const requested = -err * AudioEngine.SYNC_PHASE_K;
     slave.setSyncTrim(requested);
-    // Telemetry: fold = ratio of the two grids' beat frequencies (effRate·bpm). ~1 = locked;
-    // ~2 / ~0.5 = the density chase. saturated = the clamp swallowed part of the request (rubato).
-    const fold = mg.bpm && master.rate ? (slave.rate * sg.bpm) / (master.rate * mg.bpm) : null;
+    // saturated = the clamp swallowed part of the request (rubato the loop can't follow).
     this.syncDiagState = {
       active: true,
       slave: sid,

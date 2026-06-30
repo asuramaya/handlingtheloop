@@ -20,6 +20,7 @@ import {
   barAnchor,
   barPhase,
   foldTempoOctave,
+  commonPhaseError,
   type KeyInfo,
   type Beatgrid,
 } from "./analyze";
@@ -442,5 +443,59 @@ describe("foldTempoOctave", () => {
     expect(foldTempoOctave(128, Infinity)).toBeNull();
     expect(foldTempoOctave(-128, 128)).toBeNull();
     expect(foldTempoOctave(128, -1)).toBeNull();
+  });
+});
+
+// commonPhaseError — the SYNC phase-lock sensor fix. When the two grids differ in density
+// (fold ≈ 2 / 0.5 = a half/double-detected octave), the raw phase difference cycles at 2× and the
+// loop chases forever. Folding both phases onto the audible beat makes the error well-posed.
+describe("commonPhaseError", () => {
+  const wrap = (e: number) => Math.abs(e) <= 0.5 + 1e-9;
+
+  it("fold ≈ 1 (no octave gap) is the plain wrapped difference — no regression on matched pairs", () => {
+    expect(commonPhaseError(0.3, 0.3, 1)).toBeCloseTo(0, 9);
+    expect(commonPhaseError(0.4, 0.1, 1)).toBeCloseTo(0.3, 9);
+    expect(commonPhaseError(0.1, 0.4, 1)).toBeCloseTo(-0.3, 9);
+    expect(commonPhaseError(0.95, 0.05, 1)).toBeCloseTo(-0.1, 9); // wraps the long way round
+  });
+
+  it("a tiny tempo mismatch (fold 0.998) still counts as no fold", () => {
+    expect(commonPhaseError(0.4, 0.1, 0.998)).toBeCloseTo(0.3, 9);
+  });
+
+  it("THE FIX: master half-way through its DOUBLE-length beat reads as ALIGNED, not max-error", () => {
+    // fold=2 → master grid is coarser (its beat spans 2 audible beats). Master at phase 0.5 is on
+    // the audible downbeat of its 2nd sub-beat → aligned with the slave at 0. Old code: err=−0.5
+    // (max, the chase). New: 0.
+    expect(commonPhaseError(0.0, 0.5, 2)).toBeCloseTo(0, 9);
+    expect(commonPhaseError(0.5, 0.25, 2)).toBeCloseTo(0, 9); // both land on the audible mid-beat
+    expect(commonPhaseError(0.5, 0.75, 2)).toBeCloseTo(0, 9); // master's 2nd sub-beat, same audible phase
+  });
+
+  it("symmetric: fold = 0.5 (slave grid coarser) folds the SLAVE phase up", () => {
+    expect(commonPhaseError(0.5, 0.0, 0.5)).toBeCloseTo(0, 9);
+    expect(commonPhaseError(0.25, 0.5, 0.5)).toBeCloseTo(0, 9);
+  });
+
+  it("a genuine offset survives the fold (not everything collapses to 0)", () => {
+    // fold=2, slave at 0.1, master at 0.0 (audible 0.0) → err 0.1.
+    expect(commonPhaseError(0.1, 0.0, 2)).toBeCloseTo(0.1, 9);
+  });
+
+  it("anything past the √2 fold boundary is treated as a 2× gap (matches matchSlaveTempo)", () => {
+    // fold=1.5 → round(log2)=1 → octave gap → master scaled ×2. 0.5 master → audible 0.
+    expect(commonPhaseError(0.0, 0.5, 1.5)).toBeCloseTo(0, 9);
+    // fold=1.3 (< √2) → no gap → plain difference.
+    expect(commonPhaseError(0.0, 0.5, 1.3)).toBeCloseTo(-0.5, 9);
+  });
+
+  it("null / non-finite fold → no scaling (plain wrapped difference)", () => {
+    expect(commonPhaseError(0.4, 0.1, null)).toBeCloseTo(0.3, 9);
+    expect(commonPhaseError(0.4, 0.1, NaN)).toBeCloseTo(0.3, 9);
+    expect(commonPhaseError(0.4, 0.1, 0)).toBeCloseTo(0.3, 9);
+  });
+
+  it("result always lands in [−0.5, 0.5)", () => {
+    for (const f of [0.25, 0.5, 1, 2, 4]) for (let i = 0; i < 20; i++) for (let j = 0; j < 20; j++) expect(wrap(commonPhaseError(i / 20, j / 20, f))).toBe(true);
   });
 });

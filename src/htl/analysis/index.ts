@@ -6,6 +6,7 @@ export {
   beatPhase,
   beatTimeOffset,
   computePyramid,
+  commonPhaseError,
   detectBeatgrid,
   detectKey,
   foldTempoOctave,

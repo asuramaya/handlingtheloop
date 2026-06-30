@@ -412,6 +412,31 @@ export function foldTempoOctave(target: number, ref: number): number | null {
   return t;
 }
 
+/** Phase error between a SYNC slave and master, measured against a COMMON audible beat so a
+ *  half/double-detected grid doesn't poison the lock. Inputs are each deck's beat phase in [0,1)
+ *  (from beatPhase) plus `fold` = the grid-beat-frequency ratio slave/master (≈ slaveRate·sBpm /
+ *  masterRate·mBpm). When the grids differ in density (fold ≈ 2 or 0.5 — the half/double case), the
+ *  raw phase difference cycles at 2× and the lock can never settle (it chases forever). We snap fold
+ *  to its nearest octave 2^k and scale the COARSER grid's phase up by 2^|k| so both decks are
+ *  measured on the finer (audible) beat; the result then folds onto the audible downbeat and the
+ *  ambiguity collapses. fold ≈ 1 (no octave gap) → identical to the plain wrapped difference, so a
+ *  normally-matched pair is unaffected. Returns the wrapped error in [−0.5, 0.5) beats. */
+export function commonPhaseError(phaseSlave: number, phaseMaster: number, fold: number | null): number {
+  let scaleSlave = 1;
+  let scaleMaster = 1;
+  if (fold != null && Number.isFinite(fold) && fold > 0) {
+    const ratio = Math.pow(2, Math.round(Math.log2(fold))); // nearest octave: …0.5, 1, 2, 4…
+    if (ratio >= 1) scaleMaster = Math.min(8, ratio); // master coarser → lift it to the audible rate
+    else scaleSlave = Math.min(8, Math.round(1 / ratio)); // slave coarser → lift it
+  }
+  const aS = (phaseSlave * scaleSlave) % 1;
+  const aM = (phaseMaster * scaleMaster) % 1;
+  let err = aS - aM;
+  if (err > 0.5) err -= 1;
+  else if (err < -0.5) err += 1;
+  return err;
+}
+
 /** Legacy single-tempo detector: onset-strength envelope → autocorrelation over
  *  60–180 BPM → best phase offset. Kept only as a fallback for clips too short for
  *  the DP tracker. Produces a uniform grid (no dynamic `beats[]`). */

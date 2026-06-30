@@ -1229,7 +1229,7 @@ function AppBody() {
   useEffect(() => {
     if (!isMobileDevice()) return;
     const sr = engine.ctx.sampleRate;
-    const max = Math.round(sr * 0.12); // ~120 ms — covers A2DP/CarPlay clock jitter
+    const max = Math.round(sr * 0.2); // ~200 ms — a strong always-on cushion for CarPlay Wi-Fi jitter
     // Primary path: the engine auto-ramps the pre-roll from the worklet's REAL dropout count
     // (the only signal iOS gives us on Bluetooth/CarPlay — outputLatency reads 0 there).
     engine.setWirelessAuto(true);
@@ -1248,8 +1248,14 @@ function AppBody() {
     };
     probe();
     const iv = window.setInterval(probe, 3000);
+    // A route flip to wireless CarPlay (Wi-Fi Direct, 48 kHz) fires a devicechange but keeps the
+    // page visible + the ctx "running", so none of the resume hooks fire — proactively pre-buffer
+    // the moment the route changes, before the first skip (iOS gives no outputLatency to predict it).
+    const onDevice = () => engine.primeWirelessFloor();
+    navigator.mediaDevices?.addEventListener?.("devicechange", onDevice);
     return () => {
       window.clearInterval(iv);
+      navigator.mediaDevices?.removeEventListener?.("devicechange", onDevice);
       engine.setWirelessReserve(0);
       engine.setWirelessAuto(false);
     };

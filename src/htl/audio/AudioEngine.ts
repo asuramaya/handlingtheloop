@@ -10,6 +10,7 @@ import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
+import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
 
 type DeckId = "A" | "B";
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
@@ -304,51 +305,61 @@ export class AudioEngine {
     this.deckB.configureStretch(this.stretchCfg);
   }
 
-  // ---- #14 automatic wireless-skip guard ---------------------------------------
+  // ---- #14 automatic wireless-skip guard (sharpened for wireless CarPlay) -------
+  // The math lives in wirelessGuard.ts (pure + tested): ramp UP fast on the first confirmed skip,
+  // cap DEEP for CarPlay's Wi-Fi jitter, hold a STICKY FLOOR once a struggling route is confirmed
+  // so intermittent stutter can't decay the cushion into the next skip. See that file for the why.
   private lastUnderruns = 0;
-  private cleanTicks = 0;
+  private guardState: ReserveState = ZERO_RESERVE;
   private autoGuard: ReturnType<typeof setInterval> | null = null;
   private totalUnderruns(): number {
     return (this.deckA.lastDiag?.underruns ?? 0) + (this.deckB.lastDiag?.underruns ?? 0);
   }
   /** Start/stop the dropout-driven pre-roll auto-ramp (mobile-only; the host enables it).
-   *  Watches the worklet's real underrun counter once a second: any NEW dropout while a deck
-   *  is playing steps the reserve up (to a ~120 ms cap); a sustained clean stretch decays it
-   *  back to 0. Platform-agnostic — it reacts to skips themselves, the signal iOS can't predict. */
+   *  Polls the worklet's REAL underrun counter ~4×/s (the only signal iOS gives us — outputLatency
+   *  reads 0 on Bluetooth/CarPlay) and feeds the per-tick delta to nextReserve(). Reactive but fast;
+   *  wired/clean output never trips it → zero added latency. */
   setWirelessAuto(on: boolean) {
     if (on === !!this.autoGuard) return;
     if (!on) {
       if (this.autoGuard) clearInterval(this.autoGuard);
       this.autoGuard = null;
+      this.guardState = ZERO_RESERVE;
       this.adaptiveReserve = 0;
-      this.cleanTicks = 0;
       this.applyReserve();
       return;
     }
-    const sr = this.ctx.sampleRate;
-    const step = Math.round(sr * 0.03); // +30 ms per dropout-second
-    const cap = Math.round(sr * 0.12); // ceiling ~120 ms (matches the manual force)
-    const decay = Math.round(sr * 0.015); // -15 ms per clean window (slow, anti-flap)
+    const cfg = reserveCfg(this.ctx.sampleRate);
     this.lastUnderruns = this.totalUnderruns();
-    this.cleanTicks = 0;
+    this.guardState = ZERO_RESERVE;
     this.autoGuard = setInterval(() => {
       const u = this.totalUnderruns();
-      const delta = u - this.lastUnderruns; // node re-attach resets the counter → negative → treated clean
+      // Keep the baseline current even while paused so resuming never sees a stale delta spike.
+      if (!(this.deckA.playing || this.deckB.playing)) {
+        this.lastUnderruns = u;
+        return;
+      }
+      const delta = u - this.lastUnderruns; // node re-attach resets the counter → negative → clean
       this.lastUnderruns = u;
-      if (!(this.deckA.playing || this.deckB.playing)) return;
-      if (delta > 0) {
-        this.cleanTicks = 0;
-        const next = Math.min(this.adaptiveReserve + step, cap);
-        if (next !== this.adaptiveReserve) {
-          this.adaptiveReserve = next;
-          this.applyReserve();
-        }
-      } else if (this.adaptiveReserve > 0 && ++this.cleanTicks >= 12) {
-        this.cleanTicks = 0;
-        this.adaptiveReserve = Math.max(0, this.adaptiveReserve - decay);
+      this.guardState = nextReserve(this.guardState, delta, cfg);
+      if (this.guardState.reserve !== this.adaptiveReserve) {
+        this.adaptiveReserve = this.guardState.reserve;
         this.applyReserve();
       }
-    }, 1000);
+    }, POLL_MS);
+  }
+
+  /** Proactively pre-buffer the instant a wireless route CONNECTS (a devicechange) — before the
+   *  first skip. A CarPlay connect keeps the page visible + ctx "running", so the resume hooks
+   *  never fire; this is the only proactive lever on iOS (no outputLatency to predict the route).
+   *  No-op unless the auto-guard is running (mobile). */
+  primeWirelessFloor() {
+    if (!this.autoGuard) return;
+    this.guardState = primedFloor(this.guardState, reserveCfg(this.ctx.sampleRate));
+    if (this.guardState.reserve !== this.adaptiveReserve) {
+      this.adaptiveReserve = this.guardState.reserve;
+      this.applyReserve();
+    }
   }
 
   /** Pre-roll headroom for an in-flight on-device stem separation (the mid-split stutter). */

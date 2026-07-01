@@ -15,6 +15,7 @@ import {
   shiftKey,
   beatIndexBefore,
   beatPhase,
+  localTempoDev,
   nearestBeat,
   beatTimeOffset,
   barAnchor,
@@ -251,6 +252,36 @@ describe("beatIndexBefore", () => {
   it("returns the last index for t at or past the final beat", () => {
     expect(beatIndexBefore(beats, 2.0)).toBe(4);
     expect(beatIndexBefore(beats, 10)).toBe(4);
+  });
+});
+
+// ===========================================================================
+// localTempoDev
+// ===========================================================================
+describe("localTempoDev (rubato feed-forward)", () => {
+  it("returns 0 for a uniform grid (no dynamic beats[])", () => {
+    expect(localTempoDev({ bpm: 120, firstBeat: 0, interval: 0.5 }, 1.0)).toBe(0);
+  });
+  it("returns ~0 for an evenly-spaced dynamic grid (on-tempo)", () => {
+    const g: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5, beats: new Float32Array([0, 0.5, 1, 1.5, 2, 2.5, 3]) };
+    expect(localTempoDev(g, 1.5)).toBeCloseTo(0, 6);
+  });
+  it("positive where beats run locally CLOSER (faster than the grid average)", () => {
+    // avg interval 0.5, but a 0.4-spaced fast pocket in the middle
+    const g: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5, beats: new Float32Array([0, 0.5, 1.0, 1.4, 1.8, 2.2, 2.6, 3.1, 3.6]) };
+    expect(localTempoDev(g, 1.9)).toBeGreaterThan(0.1); // ~+0.25
+  });
+  it("negative where beats run locally WIDER (slower than the grid average)", () => {
+    const g: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5, beats: new Float32Array([0, 0.5, 1.0, 1.7, 2.4, 3.1, 3.6, 4.1]) };
+    expect(localTempoDev(g, 2.4)).toBeLessThan(0);
+  });
+  it("returns 0 before the first tracked beat (out of range)", () => {
+    const g: Beatgrid = { bpm: 120, firstBeat: 1, interval: 0.5, beats: new Float32Array([1, 1.5, 2, 2.5]) };
+    expect(localTempoDev(g, 0.2)).toBe(0);
+  });
+  it("clamps an absurd local deviation to ±0.5 (rejects grid glitches)", () => {
+    const g: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5, beats: new Float32Array([0, 0.05, 0.1, 0.15, 0.2, 0.25]) };
+    expect(localTempoDev(g, 0.12)).toBeCloseTo(0.5, 6); // 0.5/0.05 − 1 = 9 → clamped to 0.5
   });
 });
 

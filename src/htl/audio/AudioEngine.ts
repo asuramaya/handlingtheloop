@@ -1,4 +1,4 @@
-import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, foldTempoOctave, nearestBeat, piTrim, smartKeyShift } from "../analysis/analyze";
+import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, foldTempoOctave, localTempoDev, nearestBeat, piTrim, smartKeyShift } from "../analysis/analyze";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
@@ -24,7 +24,8 @@ export interface SyncDiag {
   fold: number | null; // grid-beat-frequency ratio slave/master — ~1 locked, ~2/~0.5 = density chase
   errBeats: number | null; // live phase error in [−0.5, 0.5) beats
   trim: number | null; // applied (clamped) rate trim, fraction
-  saturated: boolean; // the request exceeded the clamp — the loop can't follow (rubato)
+  feedFwd: number | null; // rubato feed-forward: master local-tempo dev − slave's, fraction (0 = steady)
+  saturated: boolean; // the request exceeded the clamp — the loop can't follow (extreme rubato)
 }
 
 // Master audio graph:
@@ -702,16 +703,18 @@ export class AudioEngine {
   private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
   private static readonly SYNC_PHASE_K = 0.06; // P-gain: rate trim per beat of phase error (gentle, ~8 s time constant)
   private static readonly SYNC_INTEGRAL_K = 0.003; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
+  private static readonly SYNC_FF_SMOOTH = 0.25; // one-pole smoothing on the rubato feed-forward (~0.28 s @ 80 ms tick) so the rate never STEPS as the beat window advances
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
+  private syncFF = 0; // smoothed rubato feed-forward (master local-tempo dev − slave's); reset with the integral
   // Live phase-lock telemetry (Settings ▸ Debug). `fold` is the grid-beat-frequency ratio
   // slave/master: ~1 = locked; ~2 or ~0.5 = the half/double DENSITY chase (err can never settle).
   // `saturated` = the requested trim exceeded the ±clamp (rubato the loop can't follow).
-  private syncDiagState: SyncDiag = { active: false, slave: null, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, saturated: false };
+  private syncDiagState: SyncDiag = { active: false, slave: null, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, feedFwd: null, saturated: false };
   get syncDiag(): SyncDiag {
     return this.syncDiagState;
   }
   private idleSyncDiag(slave: DeckId | null): SyncDiag {
-    return { active: false, slave, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, saturated: false };
+    return { active: false, slave, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, feedFwd: null, saturated: false };
   }
 
   private get masterId(): DeckId | null {
@@ -736,6 +739,7 @@ export class AudioEngine {
       this.deckA.setSyncTrim(0);
       this.deckB.setSyncTrim(0);
       this.syncIntegral = 0; // sync released → forget the accumulated phase correction
+      this.syncFF = 0; // …and the rubato feed-forward
     }
   }
 
@@ -762,6 +766,7 @@ export class AudioEngine {
     if (!slave.playing || !master.playing) {
       slave.setSyncTrim(0); // nothing to lock to while stopped
       this.syncIntegral = 0; // start the integral fresh on resume (don't carry a stale offset)
+      this.syncFF = 0; // and the feed-forward — re-tracks from the resume position
       this.syncDiagState = this.idleSyncDiag(sid);
       return;
     }
@@ -775,18 +780,27 @@ export class AudioEngine {
     // A big discontinuity (a seek, a re-acquire) means the integral's accumulation is stale — drop
     // it and let the P term re-acquire, then the integral rebuilds from the new phase.
     if (Math.abs(err) > 0.4) this.syncIntegral = 0;
-    // PI correction: P pulls toward phase-zero fast; I nulls the residual offset a P-only loop leaves.
+    // RUBATO FEED-FORWARD: how much faster/slower the MASTER's beats run locally (vs its grid
+    // average), minus the SLAVE's own local rubato → the fractional rate the slave needs just to
+    // TRACK the tempo, before any phase correction. Anticipating it (feed-forward) beats chasing it
+    // (the PI would always lag a moving tempo). Smoothed so the rate never steps as the window moves.
+    const ffTarget = localTempoDev(mg, master.position()) - localTempoDev(sg, slave.position());
+    this.syncFF += AudioEngine.SYNC_FF_SMOOTH * (ffTarget - this.syncFF);
+    const ff = Math.max(-Deck.SYNC_TRIM_MAX, Math.min(Deck.SYNC_TRIM_MAX, this.syncFF));
+    // The PI cleans up residual phase within whatever headroom the feed-forward leaves — so the
+    // integral's anti-windup sees the true remaining budget and never winds up behind a saturated ff.
+    const headroom = Math.max(0, Deck.SYNC_TRIM_MAX - Math.abs(ff));
     const pi = piTrim({
       err,
       integral: this.syncIntegral,
       dt: AudioEngine.SYNC_TICK_MS / 1000,
       kp: AudioEngine.SYNC_PHASE_K,
       ki: AudioEngine.SYNC_INTEGRAL_K,
-      clamp: Deck.SYNC_TRIM_MAX,
+      clamp: headroom,
     });
     this.syncIntegral = pi.integral;
-    slave.setSyncTrim(pi.trim);
-    // saturated = the clamp swallowed part of the request (rubato the loop can't follow).
+    slave.setSyncTrim(ff + pi.trim); // feed-forward tempo + feedback phase; setSyncTrim re-clamps as a guard
+    // saturated = even ±SYNC_TRIM_MAX can't cover the feed-forward + phase demand (extreme rubato).
     this.syncDiagState = {
       active: true,
       slave: sid,
@@ -795,7 +809,8 @@ export class AudioEngine {
       fold,
       errBeats: err,
       trim: slave.syncTrim,
-      saturated: Math.abs(pi.raw) - Math.abs(slave.syncTrim) > 1e-6,
+      feedFwd: ff,
+      saturated: Math.abs(this.syncFF + pi.raw) - Deck.SYNC_TRIM_MAX > 1e-6,
     };
   }
 
@@ -864,6 +879,7 @@ export class AudioEngine {
     this.matchSlaveTempo();
     slave.setSyncTrim(0); // start the lock from zero; the corrector takes over from here
     this.syncIntegral = 0; // fresh engage / re-align → start the PI integral from zero
+    this.syncFF = 0; // …and the rubato feed-forward
 
     // Phase align: bar-level when both downbeats are known (the two "1"s land
     // together — a phrase-tight mix), else per-beat. Minimal move (wrap to nearest).

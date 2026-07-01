@@ -255,6 +255,26 @@ export function beatIndexBefore(beats: Float32Array, t: number): number {
   return lo;
 }
 
+/** Local tempo DEVIATION at time `t`: how much faster (+) or slower (−) the beats run RIGHT HERE
+ *  vs the grid's average, as a fraction (0 = on-tempo, +0.05 = 5% faster locally). Read from the
+ *  dynamic `beats[]` over a ±2-beat window (smooths per-beat jitter); returns 0 for a uniform grid
+ *  (no rubato info) or an out-of-range `t`. The SYNC loop feeds `masterDev − slaveDev` forward as a
+ *  rate trim so the slave ANTICIPATES rubato instead of chasing it. Clamped to ±0.5 (reject glitches). */
+export function localTempoDev(g: Beatgrid, t: number): number {
+  const beats = g.beats;
+  if (!beats || beats.length < 3 || !(g.interval > 0)) return 0;
+  const i = beatIndexBefore(beats, t);
+  if (i < 0) return 0;
+  const W = 2; // ±2 beats → a 4-beat span, steadier than a single inter-beat interval
+  const lo = Math.max(0, i - W);
+  const hi = Math.min(beats.length - 1, i + W);
+  if (hi - lo < 1) return 0;
+  const localInterval = (beats[hi] - beats[lo]) / (hi - lo);
+  if (!(localInterval > 0)) return 0;
+  const dev = g.interval / localInterval - 1; // avgBpm/localBpm inverted → localBpm/avgBpm − 1
+  return Math.max(-0.5, Math.min(0.5, dev));
+}
+
 /** Fractional beat phase at time `t`, 0..1 (0 = on a beat). Interpolates within
  *  the surrounding tracked interval, so it's accurate even where tempo drifts. */
 export function beatPhase(g: Beatgrid, t: number): number {

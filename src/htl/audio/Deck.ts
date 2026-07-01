@@ -339,7 +339,11 @@ export class Deck {
   // so the clock + audio stay together and the slave imperceptibly speeds/slows to stay
   // locked. 0 whenever the deck isn't following.
   private _syncTrim = 0;
-  static readonly SYNC_TRIM_MAX = 0.02; // ±2 % — enough to pull a sub-beat slip in seconds, inaudible
+  // ±6 % rate: headroom to actually FOLLOW a master's local tempo / rubato (feed-forward + phase PI),
+  // not just nudge a sub-beat slip. SMC's failure study calls even ±20 % detection bounds "too rigid"
+  // for expressive music, so ±2 % was 10× tighter than that. Pitch-SAFE under keylock (default on —
+  // WSOLA holds pitch as the rate moves); it only moves pitch when keylock is off (varispeed).
+  static readonly SYNC_TRIM_MAX = 0.06;
   // Loop / cue / hot-cue subsystem (state + editing logic), constructed in the ctor.
   // Deck forwards `deck.loop` / `deck.cuePoint` etc. to it (getters below) and delegates
   // the public methods, so every existing reader/caller is unchanged. See LoopEngine.ts.

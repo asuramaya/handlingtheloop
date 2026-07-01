@@ -3033,6 +3033,7 @@ function AppBody() {
               ["bpm slave / master", `${fmt(sd.slaveBpm, 1)} / ${fmt(sd.masterBpm, 1)}`],
               ["fold factor", `${fmt(sd.fold, 3)}${chase ? "  ⚠ DENSITY CHASE" : ""}`],
               ["phase err", `${fmt(sd.errBeats, 3)} beats`],
+              ["rubato feed-fwd", `${((sd.feedFwd ?? 0) * 100).toFixed(2)}%`],
               ["trim", `${((sd.trim ?? 0) * 100).toFixed(2)}%${sd.saturated ? "  ⚠ SATURATED (rubato)" : ""}`],
             ]
           : [["state", sd.slave ? "engaged · idle (a deck not playing)" : "off"]],

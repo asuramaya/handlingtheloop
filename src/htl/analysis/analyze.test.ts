@@ -30,6 +30,7 @@ import {
   type Beatgrid,
   type KeyInfo,
 } from "./analyze";
+import { percussiveMag } from "./beats";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -252,6 +253,38 @@ describe("beatIndexBefore", () => {
   it("returns the last index for t at or past the final beat", () => {
     expect(beatIndexBefore(beats, 2.0)).toBe(4);
     expect(beatIndexBefore(beats, 10)).toBe(4);
+  });
+});
+
+// ===========================================================================
+// percussiveMag — the drum-DSP gridding pass (transient emphasis for onsets)
+// ===========================================================================
+describe("percussiveMag (percussive-emphasis onset front-end)", () => {
+  it("mix=0 → plain log-magnitude, ignores the harmonic estimate", () => {
+    expect(percussiveMag(5, 3, 0)).toBeCloseTo(Math.log1p(5), 10);
+    expect(percussiveMag(5, 0, 0)).toBeCloseTo(Math.log1p(5), 10);
+  });
+  it("mix=1, no sustained level → all transient (equals plain)", () => {
+    expect(percussiveMag(5, 0, 1)).toBeCloseTo(Math.log1p(5), 10);
+  });
+  it("mix=1, fully sustained (harm==raw) → zero onset (tone suppressed)", () => {
+    expect(percussiveMag(5, 5, 1)).toBeCloseTo(0, 10);
+    expect(percussiveMag(5, 9, 1)).toBeCloseTo(0, 10); // harm>raw → excess clamped to 0
+  });
+  it("blends transient excess with raw by mix", () => {
+    expect(percussiveMag(5, 3, 0.5)).toBeCloseTo(0.5 * Math.log1p(5) + 0.5 * Math.log1p(2), 10);
+  });
+  it("is monotonically NON-increasing as the sustained level rises (more suppression)", () => {
+    const a = percussiveMag(5, 1, 0.7);
+    const b = percussiveMag(5, 3, 0.7);
+    const c = percussiveMag(5, 5, 0.7);
+    expect(a).toBeGreaterThan(b);
+    expect(b).toBeGreaterThan(c);
+  });
+  it("a transient towering over its baseline stays crisp; an equal-amplitude sustained tone is cut", () => {
+    const transient = percussiveMag(8, 1, 0.7); // hit over a quiet background
+    const sustained = percussiveMag(8, 7.5, 0.7); // same magnitude but it's the ongoing level
+    expect(transient).toBeGreaterThan(sustained * 1.5);
   });
 });
 

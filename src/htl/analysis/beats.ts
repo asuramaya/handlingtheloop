@@ -8,9 +8,11 @@
 // the tempo" are the SAME bug. The fix is to track the actual beat sequence.
 //
 // Pipeline (all offline, single pass, O(n)):
-//   1. Spectral-flux onset envelope — STFT, log-magnitude, sum of positive
-//      bin-to-bin change. Far more robust than abs-amplitude on bass-heavy or
-//      sustained material; high-passed (local-mean subtraction) + normalised.
+//   1. Spectral-flux onset envelope — STFT, then a PERCUSSIVE-EMPHASIS pass (per-bin transient
+//      excess over a slow sustained-level EMA; see percussiveMag) so pads/held vocals/vibrato
+//      don't fake onsets, log-magnitude, sum of positive bin-to-bin change. Far more robust than
+//      abs-amplitude on bass-heavy or sustained material; high-passed (local-mean subtraction) +
+//      normalised. This is a drum DSP pass aimed at GRIDDING — no stem, no audio reconstructed.
 //   2. Tempo — autocorrelation of the envelope over 60–180 BPM with a gentle
 //      log-normal prior (~125 BPM) so octave errors don't win; parabolic peak
 //      interpolation for sub-BPM precision.
@@ -30,6 +32,28 @@ const HOP = 512;
 // frame count (and the FFT cost) with no loss of beat accuracy, keeping the whole
 // analysis well under a noticeable main-thread stall. (librosa defaults to 22050.)
 const DECIM = 2;
+
+// Percussive emphasis for the onset front-end (a "drum DSP pass aimed at GRIDDING" — NOT a stem:
+// no audio is reconstructed, nothing is cached or played, it lives and dies inside this function).
+// Each bin carries a slow EMA of its SUSTAINED magnitude (the harmonic estimate); the flux is then
+// computed on the TRANSIENT excess over that baseline, so pads / held vocals / strings / vibrato /
+// gated synths — sustained or modulated content that plain spectral flux misreads as onsets — are
+// attenuated, while drum hits (which tower over their own baseline) stay crisp. It does NOT remove
+// pitched ATTACKS (a piano stab is a transient too; that needs the neural stem or a learned model);
+// it strips the harmonic WASH and concentrates the periodic percussive backbone the tracker locks to.
+// Universal + ~free (one running EMA per bin), so mobile/no-cache gets the SAME grid as desktop —
+// the whole point of doing this in the light metadata lane instead of leaning on stems.
+const HARM_TAU_SEC = 0.4; // sustained-level EMA time constant (drums are far briefer → survive it)
+const PERC_MIX = 0.7; // 1 = flux purely on the transient excess; 0 = plain flux. 0.7 keeps a raw floor so a non-percussive beat is never fully lost.
+
+/** Transient-emphasised log-magnitude for one bin: blends the log-magnitude of the TRANSIENT excess
+ *  (`raw − harm`, clamped ≥0) with the plain log-magnitude by `mix`. `harm` is a slow running estimate
+ *  of the bin's sustained level. mix=1 → all-transient (sustained → 0); mix=0 → plain (ignores harm).
+ *  Pure; the onset loop calls it per bin. This is the core of the percussive gridding pass. */
+export function percussiveMag(raw: number, harm: number, mix: number): number {
+  const perc = raw > harm ? raw - harm : 0;
+  return (1 - mix) * Math.log1p(raw) + mix * Math.log1p(perc);
+}
 
 /** Mono, box-filtered down by DECIM. Box averaging is a cheap anti-alias — enough
  *  since we only keep the magnitude envelope below Nyquist/2 for onsets. */
@@ -65,8 +89,11 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
   const re = new Float32Array(FFT_SIZE);
   const im = new Float32Array(FFT_SIZE);
   const prevMag = new Float32Array(bins);
+  const harm = new Float32Array(bins); // per-bin slow EMA of the sustained (harmonic) magnitude
   // Bins up to ~150 Hz carry the kick — their flux marks downbeats.
   const lowCut = Math.max(2, Math.min(bins - 1, Math.round((150 * FFT_SIZE) / sr)));
+  // EMA coefficient for the sustained-level tracker (~HARM_TAU_SEC at this frame rate).
+  const harmA = 1 - Math.exp(-1 / (HARM_TAU_SEC * (sr / HOP)));
 
   const frames = Math.floor((n - FFT_SIZE) / HOP) + 1;
   if (frames < 8) return null;
@@ -86,10 +113,12 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
     let loud = 0;
     for (let k = 1; k < bins; k++) {
       const raw = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
-      loud += raw; // sustained spectral magnitude ≈ loudness (drops/breakdowns)
-      // log-magnitude tames the loud-vs-quiet dynamic range so onsets in soft
-      // passages still register against onsets in loud drops.
-      const mag = Math.log1p(raw);
+      loud += raw; // sustained spectral magnitude ≈ loudness (drops/breakdowns) — stays RAW
+      // Transient-emphasised magnitude: measure the excess over this bin's sustained level (the
+      // PRE-transient background — update the EMA after), so pads/vibrato/held tones don't drive
+      // the flux. log-magnitude still tames the loud-vs-quiet dynamic range. See percussiveMag.
+      const mag = percussiveMag(raw, harm[k], PERC_MIX);
+      harm[k] += harmA * (raw - harm[k]);
       const d = mag - prevMag[k];
       if (d > 0) {
         sum += d; // half-wave rectify: only energy INCREASES are onsets

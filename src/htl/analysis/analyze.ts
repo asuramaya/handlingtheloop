@@ -486,13 +486,15 @@ export function piTrim(p: { err: number; integral: number; dt: number; kp: numbe
  *  client can never misread a shape it wasn't written for. Read the two-stamp model in analyze.test. */
 export const GRID_FORMAT_EPOCH = 1;
 
-/** Analysis ALGORITHM version — what PRODUCED the grid (Ellis-2007 DP = 1; a future stem-cleaned or
- *  Beat This! detector bumps it). Stored in the D1 `version` column, NOT in the grid bytes. It's
- *  provenance + the convergence gate: a client REUSES a stored grid only when `stored.version >=`
- *  this (as-good-or-better), and otherwise RE-DERIVES + upgrades the row. So the crowdsourced pool
- *  climbs to the newest algorithm in circulation as tracks get touched ("everything upgrades
- *  eventually") instead of a messy mix — see the write-side don't-downgrade guard in upsertAnalysis. */
-export const ANALYSIS_VERSION = 1;
+/** Analysis ALGORITHM version — what PRODUCED the grid. Stored in the D1 `version` column, NOT in
+ *  the grid bytes. It's provenance + the convergence gate: a client REUSES a stored grid only when
+ *  `stored.version >=` this (as-good-or-better), and otherwise RE-DERIVES + upgrades the row. So the
+ *  crowdsourced pool climbs to the newest algorithm in circulation as tracks get touched ("everything
+ *  upgrades eventually") instead of a messy mix — see the don't-downgrade guard in upsertAnalysis.
+ *    1 = Ellis-2007 DP on the plain spectral-flux envelope.
+ *    2 = + percussive-emphasis onset front-end (beats.ts percussiveMag): strips sustained/modulated
+ *        harmonic wash so the tracker locks the drum backbone cleaner — universal, stem-free. */
+export const ANALYSIS_VERSION = 2;
 
 /** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
  *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —

@@ -460,11 +460,27 @@ export function piTrim(p: { err: number; integral: number; dt: number; kp: numbe
   return raw === trim ? { trim, integral: nextI, raw } : { trim, integral, raw };
 }
 
+/** Grid wire-format EPOCH — the SHAPE of the serialized beatgrid. Bump ONLY when this JSON
+ *  structure changes (a field added/renamed, units change) — never for a mere algorithm swap.
+ *  It's embedded IN the serialized bytes; deserializeGrid rejects a grid whose epoch != this, so a
+ *  client can never misread a shape it wasn't written for. Read the two-stamp model in analyze.test. */
+export const GRID_FORMAT_EPOCH = 1;
+
+/** Analysis ALGORITHM version — what PRODUCED the grid (Ellis-2007 DP = 1; a future stem-cleaned or
+ *  Beat This! detector bumps it). Stored in the D1 `version` column, NOT in the grid bytes. It's
+ *  provenance + the convergence gate: a client REUSES a stored grid only when `stored.version >=`
+ *  this (as-good-or-better), and otherwise RE-DERIVES + upgrades the row. So the crowdsourced pool
+ *  climbs to the newest algorithm in circulation as tracks get touched ("everything upgrades
+ *  eventually") instead of a messy mix — see the write-side don't-downgrade guard in upsertAnalysis. */
+export const ANALYSIS_VERSION = 1;
+
 /** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
  *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —
- *  so they're converted to plain number arrays here and back in deserializeGrid. Round-trips. */
+ *  so they're converted to plain number arrays here and back in deserializeGrid. Round-trips.
+ *  Embeds GRID_FORMAT_EPOCH so a reader can reject a shape it can't parse. */
 export function serializeGrid(g: Beatgrid): string {
   return JSON.stringify({
+    epoch: GRID_FORMAT_EPOCH,
     bpm: g.bpm,
     firstBeat: g.firstBeat,
     interval: g.interval,
@@ -479,12 +495,16 @@ export function serializeGrid(g: Beatgrid): string {
 }
 
 /** Parse a serialized Beatgrid back (Float32Arrays restored). Returns null on malformed/empty
- *  input or an implausible grid (no positive bpm) — callers then fall back to deriving it, so a
- *  corrupt cache entry can never put a bad grid on a deck. */
+ *  input, a FORMAT-EPOCH mismatch (a shape this client wasn't written to read), or an implausible
+ *  grid (no positive bpm) — callers then fall back to deriving it, so a corrupt or foreign-shaped
+ *  cache entry can never put a bad grid on a deck. */
 export function deserializeGrid(s: string | null | undefined): Beatgrid | null {
   if (!s) return null;
   try {
     const o = JSON.parse(s) as Record<string, unknown>;
+    // Epoch gate: a grid with no epoch is pre-versioning (legacy/foreign); one with a different
+    // epoch is a shape we can't safely parse. Either way → null → the caller re-derives.
+    if (o.epoch !== GRID_FORMAT_EPOCH) return null;
     const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
     const bpm = num(o.bpm);
     const firstBeat = num(o.firstBeat);
@@ -585,21 +605,30 @@ function detectBeatgridUniform(buffer: AudioLike): Beatgrid | null {
   return { bpm: Math.round(bpm * 100) / 100, firstBeat: bestPhase / envRate, interval: 60 / bpm };
 }
 
-export function analyzeTrack(buffer: AudioLike): TrackAnalysis {
-  const beatgrid = detectBeatgrid(buffer);
+/** Full analysis. When `suppliedGrid` is given (a persisted grid reused from the crowdsourced
+ *  cache), the expensive `detectBeatgrid` pass is SKIPPED and that grid is used verbatim — key and
+ *  the LOD pyramid are still derived from the buffer (they aren't persisted; both are cheap). */
+export function analyzeTrack(buffer: AudioLike, suppliedGrid?: Beatgrid | null): TrackAnalysis {
+  const beatgrid = suppliedGrid ?? detectBeatgrid(buffer);
   return { bpm: beatgrid?.bpm ?? null, beatgrid, key: detectKey(buffer), pyramid: computePyramid(buffer) };
 }
 
 /** Analyse from raw planar channels (what a Web Worker receives — no AudioBuffer).
- *  Wraps the channels in an AudioLike and runs the full pipeline. */
-export function analyzeChannels(ch0: Float32Array, ch1: Float32Array | null, sampleRate: number): TrackAnalysis {
+ *  Wraps the channels in an AudioLike and runs the full pipeline. `suppliedGrid` skips beat
+ *  detection (see analyzeTrack) — used by the cache-first load to reuse a stored grid. */
+export function analyzeChannels(
+  ch0: Float32Array,
+  ch1: Float32Array | null,
+  sampleRate: number,
+  suppliedGrid?: Beatgrid | null,
+): TrackAnalysis {
   const like: AudioLike = {
     sampleRate,
     length: ch0.length,
     numberOfChannels: ch1 ? 2 : 1,
     getChannelData: (c) => (c === 0 ? ch0 : (ch1 ?? ch0)),
   };
-  return analyzeTrack(like);
+  return analyzeTrack(like, suppliedGrid);
 }
 
 // ----------------------------- musical key --------------------------------

@@ -2,7 +2,7 @@
 // TrackAnalysis. Degrades gracefully — if the worker can't be constructed or dies
 // mid-flight, analysis runs inline on the main thread so a track still loads.
 import { analyzeChannels } from "./analyze";
-import type { TrackAnalysis } from "./analyze";
+import type { Beatgrid, TrackAnalysis } from "./analyze";
 
 let worker: Worker | null = null;
 let failed = false; // construction failed once → don't keep retrying, go inline
@@ -38,13 +38,15 @@ function getWorker(): Worker | null {
 }
 
 /** Analyse `buffer` off-thread. Channels are COPIED (slice) before transfer so the
- *  live playback buffer is never detached. */
-export function analyzeTrackAsync(buffer: AudioBuffer): Promise<TrackAnalysis> {
+ *  live playback buffer is never detached. When `grid` is passed (a grid reused from the
+ *  crowdsourced cache), beat detection is skipped and that grid is used verbatim — key and the
+ *  LOD pyramid are still derived from the buffer off-thread (they aren't persisted). */
+export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): Promise<TrackAnalysis> {
   const sampleRate = buffer.sampleRate;
   const inline = (): TrackAnalysis => {
     const c0 = buffer.getChannelData(0).slice();
     const c1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1).slice() : null;
-    return analyzeChannels(c0, c1, sampleRate);
+    return analyzeChannels(c0, c1, sampleRate, grid);
   };
 
   const w = getWorker();
@@ -55,7 +57,9 @@ export function analyzeTrackAsync(buffer: AudioBuffer): Promise<TrackAnalysis> {
   const id = ++seq;
   return new Promise<TrackAnalysis>((resolve, reject) => {
     pending.set(id, { resolve, reject });
+    // Only the channel buffers transfer — `grid` is small and structured-cloned (its Float32Arrays
+    // stay owned by the caller, which needs the grid intact for its own use).
     const transfer: Transferable[] = ch1 ? [ch0.buffer, ch1.buffer] : [ch0.buffer];
-    w.postMessage({ id, ch0, ch1, sampleRate }, transfer);
+    w.postMessage({ id, ch0, ch1, sampleRate, grid }, transfer);
   }).catch(() => inline()); // worker died — recopy from the intact source buffer
 }

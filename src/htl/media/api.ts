@@ -69,6 +69,32 @@ export async function fetchAnalysisBatch(
   }
 }
 
+export interface StoredAnalysis {
+  bpm: number | null;
+  key: string | null;
+  keyName: string | null;
+  beatOffset: number | null;
+  duration: number | null;
+  grid: string | null; // serialized beatgrid (deserializeGrid) — null if none stored / column unmigrated
+  version: number; // the algorithm version that produced it (drives the reuse-vs-recompute gate)
+}
+
+/** The FULL stored analysis for one track (incl. the serialized grid + version) from the shared
+ *  dataset — the cache-first load reads this to reuse a grid instead of re-deriving. null when
+ *  unknown, offline, or in plain vite dev (no D1). Best-effort — never blocks a track load. */
+export async function fetchAnalysisFull(videoId: string, signal?: AbortSignal): Promise<StoredAnalysis | null> {
+  if (!/^[\w-]{11}$/.test(videoId)) return null;
+  try {
+    const { analysis } = await getJson<{ analysis: StoredAnalysis | null }>(
+      `/api/analysis?v=${encodeURIComponent(videoId)}&full=1`,
+      signal,
+    );
+    return analysis ?? null;
+  } catch {
+    return null; // any failure → caller derives locally
+  }
+}
+
 /** Key/BPM for a single track via its ISRC (free public DBs — MusicBrainz →
  *  AcousticBrainz). Cheap (no decode); null when uncovered. `videoId` lets the
  *  server cache the hit to the shared dataset. */
@@ -128,7 +154,8 @@ export async function fetchCommunity(limit = 60, signal?: AbortSignal): Promise<
 // once per session — a reload / re-analyze / both-decks-same-track shouldn't each write D1.
 const postedAnalysis = new Set<string>();
 
-/** Contribute a track's analysis (BPM/key/grid) to the shared dataset. Best-effort, de-duped. */
+/** Contribute a track's analysis (BPM/key/grid) to the shared dataset. Best-effort, de-duped.
+ *  `version` (the algorithm that produced the grid) drives the server's don't-downgrade guard. */
 export async function postAnalysis(a: {
   videoId: string;
   bpm?: number | null;
@@ -137,6 +164,7 @@ export async function postAnalysis(a: {
   beatOffset?: number | null;
   duration?: number | null;
   grid?: string | null; // full serialized beatgrid (serializeGrid) — the cache-first/re-derivation seam
+  version?: number; // ANALYSIS_VERSION — omit to accept the server default (1)
 }): Promise<void> {
   if (postedAnalysis.has(a.videoId)) return; // already contributed this session
   postedAnalysis.add(a.videoId);

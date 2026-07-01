@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { decodeAudio, getCachedTrack, setCachedTrack } from "../audio";
-import { analyzeTrackAsync } from "../analysis";
+import { analyzeTrackAsync, serializeGrid, ANALYSIS_VERSION } from "../analysis";
 import { fetchFeaturesByIsrc, fetchYouTubeAudio, identifyTrack, postAnalysis } from "../media";
 import { fingerprintBuffer } from "../fingerprint";
 import type { TrackMeta } from "../library/types";
@@ -94,6 +94,10 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
           keyName: analysis.key?.name ?? null,
           beatOffset: analysis.beatgrid?.firstBeat ?? null,
           duration: Math.round(buffer.duration),
+          // Contribute the full grid + version too, uniform with the deck-load poster (Metadata B) —
+          // so a prefetch primes the shared cache the same way and the convergence guard applies.
+          grid: analysis.beatgrid ? serializeGrid(analysis.beatgrid) : null,
+          version: ANALYSIS_VERSION,
         });
       } catch {
         /* best-effort — a failed precompute just means we score from provider order */

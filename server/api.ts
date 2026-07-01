@@ -361,10 +361,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         return true;
       }
       case "/api/analysis": {
-        // No D1 in plain vite dev. GET → empty map (auto-mix falls back to provider
-        // order); POST → accept + no-op so the client's contribution doesn't error.
+        // No D1 in plain vite dev. GET ?full=1 → null (no stored grid → client derives locally);
+        // GET ?ids= → empty map (auto-mix falls back to provider order); POST → accept + no-op so
+        // the client's contribution doesn't error. (Run `pnpm worker` for the real D1-backed path.)
         if (req.method === "GET") {
-          sendJson(res, 200, { analysis: {} });
+          sendJson(res, 200, url.searchParams.get("full") ? { analysis: null } : { analysis: {} });
           return true;
         }
         sendJson(res, 200, { ok: true });

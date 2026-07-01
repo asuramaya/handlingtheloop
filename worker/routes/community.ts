@@ -12,7 +12,7 @@ import {
   stemCachedIds,
 } from "../shared";
 import { type TrackMeta } from "../../server/youtube";
-import { listCommunityTracks, upsertCommunityTrack, getOrCreateInvite, getAnalysisByIds, upsertAnalysis } from "../../server/db";
+import { listCommunityTracks, upsertCommunityTrack, getOrCreateInvite, getAnalysisByIds, getAnalysisFull, upsertAnalysis } from "../../server/db";
 import {
   STEM_DOWNLOAD_CONTENT_TYPE,
   DOWNLOAD_SAFE_HEADERS,
@@ -139,6 +139,24 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
       return json(200, { ok: true });
     }
     case "/api/analysis": {
+      // GET ?v=<id>&full=1 → the FULL stored analysis for one track (incl. serialized grid +
+      // algorithm version) — the cache-first load reads this to reuse a grid instead of re-deriving.
+      if (req.method === "GET" && url.searchParams.get("full")) {
+        const v = url.searchParams.get("v") || "";
+        if (!isVideoId(v)) return json(400, { error: "bad videoId" });
+        if (!env.DB) return json(200, { analysis: null });
+        const row = await getAnalysisFull(env.DB, v);
+        return json(
+          200,
+          {
+            analysis: row
+              ? { bpm: row.bpm, key: row.music_key, keyName: row.key_name, beatOffset: row.beat_offset, duration: row.duration, grid: row.grid, version: row.version }
+              : null,
+          },
+          // A stored grid is deterministic for a (video, version) pair — let the browser hold it.
+          { "cache-control": "public, max-age=300" },
+        );
+      }
       // GET ?ids=v1,v2 → known BPM/key for a batch (auto-mix candidate scoring).
       if (req.method === "GET") {
         const ids = (url.searchParams.get("ids") || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -162,6 +180,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
         beatOffset?: number;
         duration?: number;
         grid?: string;
+        version?: number;
       };
       if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
       // This crowdsourced data is later published to a public HF dataset, so clamp
@@ -179,6 +198,9 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             // Full serialized beatgrid — bounded (anonymous, HF-bound). A ~10-min track's grid is
             // a few KB; 256 KB is a generous ceiling that rejects any absurd/oversized payload.
             grid: typeof b.grid === "string" && b.grid.length > 0 && b.grid.length <= 262_144 ? b.grid : null,
+            // Algorithm version — drives the don't-downgrade convergence guard in upsertAnalysis.
+            // Clamp to a sane integer; absent/garbage falls to the DB default (1).
+            version: Number.isInteger(b.version) && b.version! >= 1 && b.version! <= 1_000_000 ? b.version : undefined,
           }).catch(() => {}),
         );
       }

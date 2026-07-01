@@ -4,21 +4,22 @@
 // thread that's a visible UI stall on every load. The worker receives raw channel
 // arrays (no AudioBuffer exists here) and returns the full TrackAnalysis.
 import { analyzeChannels } from "./analyze";
-import type { TrackAnalysis } from "./analyze";
+import type { Beatgrid, TrackAnalysis } from "./analyze";
 
 interface Req {
   id: number;
   ch0: Float32Array;
   ch1: Float32Array | null;
   sampleRate: number;
+  grid?: Beatgrid | null; // reused-from-cache grid → skip beat detection (key/pyramid still derived)
 }
 
 const ctx = self as unknown as Worker;
 
 ctx.onmessage = (e: MessageEvent<Req>) => {
-  const { id, ch0, ch1, sampleRate } = e.data;
+  const { id, ch0, ch1, sampleRate, grid } = e.data;
   try {
-    const analysis: TrackAnalysis = analyzeChannels(ch0, ch1, sampleRate);
+    const analysis: TrackAnalysis = analyzeChannels(ch0, ch1, sampleRate, grid);
     ctx.postMessage({ id, analysis });
   } catch (err) {
     ctx.postMessage({ id, error: String((err as Error)?.message ?? err) });

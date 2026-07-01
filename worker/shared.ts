@@ -109,10 +109,11 @@ export const NO_CACHE = { "cache-control": "no-store" };
 export const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext } = createInnertubeApi(Innertube as never);
 
 // ---- helpers -----------------------------------------------------------------
-export function json(status: number, body: unknown): Response {
+export function json(status: number, body: unknown, headers?: Record<string, string>): Response {
+  // NO_CACHE is the default; pass `headers` to override it (e.g. a deterministic, cacheable read).
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...NO_CACHE },
+    headers: { "content-type": "application/json", ...NO_CACHE, ...headers },
   });
 }
 

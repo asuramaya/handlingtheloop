@@ -11,12 +11,18 @@ export interface TrackAnalysisRow {
   duration: number | null;
 }
 
-/** Contribute/refresh a track's analysis (BPM/key/grid). Idempotent per video. */
+/** Contribute/refresh a track's analysis (BPM/key/grid). Idempotent per video.
+ *  DON'T-DOWNGRADE: the row is overwritten only when the incoming `version` is >= the stored one,
+ *  so an older client can never stomp a grid produced by a newer detector. Combined with the load
+ *  path re-deriving whenever the stored version is behind, the pool converges monotonically to the
+ *  newest algorithm in circulation — see the htl-metadata-convergence design note. */
 export async function upsertAnalysis(
   db: D1Database,
   a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; version?: number },
 ): Promise<void> {
-  // The BPM/key summary write — unchanged, so it can NEVER be broken by the grid column.
+  const version = a.version ?? 1;
+  // The BPM/key summary write — unchanged shape, so it can NEVER be broken by the grid column.
+  // A fresh row always inserts; an existing row updates only when this version is >= the stored one.
   await db
     .prepare(
       `INSERT INTO track_analysis (video_id, bpm, music_key, key_name, beat_offset, duration, version, updated_at)
@@ -24,20 +30,51 @@ export async function upsertAnalysis(
        ON CONFLICT(video_id) DO UPDATE SET
          bpm=excluded.bpm, music_key=excluded.music_key, key_name=excluded.key_name,
          beat_offset=excluded.beat_offset, duration=excluded.duration,
-         version=excluded.version, updated_at=excluded.updated_at`,
+         version=excluded.version, updated_at=excluded.updated_at
+       WHERE excluded.version >= track_analysis.version`,
     )
-    .bind(a.videoId, a.bpm ?? null, a.key ?? null, a.keyName ?? null, a.beatOffset ?? null, a.duration ?? null, a.version ?? 1, now())
+    .bind(a.videoId, a.bpm ?? null, a.key ?? null, a.keyName ?? null, a.beatOffset ?? null, a.duration ?? null, version, now())
     .run();
   // The full grid is a SEPARATE, self-healing write: if migration 0023 (the `grid` column) hasn't
   // applied yet, this throws and we swallow it — the summary above is already persisted. Once the
   // column exists, the grid lands. Skip when no grid is offered so a summary-only contributor
-  // (e.g. the ISRC features path) never nulls a previously-stored grid.
+  // (e.g. the ISRC features path) never nulls a previously-stored grid. Same don't-downgrade guard
+  // (`version >= current`): after the summary write the row's version is the survivor's, so the grid
+  // only lands when this contribution won (or tied) — never overwriting a newer detector's grid.
   if (a.grid != null) {
     try {
-      await db.prepare(`UPDATE track_analysis SET grid=? WHERE video_id=?`).bind(a.grid, a.videoId).run();
+      await db
+        .prepare(`UPDATE track_analysis SET grid=? WHERE video_id=? AND ? >= version`)
+        .bind(a.grid, a.videoId, version)
+        .run();
     } catch {
       /* grid column not migrated yet — bpm/key already persisted, grid lands after the migration */
     }
+  }
+}
+
+export interface TrackAnalysisFull {
+  bpm: number | null;
+  music_key: string | null;
+  key_name: string | null;
+  beat_offset: number | null;
+  duration: number | null;
+  grid: string | null;
+  version: number;
+}
+
+/** Full stored analysis for ONE track (incl. the serialized grid + algorithm version) — the
+ *  cache-first load reads this to reuse a grid instead of re-deriving. Returns null if unknown,
+ *  or if the `grid` column hasn't migrated yet (0023) — either way the caller derives locally. */
+export async function getAnalysisFull(db: D1Database, videoId: string): Promise<TrackAnalysisFull | null> {
+  if (!/^[\w-]{11}$/.test(videoId)) return null;
+  try {
+    return await db
+      .prepare("SELECT bpm, music_key, key_name, beat_offset, duration, grid, version FROM track_analysis WHERE video_id = ?")
+      .bind(videoId)
+      .first<TrackAnalysisFull>();
+  } catch {
+    return null; // grid column not migrated yet → treat as a miss, derive locally
   }
 }
 

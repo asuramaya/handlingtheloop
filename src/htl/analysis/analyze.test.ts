@@ -24,6 +24,8 @@ import {
   piTrim,
   serializeGrid,
   deserializeGrid,
+  analyzeChannels,
+  GRID_FORMAT_EPOCH,
   type Beatgrid,
   type KeyInfo,
 } from "./analyze";
@@ -550,9 +552,50 @@ describe("grid codec (serialize/deserialize)", () => {
     expect(deserializeGrid("")).toBeNull();
     expect(deserializeGrid("not json{")).toBeNull();
     expect(deserializeGrid("[1,2,3]")).toBeNull(); // not an object with bpm
-    expect(deserializeGrid(JSON.stringify({ firstBeat: 0, interval: 0.5 }))).toBeNull(); // no bpm
-    expect(deserializeGrid(JSON.stringify({ bpm: 0, firstBeat: 0, interval: 0.5 }))).toBeNull(); // bpm not positive
-    expect(deserializeGrid(JSON.stringify({ bpm: NaN, firstBeat: 0, interval: 0.5 }))).toBeNull();
+    // (all below also lack the epoch tag, so they'd reject on that alone — see the epoch-gate block)
+    expect(deserializeGrid(JSON.stringify({ epoch: GRID_FORMAT_EPOCH, firstBeat: 0, interval: 0.5 }))).toBeNull(); // no bpm
+    expect(deserializeGrid(JSON.stringify({ epoch: GRID_FORMAT_EPOCH, bpm: 0, firstBeat: 0, interval: 0.5 }))).toBeNull(); // bpm not positive
+    expect(deserializeGrid(JSON.stringify({ epoch: GRID_FORMAT_EPOCH, bpm: NaN, firstBeat: 0, interval: 0.5 }))).toBeNull();
+  });
+
+  // The FORMAT-EPOCH gate: a grid must carry the exact epoch this build writes, or it's a shape we
+  // can't safely parse (legacy pre-versioning, or a future/foreign detector) → null → recompute.
+  it("rejects a grid whose format-epoch is missing or mismatched (shape safety)", () => {
+    const body = { bpm: 120, firstBeat: 0, interval: 0.5 };
+    // Structurally valid but NO epoch → a pre-versioning / foreign grid → rejected.
+    expect(deserializeGrid(JSON.stringify(body))).toBeNull();
+    // Wrong epoch (older or newer than this build) → rejected.
+    expect(deserializeGrid(JSON.stringify({ ...body, epoch: GRID_FORMAT_EPOCH - 1 }))).toBeNull();
+    expect(deserializeGrid(JSON.stringify({ ...body, epoch: GRID_FORMAT_EPOCH + 1 }))).toBeNull();
+    // Exact epoch → accepted (this is what serializeGrid emits).
+    expect(deserializeGrid(JSON.stringify({ ...body, epoch: GRID_FORMAT_EPOCH }))?.bpm).toBe(120);
+    // And serializeGrid always embeds the current epoch, so its output survives the gate.
+    expect(deserializeGrid(serializeGrid(full as Beatgrid))).not.toBeNull();
+  });
+});
+
+// The cache-first REUSE path: when a persisted grid is supplied, analyzeTrack must use it verbatim
+// (skip the expensive detector) while still deriving key + pyramid from the buffer.
+describe("analyzeChannels with a supplied grid (cache-first reuse)", () => {
+  // A short synthetic mono buffer — enough for detectKey/computePyramid to run without throwing.
+  const N = 8000;
+  const ch0 = new Float32Array(N);
+  for (let i = 0; i < N; i++) ch0[i] = Math.sin((2 * Math.PI * 220 * i) / 16000) * 0.25;
+
+  it("uses the supplied grid verbatim instead of detecting beats", () => {
+    const supplied: Beatgrid = { bpm: 123.45, firstBeat: 0.05, interval: 60 / 123.45 };
+    const a = analyzeChannels(ch0, null, 16000, supplied);
+    expect(a.beatgrid).toBe(supplied); // reference-identical → detection was skipped
+    expect(a.bpm).toBe(123.45); // bpm mirrors the supplied grid
+    expect(a.pyramid).toBeTruthy(); // pyramid still derived locally (not persisted)
+  });
+
+  it("derives its own grid when none is supplied (no reuse)", () => {
+    const supplied: Beatgrid = { bpm: 123.45, firstBeat: 0.05, interval: 60 / 123.45 };
+    const withGrid = analyzeChannels(ch0, null, 16000, supplied);
+    const without = analyzeChannels(ch0, null, 16000);
+    expect(withGrid.beatgrid).toBe(supplied); // reused
+    expect(without.beatgrid).not.toBe(supplied); // ran the detector (grid or null), never the supplied object
   });
 });
 

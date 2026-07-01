@@ -27,6 +27,10 @@ import {
   EQ_MAX_DB,
   analyzeTrackAsync,
   serializeGrid,
+  deserializeGrid,
+  fetchAnalysisFull,
+  ANALYSIS_VERSION,
+  type Beatgrid,
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
@@ -1533,6 +1537,10 @@ function AppBody() {
           },
         });
         let cached = getCachedTrack(vid);
+        // True when this load REUSED a persisted grid from the shared dataset (vs deriving locally).
+        // Gates the contribution below: a reuse-hit has nothing new to add, so it skips the re-POST;
+        // a local derive (fresh, behind, or foreign-shape) DOES post → self-healing the row.
+        let reusedGrid = false;
         if (!cached) {
           let data: ArrayBuffer;
           const stored = await getAudio(vid);
@@ -1556,7 +1564,20 @@ function AppBody() {
           setStatusFor(id, { phase: "downloading", detail: "Decoding…" });
           const buffer = await decodeAudio(engine.ctx, data);
           if (stale()) return;
-          const analysis = await analyzeTrackAsync(buffer);
+          // Cache-first (Metadata B): reuse a persisted beatgrid from the shared dataset instead of
+          // re-running the expensive detector — but ONLY when the stored grid is a shape this build
+          // can read (deserializeGrid is epoch-gated) AND at least as new as what we'd produce
+          // (version >= ANALYSIS_VERSION). A behind / foreign-shaped / absent grid → derive locally,
+          // which re-contributes at OUR version below, upgrading the row: the pool converges to the
+          // newest detector as tracks get touched. Key by track.videoId (what postAnalysis writes).
+          let suppliedGrid: Beatgrid | null = null;
+          if (track.videoId) {
+            const stored = await fetchAnalysisFull(track.videoId, ctrl.signal);
+            if (stale()) return;
+            if (stored && stored.version >= ANALYSIS_VERSION) suppliedGrid = deserializeGrid(stored.grid);
+          }
+          reusedGrid = suppliedGrid != null;
+          const analysis = await analyzeTrackAsync(buffer, suppliedGrid);
           if (stale()) return;
           cached = { buffer, analysis };
           setCachedTrack(vid, cached);
@@ -1599,8 +1620,10 @@ function AppBody() {
           if (cached.analysis.bpm != null) library.setBpm(aid, cached.analysis.bpm);
           if (cached.analysis.key) library.setKey(aid, cached.analysis.key.camelot);
         }
-        // Contribute this analysis to the shared dataset (BPM/key/grid — facts, no audio).
-        if (track.videoId) {
+        // Contribute this analysis to the shared dataset (BPM/key/grid — facts, no audio). Skip when
+        // we REUSED a stored grid: the row is already current, so there's nothing to add (and the
+        // don't-downgrade guard would no-op it anyway). A local derive DOES post → upgrading the row.
+        if (track.videoId && !reusedGrid) {
           void postAnalysis({
             videoId: track.videoId,
             bpm: cached.analysis.bpm,
@@ -1611,6 +1634,7 @@ function AppBody() {
             // Contribute the FULL grid too (Metadata B) so a later load can skip re-derivation and
             // the dataset carries the dynamic beats/downbeat/phrases, not just the summary.
             grid: cached.analysis.beatgrid ? serializeGrid(cached.analysis.beatgrid) : null,
+            version: ANALYSIS_VERSION, // stamps the algorithm → drives the convergence guard
           });
         }
         // Stems: light the buttons instantly with the DSP split, then (if a neural

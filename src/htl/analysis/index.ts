@@ -1,6 +1,8 @@
 export {
   analyzeChannels,
   analyzeTrack,
+  ANALYSIS_VERSION,
+  GRID_FORMAT_EPOCH,
   barAnchor,
   barPhase,
   beatPhase,

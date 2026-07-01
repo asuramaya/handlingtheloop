@@ -72,7 +72,6 @@ import {
   getAudio,
   putAudio,
   loadStems,
-  isDspStems,
   getStemModel,
   modelSupport,
   isMobileDevice,
@@ -122,8 +121,6 @@ export type StemPhase =
   | "separating"
   | "ready"
   | "promoted"
-  | "dsp" // neural asked-for but it fell back to the DSP split — the deck has working
-  //        stems, just not the model claimed; an honest persistent "DSP" chip (no "✦").
   | "failed"
   | "unavailable";
 export interface StemStatus {
@@ -160,10 +157,6 @@ function terseStem(s: StemStatus | null | undefined): StemBadge | null {
       return { text: s.src ? `✦ ${s.src}` : "✓ Done", tone: "ok" };
     case "promoted":
       return { text: `✦ ${s.src ?? "Enhanced"}`, tone: "ok" };
-    case "dsp":
-      // Honest: a DSP split is active (not the neural model). No "✦" — that prefix means
-      // a neural engine ran. Persistent idle chip, same as the no-stems "DSP" badge.
-      return { text: "DSP", tone: "idle" };
     case "downloading":
       return { text: s.pct != null ? `↓ ${s.pct}%` : "↓ Cache", tone: "fetch" };
     case "separating":
@@ -1729,18 +1722,11 @@ function AppBody() {
           true, // force a re-compute, ignore + overwrite the cache
         );
         if (stale?.()) return;
-        // Two fixes: (1) `setStems(stems)` defaulted neural→FALSE, so a freshly re-analyzed
-        // Demucs set was flagged non-neural; pass the real flag. (2) honor a silent DSP
-        // fallback instead of claiming the model ran.
-        const real = !isDspStems(stems);
-        engine.deck(id).setStems(stems, real);
+        // loadStems throws on failure now (no DSP fallback) → the catch below reports it. A
+        // returned set is always the real neural model, so flag it neural (setStems defaults false).
+        engine.deck(id).setStems(stems, true);
         refresh();
-        setStatusFor(
-          id,
-          real
-            ? { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready (re-analyzed).` }
-            : { phase: "dsp", detail: `${model.label} couldn't separate here — using a quick DSP split.` },
-        );
+        setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready (re-analyzed).` });
       } catch (e) {
         console.warn("[htl] re-analyze failed:", e);
         setStatusFor(id, { phase: "failed", detail: `${model.label} re-analyze failed — see console.` });
@@ -3017,7 +3003,7 @@ function AppBody() {
           ["bpm / key", `${fmt(dk.effectiveBpm, 1)} / ${dk.effectiveKey?.camelot ?? "—"} ${dk.effectiveKey?.name ?? ""}`.trim()],
           ["sync / key role", `${dk.syncRole} / ${dk.keyRole}`],
           ["loop", dk.loop ? `${dk.loop.active ? "on" : "off"} ${fmt(dk.loop.start)}–${fmt(dk.loop.end)} (${dk.loop.beats}b)` : "—"],
-          ["stems", dk.hasStems ? (dk.stemsNeural ? "neural (4-lane)" : "dsp") : "none"],
+          ["stems", dk.hasStems ? (dk.stemsNeural ? "neural (4-lane)" : "non-neural") : "none"],
           ["stretch attached", String(dk.stretchAttached)],
           ["worklet heartbeat", h ? `ld${h.loaded} pl${h.playing} fifo${h.fifo} pk${Number(h.peak ?? 0).toFixed(2)} g${Number(h.gain ?? 0).toFixed(2)} end${h.ended}` : "none"],
         ],

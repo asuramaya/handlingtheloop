@@ -3,7 +3,8 @@
 // per model and switching never clobbers another model's results.
 //
 // `arch` selects the worker pipeline:
-//   • "dsp"       — no model, instant band/centre split (src/htl/stems dspStems)
+//   • "dsp"       — the "Single" no-stems sentinel (kind/arch typed dsp to satisfy the union;
+//                   plays the plain mix, no separation — there is NO band/centre DSP split)
 //   • "openunmix" — spectrogram magnitude nets + softmask (separator.worker.ts)
 //   • "demucs"    — waveform-domain (reserved; pending an ONNX export)
 import type { StemName } from "./index";

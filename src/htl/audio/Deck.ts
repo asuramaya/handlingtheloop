@@ -1052,8 +1052,8 @@ export class Deck {
     }
   }
 
-  /** Load PRE-PACKED int16 stems (from `dspStemsWindowedInt16`) with NO float32 intermediate —
-   *  the windowed build never held the full float32 set, so this is the OOM-safe path for LONG
+  /** Load PRE-PACKED int16 stems (from `loadStemsPackedInt16`) with NO float32 intermediate —
+   *  the packed build never holds the full float32 set, so this is the OOM-safe path for LONG
    *  tracks on mobile. Posts the int16 PCM straight to the worklet and builds the LOD pyramids
    *  from the supplied envelopes (no PCM re-scan). `this.stems` stays null (deep-zoom stem render
    *  → LOD only). Mirrors the tail of setStems' mobile branch, minus the float32 pack. */

@@ -205,33 +205,28 @@ async function encodeWav(buffer: AudioBuffer): Promise<ArrayBuffer> {
 }
 
 // --- stem source for the decks ------------------------------------------------
-// Resolve the four stems for a track under the SELECTED model:
-//   • dsp model → the instant on-device DSP split (no download).
-//   • onnx model → cache-first: pull this model's stems from R2 if warm; else, on
-//     a capable device, separate in-browser and share the result back to R2; on a
-//     weak device with a cold cache, fall back to the DSP split so buttons still work.
-// All paths return the same `Stems` shape, so the deck/UI never changes.
+// Resolve the four stems for a track under the SELECTED NEURAL model, cache-first:
+// pull this model's stems from R2 if warm; else, on a capable device, separate
+// in-browser and share the result back to R2. All paths return the same `Stems`
+// shape, so the deck/UI never changes.
 //
-// HONESTY TAG: a neural request that silently falls back to the DSP split (cold cache it
-// can't separate, or a separation that threw) returns a `dspStems` result — visually 4
-// lanes, but NOT the model the caller asked for. Tag those so the caller labels them "DSP"
-// instead of wearing a "✦ Demucs" chip over a DSP split (the "claims Demucs but isn't" bug).
-const DSP_FALLBACK = new WeakSet<Stems>();
-/** True when these stems are the instant DSP split, not the requested neural model. */
-export function isDspStems(s: Stems): boolean {
-  return DSP_FALLBACK.has(s);
-}
-
+// NO DSP FALLBACK: when neural separation is unavailable (a device that can't run the
+// model with a cold cache) or fails (worker crash / OOM / weights 404), loadStems THROWS
+// — it never fabricates a band/centre "DSP split". Every caller catches and plays the
+// plain mix with an honest status. A fabricated split was worse than none (it lit the
+// stem mixer over pseudo-stems the user couldn't tell from the real thing).
 export async function loadStems(
   ctx: BaseAudioContext,
   videoId: string,
   mix: AudioBuffer,
-  model: StemModel | string = "dsp",
+  model: StemModel | string,
   onProgress?: (pct: number) => void,
   force = false, // re-analyze: skip the cache (R2 download) and RE-COMPUTE, overwriting it
 ): Promise<Stems> {
   const m = typeof model === "string" ? getStemModel(model) : model;
-  if (m.kind === "dsp") return dspStems(mix);
+  // A non-neural ("off"/dsp-kind) model has no stems to load — callers gate that upstream
+  // (deriveStems treats "off" as the plain no-stems mix), so reaching here is a programmer error.
+  if (m.kind === "dsp") throw new Error(`loadStems: non-neural model "${m.id}" has no stems`);
 
   // neural: R2 cache-first by model id. Download the raw WAV bytes, persist them
   // locally (so the NEXT refresh skips even this download), then decode.
@@ -257,68 +252,22 @@ export async function loadStems(
 
   // Cold cache: only separate if THIS device can run THIS model on-device
   // (light int8 → phones too; heavy fp32 → desktop; demucs → desktop GPU). If not,
-  // fall back to the instant DSP split so the stem buttons still work.
-  if (!deviceSupportsModel(m)) return dspStems(mix);
+  // THROW — the caller plays the plain mix (no fabricated DSP split).
+  if (!deviceSupportsModel(m)) throw new Error(`loadStems: device can't run "${m.id}" and no cached set`);
 
-  // route to the engine for this model's architecture (both run in workers).
-  // Stems are second-class: ANY failure (model weights 404 on the edge, worker
-  // crash, OOM) must NEVER bubble up and break the deck — fall back to the
-  // instant DSP split so the stem buttons always work.
+  // route to the engine for this model's architecture (both run in workers). ANY failure
+  // (model weights 404 on the edge, worker crash, OOM) is logged (so a desktop separation
+  // failure is diagnosable) and RE-THROWN — the caller catches it and plays the plain mix.
+  // We never fabricate a DSP split to keep the buttons lit.
   try {
     const separate = m.arch === "demucs" ? separateDemucs : separateOpenUnmix;
     const stems = await separate(mix, m, onProgress);
     void persistStems(videoId, m.id, stems); // cache locally (refresh) + share to R2
     return stems;
   } catch (err) {
-    // Don't break the deck — but DON'T swallow this silently either: log it (so a desktop
-    // separation failure is diagnosable) and return a DSP split TAGGED as a fallback, so the
-    // caller labels it honestly rather than claiming the neural engine ran.
-    console.warn(`[htl] neural separation failed (${m.id}) — falling back to DSP split:`, err);
-    return dspStems(mix);
+    console.warn(`[htl] neural separation failed (${m.id}) — playing the mix:`, err);
+    throw err;
   }
-}
-
-// --- no-model DSP stem split --------------------------------------------------
-// A sum-exact decomposition of the mix: bass = lows, drums = highs, vocals =
-// the centre channel's vocal band, other = the residual (original − the rest).
-// Because `other` is the residual, every stem ON reconstructs the original mix
-// bit-for-bit, and muting any stem cleanly subtracts it. Not as clean as Demucs,
-// but real, instant, and on the same client-side-only path (runs in an
-// OfflineAudioContext — no Worker compute, by design).
-export async function dspStems(buffer: AudioBuffer): Promise<Stems> {
-  const bass = await renderFiltered(buffer, buffer, (ctx, src) => {
-    const f = ctx.createBiquadFilter();
-    f.type = "lowpass";
-    f.frequency.value = 200;
-    f.Q.value = 0.7;
-    src.connect(f);
-    return f;
-  });
-  const drums = await renderFiltered(buffer, buffer, (ctx, src) => {
-    const f = ctx.createBiquadFilter();
-    f.type = "highpass";
-    f.frequency.value = 5000;
-    src.connect(f);
-    return f;
-  });
-  // Vocals: the centre channel (L+R)/2, band-passed to the vocal range, then
-  // up-mixed back to stereo so muting it pulls voice out of both channels.
-  const voiceMono = await renderFiltered(buffer, midBuffer(buffer), (ctx, src) => {
-    const hp = ctx.createBiquadFilter();
-    hp.type = "highpass";
-    hp.frequency.value = 300;
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = 3500;
-    src.connect(hp);
-    hp.connect(lp);
-    return lp;
-  });
-  const vocals = upmix(voiceMono, buffer.numberOfChannels, buffer.sampleRate);
-  const other = await residual(buffer, [bass, drums, vocals]);
-  const out: Stems = { vocals, drums, bass, other };
-  DSP_FALLBACK.add(out); // tag: a DSP split, not a neural model → callers label it honestly
-  return out;
 }
 
 // PRE-PACKED stems: int16 PCM per group (in STEM_NAMES order, so the worklet's stemGain
@@ -335,116 +284,6 @@ export interface PackedStems {
 }
 
 const PACK_BUCKET = 256; // MUST match STEM_BASE_BUCKET in Deck.ts (the pyramid level-0 bucket)
-const DSP_WIN_BUCKETS = 4096; // window ≈ 4096·256 ≈ 21.8 s @ 48 k, bucket-aligned (no straddling buckets)
-const DSP_LEAD_SEC = 0.75; // IIR warm-up rendered before each window then discarded → continuous audio
-
-// WINDOWED DSP → int16, for LONG tracks. dspStems renders the whole track through OfflineAudio-
-// Context biquads → 4 full-length float32 buffers, then the engine packs them to int16; that
-// double (float32 output + int16) peaks at ~138 MB/min and OOMs a phone past ~6 min. This walks
-// the track in bucket-aligned windows, reuses dspStems on a SHORT slice (+ a lead-in so the IIR
-// filters settle → seam-free audio), packs each window straight into the resident int16 output,
-// and accumulates the envelope — so the float32 transient is bounded to ONE window regardless of
-// length. The band-split LPFs for the COLOUR envelope restart per window (a negligible colour
-// seam; the audio shape is continuous via the lead-in). Yields between windows.
-export async function dspStemsWindowedInt16(buffer: AudioBuffer, signal?: AbortSignal): Promise<PackedStems> {
-  const sr = buffer.sampleRate;
-  const N = buffer.length;
-  const ch = buffer.numberOfChannels;
-  const WIN = DSP_WIN_BUCKETS * PACK_BUCKET;
-  const LEAD = Math.round(DSP_LEAD_SEC * sr);
-  const buckets = Math.ceil(N / PACK_BUCKET);
-  const gL = STEM_NAMES.map(() => new Int16Array(N));
-  const gR = STEM_NAMES.map(() => new Int16Array(N));
-  const acc = STEM_NAMES.map(() => ({
-    min: new Float32Array(buckets),
-    max: new Float32Array(buckets),
-    low: new Float32Array(buckets),
-    mid: new Float32Array(buckets),
-    high: new Float32Array(buckets),
-    maxLow: 1e-9,
-    maxMid: 1e-9,
-    maxHigh: 1e-9,
-  }));
-  const aLow = 1 - Math.exp((-2 * Math.PI * 200) / sr);
-  const aMid = 1 - Math.exp((-2 * Math.PI * 2000) / sr);
-
-  for (let s = 0; s < N; s += WIN) {
-    if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-    const e = Math.min(N, s + WIN);
-    const leadStart = Math.max(0, s - LEAD);
-    const sliceLen = e - leadStart;
-    const slice = new AudioBuffer({ length: sliceLen, sampleRate: sr, numberOfChannels: ch });
-    for (let c = 0; c < ch; c++) slice.getChannelData(c).set(buffer.getChannelData(c).subarray(leadStart, e));
-    const stems = await dspStems(slice); // reuse the whole split on a short slice (with lead-in)
-    const off = s - leadStart; // first real (post-lead-in) sample inside the slice
-    for (let gi = 0; gi < STEM_NAMES.length; gi++) {
-      const stem = stems[STEM_NAMES[gi]];
-      const fL = stem.getChannelData(0);
-      const fR = stem.numberOfChannels > 1 ? stem.getChannelData(1) : fL;
-      const a = acc[gi];
-      const oL = gL[gi];
-      const oR = gR[gi];
-      let lp200 = 0;
-      let lp2000 = 0;
-      let lSum = 0;
-      let mSum = 0;
-      let hSum = 0;
-      let bMin = 1;
-      let bMax = -1;
-      let cnt = 0;
-      let bi = (s / PACK_BUCKET) | 0; // s is WIN-aligned ⇒ exact bucket index
-      for (let i = off, oi = s; i < sliceLen; i++, oi++) {
-        const l = fL[i];
-        const r = fR[i];
-        const sl = l * 32767;
-        const srr = r * 32767;
-        oL[oi] = sl < -32767 ? -32767 : sl > 32767 ? 32767 : Math.round(sl);
-        oR[oi] = srr < -32767 ? -32767 : srr > 32767 ? 32767 : Math.round(srr);
-        const m = (l + r) * 0.5;
-        lp200 += aLow * (m - lp200);
-        lp2000 += aMid * (m - lp2000);
-        const lo = lp200;
-        const md = lp2000 - lp200;
-        const hi = m - lp2000;
-        if (m < bMin) bMin = m;
-        if (m > bMax) bMax = m;
-        lSum += lo * lo;
-        mSum += md * md;
-        hSum += hi * hi;
-        if (++cnt >= PACK_BUCKET || oi === N - 1) {
-          const lv = Math.sqrt(lSum / cnt);
-          const mv = Math.sqrt(mSum / cnt);
-          const hv = Math.sqrt(hSum / cnt);
-          a.min[bi] = bMin;
-          a.max[bi] = bMax;
-          a.low[bi] = lv;
-          a.mid[bi] = mv;
-          a.high[bi] = hv;
-          if (lv > a.maxLow) a.maxLow = lv;
-          if (mv > a.maxMid) a.maxMid = mv;
-          if (hv > a.maxHigh) a.maxHigh = hv;
-          bi++;
-          bMin = 1;
-          bMax = -1;
-          lSum = mSum = hSum = 0;
-          cnt = 0;
-        }
-      }
-    }
-    await yieldToMain(); // one window's float32 is now GC-able before the next
-  }
-  const base = {} as PackedStems["base"];
-  for (let gi = 0; gi < STEM_NAMES.length; gi++) {
-    const a = acc[gi];
-    for (let i = 0; i < buckets; i++) {
-      a.low[i] /= a.maxLow;
-      a.mid[i] /= a.maxMid;
-      a.high[i] /= a.maxHigh;
-    }
-    base[STEM_NAMES[gi]] = { min: a.min, max: a.max, low: a.low, mid: a.mid, high: a.high, bucket: PACK_BUCKET };
-  }
-  return { gL, gR, length: N, sampleRate: sr, base };
-}
 
 // CACHE-HIT NEURAL → PRE-PACKED int16, decoding ONE stem at a time. This is the OOM-safe twin of
 // the loadStems R2 cache-hit branch (lines ~228-242), which decodes all 4 stems into a full float32
@@ -496,8 +335,8 @@ export async function loadStemsPackedInt16(
 }
 
 // Pack one fully-decoded stem AudioBuffer into int16 output group `gi` + its level-0 min/max +
-// low/mid/high colour envelope (PACK_BUCKET-aligned, identical math to dspStemsWindowedInt16 and
-// Deck's fused pack, so the LOD pyramids match). Single read of the float32.
+// low/mid/high colour envelope (PACK_BUCKET-aligned, identical math to Deck's fused pack, so the
+// LOD pyramids match). Single read of the float32.
 function packStemInt16Full(
   buf: AudioBuffer,
   gi: number,
@@ -577,62 +416,8 @@ function packStemInt16Full(
   base[STEM_NAMES[gi]] = { min, max, low, mid, high, bucket: PACK_BUCKET };
 }
 
-function renderFiltered(
-  ref: AudioBuffer,
-  srcBuffer: AudioBuffer,
-  build: (ctx: OfflineAudioContext, src: AudioBufferSourceNode) => AudioNode,
-): Promise<AudioBuffer> {
-  const ctx = new OfflineAudioContext(srcBuffer.numberOfChannels, ref.length, ref.sampleRate);
-  const src = ctx.createBufferSource();
-  src.buffer = srcBuffer;
-  build(ctx, src).connect(ctx.destination);
-  src.start();
-  return ctx.startRendering();
-}
-
-function midBuffer(buffer: AudioBuffer): AudioBuffer {
-  const { length, sampleRate, numberOfChannels } = buffer;
-  const L = buffer.getChannelData(0);
-  const R = numberOfChannels > 1 ? buffer.getChannelData(1) : L;
-  const mid = new AudioBuffer({ length, sampleRate, numberOfChannels: 1 });
-  const m = mid.getChannelData(0);
-  for (let i = 0; i < length; i++) m[i] = (L[i] + R[i]) * 0.5;
-  return mid;
-}
-
-function upmix(mono: AudioBuffer, channels: number, sampleRate: number): AudioBuffer {
-  if (channels <= 1) return mono;
-  const out = new AudioBuffer({ length: mono.length, sampleRate, numberOfChannels: channels });
-  const m = mono.getChannelData(0);
-  for (let c = 0; c < channels; c++) out.getChannelData(c).set(m);
-  return out;
-}
-
-// other = original − Σ parts, so the four stems always sum back to the mix.
 // Yield control back to the browser (a macrotask, so it can paint / handle input
 // between chunks of heavy sample work — a microtask wouldn't unblock rendering).
 function yieldToMain(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-// `other` = original − (bass + drums + vocals), per sample. For a multi-minute
-// track this is tens of millions of subtractions, so it runs in ~1M-sample
-// chunks that yield between them — the UI stays responsive instead of freezing.
-async function residual(orig: AudioBuffer, parts: AudioBuffer[]): Promise<AudioBuffer> {
-  const { length, sampleRate, numberOfChannels } = orig;
-  const out = new AudioBuffer({ length, sampleRate, numberOfChannels });
-  const CHUNK = 1 << 20;
-  for (let c = 0; c < numberOfChannels; c++) {
-    const o = out.getChannelData(c);
-    o.set(orig.getChannelData(c));
-    const pcs = parts.map((p) => (c < p.numberOfChannels ? p.getChannelData(c) : p.getChannelData(0)));
-    for (let start = 0; start < length; start += CHUNK) {
-      const end = Math.min(length, start + CHUNK);
-      for (let i = start; i < end; i++) {
-        for (let k = 0; k < pcs.length; k++) o[i] -= pcs[k][i];
-      }
-      await yieldToMain();
-    }
-  }
-  return out;
 }

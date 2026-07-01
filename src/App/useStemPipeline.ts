@@ -9,7 +9,6 @@ import {
   loadStems,
   loadStemsPackedInt16,
   loadStemsLocal,
-  isDspStems,
   getStemModel,
   modelSupport,
   isMobileDevice,
@@ -119,10 +118,8 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           }
           const neural = await job;
           if (stale?.()) return false;
-          // The cached download fell back to a DSP split (download + re-separate both failed) →
-          // there's nothing to promote. Leave the existing DSP split as-is, don't claim an
-          // "Auto-enhanced" badge over a DSP result.
-          if (isDspStems(neural)) return false;
+          // loadStems throws (not a DSP fallback) when the set can't be produced → the catch below
+          // returns false, nothing to promote. Reaching here means a real neural set downloaded.
           engine.deck(id).setStems(neural, true); // neural → per-stem lanes
           stemLoadedKey.current[id] = `${videoId}:${mid}`; // promoted set → don't re-separate it
           refresh();
@@ -274,23 +271,16 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           const res = await run;
           if (stale?.() || res?.kind === "stale") return;
           if (res?.kind === "neural") {
-            // A cached-download failure inside loadStems can tag a silent DSP fallback — label
-            // it honestly (no "✦" lie). The DSP split is sum-exact to the mix, so freeing the
-            // float32 mix is still safe (the stems are the audio source either way).
-            const real = !isDspStems(res.stems);
-            engine.deck(id).setStems(res.stems, real); // packs int16 + builds lanes + frees float32
+            // loadStems throws on any failure (no DSP fallback), and the try above breaks to the
+            // plain mix on that — so a "neural" result is always a real downloaded set.
+            engine.deck(id).setStems(res.stems, true); // packs int16 + builds lanes + frees float32
             stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
             // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
             engine.deck(id).releaseMixBuffer();
             dropCachedBuffer(videoId);
             refresh();
             const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
-            setStatusFor(
-              id,
-              real
-                ? { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` }
-                : { phase: "dsp", detail: `Couldn't load ${getStemModel(res.mid).label} stems — using a quick DSP split.` },
-            );
+            setStatusFor(id, { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` });
           } else if (res?.kind === "neuralPacked") {
             engine.deck(id).loadPackedStems(res.packed, true); // int16 direct — no float32 set ever held
             stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
@@ -423,19 +413,13 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         }
         const neural = await job;
         if (stale?.()) return;
-        // loadStems silently falls back to a DSP split on a separation failure (it tags it) —
-        // flag the deck + badge HONESTLY instead of wearing a "✦ Demucs" chip over a DSP split.
-        const real = !isDspStems(neural);
-        engine.deck(id).setStems(neural, real); // real neural → per-stem lanes; DSP → honest
+        // loadStems throws on a separation failure (no DSP fallback) → the catch below plays the
+        // plain mix. Reaching here means a real neural set separated/downloaded.
+        engine.deck(id).setStems(neural, true); // real neural → per-stem lanes
         stemLoadedKey.current[id] = guardKey; // remember it's loaded → never re-separate it
         refresh();
         // Persistent active-stems chip (clears on next track load).
-        setStatusFor(
-          id,
-          real
-            ? { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready.` }
-            : { phase: "dsp", detail: `${model.label} couldn't separate here — using a quick DSP split. Re-analyze to retry.` },
-        );
+        setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready.` });
       } catch (e) {
         console.warn("[htl] neural stems failed:", e);
         // The neural attempt is over (its memory freed) → fall back to the plain mix.

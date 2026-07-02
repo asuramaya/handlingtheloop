@@ -3194,7 +3194,15 @@ function AppBody() {
         {room.enabled && !room.controlling && (
           <div className="stage-lock" aria-hidden="true" title="Listening — controls are with the host (open the session menu to take control)" />
         )}
-        <div className="lanes">
+        <div
+          className="lanes"
+          style={{
+            // Per-deck art-backdrop opacity, driven by the crossfade (−1 = A … +1 = B). Set as CSS
+            // vars so .lane-art dissolves A↔B without re-rendering the decks. 0 when the toggle's off.
+            ["--art-a" as string]: settings.artBackdrop ? (0.28 * (1 - (crossfade + 1) / 2)).toFixed(3) : "0",
+            ["--art-b" as string]: settings.artBackdrop ? (0.28 * ((crossfade + 1) / 2)).toFixed(3) : "0",
+          }}
+        >
           {(["A", "B"] as DeckId[]).map((id) => (
             <DeckLane
               key={id}
@@ -3204,6 +3212,7 @@ function AppBody() {
               focused={focused === id}
               onFocus={() => setFocused(id)}
               background={surfaceColor(settings.bgColor, settings.uiContrast)}
+              artBackdrop={settings.artBackdrop}
               selectorColor={settings.selectorColor}
               loopColor={settings.loopColor}
               markerColor={settings.markerColor}

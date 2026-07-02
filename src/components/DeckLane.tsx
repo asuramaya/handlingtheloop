@@ -28,6 +28,7 @@ interface DeckLaneProps {
   focused: boolean;
   onFocus: () => void;
   background: string;
+  artBackdrop?: boolean; // opt-in: blurred album art bleeds through the deck chrome, dissolving A↔B with the crossfader
   selectorColor: string;
   loopColor: string;
   markerColor: string;
@@ -125,7 +126,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, artBackdrop, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -205,6 +206,11 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropActive(false);
       }}
     >
+      {/* Opt-in ambient backdrop: the album art, blurred, bleeding through the deck chrome. Opacity
+          rides the crossfade CSS var (--art-a / --art-b on .lanes) → dissolves A↔B with the fader. */}
+      {artBackdrop && meta.thumbnail && (
+        <div className="lane-art" aria-hidden="true" style={{ backgroundImage: `url(${meta.thumbnail})`, opacity: `var(--art-${id === "A" ? "a" : "b"})` }} />
+      )}
       <div className="lane-info">
         {/* DECK id + scrolling title — its own full-width row on mobile. Drag the
             header (or the grip) onto a playlist to file the loaded track. */}

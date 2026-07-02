@@ -72,6 +72,7 @@ export interface Settings {
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
+  artBackdrop: boolean; // opt-in: blurred album art bleeds through the deck chrome, dissolving A↔B with the crossfader
   lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
   lyricsModel: string; // lyrics engine: whisper model id "base" | "small" (WHISPER_MODELS), or "youtube" for YouTube captions
 }
@@ -213,6 +214,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   deckArtAccent: true, // themes the deck accent to the track's artwork; toggle off for a fixed accent
+  artBackdrop: false, // ambient art backdrop behind the decks — OFF by default (bolder opt-in art visual)
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
   lyricsModel: "youtube", // DEFAULT = YouTube captions (instant, no GPU); pick a Whisper tier (base/small) to transcribe from the vocal stem
 };

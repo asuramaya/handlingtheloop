@@ -294,6 +294,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
         pyramid={meta.pyramid}
         accent={accent}
         background={background}
+        artBg={artBackdrop && !!meta.thumbnail}
         selectorColor={selectorColor}
         loopColor={loopColor}
         markerColor={markerColor}

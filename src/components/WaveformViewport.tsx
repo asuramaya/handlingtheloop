@@ -10,6 +10,7 @@ interface WaveformViewportProps {
   pyramid: Pyramid | null; // mix LOD (stable per track)
   accent: string;
   background: string; // lane surface (--surface), passed as a value so a bg change paints live
+  artBg?: boolean; // on → clear the canvas (transparent) instead of filling it, so the .lane-art album backdrop shows through behind the peaks
   selectorColor: string;
   loopColor: string;
   markerColor: string;
@@ -751,8 +752,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (w === 0) return;
     const p = view.current;
 
-    ctx.fillStyle = bgRef.current;
-    ctx.fillRect(0, 0, w, h);
+    // Opt-in art backdrop: leave the canvas TRANSPARENT so the blurred .lane-art (behind the canvas)
+    // shows through the gaps between the peaks; otherwise paint the opaque lane surface exactly as
+    // before — pixel-identical when the toggle is off. Peaks/grid/markers below draw on top either way.
+    if (p.artBg) ctx.clearRect(0, 0, w, h);
+    else {
+      ctx.fillStyle = bgRef.current;
+      ctx.fillRect(0, 0, w, h);
+    }
     // Render from the LOD pyramid (mix) or the stem pyramids — NOT the raw float32 buffer.
     // On mobile the buffer is RELEASED once stems pack into the worklet (releaseMixBuffer,
     // the OOM fix), so gating draw on `deck.buffer` blanked the whole deck — waveform AND

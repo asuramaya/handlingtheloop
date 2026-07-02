@@ -31,6 +31,7 @@ import {
   extractPalette,
   serializePalette,
   deserializePalette,
+  neonHex,
   fetchAnalysisFull,
   ANALYSIS_VERSION,
   type Beatgrid,
@@ -595,9 +596,11 @@ function AppBody() {
   // Deck accent tints to the LOADED track's album-art palette (Phase C) — "themes to whatever's
   // playing" — falling back to the user's chosen accent for an empty deck, an art-less track, or
   // when the `deckArtAccent` toggle is off (art theming is opt-in — the base look stays untouched).
+  // neonHex floors the art-derived accent into a legible, vivid band (a dark/washed cover can't
+  // produce an unreadable deck) — applied here at the theming seam so it fixes stored palettes too.
   const ACCENT: Record<DeckId, string> = {
-    A: settings.deckArtAccent ? (meta.A.palette?.accent ?? settings.accentA) : settings.accentA,
-    B: settings.deckArtAccent ? (meta.B.palette?.accent ?? settings.accentB) : settings.accentB,
+    A: settings.deckArtAccent && meta.A.palette ? neonHex(meta.A.palette.accent) : settings.accentA,
+    B: settings.deckArtAccent && meta.B.palette ? neonHex(meta.B.palette.accent) : settings.accentB,
   };
   // Post-crossfade attenuation per deck, so the bottom level-fader meters fade with the crossfader.
   const levelGainsDb = crossfadeGainsDb(crossfade);

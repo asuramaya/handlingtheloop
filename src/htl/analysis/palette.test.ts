@@ -1,7 +1,7 @@
 // The pure parts of the album-art palette pipeline: median-cut quantiser, the accent/band chooser,
 // and the codec. extractPalette (canvas/DOM) is browser-only and out of scope here.
 import { describe, it, expect } from "vitest";
-import { quantize, paletteFrom, serializePalette, deserializePalette, rgbHex, type RGB, type Palette } from "./palette";
+import { quantize, paletteFrom, serializePalette, deserializePalette, rgbHex, neonAccent, neonHex, type RGB, type Palette } from "./palette";
 
 describe("rgbHex", () => {
   it("formats, clamps, and rounds to #rrggbb", () => {
@@ -53,6 +53,32 @@ describe("paletteFrom", () => {
   it("derives distinct band shades from monochromatic art (low ≠ high)", () => {
     const p = paletteFrom([[120, 40, 40]])!;
     expect(p.low).not.toBe(p.high);
+  });
+});
+
+describe("neonAccent / neonHex (legible accent floor)", () => {
+  const lum = (c: RGB) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  it("brightens a near-black accent so it's legible on a dark UI", () => {
+    const dark: RGB = [15, 12, 45];
+    expect(lum(neonAccent(dark))).toBeGreaterThan(lum(dark) + 30);
+  });
+  it("pulls a near-white accent down out of the wash", () => {
+    expect(lum(neonAccent([252, 252, 255]))).toBeLessThan(lum([252, 252, 255]));
+  });
+  it("keeps a grey grey — never invents a hue", () => {
+    const out = neonAccent([40, 40, 40]);
+    expect(Math.max(...out) - Math.min(...out)).toBeLessThan(12);
+  });
+  it("saturates a muted hue so it still pops", () => {
+    const out = neonAccent([120, 100, 100]);
+    expect((Math.max(...out) - Math.min(...out)) / Math.max(...out)).toBeGreaterThan(0.4);
+  });
+  it("neonHex passes a non-#rrggbb value through unchanged", () => {
+    expect(neonHex("red")).toBe("red");
+    expect(neonHex("#fff")).toBe("#fff");
+  });
+  it("neonHex returns a valid #rrggbb for a hex input", () => {
+    expect(neonHex("#0a0a28")).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
 

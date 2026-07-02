@@ -122,6 +122,68 @@ export function paletteFrom(colors: RGB[]): Palette | null {
   return { accent: rgbHex(accent), low: rgbHex(band[0]), mid: rgbHex(band[1]), high: rgbHex(band[2]) };
 }
 
+function hexRgb(hex: string): RGB | null {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHsl([r, g, b]: RGB): [number, number, number] {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+    if (h < 0) h += 1;
+  }
+  return [h, s, l];
+}
+
+function hslToRgb([h, s, l]: [number, number, number]): RGB {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h * 6) % 2) - 1));
+  const m = l - c / 2;
+  const hh = h * 6;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hh < 1) [r, g] = [c, x];
+  else if (hh < 2) [r, g] = [x, c];
+  else if (hh < 3) [g, b] = [c, x];
+  else if (hh < 4) [g, b] = [x, c];
+  else if (hh < 5) [r, b] = [x, c];
+  else [r, b] = [c, x];
+  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+}
+
+/** Force a colour into a LEGIBLE, vivid band for a dark UI (matches the app's neon accents): floor
+ *  the lightness so a dark cover can't produce an unreadable near-black accent, and floor the
+ *  saturation so a muted cover still pops — but leave a genuinely GREY cover grey (just lightened),
+ *  never inventing a hue. Fixes "some album covers make the deck illegible". */
+export function neonAccent(c: RGB): RGB {
+  const [h, s, l] = rgbToHsl(c);
+  const s2 = s > 0.08 ? Math.max(s, 0.5) : s; // only boost saturation if there's a real hue
+  const l2 = Math.min(Math.max(l, 0.5), 0.68); // legible mid-bright band on a dark background
+  return hslToRgb([h, s2, l2]);
+}
+
+/** neonAccent as hex→hex (returns the input unchanged if it isn't #rrggbb). Applied at the theming
+ *  seam, so it fixes ALREADY-stored palettes too — the raw art colour stays in the dataset. */
+export function neonHex(hex: string): string {
+  const rgb = hexRgb(hex);
+  return rgb ? rgbHex(neonAccent(rgb)) : hex;
+}
+
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
 /** Compact JSON for D1/transport. */

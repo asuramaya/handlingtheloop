@@ -28,4 +28,4 @@ export {
   type TrackAnalysis,
 } from "./analyze";
 export { analyzeTrackAsync } from "./analyzeWorker";
-export { extractPalette, serializePalette, deserializePalette, rgbHex, type Palette } from "./palette";
+export { extractPalette, serializePalette, deserializePalette, rgbHex, neonHex, neonAccent, type Palette } from "./palette";

@@ -148,7 +148,7 @@ export function ProfilePublicView({
                 <span className="profile-top-rank">{i + 1}</span>
                 <img
                   className="profile-top-thumb"
-                  src={t.thumbnail || `https://i.ytimg.com/vi/${t.videoId}/default.jpg`}
+                  src={t.thumbnail || `/api/art/${t.videoId}`}
                   alt=""
                   loading="lazy"
                 />

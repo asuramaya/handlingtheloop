@@ -21,7 +21,7 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
           <li key={s.id} className={`set-card ${expanded ? "open" : ""}`}>
             <div className="set-row">
               <button className="set-cover" aria-label="Show tracklist" onClick={() => setOpen(expanded ? null : s.id)}>
-                {s.coverVideo ? <img src={`https://i.ytimg.com/vi/${s.coverVideo}/mqdefault.jpg`} alt="" loading="lazy" /> : <span className="set-cover-ph">♪</span>}
+                {s.coverVideo ? <img src={`/api/art/${s.coverVideo}`} alt="" loading="lazy" /> : <span className="set-cover-ph">♪</span>}
               </button>
               <button className="set-main" onClick={() => setOpen(expanded ? null : s.id)}>
                 <span className="set-title">{s.title || setLabel(s)}</span>

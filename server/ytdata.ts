@@ -175,7 +175,7 @@ export async function fetchPlaylistData(token: string, playlistId: string): Prom
       title: d?.snippet?.title || s?.title || vid,
       artist: d?.snippet?.channelTitle || s?.videoOwnerChannelTitle || "",
       duration: parseISODuration(d?.contentDetails?.duration),
-      thumbnail: bestThumb(d?.snippet?.thumbnails ?? s?.thumbnails) || `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+      thumbnail: `/api/art/${vid}`, // same-origin R2 art (see /api/art)
       views: d?.statistics?.viewCount ? Number(d.statistics.viewCount) || null : null,
     });
   }

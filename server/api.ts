@@ -420,7 +420,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
               title: m.title ?? "",
               artist: m.artist ?? "",
               duration: m.duration ?? 0,
-              thumbnail: m.thumbnail ?? `https://i.ytimg.com/vi/${v}/hqdefault.jpg`,
+              thumbnail: `/api/art/${v}`, // same-origin R2 art
               views: null,
               stems: true,
             });

@@ -68,9 +68,7 @@ export function normalize(n: AnyNode): TrackMeta | null {
     artist: n.author?.name ?? "",
     duration,
     thumbnail:
-      n.thumbnails && n.thumbnails.length
-        ? n.thumbnails[n.thumbnails.length - 1].url
-        : `https://i.ytimg.com/vi/${n.id}/hqdefault.jpg`,
+      `/api/art/${n.id}`,
     views: parseViews(n.view_count?.text ?? n.short_view_count?.text),
   };
 }
@@ -91,7 +89,7 @@ export function fromMusicItem(it: MusicItem): TrackMeta | null {
     title,
     artist,
     duration,
-    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    thumbnail: `/api/art/${id}`,
     views: null,
   };
 }
@@ -177,14 +175,12 @@ export function fromCompact(r: CompactRenderer): TrackMeta | null {
   if (!id || !/^[\w-]{11}$/.test(id)) return null;
   const duration = parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs));
   if (tooLong(duration)) return null;
-  const thumbs = r.thumbnail?.thumbnails;
   return {
     videoId: id,
     title: r.title?.simpleText ?? runsText(r.title?.runs) ?? id,
     artist: runsText(r.longBylineText?.runs) ?? runsText(r.shortBylineText?.runs) ?? "",
     duration,
-    thumbnail:
-      thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    thumbnail: `/api/art/${id}`,
     views: parseViews(r.viewCountText?.simpleText ?? runsText(r.viewCountText?.runs) ?? r.shortViewCountText?.simpleText),
   };
 }
@@ -244,7 +240,7 @@ export function fromLockup(l: LockupVM): TrackMeta | null {
     title,
     artist,
     duration,
-    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    thumbnail: `/api/art/${id}`,
     views: null,
   };
 }

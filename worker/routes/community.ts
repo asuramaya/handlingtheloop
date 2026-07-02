@@ -42,7 +42,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             return json(200, {
               tracks: rows.map((t) => ({
                 ...t,
-                thumbnail: t.thumbnail || `https://i.ytimg.com/vi/${t.videoId}/hqdefault.jpg`,
+                thumbnail: `/api/art/${t.videoId}`, // same-origin R2 art (see /api/art); upgrades old ytimg rows too
                 views: null,
                 ...(stemIds ? { stems: stemIds.has(t.videoId) } : {}),
               })),
@@ -79,7 +79,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             title: m?.title || "",
             artist: m?.artist || "",
             duration: Number(m?.duration) || 0,
-            thumbnail: m?.thumbnail || `https://i.ytimg.com/vi/${v}/hqdefault.jpg`,
+            thumbnail: `/api/art/${v}`, // same-origin R2 art
             views: null,
             ...(stemIds ? { stems: stemIds.has(v) } : {}),
           });

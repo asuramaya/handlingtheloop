@@ -135,7 +135,7 @@ describe("normalize (AnyNode -> TrackMeta)", () => {
     expect(t!.title).toBe("Song Title");
     expect(t!.artist).toBe("Artist");
     expect(t!.duration).toBe(200);
-    expect(t!.thumbnail).toBe("large.jpg"); // last thumbnail wins
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`); // always same-origin R2 art, not the provider URL
     expect(t!.views).toBe(1200000);
   });
   it("falls back to duration.text when seconds absent", () => {
@@ -146,7 +146,7 @@ describe("normalize (AnyNode -> TrackMeta)", () => {
     const t = normalize({ id: VALID_ID });
     expect(t!.title).toBe(VALID_ID);
     expect(t!.artist).toBe("");
-    expect(t!.thumbnail).toBe(`https://i.ytimg.com/vi/${VALID_ID}/hqdefault.jpg`);
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`);
     expect(t!.views).toBeNull();
   });
   it("missing id -> null", () => {
@@ -181,7 +181,7 @@ describe("fromMusicItem", () => {
     expect(t!.title).toBe("Track");
     expect(t!.artist).toBe("A, B");
     expect(t!.duration).toBe(180);
-    expect(t!.thumbnail).toBe(`https://i.ytimg.com/vi/${VALID_ID}/hqdefault.jpg`);
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`);
     expect(t!.views).toBeNull();
   });
   it("non-song item_type -> null", () => {
@@ -221,7 +221,7 @@ describe("fromCompact (compactVideoRenderer)", () => {
     expect(t!.title).toBe("Compact Title");
     expect(t!.artist).toBe("Channel");
     expect(t!.duration).toBe(222);
-    expect(t!.thumbnail).toBe("b.jpg");
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`);
     expect(t!.views).toBe(1200000);
   });
   it("runs fallbacks for title/length/byline", () => {
@@ -241,7 +241,7 @@ describe("fromCompact (compactVideoRenderer)", () => {
     const t = fromCompact({ videoId: VALID_ID });
     expect(t!.title).toBe(VALID_ID);
     expect(t!.artist).toBe("");
-    expect(t!.thumbnail).toBe(`https://i.ytimg.com/vi/${VALID_ID}/hqdefault.jpg`);
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`);
   });
   it("missing videoId -> null", () => {
     expect(fromCompact({})).toBeNull();
@@ -322,7 +322,7 @@ describe("fromLockup (lockupViewModel)", () => {
     expect(t!.title).toBe("Lockup Title");
     expect(t!.artist).toBe("Lockup Artist");
     expect(t!.duration).toBe(222);
-    expect(t!.thumbnail).toBe(`https://i.ytimg.com/vi/${VALID_ID}/hqdefault.jpg`);
+    expect(t!.thumbnail).toBe(`/api/art/${VALID_ID}`);
     expect(t!.views).toBeNull();
   });
   it("bad-length contentId -> null (skips playlist/channel lockups)", () => {

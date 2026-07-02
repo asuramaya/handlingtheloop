@@ -13,7 +13,24 @@ import {
 } from "../shared";
 import { audioChunks, diagnoseAudio, diagnoseRelay, fetchCaptions, fetchMeta, makeRelayFetch, resolveAudio, type Fetcher } from "../../server/youtube";
 import { upsertCommunityTrack, getCachedCaptions, putCachedCaptions, getLyrics, putLyrics } from "../../server/db";
-import { allow, clientIp, cleanText, clampNum } from "../../server/security";
+import { allow, clientIp, cleanText, clampNum, sniffImage } from "../../server/security";
+
+// Fetch a video's thumbnail from YouTube's CDN, best resolution first. hqdefault always exists;
+// maxresdefault is higher-res but 404s (or returns a tiny placeholder) for some uploads.
+async function fetchYtThumb(id: string): Promise<ArrayBuffer | null> {
+  for (const q of ["maxresdefault", "hqdefault"]) {
+    try {
+      const r = await fetch(`https://i.ytimg.com/vi/${id}/${q}.jpg`);
+      if (r.ok) {
+        const b = await r.arrayBuffer();
+        if (b.byteLength > 2048) return b; // reject the 120×90 "no maxres" placeholder
+      }
+    } catch {
+      /* try the next resolution */
+    }
+  }
+  return null;
+}
 
 // Cloudflare's identity TransformStream carrying a known Content-Length — lets us hand R2 a
 // streaming body (a tee branch) for a streamed put without buffering the whole track in RAM.
@@ -26,6 +43,38 @@ declare class FixedLengthStream {
 }
 
 export async function handleAudioRoutes(url: URL, req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
+  // Same-origin album art (R2-cached). YouTube thumbnails are cross-origin (i.ytimg.com), which
+  // (a) leaks the viewer's IP to Google on every render and (b) blocks the COEP `require-corp`
+  // upgrade the stem pager needs. Serve the art first-party instead: fetch-on-miss from ytimg, sniff
+  // the bytes, store in R2, and serve through the edge Cache API (nosniff, immutable) — the same
+  // template as the avatar serve. Being same-origin, the art is also canvas-UNTAINTED → the client
+  // can extract a colour palette from it (per-track theming). Prefix route → matched before the switch.
+  if (url.pathname.startsWith("/api/art/")) {
+    if (!env.AUDIO) return new Response(null, { status: 404 });
+    const v = url.pathname.slice("/api/art/".length).replace(/[^\w-]/g, "");
+    if (!isVideoId(v)) return new Response(null, { status: 404 });
+    const edge = (globalThis as { caches?: { default?: { match(r: Request): Promise<Response | undefined>; put(r: Request, resp: Response): Promise<void> } } }).caches?.default;
+    const cacheKey = new Request(url.toString());
+    if (edge) {
+      const hit = await edge.match(cacheKey);
+      if (hit) return hit;
+    }
+    let body: ArrayBuffer | null = null;
+    const stored = await env.AUDIO.get(`art/${v}`);
+    if (stored) body = await stored.arrayBuffer();
+    else {
+      body = await fetchYtThumb(v); // cold: pull it from ytimg once, then it's ours
+      if (body) ctx.waitUntil(env.AUDIO.put(`art/${v}`, body, { httpMetadata: { contentType: sniffImage(new Uint8Array(body.slice(0, 12))) ?? "image/jpeg" } }));
+    }
+    if (!body) return new Response(null, { status: 404 });
+    const ct = sniffImage(new Uint8Array(body.slice(0, 12))) ?? "image/jpeg"; // never trust a stored/fetched type
+    const resp = new Response(body, {
+      status: 200,
+      headers: { "content-type": ct, "x-content-type-options": "nosniff", "cache-control": "public, max-age=604800, immutable" },
+    });
+    if (edge) ctx.waitUntil(edge.put(cacheKey, resp.clone()));
+    return resp;
+  }
   switch (url.pathname) {
     case "/api/audio/diag": {
       const v = url.searchParams.get("v");

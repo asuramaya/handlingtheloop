@@ -336,13 +336,12 @@ export async function resolveAudio(videoId: string, auth?: YtAuth, fx: Fetcher =
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
   if (!fmt || !fmt.url) throw new Error("no playable audio format");
   const d = pr.videoDetails;
-  const thumbs = d?.thumbnail?.thumbnails;
   const meta = d?.videoId
     ? {
         title: d.title ?? d.videoId,
         artist: d.author ?? "",
         duration: Number(d.lengthSeconds) || 0,
-        thumbnail: thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${d.videoId}/hqdefault.jpg`,
+        thumbnail: `/api/art/${d.videoId}`, // same-origin R2 art (see /api/art)
       }
     : undefined;
   return {
@@ -487,13 +486,15 @@ export async function fetchMeta(videoId: string, auth?: YtAuth): Promise<TrackMe
   const pr = await playerWithRetry(videoId, 6, auth);
   const d = pr.videoDetails;
   if (!d?.videoId) throw new Error("no metadata");
-  const thumbs = d.thumbnail?.thumbnails;
   return {
     videoId: d.videoId,
     title: d.title ?? d.videoId,
     artist: d.author ?? "",
     duration: Number(d.lengthSeconds) || 0,
-    thumbnail: thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${d.videoId}/hqdefault.jpg`,
+    // Same-origin, R2-cached art (see /api/art) — never the raw cross-origin i.ytimg.com URL. Keeps
+    // COEP `require-corp`-clean, stops the viewer-IP leak to Google, and stays canvas-untainted so a
+    // per-track colour palette can be read from it. Every TrackMeta.thumbnail render site inherits this.
+    thumbnail: `/api/art/${d.videoId}`,
     views: Number(d.viewCount) || null,
   };
 }

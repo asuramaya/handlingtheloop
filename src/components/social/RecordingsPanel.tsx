@@ -69,7 +69,7 @@ export function RecordingsPanel({
           {sets.map((s) => (
             <li key={s.id} className={`rec-item ${s.status}`}>
               <div className="rec-cover" aria-hidden="true">
-                {s.coverVideo ? <img src={`https://i.ytimg.com/vi/${s.coverVideo}/default.jpg`} alt="" loading="lazy" /> : <span className="rec-cover-ph">♪</span>}
+                {s.coverVideo ? <img src={`/api/art/${s.coverVideo}`} alt="" loading="lazy" /> : <span className="rec-cover-ph">♪</span>}
               </div>
               <div className="rec-main">
                 {editing === s.id ? (

@@ -253,7 +253,7 @@ async function ogMetaFor(url: URL, env: Env): Promise<string | null> {
     if (!s || s.status !== "published") return null;
     const mins = Math.max(1, Math.round(s.duration / 60000));
     const desc = `${s.tracks} track${s.tracks === 1 ? "" : "s"} · ~${mins} min — replay it on Handling The Loop`;
-    const img = s.coverVideo ? `https://i.ytimg.com/vi/${s.coverVideo}/mqdefault.jpg` : "";
+    const img = s.coverVideo ? `${url.origin}/api/art/${s.coverVideo}` : ""; // same-origin R2 art (absolute for crawlers)
     return ogBlock({ title: s.title || "A DJ set", desc, img, url: `${url.origin}/set/${s.id}`, large: true });
   }
   return null;

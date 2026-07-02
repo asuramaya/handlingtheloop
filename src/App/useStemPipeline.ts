@@ -36,8 +36,16 @@ export function stemSrcLabel(modelId: string): string {
   if (modelId.startsWith("umx")) return "Open-Unmix";
   return getStemModel(modelId).label;
 }
-// Cross-device AGGREGATE stem budget (mobile): combined length of BOTH decks' stem'd tracks.
-const MOBILE_MAX_COMBINED_STEM_SECONDS = 960; // 16 min combined — for DOWNLOADED int16 sets
+// Cross-device AGGREGATE stem budget (mobile), the iOS memory SEATBELT. Byte-accurate: a resident
+// int16 stem set costs 4 stems × 2ch × 2 bytes = 16 B/sample (~46 MB/min @48k), so a single 10-min
+// set ≈ 460 MB and TWO ≈ 920 MB — over the ~1.3 GB WebKit Gigacage on older iPhones, which is the
+// confirmed 2-deadmau5 crash. The old proxy gated on a 16-min SECONDS SUM (bytes-blind: ignored
+// stem count / rate / channels) and let 2×8-min sit right at the boundary → 736 MB → jetsam. This
+// caps RESIDENT stem bytes across both decks below the observed crash point; a single long deck
+// (≤~13 min) always fits, two decks share the budget, and an over-budget load DECLINES to the plain
+// mix instead of crashing. Tunable pending the on-device probe (engine/test/iphone-mem-probe.html).
+const MOBILE_STEM_BYTE_BUDGET = 600 * 1024 * 1024; // 600 MB resident, combined across decks
+const STEM_SET_BYTES_PER_SAMPLE = 16; // 4 stems × 2 channels × 2 bytes (int16)
 // Serializes mobile derive passes so two decks never build float32 sets concurrently (iOS OOM).
 let mobileDeriveChain: Promise<unknown> = Promise.resolve();
 
@@ -239,8 +247,11 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           // same as before — a 2-deck cached set is the same int16 footprint as a derived one.
           const run = mobileDeriveChain.then(async () => {
             const otherId: DeckId = id === "A" ? "B" : "A";
-            const otherSec = engine.deck(otherId).hasStems ? engine.deck(otherId).duration : 0;
-            if (mix.duration + otherSec > MOBILE_MAX_COMBINED_STEM_SECONDS) return { kind: "over" as const };
+            // SEATBELT: project THIS set's resident int16 bytes (16 B/sample × length) and add the
+            // OTHER deck's already-resident stem bytes. Over budget → decline to the plain mix
+            // (below) rather than let the tab OOM. Byte-accurate, unlike the old seconds proxy.
+            const incomingBytes = STEM_SET_BYTES_PER_SAMPLE * Math.round(mix.duration * engine.ctx.sampleRate);
+            if (engine.deck(otherId).stemBytes + incomingBytes > MOBILE_STEM_BYTE_BUDGET) return { kind: "over" as const };
             // SHARED NEURAL CACHE ONLY. Probe R2 best-first; the first complete set wins and is
             // DOWNLOADED (loadStems takes the no-separation branch on a complete manifest).
             for (const mid of PROMOTE_ORDER) {

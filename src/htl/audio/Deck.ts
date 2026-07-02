@@ -256,6 +256,10 @@ export class Deck {
   // pyramids are built (the iPhone OOM fix — see buildStemPyramidsLazy). hasStems and
   // the stem mixer stay live off this flag + the worklet, not the (freed) buffers.
   private stemsLoaded = false;
+  // Resident int16 stem bytes handed to the worklet for THIS deck (0 when mix-only). The mobile
+  // seatbelt sums this across decks to refuse a stem load that would OOM the tab, instead of
+  // crashing — a byte-accurate budget replacing the old (bytes-blind) seconds proxy.
+  private _stemBytes = 0;
   // Does the STRETCH ENGINE currently hold the 4 separate stems (vs a single mix)?
   // The per-stem gain path (rampStem) is gated on this so it no-ops on a mix-only
   // track — stem index 0 aliases the mix group, so posting would scale the whole mix.
@@ -632,6 +636,9 @@ export class Deck {
     // Track length comes from whichever source we packed — `buf` may be null (mobile, mix
     // released after a stems pack), so read it from the first stem in that case.
     const length = useStems ? this.stems![STEM_NAMES[0]].length : buf!.length;
+    // Resident-byte tally for the seatbelt: sum the group buffers we're handing off (stems only;
+    // the mix isn't counted as stem memory). Read BEFORE postMessage detaches them.
+    this._stemBytes = useStems ? gL.reduce((s, a, i) => s + a.byteLength + gR[i].byteLength, 0) : 0;
     node.port.postMessage({ type: "loadPcm", gL, gR, length, int16: packInt16 }, transfer);
   }
 
@@ -766,6 +773,11 @@ export class Deck {
   // A track can carry 4 time-aligned stem buffers (vocals/drums/bass/other) that
   // share the deck's clock, loop and tempo. With stems set, playback sums their
   // per-stem gains so any can be muted live; with all on the sum IS the mix.
+  /** Resident int16 stem bytes this deck handed to the worklet (0 = mix-only). Feeds the
+   *  mobile stem-load seatbelt so two long stem sets can't blow the iOS memory ceiling. */
+  get stemBytes(): number {
+    return this.stemsLoaded ? this._stemBytes : 0;
+  }
   get hasStems(): boolean {
     return this.stemsLoaded;
   }
@@ -1072,6 +1084,8 @@ export class Deck {
     const transfer: ArrayBuffer[] = [];
     for (let i = 0; i < packed.gL.length; i++)
       transfer.push(packed.gL[i].buffer as ArrayBuffer, packed.gR[i].buffer as ArrayBuffer);
+    // Resident-byte tally for the seatbelt (read before postMessage detaches the buffers).
+    this._stemBytes = transfer.reduce((s, b) => s + b.byteLength, 0);
     // int16 PCM straight to the worklet (it sets nG, scales by INV16, resets gains to 1).
     this.stretchNode?.port.postMessage(
       { type: "loadPcm", gL: packed.gL, gR: packed.gR, length: packed.length, int16: true },

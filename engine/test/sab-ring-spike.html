@@ -1,0 +1,139 @@
+<!doctype html>
+<!--
+  SAB → AudioWorklet ring KEYSTONE SPIKE (Rhythm/Engine #71) — GO/NO-GO for sliding-window stem paging.
+
+  The pager's whole design hinges on ONE unproven assumption: that an iOS Safari AudioWorklet can be
+  fed from a SharedArrayBuffer ring the main thread writes into. SAB needs cross-origin isolation
+  (`crossOriginIsolated === true`), which the app ships via COOP same-origin + COEP credentialless —
+  and Safari only supports `credentialless` from 18.4 (2025). On older iOS, SAB is UNAVAILABLE and the
+  pager cannot run. This page answers that on a REAL device before we invest weeks in the pager.
+
+  HOW TO RUN (must be served with the SAME COI headers the app ships):
+    1. In engine/test/serve-coi.mjs change the bind "127.0.0.1" → "0.0.0.0" (so the phone can reach it).
+    2. `node engine/test/serve-coi.mjs 8099`
+    3. On the iPhone (same Wi-Fi): open  http://<your-mac-LAN-ip>:8099/engine/test/sab-ring-spike.html
+    4. Read the verdict; tap ▶ and confirm you hear a steady 440 Hz tone.
+
+  VERDICT:
+    • crossOriginIsolated false / no SharedArrayBuffer  → NO-GO. The pager needs a different design on
+      this iOS (mono/half-rate stems, or a hard one-stem'd-deck cap) — the byte seatbelt is the floor.
+    • tone plays cleanly from the ring                  → GO. Build the pager.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>SAB→Worklet ring spike</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font: 15px/1.5 -apple-system, system-ui, sans-serif; background: #0d0d10; color: #e8e8ea; padding: 20px; }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .verdict { font-size: 26px; font-weight: 700; padding: 16px; border-radius: 12px; text-align: center; margin: 16px 0; }
+      .go { background: #0d3b1e; color: #46e08a; }
+      .nogo { background: #3b0d12; color: #ff6b78; }
+      .wait { background: #2a2a12; color: #ffd24a; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+      td { padding: 8px 10px; border-bottom: 1px solid #24242a; }
+      td:last-child { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+      .ok { color: #46e08a; } .bad { color: #ff6b78; }
+      button { font-size: 18px; padding: 14px 22px; border: 0; border-radius: 12px; background: #2b6cff; color: #fff; width: 100%; margin-top: 8px; }
+      button:disabled { opacity: 0.4; }
+      #log { margin-top: 14px; font-size: 12px; color: #9a9aa2; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>SAB → AudioWorklet ring spike</h1>
+    <div id="verdict" class="verdict wait">checking…</div>
+    <table id="env"></table>
+    <button id="start" disabled>▶ Start audio test</button>
+    <div id="log"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const log = (m) => ($("log").textContent += m + "\n");
+      const row = (k, v, ok) => `<tr><td>${k}</td><td class="${ok === undefined ? "" : ok ? "ok" : "bad"}">${v}</td></tr>`;
+
+      const coi = self.crossOriginIsolated === true;
+      const hasSAB = typeof SharedArrayBuffer !== "undefined";
+      const hasWorklet = typeof AudioWorklet !== "undefined" && !!(window.AudioContext || window.webkitAudioContext);
+      const sabUsable = coi && hasSAB;
+
+      $("env").innerHTML =
+        row("crossOriginIsolated", String(coi), coi) +
+        row("SharedArrayBuffer", hasSAB ? "available" : "MISSING", hasSAB) +
+        row("AudioWorklet", hasWorklet ? "available" : "MISSING", hasWorklet) +
+        row("userAgent", navigator.userAgent.replace(/^Mozilla\/5.0 /, ""));
+
+      if (!sabUsable || !hasWorklet) {
+        $("verdict").className = "verdict nogo";
+        $("verdict").textContent = "NO-GO — SharedArrayBuffer unavailable here";
+        log("SAB ring cannot run on this device/context. The pager needs a different design (mono/half-rate stems or a one-stem'd-deck cap). The byte seatbelt remains the floor.");
+      } else {
+        $("verdict").className = "verdict wait";
+        $("verdict").textContent = "SAB available — tap ▶ to confirm the ring feeds audio";
+        $("start").disabled = false;
+      }
+
+      // Single-producer (main) / single-consumer (worklet) float32 ring in a SharedArrayBuffer.
+      // control[0] = total frames WRITTEN, control[1] = total frames READ (both monotonic).
+      const RING = 1 << 14; // 16384 frames (~0.34 s @ 48k) — headroom over the 128-frame render quantum
+      const MASK = RING - 1;
+
+      const workletSrc = `
+        class RingReader extends AudioWorkletProcessor {
+          constructor(o){ super(); this.ctl = new Int32Array(o.processorOptions.control); this.ring = new Float32Array(o.processorOptions.ring); this.read = 0; this.MASK = ${MASK}; }
+          process(_, outputs){
+            const out = outputs[0]; const n = out[0].length;
+            const written = Atomics.load(this.ctl, 0);
+            let r = this.read;
+            for (let i = 0; i < n; i++){
+              const s = r < written ? this.ring[r & this.MASK] : 0; // underrun → silence
+              if (r < written) r++;
+              for (let c = 0; c < out.length; c++) out[c][i] = s;
+            }
+            this.read = r;
+            Atomics.store(this.ctl, 1, r); // publish read cursor so the producer won't overwrite unread
+            return true;
+          }
+        }
+        registerProcessor('ring-reader', RingReader);
+      `;
+
+      $("start").onclick = async () => {
+        $("start").disabled = true;
+        try {
+          const control = new Int32Array(new SharedArrayBuffer(8));
+          const ring = new Float32Array(new SharedArrayBuffer(RING * 4));
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new Ctx();
+          await ctx.resume();
+          const url = URL.createObjectURL(new Blob([workletSrc], { type: "text/javascript" }));
+          await ctx.audioWorklet.addModule(url);
+          const node = new AudioWorkletNode(ctx, "ring-reader", { processorOptions: { control: control.buffer, ring: ring.buffer } });
+          node.connect(ctx.destination);
+          log("ctx sampleRate: " + ctx.sampleRate + " Hz");
+
+          // Producer: keep the ring filled ahead of the worklet's read cursor with a 440 Hz sine.
+          const sr = ctx.sampleRate, hz = 440, amp = 0.2;
+          let written = 0;
+          const pump = () => {
+            const read = Atomics.load(control, 1);
+            const target = read + RING - 256; // fill to nearly full, leave a margin
+            while (written < target) { ring[written & MASK] = Math.sin((2 * Math.PI * hz * written) / sr) * amp; written++; }
+            Atomics.store(control, 0, written);
+          };
+          pump();
+          setInterval(pump, 8);
+
+          $("verdict").className = "verdict go";
+          $("verdict").textContent = "GO (if you hear a steady tone)";
+          log("Ring feeding. A clean 440 Hz tone = the SAB→worklet ring WORKS on this iOS → build the pager.\nSilence / glitches / a crash = NO-GO or needs rework.");
+        } catch (e) {
+          $("verdict").className = "verdict nogo";
+          $("verdict").textContent = "NO-GO — " + (e && e.message ? e.message : e);
+          log("Failed to start the SAB ring: " + (e && e.stack ? e.stack : e));
+        }
+      };
+    </script>
+  </body>
+</html>

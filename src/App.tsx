@@ -592,7 +592,12 @@ function AppBody() {
   const bankShift = (id: DeckId) => midiShift[id] || ((shiftLatched || shiftHeld || focusShift) && focused === id);
   const shift = bankShift(focused); // shift for whatever the keyboard is driving
   const [expandedLane, setExpandedLane] = useState<DeckId | null>(null); // single-deck (maximized) view
-  const ACCENT: Record<DeckId, string> = { A: settings.accentA, B: settings.accentB };
+  // Deck accent tints to the LOADED track's album-art palette (Phase C) — "themes to whatever's
+  // playing" — falling back to the user's chosen accent for an empty deck or a track with no art.
+  const ACCENT: Record<DeckId, string> = {
+    A: meta.A.palette?.accent ?? settings.accentA,
+    B: meta.B.palette?.accent ?? settings.accentB,
+  };
   // Post-crossfade attenuation per deck, so the bottom level-fader meters fade with the crossfader.
   const levelGainsDb = crossfadeGainsDb(crossfade);
 

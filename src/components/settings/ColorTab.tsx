@@ -298,6 +298,22 @@ export function ColorTab({
             <span className="toggle-knob" />
           </button>
         </div>
+
+        <div className="settings-row">
+          <span className="settings-label">
+            Deck artwork
+            <span className="settings-sub muted"> · tint each deck to its track's cover</span>
+          </span>
+          <button
+            className={`toggle ${settings.deckArtAccent ? "on" : ""}`}
+            onClick={() => set({ deckArtAccent: !settings.deckArtAccent })}
+            role="switch"
+            aria-checked={settings.deckArtAccent}
+            title="Theme each deck's accent color to the loaded track's album art. Turn off to keep your fixed Deck A / Deck B accents. (Album art is always served from our own cache for privacy — only the coloring is optional.)"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
       </div>
 
       {/* Vividness (band look) + saved/synced/shareable colour profiles. */}

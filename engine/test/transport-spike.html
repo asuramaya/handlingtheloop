@@ -1,0 +1,115 @@
+<!doctype html>
+<!--
+  Worker → AudioWorklet TRANSPORT SPIKE v3 — the pager's SAB-free architecture, corrected.
+
+  v2 STARVED (0 buffered): iOS doesn't deliver a MessagePort TRANSFERRED INTO an AudioWorkletProcessor.
+  But v1 proved the processor's NATIVE port (node.port ⇄ processor.this.port) carries data fine and
+  even ran ahead. So v3 transfers node.port ITSELF to the Worker: the Worker feeds the processor's
+  built-in port directly (no injected port, no main thread in the audio path), and flow control comes
+  back over the same native channel. Worker relays stats to main for display + surfaces errors.
+
+  If this is clean, it's the real pager transport on iOS: Worker(OPFS window reads) → node.port →
+  processor ring, full stereo / full rate / any length, no SAB.
+
+    node engine/test/serve-coi-https.mjs 8443 /tmp/htl-spike
+    iPhone → https://<LAN-IP>:8443/transport-spike.html   (accept cert; tap ▶; hands off ~20 s)
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Worker→worklet transport spike v3</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font: 15px/1.5 -apple-system, system-ui, sans-serif; background: #0d0d10; color: #e8e8ea; padding: 20px; }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .verdict { font-size: 24px; font-weight: 700; padding: 16px; border-radius: 12px; text-align: center; margin: 16px 0; }
+      .go { background: #0d3b1e; color: #46e08a; } .nogo { background: #3b0d12; color: #ff6b78; } .wait { background: #2a2a12; color: #ffd24a; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+      td { padding: 8px 10px; border-bottom: 1px solid #24242a; } td:last-child { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+      .ok { color: #46e08a; } .bad { color: #ff6b78; }
+      button { font-size: 17px; padding: 13px 20px; border: 0; border-radius: 12px; background: #2b6cff; color: #fff; width: 100%; margin-top: 8px; }
+      button.alt { background: #333; } button:disabled { opacity: 0.4; }
+      #log { margin-top: 14px; font-size: 12px; color: #9a9aa2; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Worker → worklet transport spike v3 (native-port transfer)</h1>
+    <div id="verdict" class="verdict wait">tap ▶ — Worker owns node.port; listen ~20 s hands-off</div>
+    <table id="stats"></table>
+    <button id="start">▶ Start</button>
+    <button id="seek" class="alt" disabled>⤾ simulate seek (flush)</button>
+    <div id="log"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const log = (m) => ($("log").textContent = m + "\n" + $("log").textContent);
+      const secure = self.isSecureContext, hasWorklet = typeof AudioWorklet !== "undefined" && !!(window.AudioContext || window.webkitAudioContext);
+      if (!secure || !hasWorklet) { $("verdict").className = "verdict nogo"; $("verdict").textContent = "Can't run — " + (!secure ? "not a secure context" : "no AudioWorklet"); $("start").disabled = true; }
+
+      const RING = 1 << 16;       // 65536 frames (~1.36 s @48k)
+      const LOOKAHEAD_SEC = 0.5;
+
+      // Processor: uses its NATIVE this.port for everything. Receives int16 chunks (from whoever holds
+      // the other end of node.port — here, the Worker), appends to the ring, reads in process(), and
+      // posts read-cursor + stats back over the same native port.
+      const workletSrc = `
+        class Feed extends AudioWorkletProcessor {
+          constructor(){ super(); this.RING=${RING}; this.MASK=${RING - 1}; this.buf=new Int16Array(this.RING); this.w=0; this.r=0; this.under=0; this.t=0;
+            this.port.onmessage=(e)=>{ const d=e.data; if(d.buf){ const c=new Int16Array(d.buf); for(let i=0;i<c.length;i++) this.buf[(this.w+i)&this.MASK]=c[i]; this.w+=c.length; } else if(d.cmd==='flush'){ this.r=this.w; } }; }
+          process(_, outputs){ const out=outputs[0], n=out[0].length;
+            for(let i=0;i<n;i++){ let s=0; if(this.r<this.w){ s=this.buf[this.r&this.MASK]/32768; this.r++; } else { this.under++; } for(let c=0;c<out.length;c++) out[c][i]=s; }
+            if((this.t++ & 7)===0) this.port.postMessage({read:this.r, under:this.under, buffered:this.w-this.r});
+            return true; }
+        }
+        registerProcessor('feed', Feed);
+      `;
+
+      // Worker: holds node.port (transferred in). Feeds the processor int16 sine chunks kept ~LOOKAHEAD
+      // ahead of its reported read cursor; relays stats to the main thread for display.
+      const workerSrc = `
+        let np, sr, look, produced=0, read=0; const CHUNK=2048;
+        function fill(from,count){ const c=new Int16Array(count); for(let i=0;i<count;i++) c[i]=Math.round(Math.sin((2*Math.PI*440*(from+i))/sr)*0.2*32767); return c; }
+        function pump(){ const target=read+look; while(produced<target){ const n=Math.min(CHUNK,target-produced); const c=fill(produced,n); np.postMessage({buf:c.buffer},[c.buffer]); produced+=n; } }
+        onmessage=(e)=>{ const d=e.data;
+          if(d.nodePort){ np=d.nodePort; sr=d.sampleRate; look=d.lookahead;
+            np.onmessage=(ev)=>{ read=ev.data.read; postMessage({read, under:ev.data.under, buffered:ev.data.buffered}); };
+            pump(); setInterval(pump, 10); }
+          else if(d.cmd==='flush'){ np.postMessage({cmd:'flush'}); } };
+      `;
+
+      let ctx, node, worker;
+      $("start").onclick = async () => {
+        $("start").disabled = true;
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          ctx = new Ctx(); await ctx.resume(); const sr = ctx.sampleRate;
+          await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([workletSrc], { type: "text/javascript" })));
+          node = new AudioWorkletNode(ctx, "feed", { outputChannelCount: [2] });
+          node.connect(ctx.destination);
+
+          worker = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" })));
+          worker.onerror = (e) => { $("verdict").className = "verdict nogo"; $("verdict").textContent = "Worker error"; log("worker.onerror: " + (e.message || "") + " @" + (e.filename || "") + ":" + (e.lineno || "")); };
+          const t0 = performance.now(); let maxUnder = 0;
+          worker.onmessage = (e) => { maxUnder = Math.max(maxUnder, e.data.under); const secs = (performance.now() - t0) / 1000;
+            $("stats").innerHTML =
+              `<tr><td>ctx sampleRate</td><td>${sr} Hz</td></tr>` +
+              `<tr><td>elapsed</td><td>${secs.toFixed(1)} s</td></tr>` +
+              `<tr><td>buffered ahead</td><td>${(e.data.buffered / sr * 1000).toFixed(0)} ms</td></tr>` +
+              `<tr><td>underruns (total)</td><td class="${maxUnder ? "bad" : "ok"}">${maxUnder}</td></tr>`;
+            if (secs > 5) { const clean = maxUnder === 0; $("verdict").className = "verdict " + (clean ? "go" : "nogo");
+              $("verdict").textContent = clean ? "GO — Worker owns node.port, clean feed, 0 underruns" : `${maxUnder} underruns`; } };
+
+          // Transfer node.port to the Worker (main leaves the audio path). node keeps making sound;
+          // only its messaging channel moves to the Worker.
+          worker.postMessage({ nodePort: node.port, sampleRate: sr, lookahead: Math.round(LOOKAHEAD_SEC * sr) }, [node.port]);
+          $("seek").disabled = false;
+          $("verdict").className = "verdict wait"; $("verdict").textContent = "streaming from the Worker… (steady tone?)";
+          log("Worker holds node.port and feeds the processor's native port directly. Steady tone + 0 underruns + buffered ≈ 500 ms stable = GO. buffered stuck at 0 = the native-port transfer to a Worker also failed on iOS.");
+        } catch (err) { $("verdict").className = "verdict nogo"; $("verdict").textContent = "failed — " + (err && err.message || err); log(String(err && err.stack || err)); }
+      };
+
+      $("seek").onclick = () => { worker.postMessage({ cmd: "flush" }); log("seek: flush requested via Worker."); };
+    </script>
+  </body>
+</html>

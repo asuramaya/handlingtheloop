@@ -28,6 +28,9 @@ import {
   analyzeTrackAsync,
   serializeGrid,
   deserializeGrid,
+  extractPalette,
+  serializePalette,
+  deserializePalette,
   fetchAnalysisFull,
   ANALYSIS_VERSION,
   type Beatgrid,
@@ -176,7 +179,7 @@ const stemLoading = (s: StemStatus | null | undefined): boolean =>
 
 
 
-const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null, videoId: null, thumbnail: null };
+const EMPTY_META: DeckMeta = { name: "", artist: "", bpm: null, duration: 0, pyramid: null, videoId: null, thumbnail: null, palette: null };
 
 // <input> types that are NOT text entry. A focused slider / checkbox / button must NOT swallow the
 // board keyboard shortcuts — only an actual typing target (text field / textarea / contentEditable)
@@ -1534,6 +1537,7 @@ function AppBody() {
         // Gates the contribution below: a reuse-hit has nothing new to add, so it skips the re-POST;
         // a local derive (fresh, behind, or foreign-shape) DOES post → self-healing the row.
         let reusedGrid = false;
+        let storedPaletteStr: string | null = null; // stored art palette from the shared dataset (if any)
         if (!cached) {
           let data: ArrayBuffer;
           const stored = await getAudio(vid);
@@ -1568,6 +1572,7 @@ function AppBody() {
             const stored = await fetchAnalysisFull(track.videoId, ctrl.signal);
             if (stale()) return;
             if (stored && stored.version >= ANALYSIS_VERSION) suppliedGrid = deserializeGrid(stored.grid);
+            storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;
           const analysis = await analyzeTrackAsync(buffer, suppliedGrid);
@@ -1613,22 +1618,46 @@ function AppBody() {
           if (cached.analysis.bpm != null) library.setBpm(aid, cached.analysis.bpm);
           if (cached.analysis.key) library.setKey(aid, cached.analysis.key.camelot);
         }
-        // Contribute this analysis to the shared dataset (BPM/key/grid — facts, no audio). Skip when
-        // we REUSED a stored grid: the row is already current, so there's nothing to add (and the
-        // don't-downgrade guard would no-op it anyway). A local derive DOES post → upgrading the row.
-        if (track.videoId && !reusedGrid) {
-          void postAnalysis({
-            videoId: track.videoId,
-            bpm: cached.analysis.bpm,
-            key: cached.analysis.key?.camelot ?? null,
-            keyName: cached.analysis.key?.name ?? null,
-            beatOffset: cached.analysis.beatgrid?.firstBeat ?? null,
-            duration: Math.round(cached.buffer.duration),
-            // Contribute the FULL grid too (Metadata B) so a later load can skip re-derivation and
-            // the dataset carries the dynamic beats/downbeat/phrases, not just the summary.
-            grid: cached.analysis.beatgrid ? serializeGrid(cached.analysis.beatgrid) : null,
-            version: ANALYSIS_VERSION, // stamps the algorithm → drives the convergence guard
-          });
+        // Album-art palette (Phase B) + the analysis contribution, in ONE self-healing post. Read the
+        // stored palette; if none yet, extract it from the same-origin /api/art image (canvas-untainted
+        // now that art is first-party). Apply it to the deck meta for per-track theming, then contribute
+        // grid + palette to the shared dataset. Fire-and-forget so neither the image load nor the POST
+        // blocks the deck. The POST fires when we DERIVED a grid OR extracted a NEW palette (either is
+        // new data); it carries the grid/summary so a palette-only top-up never nulls them. Skipping it
+        // when a stored grid was reused AND the palette already existed = nothing new to add.
+        if (track.videoId) {
+          const artId = track.videoId;
+          const derived = cached!;
+          void (async () => {
+            try {
+              let paletteStr = deserializePalette(storedPaletteStr) ? storedPaletteStr : null;
+              let freshPalette = false;
+              if (!paletteStr) {
+                const p = await extractPalette(`/api/art/${artId}`);
+                if (p) {
+                  paletteStr = serializePalette(p);
+                  freshPalette = true;
+                }
+              }
+              const pal = deserializePalette(paletteStr);
+              if (pal) setMeta((m) => (m[id]?.videoId === artId ? { ...m, [id]: { ...m[id], palette: pal } } : m));
+              if (!reusedGrid || freshPalette) {
+                void postAnalysis({
+                  videoId: artId,
+                  bpm: derived.analysis.bpm,
+                  key: derived.analysis.key?.camelot ?? null,
+                  keyName: derived.analysis.key?.name ?? null,
+                  beatOffset: derived.analysis.beatgrid?.firstBeat ?? null,
+                  duration: Math.round(derived.buffer.duration),
+                  grid: derived.analysis.beatgrid ? serializeGrid(derived.analysis.beatgrid) : null,
+                  palette: paletteStr,
+                  version: ANALYSIS_VERSION, // stamps the algorithm → drives the convergence guard
+                });
+              }
+            } catch {
+              /* palette/contribution is best-effort — never affects the load */
+            }
+          })();
         }
         // Stems: light the buttons instantly with the DSP split, then (if a neural
         // model is selected) separate in the background and swap the cleaner stems

@@ -150,7 +150,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
           200,
           {
             analysis: row
-              ? { bpm: row.bpm, key: row.music_key, keyName: row.key_name, beatOffset: row.beat_offset, duration: row.duration, grid: row.grid, version: row.version }
+              ? { bpm: row.bpm, key: row.music_key, keyName: row.key_name, beatOffset: row.beat_offset, duration: row.duration, grid: row.grid, palette: row.palette, version: row.version }
               : null,
           },
           // A stored grid is deterministic for a (video, version) pair — let the browser hold it.
@@ -180,6 +180,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
         beatOffset?: number;
         duration?: number;
         grid?: string;
+        palette?: string;
         version?: number;
       };
       if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
@@ -198,6 +199,8 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             // Full serialized beatgrid — bounded (anonymous, HF-bound). A ~10-min track's grid is
             // a few KB; 256 KB is a generous ceiling that rejects any absurd/oversized payload.
             grid: typeof b.grid === "string" && b.grid.length > 0 && b.grid.length <= 262_144 ? b.grid : null,
+            // Album-art colour palette (4 hex colours as compact JSON, ~tens of bytes) — bounded to 4 KB.
+            palette: typeof b.palette === "string" && b.palette.length > 0 && b.palette.length <= 4096 ? b.palette : null,
             // Algorithm version — drives the don't-downgrade convergence guard in upsertAnalysis.
             // Clamp to a sane integer; absent/garbage falls to the DB default (1).
             version: Number.isInteger(b.version) && b.version! >= 1 && b.version! <= 1_000_000 ? b.version : undefined,

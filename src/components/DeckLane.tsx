@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Deck } from "@htl/audio";
-import type { Pyramid } from "@htl/analysis";
+import type { Pyramid, Palette } from "@htl/analysis";
 import type { LyricsSource, LyricsLine } from "@htl/lyrics";
 import type { TrackMeta } from "@htl/library";
 import { gridLabel, stepSkip } from "@htl/state";
@@ -18,6 +18,7 @@ export interface DeckMeta {
   pyramid: Pyramid | null;
   videoId?: string | null; // the loaded catalog track's id (null for local files) — drag-to-add source
   thumbnail?: string | null;
+  palette?: Palette | null; // colours extracted from the album art → per-track theming (accent + band hues)
 }
 
 interface DeckLaneProps {

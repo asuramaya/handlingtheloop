@@ -18,7 +18,7 @@ export interface TrackAnalysisRow {
  *  newest algorithm in circulation — see the htl-metadata-convergence design note. */
 export async function upsertAnalysis(
   db: D1Database,
-  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; version?: number },
+  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; palette?: string | null; version?: number },
 ): Promise<void> {
   const version = a.version ?? 1;
   // The BPM/key summary write — unchanged shape, so it can NEVER be broken by the grid column.
@@ -51,6 +51,17 @@ export async function upsertAnalysis(
       /* grid column not migrated yet — bpm/key already persisted, grid lands after the migration */
     }
   }
+  // The album-art colour palette — same separate, guarded, self-healing write as the grid (0024).
+  if (a.palette != null) {
+    try {
+      await db
+        .prepare(`UPDATE track_analysis SET palette=? WHERE video_id=? AND ? >= version`)
+        .bind(a.palette, a.videoId, version)
+        .run();
+    } catch {
+      /* palette column not migrated yet — lands after 0024 */
+    }
+  }
 }
 
 export interface TrackAnalysisFull {
@@ -60,21 +71,23 @@ export interface TrackAnalysisFull {
   beat_offset: number | null;
   duration: number | null;
   grid: string | null;
+  palette: string | null;
   version: number;
 }
 
-/** Full stored analysis for ONE track (incl. the serialized grid + algorithm version) — the
- *  cache-first load reads this to reuse a grid instead of re-deriving. Returns null if unknown,
- *  or if the `grid` column hasn't migrated yet (0023) — either way the caller derives locally. */
+/** Full stored analysis for ONE track (serialized grid + palette + algorithm version) — the
+ *  cache-first load reads this to reuse a grid/palette instead of re-deriving/re-extracting. Returns
+ *  null if unknown, or if the `grid`/`palette` columns haven't migrated yet (0023/0024, which apply
+ *  together) — either way the caller derives locally, then re-contributes (self-healing). */
 export async function getAnalysisFull(db: D1Database, videoId: string): Promise<TrackAnalysisFull | null> {
   if (!/^[\w-]{11}$/.test(videoId)) return null;
   try {
     return await db
-      .prepare("SELECT bpm, music_key, key_name, beat_offset, duration, grid, version FROM track_analysis WHERE video_id = ?")
+      .prepare("SELECT bpm, music_key, key_name, beat_offset, duration, grid, palette, version FROM track_analysis WHERE video_id = ?")
       .bind(videoId)
       .first<TrackAnalysisFull>();
   } catch {
-    return null; // grid column not migrated yet → treat as a miss, derive locally
+    return null; // grid/palette columns not migrated yet → treat as a miss, derive locally
   }
 }
 

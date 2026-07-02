@@ -76,6 +76,7 @@ export interface StoredAnalysis {
   beatOffset: number | null;
   duration: number | null;
   grid: string | null; // serialized beatgrid (deserializeGrid) — null if none stored / column unmigrated
+  palette: string | null; // serialized art colour palette (deserializePalette) — null if none stored yet
   version: number; // the algorithm version that produced it (drives the reuse-vs-recompute gate)
 }
 
@@ -164,6 +165,7 @@ export async function postAnalysis(a: {
   beatOffset?: number | null;
   duration?: number | null;
   grid?: string | null; // full serialized beatgrid (serializeGrid) — the cache-first/re-derivation seam
+  palette?: string | null; // serialized art colour palette (serializePalette) — deterministic per art
   version?: number; // ANALYSIS_VERSION — omit to accept the server default (1)
 }): Promise<void> {
   if (postedAnalysis.has(a.videoId)) return; // already contributed this session

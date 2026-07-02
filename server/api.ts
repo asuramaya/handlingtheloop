@@ -268,6 +268,35 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       return true;
     }
 
+    // Dev: no R2 — proxy album art through same-origin (mirrors the worker's /api/art) so
+    // thumbnails load and stay canvas-untainted in `pnpm dev`. No caching (dev only).
+    if (path.startsWith("/api/art/")) {
+      const v = path.slice("/api/art/".length).replace(/[^\w-]/g, "");
+      if (!/^[\w-]{11}$/.test(v)) {
+        res.writeHead(404);
+        res.end();
+        return true;
+      }
+      for (const q of ["maxresdefault", "hqdefault"]) {
+        try {
+          const r = await fetch(`https://i.ytimg.com/vi/${v}/${q}.jpg`);
+          if (r.ok) {
+            const buf = Buffer.from(await r.arrayBuffer());
+            if (buf.byteLength > 2048) {
+              res.writeHead(200, { "content-type": "image/jpeg", "x-content-type-options": "nosniff", "cache-control": "public, max-age=604800" });
+              res.end(buf);
+              return true;
+            }
+          }
+        } catch {
+          /* try the next resolution */
+        }
+      }
+      res.writeHead(404);
+      res.end();
+      return true;
+    }
+
     switch (path) {
       case "/api/audio": {
         const v = url.searchParams.get("v");

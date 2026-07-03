@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Deck } from "@htl/audio";
+import { neonHex } from "@htl/analysis";
 import type { Pyramid, Palette } from "@htl/analysis";
 import type { LyricsSource, LyricsLine } from "@htl/lyrics";
 import type { TrackMeta } from "@htl/library";
@@ -148,11 +149,6 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
   // LibraryPanel drop targets accept it. Only catalog tracks (with a videoId) can be
   // filed; local-file loads have none.
   const canDrag = !!meta.videoId;
-  // The backdrop art keys off the videoId-derived same-origin URL — the SAME source the deck accent
-  // already themes from — NOT meta.thumbnail, which is null for engine-loaded / restored tracks.
-  // (That mismatch is why the accent worked but the backdrop was invisible: it gated on the one
-  // field that's always empty on a loaded deck.)
-  const artUrl = meta.videoId ? `/api/art/${meta.videoId}` : meta.thumbnail ?? null;
   function onHeaderDragStart(e: React.DragEvent) {
     if (!meta.videoId) {
       e.preventDefault();
@@ -213,8 +209,18 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
     >
       {/* Opt-in ambient backdrop: the album art, blurred, bleeding through the deck chrome. Opacity
           rides the crossfade CSS var (--art-a / --art-b on .lanes) → dissolves A↔B with the fader. */}
-      {artBackdrop && artUrl && (
-        <div className="lane-art" aria-hidden="true" style={{ backgroundImage: `url(${artUrl})`, opacity: `var(--art-${id === "A" ? "a" : "b"})` }} />
+      {artBackdrop && meta.palette && (
+        <div
+          className="lane-art"
+          aria-hidden="true"
+          style={{
+            opacity: `var(--art-${id === "A" ? "a" : "b"})`,
+            // A radial glow of the track's dominant colour rising from behind the waveform floor — NOT a
+            // blurred album photo (photos mud to grey under blur). Neon-floored so even a desaturated
+            // cover reads as real colour, and the radial fade means it's ambient light, not a flat fill.
+            background: `radial-gradient(125% 88% at 50% 122%, ${neonHex(meta.palette.mid)} 0%, transparent 60%)`,
+          }}
+        />
       )}
       <div className="lane-info">
         {/* DECK id + scrolling title — its own full-width row on mobile. Drag the
@@ -299,7 +305,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
         pyramid={meta.pyramid}
         accent={accent}
         background={background}
-        artBg={artBackdrop && !!artUrl}
+        artBg={artBackdrop && !!meta.palette}
         selectorColor={selectorColor}
         loopColor={loopColor}
         markerColor={markerColor}

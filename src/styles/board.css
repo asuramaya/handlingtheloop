@@ -28,11 +28,11 @@
   position: absolute;
   inset: 0;
   z-index: -1;
-  background-size: cover;
-  background-position: center;
-  filter: blur(26px) saturate(1.4) brightness(0.85);
+  /* The radial gradient (set inline from the track palette) is bottom-anchored and fades to
+     transparent on its own — an ambient glow rising behind the waveform, not a flat rectangle. */
+  filter: saturate(1.15);
   pointer-events: none;
-  transition: opacity 0.3s ease, background-image 0.4s ease;
+  transition: opacity 0.3s ease, background 0.4s ease;
 }
 /* Single-deck view: the tapped lane fills the whole lanes area, the other hides. */
 .lane.collapsed {

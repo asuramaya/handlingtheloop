@@ -12,27 +12,11 @@
 }
 .lane {
   position: relative;
-  isolation: isolate; /* contain the opt-in .lane-art backdrop's negative z-index within the lane */
   background: var(--surface);
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-/* Opt-in ambient album-art backdrop (Settings ▸ Color ▸ "Deck backdrop"). Sits ABOVE the --surface
-   fill but BELOW the deck content (negative z within the isolated lane), so blurred art bleeds
-   through the deck chrome/gaps. Opacity is the crossfade var (--art-a / --art-b, set on .lanes) →
-   it dissolves A↔B with the fader, no re-render. The opaque waveform covers its own region. */
-.lane-art {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  /* The radial gradient (set inline from the track palette) is bottom-anchored and fades to
-     transparent on its own — an ambient glow rising behind the waveform, not a flat rectangle. */
-  filter: saturate(1.15);
-  pointer-events: none;
-  transition: opacity 0.3s ease, background 0.4s ease;
 }
 /* Single-deck view: the tapped lane fills the whole lanes area, the other hides. */
 .lane.collapsed {

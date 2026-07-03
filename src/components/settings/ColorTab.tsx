@@ -314,22 +314,6 @@ export function ColorTab({
             <span className="toggle-knob" />
           </button>
         </div>
-
-        <div className="settings-row">
-          <span className="settings-label">
-            Deck backdrop
-            <span className="settings-sub muted"> · blurred cover behind the decks, dissolves A↔B</span>
-          </span>
-          <button
-            className={`toggle ${settings.artBackdrop ? "on" : ""}`}
-            onClick={() => set({ artBackdrop: !settings.artBackdrop })}
-            role="switch"
-            aria-checked={settings.artBackdrop}
-            title="An ambient, blurred album-art backdrop behind each deck that fades between A and B as you move the crossfader. Off by default."
-          >
-            <span className="toggle-knob" />
-          </button>
-        </div>
       </div>
 
       {/* Vividness (band look) + saved/synced/shareable colour profiles. */}

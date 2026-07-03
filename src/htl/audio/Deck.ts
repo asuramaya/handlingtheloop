@@ -289,6 +289,7 @@ export class Deck {
   private _pitchSemis = 0; // musical key shift, −12 … +12 semitones
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
+  private extractSeq = 0; // request id for extractRegion round-trips to the worklet
   lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
   get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
   get scratchAttached() { return this.jog.attached; } // did the scrub worklet attach?
@@ -892,6 +893,41 @@ export class Deck {
    *  `this.stems`), so a null here makes the sampler fall back to the full-mix region. */
   stemBuffer(name: StemName): AudioBuffer | null {
     return this.stems ? this.stems[name] : null;
+  }
+  /** Pull a [start,end]-second region's PCM back out of the stretch worklet as a small AudioBuffer.
+   *  On mobile the raw mix + stem AudioBuffers are freed once stems pack into the worklet
+   *  (releaseMixBuffer + `this.stems = null`), so the local sampler — which slices an AudioBuffer —
+   *  has nothing to grab. The int16 PCM still lives in the worklet, so copy just the slice back (a
+   *  loop = a few seconds = cheap, no OOM). `stem` picks one stem group; undefined = the full mix
+   *  (sum of all groups). Resolves null if the worklet isn't loaded or the node hot-swaps mid-call. */
+  extractRegion(start: number, end: number, stem?: StemName): Promise<AudioBuffer | null> {
+    const node = this.stretchNode;
+    if (!node || end - start < 0.02) return Promise.resolve(null);
+    const group = stem ? STEM_NAMES.indexOf(stem) : -1; // -1 = sum every group → the mix
+    const id = ++this.extractSeq;
+    return new Promise((resolve) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (buf: AudioBuffer | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        node.port.removeEventListener("message", onMsg);
+        resolve(buf);
+      };
+      const onMsg = (e: MessageEvent) => {
+        const d = e.data as { type?: string; id?: number; length?: number; sampleRate?: number; L?: Float32Array; R?: Float32Array };
+        if (d?.type !== "region" || d.id !== id) return; // not our reply (rides alongside the node's onmessage)
+        if (!d.length || !d.L || !d.R) return finish(null);
+        const buf = this.ctx.createBuffer(2, d.length, d.sampleRate || this.ctx.sampleRate);
+        buf.getChannelData(0).set(d.L); // .set (not copyToChannel) sidesteps the ArrayBuffer/SAB generic
+        buf.getChannelData(1).set(d.R);
+        finish(buf);
+      };
+      node.port.addEventListener("message", onMsg); // the port is already started (onmessage is set in attachStretchNode)
+      timer = setTimeout(() => finish(null), 2000); // safety: never hang if the node swaps out
+      node.port.postMessage({ type: "extractRegion", id, start, end, group });
+    });
   }
   /** The knob level for a stem (0..1.5; 1 = unity). */
   stemLevel(name: StemName): number {

@@ -114,6 +114,9 @@ export function useSampler(
   const [globals, setGlobals] = useState<GlobalPad[]>(() => emptyGlobals(globalMeta.current));
   const fileBuffers = useRef<(AudioBuffer | null)[]>(Array(GLOBAL_COUNT).fill(null)); // decoded global clips
   const remoteGlobalBuf = useRef<Map<string, AudioBuffer>>(new Map()); // guest-side cache of host global clips (by sampleId)
+  // Region slices pulled back out of the worklet when a deck's raw buffers are freed (mobile + stems).
+  // Keyed by vid:start:end:stem so it survives re-slices; shared by local trigger + remote play.
+  const regionBufCache = useRef<Map<string, AudioBuffer>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [playTick, bumpPlaying] = useReducer((n: number) => n + 1, 0); // re-render when voices start/stop
   // When applyRemote re-runs a mutator to apply an inbound config change, suppress its emit so
@@ -140,6 +143,11 @@ export function useSampler(
   useEffect(() => {
     for (let i = deckPadBase("B"); i < deckPadBase("B") + DECK_REGION_COUNT; i++) engine.sampler.stop(i);
   }, [engine, loaded.B]);
+  // Extracted region slices are keyed by videoId, but a new track on either deck retires the old
+  // ones — drop the whole cache (a handful of short buffers; re-extracted lazily on next play).
+  useEffect(() => {
+    regionBufCache.current.clear();
+  }, [loaded.A, loaded.B]);
 
   const persistRegions = useCallback((next: RegionStore) => {
     setRegions(next);
@@ -237,6 +245,31 @@ export function useSampler(
 
   // ---- actions ----
 
+  // Play a deck-region slice. Fast path: slice the deck's LIVE AudioBuffer (or a resident stem) in
+  // place — zero-copy. On mobile the raw buffers are freed once stems pack into the worklet, so
+  // instead pull the slice back out of the worklet (cached per region), which is what makes local
+  // sampling work with stems on. `id` is the region's deck (also its route). Bails only when there's
+  // no local PCM at all (a pure remote-display deck mirroring a host).
+  const playRegion = useCallback(
+    (pad: number, id: DeckId, r: { start: number; end: number; mode: SampleMode; gain: number; stem?: StemName }, rate: number) => {
+      const d = engine.deck(id);
+      const vid = id === "A" ? loaded.A : loaded.B;
+      const opts = { route: id, mode: r.mode, gain: r.gain, rate };
+      const live = (r.stem && d.stemBuffer(r.stem)) || d.buffer;
+      if (live) {
+        engine.sampler.play(pad, { buffer: live, offset: r.start, duration: r.end - r.start, ...opts });
+        return;
+      }
+      if (!vid || !d.ownStems) return; // no local PCM to slice (mix freed AND not our own stems)
+      const key = `${vid}:${r.start.toFixed(3)}:${r.end.toFixed(3)}:${r.stem ?? "mix"}`;
+      const play = (b: AudioBuffer) => engine.sampler.play(pad, { buffer: b, offset: 0, duration: b.duration, ...opts });
+      const cached = regionBufCache.current.get(key);
+      if (cached) { play(cached); return; }
+      void d.extractRegion(r.start, r.end, r.stem).then((b) => { if (b) { regionBufCache.current.set(key, b); play(b); } });
+    },
+    [engine, loaded.A, loaded.B],
+  );
+
   const trigger = useCallback(
     (i: number) => {
       engine.resume();
@@ -256,14 +289,12 @@ export function useSampler(
         const r = vid ? regions[vid]?.[slot] : null;
         if (!r) return;
         const rate = d.rate * pitchRate(r.pitch); // tempo-sync to the deck, then varispeed-repitch
-        const buf = (r.stem && d.stemBuffer(r.stem)) || d.buffer; // stem-aware: chop one stem, else the full mix
-        if (!buf) return;
-        engine.sampler.play(i, { buffer: buf, offset: r.start, duration: r.end - r.start, route, mode: r.mode, gain: r.gain, rate });
+        playRegion(i, id, r, rate); // slices the live buffer, or pulls it out of the worklet on mobile+stems
         // Carry the slice — the guest plays it off ITS OWN copy of the deck's track (no audio on the wire).
         emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stem: r.stem } });
       }
     },
-    [engine, globals, regions, loaded.A, loaded.B, emit],
+    [engine, globals, regions, loaded.A, loaded.B, emit, playRegion],
   );
 
   const release = useCallback(
@@ -309,7 +340,9 @@ export function useSampler(
       const id = regionDeck(i);
       const d = engine.deck(id);
       const vid = id === "A" ? loaded.A : loaded.B;
-      if (!vid || !d.buffer) return;
+      // Need SOME local source to slice: the raw mix buffer, or — once it's been freed on mobile —
+      // our own stems still resident as int16 in the worklet (extractRegion pulls the slice back).
+      if (!vid || (!d.buffer && !d.ownStems)) return;
       let start: number, end: number;
       if (d.loop) {
         start = d.loop.start;
@@ -326,6 +359,12 @@ export function useSampler(
       arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1 };
       next[vid] = arr;
       persistRegions(next);
+      // Mobile + stems: the raw buffer is gone, so warm the worklet-extracted slice now → the first
+      // pad tap plays instantly instead of eating the round-trip. (No-op on desktop; d.buffer exists.)
+      if (!d.buffer && d.ownStems) {
+        const key = `${vid}:${start.toFixed(3)}:${end.toFixed(3)}:mix`;
+        void d.extractRegion(start, end).then((b) => { if (b) regionBufCache.current.set(key, b); });
+      }
       doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "assign" }); // watcher grabs the same region off its synced deck
     },
     [engine, loaded.A, loaded.B, regions, persistRegions],
@@ -609,15 +648,14 @@ export function useSampler(
           }
         })();
       } else {
-        const d = engine.deck(route);
         const rg = intent.region;
         if (!rg) return;
-        const buf = (rg.stem && d.stemBuffer(rg.stem)) || d.buffer; // guest's own stem if it has it, else the mix
-        if (!buf) return; // guest hasn't decoded this deck's track yet → skip
-        engine.sampler.play(pad, { buffer: buf, offset: rg.start, duration: rg.end - rg.start, route, mode: rg.mode, gain: rg.gain, rate: rg.rate });
+        // Same as local trigger: slice the guest's live buffer, or pull it from the worklet on
+        // mobile+stems. Skips cleanly if the guest hasn't decoded this deck's track yet.
+        playRegion(pad, route, rg, rg.rate ?? 1);
       }
     },
-    [engine, assignRegion, clearPad, setMode, setGain, setStem, setPitch],
+    [engine, assignRegion, clearPad, setMode, setGain, setStem, setPitch, playRegion],
   );
 
   return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStem, setPitch };

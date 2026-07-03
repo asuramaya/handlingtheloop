@@ -1864,6 +1864,12 @@ body.no-glow .hw-btn.shift.on {
   background: var(--panel);
   border: 1px solid var(--btn-border, var(--line));
   color: var(--muted);
+  /* Pads FIRE on pointerdown (low-latency, like a real sample pad). Without an explicit touch-action
+     iOS Safari treats the tap as an ambiguous zoom/scroll gesture and suppresses the pointer events,
+     so the pad never triggers on touch. `manipulation` claims the tap (no double-tap-zoom / 350ms
+     delay) while still letting the bank scroll. Every other board control (.btn/.hw-btn/.vcell) does
+     this too — .pad was the one that was missed, which is why the sampler was dead on touch. */
+  touch-action: manipulation;
   transition: border-color 0.12s, box-shadow 0.12s, color 0.12s;
 }
 .bank .pad:hover {

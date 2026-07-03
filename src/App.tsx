@@ -3202,8 +3202,8 @@ function AppBody() {
           style={{
             // Per-deck art-backdrop opacity, driven by the crossfade (−1 = A … +1 = B). Set as CSS
             // vars so .lane-art dissolves A↔B without re-rendering the decks. 0 when the toggle's off.
-            ["--art-a" as string]: settings.artBackdrop ? (0.4 * (1 - (crossfade + 1) / 2)).toFixed(3) : "0",
-            ["--art-b" as string]: settings.artBackdrop ? (0.4 * ((crossfade + 1) / 2)).toFixed(3) : "0",
+            ["--art-a" as string]: settings.artBackdrop ? (0.6 * (1 - (crossfade + 1) / 2)).toFixed(3) : "0",
+            ["--art-b" as string]: settings.artBackdrop ? (0.6 * ((crossfade + 1) / 2)).toFixed(3) : "0",
           }}
         >
           {(["A", "B"] as DeckId[]).map((id) => (

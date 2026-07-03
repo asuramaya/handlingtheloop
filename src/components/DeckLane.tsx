@@ -148,6 +148,11 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
   // LibraryPanel drop targets accept it. Only catalog tracks (with a videoId) can be
   // filed; local-file loads have none.
   const canDrag = !!meta.videoId;
+  // The backdrop art keys off the videoId-derived same-origin URL — the SAME source the deck accent
+  // already themes from — NOT meta.thumbnail, which is null for engine-loaded / restored tracks.
+  // (That mismatch is why the accent worked but the backdrop was invisible: it gated on the one
+  // field that's always empty on a loaded deck.)
+  const artUrl = meta.videoId ? `/api/art/${meta.videoId}` : meta.thumbnail ?? null;
   function onHeaderDragStart(e: React.DragEvent) {
     if (!meta.videoId) {
       e.preventDefault();
@@ -208,8 +213,8 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
     >
       {/* Opt-in ambient backdrop: the album art, blurred, bleeding through the deck chrome. Opacity
           rides the crossfade CSS var (--art-a / --art-b on .lanes) → dissolves A↔B with the fader. */}
-      {artBackdrop && meta.thumbnail && (
-        <div className="lane-art" aria-hidden="true" style={{ backgroundImage: `url(${meta.thumbnail})`, opacity: `var(--art-${id === "A" ? "a" : "b"})` }} />
+      {artBackdrop && artUrl && (
+        <div className="lane-art" aria-hidden="true" style={{ backgroundImage: `url(${artUrl})`, opacity: `var(--art-${id === "A" ? "a" : "b"})` }} />
       )}
       <div className="lane-info">
         {/* DECK id + scrolling title — its own full-width row on mobile. Drag the
@@ -294,7 +299,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, artBa
         pyramid={meta.pyramid}
         accent={accent}
         background={background}
-        artBg={artBackdrop && !!meta.thumbnail}
+        artBg={artBackdrop && !!artUrl}
         selectorColor={selectorColor}
         loopColor={loopColor}
         markerColor={markerColor}

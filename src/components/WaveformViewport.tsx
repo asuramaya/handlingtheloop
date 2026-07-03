@@ -1085,7 +1085,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       <canvas
         ref={canvasRef}
         className="waveform"
-        style={{ touchAction: "none" }}
+        // When the art backdrop is armed, drop the canvas ELEMENT's opaque `.waveform` background
+        // (base.css → var(--panel)) so the cleared (transparent) bitmap reveals the .lane-art behind
+        // it. Off → undefined, so the CSS rule paints the surface exactly as before.
+        style={{ touchAction: "none", background: props.artBg ? "transparent" : undefined }}
         onWheel={(e) => {
           // In loop-boundary adjust mode the wheel steps the edge (routed downstream
           // via onNeedleDrop → adjustStep) — no Shift needed, that's the mode's point.

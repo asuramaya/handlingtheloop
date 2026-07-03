@@ -104,11 +104,11 @@ shipped), **E2/J1** (Discover surface), **G1–G5** (sets), **B5** (profile sets
 ## Ordered backlog (task list — 2026-06-18)
 
 The remaining work, ordered. Top of the list is the active push; per-task detail is in the
-Epics section below. **Done so far (2026-06-18, main, undeployed):** surface restructure
+Epics section below. **Done so far (2026-06-18, main, shipped):** surface restructure
 (Discover surface + public-first Profile), **B3**, **J1** (v1), **D5**.
 
 ### Tier 1 — Sets spine (Epic G) — the active push
-- [x] **G1a — capture + model.** DONE (`18b32f0`, undeployed). `SetCapture` (src/htl/room/
+- [x] **G1a — capture + model.** DONE (`18b32f0`, shipped). `SetCapture` (src/htl/room/
       setCapture.ts) tees the host's outbound recipe (snapshot+intents+automix+~1/sec ticks;
       drops display-only stemview/lyrics) → on broadcast-end POSTs to `POST /api/sets` → R2 log
       blob `sets/<id>.json` + a `sets` D1 row (migration 0016, server/db/sets.ts) as a private
@@ -116,13 +116,13 @@ Epics section below. **Done so far (2026-06-18, main, undeployed):** surface res
       replay). engineVersion stamped (D5). Host-side for v1 (recipe is cheap, dodges the DO
       write-quota ceiling — [[htl-do-write-quota]]); solo host = full capture (co-DJ intents not
       tee'd here — G5). 86 tests green. **Migration 0016 needs `d1 migrations apply` at deploy.**
-- [x] **G1b — lifecycle.** DONE (`3dce9d6`, undeployed). `RecordingsPanel` in Session lists the
+- [x] **G1b — lifecycle.** DONE (`3dce9d6`, shipped). `RecordingsPanel` in Session lists the
       host's sets (fetchMySets) → Publish / Unpublish / inline Rename / Discard (deletes row +
       R2 blob). Owner-only routes `POST /api/sets/:id/{publish,unpublish,rename}` + `DELETE
       /api/sets/:id` (403 unauthed, drafts 404 to non-owners). Self-hides until the first set,
       stays collapsed (Session stays uncluttered), auto-opens when a fresh draft lands via the
       new `room.setsRev` signal. Verified end-to-end against the live worker (2 drafts captured).
-- [x] **G1c — replay** DONE (`e99fd0c`, undeployed; OWES real-device ear-test). `useSetReplay`
+- [x] **G1c — replay** DONE (`e99fd0c`, shipped). `useSetReplay`
       (src/htl/replay/) drives a local rAF clock that fires each recipe entry at its timestamp
       through the SAME live-listener handlers (App `replayDispatch` → applyRoomSnapshot/onRoomIntent/
       onRoomTick/setRemoteAutomix; follow gates forced open while replay.active). play/pause (halts

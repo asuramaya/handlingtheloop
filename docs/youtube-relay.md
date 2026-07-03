@@ -69,7 +69,7 @@ A thin, locked-down forward relay — **all resolve logic stays in the Worker**:
   `http://127.0.0.1:8088`, else `http_status:404` (scoped to the one port).
 - DNS: CNAME `relay-b.handlingtheloop.com` → `73ba5e75….cfargotunnel.com` (no home IP in DNS).
 
-## Worker hook (committed `af64585`, UNDEPLOYED, INERT until secrets set)
+## Worker hook (committed `af64585`, deployed but INERT until secrets set)
 
 - `server/youtube.ts`: `type Fetcher`, `makeRelayFetch(url, secret)`, threaded through
   getVisitorData/rawPlayer/playerWithRetry/resolveAudio/fetchRange/audioChunks (default =
@@ -84,7 +84,7 @@ A thin, locked-down forward relay — **all resolve logic stays in the Worker**:
 printf %s "https://relay-b.handlingtheloop.com" | npx wrangler secret put YT_RELAY_URL
 tr -d '\n\r' < /tmp/relay/secret.txt | npx wrangler secret put YT_RELAY_SECRET   # match fgb byte-for-byte
 # recover secret if /tmp wiped:  ssh fortigate-b 'sed -n "s/^RELAY_SECRET=//p" /etc/htl-relay.env'
-./deploy.sh    # ships af64585 (+ the rest of the undeployed tree)
+./deploy.sh    # redeploy so the Worker picks up the new secrets
 ```
 
 ## Operate

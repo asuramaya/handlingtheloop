@@ -525,13 +525,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {smpPads.map((pad, i) => (
             <button
               key={pad.index}
-              className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stem ? "stemmed" : ""}`}
+              className={`pad smp ${pad.kind === "empty" ? "" : "set"} ${pad.playing ? "playing" : ""} ${pad.stems ? "stemmed" : ""}`}
               data-cue={i + 1}
               disabled={pad.kind === "empty" && !pad.hasTrack}
               title={
                 pad.kind === "empty"
                   ? pad.hasTrack ? `Slice a region from deck ${id}` : `Load a track on deck ${id} first`
-                  : `${pad.name || "sample"} · ${pad.mode}${pad.stem ? ` · ${pad.stem}` : ""} — tap to play · SHIFT = clear · right-click for options`
+                  : `${pad.name || "sample"} · ${pad.mode}${pad.stems ? ` · ${pad.stems.join("+")}` : ""} — tap to play · SHIFT = clear · right-click for options`
               }
               onPointerDown={(e) => { if (e.button === 0) smpDown(pad); }}
               onPointerUp={() => smpUp(pad)}
@@ -540,7 +540,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               onContextMenu={(e) => { e.preventDefault(); if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x: e.clientX, y: e.clientY }); }}
             >
               {shift && pad.kind !== "empty" ? <span className="pad-clr">CLR</span> : pad.kind === "empty" ? (pad.hasTrack ? "+" : "—") : pad.name || i + 1}
-              {!shift && pad.stem && <span className="pad-stem" aria-hidden="true">{pad.stem[0].toUpperCase()}</span>}
+              {!shift && pad.stems && <span className="pad-stem" aria-hidden="true">{pad.stems.map((s) => s[0].toUpperCase()).join("")}</span>}
               <span className="kbd">{i + 1}</span>
             </button>
           ))}
@@ -638,14 +638,30 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
               {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
                 <>
-                  <div className="ctx-label">Stem</div>
+                  <div className="ctx-label">Stems</div>
+                  {/* Multi-select: each stem toggles in/out of the chopped subset; "full" clears to the
+                      mix. Derived from what was audible at grab, editable here. */}
                   <div className="smp-modes smp-stems">
-                    <button className={!sampler.pads[smpMenu.i].stem ? "active" : ""} onClick={() => { sampler.setStem(smpMenu.i, undefined); refresh(); }}>full</button>
-                    {STEM_CELLS.map((s) => (
-                      <button key={s.name} className={sampler.pads[smpMenu.i].stem === s.name ? "active" : ""} onClick={() => { sampler.setStem(smpMenu.i, s.name); refresh(); }}>
-                        {s.label.toLowerCase()}
-                      </button>
-                    ))}
+                    {(() => {
+                      const cur = sampler.pads[smpMenu.i].stems ?? [];
+                      return (
+                        <>
+                          <button className={cur.length === 0 ? "active" : ""} onClick={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}>full</button>
+                          {STEM_CELLS.map((s) => {
+                            const on = cur.includes(s.name);
+                            return (
+                              <button
+                                key={s.name}
+                                className={on ? "active" : ""}
+                                onClick={() => { sampler.setStems(smpMenu.i, on ? cur.filter((n) => n !== s.name) : [...cur, s.name]); refresh(); }}
+                              >
+                                {s.label.toLowerCase()}
+                              </button>
+                            );
+                          })}
+                        </>
+                      );
+                    })()}
                   </div>
                 </>
               )}

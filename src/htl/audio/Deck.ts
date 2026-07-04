@@ -3,6 +3,10 @@ import { beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
+import { pcmMark, pcmResident } from "./pcmMeter";
+
+// Per-deck id for the PCM meter breadcrumbs (iOS OOM hunt) — "0"/"1" for A/B.
+let _deckMeterSeq = 0;
 
 // WSOLA stretch-engine config posted to the worklet. The preset numbers (frame/
 // search/stride) plus the optional quality toggles wired from the Audio settings tab.
@@ -261,6 +265,7 @@ export class Deck {
   // seatbelt sums this across decks to refuse a stem load that would OOM the tab, instead of
   // crashing — a byte-accurate budget replacing the old (bytes-blind) seconds proxy.
   private _stemBytes = 0;
+  private readonly _meterId = String(_deckMeterSeq++); // PCM-meter breadcrumb id (iOS OOM hunt)
   // Does the STRETCH ENGINE currently hold the 4 separate stems (vs a single mix)?
   // The per-stem gain path (rampStem) is gated on this so it no-ops on a mix-only
   // track — stem index 0 aliases the mix group, so posting would scale the whole mix.
@@ -642,7 +647,23 @@ export class Deck {
     // Resident-byte tally for the seatbelt: sum the group buffers we're handing off (stems only;
     // the mix isn't counted as stem memory). Read BEFORE postMessage detaches them.
     this._stemBytes = useStems ? gL.reduce((s, a, i) => s + a.byteLength + gR[i].byteLength, 0) : 0;
+    // iOS OOM instrumentation (#69/#70): the transient PEAK is HERE — the int16 groups (gL/gR)
+    // are built AND `this.stems` still holds all 4 float32 AudioBuffers AND the float32 mix may be
+    // live, all on top of the other deck's resident int16. Breadcrumb the computed total before the
+    // postMessage detaches the int16 and setStems frees the float32. This proves/refutes the
+    // load-transient theory before we refactor the pack. See pcmMeter.ts / docs/engine-stem-paging.md.
+    if (useStems) {
+      const f32 = STEM_NAMES.reduce((s, name) => {
+        const b = this.stems![name];
+        return s + b.length * b.numberOfChannels * 4;
+      }, 0);
+      const mixB = this.buffer ? this.buffer.length * this.buffer.numberOfChannels * 4 : 0;
+      pcmMark(`deck${this._meterId} stempack`, f32 + this._stemBytes + mixB);
+    }
     node.port.postMessage({ type: "loadPcm", gL, gR, length, int16: packInt16 }, transfer);
+    // Steady state after the handoff: int16 lives in the worklet, the float32 stems get freed next
+    // (setStems). This is what each deck contributes to the resident total for the next load's peak.
+    if (useStems) pcmResident(this._meterId, this._stemBytes);
   }
 
   /** Push WSOLA engine config (grain/search/stride + transient/AA toggles) to the worklet. */
@@ -884,6 +905,11 @@ export class Deck {
   stemActive(name: StemName): boolean {
     return !this.stemMuted[name];
   }
+  /** The stems currently AUDIBLE (un-muted) — used to derive a region's stem set at grab time
+   *  ("sample what I'm hearing": solo drums → drums pad; drums+bass on → both). Empty if no stems. */
+  activeStems(): StemName[] {
+    return this.stemsLoaded ? STEM_NAMES.filter((n) => this.stemActive(n)) : [];
+  }
   /** Raw PCM (channel 0) of a stem — for the deep-zoom oscilloscope, which reads the
    *  real signal instead of the 256-sample LOD. The buffers are already resident (the
    *  deck plays them), so this is zero-copy. null when the track has no stems. */
@@ -902,10 +928,16 @@ export class Deck {
    *  has nothing to grab. The int16 PCM still lives in the worklet, so copy just the slice back (a
    *  loop = a few seconds = cheap, no OOM). `stem` picks one stem group; undefined = the full mix
    *  (sum of all groups). Resolves null if the worklet isn't loaded or the node hot-swaps mid-call. */
-  extractRegion(start: number, end: number, stem?: StemName): Promise<AudioBuffer | null> {
+  extractRegion(start: number, end: number, stems?: StemName[]): Promise<AudioBuffer | null> {
     const node = this.stretchNode;
     if (!node || end - start < 0.02) return Promise.resolve(null);
-    const group = stem ? STEM_NAMES.indexOf(stem) : -1; // -1 = sum every group → the mix
+    // Which stem groups to sum, as a bitmask. -1 = every group (the full mix); a proper subset →
+    // just those bits. All-four collapses to the mix (-1) so it takes the cheaper sum-everything path.
+    let mask = -1;
+    if (stems && stems.length && stems.length < STEM_NAMES.length) {
+      mask = 0;
+      for (const s of stems) { const g = STEM_NAMES.indexOf(s); if (g >= 0) mask |= 1 << g; }
+    }
     const id = ++this.extractSeq;
     return new Promise((resolve) => {
       let done = false;
@@ -928,7 +960,7 @@ export class Deck {
       };
       node.port.addEventListener("message", onMsg); // the port is already started (onmessage is set in attachStretchNode)
       timer = setTimeout(() => finish(null), 2000); // safety: never hang if the node swaps out
-      node.port.postMessage({ type: "extractRegion", id, start, end, group });
+      node.port.postMessage({ type: "extractRegion", id, start, end, mask });
     });
   }
   /** For JogEngine: a bounded PCM window (±SCRATCH_WINDOW_SEC) around `centerSec`, pulled back out
@@ -1136,6 +1168,11 @@ export class Deck {
       transfer.push(packed.gL[i].buffer as ArrayBuffer, packed.gR[i].buffer as ArrayBuffer);
     // Resident-byte tally for the seatbelt (read before postMessage detaches the buffers).
     this._stemBytes = transfer.reduce((s, b) => s + b.byteLength, 0);
+    // iOS OOM instrumentation: the OOM-SAFE path (int16 already packed, no float32 intermediate) —
+    // so the only in-flight cost is the int16 itself over the other deck's resident. Breadcrumb it
+    // for contrast with the fresh-separation transient above.
+    pcmMark(`deck${this._meterId} packed`, this._stemBytes);
+    pcmResident(this._meterId, this._stemBytes);
     // int16 PCM straight to the worklet (it sets nG, scales by INV16, resets gains to 1).
     this.stretchNode?.port.postMessage(
       { type: "loadPcm", gL: packed.gL, gR: packed.gR, length: packed.length, int16: true },

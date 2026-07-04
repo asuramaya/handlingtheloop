@@ -215,23 +215,19 @@ class Stretch extends AudioWorkletProcessor {
       // Copy a [start,end]-second slice of the resident PCM back to the main thread as float32.
       // The local sampler needs an AudioBuffer to grab a loop, but on mobile the deck's raw mix +
       // stem AudioBuffers are freed once stems pack in here (this worklet is then the ONLY copy).
-      // group<0 = sum every group (reconstructs the mix); group>=0 = that one stem. Transferred
-      // out, so nothing lingers here. Empty (length 0) if nothing's loaded.
-      const sr = this.sr, len = this.length, nG = this.nG, scale = this.pcmScale, grp = d.group;
+      // \`mask\` selects which groups to sum: <0 = every group (the mix); otherwise the set bits pick
+      // the stems (one bit = one stem, several = a subset). Transferred out, nothing lingers here.
+      // Empty (length 0) if nothing's loaded.
+      const sr = this.sr, len = this.length, nG = this.nG, scale = this.pcmScale, mask = d.mask;
       const s0 = Math.max(0, Math.min(len, Math.round((d.start || 0) * sr)));
       const s1 = Math.max(s0, Math.min(len, Math.round((d.end || 0) * sr)));
       const n = s1 - s0;
       const L = new Float32Array(n), R = new Float32Array(n);
       if (this.loaded && nG > 0 && n > 0) {
-        if (grp >= 0 && grp < nG) {
-          const gl = this.gL[grp], gr = this.gR[grp];
-          for (let i = 0; i < n; i++) { L[i] = gl[s0 + i] * scale; R[i] = gr[s0 + i] * scale; }
-        } else {
-          for (let i = 0; i < n; i++) {
-            let l = 0, r = 0;
-            for (let g = 0; g < nG; g++) { l += this.gL[g][s0 + i]; r += this.gR[g][s0 + i]; }
-            L[i] = l * scale; R[i] = r * scale;
-          }
+        for (let i = 0; i < n; i++) {
+          let l = 0, r = 0;
+          for (let g = 0; g < nG; g++) { if (mask < 0 || (mask & (1 << g))) { l += this.gL[g][s0 + i]; r += this.gR[g][s0 + i]; } }
+          L[i] = l * scale; R[i] = r * scale;
         }
       }
       this.port.postMessage({ type: 'region', id: d.id, length: n, sampleRate: sr, L, R }, [L.buffer, R.buffer]);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { AudioEngine, DeckId, SampleMode, StemName } from "@htl";
+import { STEM_NAMES } from "@htl";
 import type { Intent } from "@htl/room";
 import { decodeAudio } from "@htl/audio";
 import {
@@ -48,8 +49,16 @@ interface RegionDesc {
   mode: SampleMode;
   gain: number;
   pitch?: number; // semitones (varispeed repitch on trigger); undefined/0 = original pitch
-  stem?: StemName; // chop just this stem (desktop, neural stems resident); undefined = full mix
+  stems?: StemName[]; // chop just this SUBSET of stems (derived from what's audible at grab); undefined/all = full mix
+  stem?: StemName; // legacy single-stem field — read for back-compat, never written (see regionStems)
 }
+
+// Normalise a region's stem selection: prefer the subset, fall back to the legacy single field.
+// undefined = full mix (also when the "subset" is actually all four — the mix is cheaper).
+const regionStems = (r: { stems?: StemName[]; stem?: StemName } | null | undefined): StemName[] | undefined => {
+  const s = r?.stems ?? (r?.stem ? [r.stem] : undefined);
+  return s && s.length && s.length < STEM_NAMES.length ? s : undefined;
+};
 type RegionStore = Record<string, (RegionDesc | null)[]>;
 interface GlobalPad {
   sampleId?: string; // server id (absent until uploaded)
@@ -78,7 +87,7 @@ export interface SamplerPad {
   uploading?: boolean;
   ready: boolean; // can be triggered right now
   hasTrack?: boolean; // region pads: a track is loaded on that deck (so capture is possible)
-  stem?: StemName; // region pads: chop just this stem (undefined = full mix)
+  stems?: StemName[]; // region pads: the stem subset chopped (undefined = full mix)
 }
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -235,7 +244,7 @@ export function useSampler(
           playing,
           ready: !!r,
           hasTrack: !!vid,
-          stem: r?.stem,
+          stems: regionStems(r),
         });
       }
     }
@@ -251,21 +260,26 @@ export function useSampler(
   // sampling work with stems on. `id` is the region's deck (also its route). Bails only when there's
   // no local PCM at all (a pure remote-display deck mirroring a host).
   const playRegion = useCallback(
-    (pad: number, id: DeckId, r: { start: number; end: number; mode: SampleMode; gain: number; stem?: StemName }, rate: number) => {
+    (pad: number, id: DeckId, r: { start: number; end: number; mode: SampleMode; gain: number; stems?: StemName[]; stem?: StemName }, rate: number) => {
       const d = engine.deck(id);
       const vid = id === "A" ? loaded.A : loaded.B;
       const opts = { route: id, mode: r.mode, gain: r.gain, rate };
-      const live = (r.stem && d.stemBuffer(r.stem)) || d.buffer;
+      const stems = regionStems(r); // the chopped subset, or undefined = full mix
+      // Fast path — one live AudioBuffer we can slice in place (zero-copy): the mix (deck buffer),
+      // or a SINGLE resident stem. A multi-stem subset has no single buffer, so it always extracts.
+      const live = !stems ? d.buffer : stems.length === 1 ? d.stemBuffer(stems[0]) : null;
       if (live) {
         engine.sampler.play(pad, { buffer: live, offset: r.start, duration: r.end - r.start, ...opts });
         return;
       }
-      if (!vid || !d.ownStems) return; // no local PCM to slice (mix freed AND not our own stems)
-      const key = `${vid}:${r.start.toFixed(3)}:${r.end.toFixed(3)}:${r.stem ?? "mix"}`;
+      // Else sum it out of the worklet (mix/single freed on mobile, OR a 2-3 stem subset — no single
+      // buffer even on desktop). Cached per selection so re-taps are instant.
+      if (!vid || !d.ownStems) return;
+      const key = `${vid}:${r.start.toFixed(3)}:${r.end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
       const play = (b: AudioBuffer) => engine.sampler.play(pad, { buffer: b, offset: 0, duration: b.duration, ...opts });
       const cached = regionBufCache.current.get(key);
       if (cached) { play(cached); return; }
-      void d.extractRegion(r.start, r.end, r.stem).then((b) => { if (b) { regionBufCache.current.set(key, b); play(b); } });
+      void d.extractRegion(r.start, r.end, stems).then((b) => { if (b) { regionBufCache.current.set(key, b); play(b); } });
     },
     [engine, loaded.A, loaded.B],
   );
@@ -291,7 +305,7 @@ export function useSampler(
         const rate = d.rate * pitchRate(r.pitch); // tempo-sync to the deck, then varispeed-repitch
         playRegion(i, id, r, rate); // slices the live buffer, or pulls it out of the worklet on mobile+stems
         // Carry the slice — the guest plays it off ITS OWN copy of the deck's track (no audio on the wire).
-        emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stem: r.stem } });
+        emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stems: regionStems(r) } });
       }
     },
     [engine, globals, regions, loaded.A, loaded.B, emit, playRegion],
@@ -353,17 +367,23 @@ export function useSampler(
         end = Math.min(d.duration, start + beat * 4);
       }
       if (end - start < 0.05) return;
+      // Contextually derive the stem SUBSET from what's audible RIGHT NOW: solo drums → a drums pad,
+      // drums+bass on → both, all four (or none) → the full mix. Fresh each grab — sample what you hear.
+      const active = d.activeStems();
+      const stems = active.length >= 1 && active.length < STEM_NAMES.length ? active : undefined;
       const slot = regionSlot(i);
       const next: RegionStore = { ...regions };
       const arr = (next[vid] ? [...next[vid]] : emptyRegionArr()) as (RegionDesc | null)[];
-      arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1 };
+      arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1, ...(stems ? { stems } : {}) };
       next[vid] = arr;
       persistRegions(next);
-      // Mobile + stems: the raw buffer is gone, so warm the worklet-extracted slice now → the first
-      // pad tap plays instantly instead of eating the round-trip. (No-op on desktop; d.buffer exists.)
-      if (!d.buffer && d.ownStems) {
-        const key = `${vid}:${start.toFixed(3)}:${end.toFixed(3)}:mix`;
-        void d.extractRegion(start, end).then((b) => { if (b) regionBufCache.current.set(key, b); });
+      // Warm the worklet-extracted slice now → first tap is instant. Needed whenever there's no single
+      // live buffer to slice: a mix/single freed on mobile, OR a multi-stem subset (no single buffer,
+      // even on desktop). No-op when a live buffer covers it (desktop mix / resident single stem).
+      const hasLive = !stems ? d.buffer : stems.length === 1 ? d.stemBuffer(stems[0]) : null;
+      if (!hasLive && d.ownStems) {
+        const key = `${vid}:${start.toFixed(3)}:${end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
+        void d.extractRegion(start, end, stems).then((b) => { if (b) regionBufCache.current.set(key, b); });
       }
       doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "assign" }); // watcher grabs the same region off its synced deck
     },
@@ -581,17 +601,18 @@ export function useSampler(
   );
 
   // Pick which stem a REGION pad chops (undefined = full mix). Master pads have no stems → no-op.
-  const setStem = useCallback(
-    (i: number, stem: StemName | undefined) => {
+  const setStems = useCallback(
+    (i: number, stems: StemName[] | undefined) => {
       if (routeOf(i) === "master") return;
       const vid = regionDeck(i) === "A" ? loaded.A : loaded.B;
       if (!vid || !regions[vid]?.[regionSlot(i)]) return;
+      const clean = stems && stems.length ? stems : undefined; // empty → full mix
       const next: RegionStore = { ...regions };
       const arr = [...next[vid]];
-      arr[regionSlot(i)] = { ...(arr[regionSlot(i)] as RegionDesc), stem };
+      arr[regionSlot(i)] = { ...(arr[regionSlot(i)] as RegionDesc), stems: clean, stem: undefined }; // clear the legacy single field
       next[vid] = arr;
       persistRegions(next);
-      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "stem", stem });
+      doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "stem", stems: clean });
     },
     [regions, loaded.A, loaded.B, persistRegions],
   );
@@ -622,7 +643,7 @@ export function useSampler(
           else if (action === "mode") setMode(pad, intent.mode ?? "oneshot");
           else if (action === "gain") setGain(pad, intent.gain ?? 1);
           else if (action === "pitch") setPitch(pad, intent.pitch ?? 0);
-          else setStem(pad, intent.stem);
+          else setStems(pad, intent.stems ?? (intent.stem ? [intent.stem] : undefined));
         } finally {
           muteEmit.current = false;
         }
@@ -655,10 +676,10 @@ export function useSampler(
         playRegion(pad, route, rg, rg.rate ?? 1);
       }
     },
-    [engine, assignRegion, clearPad, setMode, setGain, setStem, setPitch, playRegion],
+    [engine, assignRegion, clearPad, setMode, setGain, setStems, setPitch, playRegion],
   );
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStem, setPitch };
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStems, setPitch };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

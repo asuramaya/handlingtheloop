@@ -200,12 +200,13 @@ export type Intent =
       // (so a watcher/replay sees a region grabbed, a pad cleared, a mode/gain/stem badge change —
       // the audio itself always rides the self-contained trigger above).
       action: "trigger" | "release" | "stop" | "assign" | "clear" | "mode" | "gain" | "stem" | "pitch";
-      region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number; stem?: StemName };
+      region?: { start: number; end: number; mode: SampleMode; gain: number; rate?: number; stem?: StemName; stems?: StemName[] };
       sampleId?: string;
       name?: string;
       mode?: SampleMode;
       gain?: number;
-      stem?: StemName; // for action:"stem" — which stem a region pad chops (undefined = full mix)
+      stem?: StemName; // legacy single-stem (read for back-compat)
+      stems?: StemName[]; // for action:"stem" — the stem SUBSET a region pad chops (undefined/all = full mix)
       pitch?: number; // semitones — action:"pitch" config, and carried on a global trigger so the repitch syncs
     }
   // Channel-strip effects (post-EQ). `slot` indexes the EFFECT list (0 = first effect

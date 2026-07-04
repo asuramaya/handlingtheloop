@@ -69,7 +69,7 @@ A thin, locked-down forward relay — **all resolve logic stays in the Worker**:
   `http://127.0.0.1:8088`, else `http_status:404` (scoped to the one port).
 - DNS: CNAME `relay-b.handlingtheloop.com` → `73ba5e75….cfargotunnel.com` (no home IP in DNS).
 
-## Worker hook (committed `af64585`, deployed but INERT until secrets set)
+## Worker hook (committed `af64585`, LIVE — secrets set, serving)
 
 - `server/youtube.ts`: `type Fetcher`, `makeRelayFetch(url, secret)`, threaded through
   getVisitorData/rawPlayer/playerWithRetry/resolveAudio/fetchRange/audioChunks (default =

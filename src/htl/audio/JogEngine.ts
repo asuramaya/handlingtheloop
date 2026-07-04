@@ -21,6 +21,9 @@ export interface JogHost {
   stopSource(): void; // hand the audio to the scratch resampler
   clearBend(): void; // a grab/ramp takes over the clock — drop any decaying bend
   scratchBuffer(): AudioBuffer | null; // decoded PCM for the resampler (lazy on mobile)
+  // Mobile+stems only: the raw buffer above is freed, so pull a bounded PCM window around `centerSec`
+  // out of the worklet for the resampler. Resolves null on desktop / plain-mix (use scratchBuffer).
+  scratchWindow(centerSec: number): Promise<{ buffer: AudioBuffer; offsetSec: number } | null>;
   connectScratch(node: AudioWorkletNode): void; // node.connect(deck channel input)
   slipArm(): void; // SLIP: anchor the shadow playhead at grab (no-op unless slip on + playing)
   slipArmForce(): void; // CENSOR: anchor the shadow regardless of the slip toggle (still playing-only)
@@ -61,6 +64,13 @@ export class JogEngine {
   // The continuous scrub resampler (attached by AudioEngine), owned here.
   private scratchNode: AudioWorkletNode | null = null;
   private scratchLoaded = false; // the worklet holds this track's PCM (mobile loads it lazily)
+  // When only a WINDOW of PCM is loaded (mobile+stems — the mix buffer is freed), the resampler
+  // indexes 0..windowLen while the deck thinks in absolute samples. `scratchBase` = the window's
+  // start sample; every position sent to / read from the worklet is shifted by it. 0 = full track.
+  private scratchBase = 0;
+  private scratchWinLen = 0; // samples the worklet currently holds (full length on desktop)
+  private scratchFull = false; // true = the whole track is loaded (desktop) → always covered
+  private scratchLoadGen = 0; // supersede an in-flight async window pull if another starts
 
   constructor(private readonly ctx: AudioContext, private readonly host: JogHost) {}
 
@@ -80,10 +90,10 @@ export class JogEngine {
   private onScratchMessage(d: { type: string; pos: number }) {
     if (this.jogPhase !== "motor") return; // stale message from a cancelled ramp
     if (d.type === "rampPos") {
-      this.jogPos = d.pos / this.ctx.sampleRate;
+      this.jogPos = (d.pos + this.scratchBase) / this.ctx.sampleRate; // worklet-local → absolute
       this.host.setStartOffset(this.jogPos);
     } else if (d.type === "rampDone") {
-      this.jogPos = d.pos / this.ctx.sampleRate;
+      this.jogPos = (d.pos + this.scratchBase) / this.ctx.sampleRate;
       this.clampJog();
       const resume = this.jogReturnToPlay;
       this.jogPhase = "off";
@@ -107,7 +117,12 @@ export class JogEngine {
   // desktop preloads it eagerly, mobile lazily on first scratch (the two-deck iOS peak).
   sendBuffer() {
     const b = this.host.scratchBuffer();
-    if (!this.scratchNode || !b) return;
+    if (b) this.loadScratchPcm(b, 0, true);
+  }
+  // Copy a buffer's channels to the resampler (its own copies, so the source AudioBuffer isn't
+  // detached). `baseSamples` = the absolute sample the buffer starts at; `full` = it's the whole track.
+  private loadScratchPcm(b: AudioBuffer, baseSamples: number, full: boolean) {
+    if (!this.scratchNode) return;
     const channels: Float32Array[] = [];
     const transfer: ArrayBuffer[] = [];
     for (let c = 0; c < b.numberOfChannels; c++) {
@@ -116,16 +131,41 @@ export class JogEngine {
       transfer.push(copy.buffer);
     }
     this.scratchNode.port.postMessage({ type: "load", channels, length: b.length }, transfer);
+    this.scratchBase = baseSamples;
+    this.scratchWinLen = b.length;
+    this.scratchFull = full;
     this.scratchLoaded = true;
   }
+  // Is the loaded PCM usable at `posSamples`? A full track always is (the worklet clamps at its ends);
+  // a partial window needs `pos` a comfortable 1 s inside its edges, else we re-pull centred anew.
+  private scratchCovers(posSamples: number) {
+    if (!this.scratchLoaded) return false;
+    if (this.scratchFull) return true;
+    const m = this.ctx.sampleRate; // 1 s margin
+    return posSamples >= this.scratchBase + m && posSamples <= this.scratchBase + this.scratchWinLen - m;
+  }
+  private postScratchStart() {
+    this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate - this.scratchBase });
+  }
   private scratchStart() {
-    if (!this.scratchLoaded) this.sendBuffer(); // mobile: lazy-load the PCM on first scratch
-    this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
+    const center = this.jogPos * this.ctx.sampleRate;
+    if (this.scratchCovers(center)) { this.postScratchStart(); return; } // already have covering PCM
+    const full = this.host.scratchBuffer();
+    if (full) { this.sendBuffer(); this.postScratchStart(); return; } // desktop / plain-mix: full buffer
+    // Mobile + stems: the mix buffer is freed, so pull a window around the playhead out of the
+    // worklet (async). The grab's platter physics run meanwhile; audio engages when it arrives.
+    const gen = ++this.scratchLoadGen;
+    void this.host.scratchWindow(this.jogPos).then((win) => {
+      if (gen !== this.scratchLoadGen || !win) return; // superseded, or nothing to pull
+      this.loadScratchPcm(win.buffer, Math.round(win.offsetSec * this.ctx.sampleRate), false);
+      if (this.jogPhase !== "off") this.postScratchStart(); // still scratching → engage now
+    });
   }
   private scratchMove() {
-    // Position only — the worklet reconstructs smooth motion from the position stream
-    // itself; feeding it our noisy per-frame velocity made it garbled.
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate });
+    // Position only — the worklet reconstructs smooth motion from the position stream itself
+    // (feeding it our noisy per-frame velocity garbled it). Skip until the PCM has loaded.
+    if (!this.scratchLoaded) return;
+    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate - this.scratchBase });
   }
   private scratchStop() {
     this.scratchNode?.port.postMessage({ type: "stop" });
@@ -314,7 +354,7 @@ export class JogEngine {
       vel: initialVel,
       target: resumePlay ? this.host.rate() : 0,
       tau,
-      pos: this.jogPos * this.ctx.sampleRate,
+      pos: this.jogPos * this.ctx.sampleRate - this.scratchBase,
     });
   }
 
@@ -456,6 +496,10 @@ export class JogEngine {
     this.handPos = 0;
     this.jogReturnToPlay = false;
     this.scratchLoaded = false;
+    this.scratchBase = 0; // a new track invalidates any loaded window
+    this.scratchWinLen = 0;
+    this.scratchFull = false;
+    this.scratchLoadGen++; // drop any in-flight window pull for the old track
   }
 
   // GRAB tick (frame rate): the platter IS the finger while gripped — each pointer sample

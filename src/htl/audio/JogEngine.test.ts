@@ -43,6 +43,7 @@ function harness(over: Partial<{ start: number; playing: boolean; loaded: boolea
     stopSource: () => void calls.stopSource++,
     clearBend: () => void calls.clearBend++,
     scratchBuffer: () => null, //      no PCM → the resampler wiring is a no-op (null-guarded)
+    scratchWindow: () => Promise.resolve(null), // no worklet PCM to window in the host seam
     connectScratch: () => {},
     slipArm: () => void calls.slipArm++,
     slipArmForce: () => void calls.slipArmForce++,

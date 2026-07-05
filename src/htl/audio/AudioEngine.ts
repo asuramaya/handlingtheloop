@@ -328,6 +328,37 @@ export class AudioEngine {
   private totalUnderruns(): number {
     return (this.deckA.lastDiag?.underruns ?? 0) + (this.deckB.lastDiag?.underruns ?? 0);
   }
+
+  /** On-device audio-thread health for Settings ▸ Debug — the ONLY window into a CarPlay/Bluetooth
+   *  chop (iOS gives no outputLatency there). `underruns` climbing while it mutes = the worklet FIFO
+   *  is running dry (CPU/pre-roll problem, ours to fix); flat while it mutes = the app's audio is
+   *  clean and the drop is downstream (the route). `reserveMs` is the current pre-roll cushion and
+   *  which of the three drivers set it. */
+  audioHealth(): {
+    underruns: number;
+    reserveMs: number;
+    sepMs: number;
+    wirelessMs: number;
+    adaptiveMs: number;
+    sampleRate: number;
+    outputLatencyMs: number;
+    state: string;
+    playing: boolean;
+  } {
+    const toMs = (samples: number) => Math.round((samples / this.ctx.sampleRate) * 1000);
+    const ol = (this.ctx as unknown as { outputLatency?: number }).outputLatency ?? 0;
+    return {
+      underruns: this.totalUnderruns(),
+      reserveMs: toMs(this.stretchCfg.reserve ?? 0),
+      sepMs: toMs(this.separationReserve),
+      wirelessMs: toMs(this.wirelessReserve),
+      adaptiveMs: toMs(this.adaptiveReserve),
+      sampleRate: this.ctx.sampleRate,
+      outputLatencyMs: Math.round(ol * 1000),
+      state: this.ctx.state,
+      playing: this.deckA.playing || this.deckB.playing,
+    };
+  }
   /** Start/stop the dropout-driven pre-roll auto-ramp (mobile-only; the host enables it).
    *  Polls the worklet's REAL underrun counter ~4×/s (the only signal iOS gives us — outputLatency
    *  reads 0 on Bluetooth/CarPlay) and feeds the per-tick delta to nextReserve(). Reactive but fast;

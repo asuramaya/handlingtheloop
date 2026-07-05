@@ -141,6 +141,10 @@ export interface DebugSection {
   rows: [string, string][];
 }
 
+// Debug-only: underruns-per-second tracker for the Audio-health readout, so a CarPlay/Bluetooth
+// chop reads as a clear rate ("⚠ STARVING") not a slowly-climbing total. Module-level (one app).
+const _uhRate = { underruns: 0, atMs: 0, perSec: 0 };
+
 // Visual tone for the deck-lane badge: a cache FETCH reads green, on-device
 // PROCESSING reads yellow — so a song that's already done is obvious at a glance.
 export type StemTone = "fetch" | "process" | "ok" | "fail" | "idle";
@@ -3050,7 +3054,29 @@ function AppBody() {
     const role = room.isAnchor ? "anchor" : room.controlling ? "controller" : room.listening ? "listener" : room.joined ? "watcher" : "—";
     const sd = e.syncDiag;
     const chase = sd.fold != null && Math.abs(Math.log2(sd.fold)) > 0.5; // fold >1.41× or <0.71× → density chase
+    // Audio-thread health — the CarPlay/Bluetooth chop instrument. Compute an underruns/sec RATE
+    // across polls so a real dropout stream reads as a rate ("⚠ STARVING"), not a static total.
+    const ah = e.audioHealth();
+    const nowMs = performance.now();
+    if (_uhRate.atMs > 0) {
+      const dt = (nowMs - _uhRate.atMs) / 1000;
+      if (dt > 0.05) _uhRate.perSec = Math.max(0, (ah.underruns - _uhRate.underruns) / dt);
+    }
+    _uhRate.underruns = ah.underruns;
+    _uhRate.atMs = nowMs;
+    const starving = _uhRate.perSec > 1;
     return [
+      {
+        // ⚠ STARVING = the worklet FIFO ran dry (our problem — CPU / pre-roll). Flat while it mutes
+        // = the app's audio is clean and the drop is downstream (the route). reserve shows the guard.
+        title: "Audio health (chop / skip)",
+        rows: [
+          ["underruns", `${ah.underruns}  (${_uhRate.perSec.toFixed(1)}/s)${starving ? "  ⚠ STARVING — FIFO dry" : ah.playing ? "  ok" : ""}`],
+          ["pre-roll reserve", `${ah.reserveMs} ms  ·  sep ${ah.sepMs} / wl ${ah.wirelessMs} / adaptive ${ah.adaptiveMs}`],
+          ["output latency", `${ah.outputLatencyMs} ms${ah.outputLatencyMs === 0 ? "  (iOS reads 0 on CarPlay/BT)" : ""}`],
+          ["sample rate / state", `${ah.sampleRate} Hz · ${ah.state}${ah.playing ? " · playing" : ""}`],
+        ],
+      },
       {
         title: "Audio context",
         rows: [

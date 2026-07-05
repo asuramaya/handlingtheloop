@@ -706,6 +706,7 @@ export class AudioEngine {
   private static readonly SYNC_FF_SMOOTH = 0.25; // one-pole smoothing on the rubato feed-forward (~0.28 s @ 80 ms tick) so the rate never STEPS as the beat window advances
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
   private syncFF = 0; // smoothed rubato feed-forward (master local-tempo dev − slave's); reset with the integral
+  private commandedRamp = false; // a Smart Fader throw / AutoMixer transition is actively driving a deck's tempo OFF its grid → suppress the grid-rubato feed-forward (which assumes the master follows its own grid; a commanded ramp doesn't, so the two fought and the pair couldn't settle)
   // Live phase-lock telemetry (Settings ▸ Debug). `fold` is the grid-beat-frequency ratio
   // slave/master: ~1 = locked; ~2 or ~0.5 = the half/double DENSITY chase (err can never settle).
   // `saturated` = the requested trim exceeded the ±clamp (rubato the loop can't follow).
@@ -784,8 +785,17 @@ export class AudioEngine {
     // average), minus the SLAVE's own local rubato → the fractional rate the slave needs just to
     // TRACK the tempo, before any phase correction. Anticipating it (feed-forward) beats chasing it
     // (the PI would always lag a moving tempo). Smoothed so the rate never steps as the window moves.
-    const ffTarget = localTempoDev(mg, master.position()) - localTempoDev(sg, slave.position());
-    this.syncFF += AudioEngine.SYNC_FF_SMOOTH * (ffTarget - this.syncFF);
+    // A COMMANDED tempo ramp (Smart Fader throw / AutoMixer transition) drives the master OFF its
+    // grid, so the grid-rubato feed-forward predicts a wobble that isn't the real motion — it fought
+    // the ramp and the pair couldn't settle. During a ramp, drop the feed-forward and let the PI
+    // phase-lock track the commanded motion with the full trim headroom (the pre-feed-forward
+    // behaviour Smart Fader was built on, now with the wider ±SYNC_TRIM_MAX clamp).
+    if (this.commandedRamp) {
+      this.syncFF = 0;
+    } else {
+      const ffTarget = localTempoDev(mg, master.position()) - localTempoDev(sg, slave.position());
+      this.syncFF += AudioEngine.SYNC_FF_SMOOTH * (ffTarget - this.syncFF);
+    }
     const ff = Math.max(-Deck.SYNC_TRIM_MAX, Math.min(Deck.SYNC_TRIM_MAX, this.syncFF));
     // The PI cleans up residual phase within whatever headroom the feed-forward leaves — so the
     // integral's anti-windup sees the true remaining budget and never winds up behind a saturated ff.
@@ -897,6 +907,15 @@ export class AudioEngine {
       const interval = beatTimeOffset(sg, sBeat, 1) - sBeat || sg.interval;
       slave.seek(sBeat + oFrac * interval);
     }
+  }
+
+  /** Signal that a COMMANDED tempo ramp (Smart Fader throw / AutoMixer transition) is driving a
+   *  deck's tempo off its grid, so the SYNC phase-lock drops its grid-rubato feed-forward (which
+   *  assumes the master follows its own grid) and tracks the commanded motion with pure phase
+   *  correction + the full trim headroom. Off → re-acquire the feed-forward from zero. */
+  setCommandedRamp(on: boolean) {
+    this.commandedRamp = on;
+    if (!on) this.syncFF = 0;
   }
 
   // Deck tempo hook: master moves → slave follows; the user moving the SLAVE's own

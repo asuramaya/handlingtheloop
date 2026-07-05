@@ -65,6 +65,9 @@ export class SmartFader {
     this.keylockSaved = { A: this.engine.deck("A").keylock, B: this.engine.deck("B").keylock };
     this.engine.deck("A").setKeylockPinnedOff(true);
     this.engine.deck("B").setKeylockPinnedOff(true);
+    // The throw COMMANDS the master's tempo off its grid, so tell SYNC to drop the grid-rubato
+    // feed-forward (it assumes grid-natural playback and fought the morph) and ride pure phase-lock.
+    this.engine.setCommandedRamp(true);
     this.armed = true;
     this.apply(cf, false); // arm only — never auto-plays (so you can set the blend up while paused)
     return true;
@@ -74,6 +77,7 @@ export class SmartFader {
    *  also releases SYNC.) Leaves the crossfade where it is. */
   disarm(): void {
     if (!this.armed) return;
+    this.engine.setCommandedRamp(false); // back to normal beatmatch sync (feed-forward re-acquires)
     for (const id of ["A", "B"] as DeckId[]) {
       const d = this.engine.deck(id);
       d.setTempo(0);

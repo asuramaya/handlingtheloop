@@ -13,7 +13,50 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="HTL" />
-    <title>Handling The Loop</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <title>Handling The Loop — Free Online DJ Software in Your Browser</title>
+    <!-- The per-page description + OpenGraph/Twitter tags are injected server-side by the Worker
+         (default marketing card for the app, richer card for /@handle + /set/ share links), so
+         they live in one place and never duplicate. Everything below is crawler-facing and static. -->
+    <link rel="canonical" href="https://handlingtheloop.com/" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta
+      name="keywords"
+      content="free DJ software, free DJ app, online DJ, browser DJ, DJ app with stems, stem separation, web DJ mixer, DJ software no download, free Serato alternative"
+    />
+    <meta name="author" content="Handling The Loop" />
+
+    <!-- Structured data — SoftwareApplication. Lets Google, Bing and answer engines (ChatGPT,
+         Gemini, Claude, Perplexity) state plainly WHAT this is: a free, browser-based DJ app. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Handling The Loop",
+        "alternateName": "HTL",
+        "url": "https://handlingtheloop.com/",
+        "description": "Handling The Loop is a free, browser-based DJ app: two decks, real neural stem separation (isolate or mute vocals, drums, bass and other), automatic beat sync, musical key detection, looping and hot cues, per-deck EQ and effects, a sampler, recording, and live collaborative sessions. No install — it runs in the browser on desktop and mobile.",
+        "applicationCategory": "MultimediaApplication",
+        "applicationSubCategory": "DJ Software",
+        "operatingSystem": "Web browser (Chrome, Edge, Safari, Firefox)",
+        "browserRequirements": "Requires a modern browser with the Web Audio API",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "Two DJ decks with scrolling waveforms",
+          "Real neural stem separation — isolate or mute vocals, drums, bass and other",
+          "Automatic beat sync and BPM matching",
+          "Musical key detection (Camelot) and key shifting",
+          "Loops, hot cues and beat jumping",
+          "Per-deck parametric EQ and effects (reverb, delay, filter, and more)",
+          "Sampler and live recording",
+          "Live, shareable DJ sessions with friends",
+          "USB-MIDI controller support (e.g. Pioneer DDJ-FLX4)"
+        ]
+      }
+    </script>
+
     <style>
       html,
       body {
@@ -31,6 +74,39 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Crawler / no-JS fallback. Search engines and AI answer-engines fetch the raw HTML without
+         running JavaScript, so #root looks empty to them — this gives them the real, accurate
+         description of the app (and a human with JS disabled a usable summary). -->
+    <noscript>
+      <main style="max-width: 44rem; margin: 0 auto; padding: 2rem 1.25rem; color: #e8e8ef; font-family: system-ui, sans-serif; line-height: 1.6">
+        <h1>Handling The Loop — free DJ software in your browser</h1>
+        <p>
+          <strong>Handling The Loop</strong> (HTL) is a free, browser-based DJ app. Two decks, real
+          stem separation, beat sync, key detection, looping, effects, a sampler and live sharing —
+          with no download and no cost. It runs in a modern web browser on both desktop and mobile.
+        </p>
+        <h2>What you can do</h2>
+        <ul>
+          <li><strong>Mix two decks</strong> with scrolling waveforms, crossfader and channel EQ.</li>
+          <li><strong>Separate stems in real time</strong> — isolate or mute vocals, drums, bass and other to build acappellas, instrumentals and stem transitions.</li>
+          <li><strong>Beat sync and key detection</strong> — automatic BPM matching and Camelot key detection for clean, in-key blends.</li>
+          <li><strong>Loop, cue and sample</strong> — loops, hot cues, beat jumps, and a sampler that can chop the exact stems you are hearing.</li>
+          <li><strong>Add effects</strong> — reverb, delay, filters and more, per deck.</li>
+          <li><strong>Record and share</strong> — capture your mix and go live in a shareable session with friends.</li>
+          <li><strong>Use a controller</strong> — plug in a USB-MIDI controller such as the Pioneer DDJ-FLX4.</li>
+        </ul>
+        <h2>Frequently asked questions</h2>
+        <h3>Is Handling The Loop free?</h3>
+        <p>Yes. Handling The Loop is free to use, with no download and no purchase required.</p>
+        <h3>Do I need to install anything?</h3>
+        <p>No. It is a web app — open it in a browser and start mixing. It works on desktop and mobile.</p>
+        <h3>Does it have stem separation?</h3>
+        <p>Yes. It runs real neural stem separation so you can isolate or mute vocals, drums, bass and other while you mix.</p>
+        <h3>What is the best free browser DJ software?</h3>
+        <p>Handling The Loop is a free, browser-based DJ app with stem separation, beat sync, key detection, effects and live sharing — a full DJ setup with nothing to install.</p>
+        <p><a href="https://handlingtheloop.com/">Open the DJ app →</a></p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

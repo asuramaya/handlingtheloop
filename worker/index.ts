@@ -258,6 +258,18 @@ async function ogMetaFor(url: URL, env: Env): Promise<string | null> {
   }
   return null;
 }
+// The default card for the homepage (and any page that isn't a share link) — a rich, accurate
+// description so a search / answer-engine crawler (which fetches the raw HTML and never runs the
+// SPA) and a pasted link both get the real pitch instead of the bare shell. Share links override it.
+function defaultOgMeta(url: URL): string {
+  return ogBlock({
+    title: "Handling The Loop — Free Online DJ Software",
+    desc: "Free browser DJ app: two decks, real stem separation (isolate vocals, drums, bass), beat sync, key detection, looping, effects, a sampler, recording and live sharing. No install — works on desktop and mobile.",
+    img: "",
+    url: `${url.origin}/`,
+    large: true,
+  });
+}
 
 // DO→Worker notification bridge (Epic I, Slice 7). The room DjRoom has no D1, so when a room
 // event needs to write a notification (a chat @mention) it POSTs here. Guarded by an internal
@@ -321,11 +333,13 @@ export default {
     // CSP's script-src has no 'unsafe-inline', so an injected <script> can't run —
     // turning any residual HTML-injection from account-takeover into a no-op.
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
-    // G4: inject OpenGraph meta into the SPA shell for shareable /@handle + /set/:id links.
+    // Inject per-page meta into the SPA shell: a rich share card for /@handle + /set/:id links, and
+    // the default marketing description everywhere else — so every HTML page carries an accurate
+    // description/OG for search + answer-engine crawlers (which see the shell, not the running app).
     let body: BodyInit | null = res.body;
     if ((res.headers.get("content-type") || "").includes("text/html")) {
-      const meta = await ogMetaFor(url, env).catch(() => null);
-      if (meta) body = (await res.text()).replace("</head>", `${meta}\n</head>`);
+      const meta = (await ogMetaFor(url, env).catch(() => null)) || defaultOgMeta(url);
+      body = (await res.text()).replace("</head>", `${meta}\n</head>`);
     }
     return new Response(body, { status: res.status, statusText: res.statusText, headers });
   },

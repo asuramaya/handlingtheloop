@@ -1,0 +1,15 @@
+{
+  "name": "Handling The Loop — Free Browser DJ App",
+  "short_name": "HTL",
+  "description": "Free, browser-based DJ app with real stem separation, beat sync, key detection, effects and live sharing. No install.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#050507",
+  "theme_color": "#050507",
+  "categories": ["music", "entertainment", "multimedia"],
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

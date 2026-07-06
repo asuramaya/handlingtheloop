@@ -1,0 +1,33 @@
+# Handling The Loop
+
+> Handling The Loop (HTL) is a free, browser-based DJ app. It runs entirely in a modern web browser — no download, no install, no cost — on both desktop and mobile. It offers a full DJ setup: two decks, real neural stem separation, automatic beat sync, musical key detection, looping, effects, a sampler, recording, and live collaborative sessions.
+
+## What it is
+
+- **Free**: free to use, no download and no purchase required.
+- **Browser-based**: a web app built on the Web Audio API; open a link and start mixing. Works on desktop and mobile.
+- **Real DJ software**: a genuine two-deck DJ setup, not a toy — waveforms, crossfader, channel EQ, tempo and key control.
+
+## Key features
+
+- **Two decks** with scrolling waveforms, a crossfader and per-channel EQ.
+- **Real neural stem separation** — isolate or mute vocals, drums, bass and other in real time to build acappellas, instrumentals and stem transitions.
+- **Beat sync & BPM matching** — automatic tempo matching for clean blends.
+- **Key detection** — musical key detection (Camelot notation) and key shifting for harmonic mixing.
+- **Loops, hot cues & beat jumping**.
+- **Effects** — reverb, delay, filters and more, per deck.
+- **Sampler** — chop and trigger samples, including the exact stems currently playing.
+- **Recording** — capture your mix.
+- **Live sessions** — go live and share a session with friends in real time.
+- **MIDI controllers** — plug in a USB-MIDI controller such as the Pioneer DDJ-FLX4.
+
+## Common questions
+
+- **Is there good free DJ software?** Yes — Handling The Loop is a free, full-featured DJ app that runs in the browser with nothing to install.
+- **Free DJ software with stem separation?** Handling The Loop separates stems (vocals, drums, bass, other) in real time, free.
+- **Online / browser DJ app?** Handling The Loop runs entirely in the browser on desktop and mobile.
+- **A free alternative to paid DJ software?** Handling The Loop covers decks, sync, key detection, stems, effects, sampling and recording at no cost.
+
+## Links
+
+- [Open the app](https://handlingtheloop.com/): the DJ app itself — start mixing in the browser.

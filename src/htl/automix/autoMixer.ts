@@ -725,6 +725,12 @@ export class AutoMixer {
     this.glideKeylock = null;
     if (!live.beatgrid?.bpm || !inc.beatgrid?.bpm) return; // no grid → keep the hard handoff
     this.glideActive = true;
+    // The glide COMMANDS the master's tempo off its grid (glideTempo), so tell SYNC to drop the
+    // grid-rubato feed-forward — it assumes grid-natural playback and otherwise fights the ramp,
+    // making the slave's trim oscillate: random tempo jumps mid-fade. During a commanded ramp the
+    // phase-lock rides pure PI with the full ±SYNC_TRIM_MAX headroom (the same signal the Smart
+    // Fader sets on arm; endGlide clears it). Without this every auto-transition wobbled.
+    this.deps.engine.setCommandedRamp(true);
     if (!this.plan?.keyMatch) {
       this.glideKeylock = { A: this.deps.engine.deck("A").keylock, B: this.deps.engine.deck("B").keylock };
       // PIN keylock off (not just setKeylock(false)) for the vinyl pitch ride: pinning also stops
@@ -763,6 +769,7 @@ export class AutoMixer {
       this.glideKeylock = null;
     }
     this.glideActive = false;
+    this.deps.engine.setCommandedRamp(false); // ramp done → normal beatmatch sync (feed-forward re-acquires)
   }
 
   private tickMixing(dt: number): void {

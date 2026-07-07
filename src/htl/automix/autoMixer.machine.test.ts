@@ -95,6 +95,11 @@ class FakeEngine {
   toggleKey(id: DeckId): void {
     this.keySlave[id] = !this.keySlave[id];
   }
+  // The glide toggles this so SYNC drops its rubato feed-forward during a commanded tempo ramp.
+  commandedRamp = false;
+  setCommandedRamp(on: boolean): void {
+    this.commandedRamp = on;
+  }
 }
 
 // Minimal MixQueue: an ordered `upcoming` list + a `current`. ensureNext/peekNext read the head;
@@ -376,6 +381,35 @@ describe("AutoMixer machine — full transition path", () => {
     expect(r.engine.B.playing).toBe(true);
     expect(r.deckTracks.B).toBe(t2);
     expect(r.engine.A.playing).toBe(false); // outgoing paused at settle
+  });
+
+  test("the glide holds commandedRamp through the fade, then clears it (no rubato-FF fight → no mid-fade tempo jumps)", async () => {
+    // The glide ramps the master's tempo OFF its grid. SYNC's phase-lock has a grid-rubato
+    // feed-forward that assumes grid-natural playback; left on during a commanded ramp it fights the
+    // ramp and the slave's trim oscillates — the random tempo jumps mid-fade. beginGlide must raise
+    // commandedRamp for the whole blend and endGlide must clear it at settle.
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 128, hasStems: false }); // a real tempo gap → the glide has something to ramp
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let sawRampDuringMix = false;
+    let settledOnB = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") sawRampDuringMix ||= r.engine.commandedRamp;
+      if (r.live === "B" && r.phase === "armed") {
+        settledOnB = true;
+        break;
+      }
+    }
+    expect(settledOnB).toBe(true);
+    expect(sawRampDuringMix).toBe(true); // feed-forward suppressed for the whole ramp
+    expect(r.engine.commandedRamp).toBe(false); // …re-armed to normal beatmatch once the fade ended
   });
 
   test("a non-key-matched glide pins keylock OFF during the blend, then restores it after", async () => {

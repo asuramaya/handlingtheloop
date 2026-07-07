@@ -92,6 +92,11 @@ describe("SmartFader tempo morph fold", () => {
     sf.onCrossfade(1);
     const landed = bpmAt(120, eng.A.tempoLog[eng.A.tempoLog.length - 1]);
     expect(Math.abs(landed - 87)).toBeLessThan(2);
+
+    // The deck we faded INTO must land at its OWN natural tempo (0 shift) — explicitly released,
+    // not left riding the blend tempo. (B was the incoming/slave; the throw completing releases it.)
+    expect(eng.B.tempoPct).toBe(0);
+    expect(eng.B.tempoLog.length).toBeGreaterThan(0); // proves the explicit release fired
   });
 
   test("no boundary crossing: the whole ramp stays within one octave band", () => {

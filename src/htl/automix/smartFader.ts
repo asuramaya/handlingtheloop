@@ -175,10 +175,16 @@ export class SmartFader {
     // The crossfade itself just follows the fader (equal-power curve in the engine).
     this.engine.setCrossfade(clamp(cf, -1, 1));
 
-    // Throw complete → the incoming is now live at its own BPM. STAY in Smart mode: re-arm in the
-    // reverse direction (keeps key-lock off) so the next throw blends back. Tidy the ex-live bass.
+    // Throw complete → the incoming is now live. The whole point of "fade INTO the next song" is
+    // that you LAND on it at ITS OWN natural tempo (0 shift), not the beatmatched blend tempo it
+    // rode in on. Release it to natural EXPLICITLY rather than trusting the SYNC slave to have
+    // settled to the exact instant — otherwise a residual bend both shows as a non-zero shift on
+    // the deck you just faded into AND poisons the reverse throw (setupDirection seeds fromStartBpm
+    // from the incoming's effectiveBpm). setTempo(0) on the ex-slave also drops the old sync
+    // direction; setupDirection then re-locks with the roles swapped so the next throw blends back.
     if (p >= 0.999) {
       fromDeck.setEqLow(0);
+      toDeck.setTempo(0);
       this.setupDirection(cf);
     }
   }

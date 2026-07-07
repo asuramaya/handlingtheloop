@@ -171,7 +171,11 @@ export function useMixQueue(): MixQueue {
     const deckSeeds = dedupeByVideoId(
       (Array.isArray(seedsArg) ? seedsArg : seedsArg ? [seedsArg] : []).filter((s): s is TrackMeta => !!s?.videoId),
     ).slice(0, 3);
-    const deckSig = deckSeeds.map((s) => s.videoId).join(",");
+    // Order-INSENSITIVE signature: seeding the SAME set of tracks in a swapped live/idle role must
+    // not read as a seed change. It otherwise bypasses the cooldown and REPLACEs the whole tail on a
+    // mere deck-role flip (visible churn). The fetch below still consumes `deckSeeds` in rank order —
+    // only change-detection (deckSeedSig / seedSig) is set-based.
+    const deckSig = deckSeeds.map((s) => s.videoId).sort().join(",");
     // "Dynamic" = radio mode, or augment when no fixed playlist is loaded → the queue
     // should follow whatever's playing now (not stay stuck on the first seed).
     const radioDynamic = modeRef.current === "radio" || (augmentRef.current && !playlistLoaded.current);

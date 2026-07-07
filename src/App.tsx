@@ -93,6 +93,7 @@ import {
   type MixQueue,
   useQueuePrefetch,
   AutoMixer,
+  radioSeedSet,
   SmartFader,
   PAD_MODE_RESERVED,
   type PadMode,
@@ -2680,9 +2681,23 @@ function AppBody() {
     const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
     const other = live === a ? b : a;
     mixQueue.setCurrent(live);
-    // Seed primary = the LIVE deck (what's playing / loaded), so suggestions follow it;
-    // the seed-set signature in ensureNext means loading EITHER deck re-seeds.
-    if (live) void mixQueue.ensureNext([live, other].filter((t): t is TrackMeta => !!t));
+    // Seed primary = the LIVE deck (what's playing / loaded), so suggestions follow it. Route through
+    // the SAME fedBack guard the in-mixer callers use (radioSeedSet) — this was the LAST ensureNext
+    // caller still seeding RAW. DROP the idle deck as a seed when it merely holds the queue's OWN next
+    // track: seeding from the queue head feeds the queue back into itself, and off-AUTO a seed change
+    // bypasses the fill cooldown to REPLACE the tail — the visible "queue freak-out" (the
+    // preload→seed→refetch spiral). When the idle deck holds a genuinely different track it's still a
+    // seed, so both decks contribute as before.
+    if (live) {
+      const seeds = radioSeedSet({
+        live,
+        anchor: null,
+        idleTrack: other,
+        preloadedIsIdle: false,
+        queueNextId: mixQueue.peekNext()?.videoId ?? null,
+      });
+      void mixQueue.ensureNext(seeds);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, autoIsRemote, mixQueue.mode]);
 

@@ -6,9 +6,11 @@
 // On each fader move (progress p, 0 = fully on the live deck … 1 = fully on the incoming):
 //   • Tempo morph — the LIVE (master) deck's tempo is moved to lerp(liveStartBpm, incBpm, p) and
 //     the incoming (a SYNC slave) follows, so the pair stays beat-locked while the common tempo
-//     migrates from the live track's current BPM to the incoming track's natural BPM. That's the
-//     "bridge two genres with a big BPM gap" trick — and with key-lock dropped it glides in pitch
-//     like a turntable (a deliberate effect; the live key/cents is surfaced in the deck badge).
+//     migrates from the live track's current BPM to the incoming's — FOLDED into the live octave
+//     (half/double), the same match SYNC and the auto-mix glide use, so a big genre gap becomes a
+//     small ≤√2 move (half-time DnB under house) instead of a raw ramp that lurches past a fold
+//     boundary and unlocks the pair. That's the "bridge two genres" trick — and with key-lock dropped
+//     it glides in pitch like a turntable (a deliberate effect; the live key/cents is in the badge).
 //   • Bass swap — the live LOW EQ is cut to the incoming's around the middle of the throw so the
 //     two basslines never stack and mud the mix.
 //   • Crossfade — the equal-power curve just follows the fader (we pass the position through).
@@ -20,6 +22,7 @@
 
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
+import { foldTempoOctave } from "../analysis";
 import { clamp, clamp01, lerp } from "../../util/math";
 
 const EQ_KILL = -26; // dB — the engine low-shelf floor (a full bass cut), matching AutoMixer
@@ -122,7 +125,16 @@ export class SmartFader {
     // Start the morph from the live deck's CURRENT effective BPM (not its natural BPM) so arming
     // never snaps a deck the DJ had pitched — the throw begins exactly where the deck is playing.
     this.fromStartBpm = fromDeck.effectiveBpm ?? fromBase;
-    this.toBpm = toBpm;
+    // Fold the incoming BPM into the LIVE deck's tempo octave (±√2) — the same half/double match
+    // SYNC's matchSlaveTempo and the AutoMixer glide already use. Without this the morph ramps the
+    // master RAW to the incoming's natural BPM; across a genre gap (e.g. 124 → 174) that (a) stretches
+    // the master far past a clean WSOLA range and (b) makes the raw ramp CROSS a half/double fold
+    // boundary — exactly where the SYNC slave's own folded target discontinuously halves/doubles. That
+    // discontinuity IS the "jumps BPM drastically / can't lock the tempos" fail: the master races up
+    // while the slave lurches an octave the other way. Folding relative to fromStartBpm keeps the whole
+    // ramp a ≤√2 move inside ONE octave band, so the slave follows continuously (half-time DnB under a
+    // house track, beat-locked — the musical result) and the pair never re-acquires mid-throw.
+    this.toBpm = foldTempoOctave(toBpm, this.fromStartBpm) ?? toBpm;
 
     // Beat-lock incoming → live (the incoming becomes the SYNC slave; the live deck is master and
     // its tempo moves drive the slave via matchSlaveTempo). Sync only — playback starts on the

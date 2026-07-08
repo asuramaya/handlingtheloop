@@ -526,26 +526,38 @@ body {
    (right-click / hold opens the picker), so there's no standalone selector control on the strip. */
 .smp-io {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr; /* INPUT | MASTER anchor | OUTPUT — SMART never moves */
   align-items: stretch;
-  flex-wrap: nowrap;
-  gap: 4px;
+  gap: 0;
   flex: 1 1 auto;
   width: 100%;
 }
-.smp-io button,
-.smp-io .vcell {
+/* Each zone is its own flex row; its cells share the zone's width equally. */
+.smp-io-zone {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+.smp-io-in { padding-right: 8px; }
+.smp-io-out { padding-left: 8px; }
+/* MASTER anchor — fixed width, framed by hairlines so it reads as the centre of the board and holds
+   its place while the flanking zones reflow (mic in, cue device out). */
+.smp-io-mid {
+  flex: 0 0 auto;
+  justify-content: center;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding: 0 8px;
+}
+.smp-io-zone > button,
+.smp-io-zone > .vcell {
   flex: 1 1 0;
   min-width: 0;
   width: auto;
 }
-/* A thin vertical rule between functional zones (mic | capture | monitor). */
-.smp-io-sep {
-  flex: 0 0 1px;
-  align-self: stretch;
-  background: var(--line);
-  margin: 2px 4px;
-}
+.smp-io-mid > .vcell { flex: 0 0 104px; } /* SMART: a stable, slightly-wider master cell */
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;
   letter-spacing: 0.03em;

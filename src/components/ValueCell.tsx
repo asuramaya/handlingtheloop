@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { KnobBorder } from "./KnobBorder";
 
 interface ValueCellProps {
@@ -16,6 +16,7 @@ interface ValueCellProps {
   className?: string;
   disabled?: boolean;
   children?: ReactNode; // overlay slot
+  style?: CSSProperties; // extra inline style (merged after touch-action) — e.g. accent CSS vars
   onTap?: () => void; // a clean tap (no drag) fires this — e.g. a stem mute toggle
   kbd?: string; // keyboard hint shown bottom-right (when show-keys is on)
   active?: boolean; // false dims the cell as "off" (e.g. a muted stem)
@@ -34,7 +35,7 @@ const TAP_SLOP = 4;
 // circle marker. Tapping SELECTS it (a ring, no value jump). Adjust by relative
 // vertical drag or scroll wheel; double-click / right-click resets. (Arrow keys
 // are intentionally NOT bound — they belong to the global deck keymap.)
-export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, onChange, format, className, disabled, children, onTap, kbd, active, onContextMenu }: ValueCellProps) {
+export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, onChange, format, className, disabled, children, style, onTap, kbd, active, onContextMenu }: ValueCellProps) {
   const el = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startY: number; startVal: number; moved: boolean } | null>(null);
   const lastTap = useRef(0);
@@ -75,7 +76,7 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
       ref={el}
       tabIndex={disabled ? -1 : 0}
       className={`vcell ${className ?? ""} ${bipolar ? "bipolar" : ""} ${disabled ? "disabled" : ""} ${active === false ? "muted" : ""}`}
-      style={{ touchAction: "none" }}
+      style={{ touchAction: "none", ...style }}
       onPointerDown={(e) => {
         if (disabled) return;
         // Right / middle button: let onContextMenu reset the value — don't start a

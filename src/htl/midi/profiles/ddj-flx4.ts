@@ -54,21 +54,27 @@ function knob(target: "tempo" | "level" | "trim" | "eqHi" | "eqMid" | "eqLow" | 
   ];
 }
 
-// Performance pads. Each UNSHIFTED bank emits its own contiguous block of 8 notes on the
-// pad status (deck A 0x97 / deck B 0x99): HOT CUE 0x00, BEAT JUMP 0x20, SAMPLER 0x30,
-// PAD FX1 0x40 (verified on hardware + the Mixxx FLX4 map). We deliberately do NOT bind a
-// bank to a fixed action — the FLX bank stays in lock-step with HTL's pad mode (the bank
-// buttons switch both), so EVERY block maps the same way the keyboard 1-8 do: pad position
-// i → `hotcue${i+1}`, the single generic handler that routes by the deck's pad mode
-// (cue → hot cue, loop → beat-loop size, sampler → region pad, fx → Pad-FX). One source of
-// truth means switching banks can never desync the pad's action from the on-screen mode.
-const PAD_BANKS = [0x00, 0x20, 0x30, 0x40];
+// Performance pads. Each UNSHIFTED bank emits its own contiguous block of 8 notes on the pad status
+// (deck A 0x97 / deck B 0x99), VERIFIED live on the unit: HOT CUE 0x00, PAD FX1 0x10, BEAT JUMP 0x20,
+// SAMPLER 0x30. (The earlier PAD FX1 = 0x40 was wrong — the Mixxx map's numbers didn't match this
+// firmware.) Every pad still fires the generic `hotcue${i+1}` handler that routes by the deck's pad
+// mode — BUT each block is TAGGED with its `padBank`, so pressing a pad first switches the deck's pad
+// mode to that hardware bank (see the button case in useMidiRouting). The hardware bank you're
+// physically in becomes the source of truth, which is why switching banks used to leave every pad
+// stuck on CUE (the software mode never followed). Shifted peers (roll/fx2/global) share their base
+// bank's block, so they come from the SHIFT byte + the shifted bank buttons, not a distinct block.
+const PAD_BANKS: { base: number; bank: "cue" | "fx" | "loop" | "sampler" }[] = [
+  { base: 0x00, bank: "cue" },
+  { base: 0x10, bank: "fx" },
+  { base: 0x20, bank: "loop" },
+  { base: 0x30, bank: "sampler" },
+];
 function padBanks(): MidiBinding[] {
   const out: MidiBinding[] = [];
-  for (const base of PAD_BANKS)
+  for (const { base, bank } of PAD_BANKS)
     for (let i = 0; i < 8; i++) {
-      out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "A", status: PAD_A, data: base + i, type: "note" });
-      out.push({ control: { kind: "action", action: `hotcue${i + 1}` }, deck: "B", status: PAD_B, data: base + i, type: "note" });
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "A", status: PAD_A, data: base + i, type: "note" });
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "B", status: PAD_B, data: base + i, type: "note" });
     }
   return out;
 }
@@ -119,6 +125,13 @@ export const DDJ_FLX4: DeviceProfile = {
     ...btn("padModeFx", 0x1e),
     ...btn("padModeLoop", 0x20),
     ...btn("padModeSampler", 0x22),
+    // Shifted bank buttons → the peer pad modes. Captured live on the unit with SHIFT held
+    // (notes climb by 2: HOT CUE 0x69, PAD FX1 0x6b, BEAT JUMP 0x6d, SAMPLER 0x6f). The App
+    // padMode* handlers already route the shift flag to the peer (fx→fx2, loop→roll,
+    // sampler→global); CUE's 0x69 has no peer since KEY was retired, so it's left unbound.
+    ...shiftedBtn("padModeFx", 0x6b),
+    ...shiftedBtn("padModeLoop", 0x6d),
+    ...shiftedBtn("padModeSampler", 0x6f),
     // SHIFT button (per deck, note 0x3F — verified on hardware via the MIDI monitor).
     // A plain momentary modifier: the FLX4 keeps sending each button's normal note while
     // SHIFT is held, so HTL's own shift logic applies the alt action (shift+cue clears
@@ -148,6 +161,9 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "fader", target: "micLevel" }, status: CC_MIX, data: 0x05, type: "cc14" },
     { control: { kind: "fader", target: "cueMix" }, status: CC_MIX, data: 0x0c, type: "cc14" },
     { control: { kind: "fader", target: "cueLevel" }, status: CC_MIX, data: 0x0d, type: "cc14" },
+    // MASTER LEVEL knob (top-right of the mixer) → the master output volume, surfaced on the
+    // SMART buttonoid in the I/O strip. 14-bit, MSB 0x08 / LSB 0x28 (captured live on the unit).
+    { control: { kind: "fader", target: "master" }, status: CC_MIX, data: 0x08, type: "cc14" },
     // SMART CFX (0x96/0x00) → toggle the HI/MID/LOW knobs between EQ and STEM volume.
     // SMART FADER (0x96/0x01) → arm/disarm OUR Smart Fader (crossfader-driven auto-transition).
     //   SHIFT + SMART FADER (0x96/0x09) → enable/disable the crossfader entirely (the old toggle).

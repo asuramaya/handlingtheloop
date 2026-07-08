@@ -17,7 +17,13 @@ import type { MidiEvent } from "@htl/midi";
 //   LB / RB            → beatgrid magnet (G) / SHIFT (held)
 //   View / Menu        → SYNC / KEY-match (focused)
 //   L3 / R3 (clicks)   → CUE / arm-disarm Smart Fader
+//   Guide (centre X)   → open / close the library = CRATE-DIG MODE (below)
 //   …and the pad RUMBLES on every beat of the focused deck (harder on the bar line).
+//
+// CRATE-DIG MODE — while the library dock is open the DJ map is suspended and the pad drives the
+// library instead: D-pad ↑/↓ (+ left stick ↕) move the row cursor, ←/→ jump list ↔ sources, A / B
+// load the highlighted track onto deck A / B, Guide closes it. The pad reads the live libOpen state
+// each frame (getLibraryOpen), so opening the library any other way (Alt / chin) flips it too.
 
 export interface GamepadStatus {
   connected: boolean;
@@ -30,12 +36,14 @@ interface GamepadOpts {
   onEvent: (e: MidiEvent) => void;
   onStatus?: (s: GamepadStatus) => void;
   getEnabled?: () => boolean;
+  getLibraryOpen?: () => boolean; // library open → the pad flips into crate-dig mode
 }
 
 // Standard-mapping indices.
 const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, VIEW = 8, MENU = 9, L3 = 10, R3 = 11,
   DUP = 12, DDOWN = 13, DLEFT = 14, DRIGHT = 15;
-const SHARE = [16, 17]; // Xbox guide / Series Share — whichever the controller reports as the centre button
+const GUIDE = 16; // the centre Xbox/Guide button (X logo) → open/close the library (crate-dig mode)
+const SHARE = [17]; // Series X/S Share button → focus toggle (older pads report the centre as 16 — see note)
 
 const DEAD = 0.18; // stick deadzone (fraction)
 const TRIG_DEAD = 0.06; // trigger engage threshold
@@ -43,6 +51,7 @@ const SCRATCH_GAIN = 5; // jog ticks per frame at full stick deflection
 const XF_RATE = 0.015; // crossfader travel per frame at full stick (incremental → holds)
 const LEVEL_RATE = 0.012; // channel-volume nudge per frame at full stick
 const ZOOM_FRAMES = 6; // frames between zoom steps while the stick is held (~10/s)
+const BROWSE_FRAMES = 5; // frames between library-scroll steps while the stick is held (~12/s)
 // Bluetooth rumble lands late (the BT hop + motor spin-up, ~100-150 ms), so we PRE-FIRE: the
 // pulse goes out this many ms BEFORE the beat sounds, landing the buzz on the beat. Tune to your
 // pad/stack — bigger if it still lags, smaller if it pre-empts.
@@ -80,6 +89,7 @@ export class GamepadEngine {
   private trigOn: Record<"lp" | "hp", boolean> = { lp: false, hp: false };
   private xfPos = 0.5; // tracked crossfader position (incremental driver)
   private zoomCd = 0;
+  private browseCd = 0; // library-scroll throttle (left stick ↕ in crate-dig mode)
   private firedBeat: Record<DeckId, number> = { A: -1, B: -1 }; // last beat index we've already pulsed for
   private present = false;
   private padId: string | null = null;
@@ -104,10 +114,17 @@ export class GamepadEngine {
     }
     if (!pad) return;
     if (this.o.getEnabled && !this.o.getEnabled()) return;
-    this.handleButtons(pad);
-    this.handleTriggers(pad);
-    this.handleSticks(pad);
-    this.handleRumble(pad);
+    // Guide (centre X) opens/closes the library in BOTH modes — it's how you get out of crate-dig.
+    this.handleGuide(pad);
+    if (this.o.getLibraryOpen?.()) {
+      this.handleBrowse(pad); // crate-dig: DJ controls suspended, the pad drives the library
+    } else {
+      this.handleButtons(pad);
+      this.handleTriggers(pad);
+      this.handleSticks(pad);
+      this.handleRumble(pad);
+    }
+    this.syncPrev(pad); // snapshot button states once per frame → edge() for whichever mode ran
   };
 
   // First standard-mapping pad if any, else the first connected one.
@@ -134,7 +151,7 @@ export class GamepadEngine {
         this.o.onEvent({ type: "button", action: PRESS[i], pressed: true, shift: false, velocity: 127 });
       }
     }
-    // Share / centre → flip the focused deck (read live so repeated presses toggle).
+    // Share → flip the focused deck (read live so repeated presses toggle).
     if (SHARE.some((i) => this.edge(i, b))) {
       this.o.onEvent({ type: "focus", deck: this.o.getFocused() === "A" ? "B" : "A" });
     }
@@ -144,6 +161,49 @@ export class GamepadEngine {
       this.shiftDown = rb;
       this.o.onEvent({ type: "shift", down: rb });
     }
+  }
+
+  // Guide (centre X) → toggle the library dock. Fires in both modes (always the way out of
+  // crate-dig). Shared edge tracker — syncPrev snapshots index 16 each frame if the pad reports it.
+  private handleGuide(pad: Gamepad) {
+    if (this.edge(GUIDE, pad.buttons)) this.o.onEvent({ type: "library" });
+  }
+
+  // Crate-dig mode (library open): the DJ map is suspended and the pad drives the library.
+  //   D-pad ↑/↓ (+ left stick ↕) → move the row cursor    D-pad ←/→ → jump list ↔ sources
+  //   A → load deck A            B → load deck B           Guide → close (handled above)
+  // A soft rumble tick marks each cursor step (tactile flicking). The rest stay idle for now.
+  private handleBrowse(pad: Gamepad) {
+    const b = pad.buttons;
+    // If the library opened mid-scratch, release the platter so it doesn't stay grabbed.
+    if (this.scratchDeck) {
+      this.o.onEvent({ type: "jogTouch", deck: this.scratchDeck, down: false });
+      this.scratchDeck = null;
+    }
+    let moved = false;
+    if (this.edge(DUP, b)) { this.o.onEvent({ type: "browse", delta: -1 }); moved = true; }
+    if (this.edge(DDOWN, b)) { this.o.onEvent({ type: "browse", delta: 1 }); moved = true; }
+    if (this.edge(DLEFT, b) || this.edge(DRIGHT, b)) this.o.onEvent({ type: "selector" }); // jump list ↔ sources
+    if (this.edge(A, b)) this.o.onEvent({ type: "load", deck: "A" });
+    if (this.edge(B, b)) this.o.onEvent({ type: "load", deck: "B" });
+    // Left stick ↕ = fast scroll for long crates (throttled to ~12 steps/s).
+    const y = dz(pad.axes[1] ?? 0);
+    if (y === 0) this.browseCd = 0;
+    else if (this.browseCd > 0) this.browseCd--;
+    else { this.browseCd = BROWSE_FRAMES; this.o.onEvent({ type: "browse", delta: y < 0 ? -1 : 1 }); moved = true; }
+    if (moved) this.tick(pad);
+  }
+
+  // A short, soft haptic blip — the felt cue for a cursor step while crate-digging.
+  private tick(pad: Gamepad) {
+    const act = (pad as Gamepad & { vibrationActuator?: Actuator }).vibrationActuator;
+    void act?.playEffect?.("dual-rumble", { duration: 26, strongMagnitude: 0, weakMagnitude: 0.22 }).catch(() => {});
+  }
+
+  // Snapshot every button's pressed state once per frame — the basis for edge() next frame, in
+  // whichever mode ran (lifted out of handleButtons so crate-dig edges work too).
+  private syncPrev(pad: Gamepad) {
+    const b = pad.buttons;
     for (let i = 0; i < b.length; i++) this.prev[i] = b[i]?.pressed ?? false;
   }
 

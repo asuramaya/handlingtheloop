@@ -9,6 +9,7 @@ export function useGamepad(opts: {
   engine: AudioEngine;
   getFocused: () => DeckId;
   onEvent: (e: MidiEvent) => void;
+  getLibraryOpen?: () => boolean; // pad reads this live → crate-dig mode when the library is open
   enabled?: boolean;
 }): GamepadStatus {
   const [status, setStatus] = useState<GamepadStatus>({ connected: false, id: null });
@@ -16,6 +17,8 @@ export function useGamepad(opts: {
   focusRef.current = opts.getFocused;
   const eventRef = useRef(opts.onEvent);
   eventRef.current = opts.onEvent;
+  const libOpenRef = useRef(opts.getLibraryOpen);
+  libOpenRef.current = opts.getLibraryOpen;
   const enabledRef = useRef(opts.enabled ?? true);
   enabledRef.current = opts.enabled ?? true;
   const { engine } = opts;
@@ -25,6 +28,7 @@ export function useGamepad(opts: {
       engine,
       getFocused: () => focusRef.current(),
       onEvent: (e) => eventRef.current(e),
+      getLibraryOpen: () => libOpenRef.current?.() ?? false,
       getEnabled: () => enabledRef.current,
       onStatus: setStatus,
     });

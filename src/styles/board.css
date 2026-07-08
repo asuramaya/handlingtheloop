@@ -857,47 +857,34 @@
    equal-width button sizing (.smp-io button = flex:1) and only adds its STATE styling here: lights
    up (A↔B glow) when armed, goes dashed-dim when off, flips to the shift tint when board shift is
    held. Carries the keybind letter inside it (shown only under body.show-keys, desktop). */
-.smart-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  transition: color 0.12s, background 0.12s, box-shadow 0.18s, border-color 0.12s;
-}
-/* ARMED — tapped on. The deck A↔B blend lives on the RING only: a gradient BORDER via the
-   padding-box/border-box background-clip trick (keeps the rounded corners, which a plain border-image
-   would square off), over the normal dark fill + text, with a soft A+B glow. --xa / --xb are set
-   inline from the live deck accents, so the ring tracks whatever the two decks are coloured. */
+/* SMART buttonoid — a ValueCell (master-volume knob). .smp-io-cell / .vcell own its sizing + the
+   knob ring, so here we add ONLY the STATE styling that's unique to it. */
+.smart-chip { transition: background 0.12s, box-shadow 0.18s, border-color 0.12s; }
+/* ARMED — Smart Fader tapped on. The value RING (KnobBorder) owns the border, so the A↔B blend lives
+   INSIDE instead: a left-to-right --xa→--xb wash across the cell fill plus a two-colour glow, so the
+   deck blend reads clearly without the level ring painting over it. --xa / --xb are the live deck
+   accents, set inline. */
 .smart-chip.armed {
-  border: 1.5px solid transparent;
-  background:
-    linear-gradient(var(--panel), var(--panel)) padding-box,
-    linear-gradient(90deg, var(--xa, #4ad), var(--xb, #d4a)) border-box;
+  border-color: color-mix(in srgb, var(--xb, #d4a) 45%, var(--line));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--xa, #4ad) 26%, var(--panel)),
+    color-mix(in srgb, var(--xb, #d4a) 26%, var(--panel))
+  );
   box-shadow:
-    0 0 7px color-mix(in srgb, var(--xa, #4ad) 42%, transparent),
-    0 0 7px color-mix(in srgb, var(--xb, #d4a) 42%, transparent);
+    inset 0 0 10px color-mix(in srgb, var(--xa, #4ad) 20%, transparent),
+    0 0 8px color-mix(in srgb, var(--xa, #4ad) 34%, transparent),
+    0 0 8px color-mix(in srgb, var(--xb, #d4a) 34%, transparent);
 }
-/* A hair of the blend on the keybind hint so the chip still reads as "the A↔B control" up close. */
-.smart-chip.armed .kbd { color: color-mix(in srgb, var(--xb, #d4a) 70%, var(--text)); opacity: 0.9; }
-/* OFF — crossfader disabled (held/right-clicked). Dashed, dim, label struck through; a ⃠ leads it. */
+/* OFF — crossfader disabled (held / right-clicked). Dashed, dim, label struck through. */
 .smart-chip.off {
   border-style: dashed;
   color: color-mix(in srgb, var(--text) 45%, var(--line));
-  background: transparent;
   box-shadow: none;
 }
-.smart-chip.off .smart-chip-lbl { text-decoration: line-through; }
-.smart-chip.off::before {
-  content: "⃠";
-  font-size: 12px;
-  line-height: 1;
-}
-.smart-chip:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
-/* SHIFTED — board shift held/latched flips the chip to its alt action (enable/disable the
-   crossfader). Same yellow shift tint as the deck banks, so the remap reads in one grammar
-   (overrides armed/off colour while shift is active; the gradient/strike return on release). */
+.smart-chip.off .vcell-label { text-decoration: line-through; }
+/* SHIFTED — board shift flips the cell to its alt action (enable/disable the crossfader). Same
+   yellow shift tint as the deck banks, so the remap reads in one grammar. */
 .smart-chip.shifted {
   color: var(--shift);
   border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
@@ -905,13 +892,7 @@
   background: color-mix(in srgb, var(--shift) 14%, var(--panel));
   box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
 }
-.smart-chip.shifted .smart-chip-lbl { text-decoration: none; }
-.smart-chip.shifted::before { content: none; }
-/* The keybind letter rides inside the chip; .kbd already hides itself off body.show-keys / mobile. */
-.smart-chip .kbd {
-  position: static;
-  opacity: 0.7;
-}
+.smart-chip.shifted .vcell-label { text-decoration: none; }
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first
    flex child of .app (not floating), so it reserves its row and never overlaps

@@ -30,7 +30,7 @@ export function SamplerStrip({
   // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
   // The crossfader's SMART chip lives here (between the mic and capture zones) — see SmartChip.
-  smart?: { armed: boolean; enabled: boolean; canControl: boolean; shift: boolean; kbd: string; accentA: string; accentB: string; onToggleSmart: () => void; onToggleEnabled: () => void };
+  smart?: { armed: boolean; enabled: boolean; canControl: boolean; shift: boolean; kbd: string; accentA: string; accentB: string; master: number; onToggleSmart: () => void; onToggleEnabled: () => void; onMaster: (v: number) => void };
 }) {
   const s = sampler;
   const engine = useEngine();
@@ -151,51 +151,54 @@ export function SamplerStrip({
       {/* The global sample PADS moved into the decks' GLBL pad-mode (SMP+shift); this strip is now
           controls-only. REC still lands its take in the next free GLBL pad — play/manage it from
           GLBL on either deck. */}
-      {/* One adaptive row, three functional zones split by thin dividers (mic · capture · monitor).
-          Consistent grammar: every SETTING is a static LABEL + value (knobs DUCK·60, selectors
-          DEST·PA / SRC·MIX read the same way); ACTIONS are single bold words (REC · CATCH · MON). */}
+      {/* Three fixed zones: INPUT (mic) · MASTER (the SMART anchor) · OUTPUT (capture + monitor).
+          SMART is pinned dead-centre (the crossfader's companion) and NEVER reflows — the flanking
+          zones grow and shrink around it as the mic / cue device appear. Consistent grammar: every
+          SETTING is a static LABEL + value (knob cells); ACTIONS are single bold words (REC · MON). */}
       <div className="smp-io">
-        {engine.canMic && (
-          <>
-            {/* AMOUNT (+ tap-toggle + right-click): TAP = mic on/off, DRAG = talkover VOL, RIGHT-CLICK =
-                destination (Room / Deck A·B FX). The mic is just "the mic"; its routing hides here. */}
-            <ValueCell
-              className={`smp-io-cell smp-io-mic ${micOn ? "on" : ""}`}
-              label={micBusy ? "MIC …" : "MIC"}
-              value={micVol}
-              min={0}
-              max={1}
-              step={0.02}
-              reset={0.85}
-              active={micOn}
-              disabled={micBusy}
-              format={(v) => `${Math.round(v * 100)}`}
-              onTap={() => void toggleMic()}
-              onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }}
-              onContextMenu={(e) => setRouteMenu({ kind: "dest", x: e.clientX, y: e.clientY })}
-            >
-              <span className="smp-io-meter"><span ref={meterRef} /></span>
-            </ValueCell>
-            {/* AMOUNT — how far the music drops under talkover. */}
-            <ValueCell
-              className="smp-io-cell smp-io-duck"
-              label="DUCK"
-              value={duck}
-              min={0}
-              max={1}
-              step={0.02}
-              reset={0.6}
-              format={(v) => `${Math.round(v * 100)}`}
-              onChange={(v) => { setDuck(v); engine.setMicDuck(v); }}
-            />
-          </>
-        )}
+        {/* INPUT — mic talkover (collapses to nothing when there's no mic). */}
+        <div className="smp-io-zone smp-io-in">
+          {engine.canMic && (
+            <>
+              {/* AMOUNT (+ tap-toggle + right-click): TAP = mic on/off, DRAG = talkover VOL, RIGHT-CLICK =
+                  destination (Room / Deck A·B FX). The mic is just "the mic"; its routing hides here. */}
+              <ValueCell
+                className={`smp-io-cell smp-io-mic ${micOn ? "on" : ""}`}
+                label={micBusy ? "MIC …" : "MIC"}
+                value={micVol}
+                min={0}
+                max={1}
+                step={0.02}
+                reset={0.85}
+                active={micOn}
+                disabled={micBusy}
+                format={(v) => `${Math.round(v * 100)}`}
+                onTap={() => void toggleMic()}
+                onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }}
+                onContextMenu={(e) => setRouteMenu({ kind: "dest", x: e.clientX, y: e.clientY })}
+              >
+                <span className="smp-io-meter"><span ref={meterRef} /></span>
+              </ValueCell>
+              {/* AMOUNT — how far the music drops under talkover. */}
+              <ValueCell
+                className="smp-io-cell smp-io-duck"
+                label="DUCK"
+                value={duck}
+                min={0}
+                max={1}
+                step={0.02}
+                reset={0.6}
+                format={(v) => `${Math.round(v * 100)}`}
+                onChange={(v) => { setDuck(v); engine.setMicDuck(v); }}
+              />
+            </>
+          )}
+        </div>
 
-        {engine.canMic && <span className="smp-io-sep" aria-hidden="true" />}
-        {/* SMART chip — the crossfader's Smart-Fader arm + enable/disable toggles, surfaced here so
-            they're reachable on touch (between the mic and capture zones). */}
-        {smart && (
-          <>
+        {/* MASTER — the anchor. Tap = arm Smart Fader · drag / FLX MASTER knob = master volume ·
+            double-tap = unity · hold / right-click / shift-tap = enable/disable the crossfader. */}
+        <div className="smp-io-zone smp-io-mid">
+          {smart && (
             <SmartChip
               smart={smart.armed}
               enabled={smart.enabled}
@@ -204,66 +207,65 @@ export function SamplerStrip({
               kbd={smart.kbd}
               accentA={smart.accentA}
               accentB={smart.accentB}
+              master={smart.master}
               onToggleSmart={smart.onToggleSmart}
               onToggleEnabled={smart.onToggleEnabled}
+              onMaster={smart.onMaster}
             />
-            <span className="smp-io-sep" aria-hidden="true" />
-          </>
-        )}
-        {/* ACTION — TAP = record into the next free GLBL pad (armed = red pulse); RIGHT-CLICK / HOLD =
-            pick the SOURCE. The small tag under REC shows what you'll capture (no separate cell). */}
-        <button
-          className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`}
-          onClick={() => { if (recSuppress.current) { recSuppress.current = false; return; } void toggleRec(); }}
-          onContextMenu={(e) => { e.preventDefault(); setRouteMenu({ kind: "src", x: e.clientX, y: e.clientY }); }}
-          onTouchStart={(e) => { const t = e.touches[0]; recLong.current = window.setTimeout(() => { recSuppress.current = true; setRouteMenu({ kind: "src", x: t.clientX, y: t.clientY }); }, 480); }}
-          onTouchEnd={() => clearTimeout(recLong.current)}
-          onTouchMove={() => clearTimeout(recLong.current)}
-          title={recording ? "Stop → the take drops into the next free GLBL pad" : `Tap to record ${SRC_FULL[recSrc]} → next free GLBL pad · right-click / hold to change source`}
-        >
-          <span className="smp-io-rec-lab">{recording ? "STOP" : "REC"}</span>
-          {!recording && <span className="smp-io-rec-src">{SRC_LABEL[recSrc]}</span>}
-        </button>
-        {/* Where the take landed — it's in GLBL pad-mode now, not beside the strip. */}
-        {landed != null && <span className="smp-io-landed" role="status">→ GLBL {landed + 1}</span>}
+          )}
+        </div>
 
-        {(engine.canMic || phones) && (
-          <>
-            <span className="smp-io-sep" aria-hidden="true" />
-            {/* ACTION (toggle) — hear your own mic in the cue device (lives with the monitor controls). */}
-            {engine.canMic && (
-              <button className={`smp-io-btn smp-io-toggle ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="MON — monitor your own mic in the cue/headphone device (needs a cue device set)">
-                MON
-              </button>
-            )}
-            {phones && (
-              <>
-                {/* AMOUNTS — cue-device blend + level. (BLEND, not "MIX", so it never collides with the
-                    REC source value MIX.) */}
-                <ValueCell
-                  className="smp-io-cell"
-                  label="BLEND"
-                  value={phones.mix}
-                  min={0}
-                  max={1}
-                  pivot={0.5}
-                  format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
-                  onChange={phones.onMix}
-                />
-                <ValueCell
-                  className="smp-io-cell"
-                  label="LVL"
-                  value={phones.level}
-                  min={0}
-                  max={1}
-                  reset={1}
-                  format={(v) => `${Math.round(v * 100)}`}
-                  onChange={phones.onLevel}
-                />
-              </>
-            )}
-          </>
-        )}
+        {/* OUTPUT — capture + headphone monitor. Grows/reflows as the cue device appears. */}
+        <div className="smp-io-zone smp-io-out">
+          {/* ACTION — TAP = record into the next free GLBL pad (armed = red pulse); RIGHT-CLICK / HOLD =
+              pick the SOURCE. The small tag under REC shows what you'll capture (no separate cell). */}
+          <button
+            className={`smp-io-btn smp-io-rec ${recording ? "armed" : ""}`}
+            onClick={() => { if (recSuppress.current) { recSuppress.current = false; return; } void toggleRec(); }}
+            onContextMenu={(e) => { e.preventDefault(); setRouteMenu({ kind: "src", x: e.clientX, y: e.clientY }); }}
+            onTouchStart={(e) => { const t = e.touches[0]; recLong.current = window.setTimeout(() => { recSuppress.current = true; setRouteMenu({ kind: "src", x: t.clientX, y: t.clientY }); }, 480); }}
+            onTouchEnd={() => clearTimeout(recLong.current)}
+            onTouchMove={() => clearTimeout(recLong.current)}
+            title={recording ? "Stop → the take drops into the next free GLBL pad" : `Tap to record ${SRC_FULL[recSrc]} → next free GLBL pad · right-click / hold to change source`}
+          >
+            <span className="smp-io-rec-lab">{recording ? "STOP" : "REC"}</span>
+            {!recording && <span className="smp-io-rec-src">{SRC_LABEL[recSrc]}</span>}
+          </button>
+          {/* Where the take landed — it's in GLBL pad-mode now, not beside the strip. */}
+          {landed != null && <span className="smp-io-landed" role="status">→ GLBL {landed + 1}</span>}
+          {/* ACTION (toggle) — hear your own mic in the cue device (lives with the monitor controls). */}
+          {engine.canMic && (
+            <button className={`smp-io-btn smp-io-toggle ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="MON — monitor your own mic in the cue/headphone device (needs a cue device set)">
+              MON
+            </button>
+          )}
+          {phones && (
+            <>
+              {/* AMOUNTS — cue-device blend + level. (BLEND, not "MIX", so it never collides with the
+                  REC source value MIX.) */}
+              <ValueCell
+                className="smp-io-cell"
+                label="BLEND"
+                value={phones.mix}
+                min={0}
+                max={1}
+                pivot={0.5}
+                format={(v) => (v < 0.48 ? "CUE" : v > 0.52 ? "MST" : "MID")}
+                onChange={phones.onMix}
+              />
+              <ValueCell
+                className="smp-io-cell"
+                label="LVL"
+                value={phones.level}
+                min={0}
+                max={1}
+                reset={1}
+                format={(v) => `${Math.round(v * 100)}`}
+                onChange={phones.onLevel}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {(s.error || ioErr) && (

@@ -27,6 +27,7 @@ export type FaderTarget =
   | "cueMix" // headphone CUE↔MST blend → engine.setCueMix (0..1)
   | "cueLevel" // headphone master level → engine.setCueLevel (0..1)
   | "micLevel" // mic input level → engine.setMicLevel (0..1)
+  | "master" // master output volume → engine.setMasterVolume (0..1, unity = 1)
   | "pitch" // musical key shift → setPitch (±12 semitones)
   | "stemDrums" // per-stem level → setStemGain (0..1.5)
   | "stemBass"
@@ -35,8 +36,14 @@ export type FaderTarget =
 
 // What a single physical control does. `action` reuses the keyboard action ids
 // from @htl keybinds (KEY_ACTIONS) so buttons share the exact same behaviour.
+// A hardware performance-pad bank. The controller emits a distinct note block per BASE bank, so the
+// block tells us which pad mode the player is physically in — HTL switches its deck pad mode to match
+// before routing the pad (see the button case in useMidiRouting). Peers (roll/fx2/global) share their
+// base's block, so they're reached by the SHIFT byte, not a distinct bank.
+export type PadBank = "cue" | "fx" | "loop" | "sampler";
+
 export type ControlSpec =
-  | { kind: "action"; action: string } // button → HANDLERS[action]
+  | { kind: "action"; action: string; padBank?: PadBank } // button → HANDLERS[action]; padBank tags a performance pad with the hardware bank it came from
   | { kind: "beatjump"; beats: number } // pad → deck.beatJump(beats)
   | { kind: "fader"; target: FaderTarget; invert?: boolean; relative?: boolean; pickup?: boolean } // knob/fader. relative = delta-track an endless encoder; pickup = absolute encoder with soft-takeover (no jump until the knob sweeps through the current value — see App)
   | { kind: "jogTurn"; scratch?: boolean } // platter rotation (relative, centred on 64). scratch:true = the dedicated SCRATCH stream (vinyl mode, FLX4 CC 0x22); scratch:false/omit = the top-plate BEND stream (non-vinyl, FLX4 CC 0x23) or a generic single-CC wheel
@@ -101,7 +108,7 @@ export interface DeviceProfile {
 
 // A decoded, normalized event handed to the app dispatcher.
 export type MidiEvent =
-  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play)
+  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number; padBank?: PadBank } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play); padBank = the hardware pad bank (switch the deck's pad mode to match)
   | { type: "shift"; deck?: DeckId; down: boolean } // the SHIFT button → drives HTL's shift mode (deck omitted = focused)
   | { type: "focus"; deck: DeckId } // a focus button → make this deck the one the controller drives
   | { type: "beatjump"; deck: DeckId; beats: number; shift: boolean }
@@ -114,7 +121,8 @@ export type MidiEvent =
   | { type: "browse"; delta: number }
   | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform
   | { type: "load"; deck: DeckId }
-  | { type: "selector" }; // browse-encoder press
+  | { type: "selector" } // browse-encoder press
+  | { type: "library" }; // toggle the library dock open/closed (gamepad Guide → crate-dig mode)
 
 // Per-deck button state used to drive LED feedback.
 export interface DeckFeedback {

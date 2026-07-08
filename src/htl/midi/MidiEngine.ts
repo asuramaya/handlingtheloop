@@ -430,7 +430,7 @@ export class MidiEngine {
     const shift = entry.shiftOverride ?? (b.deck ? this.shiftHeld[b.deck] : false);
     if (c.kind === "action") {
       // deck omitted (focus-model board, e.g. Starrypad pads) → App drives the focused deck
-      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed: true, shift, velocity });
+      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed: true, shift, velocity, padBank: c.padBank });
     } else if (c.kind === "beatjump" && b.deck) {
       this.opts.onEvent({ type: "beatjump", deck: b.deck, beats: c.beats, shift });
     } else if (c.kind === "load" && b.deck) {

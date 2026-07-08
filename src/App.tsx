@@ -363,6 +363,7 @@ function AppBody() {
   // holds the truth, these mirror it so the FLX 🎧 MIX knob and the on-screen cells agree.
   const [cueMix, setCueMixSt] = useState(0); // 0 = full CUE (PFL) … 1 = full MST (master)
   const [cueLevel, setCueLevelSt] = useState(1); // headphone master output level
+  const [masterVol, setMasterVolSt] = useState(1); // master output volume (SMART buttonoid + FLX MASTER knob)
   // The sampler-strip MIC cell owns its level state; this ref lets the FLX MIC LEVEL knob
   // push the display value into it (the knob already drives engine.setMicLevel directly).
   const micVolSetRef = useRef<((v: number) => void) | null>(null);
@@ -1109,7 +1110,7 @@ function AppBody() {
     // a one-shot fires once; the on-screen pads stay true momentary.
     for (let i = 0; i < 8; i++)
       HANDLERS[`hotcue${i + 1}`] = (deck, id, s) =>
-        deck.padMode === "loop"
+        deck.padMode === "loop" || deck.padMode === "roll"
           ? beatLoop(deck, id, i)
           : deck.padMode === "sampler"
             ? samplerCtl.current?.trigger(deckPadBase(id) + i)
@@ -2240,6 +2241,7 @@ function AppBody() {
     fxSelRef,
     handlersRef,
     libRef,
+    toggleLibrary: toggleLib,
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,
@@ -2252,6 +2254,7 @@ function AppBody() {
     setSmartFaderArmed,
     setCueMixSt,
     setCueLevelSt,
+    setMasterVolSt,
     jogVinyl,
     latest,
   });
@@ -2266,7 +2269,7 @@ function AppBody() {
   // 🎮 An Xbox/standard gamepad as a control surface — emits the SAME MidiEvents as the MIDI
   // layer into onMidiEvent (so it inherits focus / shift / room-sync / jog). Live whenever a
   // pad is present; rumbles on the beat of the deck being driven. See src/htl/gamepad.
-  useGamepad({ engine, getFocused: () => focused, onEvent: onMidiEvent });
+  useGamepad({ engine, getFocused: () => focused, onEvent: onMidiEvent, getLibraryOpen: () => libOpen });
 
   // Light the controller from deck state (play/cue/sync/loop + hot-cue pads). Polled
   // at ~7 Hz; the engine diffs each lamp so only changes are actually sent. The mute
@@ -2821,7 +2824,7 @@ function AppBody() {
   // when this device turned its own audio off. Solo (not in a session) → full output.
   useEffect(() => {
     const silent = room.enabled && room.status === "online" && !room.listening;
-    engine.setMaster(silent ? 0 : 1);
+    engine.setMasterMuted(silent); // multiplies the DJ's own master fader — never clobbers it
     if (!silent) {
       try {
         engine.resume();
@@ -3301,6 +3304,8 @@ function AppBody() {
               kbd: codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? ""),
               accentA: ACCENT.A,
               accentB: ACCENT.B,
+              master: masterVol,
+              onMaster: (v: number) => { engine.setMasterVolume(v); setMasterVolSt(v); },
               onToggleSmart: () => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false),
               onToggleEnabled: () => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false),
             }}

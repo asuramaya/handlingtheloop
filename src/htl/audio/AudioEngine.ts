@@ -1077,7 +1077,24 @@ export class AudioEngine {
     this.xfadeB.gain.setTargetAtTime(Math.cos(((1 - x) * Math.PI) / 2), t, 0.015);
   }
 
-  setMaster(gain: number) {
-    this.master.gain.value = gain;
+  // Master output is two independent things multiplied: the DJ's own volume fader (_masterVol,
+  // unity = 1) and the session mute (_masterMuted — a joined listener who turned their own audio
+  // off). Kept apart so un-muting restores the set level instead of slamming back to a hard 1.
+  private _masterVol = 1;
+  private _masterMuted = false;
+  setMasterVolume(v: number) {
+    this._masterVol = Math.max(0, Math.min(1, v));
+    this.applyMaster();
+  }
+  get masterVolume() {
+    return this._masterVol;
+  }
+  setMasterMuted(muted: boolean) {
+    this._masterMuted = muted;
+    this.applyMaster();
+  }
+  private applyMaster() {
+    const g = this._masterMuted ? 0 : this._masterVol;
+    this.master.gain.setTargetAtTime(g, this.ctx.currentTime, 0.01);
   }
 }

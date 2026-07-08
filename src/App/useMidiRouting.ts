@@ -30,6 +30,7 @@ export interface MidiRoutingDeps {
   fxSelRef: MutableRefObject<Record<DeckId, number>>;
   handlersRef: MutableRefObject<Record<string, (deck: Deck, id: DeckId, s: boolean) => void>>;
   libRef: RefObject<LibraryHandle>;
+  toggleLibrary: () => void;
   lockedRef: MutableRefObject<boolean>;
   micVolSetRef: MutableRefObject<((v: number) => void) | null>;
   xfaderEnabledRef: MutableRefObject<boolean>;
@@ -42,6 +43,7 @@ export interface MidiRoutingDeps {
   setSmartFaderArmed: Dispatch<SetStateAction<boolean>>;
   setCueMixSt: Dispatch<SetStateAction<number>>;
   setCueLevelSt: Dispatch<SetStateAction<number>>;
+  setMasterVolSt: Dispatch<SetStateAction<number>>;
   jogVinyl: MutableRefObject<Record<DeckId, boolean>>;
   latest: { readonly current: { zoom: Record<DeckId, number> } };
 }
@@ -67,6 +69,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     fxSelRef,
     handlersRef,
     libRef,
+    toggleLibrary,
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,
@@ -79,6 +82,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     setSmartFaderArmed,
     setCueMixSt,
     setCueLevelSt,
+    setMasterVolSt,
     jogVinyl,
     latest,
   } = deps;
@@ -93,7 +97,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
       if (lockedRef.current) return; // a watch-only participant can't drive the decks
       // A stepped-up listener may drive ONLY their own deck — block control aimed at the
       // other one (navigation/zoom stay free). A deck-less control event targets `focused`.
-      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector";
+      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector" || ev.type === "library";
       if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
@@ -163,6 +167,18 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // move-loop, so "jog forward" died intermittently on whichever deck had focus (deck B).
           // The focus-model shift (focusShift/latch/keyboard) only applies to a DECKLESS board.
           const sh = ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
+          // Hardware pad bank → HTL pad mode. The FLX emits a distinct note block per base bank, so a
+          // pad press tells us which bank the player is physically in; switch the deck to match BEFORE
+          // routing — otherwise every bank stays stuck on whatever software mode was set (all CUE). We
+          // only switch when the FAMILY differs, so an active shifted peer (ROLL/FX2/GLBL, set from the
+          // shifted bank button) survives a plain pad hit in the same family.
+          if (ev.padBank) {
+            const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode;
+            if (family !== ev.padBank) {
+              deck.setPadMode(ev.padBank);
+              emitRef.current({ kind: "board", deck: id, id: "padMode", arg: ev.padBank });
+            }
+          }
           // Pad workflow: triggering an EXISTING hot cue or a beat loop WHILE PAUSED drops
           // into playback (a pad press "launches"). Velocity-sensitive: a SOFT tap just
           // jumps (audition the spot, stay paused), a FIRM hit plays. Saving a new cue
@@ -235,6 +251,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           if (ev.target === "micLevel") {
             engine.setMicLevel(ev.value);
             micVolSetRef.current?.(ev.value); // mirror to the sampler-strip MIC cell display
+            break;
+          }
+          if (ev.target === "master") {
+            engine.setMasterVolume(ev.value);
+            setMasterVolSt(ev.value); // keep the SMART buttonoid's ring/value in step with the knob
             break;
           }
           const id = ev.deck ?? focused;
@@ -489,6 +510,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // Browse encoder → step the library row cursor (opens the panel if it was shut).
           libRef.current?.browse(ev.delta);
           break;
+        case "library":
+          // Gamepad Guide button → open / close the library dock (which flips the pad into
+          // crate-dig mode: the pad reads the live libOpen state to reroute its inputs).
+          toggleLibrary();
+          break;
         case "load":
           // LOAD A / LOAD B → load the cursor row onto that deck (canDriveDeck already gated
           // this above, so a session passenger can't load over a deck they don't control).
@@ -496,7 +522,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary],
   );
 
   return { onMidiEvent };

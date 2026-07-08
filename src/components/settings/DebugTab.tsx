@@ -64,7 +64,20 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
         </p>
         <textarea
           rows={2}
-          style={{ width: "100%", resize: "vertical" }}
+          style={{
+            width: "100%",
+            resize: "vertical",
+            boxSizing: "border-box",
+            background: "var(--panel-2, var(--panel))",
+            color: "var(--text)",
+            border: "1px solid var(--line)",
+            borderRadius: 6,
+            padding: "8px 10px",
+            font: "inherit",
+            fontSize: 14,
+            lineHeight: 1.4,
+            outlineColor: "var(--accent)",
+          }}
           placeholder="What went wrong? (e.g. “cue is delayed and pitched”)"
           value={reportDesc}
           maxLength={2000}

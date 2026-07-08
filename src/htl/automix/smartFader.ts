@@ -165,9 +165,20 @@ export class SmartFader {
 
     // Tempo morph: move ONLY the master (live) tempo; the SYNC slave (incoming) follows
     // automatically (half/double folded for big gaps). Common BPM migrates fromStart → incoming.
-    const targetBpm = lerp(this.fromStartBpm, this.toBpm, p);
-    const tempoPct = (targetBpm / this.fromBaseBpm - 1) * 100;
-    trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +this.toBpm.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +(toDeck.beatgrid?.bpm ?? 0).toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
+    //
+    // Re-read the incoming's natural BPM and fold it LIVE every step — do NOT trust the value frozen
+    // at arm. The incoming deck's beatgrid can change AFTER setupDirection: async analysis settling,
+    // or the DJ loading a different track on the idle deck during the armed wait. A frozen target
+    // then makes the morph chase a STALE tempo (trace-confirmed: toFold stuck at 98 while the grid
+    // had become 128), so the decks end mismatched and the endpoint release snaps the incoming to its
+    // real natural BPM — the audible jump. fromBaseBpm is re-read too (a refined master grid stays
+    // exact). fromStartBpm stays frozen: it's the morph's START, and it's the deck being morphed.
+    const incNatural = toDeck.beatgrid?.bpm || this.toBpm;
+    const fromBase = fromDeck.beatgrid?.bpm || this.fromBaseBpm;
+    const foldedTarget = foldTempoOctave(incNatural, this.fromStartBpm) ?? incNatural;
+    const targetBpm = lerp(this.fromStartBpm, foldedTarget, p);
+    const tempoPct = (targetBpm / fromBase - 1) * 100;
+    trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +foldedTarget.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +incNatural.toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
     fromDeck.setTempo(tempoPct);
 
     // Bass swap across the middle of the throw.

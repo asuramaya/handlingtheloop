@@ -59,6 +59,7 @@ const FILL_COOLDOWN_MS = 12_000; // don't refetch the graph more often than this
 const MAX_APPEND = 8;
 const MAX_QUEUE = 14; // cap the radio queue so it never grows unbounded
 const PLAYED_CAP = 100; // remember only the last N plays — older ones can resurface
+const SEED_HISTORY = 6; // recent plays kept as the RADIO SEED (most-recent first)
 
 export function dedupeByVideoId(list: TrackMeta[]): TrackMeta[] {
   const seen = new Set<string>();
@@ -79,12 +80,16 @@ export function useMixQueue(): MixQueue {
   const [current, setCurrentState] = useState<TrackMeta | null>(null);
 
   const played = useRef<Set<string>>(new Set());
+  // THE RADIO SEED. Recency-ordered (most-recent first) list of tracks that ACTUALLY PLAYED. The
+  // radio suggests from this, never from the decks — a staged/preloaded deck track is not "played",
+  // so it's never here, so the queue can't feed its own next pick back into its own seed. That one
+  // fact dissolves the "seed from both decks / which deck is active / don't feed yourself" recursion
+  // the fedBack guard was fighting: the model is the performance, not the hardware.
+  const history = useRef<TrackMeta[]>([]);
   const filling = useRef(false);
   const lastFill = useRef(0);
   const lastSeed = useRef<string | null>(null); // signature of the seed SET the queue was last filled from
-  const manualSeed = useRef<TrackMeta | null>(null); // a user-queued pick radio should follow until a deck changes
-  const deckSeedSig = useRef<string | null>(null); // last DECK seed signature — manualSeed expires when it moves
-  const lastDeckSeeds = useRef<TrackMeta[]>([]); // last deck seeds, so a manual add can refill without new deck context
+  const manualSeed = useRef<TrackMeta | null>(null); // a user-queued "play next" pick — the freshest seed until it plays
   const playlistLoaded = useRef(false); // a fixed playlist is the source (don't auto-refresh it)
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -126,7 +131,7 @@ export function useMixQueue(): MixQueue {
       lastFill.current = 0;
       lastSeed.current = null;
       manualSeed.current = null;
-      deckSeedSig.current = null;
+      history.current = [];
       playlistLoaded.current = tracks.length > 0; // a fixed playlist → don't auto-refresh it
       setSmartSortState(sort);
       if (opts?.mode) setModeState(opts.mode);
@@ -138,19 +143,25 @@ export function useMixQueue(): MixQueue {
     [enrichAnalysis],
   );
 
-  // Remember a play, but cap the set so an exhausted seed's radio can refill later
-  // (an unbounded played-set is what froze the queue after the first sequence).
-  const markPlayed = (id: string) => {
+  // Remember a play: it joins the dedup set (capped so an exhausted seed can refill later — an
+  // unbounded played-set is what froze the queue after the first sequence) AND becomes the freshest
+  // RADIO SEED at the head of `history`. A user's "play next" pick is consumed once anything plays,
+  // so the seed hands back to history.
+  const markPlayed = (track: TrackMeta) => {
+    const id = track.videoId;
+    if (!id) return;
     played.current.add(id);
     while (played.current.size > PLAYED_CAP) {
       const oldest = played.current.values().next().value as string | undefined;
       if (oldest === undefined) break;
       played.current.delete(oldest);
     }
+    history.current = [track, ...history.current.filter((t) => t.videoId !== id)].slice(0, SEED_HISTORY);
+    manualSeed.current = null;
   };
 
   const setCurrent = useCallback((t: TrackMeta | null) => {
-    if (t) markPlayed(t.videoId);
+    if (t) markPlayed(t);
     setCurrentState(t);
   }, []);
 
@@ -159,7 +170,7 @@ export function useMixQueue(): MixQueue {
   const advance = useCallback((): TrackMeta | null => {
     const next = itemsRef.current[0] ?? null;
     if (!next) return null;
-    markPlayed(next.videoId);
+    markPlayed(next);
     setItems((cur) => cur.slice(1));
     setCurrentState(next);
     return next;
@@ -167,36 +178,24 @@ export function useMixQueue(): MixQueue {
 
   const peekNext = useCallback((): TrackMeta | null => itemsRef.current[0] ?? null, []);
 
-  const ensureNext = useCallback(async (seedsArg: TrackMeta | TrackMeta[] | null): Promise<TrackMeta | null> => {
-    const deckSeeds = dedupeByVideoId(
-      (Array.isArray(seedsArg) ? seedsArg : seedsArg ? [seedsArg] : []).filter((s): s is TrackMeta => !!s?.videoId),
-    ).slice(0, 3);
-    // Order-INSENSITIVE signature: seeding the SAME set of tracks in a swapped live/idle role must
-    // not read as a seed change. It otherwise bypasses the cooldown and REPLACEs the whole tail on a
-    // mere deck-role flip (visible churn). The fetch below still consumes `deckSeeds` in rank order —
-    // only change-detection (deckSeedSig / seedSig) is set-based.
-    const deckSig = deckSeeds.map((s) => s.videoId).sort().join(",");
-    // "Dynamic" = radio mode, or augment when no fixed playlist is loaded → the queue
-    // should follow whatever's playing now (not stay stuck on the first seed).
+  const ensureNext = useCallback(async (_legacySeeds?: TrackMeta | TrackMeta[] | null): Promise<TrackMeta | null> => {
+    // The seed no longer comes from the DECKS — `_legacySeeds` is ignored (callers still pass it
+    // pending the cleanup that removes radioSeedSet). It comes from the recent PLAY HISTORY: the
+    // tracks that actually went live, most-recent first. A staged/preloaded deck track is never in
+    // history, so the queue can't read its own next pick back in — the recursion (and the whole
+    // fedBack guard / "which deck" question) is gone by construction. A user's explicit "play next"
+    // pick still dominates as the freshest seed until it plays.
     const radioDynamic = modeRef.current === "radio" || (augmentRef.current && !playlistLoaded.current);
-    // A manual queue-add (manualSeed) becomes the FRESHEST radio seed — suggestions follow
-    // the user's pick — but only until a DECK changes, when radio reverts to the decks.
-    // Detect the deck change by the deck-seed signature moving.
-    if (radioDynamic && deckSeedSig.current !== null && deckSig !== deckSeedSig.current) {
-      manualSeed.current = null;
-    }
-    deckSeedSig.current = deckSig;
-    lastDeckSeeds.current = deckSeeds;
-    // Active seeds: a manual pick dominates (prepended); otherwise just the decks.
+    const recent = history.current.slice(0, 3);
     const seeds =
       radioDynamic && manualSeed.current
-        ? dedupeByVideoId([manualSeed.current, ...deckSeeds]).slice(0, 3)
-        : deckSeeds;
+        ? dedupeByVideoId([manualSeed.current, ...recent]).slice(0, 3)
+        : recent;
     if (!seeds.length) return itemsRef.current[0] ?? null;
-    // Signature of the WHOLE active seed set (manual pick + both decks), not just seeds[0] —
-    // so loading EITHER deck, OR a manual add, re-seeds. Keying off only the primary left
-    // the queue stuck on the first seed whenever the change happened on deck B.
-    const seedSig = (radioDynamic && manualSeed.current ? `m:${manualSeed.current.videoId}|` : "") + deckSig;
+    // Signature of the active seed set — changes only when a NEW track plays (history head moves) or
+    // a manual pick is added. That's per-SONG, not per-tick, so the cooldown-bypass below can never
+    // flap: the tight per-tick recursion is structurally impossible now.
+    const seedSig = (radioDynamic && manualSeed.current ? `m:${manualSeed.current.videoId}|` : "") + seeds.map((s) => s.videoId).join(",");
     const seedChanged = radioDynamic && seedSig !== lastSeed.current;
     const wantFill = modeRef.current === "radio" || augmentRef.current;
     const low = itemsRef.current.length < RADIO_MIN_AHEAD;
@@ -331,7 +330,7 @@ export function useMixQueue(): MixQueue {
     if (dynamic) {
       manualSeed.current = t;
       lastSeed.current = null; // force the refill below to reseed from the new pick
-      void ensureNextRef.current(lastDeckSeeds.current);
+      void ensureNextRef.current();
     }
   }, []);
 
@@ -365,10 +364,10 @@ export function useMixQueue(): MixQueue {
   const adopt = useCallback((tracks: TrackMeta[], cur: TrackMeta | null, m: MixMode) => {
     played.current = new Set();
     if (cur) played.current.add(cur.videoId);
+    history.current = cur ? [cur] : []; // seed the radio from the now-playing track after handover
     lastFill.current = 0;
     lastSeed.current = null;
     manualSeed.current = null;
-    deckSeedSig.current = null;
     // Radio keeps topping itself up from the decks; only a real fixed playlist freezes
     // auto-refresh — otherwise the adopted radio queue would never refill again.
     playlistLoaded.current = m === "playlist" && tracks.length > 0;
@@ -379,10 +378,10 @@ export function useMixQueue(): MixQueue {
 
   const clear = useCallback(() => {
     played.current = new Set();
+    history.current = [];
     lastFill.current = 0;
     lastSeed.current = null;
     manualSeed.current = null;
-    deckSeedSig.current = null;
     playlistLoaded.current = false;
     setItems([]);
     setCurrentState(null);

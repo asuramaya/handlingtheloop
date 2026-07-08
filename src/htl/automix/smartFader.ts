@@ -23,6 +23,7 @@
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
 import { foldTempoOctave } from "../analysis";
+import { trace } from "../debug/trace";
 import { clamp, clamp01, lerp } from "../../util/math";
 
 const EQ_KILL = -26; // dB — the engine low-shelf floor (a full bass cut), matching AutoMixer
@@ -165,7 +166,9 @@ export class SmartFader {
     // Tempo morph: move ONLY the master (live) tempo; the SYNC slave (incoming) follows
     // automatically (half/double folded for big gaps). Common BPM migrates fromStart → incoming.
     const targetBpm = lerp(this.fromStartBpm, this.toBpm, p);
-    fromDeck.setTempo((targetBpm / this.fromBaseBpm - 1) * 100);
+    const tempoPct = (targetBpm / this.fromBaseBpm - 1) * 100;
+    trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +this.toBpm.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +(toDeck.beatgrid?.bpm ?? 0).toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
+    fromDeck.setTempo(tempoPct);
 
     // Bass swap across the middle of the throw.
     const s = clamp01((p - BASS_LO) / (BASS_HI - BASS_LO));

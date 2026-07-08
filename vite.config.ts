@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -74,8 +74,39 @@ function xxitApi() {
   };
 }
 
+// DEV-ONLY telemetry sink. The client (src/htl/debug/trace.ts) POSTs JSON-line trace events to
+// /__htl_debug and we append them to .htl-debug.log (gitignored via *.log) at the repo root, so a
+// live `pnpm dev` session's audio/tempo/queue behaviour can be read straight off disk. DELETE
+// clears the log (reset before a repro). Vite middleware only — never in the prod Worker.
+function htlDebugSink() {
+  const logPath = fileURLToPath(new URL("./.htl-debug.log", import.meta.url));
+  return {
+    name: "htl-debug-sink",
+    configureServer(server: import("vite").ViteDevServer) {
+      server.middlewares.use("/__htl_debug", (req, res) => {
+        if (req.method === "DELETE") {
+          void writeFile(logPath, "").catch(() => {});
+          res.statusCode = 204;
+          return res.end();
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          return res.end();
+        }
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          void appendFile(logPath, body.endsWith("\n") ? body : body + "\n").catch(() => {});
+          res.statusCode = 204;
+          res.end();
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), xxitApi(), ortVendor()],
+  plugins: [react(), xxitApi(), ortVendor(), htlDebugSink()],
   resolve: {
     alias: { "@htl": htlDir },
   },

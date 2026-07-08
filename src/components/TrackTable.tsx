@@ -176,12 +176,16 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     }
     scrollerRef.current = node ?? null;
   }, [view.length, virtualize]);
-  // Measure a real row's height once it's painted (it scales with the row-size stepper), so
-  // the spacer math + window size track the actual layout instead of the estimate.
+  // Measure a real row's height once it's painted (rows are uniform; height only changes with the
+  // row-size stepper), so the spacer math + window size track the actual layout instead of the
+  // estimate. Deliberately NOT keyed on scroll (range.start): re-measuring the first *rendered* row
+  // on every scroll step let integer-rounded offsetHeight flip ±1px, and the top spacer (vStart *
+  // rowH) multiplies that by thousands of rows → the scroll position jumps and jiggles. Functional
+  // setter keeps rowH out of the deps (no stale-closure re-measure loop).
   useLayoutEffect(() => {
     const h = firstRowRef.current?.offsetHeight;
-    if (h && Math.abs(h - rowH) > 0.5) setRowH(h);
-  }, [scale, view.length, range.start, rowH]);
+    if (h) setRowH((prev) => (Math.abs(h - prev) > 0.5 ? h : prev));
+  }, [scale, view.length]);
   // Compute the visible window from the scroller's position. The table top tracks logical
   // row 0 (the spacers preserve full height), so (scrollerTop − row0Top)/rowH = rows above.
   const recompute = useCallback(() => {

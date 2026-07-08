@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -105,8 +106,19 @@ function htlDebugSink() {
   };
 }
 
+// Build SHA baked in at config time so every bug report says exactly which code was running — the
+// single load-bearing field. Falls back to "unknown" outside a git checkout.
+function gitSha(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim() || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig({
   plugins: [react(), xxitApi(), ortVendor(), htlDebugSink()],
+  define: { __HTL_BUILD__: JSON.stringify(gitSha()) },
   resolve: {
     alias: { "@htl": htlDir },
   },

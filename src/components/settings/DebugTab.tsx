@@ -3,6 +3,7 @@
 // the Debug tab is open, so the poll runs exactly while visible (idle otherwise).
 import { useEffect, useState } from "react";
 import { readStemTrace, clearStemTrace, formatStemTrace } from "@htl";
+import { submitBugReport } from "@htl/debug/report";
 import type { UseMidi } from "@htl/midi";
 import type { DebugSection } from "../../App";
 import { MidiDebug } from "../MidiDebug";
@@ -14,6 +15,23 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
   const [diag, setDiag] = useState<DebugSection[]>([]);
   const [copied, setCopied] = useState<string | null>(null); // which block (or "all") just copied
   const [traceTick, setTraceTick] = useState(0); // bump to re-read the separation trace
+  // One-click bug report: pack the build version + device + live snapshot + event ring + crash trace.
+  const [reportDesc, setReportDesc] = useState("");
+  const [reporting, setReporting] = useState(false);
+  const [reportMsg, setReportMsg] = useState<string | null>(null);
+  const sendReport = async () => {
+    setReporting(true);
+    setReportMsg(null);
+    const st = readStemTrace();
+    const r = await submitBugReport({
+      description: reportDesc,
+      sections: debug ? debug() : [],
+      stemTrace: st.length ? formatStemTrace(st) : null,
+    });
+    setReporting(false);
+    setReportMsg(r.ok ? `Sent ✓ ${(r.id ?? "").slice(0, 8)}` : `Failed — ${r.error ?? "unknown"}`);
+    if (r.ok) setReportDesc("");
+  };
   const sectionText = (s: DebugSection) => `[${s.title}]\n` + s.rows.map(([k, v]) => `  ${k}: ${v}`).join("\n");
   const copy = (text: string, id: string) =>
     void navigator.clipboard?.writeText(text).then(
@@ -33,6 +51,33 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
 
   return (
     <>
+      {/* One-click bug report — the whole flight recorder in a sentence + a button. Packs the build
+          SHA, device, live engine/session snapshot, the recent-event ring and any crash trace into a
+          single bounded report so it can actually be diagnosed. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Report a problem</span>
+        </div>
+        <p className="settings-hint">
+          Something off? Describe it in a line and send. It bundles the build version, your device, the
+          live engine state, recent events and any crash trace — no console needed.
+        </p>
+        <textarea
+          rows={2}
+          style={{ width: "100%", resize: "vertical" }}
+          placeholder="What went wrong? (e.g. “cue is delayed and pitched”)"
+          value={reportDesc}
+          maxLength={2000}
+          onChange={(e) => setReportDesc(e.target.value)}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+          <button className="btn" disabled={reporting} onClick={() => void sendReport()}>
+            {reporting ? "Sending…" : "Send report"}
+          </button>
+          {reportMsg && <span className="settings-hint">{reportMsg}</span>}
+        </div>
+      </div>
+
       {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
           and reverse-engineering LED / RGB protocols. Open-source debug surface. */}
       {midi && <MidiDebug midi={midi} />}

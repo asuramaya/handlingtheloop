@@ -1,23 +1,26 @@
-// Dev-only structured trace sink. In `pnpm dev` (import.meta.env.DEV) it batches events and
-// POSTs them as JSON lines to the Vite middleware (/__htl_debug → .htl-debug.log at the repo
-// root), so the exact behaviour of the audio / tempo / queue engine during a LIVE session can
-// be read back off disk — no console scraping, no guessing. Compiled to a no-op in the prod
-// build (DEV is statically false → the calls tree-shake away). Runtime off-switch:
-// localStorage['htl:trace'] = '0'.
+// Structured trace + flight recorder. Two sinks off one call:
+//
+//  • DEV FILE — in `pnpm dev` (import.meta.env.DEV) events are batched and POSTed as JSON lines to
+//    the Vite middleware (/__htl_debug → .htl-debug.log), so a live session's behaviour can be read
+//    straight off disk. Compiled to a no-op in prod (DEV statically false → tree-shaken). Off-switch:
+//    localStorage['htl:trace']='0'.
+//  • RING (prod too) — a bounded in-memory flight recorder of SIGNIFICANT events (`event()`), always
+//    on, ~zero cost. It's what a one-click bug report dumps: the "how did we get here" without
+//    streaming anything to a server. High-frequency `trace()` (per-fader-move) does NOT enter the
+//    ring — only `event()` — so the ring stays small and relevant.
 const DEV = Boolean(import.meta.env?.DEV);
 
 let buf: string[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let enabled = DEV && !(typeof localStorage !== "undefined" && localStorage.getItem("htl:trace") === "0");
 
-/** Turn tracing on/off at runtime (still a no-op unless this is a dev build). */
+/** Turn the dev-file stream on/off at runtime (still a no-op unless this is a dev build). */
 export function setTrace(on: boolean): void {
   enabled = on && DEV;
 }
 
-/** Record one event on `ch` (a dotted channel like "sf" / "sync.match"). Cheap + fire-and-forget:
- *  events are stamped with a ms clock, buffered, and flushed on a short timer or when the buffer
- *  fills. Never throws into the caller. */
+/** Fine-grained probe → dev file only. Cheap, fire-and-forget, never throws into the caller. Use for
+ *  high-frequency signals (per-fader-move, per-tick) you only want while actively debugging in dev. */
 export function trace(ch: string, data: Record<string, unknown>): void {
   if (!enabled) return;
   try {
@@ -38,4 +41,37 @@ function flush(): void {
   const body = buf.join("\n");
   buf = [];
   void fetch("/__htl_debug", { method: "POST", body, keepalive: true }).catch(() => {});
+}
+
+// ── flight recorder ──────────────────────────────────────────────────────────────────────────────
+const RING_CAP = 300; // last N significant events kept for a bug report (bounded → cheap in prod)
+const ring: Array<Record<string, unknown>> = [];
+
+/** Significant event → the flight-recorder ring (always, prod included) AND the dev file. This is the
+ *  fuel for one-click bug reports: track loads, transitions, sync toggles, errors — the state changes
+ *  you'd want to see leading up to a problem. Keep it to notable moments, not per-frame chatter. */
+export function event(ch: string, data: Record<string, unknown>): void {
+  try {
+    ring.push({ t: Math.round(performance.now()), ch, ...data });
+    if (ring.length > RING_CAP) ring.splice(0, ring.length - RING_CAP);
+  } catch {
+    /* ignore — recording must never break the app */
+  }
+  trace(ch, data); // also stream to the dev file when DEV
+}
+
+/** Snapshot the flight-recorder ring (a shallow copy) — dumped into a bug report. */
+export function dumpRing(): Array<Record<string, unknown>> {
+  return ring.slice();
+}
+
+// Auto-capture uncaught errors + rejections into the ring the moment this module loads (it's imported
+// early by the audio engine), so a report always carries whatever just blew up — the single highest
+// value-per-byte payload after the user's own words. Guarded for non-browser (test/SSR) contexts.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("error", (e) => event("error", { msg: String(e.message ?? "").slice(0, 300), src: e.filename ?? "", line: e.lineno ?? 0 }));
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = (e as PromiseRejectionEvent).reason;
+    event("reject", { reason: String(r instanceof Error ? r.message : r).slice(0, 300) });
+  });
 }

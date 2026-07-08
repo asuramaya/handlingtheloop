@@ -177,6 +177,24 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
   }
 
   try {
+    // Bug reports (Settings ▸ Debug → one click). Dev has no D1, so append the payload to
+    // .htl-reports.log — it can be read straight off disk (also a live test of what the reporter
+    // captures). Anonymous-friendly, matched before the auth-gated routes.
+    if (path === "/api/bug-report") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "POST only" });
+        return true;
+      }
+      const b = (await readJsonBody(req)) as { id?: string };
+      try {
+        await fs.appendFile(".htl-reports.log", JSON.stringify({ ...(b as object), _received: Date.now() }) + "\n");
+      } catch {
+        /* best-effort dev sink */
+      }
+      sendJson(res, 200, { ok: true, id: b?.id ?? "dev" });
+      return true;
+    }
+
     // PUBLIC profile by handle (dynamic path, matched before the exact switch).
     // Dev is single-user, so only the dev user's own handle resolves.
     if (DEV_AUTH && path.startsWith("/api/u/")) {

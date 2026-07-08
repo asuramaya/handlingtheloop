@@ -9,6 +9,7 @@ import { handleAudioRoutes } from "./routes/audio";
 import { handleCatalogRoutes } from "./routes/catalog";
 import { handleCommunityRoutes } from "./routes/community";
 import { handleSyncRoutes } from "./routes/sync";
+import { handleReportRoutes } from "./routes/report";
 import { handleAuthRoutes } from "./routes/auth";
 import { handleAccountRoute } from "../server/accounts";
 import { handleSampleRoute } from "../server/samples";
@@ -49,6 +50,7 @@ async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext
       (await handleCatalogRoutes(url, req, env, ctx)) ??
       (await handleCommunityRoutes(url, req, env, ctx)) ??
       (await handleSyncRoutes(url, req, env)) ??
+      (await handleReportRoutes(url, req, env)) ??
       (await handleAuthRoutes(url, req, env));
     if (res) return res;
 

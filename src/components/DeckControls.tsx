@@ -181,17 +181,6 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     else sampler.trigger(pad.index);
     refresh();
   };
-  // FX pad-mode (Pad-FX): press fires the effect (hold = momentary, capture the pointer so a
-  // drift-off doesn't cut it early; one-shot = trigger-and-done). Release ends a hold.
-  const fxDown = (e: React.PointerEvent, slot: number) => {
-    if (e.button !== 0) return;
-    const pad = FX_PADS[slot];
-    if (!pad) return;
-    if (pad.hold) (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    pad.on(deck);
-    emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot }); // sync + record the throw
-    refresh();
-  };
   // Right-click an FX pad = REVEAL its effect's control surface in the rack below (tweak / "mode
   // making"). No load — the device is already a live resident; this just selects its tab. CENS has
   // no backing device, so it has nothing to reveal. (Touch reveals via the rack tabs directly.)
@@ -200,17 +189,11 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     const kind = FX_PADS[slot]?.kind;
     if (kind) fxCtlRef?.current?.selectKind(kind);
   };
-  const fxUp = (slot: number) => {
-    const pad = FX_PADS[slot];
-    if (pad?.hold) {
-      pad.off?.(deck);
-      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
-      refresh();
-    }
-  };
-  // FX2 pad-mode = the LATCH layer of the same bank: tap toggles the effect's throw on/off and
-  // leaves it. The device's own throw state IS the latch (read pad.active), so there's no extra
-  // state to track. No hold; right-click still reveals the panel. Mirrors over the board bus.
+  // BOTH FX pad-modes (FX and its FX2 shifted peer) now LATCH — tap toggles the effect's throw
+  // on/off and leaves it (no momentary hold/release). The device's own throw state IS the latch
+  // (read pad.active), so there's no extra state to track. Right-click still reveals the panel;
+  // the throw mirrors over the board bus so it syncs + records. (Matches the keyboard 1-8, which
+  // already toggle a held pad rather than needing a key-up.)
   const fx2Toggle = (e: React.PointerEvent, slot: number) => {
     if (e.button !== 0) return;
     const pad = FX_PADS[slot];
@@ -584,12 +567,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {FX_PADS.map((pad, i) => (
             <button
               key={pad.label}
-              className={`pad fx ${pad.active?.(deck) ? "playing" : ""} ${pad.hold ? "" : "oneshot"}`}
+              className={`pad fx ${pad.active?.(deck) ? "playing latched" : ""}`}
               data-cue={i + 1}
-              title={`${pad.label} — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
-              onPointerDown={(e) => fxDown(e, i)}
-              onPointerUp={() => fxUp(i)}
-              onPointerLeave={() => fxUp(i)}
+              title={`${pad.label} (latch) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
+              onPointerDown={(e) => fx2Toggle(e, i)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad.label}

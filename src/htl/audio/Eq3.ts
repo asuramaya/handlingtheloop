@@ -50,6 +50,9 @@ export class Eq3 implements FxDevice {
   private readonly high: BiquadFilterNode;
   private readonly lp: BiquadFilterNode; // high-cut (low-pass)
   private readonly soloNode: BiquadFilterNode; // audition bandpass
+  private readonly dry: GainNode; // parallel dry path for the wet/dry blend
+  private readonly wet: GainNode; // EQ-chain output for the wet/dry blend
+  private _mix = 1; // wet/dry: 0 = flat/dry, 1 = full EQ (default)
   private route: EqRoute = "normal";
   private lowShapeIdx: number = EQ_SHAPE_DEFAULT.low;
   private midShapeIdx: number = EQ_SHAPE_DEFAULT.mid;
@@ -93,6 +96,13 @@ export class Eq3 implements FxDevice {
     this.soloNode.type = "bandpass";
     this.soloNode.Q.value = 4;
 
+    // Wet/dry blend gains (normal route only). Default full-wet so the EQ behaves exactly as
+    // before until the knob is dialled back.
+    this.dry = ctx.createGain();
+    this.wet = ctx.createGain();
+    this.dry.gain.value = 0;
+    this.wet.gain.value = 1;
+
     // Build the series EQ chain; applyRoute() wires the ACTIVE path's tail into `output`
     // (and severs the idle paths) so only one route is live — and rendered — at a time.
     this.hp.connect(this.low);
@@ -108,15 +118,12 @@ export class Eq3 implements FxDevice {
   // the audition bandpass. (The in-series counterpart to BaseFxDevice's activation gate.)
   private applyRoute() {
     this.pre.disconnect();
-    try {
-      this.lp.disconnect();
-    } catch {
-      /* not wired yet */
-    }
-    try {
-      this.soloNode.disconnect();
-    } catch {
-      /* not wired yet */
+    for (const n of [this.lp, this.soloNode, this.dry, this.wet]) {
+      try {
+        n.disconnect();
+      } catch {
+        /* not wired yet */
+      }
     }
     if (this.route === "bypass") {
       this.pre.connect(this.output);
@@ -124,9 +131,19 @@ export class Eq3 implements FxDevice {
       this.pre.connect(this.soloNode);
       this.soloNode.connect(this.output);
     } else {
+      // NORMAL: parallel dry + the EQ chain (wet), blended by _mix. At mix = 1 the dry gain is 0,
+      // so this is bit-identical to the old series wiring.
       this.pre.connect(this.hp);
-      this.lp.connect(this.output);
+      this.lp.connect(this.wet);
+      this.wet.connect(this.output);
+      this.pre.connect(this.dry);
+      this.dry.connect(this.output);
+      this.applyMix();
     }
+  }
+  private applyMix() {
+    this.dry.gain.value = 1 - this._mix;
+    this.wet.gain.value = this._mix;
   }
 
   get routeMode(): EqRoute {
@@ -151,6 +168,15 @@ export class Eq3 implements FxDevice {
   }
   get bypassed() {
     return this.route === "bypass";
+  }
+  /** Wet/dry blend: 1 = full EQ (default), 0 = flat/dry — dial back the EQ intensity or run it
+   *  parallel. Only meaningful on the normal route (bypass is already all-dry). */
+  setMix(m: number) {
+    this._mix = Math.max(0, Math.min(1, m));
+    if (this.route === "normal") this.applyMix();
+  }
+  get mix() {
+    return this._mix;
   }
 
   // --- band gains (dB) ---
@@ -273,6 +299,7 @@ export class Eq3 implements FxDevice {
     this.setHighShape(EQ_SHAPE_DEFAULT.high);
     this.low.Q.value = 1;
     this.high.Q.value = 1;
+    this.setMix(1);
     this.setBypass(false);
   }
 
@@ -290,6 +317,9 @@ export class Eq3 implements FxDevice {
       band.getFrequencyResponse(f, this.mag, this.phase!);
       for (let i = 0; i < n; i++) outDb[i] += 20 * Math.log10(this.mag[i] || 1e-6);
     }
+    // Scale the drawn curve toward flat by the wet/dry mix — the audible blend is complex
+    // (phase-dependent), but interpolating the dB curve to 0 reads right and makes the knob visible.
+    if (this._mix !== 1) for (let i = 0; i < n; i++) outDb[i] *= this._mix;
   }
 
   // --- FxDevice generic param bus ---------------------------------------------

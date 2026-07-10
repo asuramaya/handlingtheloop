@@ -222,6 +222,7 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqLpFreq: deck.eqLpFreq,
     eqLpQ: deck.eqLpQ,
     eqBypass: deck.eqBypassed,
+    eqMix: deck.eqMix,
     filter: deck.filterValue,
     fx: deck.fxSnapshot(), // post-EQ effect chain (delay/reverb…) — EQ stays in the eq* fields
     keylock: deck.keylock,
@@ -296,6 +297,7 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqLpFreq != null) deck.setEqLpFreq(s.eqLpFreq);
   if (s.eqLpQ != null) deck.setEqLpQ(s.eqLpQ);
   deck.setEqBypass(!!s.eqBypass);
+  if (s.eqMix != null) deck.setEqMix(s.eqMix);
   deck.applyFxSnapshot(s.fx); // FX chain (undefined = old snapshot → keep default; [] = explicitly empty)
   deck.setKeylock(s.keylock);
   deck.setPitch(s.pitchSemis ?? 0);
@@ -2128,6 +2130,7 @@ function AppBody() {
       emit({ kind: "control", deck: id, param: "eqHpQ", value: d.eqHpQ });
       emit({ kind: "control", deck: id, param: "eqLpFreq", value: d.eqLpFreq });
       emit({ kind: "control", deck: id, param: "eqLpQ", value: d.eqLpQ });
+      emit({ kind: "control", deck: id, param: "eqMix", value: d.eqMix });
       emit({ kind: "toggle", deck: id, param: "eqBypass", value: d.eqBypassed });
       emit({ kind: "control", deck: id, param: "filter", value: d.filterValue });
       emit({ kind: "control", deck: id, param: "pitch", value: d.pitch });

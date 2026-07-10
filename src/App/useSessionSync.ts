@@ -125,6 +125,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       if (d.eqHpQ != null) deck.setEqHpQ(d.eqHpQ);
       if (d.eqLpFreq != null) deck.setEqLpFreq(d.eqLpFreq);
       if (d.eqLpQ != null) deck.setEqLpQ(d.eqLpQ);
+      if (d.eqMix != null) deck.setEqMix(d.eqMix);
       deck.setEqBypass(!!d.eqBypass);
       deck.setPitch(d.pitchSemis ?? 0);
       // Discrete state — absolute, so exact regardless of our own playhead.
@@ -352,6 +353,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           else if (intent.param === "eqHpQ") deck.setEqHpQ(intent.value);
           else if (intent.param === "eqLpFreq") deck.setEqLpFreq(intent.value);
           else if (intent.param === "eqLpQ") deck.setEqLpQ(intent.value);
+          else if (intent.param === "eqMix") deck.setEqMix(intent.value);
           else if (intent.param === "filter") deck.setFilter(intent.value);
           else if (intent.param === "pitch") deck.setPitch(Math.round(intent.value));
           break;

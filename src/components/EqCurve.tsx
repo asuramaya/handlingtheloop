@@ -513,6 +513,24 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
                 <span className="eq-shape-val">{EQ_SHAPE_LABELS[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_LABELS.length - 1)]}</span>
               </button>
             )}
+            {/* EQ wet/dry — global to the whole EQ (not per-band), parked at the end of the control
+                row. 100 = full EQ, 0 = flat/dry. Emits the eqMix control intent so session-sync +
+                MIDI converge like every other cell here. */}
+            <ValueCell
+              label="MIX"
+              value={deck.eqMix}
+              min={0}
+              max={1}
+              step={0.01}
+              reset={1}
+              format={(v) => `${Math.round(v * 100)}`}
+              onChange={(v) => {
+                deck.setEqMix(v);
+                emit({ kind: "control", deck: id, param: "eqMix", value: v });
+                dirty.current = true;
+                bump((x) => x + 1);
+              }}
+            />
           </div>
         );
       })()}

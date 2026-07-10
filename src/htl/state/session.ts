@@ -43,6 +43,7 @@ export interface DeckSnapshot {
   eqLpFreq?: number; // high-cut cutoff (Hz)
   eqLpQ?: number;
   eqBypass?: boolean; // EQ out of circuit
+  eqMix?: number; // EQ wet/dry (1 = full EQ, 0 = flat/dry)
   filter: number; // -1..1 color filter
   // Channel-strip effects AFTER the EQ (delay/reverb/chorus…), in order. Optional so old
   // snapshots load fine (no effects). The EQ itself is the eq* fields above, not here.

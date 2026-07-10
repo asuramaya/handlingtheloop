@@ -1796,6 +1796,12 @@ export class Deck {
     this._eqHigh = db;
     this.eq.setHigh(db);
   }
+  setEqMix(m: number) {
+    this.eq.setMix(m);
+  }
+  get eqMix() {
+    return this.eq.mix;
+  }
 
   // --- EQ band frequencies (Pro-Q-style: drag a node sideways) ---
   get eqLowFreq() {

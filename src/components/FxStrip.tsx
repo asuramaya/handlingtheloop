@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
-import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset } from "@htl/audio";
+import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
@@ -128,6 +128,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // --- presets (right-click an effect tab) ---
   const menuDev = menu ? deck.fxDeviceAt(menu.slot) : null;
   const menuPresets = useMemo(() => (menuDev ? loadFxPresets(menuDev.kind) : []), [menuDev, presetTick]);
+  const factoryPresets = useMemo(() => (menuDev ? factoryFxPresets(menuDev.kind) : []), [menuDev]); // built-in, read-only
   const openPresetMenu = (e: React.MouseEvent, slot: number) => {
     e.preventDefault();
     setSel(slot);
@@ -314,6 +315,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             <button className="fx-palette-item" role="menuitem" onClick={() => applyDefault(menu.slot)}>
               Default
             </button>
+            {/* Factory bank — built-in, read-only (apply only, no rename/remove). */}
+            {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
+            {factoryPresets.map((p) => (
+              <button key={`f:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply factory preset" onClick={() => applyPreset(menu.slot, p.params)}>
+                {p.name}
+              </button>
+            ))}
             {menuPresets.length > 0 && <div className="fx-preset-sep" />}
             {menuPresets.map((p) => (
               <div key={p.name} className="fx-preset-row">

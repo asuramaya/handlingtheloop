@@ -778,11 +778,33 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (loop && loop.end > loop.start) {
       const lx = toX(loop.start);
       const lw = (loop.end - loop.start) / secPerPx;
-      ctx.fillStyle = rgba(p.loopColor, 0.2);
+      ctx.fillStyle = rgba(p.loopColor, loop.active ? 0.2 : 0.1); // dimmer when armed-but-not-looping
       ctx.fillRect(lx, 0, lw, h);
       ctx.fillStyle = rgba(p.loopColor, 0.9);
       ctx.fillRect(lx, 0, 2 * dpr, h);
       ctx.fillRect(lx + lw - 2 * dpr, 0, 2 * dpr, h);
+    }
+    // Playhead loop badge — a glanceable "you're looping NOW" cue pinned at the top of the
+    // playhead (centre). The loop region itself scrolls off at deep zoom, so this is the always-
+    // visible state read: present + its beat length = in a live loop; gone = the loop exited.
+    if (loop && loop.active) {
+      const beats = loop.beats;
+      const txt = `⟳ ${beats >= 1 ? String(beats) : `1/${Math.round(1 / beats)}`}`;
+      ctx.font = `700 ${10 * dpr}px ui-monospace, SFMono-Regular, monospace`;
+      const prevAlign = ctx.textAlign;
+      const prevBase = ctx.textBaseline;
+      const bw = ctx.measureText(txt).width + 10 * dpr;
+      const bh = 15 * dpr;
+      const bx = w / 2 - bw / 2;
+      const by = 3 * dpr;
+      ctx.fillStyle = rgba(p.loopColor, 0.92);
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = "#0a0a0f";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(txt, w / 2, by + bh / 2 + 0.5 * dpr);
+      ctx.textAlign = prevAlign;
+      ctx.textBaseline = prevBase;
     }
 
     // Waveform — presented from the offscreen layer. A rebuild (the heavy 3×-wide

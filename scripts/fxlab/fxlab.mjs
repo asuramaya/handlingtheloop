@@ -44,6 +44,9 @@ function parseArgs(argv) {
       case "--throw-at": a.throwAt = Number(v); i++; break;
       case "--throw-off": a.throwOff = Number(v); i++; break;
       case "--stepped": a.stepped = true; break;
+      case "--pad-throw": a.padThrow = true; break;
+      case "--start-bypassed": a.startBypassed = true; break;
+      case "--bypass-at": a.bypassAt = Number(v); i++; break;
       case "--bank": a.bank = true; break;
       default: break;
     }
@@ -200,9 +203,20 @@ async function main() {
   const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"] });
   try {
     const page = await browser.newPage();
-    page.on("console", (m) => { if (m.type() === "error") process.stderr.write(`[page] ${m.text()}\n`); });
+    // Forward WARNINGS too, not just errors. The worklet devices (reverb/crush/mod) degrade to a
+    // native fallback with a console.warn when their module isn't loaded — swallow that and the
+    // harness happily reports a fallback's numbers as if they were the real DSP.
+    page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") process.stderr.write(`[page:${m.type()}] ${m.text()}\n`); });
     page.on("pageerror", (e) => process.stderr.write(`[pageerror] ${e.message}\n`));
-    await page.setContent("<!doctype html><meta charset=utf-8><title>fxlab</title>");
+    // The page needs a REAL ORIGIN. On about:blank (what setContent gives you) the origin is
+    // opaque, and Chromium refuses to load an AudioWorklet module from a blob: URL there — so
+    // addModule() fails, every worklet device (reverb / crush / mod) quietly degrades to its
+    // native fallback, and the harness reports the fallback's numbers as if they were the DSP.
+    // Serving the shell from a routed origin makes the blob loadable and the worklets real.
+    await page.route("https://fxlab.local/", (route) =>
+      route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><meta charset=utf-8><title>fxlab</title>" }),
+    );
+    await page.goto("https://fxlab.local/");
     await page.addScriptTag({ content: code });
 
     if (args.sweepFeedback) {
@@ -247,6 +261,9 @@ async function main() {
       throwAt: args.throwAt ?? null,
       throwOff: args.throwOff ?? null,
       stepped: !!args.stepped,
+      padThrow: !!args.padThrow,
+      startBypassed: !!args.startBypassed,
+      bypassAt: args.bypassAt ?? null,
     };
     const r = await renderOne(page, spec);
     if (args.json) console.log(JSON.stringify(r, null, 2));

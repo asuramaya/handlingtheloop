@@ -265,11 +265,16 @@ export abstract class BaseFxDevice implements FxDevice {
   setBypass(on: boolean) {
     // A MANUAL bypass toggle (FLX ON/OFF, toolbar BYPASS) is the SINGLE SOURCE OF TRUTH for on/off:
     // it CLEARS any live throw/latch and drops the boost, so "off means off" — no orphaned latch, no
-    // stale re-engage. The throw's OWN bypass moves set _settingBypassInternally so they don't
-    // self-clear here.
-    if (!this._settingBypassInternally && this._thrown) {
-      this._thrown = false;
-      this.applyThrowBoost(false);
+    // stale re-engage. It ALSO cancels a ring-out that's still in flight: without that, un-bypassing
+    // during a tail ("actually, keep it on") would get silently re-bypassed when the timer landed.
+    // The throw's OWN bypass moves set _settingBypassInternally so they don't self-clear here.
+    if (!this._settingBypassInternally) {
+      this._releaseGen++;
+      this._releasePending = false;
+      if (this._thrown) {
+        this._thrown = false;
+        this.applyThrowBoost(false);
+      }
     }
     this._bypassed = on;
     this.applyWet();
@@ -287,10 +292,21 @@ export abstract class BaseFxDevice implements FxDevice {
   private _thrown = false;
   private _throwPrevBypass = false;
   private _settingBypassInternally = false;
+  private _releaseGen = 0;
+  private _releasePending = false; // a ring-out is in flight: the device is still sounding, on its way back to dormant
 
   /** Subclass hook: apply (on) / remove (off) the throw's param boost. `off` MUST restore the user's
    *  settings and clear the device's own throw flag so `throwing` reads false. Idempotent. */
   protected applyThrowBoost(_on: boolean): void {}
+
+  /** How long a released throw keeps a DORMANT device active before returning it to bypass, in ms.
+   *  This is the difference between the two families of effect: a time-based one (delay repeats,
+   *  a reverb bloom) has captured audio that must ring OUT — cutting its send on key-up truncates
+   *  the very tail the throw existed to create. An instant one (saturation, crush, gate, noise)
+   *  has nothing to ring and should cut cleanly. 0 = cut. Overridden by DelayFx / ReverbFx. */
+  protected get throwReleaseMs(): number {
+    return 0;
+  }
 
   /** Engage/release a throw. The CALLER's lifetime decides latch (sticky) vs momentary (held). When
    *  already thrown, re-engaging just re-applies the boost (a slam); releasing when not thrown just
@@ -299,17 +315,42 @@ export abstract class BaseFxDevice implements FxDevice {
     if (on) {
       if (!this._thrown) {
         this._thrown = true;
-        this._throwPrevBypass = this._bypassed;
+        // Re-throwing DURING a ring-out must keep the ORIGINAL dormancy: the device is un-bypassed
+        // right now only because its tail is still decaying, so re-capturing here would read "was
+        // active" and the effect would never go back to sleep.
+        if (!this._releasePending) this._throwPrevBypass = this._bypassed;
+        this._releaseGen++; // cancel the pending re-bypass — we're sounding again
+        this._releasePending = false;
         if (this._bypassed) this.internalSetBypass(false);
       }
       this.applyThrowBoost(true);
     } else {
       if (this._thrown) {
         this._thrown = false;
-        if (this._throwPrevBypass && !this._bypassed) this.internalSetBypass(true); // re-read live bypass, not a stale capture
+        this.applyThrowBoost(false); // params back to the user's settings FIRST → the tail decays naturally
+        this.scheduleRelease();
+        return;
       }
       this.applyThrowBoost(false);
     }
+  }
+  // Return a dormant device to bypass — after its ring-out, if it has one. Generation-guarded, so a
+  // re-throw or a manual bypass in the meantime supersedes it. Re-reads the LIVE bypass rather than
+  // trusting the capture, so a hand on the bypass always wins.
+  private scheduleRelease() {
+    const gen = ++this._releaseGen;
+    const land = () => {
+      if (gen !== this._releaseGen) return; // superseded
+      this._releasePending = false;
+      if (this._throwPrevBypass && !this._bypassed) this.internalSetBypass(true);
+    };
+    const ms = this.throwReleaseMs;
+    if (ms <= 0) {
+      land();
+      return;
+    }
+    this._releasePending = true;
+    setTimeout(land, ms);
   }
   private internalSetBypass(on: boolean) {
     this._settingBypassInternally = true;
@@ -334,6 +375,7 @@ export abstract class BaseFxDevice implements FxDevice {
   }
   dispose() {
     this._wetGen++; // cancel any pending wet-disconnect timer
+    this._releaseGen++; // …and any pending ring-out re-bypass (the device is going away)
     try {
       this.input.disconnect();
     } catch {

@@ -234,6 +234,38 @@ export class DelayFx extends BaseFxDevice {
     this.applyTime(this._targetTime); // re-apply so the R offset takes effect immediately
   }
 
+  // --- ECHO OUT: the pad throw ------------------------------------------------------------
+  // Press pushes the delay to a long, nearly-self-oscillating wet tail; RELEASE puts the user's
+  // feedback/mix back so the CAPTURED repeats decay out on their own (that ring-out is the whole
+  // point — pair it with a brake or a fader pull into silence). The base then returns the device
+  // to dormant once the tail has had time to die, not the instant the pad comes up.
+  private static readonly THROW_FB = 0.85; // FB_MAX is 0.95 — long tail, still decaying
+  private static readonly THROW_MIX = 0.85; // mostly-wet throw
+  private _throw = false;
+  private _throwPrev: { fb: number; mix: number } | null = null;
+
+  protected get throwReleaseMs() {
+    return 2400; // the repeats need to ring out — see BaseFxDevice.throwReleaseMs
+  }
+  protected applyThrowBoost(on: boolean) {
+    if (on) {
+      if (!this._throw) this._throwPrev = { fb: this._fb, mix: this.mixAmount };
+      this._throw = true;
+      this.setFeedback(DelayFx.THROW_FB);
+      this.setMix(DelayFx.THROW_MIX);
+    } else {
+      const p = this._throwPrev;
+      this._throw = false;
+      this._throwPrev = null;
+      if (!p) return;
+      this.setFeedback(p.fb); // back to the user's setting → the captured repeats decay out
+      this.setMix(p.mix);
+    }
+  }
+  get throwing() {
+    return this._throw;
+  }
+
   // --- feedback / freeze ---
   private setFeedback(v: number) {
     this._fb = v;

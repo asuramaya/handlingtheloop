@@ -39,6 +39,13 @@ interface Spec {
   throwAt?: number | null;
   throwOff?: number | null;
   stepped?: boolean;
+  // A real PAD THROW (BaseFxDevice.setThrow) at throwAt, released at throwOff — the FX pad itself,
+  // not a preset apply. With `startBypassed` the device begins DORMANT exactly as it does in the
+  // rack, so the render shows the whole lifecycle: pad wakes it, pad releases, tail rings out, and
+  // the device returns to bypass on its own (or doesn't — which is the bug this was built to catch).
+  padThrow?: boolean;
+  startBypassed?: boolean;
+  bypassAt?: number | null; // a MANUAL bypass mid-throw — proves "off means off"
 }
 
 type Ctx = OfflineAudioContext;
@@ -233,16 +240,24 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
   // against the MEDIAN step of the same render, so the number means "N× what this signal does
   // naturally" and is comparable across stimuli. Report the top few, ≥5 ms apart.
   const stepAbs = (i: number) => Math.max(Math.abs(L[i] - L[i - 1]), Math.abs(R[i] - R[i - 1]));
+  const loud = (i: number) => Math.max(Math.abs(L[i]), Math.abs(R[i])) > peak * 0.02;
+  // The baseline must come from SOUNDING samples only. Most of a render like "a burst, then its
+  // echoes" is silence, and silence has a step of zero — take the median over the whole buffer and
+  // it lands on 0, so every honest wiggle of the signal divides by zero and reads as an infinite
+  // click. Scoring against the slew of the material where the material actually exists is the only
+  // baseline that means anything.
   const sampled: number[] = [];
-  for (let i = 1; i < n; i += 37) sampled.push(stepAbs(i)); // cheap median (every 37th step)
+  for (let i = 1; i < n; i += 37) if (loud(i)) sampled.push(stepAbs(i));
   sampled.sort((a, b) => a - b);
   const medianStep = sampled.length ? sampled[Math.floor(sampled.length / 2)] : 0;
   const clicks: { tSec: number; step: number; xMedian: number }[] = [];
   const guard = Math.round(sr * 0.005); // one click per 5 ms window
   const cand: { i: number; s: number }[] = [];
-  for (let i = 1; i < n; i++) {
-    const s = stepAbs(i);
-    if (s > medianStep * 4 && s > 1e-4) cand.push({ i, s });
+  if (medianStep > 0) {
+    for (let i = 1; i < n; i++) {
+      const s = stepAbs(i);
+      if (s > medianStep * 4 && s > 1e-4) cand.push({ i, s });
+    }
   }
   cand.sort((a, b) => b.s - a.s);
   for (const c of cand) {
@@ -330,14 +345,23 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
     ["crush", CRUSH_WORKLET_SRC],
     ["moddelay", MOD_DELAY_WORKLET_SRC],
   ];
-  for (const [, src] of modules) {
+  const moduleErrors: string[] = [];
+  for (const [name, src] of modules) {
     try {
       const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
       await ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
-    } catch {
-      /* module already registered or not needed for this device */
+    } catch (e) {
+      moduleErrors.push(`${name}: ${(e as Error).message}`);
     }
+  }
+  // NEVER let a worklet device render on its fallback. ReverbFx/CrushFx/ModFx catch a missing module
+  // in their constructors and degrade to a native path with a console.warn — which means a harness
+  // that swallows the addModule failure will confidently report the FALLBACK's numbers as the real
+  // DSP. That is worse than no measurement, so it's a hard error here.
+  const WORKLET_KINDS: Record<string, boolean> = { reverb: true, crush: true, mod: true };
+  if (WORKLET_KINDS[kind] && moduleErrors.length) {
+    throw new Error(`fxlab: worklet module(s) failed to load — a ${kind} render would silently be its native fallback, not the real DSP. ${moduleErrors.join("; ")}`);
   }
 
   const dev = buildDevice(ctx, kind);
@@ -359,7 +383,26 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
   // so the device can be driven from the main thread exactly as a pad press would drive it — the
   // only way to measure what a gesture SOUNDS like rather than what a static param set does.
   const quantize = (t: number) => (Math.round((t * sr) / 128) * 128) / sr; // suspend lands on a render quantum
-  if (spec.throwAt != null && spec.throwPreset) {
+  if (spec.startBypassed) dev.setBypass(true); // a dormant rack resident, as ensurePadFx leaves it
+  if (spec.padThrow && spec.throwAt != null) {
+    const pad = dev as unknown as { setThrow?: (on: boolean) => void };
+    void ctx.suspend(quantize(spec.throwAt)).then(() => {
+      pad.setThrow?.(true);
+      void ctx.resume();
+    });
+    if (spec.bypassAt != null) {
+      void ctx.suspend(quantize(spec.bypassAt)).then(() => {
+        dev.setBypass(true); // the hand on the bypass, mid-throw
+        void ctx.resume();
+      });
+    }
+    if (spec.throwOff != null) {
+      void ctx.suspend(quantize(spec.throwOff)).then(() => {
+        pad.setThrow?.(false);
+        void ctx.resume();
+      });
+    }
+  } else if (spec.throwAt != null && spec.throwPreset) {
     const p = factoryFxPresets(kind).find((x) => x.name === spec.throwPreset);
     if (!p) throw new Error(`fxlab: no factory preset "${spec.throwPreset}" for ${kind}`);
     const before = dev.snapshotParams(); // the curve the throw restores on release

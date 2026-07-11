@@ -2057,71 +2057,30 @@ export class Deck {
   resetFxAt(i: number) {
     this.rack.deviceAt(i)?.reset();
   }
-  // ECHO OUT (Release FX, item 8): a momentary delay-tail "throw". Press snapshots the rack's
-  // delay device, un-bypasses it, and pushes it to a long near-self-oscillating wet tail;
-  // RELEASE restores the prior feedback/mix (but leaves the device active) so the captured
-  // repeats decay naturally and ring out — pair it with a brake / fader pull into silence.
-  // No-op when no delay is in the chain (canEchoOut gates the UI). OWES a real-device ear-test
-  // (the 0.85/0.85 throw is a starting point, not eared-in).
-  private echoSnapshot: { fb: number; mix: number; wasBypassed: boolean } | null = null;
-  private echoRingTimer: ReturnType<typeof setTimeout> | null = null;
+  // ECHO OUT / REVERB OUT — the two time-based pad throws. They used to run their own
+  // snapshot-and-restore here (a `wasBypassed` capture + a 2.4 s re-bypass timer), which meant a
+  // manual bypass mid-throw couldn't clear their latch and the capture could go stale under it.
+  // They're now the SAME primitive every other pad FX uses (BaseFxDevice.setThrow): bypass is the
+  // single source of truth, and the ring-out survives as a per-device release delay
+  // (DelayFx/ReverbFx.throwReleaseMs = 2400 ms) rather than a bespoke timer on the deck.
   echoOut(on: boolean): void {
-    const dev = this.rack.deviceAt(this.rack.indexOf("delay"));
-    if (!dev) return;
-    if (on) {
-      if (this.echoRingTimer) { clearTimeout(this.echoRingTimer); this.echoRingTimer = null; }
-      if (this.echoSnapshot) return; // already thrown
-      this.echoSnapshot = { fb: dev.getParam("feedback"), mix: dev.getParam("mix"), wasBypassed: dev.bypassed };
-      if (dev.bypassed) dev.setBypass(false);
-      dev.setParam("feedback", 0.85); // long, slowly-decaying tail (FB cap is 0.95)
-      dev.setParam("mix", 0.85); // mostly-wet throw
-    } else {
-      const s = this.echoSnapshot;
-      if (!s) return;
-      this.echoSnapshot = null;
-      dev.setParam("feedback", s.fb); // back to the user's setting → the captured repeats decay out
-      dev.setParam("mix", s.mix);
-      // The delay is a permanent resident: if it was DORMANT before the throw, let the tail ring
-      // then return it to dormant so it never colours the dry signal at rest. If the user had it
-      // dialled in (un-bypassed) we leave it exactly as they set it.
-      if (s.wasBypassed) this.echoRingTimer = setTimeout(() => { dev.setBypass(true); this.echoRingTimer = null; }, 2400);
-    }
+    (this.rack.deviceAt(this.rack.indexOf("delay")) as DelayFx | undefined)?.setThrow(on);
   }
   /** A delay device is present to throw an echo from (gates the ECHO control). */
   get canEchoOut(): boolean {
     return this.rack.indexOf("delay") >= 0;
   }
   get echoingOut(): boolean {
-    return this.echoSnapshot != null;
+    return (this.rack.deviceAt(this.rack.indexOf("delay")) as DelayFx | undefined)?.throwing ?? false;
   }
-  // REVERB OUT — the wet-throw twin of echoOut for the rack's reverb device: snapshot the
-  // mix, un-bypass, drench it (mix → 0.85) while held; release restores so the tail blooms
-  // and decays. No-op without a reverb in the chain (canReverbOut gates the FX pad).
-  private reverbSnapshot: { mix: number; wasBypassed: boolean } | null = null;
-  private reverbRingTimer: ReturnType<typeof setTimeout> | null = null;
   reverbOut(on: boolean): void {
-    const dev = this.rack.deviceAt(this.rack.indexOf("reverb"));
-    if (!dev) return;
-    if (on) {
-      if (this.reverbRingTimer) { clearTimeout(this.reverbRingTimer); this.reverbRingTimer = null; }
-      if (this.reverbSnapshot) return;
-      this.reverbSnapshot = { mix: dev.getParam("mix"), wasBypassed: dev.bypassed };
-      if (dev.bypassed) dev.setBypass(false);
-      dev.setParam("mix", 0.85);
-    } else {
-      const s = this.reverbSnapshot;
-      if (!s) return;
-      this.reverbSnapshot = null;
-      dev.setParam("mix", s.mix);
-      // Permanent resident → bloom the tail, then re-dormant if it wasn't dialled in (see echoOut).
-      if (s.wasBypassed) this.reverbRingTimer = setTimeout(() => { dev.setBypass(true); this.reverbRingTimer = null; }, 2400);
-    }
+    (this.rack.deviceAt(this.rack.indexOf("reverb")) as ReverbFx | undefined)?.setThrow(on);
   }
   get canReverbOut(): boolean {
     return this.rack.indexOf("reverb") >= 0;
   }
   get reverbingOut(): boolean {
-    return this.reverbSnapshot != null;
+    return (this.rack.deviceAt(this.rack.indexOf("reverb")) as ReverbFx | undefined)?.throwing ?? false;
   }
   // SATURATOR THROW — slam the rack's saturator drive while held (pad-FX). No-op without a
   // saturator in the chain (canSatThrow gates the pad).

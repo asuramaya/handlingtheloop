@@ -204,6 +204,26 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     emit({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: slot });
     refresh();
   };
+  // FX2 (the shifted FX layer) is MOMENTARY — engage on press, throw OFF on release — so it
+  // reads DISTINCTLY from FX (which latches). Mirrors ROLL ↔ LOOP: the shifted peer is
+  // on-while-held, the base latches. Pointer-capture keeps the up event even if the finger
+  // slides off the pad.
+  const fx2Down = (e: React.PointerEvent, slot: number) => {
+    if (e.button !== 0) return;
+    const pad = FX_PADS[slot];
+    if (!pad) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pad.on(deck);
+    emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot });
+    refresh();
+  };
+  const fx2Up = (slot: number) => {
+    const pad = FX_PADS[slot];
+    if (!pad) return;
+    pad.off?.(deck);
+    emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
+    refresh();
+  };
   // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
   // SHIFT (clamped to the tempo range).
   const nudge = (dir: number) => {
@@ -580,17 +600,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* FX2 pad-mode (FX shifted): the LATCH layer of the same 8 effects. Tap to engage-and-hold,
-            tap again to release — build a sound hands-free. Lit = latched on. Right-click reveals. */}
+        {/* FX2 pad-mode (FX shifted): the MOMENTARY layer of the same 8 effects. Hold to throw the
+            effect, release to drop it — a hands-on stab vs FX's set-and-forget latch. Lit = live
+            while held. Right-click reveals the panel. */}
         {deck.padMode === "fx2" && (
         <div className="hotcues fx-bank fx2-bank">
           {FX_PADS.map((pad, i) => (
             <button
               key={pad.label}
-              className={`pad fx fx2 ${pad.active?.(deck) ? "playing latched" : ""}`}
+              className={`pad fx fx2 ${pad.active?.(deck) ? "playing" : ""}`}
               data-cue={i + 1}
-              title={`${pad.label} (latch) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
-              onPointerDown={(e) => fx2Toggle(e, i)}
+              title={`${pad.label} (hold) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
+              onPointerDown={(e) => fx2Down(e, i)}
+              onPointerUp={() => fx2Up(i)}
+              onPointerCancel={() => fx2Up(i)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad.label}

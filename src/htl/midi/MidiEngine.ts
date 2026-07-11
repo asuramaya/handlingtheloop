@@ -420,18 +420,23 @@ export class MidiEngine {
       if (b.deck) this.opts.onEvent({ type: "jogTouch", deck: b.deck, down: pressed });
       return;
     }
-    if (!pressed) return; // remaining note controls act on press
-    if (c.kind === "focus") {
-      this.opts.onEvent({ type: "focus", deck: c.deck });
-      return;
-    }
     // An explicit shiftOverride wins (shifted-pad +1, or a force-on/off binding);
     // otherwise use the deck's live SHIFT state.
     const shift = entry.shiftOverride ?? (b.deck ? this.shiftHeld[b.deck] : false);
     if (c.kind === "action") {
-      // deck omitted (focus-model board, e.g. Starrypad pads) → App drives the focused deck
-      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed: true, shift, velocity, padBank: c.padBank });
-    } else if (c.kind === "beatjump" && b.deck) {
+      // Action pads/buttons emit BOTH press AND release (pressed=true/false) so a pad-mode
+      // can be MOMENTARY — ROLL snaps back and FX2 throws off on key-up. Latching actions
+      // (every other button) just ignore the release downstream, so this is safe for all.
+      // (deck omitted → App drives the focused deck, e.g. Starrypad pads.)
+      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank });
+      return;
+    }
+    if (!pressed) return; // the remaining note controls (focus / beatjump / load / selector) act on press only
+    if (c.kind === "focus") {
+      this.opts.onEvent({ type: "focus", deck: c.deck });
+      return;
+    }
+    if (c.kind === "beatjump" && b.deck) {
       this.opts.onEvent({ type: "beatjump", deck: b.deck, beats: c.beats, shift });
     } else if (c.kind === "load" && b.deck) {
       this.opts.onEvent({ type: "load", deck: b.deck });

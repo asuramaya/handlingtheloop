@@ -9,6 +9,7 @@ import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
+import { fireFxPad } from "../components/fxPads";
 import { useSpine } from "./spine";
 
 export interface MidiRoutingDeps {
@@ -161,6 +162,26 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           }
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
+          // MOMENTARY shifted pad-modes: on key-up, ROLL snaps back on-beat (slip) and FX2 throws
+          // its effect OFF — that on-while-held behaviour is exactly what distinguishes them from
+          // LOOP / FX, which latch. Every other action ignores the release (it already acted on
+          // press). Handle it BEFORE the pad-bank switch so a release never reflows the pad mode.
+          if (ev.pressed === false) {
+            const rel = /^hotcue(\d)$/.exec(ev.action);
+            if (rel) {
+              const i = Number(rel[1]) - 1;
+              if (deck.padMode === "roll") {
+                deck.rollOut();
+                emitRef.current({ kind: "loop", deck: id, action: "exit" });
+                refresh();
+              } else if (deck.padMode === "fx2") {
+                fireFxPad(deck, i, false);
+                emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: i });
+                refresh();
+              }
+            }
+            break;
+          }
           // Effective shift. A DECK-ADDRESSED hardware button (FLX, ev.deck set) uses ONLY its
           // own shift (its SHIFT byte or that deck's latch) — never the focus-model/keyboard
           // shift. Otherwise a latched/held shift would silently turn the FOCUSED deck's ▶ into

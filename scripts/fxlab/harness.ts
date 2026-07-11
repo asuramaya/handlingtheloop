@@ -1,0 +1,295 @@
+// FXLAB — browser-side render harness. Vite bundles this to an IIFE that fxlab.mjs
+// injects into a headless Chromium page, so the REAL FX device code runs in Chromium's
+// OfflineAudioContext (the faithful gold-standard render — same DSP as production, not a
+// reimplementation). It feeds a chosen test signal through one device, renders offline,
+// and reduces the PCM to a COMPACT report (scalars + a downsampled envelope + — for the
+// delay — a per-repeat echo ladder) so the driver can print something a text agent can read.
+//
+// Exposes globalThis.fxlabRender(spec) → Promise<Report>. Heavy reduction happens here
+// (the page holds the PCM); only a few hundred numbers cross back to Node.
+
+import { DelayFx } from "../../src/htl/audio/DelayFx";
+import { ReverbFx } from "../../src/htl/audio/ReverbFx";
+import { SaturatorFx } from "../../src/htl/audio/SaturatorFx";
+import { CrushFx } from "../../src/htl/audio/CrushFx";
+import { ModFx } from "../../src/htl/audio/ModFx";
+import { GateFx } from "../../src/htl/audio/GateFx";
+import { NoiseFx } from "../../src/htl/audio/NoiseFx";
+import { Eq3 } from "../../src/htl/audio/Eq3";
+import { REVERB_WORKLET_SRC } from "../../src/htl/audio/reverbWorklet";
+import { CRUSH_WORKLET_SRC } from "../../src/htl/audio/crushWorklet";
+import { MOD_DELAY_WORKLET_SRC } from "../../src/htl/audio/modDelayWorklet";
+import { factoryFxPresets } from "../../src/htl/audio/fxPresets";
+import type { FxDevice, FxKind } from "../../src/htl/audio/Fx";
+
+interface Spec {
+  kind: FxKind;
+  presetName?: string | null;
+  params?: Record<string, number> | null;
+  signal?: "impulse" | "burst" | "noise" | "tone" | "silence";
+  seconds?: number;
+  bpm?: number;
+  sampleRate?: number;
+}
+
+type Ctx = OfflineAudioContext;
+
+function buildDevice(ctx: Ctx, kind: FxKind): FxDevice {
+  const c = ctx as unknown as AudioContext; // devices type their ctor as AudioContext; Offline is compatible here
+  switch (kind) {
+    case "delay": return new DelayFx(c);
+    case "reverb": return new ReverbFx(c);
+    case "saturator": return new SaturatorFx(c);
+    case "crush": return new CrushFx(c);
+    case "mod": return new ModFx(c);
+    case "gate": return new GateFx(c);
+    case "noise": return new NoiseFx(c);
+    case "eq": return new Eq3(c);
+    default: throw new Error(`fxlab: unknown kind ${kind}`);
+  }
+}
+
+// One test stimulus. Returns a started-able source node feeding the device input.
+function makeSignal(ctx: Ctx, signal: string, sr: number): AudioScheduledSourceNode {
+  if (signal === "tone") {
+    // Steady-state 1 kHz sine (±1) — for gate/mod/eq where the response, not a transient, matters.
+    const o = ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.value = 1000;
+    return o;
+  }
+  if (signal === "silence") {
+    // A muted constant source — feeds nothing, so any output is self-generated (self-oscillation).
+    const s = ctx.createConstantSource();
+    s.offset.value = 0;
+    return s;
+  }
+  // Buffer-backed stimuli: impulse / burst / noise.
+  const len = Math.round(sr * (signal === "impulse" ? 0.003 : 0.12));
+  const buf = ctx.createBuffer(2, Math.max(1, len), sr);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    if (signal === "impulse") {
+      for (let i = 0; i < d.length; i++) d[i] = 1; // ~3 ms click at full scale
+    } else if (signal === "noise") {
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.7;
+    } else {
+      // burst — 120 ms of 1 kHz at 0.7 (a "note")
+      for (let i = 0; i < d.length; i++) d[i] = Math.sin((2 * Math.PI * 1000 * i) / sr) * 0.7;
+    }
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  return src;
+}
+
+// ---- measurement ---------------------------------------------------------
+const dbOf = (lin: number) => (lin <= 1e-9 ? -180 : 20 * Math.log10(lin));
+
+interface Report {
+  ok: true;
+  kind: string;
+  signal: string;
+  seconds: number;
+  sampleRate: number;
+  applied: Record<string, number>;
+  peak: number;
+  peakDb: number;
+  rms: number;
+  rmsDb: number;
+  clipped: boolean;
+  dc: number;
+  tailSec: number; // last time |x| stayed above -60 dB of peak
+  decayTo60Sec: number; // time from global peak to first drop -60 dB below it (and stay)
+  envDb: number[]; // ~120 buckets of bucket-RMS in dB (for an ASCII plot)
+  envBuckets: number;
+  // delay-only echo ladder (per-repeat peak amplitudes at multiples of the delay time)
+  echoes?: { n: number; tSec: number; amp: number; db: number }[];
+  effFeedback?: number | null; // median echo[n+1]/echo[n] — the TRUE loop gain
+  effFeedbackDbPerRepeat?: number | null;
+  growing?: boolean; // any run of ratios > 1 → the tail builds instead of decaying (instability)
+  note?: string;
+}
+
+function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds: number; applied: Record<string, number> }): Report {
+  const sr = buf.sampleRate;
+  const L = buf.getChannelData(0);
+  const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const n = L.length;
+
+  let peak = 0;
+  let sumSq = 0;
+  let sum = 0;
+  let clipped = false;
+  for (let i = 0; i < n; i++) {
+    const a = Math.abs(L[i]);
+    const b = Math.abs(R[i]);
+    const m = a > b ? a : b;
+    if (m > peak) peak = m;
+    if (m > 1.0000001) clipped = true;
+    sumSq += L[i] * L[i];
+    sum += L[i];
+  }
+  const rms = Math.sqrt(sumSq / n);
+  const dc = sum / n;
+
+  // Envelope buckets (bucket-RMS) for the ASCII plot.
+  const B = 120;
+  const envDb: number[] = new Array(B);
+  const bw = Math.max(1, Math.floor(n / B));
+  for (let k = 0; k < B; k++) {
+    let ss = 0;
+    let cnt = 0;
+    const start = k * bw;
+    const end = Math.min(n, start + bw);
+    for (let i = start; i < end; i++) {
+      const v = Math.max(Math.abs(L[i]), Math.abs(R[i]));
+      ss += v * v;
+      cnt++;
+    }
+    envDb[k] = dbOf(cnt ? Math.sqrt(ss / cnt) : 0);
+  }
+
+  // A coarse short-window RMS envelope (256-sample) for tail/decay + echo picking.
+  const win = 256;
+  const env = new Float32Array(Math.ceil(n / win));
+  for (let k = 0; k < env.length; k++) {
+    let ss = 0;
+    let cnt = 0;
+    const start = k * win;
+    const end = Math.min(n, start + win);
+    for (let i = start; i < end; i++) {
+      const v = Math.max(Math.abs(L[i]), Math.abs(R[i]));
+      ss += v * v;
+      cnt++;
+    }
+    env[k] = cnt ? Math.sqrt(ss / cnt) : 0;
+  }
+  const tSecOf = (envIdx: number) => (envIdx * win) / sr;
+
+  // tail: last window above peak*0.001 (-60 dB).
+  const floor = peak * 0.001;
+  let tailIdx = 0;
+  for (let k = env.length - 1; k >= 0; k--) if (env[k] > floor) { tailIdx = k; break; }
+  const tailSec = tSecOf(tailIdx);
+
+  // decay-to-60: from the global-peak window, first window that drops -60 dB and stays.
+  let peakIdx = 0;
+  for (let k = 0; k < env.length; k++) if (env[k] > env[peakIdx]) peakIdx = k;
+  let decayIdx = env.length - 1;
+  const dThresh = env[peakIdx] * 0.001;
+  for (let k = peakIdx; k < env.length; k++) {
+    if (env[k] <= dThresh) {
+      let stays = true;
+      for (let j = k; j < env.length; j++) if (env[j] > dThresh) { stays = false; break; }
+      if (stays) { decayIdx = k; break; }
+    }
+  }
+  const decayTo60Sec = Math.max(0, tSecOf(decayIdx) - tSecOf(peakIdx));
+
+  const report: Report = {
+    ok: true,
+    kind: meta.kind,
+    signal: meta.signal,
+    seconds: meta.seconds,
+    sampleRate: sr,
+    applied: meta.applied,
+    peak,
+    peakDb: dbOf(peak),
+    rms,
+    rmsDb: dbOf(rms),
+    clipped,
+    dc,
+    tailSec,
+    decayTo60Sec,
+    envDb,
+    envBuckets: B,
+  };
+
+  // Delay echo ladder: for an impulse, the true per-repeat loop gain is the ratio of
+  // successive echo peaks. We know the spacing (the `time` param), so we read the local
+  // peak in a window centred on each expected repeat — robust, no peak-picking heuristics.
+  if (meta.kind === "delay" && meta.signal === "impulse" && meta.applied.time > 0.005) {
+    const dt = meta.applied.time;
+    const echoes: { n: number; tSec: number; amp: number; db: number }[] = [];
+    const maxN = Math.min(24, Math.floor((meta.seconds - dt) / dt));
+    for (let m = 1; m <= maxN; m++) {
+      const centre = m * dt;
+      const lo = Math.max(0, Math.floor((centre - dt * 0.45) * sr));
+      const hi = Math.min(n, Math.floor((centre + dt * 0.45) * sr));
+      let amp = 0;
+      let at = lo;
+      for (let i = lo; i < hi; i++) { const v = Math.max(Math.abs(L[i]), Math.abs(R[i])); if (v > amp) { amp = v; at = i; } }
+      echoes.push({ n: m, tSec: at / sr, amp, db: dbOf(amp) });
+    }
+    report.echoes = echoes;
+    const ratios: number[] = [];
+    for (let i = 0; i + 1 < echoes.length; i++) if (echoes[i].amp > 1e-5) ratios.push(echoes[i + 1].amp / echoes[i].amp);
+    if (ratios.length) {
+      const sorted = [...ratios].sort((a, b) => a - b);
+      const med = sorted[Math.floor(sorted.length / 2)];
+      report.effFeedback = med;
+      report.effFeedbackDbPerRepeat = dbOf(med);
+      // "growing" = 3+ consecutive ratios above 1 (a building tail, not a decaying one).
+      let run = 0;
+      let grew = false;
+      for (const r of ratios) { if (r > 1.001) { run++; if (run >= 3) grew = true; } else run = 0; }
+      report.growing = grew;
+    } else {
+      report.effFeedback = null;
+      report.effFeedbackDbPerRepeat = null;
+      report.growing = false;
+    }
+  }
+
+  return report;
+}
+
+// ---- entry ---------------------------------------------------------------
+(globalThis as unknown as { fxlabRender: (s: Spec) => Promise<Report> }).fxlabRender = async (spec: Spec) => {
+  const kind = spec.kind;
+  const sr = spec.sampleRate ?? 48000;
+  const seconds = spec.seconds ?? 6;
+  const signal = spec.signal ?? "impulse";
+  const len = Math.round(seconds * sr);
+  const ctx = new OfflineAudioContext(2, len, sr);
+
+  // Register the worklet modules used by reverb/crush/mod (best-effort; native devices skip these).
+  const modules: [string, string][] = [
+    ["reverbfdn", REVERB_WORKLET_SRC],
+    ["crush", CRUSH_WORKLET_SRC],
+    ["moddelay", MOD_DELAY_WORKLET_SRC],
+  ];
+  for (const [, src] of modules) {
+    try {
+      const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+    } catch {
+      /* module already registered or not needed for this device */
+    }
+  }
+
+  const dev = buildDevice(ctx, kind);
+  dev.reset();
+
+  // Resolve params: reset defaults → factory preset (if named) → explicit overrides.
+  const applied: Record<string, number> = {};
+  if (spec.presetName) {
+    const p = factoryFxPresets(kind).find((x) => x.name === spec.presetName);
+    if (!p) throw new Error(`fxlab: no factory preset "${spec.presetName}" for ${kind}`);
+    Object.assign(applied, p.params);
+  }
+  if (spec.params) Object.assign(applied, spec.params);
+  for (const k in applied) dev.setParam(k, applied[k]);
+  // Snapshot the ACTUAL device state after applying (so the report shows clamped/derived values).
+  const actual = dev.snapshotParams();
+
+  const source = makeSignal(ctx, signal, sr);
+  source.connect(dev.input);
+  dev.output.connect(ctx.destination);
+  source.start(0);
+
+  const rendered = await ctx.startRendering();
+  return measure(rendered, { kind, signal, seconds, applied: actual });
+};

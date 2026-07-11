@@ -38,6 +38,8 @@ export interface FxStripCtl {
   navSel: (dir: number) => void; // BEAT ◀▶: move the selected effect tab
   moveSel: (dir: number) => void; // SHIFT+BEAT ◀▶: reorder the selected effect left/right
   selectKind: (kind: FxKind) => void; // reveal a device's panel by kind (FX pad right-click)
+  cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
+  closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, ctlRef }: FxStripProps) {
@@ -46,8 +48,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const [sel, setSel] = useState(0); // selected rack index
   const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
   const [dropAt, setDropAt] = useState<number | null>(null); // INSERTION point 0..len (gap the drop lands in)
-  const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu
+  const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu (right-click summon)
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
+  // Hardware preset browsing (FLX FX SELECT): a per-kind cursor (0 = Default, 1..N = factory bank)
+  // + a brief on-screen flash of the applied preset name (so a hardware DJ sees what they landed on).
+  const presetIdxRef = useRef<Record<string, number>>({}); // per-kind cursor (0=Default, 1..N=factory) for hardware FX-SELECT + the menu's active-preset mark
+  const menuTimerRef = useRef<number | null>(null); // safety-net auto-dismiss for a HARDWARE-summoned menu (a DJ never clicks the backdrop)
+  const menuRef = useRef<HTMLDivElement>(null); // the open preset menu — to keep the active item scrolled into view
+  const closeMenu = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } setMenu(null); };
+  useEffect(() => () => { if (menuTimerRef.current) clearTimeout(menuTimerRef.current); }, []);
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
   const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | null>(null);
 
@@ -110,7 +119,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   useEffect(() => {
     if (!ctlRef) return;
     ctlRef.current = {
-      navSel: (dir) => setSel((s) => Math.max(0, Math.min(live.current.len - 1, s + dir))),
+      navSel: (dir) => {
+        if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; }
+        setMenu(null); // moving to another effect closes the preset browse
+        setSel((s) => Math.max(0, Math.min(live.current.len - 1, s + dir)));
+      },
       moveSel: (dir) => {
         const L = live.current;
         reorder(L.cur, Math.max(0, Math.min(L.len - 1, L.cur + dir)));
@@ -119,6 +132,43 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const idx = deck.fxDevices.findIndex((d) => d.kind === kind);
         if (idx >= 0) setSel(idx);
       },
+      // FX SELECT (hardware): step the SELECTED effect through Default → its factory bank → wrap,
+      // applying each. Reads the live cur (not a stale render closure) and drives the device
+      // directly, syncing like a menu apply. `dir` +1/-1 walks forward/back.
+      cyclePreset: (dir) => {
+        const at = live.current.cur;
+        const dev = deck.fxDeviceAt(at);
+        if (!dev) return;
+        const bank = factoryFxPresets(dev.kind);
+        const n = bank.length + 1; // slot 0 = Default, 1..N = factory presets
+        let pi = presetIdxRef.current[dev.kind] ?? 0;
+        pi = (((pi + dir) % n) + n) % n;
+        presetIdxRef.current[dev.kind] = pi;
+        const mix = dev.getParam("mix"); // wet/dry is a live performance control — hold it across the browse
+        if (pi === 0) {
+          deck.resetFxAt(at);
+          if (dev.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+        } else {
+          const params = bank[pi - 1].params;
+          for (const k in params) if (k !== "mix") deck.setFxParam(at, k, params[k]);
+        }
+        deck.setFxParam(at, "mix", mix); // restore the blend for every device incl. EQ (covers the Default reset)
+        if (dev.kind === "eq") emitControls(id);
+        else broadcastRack();
+        // Pop the SAME floaty preset menu a tab right-click opens, anchored under the selected tab, so
+        // the hardware browse is VISIBLE — repeated presses walk the highlight down the list.
+        const tabEl = tabsRef.current?.children[at] as HTMLElement | undefined;
+        const r = tabEl?.getBoundingClientRect();
+        if (r) {
+          setMenu({ slot: at, x: r.left, y: r.bottom + 4 });
+          // Transient browse HUD: dismiss a few seconds after the LAST press (each press resets it).
+          // The applied preset persists — the menu is just the visual guide, not a mode.
+          if (menuTimerRef.current) clearTimeout(menuTimerRef.current);
+          menuTimerRef.current = window.setTimeout(() => setMenu(null), 8000); // long safety net only — each fwd/back press resets it; switching effect closes it outright
+        }
+        refresh();
+      },
+      closeMenu,
     };
     return () => {
       if (ctlRef) ctlRef.current = null;
@@ -129,13 +179,39 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const menuDev = menu ? deck.fxDeviceAt(menu.slot) : null;
   const menuPresets = useMemo(() => (menuDev ? loadFxPresets(menuDev.kind) : []), [menuDev, presetTick]);
   const factoryPresets = useMemo(() => (menuDev ? factoryFxPresets(menuDev.kind) : []), [menuDev]); // built-in, read-only
+  const activePresetIdx = menuDev ? presetIdxRef.current[menuDev.kind] ?? 0 : 0; // 0 = Default, 1..N = factory (marks the applied one)
+  // Keep the active preset scrolled into view as the list is cycled (a hardware browse can walk past
+  // the visible window). Scrolls ONLY the menu container — no page jump.
+  useEffect(() => {
+    const cont = menuRef.current;
+    const el = cont?.querySelector<HTMLElement>(".fx-palette-item.sel");
+    if (!cont || !el) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < cont.scrollTop) cont.scrollTop = top - 6;
+    else if (bottom > cont.scrollTop + cont.clientHeight) cont.scrollTop = bottom - cont.clientHeight + 6;
+  }, [menu, activePresetIdx]);
+  // Adjusting wet/dry (the FLX BEAT-FX knob or the on-screen MIX cell) dismisses the browse — it means
+  // "I'm tuning this now", not still picking. Preset cycling PRESERVES mix, so this never false-fires;
+  // EQ has no mix param, and the first observation is skipped.
+  const curMix = selDev ? selDev.getParam("mix") : null; // EQ included now that Eq3 maps "mix"
+  const lastMixRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (menu && lastMixRef.current != null && curMix != null && curMix !== lastMixRef.current) closeMenu();
+    lastMixRef.current = curMix;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curMix, menu]);
+  // Mouse/touch opens are STICKY (dismiss by clicking away or picking) — cancel any pending
+  // hardware auto-dismiss so a deliberate open isn't yanked shut mid-browse.
+  const cancelMenuTimer = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } };
   const openPresetMenu = (e: React.MouseEvent, slot: number) => {
     e.preventDefault();
+    cancelMenuTimer();
     setSel(slot);
     setMenu({ slot, x: e.clientX, y: e.clientY });
   };
   // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
-  const tabLong = useLongPress<number>((slot, x, y) => { setSel(slot); setMenu({ slot, x, y }); });
+  const tabLong = useLongPress<number>((slot, x, y) => { cancelMenuTimer(); setSel(slot); setMenu({ slot, x, y }); });
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
@@ -145,7 +221,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const applyPreset = (slot: number, params: Record<string, number>) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
-    for (const k in params) deck.setFxParam(slot, k, params[k]);
+    // Wet/dry (mix) is a LIVE performance control, independent of the preset — leave it alone so
+    // browsing presets (esp. on a controller) doesn't jump the blend out from under the DJ.
+    for (const k in params) if (k !== "mix") deck.setFxParam(slot, k, params[k]);
     syncDevice(d);
     setMenu(null);
     refresh();
@@ -153,7 +231,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const applyDefault = (slot: number) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
+    presetIdxRef.current[d.kind] = 0; // keep the hardware FX-SELECT cursor in sync with a mouse apply
+    const mix = d.getParam("mix"); // preserve the live wet/dry across a Default (character resets, blend doesn't)
     deck.resetFxAt(slot);
+    deck.setFxParam(slot, "mix", mix); // preserve wet/dry incl. EQ (Eq3 now maps "mix" → setMix)
     if (d.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
     syncDevice(d);
     setMenu(null);
@@ -179,6 +260,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const bypassed = isEq ? deck.eqBypassed : !!selDev?.bypassed;
   const toggleBypass = () => {
     if (!selDev) return;
+    closeMenu(); // toggling bypass dismisses the preset browse
     if (isEq) {
       deck.setEqBypass(!deck.eqBypassed);
       emit({ kind: "toggle", deck: id, param: "eqBypass", value: deck.eqBypassed });
@@ -310,15 +392,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       {menu && menuDev && (
         <>
           <div className="fx-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
-          <div className="fx-palette fx-preset-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+          <div ref={menuRef} className="fx-palette fx-preset-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
             <div className="fx-preset-head">{KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} presets</div>
-            <button className="fx-palette-item" role="menuitem" onClick={() => applyDefault(menu.slot)}>
+            <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
               Default
             </button>
-            {/* Factory bank — built-in, read-only (apply only, no rename/remove). */}
+            {/* Factory bank — built-in, read-only (apply only, no rename/remove). The applied one is marked. */}
             {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
-            {factoryPresets.map((p) => (
-              <button key={`f:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply factory preset" onClick={() => applyPreset(menu.slot, p.params)}>
+            {factoryPresets.map((p, i) => (
+              <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p.params); }}>
                 {p.name}
               </button>
             ))}

@@ -934,6 +934,7 @@ function AppBody() {
       fxBypassCur: (deck, id, s) => {
         const i = fxSelRef.current[id];
         if (!deck.fxDevices[i]) return;
+        fxCtlFor(id)?.closeMenu(); // hardware ON/OFF dismisses the preset browse
         if (s) {
           deck.resetFxAt(i);
           refresh();
@@ -955,27 +956,11 @@ function AppBody() {
       // BEAT FX BEAT ◀▶ → move the selection (add candidate in add-mode). SHIFT → reorder the tab.
       fxSelPrev: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(-1) : c?.navSel(-1); },
       fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); s ? c?.moveSel(1) : c?.navSel(1); },
-      // FX SELECT → LATCH the selected effect's throw (slam-lock; press again to release) — the
-      // same gesture as an FX2 pad, just targeting the BEAT-FX-selected effect. The device's own
-      // throw state IS the latch (read pad.active), so there's no separate state. SHIFT+FX SELECT
-      // → clear every active throw on this deck (one-button panic). Press-only (action buttons
-      // don't fire on release), so this is the momentary-FX gesture made a toggle. Emits over the
-      // board bus so a hardware latch syncs + records like the on-screen pad.
-      fxSelectPress: (deck, id, s) => {
-        if (s) {
-          FX_PADS.forEach((p, i) => { if (p.active?.(deck)) { p.off?.(deck); emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: i }); } });
-          refresh();
-          return;
-        }
-        const dev = deck.fxDevices[fxSelRef.current[id]];
-        const slot = dev ? FX_PADS.findIndex((p) => p.kind === dev.kind) : -1;
-        if (slot < 0) return; // EQ / an effect with no throw → nothing to latch
-        const pad = FX_PADS[slot];
-        const on = !(pad.active?.(deck) ?? false);
-        if (on) pad.on(deck);
-        else pad.off?.(deck);
-        emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: slot });
-        refresh();
+      // FX SELECT → step the BEAT-FX-selected effect through its presets, popping the same floaty
+      // menu a tab right-click opens (with the applied preset highlighted). Plain = FORWARD,
+      // SHIFT = BACKWARD. Press-only.
+      fxSelectPress: (_deck, id, s) => {
+        fxCtlFor(id)?.cyclePreset(s ? -1 : 1);
       },
       // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
       // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down

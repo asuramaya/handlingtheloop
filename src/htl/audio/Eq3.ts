@@ -350,9 +350,14 @@ export class Eq3 implements FxDevice {
   ];
 
   setParam(id: string, value: number) {
+    // "mix" (wet/dry) isn't a curve node so it's not in PARAMS/snapshotParams, but expose it on the
+    // GENERIC bus so the FLX BEAT-FX wet/dry knob (deck.setFxParam(slot,"mix",…)) drives the EQ like
+    // every other device — otherwise it silently no-ops when the EQ tab is selected.
+    if (id === "mix") return void this.setMix(value);
     Eq3.PARAMS.find((p) => p.id === id)?.set(this, value);
   }
   getParam(id: string): number {
+    if (id === "mix") return this._mix;
     return Eq3.PARAMS.find((p) => p.id === id)?.get(this) ?? 0;
   }
   snapshotParams(): Record<string, number> {

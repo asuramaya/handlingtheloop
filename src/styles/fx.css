@@ -182,6 +182,16 @@ body:not(.no-glow) .fx-tab.sel {
   color: #fff;
   background: #ff5470;
 }
+/* The currently-applied preset in the menu — accent-tinted (distinct from the full-accent hover),
+   so the menu and the hardware FX-SELECT flash agree on "what's selected". */
+.fx-palette-item.sel {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.fx-palette-item.sel:hover {
+  color: #08111a;
+  background: var(--accent);
+}
 /* The stage hosts ONE device surface; the EQ's .eq-pro (flex:1) fills it as before. */
 .fx-stage {
   display: flex;

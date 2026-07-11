@@ -48,6 +48,7 @@ function parseArgs(argv) {
       case "--start-bypassed": a.startBypassed = true; break;
       case "--bypass-at": a.bypassAt = Number(v); i++; break;
       case "--bank": a.bank = true; break;
+      case "--coverage": a.coverage = true; break;
       default: break;
     }
   }
@@ -235,6 +236,25 @@ async function main() {
         );
       }
       console.log("");
+      return;
+    }
+
+    if (args.coverage) {
+      // Which knobs does each bank never touch? A `dead` param is a capability of the effect that
+      // no factory preset demonstrates.
+      const kinds = args.kind && args.kind !== "all" ? [args.kind] : ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator"];
+      console.log("");
+      for (const k of kinds) {
+        const c = await page.evaluate((kk) => globalThis.fxlabCoverage(kk), k);
+        const dead = c.params.filter((p) => p.dead || p.missing === c.presets);
+        const flat = c.params.filter((p) => p.flat);
+        const used = c.params.filter((p) => !p.dead && !p.flat && p.missing < c.presets);
+        console.log(`  ${c.kind.toUpperCase().padEnd(10)} ${c.presets} presets · ${c.params.length} params · ${used.length} exercised`);
+        if (dead.length) console.log(`     ✗ never moved:  ${dead.map((p) => `${p.id}=${f(p.def, 2)}`).join("  ")}`);
+        if (flat.length) console.log(`     ~ one value:    ${flat.map((p) => `${p.id}=${f(p.min, 2)}`).join("  ")}`);
+        console.log(`     ✓ exercised:    ${used.map((p) => `${p.id}[${f(p.min, 2)}‥${f(p.max, 2)}]×${p.distinct}`).join("  ")}`);
+        console.log("");
+      }
       return;
     }
 

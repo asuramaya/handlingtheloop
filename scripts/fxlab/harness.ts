@@ -331,6 +331,46 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
 // The bank's preset names, so the driver can walk a whole factory bank without duplicating it.
 (globalThis as unknown as { fxlabPresetNames: (k: FxKind) => string[] }).fxlabPresetNames = (k: FxKind) => factoryFxPresets(k).map((p) => p.name);
 
+// COVERAGE — what a bank does NOT use. Builds the device, reads its full param surface off a
+// reset snapshot, then asks of every param: does any preset move it off the default, and how many
+// distinct values does the bank ever ask for? A param that reads `dead` is a feature of the effect
+// that no factory preset demonstrates — the bank isn't showing the effect's range, whatever the
+// names promise. `flat` = touched, but every preset agrees on one value (a constant, not a choice).
+export interface Coverage {
+  kind: string;
+  presets: number;
+  params: { id: string; def: number; distinct: number; min: number; max: number; missing: number; dead: boolean; flat: boolean }[];
+}
+(globalThis as unknown as { fxlabCoverage: (k: FxKind) => Promise<Coverage> }).fxlabCoverage = async (kind: FxKind) => {
+  const ctx = new OfflineAudioContext(2, 128, 48000);
+  for (const src of [REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, MOD_DELAY_WORKLET_SRC]) {
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+  }
+  const dev = buildDevice(ctx, kind);
+  dev.reset();
+  const defaults = dev.snapshotParams();
+  const bank = factoryFxPresets(kind);
+  const params = Object.keys(defaults).map((id) => {
+    const vals = bank.map((p) => p.params[id]).filter((v) => v != null) as number[];
+    const missing = bank.length - vals.length;
+    const uniq = new Set(vals.map((v) => Math.round(v * 1e6) / 1e6));
+    const def = defaults[id];
+    return {
+      id,
+      def,
+      distinct: uniq.size,
+      min: vals.length ? Math.min(...vals) : def,
+      max: vals.length ? Math.max(...vals) : def,
+      missing,
+      dead: vals.length > 0 && vals.every((v) => Math.abs(v - def) < 1e-9), // never moved off its default
+      flat: uniq.size === 1 && vals.length === bank.length && !vals.every((v) => Math.abs(v - def) < 1e-9),
+    };
+  });
+  return { kind, presets: bank.length, params };
+};
+
 (globalThis as unknown as { fxlabRender: (s: Spec) => Promise<Report> }).fxlabRender = async (spec: Spec) => {
   const kind = spec.kind;
   const sr = spec.sampleRate ?? 48000;

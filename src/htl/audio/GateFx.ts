@@ -172,8 +172,7 @@ export class GateFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
    *  while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify. */
-  setThrow(on: boolean) {
-    this.throwEngage(on);
+  protected applyThrowBoost(on: boolean) {
     this._throw = on;
   }
   get throwing() {

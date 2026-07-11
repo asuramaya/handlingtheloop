@@ -179,8 +179,7 @@ export class NoiseFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER. Engages the device (un-bypass if dormant); RISE mode → tempo-synced
    *  auto-build, else a manual gate at SWEEP. Release cuts it + re-bypasses if it was off. */
-  setThrow(on: boolean) {
-    this.throwEngage(on);
+  protected applyThrowBoost(on: boolean) {
     this._throw = on;
     const t = this.ctx.currentTime;
     const g = this.riseGain.gain;

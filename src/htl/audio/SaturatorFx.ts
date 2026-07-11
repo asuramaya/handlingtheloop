@@ -256,8 +256,7 @@ export class SaturatorFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + slam all band drives up while held;
    *  release restores the drives and re-bypasses if it was off. */
-  setThrow(on: boolean) {
-    this.throwEngage(on);
+  protected applyThrowBoost(on: boolean) {
     this._throwBoost = on ? 3 : 1;
     for (let i = 0; i < this.drives.length; i++) this.applyDrive(i);
   }

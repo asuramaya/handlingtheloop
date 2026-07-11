@@ -250,8 +250,7 @@ export class ModFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + deepen the swirl (depth + feedback)
    *  while held; release restores it and re-bypasses if it was off. */
-  setThrow(on: boolean) {
-    this.throwEngage(on);
+  protected applyThrowBoost(on: boolean) {
     this._throw = on;
     this.applyDepth();
     if (this.fbGain) this.fbGain.gain.setTargetAtTime(Math.min(0.95, this._fb * 0.8 + (on ? 0.2 : 0)), this.ctx.currentTime, 0.02);

@@ -91,8 +91,7 @@ export class CrushFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + smash to a heavy crush while held;
    *  release restores the user's setting and re-bypasses if it was off. */
-  setThrow(on: boolean) {
-    this.throwEngage(on);
+  protected applyThrowBoost(on: boolean) {
     this._throw = on;
     this.node?.port.postMessage({ bits: extToBits(on ? 0.82 : this._bits), rate: extToRate(on ? 0.7 : this._rate) });
   }

@@ -263,6 +263,14 @@ export abstract class BaseFxDevice implements FxDevice {
   }
 
   setBypass(on: boolean) {
+    // A MANUAL bypass toggle (FLX ON/OFF, toolbar BYPASS) is the SINGLE SOURCE OF TRUTH for on/off:
+    // it CLEARS any live throw/latch and drops the boost, so "off means off" — no orphaned latch, no
+    // stale re-engage. The throw's OWN bypass moves set _settingBypassInternally so they don't
+    // self-clear here.
+    if (!this._settingBypassInternally && this._thrown) {
+      this._thrown = false;
+      this.applyThrowBoost(false);
+    }
     this._bypassed = on;
     this.applyWet();
   }
@@ -270,22 +278,43 @@ export abstract class BaseFxDevice implements FxDevice {
     return this._bypassed;
   }
 
-  // Momentary pad-throw trigger (FLX4/rekordbox-style): on press, if the effect is dormant
-  // (bypassed) engage it and remember that; on release, restore the prior bypass — so a pad
-  // hold enables + applies the effect and lets go of it. Subclasses call this at the top of
-  // their setThrow(); when the effect was already running, this is a no-op (the throw just
-  // intensifies it and leaves it on). Idempotent across repeat key-downs.
-  private _throwWasBypassed = false;
-  protected throwEngage(on: boolean) {
+  // --- throw / latch lifecycle ------------------------------------------------
+  // A pad THROW (momentary FX2) or LATCH (FX) engages the effect: un-bypass + a subclass param
+  // boost. Bypass is the SINGLE SOURCE OF TRUTH — engaging remembers the prior bypass; releasing
+  // RE-READS the live bypass (never a stale capture) before restoring it; and a manual bypass
+  // toggle mid-throw clears the whole thing (see setBypass). Latch vs momentary is purely WHEN the
+  // caller releases (sticky vs on key-up) — one primitive, two lifetimes.
+  private _thrown = false;
+  private _throwPrevBypass = false;
+  private _settingBypassInternally = false;
+
+  /** Subclass hook: apply (on) / remove (off) the throw's param boost. `off` MUST restore the user's
+   *  settings and clear the device's own throw flag so `throwing` reads false. Idempotent. */
+  protected applyThrowBoost(_on: boolean): void {}
+
+  /** Engage/release a throw. The CALLER's lifetime decides latch (sticky) vs momentary (held). When
+   *  already thrown, re-engaging just re-applies the boost (a slam); releasing when not thrown just
+   *  ensures the boost is off. Idempotent either way. */
+  setThrow(on: boolean) {
     if (on) {
-      if (this._bypassed) {
-        this._throwWasBypassed = true;
-        this.setBypass(false);
+      if (!this._thrown) {
+        this._thrown = true;
+        this._throwPrevBypass = this._bypassed;
+        if (this._bypassed) this.internalSetBypass(false);
       }
-    } else if (this._throwWasBypassed) {
-      this._throwWasBypassed = false;
-      this.setBypass(true);
+      this.applyThrowBoost(true);
+    } else {
+      if (this._thrown) {
+        this._thrown = false;
+        if (this._throwPrevBypass && !this._bypassed) this.internalSetBypass(true); // re-read live bypass, not a stale capture
+      }
+      this.applyThrowBoost(false);
     }
+  }
+  private internalSetBypass(on: boolean) {
+    this._settingBypassInternally = true;
+    this.setBypass(on);
+    this._settingBypassInternally = false;
   }
 
   setParam(id: string, value: number) {

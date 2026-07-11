@@ -527,16 +527,26 @@ body {
 .smp-io {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr auto 1fr; /* INPUT | MASTER anchor | OUTPUT — SMART never moves */
+  /* INPUT | MASTER anchor | OUTPUT — SMART never moves. minmax(0,1fr) (not a bare 1fr,
+     which is minmax(AUTO,1fr)) lets the side columns shrink BELOW their content's
+     min-content, so a busy OUTPUT zone (REC·MON + cue BLEND·LVL) can never blow past its
+     1fr share, steal width from INPUT, and shove the centre anchor off-axis / overflow.
+     Overcrowded cells WRAP within their zone (below) instead of collapsing to slivers. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: stretch;
   gap: 0;
   flex: 1 1 auto;
   width: 100%;
 }
-/* Each zone is its own flex row; its cells share the zone's width equally. */
+/* Each zone is its own flex row. Cells share the zone's width; when they can't all fit
+   (headphones plugged → 4 output cells in a half-width column, or any narrow/mobile
+   strip) they WRAP to a second line inside the zone rather than crush to nothing. The
+   anchor column is untouched, so SMART stays centred while the shape grows around it. */
 .smp-io-zone {
   display: flex;
-  align-items: stretch;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
   gap: 4px;
   min-width: 0;
 }
@@ -553,8 +563,10 @@ body {
 }
 .smp-io-zone > button,
 .smp-io-zone > .vcell {
-  flex: 1 1 0;
-  min-width: 0;
+  /* Prefer ~44px, grow to share the line. A basis of 44 (not 0) with wrap means a cell
+     drops to the next line before it can be squeezed unreadably narrow. */
+  flex: 1 1 44px;
+  min-width: 44px;
   width: auto;
 }
 .smp-io-mid > .vcell { flex: 0 0 104px; } /* SMART: a stable, slightly-wider master cell */
@@ -566,6 +578,10 @@ body {
   background: var(--panel);
   color: var(--text);
   cursor: pointer;
+  /* Match the .vcell height (38px) so every cell on a line is the SAME height — the zones center
+     their children (for the wrap case), which otherwise let the height-less buttons render short
+     next to the fixed-height knob cells. Uniform height, wrapped or not. */
+  height: 38px;
   padding: 3px 8px;
   white-space: nowrap;
   text-align: center;
@@ -682,6 +698,18 @@ body {
 }
 .smp-io-btn {
   position: relative;
+}
+/* Mobile: the middle third is narrow, so tighten the anchor + gutters to buy width before
+   the zones start wrapping. SMART stays centred (narrower, not moved); the flanking zones
+   still wrap gracefully when the mic and/or a cue device are both present. @media adds no
+   specificity, so these same-selector rules win only by coming LATER in source. */
+@media (max-width: 768px) {
+  .smp-io-in { padding-right: 5px; }
+  .smp-io-out { padding-left: 5px; }
+  .smp-io-mid { padding: 0 5px; }
+  .smp-io-mid > .vcell { flex-basis: 84px; } /* trimmed from 104 — keeps grow/shrink 0 */
+  .smp-io-zone { gap: 3px; }
+  .smp-io button { padding: 3px 4px; }
 }
 /* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
    carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no

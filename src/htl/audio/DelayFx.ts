@@ -360,12 +360,17 @@ export class DelayFx extends BaseFxDevice {
 function makeColorCurve(analog: number, lofi: number): Float32Array<ArrayBuffer> {
   const n = 2048;
   const curve = new Float32Array(n);
-  const k = 1 + analog * 6; // drive amount
-  const norm = Math.tanh(k); // so the curve still peaks near ±1
+  // UNITY small-signal gain (slope at x=0 is exactly 1) so the drive is NON-EXPANSIVE. This shaper
+  // sits INSIDE the feedback loop, so its slope near zero IS a loop-gain multiplier: the old
+  // peak-normalized tanh (÷tanh(k), slope k/tanh(k) ≈ k > 1) amplified the decaying tail back up
+  // → loop gain fb·slope ≥ 1 → the delay self-oscillated and never decayed (measured: analog>0
+  // presets rang at effective feedback 1.0). tanh(kx)/k passes quiet tails at unity (they decay at
+  // fb) and only saturates loud transients — the tape/tube warmth without the runaway.
+  const k = 1 + analog * 2.5; // gentler drive; the character still compounds over repeats
   const levels = 24; // bitcrush quantization steps (≈ a few bits) when LoFi is on
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1; // −1..1
-    let y = analog > 0 ? Math.tanh(k * x) / norm : x;
+    let y = analog > 0 ? Math.tanh(k * x) / k : x;
     if (lofi) y = Math.round(y * levels) / levels;
     curve[i] = y;
   }

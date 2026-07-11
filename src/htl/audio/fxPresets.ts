@@ -34,12 +34,12 @@ export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
   // `analog`/`lofi` colour the tails; `stereo:1` = ping-pong; `spread` drifts L/R for width.
   delay: [
     { name: "1/8 Slap", params: { mix: 0.26, time: 0.25, feedback: 0.28, hp: 200, lp: 8000, sync: 1, div: 2, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
-    { name: "1/4 Dub", params: { mix: 0.32, time: 0.5, feedback: 0.55, hp: 180, lp: 3800, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.4, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.15 } },
-    { name: "Ping-Pong 1/8", params: { mix: 0.3, time: 0.25, feedback: 0.45, hp: 160, lp: 7000, sync: 1, div: 2, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.3 } },
-    { name: "Triplet Throw", params: { mix: 0.3, time: 0.167, feedback: 0.5, hp: 150, lp: 6000, sync: 1, div: 1, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.2, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
-    { name: "Tape Echo", params: { mix: 0.3, time: 0.5, feedback: 0.5, hp: 220, lp: 3200, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.6, lofi: 0, modDepth: 0.004, modRate: 0.8, duck: 0, spread: 0.2 } },
-    { name: "Lo-Fi Bounce", params: { mix: 0.3, time: 0.375, feedback: 0.48, hp: 200, lp: 5000, sync: 1, div: 3, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0.15, lofi: 1, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.25 } },
-    { name: "Half-Bar Wash", params: { mix: 0.3, time: 1.0, feedback: 0.62, hp: 300, lp: 2600, sync: 1, div: 6, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0.3, lofi: 0, modDepth: 0.003, modRate: 0.4, duck: 0, spread: 0.4 } },
+    { name: "1/4 Dub", params: { mix: 0.32, time: 0.5, feedback: 0.5, hp: 180, lp: 3800, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.4, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.15 } },
+    { name: "Ping-Pong 1/8", params: { mix: 0.3, time: 0.25, feedback: 0.42, hp: 160, lp: 7000, sync: 1, div: 2, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.3 } },
+    { name: "Triplet Throw", params: { mix: 0.3, time: 0.167, feedback: 0.42, hp: 150, lp: 6000, sync: 1, div: 1, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.2, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
+    { name: "Tape Echo", params: { mix: 0.3, time: 0.5, feedback: 0.46, hp: 220, lp: 3200, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.6, lofi: 0, modDepth: 0.004, modRate: 0.8, duck: 0, spread: 0.2 } },
+    { name: "Lo-Fi Bounce", params: { mix: 0.3, time: 0.375, feedback: 0.44, hp: 200, lp: 5000, sync: 1, div: 3, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0.15, lofi: 1, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.25 } },
+    { name: "Half-Bar Wash", params: { mix: 0.3, time: 1.0, feedback: 0.4, hp: 300, lp: 2600, sync: 1, div: 6, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0.3, lofi: 0, modDepth: 0.003, modRate: 0.4, duck: 0, spread: 0.4 } },
     { name: "Freeze Hold", params: { mix: 0.4, time: 0.5, feedback: 0.6, hp: 140, lp: 5500, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 1, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
   ],
   // REVERB (VERB) — the Jot FDN tank. `style` (0 HALL/1 ROOM/2 PLATE/3 AMBIENT) picks the voicing;

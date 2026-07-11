@@ -34,3 +34,13 @@ export function applyBoardAction(deck: Deck, id: string, phase?: "down" | "up", 
 registerBoardAction("padMode", (deck, _phase, arg) => {
   if (typeof arg === "string") deck.setPadMode(arg as PadMode);
 });
+
+// CENSOR — momentary reverse, slip-returning forward on release. A TRANSPORT gesture (a deck
+// method, like padMode) since it moved off the FX pad bank to make room for the EQ pad, so it
+// registers here rather than in fxPads. `down` = play backward, `up` = slip-snap to where the
+// track would be. The keyboard has no key-up and drives it as a toggle, which arrives as the
+// same down/up pair.
+registerBoardAction("censor", (deck, phase) => {
+  if (phase === "up") deck.censorEnd();
+  else deck.censorBegin();
+});

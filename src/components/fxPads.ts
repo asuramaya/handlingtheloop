@@ -4,8 +4,9 @@ import { registerBoardAction } from "@htl/board/boardActions";
 // The deck's FX pad-mode bank ("Pad-FX") — 8 fixed performance effects over the one 8-pad
 // bank (and the keyboard 1-8 when padMode === "fx"). The "Throws + Motion" shape:
 //   row 1 (0-3) = effect THROWS:        ECHO  VERB  SAT   CRUSH
-//   row 2 (4-7) = effects:              MOD   CENS  GATE  NOISE
-// (The bank is complete — BRAKE/SPIN dropped to jog gestures as GATE/NOISE landed.)
+//   row 2 (4-7) = effects:              MOD   EQ    GATE  NOISE
+// (The bank is complete — BRAKE/SPIN dropped to jog gestures as GATE/NOISE landed, and CENS
+// followed them off the bank so the EQ — the 8th rack device — could have a pad of its own.)
 // Every backing device is a PERMANENT resident of the rack (provisioned dormant on deck birth,
 // see Deck.ensurePadFx), so all 8 pads are ALWAYS armed — no "add a Delay first" gating. `hold`
 // effects fire on press and release on pointer-up (momentary). `kind` is the pad's backing rack
@@ -28,7 +29,10 @@ export const FX_PADS: FxPadDef[] = [
   { label: "SAT", kind: "saturator", hold: true, on: (d) => d.satThrow(true), off: (d) => d.satThrow(false), active: (d) => d.satThrowing, hint: "Saturation slam — drive boost while held" },
   { label: "CRUSH", kind: "crush", hold: true, on: (d) => d.crushThrow(true), off: (d) => d.crushThrow(false), active: (d) => d.crushThrowing, hint: "Bitcrush smash — bit/rate crush while held" },
   { label: "MOD", kind: "mod", hold: true, on: (d) => d.modThrow(true), off: (d) => d.modThrow(false), active: (d) => d.modThrowing, hint: "Modulation swirl — depth boost while held" },
-  { label: "CENS", hold: true, on: (d) => d.censorBegin(), off: (d) => d.censorEnd(), active: (d) => d.reversing, hint: "Censor — reverse, slip-return on release" },
+  // The EQ is the channel EQ — always in circuit, so it can't go dormant-and-throw like the rest.
+  // Its pad throws a CURVE: hold slams the armed preset in, release restores the curve you were
+  // riding. Right-click reveals the panel + its preset menu (which is what arms the pad).
+  { label: "EQ", kind: "eq", hold: true, on: (d) => d.eqThrow(true), off: (d) => d.eqThrow(false), active: (d) => d.eqThrowing, hint: "EQ curve throw — slams the armed preset, restores your curve on release" },
   { label: "GATE", kind: "gate", hold: true, on: (d) => d.gateThrow(true), off: (d) => d.gateThrow(false), active: (d) => d.gateThrowing, hint: "Trance-gate stutter while held" },
   { label: "NOISE", kind: "noise", hold: true, on: (d) => d.noiseThrow(true), off: (d) => d.noiseThrow(false), active: (d) => d.noiseThrowing, hint: "Noise riser — sweep up while held, cut on release" },
 ];

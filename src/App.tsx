@@ -1082,6 +1082,18 @@ function AppBody() {
       // Keyboard Smart Fader: ONE shift-aware key — bare = arm/disarm Smart Fader, SHIFT = enable/
       // disable the crossfader. Mirrors the FLX SMART FADER button's unshifted/shifted split.
       smartFader: (d, i, s) => (s ? HANDLERS.xfaderToggle(d, i, s) : HANDLERS.smartFaderToggle(d, i, s)),
+      // CENSOR — plays backward from here and slip-snaps forward on release (the radio-edit move).
+      // It lost its FX pad to the EQ, so it lives on its own key now. The keyboard has no key-up
+      // (see fxKey), so this TOGGLES: press to run backward, press again to return. SHIFT = a
+      // sustained REVERSE that just keeps running backward until you press again.
+      censor: (deck, id, s) => {
+        const on = !deck.reversing;
+        if (!on) deck.censorEnd();
+        else if (s) deck.setReverse(true);
+        else deck.censorBegin();
+        if (!s) emitRef.current({ kind: "board", deck: id, id: "censor", phase: on ? "down" : "up" });
+        refresh();
+      },
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
       // SHIFT switches to the peer mode (mirrors the on-screen mode row + the FLX shift layer):

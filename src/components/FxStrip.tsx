@@ -147,10 +147,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const mix = dev.getParam("mix"); // wet/dry is a live performance control — hold it across the browse
         if (pi === 0) {
           deck.resetFxAt(at);
-          if (dev.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+          if (dev.kind === "eq") {
+            emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+            deck.armEqPreset({ name: "Default", params: dev.snapshotParams() }); // browsing also arms the pad
+          }
         } else {
-          const params = bank[pi - 1].params;
-          for (const k in params) if (k !== "mix") deck.setFxParam(at, k, params[k]);
+          const p = bank[pi - 1];
+          for (const k in p.params) if (k !== "mix") deck.setFxParam(at, k, p.params[k]);
+          if (dev.kind === "eq") deck.armEqPreset(p);
         }
         deck.setFxParam(at, "mix", mix); // restore the blend for every device incl. EQ (covers the Default reset)
         if (dev.kind === "eq") emitControls(id);
@@ -218,12 +222,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     if (d.kind === "eq") emitControls(id);
     else broadcastRack();
   };
-  const applyPreset = (slot: number, params: Record<string, number>) => {
+  // Picking an EQ preset also ARMS the EQ pad with it — the menu is how you load the curve the
+  // pad throws. (Default arms the flat curve, which turns the pad into an A/B: hold flattens
+  // your EQ, release brings it back.)
+  const armEq = (d: { kind: FxKind; snapshotParams(): Record<string, number> }, name: string, params?: Record<string, number>) => {
+    if (d.kind === "eq") deck.armEqPreset({ name, params: params ?? d.snapshotParams() });
+  };
+  const applyPreset = (slot: number, p: { name: string; params: Record<string, number> }) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
     // Wet/dry (mix) is a LIVE performance control, independent of the preset — leave it alone so
     // browsing presets (esp. on a controller) doesn't jump the blend out from under the DJ.
-    for (const k in params) if (k !== "mix") deck.setFxParam(slot, k, params[k]);
+    for (const k in p.params) if (k !== "mix") deck.setFxParam(slot, k, p.params[k]);
+    armEq(d, p.name, p.params);
     syncDevice(d);
     setMenu(null);
     refresh();
@@ -236,6 +247,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     deck.resetFxAt(slot);
     deck.setFxParam(slot, "mix", mix); // preserve wet/dry incl. EQ (Eq3 now maps "mix" → setMix)
     if (d.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+    armEq(d, "Default"); // the device is AT its defaults now → snapshot them as the armed curve
     syncDevice(d);
     setMenu(null);
     refresh();
@@ -400,14 +412,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             {/* Factory bank — built-in, read-only (apply only, no rename/remove). The applied one is marked. */}
             {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
             {factoryPresets.map((p, i) => (
-              <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p.params); }}>
+              <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p); }}>
                 {p.name}
               </button>
             ))}
             {menuPresets.length > 0 && <div className="fx-preset-sep" />}
             {menuPresets.map((p) => (
               <div key={p.name} className="fx-preset-row">
-                <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply" onClick={() => applyPreset(menu.slot, p.params)}>
+                <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply" onClick={() => applyPreset(menu.slot, p)}>
                   {p.name}
                 </button>
                 <button className="fx-preset-mini" title="Rename" aria-label="Rename preset" onClick={() => renamePreset(menuDev.kind, p.name)}>

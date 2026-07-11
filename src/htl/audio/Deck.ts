@@ -87,6 +87,7 @@ import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
 import { FxRack, type FxDevice, type FxKind, type FxSlot } from "./Fx";
+import { FACTORY_PRESETS, type FxPreset } from "./fxPresets";
 import { DelayFx } from "./DelayFx";
 import { ReverbFx } from "./ReverbFx";
 import { SaturatorFx } from "./SaturatorFx";
@@ -231,9 +232,6 @@ export class Deck {
   private _trim = 1;
   private _level = 1;
   private _cueLevel = 0; // headphone-cue send level 0..1 (0 = not in the cue bus); local monitor only
-  private _eqLow = 0;
-  private _eqMid = 0;
-  private _eqHigh = 0;
   // Filter = two INDEPENDENT cut amounts (0 = off … 1 = full), so HP and LP can be on
   // together (band-pass). The legacy one-knob bipolar filter just drives one side and
   // zeroes the other; the Starrypad's two knobs drive each side on its own.
@@ -1775,25 +1773,25 @@ export class Deck {
     this.cueSend.gain.cancelScheduledValues(now);
     this.cueSend.gain.setTargetAtTime(g, now, 0.01);
   }
+  // The mixer's LOW/MID/HIGH knobs read straight off the device — the EQ is a rack member too, so
+  // a preset apply / curve throw / room-sync write arriving over the FX param bus MUST move the
+  // knobs with it. (A Deck-side mirror used to shadow these and silently diverged from the filter.)
   get eqLow() {
-    return this._eqLow;
+    return this.eq.lowDb;
   }
   get eqMid() {
-    return this._eqMid;
+    return this.eq.midDb;
   }
   get eqHigh() {
-    return this._eqHigh;
+    return this.eq.highDb;
   }
   setEqLow(db: number) {
-    this._eqLow = db;
     this.eq.setLow(db);
   }
   setEqMid(db: number) {
-    this._eqMid = db;
     this.eq.setMid(db);
   }
   setEqHigh(db: number) {
-    this._eqHigh = db;
     this.eq.setHigh(db);
   }
   setEqMix(m: number) {
@@ -1892,6 +1890,10 @@ export class Deck {
     return this.eq.bypassed;
   }
   setEqBypass(on: boolean) {
+    // Bypass is the single source of truth (same rule as BaseFxDevice.setBypass): toggling it by
+    // hand mid-throw CLEARS the throw, restoring your curve, so "off means off" and the pad can't
+    // leave the preset stuck in the channel.
+    this.clearEqThrow();
     this.eq.setBypass(on);
   }
   soloBand(hz: number, q = 4) {
@@ -1904,10 +1906,52 @@ export class Deck {
   /** Restore the EQ to flat: all band gains 0 dB, every node back to its default
    *  frequency / bell width, the cut filters parked off, bypass cleared. */
   resetEq() {
+    this.clearEqThrow();
     this.eq.reset();
-    this._eqLow = 0;
-    this._eqMid = 0;
-    this._eqHigh = 0;
+  }
+
+  // --- EQ CURVE THROW (the EQ's FX pad) ----------------------------------------------------
+  // The EQ can't go dormant-and-throw like SAT/CRUSH — it IS the channel EQ, always in circuit.
+  // So its pad throws a CURVE instead: press snapshots the whole curve and morphs to the ARMED
+  // preset (the one last picked in the panel / cycled with FX-SELECT); release morphs back to
+  // exactly what you were riding. Eq3.applyCurve ramps rather than steps, so a slam doesn't click.
+  private eqSnapshot: Record<string, number> | null = null;
+  private eqThrowWasBypassed = false;
+  private _armedEq: FxPreset | null = null;
+
+  /** Arm the preset the EQ pad throws. Called on every EQ preset apply (mouse or hardware). */
+  armEqPreset(p: FxPreset | null) {
+    this._armedEq = p;
+  }
+  /** What the pad would throw right now — the armed preset, else the first factory one. */
+  get armedEqPreset(): FxPreset | null {
+    return this._armedEq ?? FACTORY_PRESETS.eq?.[0] ?? null;
+  }
+  eqThrow(on: boolean): void {
+    if (on) {
+      const p = this.armedEqPreset;
+      if (this.eqSnapshot || !p) return; // already thrown / nothing to throw
+      this.eqSnapshot = this.eq.snapshotParams();
+      this.eqThrowWasBypassed = this.eq.bypassed;
+      if (this.eq.bypassed) this.eq.setBypass(false); // a thrown curve is audible even from bypass
+      this.eq.applyCurve(p.params);
+    } else {
+      if (!this.clearEqThrow()) return;
+      // Re-read the LIVE bypass rather than trusting the capture: if you bypassed by hand during
+      // the throw, setEqBypass already cleared it and this branch never runs.
+      if (this.eqThrowWasBypassed && !this.eq.bypassed) this.eq.setBypass(true);
+    }
+  }
+  get eqThrowing(): boolean {
+    return this.eqSnapshot != null;
+  }
+  /** Restore the pre-throw curve if one is in flight. True if a throw was actually cleared. */
+  private clearEqThrow(): boolean {
+    const s = this.eqSnapshot;
+    if (!s) return false;
+    this.eqSnapshot = null;
+    this.eq.applyCurve(s);
+    return true;
   }
 
   // --- FX rack: the channel-strip device chain. Every device — the EQ included — is a

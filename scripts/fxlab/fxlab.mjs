@@ -40,6 +40,11 @@ function parseArgs(argv) {
       case "--bpm": a.bpm = Number(v); i++; break;
       case "--json": a.json = true; break;
       case "--sweep-feedback": a.sweepFeedback = true; break;
+      case "--throw": a.throwPreset = v; i++; break;
+      case "--throw-at": a.throwAt = Number(v); i++; break;
+      case "--throw-off": a.throwOff = Number(v); i++; break;
+      case "--stepped": a.stepped = true; break;
+      case "--bank": a.bank = true; break;
       default: break;
     }
   }
@@ -105,6 +110,33 @@ function sparkline(envDb, floorDb = -72, ceilDb = 0) {
 }
 const f = (x, d = 2) => (x == null ? "—" : Number(x).toFixed(d));
 
+// An EQ curve, drawn. Each column is a log-spaced probe frequency; the bar rides a ±12 dB
+// scale with the 0 dB line marked, so a preset's SHAPE is readable at a glance.
+function printResponse(hz, db) {
+  const rows = 9; // ±12 dB in 3 dB steps
+  const dbOfRow = (r) => 12 - r * 3; // row 0 = +12, row 4 = 0, row 8 = -12
+  console.log(`  response (${hz[0]}Hz … ${(hz[hz.length - 1] / 1000).toFixed(0)}kHz, ±12 dB):`);
+  for (let r = 0; r < rows; r++) {
+    const lvl = dbOfRow(r);
+    const label = `${lvl > 0 ? "+" : ""}${lvl}`.padStart(3);
+    let line = "";
+    for (let i = 0; i < hz.length; i++) {
+      const v = db[i];
+      const hit = lvl === 0 ? true : lvl > 0 ? v >= lvl - 1.5 && v > 0 : v <= lvl + 1.5 && v < 0;
+      line += lvl === 0 ? (Math.abs(v) < 1.5 ? "━" : "·") : hit ? "█" : " ";
+    }
+    console.log(`  ${label} │${line}`);
+  }
+  const ticks = hz.map((h) => (h < 100 ? "" : h === 1000 || h === 100 || h === 10000 ? "┬" : "")).join("");
+  console.log(`      └${"─".repeat(hz.length)}`);
+  console.log(`       ${ticks}`);
+  const lo = db.slice(0, 8);
+  const mid = db.slice(8, 19);
+  const hi = db.slice(19);
+  const avg = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  console.log(`       lows ${f(avg(lo), 1)} dB · mids ${f(avg(mid), 1)} dB · highs ${f(avg(hi), 1)} dB`);
+}
+
 function printReport(r, spec) {
   const width = r.envBuckets;
   console.log("");
@@ -126,6 +158,19 @@ function printReport(r, spec) {
       console.log(`         set feedback ${f(setFb, 3)}${flag}`);
     }
   }
+  if (r.clicks) {
+    // A click is a step the material itself could never make. >20× the median step is audible;
+    // a smooth ramp keeps every step inside the signal's own slew.
+    const bad = r.clicks.filter((c) => c.xMedian > 20);
+    if (bad.length) {
+      console.log(`  clicks ⚠ ${bad.length} discontinuit${bad.length === 1 ? "y" : "ies"} (step ≫ the signal's own slew):`);
+      for (const c of bad) console.log(`         t=${f(c.tSec, 3)}s   step ${f(c.step, 4)}   ${f(c.xMedian, 0)}× median`);
+    } else {
+      console.log(`  clicks none — biggest step ${f(Math.max(0, ...r.clicks.map((c) => c.xMedian)), 1)}× median (smooth ✓)`);
+    }
+  }
+  console.log("");
+  if (r.responseDb) printResponse(r.responseHz, r.responseDb);
   console.log("");
   console.log(`  envelope (${width} buckets, ${f(r.seconds / width, 3)}s each, -72..0 dB):`);
   console.log(`  ${sparkline(r.envDb)}`);
@@ -179,6 +224,18 @@ async function main() {
       return;
     }
 
+    if (args.bank) {
+      // Audition a WHOLE bank in one pass — every factory preset for a kind, side by side. For the
+      // EQ this prints each preset's real curve, which is the only honest way to judge a bank of
+      // curves without ears.
+      const names = await page.evaluate((k) => globalThis.fxlabPresetNames(k), args.kind);
+      for (const name of names) {
+        const r = await renderOne(page, { kind: args.kind, presetName: name, signal: args.signal, seconds: args.seconds, bpm: args.bpm });
+        printReport(r, { preset: name });
+      }
+      return;
+    }
+
     const spec = {
       kind: args.kind,
       presetName: args.preset ?? null,
@@ -186,6 +243,10 @@ async function main() {
       signal: args.signal,
       seconds: args.seconds,
       bpm: args.bpm,
+      throwPreset: args.throwPreset ?? null,
+      throwAt: args.throwAt ?? null,
+      throwOff: args.throwOff ?? null,
+      stepped: !!args.stepped,
     };
     const r = await renderOne(page, spec);
     if (args.json) console.log(JSON.stringify(r, null, 2));

@@ -30,6 +30,15 @@ interface Spec {
   seconds?: number;
   bpm?: number;
   sampleRate?: number;
+  // A mid-render THROW: slam `throwPreset` in at `throwAt` and restore the previous state at
+  // `throwOff` — the FX-pad gesture, rendered. OfflineAudioContext.suspend() is what makes this
+  // possible: the render halts at a wall-clock we choose, we mutate the device on the main thread
+  // exactly as the pad would, and resume. `stepped` forces the raw setParam path instead of the
+  // ramped applyCurve, so the two can be measured against each other.
+  throwPreset?: string | null;
+  throwAt?: number | null;
+  throwOff?: number | null;
+  stepped?: boolean;
 }
 
 type Ctx = OfflineAudioContext;
@@ -108,8 +117,19 @@ interface Report {
   effFeedback?: number | null; // median echo[n+1]/echo[n] — the TRUE loop gain
   effFeedbackDbPerRepeat?: number | null;
   growing?: boolean; // any run of ratios > 1 → the tail builds instead of decaying (instability)
+  // CLICK detector: the biggest sample-to-sample steps, scored against the median step of the same
+  // material. A stepped filter coefficient (or a hard gain change) shows up here as a spike the
+  // signal itself could never produce — this is how a "click" looks in numbers.
+  clicks?: { tSec: number; step: number; xMedian: number }[];
+  medianStep?: number;
+  // eq-only: the real magnitude response of the five biquads (Eq3.magnitude), log-spaced.
+  responseHz?: number[];
+  responseDb?: number[];
   note?: string;
 }
+
+// Log-spaced probe frequencies for the EQ response read (20 Hz … 20 kHz).
+const RESP_HZ = Array.from({ length: 28 }, (_, i) => Math.round(20 * Math.pow(1000, i / 27)));
 
 function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds: number; applied: Record<string, number> }): Report {
   const sr = buf.sampleRate;
@@ -187,6 +207,31 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
   }
   const decayTo60Sec = Math.max(0, tSecOf(decayIdx) - tSecOf(peakIdx));
 
+  // CLICK detection. A click is a DISCONTINUITY: one sample-to-sample step far larger than the
+  // material's own slew rate. (A 1 kHz sine at 48 k moves ~0.13 × its amplitude per sample; a
+  // stepped biquad coefficient can move the output a full scale in one sample.) Score each step
+  // against the MEDIAN step of the same render, so the number means "N× what this signal does
+  // naturally" and is comparable across stimuli. Report the top few, ≥5 ms apart.
+  const stepAbs = (i: number) => Math.max(Math.abs(L[i] - L[i - 1]), Math.abs(R[i] - R[i - 1]));
+  const sampled: number[] = [];
+  for (let i = 1; i < n; i += 37) sampled.push(stepAbs(i)); // cheap median (every 37th step)
+  sampled.sort((a, b) => a - b);
+  const medianStep = sampled.length ? sampled[Math.floor(sampled.length / 2)] : 0;
+  const clicks: { tSec: number; step: number; xMedian: number }[] = [];
+  const guard = Math.round(sr * 0.005); // one click per 5 ms window
+  const cand: { i: number; s: number }[] = [];
+  for (let i = 1; i < n; i++) {
+    const s = stepAbs(i);
+    if (s > medianStep * 4 && s > 1e-4) cand.push({ i, s });
+  }
+  cand.sort((a, b) => b.s - a.s);
+  for (const c of cand) {
+    if (clicks.length >= 4) break;
+    if (clicks.some((k) => Math.abs(k.tSec * sr - c.i) < guard)) continue;
+    clicks.push({ tSec: c.i / sr, step: c.s, xMedian: medianStep > 0 ? c.s / medianStep : 0 });
+  }
+  clicks.sort((a, b) => a.tSec - b.tSec);
+
   const report: Report = {
     ok: true,
     kind: meta.kind,
@@ -204,6 +249,8 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
     decayTo60Sec,
     envDb,
     envBuckets: B,
+    clicks,
+    medianStep,
   };
 
   // Delay echo ladder: for an impulse, the true per-repeat loop gain is the ratio of
@@ -246,6 +293,9 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
 }
 
 // ---- entry ---------------------------------------------------------------
+// The bank's preset names, so the driver can walk a whole factory bank without duplicating it.
+(globalThis as unknown as { fxlabPresetNames: (k: FxKind) => string[] }).fxlabPresetNames = (k: FxKind) => factoryFxPresets(k).map((p) => p.name);
+
 (globalThis as unknown as { fxlabRender: (s: Spec) => Promise<Report> }).fxlabRender = async (spec: Spec) => {
   const kind = spec.kind;
   const sr = spec.sampleRate ?? 48000;
@@ -285,11 +335,45 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
   // Snapshot the ACTUAL device state after applying (so the report shows clamped/derived values).
   const actual = dev.snapshotParams();
 
+  // Mid-render THROW (the FX pad, rendered). suspend() halts the offline render at a chosen time
+  // so the device can be driven from the main thread exactly as a pad press would drive it — the
+  // only way to measure what a gesture SOUNDS like rather than what a static param set does.
+  const quantize = (t: number) => (Math.round((t * sr) / 128) * 128) / sr; // suspend lands on a render quantum
+  if (spec.throwAt != null && spec.throwPreset) {
+    const p = factoryFxPresets(kind).find((x) => x.name === spec.throwPreset);
+    if (!p) throw new Error(`fxlab: no factory preset "${spec.throwPreset}" for ${kind}`);
+    const before = dev.snapshotParams(); // the curve the throw restores on release
+    const write = (params: Record<string, number>) => {
+      if (dev instanceof Eq3 && !spec.stepped) dev.applyCurve(params); // production path (ramped)
+      else for (const k in params) if (k !== "mix") dev.setParam(k, params[k]); // raw step, for the A/B
+    };
+    void ctx.suspend(quantize(spec.throwAt)).then(() => {
+      write(p.params);
+      void ctx.resume();
+    });
+    if (spec.throwOff != null) {
+      void ctx.suspend(quantize(spec.throwOff)).then(() => {
+        write(before);
+        void ctx.resume();
+      });
+    }
+  }
+
   const source = makeSignal(ctx, signal, sr);
   source.connect(dev.input);
   dev.output.connect(ctx.destination);
   source.start(0);
 
   const rendered = await ctx.startRendering();
-  return measure(rendered, { kind, signal, seconds, applied: actual });
+  const report = measure(rendered, { kind, signal, seconds, applied: actual });
+  // The EQ's response is free (no render needed) and is the whole point of an EQ, so always read
+  // it back — this is the curve the preset ACTUALLY produces, not the one its numbers imply.
+  if (dev instanceof Eq3) {
+    const freqs = new Float32Array(RESP_HZ);
+    const out = new Float32Array(RESP_HZ.length);
+    dev.magnitude(freqs, out);
+    report.responseHz = RESP_HZ;
+    report.responseDb = Array.from(out, (v) => Math.round(v * 100) / 100);
+  }
+  return report;
 };

@@ -68,6 +68,9 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "phraseFwd", label: "Jump forward a phrase", group: "Jog", defaultKey: "BracketRight" },
   { id: "spinback", label: "Spinback (back-spin)", group: "Jog", defaultKey: "KeyX" },
   { id: "slip", label: "Slip mode (toggle)", group: "Jog", defaultKey: "KeyZ" },
+  // CENSOR moved off the FX pad bank (the EQ took its pad) and onto its own key. No key-up on
+  // the keyboard, so it toggles: press to run backward, press again to slip-snap forward.
+  { id: "censor", label: "Censor (reverse — press again to return)", group: "Jog", defaultKey: "KeyR", shiftLabel: "Sustained reverse" },
 
   // The 8 pads (1-8): act as hot cues / beat loops / sampler per the deck's pad mode.
   ...Array.from({ length: 8 }, (_, i) => ({

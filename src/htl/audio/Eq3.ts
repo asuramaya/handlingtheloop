@@ -41,6 +41,7 @@ import type { FxDevice } from "./Fx";
 
 export class Eq3 implements FxDevice {
   readonly kind = "eq" as const;
+  readonly ctx: AudioContext;
   readonly input: GainNode;
   readonly output: GainNode;
   private readonly pre: GainNode; // routing branch point (input → pre → chain/solo/output)
@@ -62,6 +63,7 @@ export class Eq3 implements FxDevice {
   private phase?: Float32Array<ArrayBuffer>;
 
   constructor(ctx: AudioContext) {
+    this.ctx = ctx;
     this.input = ctx.createGain();
     this.output = ctx.createGain();
     this.pre = ctx.createGain();
@@ -71,26 +73,29 @@ export class Eq3 implements FxDevice {
 
     this.hp = ctx.createBiquadFilter();
     this.hp.type = "highpass";
-    this.hp.frequency.value = EQ_HP.freq;
-    this.hp.Q.value = EQ_HP.q;
-
     this.low = ctx.createBiquadFilter();
     this.low.type = "lowshelf";
-    this.low.frequency.value = EQ_BANDS.low.freq;
-
     this.mid = ctx.createBiquadFilter();
     this.mid.type = "peaking";
-    this.mid.frequency.value = EQ_BANDS.mid.freq;
-    this.mid.Q.value = 0.9;
-
     this.high = ctx.createBiquadFilter();
     this.high.type = "highshelf";
-    this.high.frequency.value = EQ_BANDS.high.freq;
-
     this.lp = ctx.createBiquadFilter();
     this.lp.type = "lowpass";
-    this.lp.frequency.value = EQ_LP.freq;
-    this.lp.Q.value = EQ_LP.q;
+    // Seed every node through the setters, so the commanded mirror (`cmd`) starts populated —
+    // a getter must never read `undefined` before the first knob move.
+    this.setHpFreq(EQ_HP.freq);
+    this.setHpQ(EQ_HP.q);
+    this.setLow(0);
+    this.setLowFreq(EQ_BANDS.low.freq);
+    this.setLowQ(1);
+    this.setMid(0);
+    this.setMidFreq(EQ_BANDS.mid.freq);
+    this.setMidQ(0.9);
+    this.setHigh(0);
+    this.setHighFreq(EQ_BANDS.high.freq);
+    this.setHighQ(1);
+    this.setLpFreq(EQ_LP.freq);
+    this.setLpQ(EQ_LP.q);
 
     this.soloNode = ctx.createBiquadFilter();
     this.soloNode.type = "bandpass";
@@ -179,43 +184,88 @@ export class Eq3 implements FxDevice {
     return this._mix;
   }
 
+  // --- curve morph -------------------------------------------------------------
+  // Stepping a biquad's coefficients while audio flows through it jumps the transfer function
+  // against the filter's retained state → a click. A knob ride is continuous, so `.value =` is
+  // right there (and stays the default). A PAD THROW slams a whole curve in one frame, so the
+  // throw path RAMPS every param over a few ms instead. setTargetAtTime is exponential and never
+  // exactly arrives, so we pin the exact value at 5τ — otherwise every throw/restore cycle would
+  // land a fraction of a percent short and the numbers would rot over a set.
+  private tau = 0; // >0 = ramp writes over this time constant (set only inside applyCurve)
+  // COMMANDED values, by param id. Every read (getters, snapshotParams, the mixer knobs) comes
+  // from here rather than from `AudioParam.value` — mid-ramp a param reads back somewhere between
+  // the old and new curve, and a snapshot taken there would bake the in-between into a preset.
+  private readonly cmd: Record<string, number> = {};
+  private write(p: AudioParam, id: string, v: number) {
+    this.cmd[id] = v;
+    if (this.tau <= 0) {
+      p.value = v;
+      return;
+    }
+    const t = this.ctx.currentTime;
+    p.cancelScheduledValues(t);
+    p.setTargetAtTime(v, t, this.tau);
+    p.setValueAtTime(v, t + this.tau * 5);
+  }
+  /** Apply a whole param map as a smooth MORPH — the FX-pad curve throw (and its restore).
+   *  Band SHAPES still switch instantly (a biquad type has no in-between), so a preset that
+   *  also flips a shape reads as a harder edge. `mix` is skipped: wet/dry is a live control
+   *  that a preset never owns. */
+  applyCurve(params: Record<string, number>, seconds = 0.012) {
+    this.tau = seconds > 0 ? Math.max(0.002, seconds) / 5 : 0; // 0 = write it instantly (reset / load)
+    try {
+      for (const id in params) if (id !== "mix") this.setParam(id, params[id]);
+    } finally {
+      this.tau = 0;
+    }
+  }
+
   // --- band gains (dB) ---
   setLow(db: number) {
-    this.low.gain.value = clampDb(db);
+    this.write(this.low.gain, "low", clampDb(db));
   }
   setMid(db: number) {
-    this.mid.gain.value = clampDb(db);
+    this.write(this.mid.gain, "mid", clampDb(db));
   }
   setHigh(db: number) {
-    this.high.gain.value = clampDb(db);
+    this.write(this.high.gain, "high", clampDb(db));
+  }
+  get lowDb() {
+    return this.cmd.low;
+  }
+  get midDb() {
+    return this.cmd.mid;
+  }
+  get highDb() {
+    return this.cmd.high;
   }
 
   // --- band frequencies (Hz) ---
   setLowFreq(hz: number) {
-    this.low.frequency.value = clampHz(hz, EQ_BANDS.low);
+    this.write(this.low.frequency, "lowFreq", clampHz(hz, EQ_BANDS.low));
   }
   setMidFreq(hz: number) {
-    this.mid.frequency.value = clampHz(hz, EQ_BANDS.mid);
+    this.write(this.mid.frequency, "midFreq", clampHz(hz, EQ_BANDS.mid));
   }
   setHighFreq(hz: number) {
-    this.high.frequency.value = clampHz(hz, EQ_BANDS.high);
+    this.write(this.high.frequency, "highFreq", clampHz(hz, EQ_BANDS.high));
   }
   get lowFreq() {
-    return this.low.frequency.value;
+    return this.cmd.lowFreq;
   }
   get midFreq() {
-    return this.mid.frequency.value;
+    return this.cmd.midFreq;
   }
   get highFreq() {
-    return this.high.frequency.value;
+    return this.cmd.highFreq;
   }
 
   // --- mid bell width ---
   setMidQ(q: number) {
-    this.mid.Q.value = clampQ(q);
+    this.write(this.mid.Q, "midQ", clampQ(q));
   }
   get midQ() {
-    return this.mid.Q.value;
+    return this.cmd.midQ;
   }
 
   // --- per-band SHAPE (bell / low-shelf / high-shelf) + the now-meaningful shelf Q.
@@ -243,64 +293,72 @@ export class Eq3 implements FxDevice {
     return this.highShapeIdx;
   }
   setLowQ(q: number) {
-    this.low.Q.value = clampQ(q);
+    this.write(this.low.Q, "lowQ", clampQ(q));
   }
   get lowQ() {
-    return this.low.Q.value;
+    return this.cmd.lowQ;
   }
   setHighQ(q: number) {
-    this.high.Q.value = clampQ(q);
+    this.write(this.high.Q, "highQ", clampQ(q));
   }
   get highQ() {
-    return this.high.Q.value;
+    return this.cmd.highQ;
   }
 
   // --- HP / LP cut filters (cutoff + resonance) ---
   setHpFreq(hz: number) {
-    this.hp.frequency.value = clampHz(hz, EQ_HP);
+    this.write(this.hp.frequency, "hpFreq", clampHz(hz, EQ_HP));
   }
   setHpQ(q: number) {
-    this.hp.Q.value = clampQ(q);
+    this.write(this.hp.Q, "hpQ", clampQ(q));
   }
   get hpFreq() {
-    return this.hp.frequency.value;
+    return this.cmd.hpFreq;
   }
   get hpQ() {
-    return this.hp.Q.value;
+    return this.cmd.hpQ;
   }
   setLpFreq(hz: number) {
-    this.lp.frequency.value = clampHz(hz, EQ_LP);
+    this.write(this.lp.frequency, "lpFreq", clampHz(hz, EQ_LP));
   }
   setLpQ(q: number) {
-    this.lp.Q.value = clampQ(q);
+    this.write(this.lp.Q, "lpQ", clampQ(q));
   }
   get lpFreq() {
-    return this.lp.frequency.value;
+    return this.cmd.lpFreq;
   }
   get lpQ() {
-    return this.lp.Q.value;
+    return this.cmd.lpQ;
   }
 
   /** Flat: all gains 0, every node back to default freq/Q, cuts parked off-screen. */
   reset() {
-    this.setLow(0);
-    this.setMid(0);
-    this.setHigh(0);
-    this.low.frequency.value = EQ_BANDS.low.freq;
-    this.mid.frequency.value = EQ_BANDS.mid.freq;
-    this.high.frequency.value = EQ_BANDS.high.freq;
-    this.mid.Q.value = 0.9;
-    this.hp.frequency.value = EQ_HP.freq;
-    this.hp.Q.value = EQ_HP.q;
-    this.lp.frequency.value = EQ_LP.freq;
-    this.lp.Q.value = EQ_LP.q;
-    this.setLowShape(EQ_SHAPE_DEFAULT.low);
-    this.setMidShape(EQ_SHAPE_DEFAULT.mid);
-    this.setHighShape(EQ_SHAPE_DEFAULT.high);
-    this.low.Q.value = 1;
-    this.high.Q.value = 1;
+    this.applyCurve(Eq3.defaults(), 0); // through the setters → the commanded mirror stays true
     this.setMix(1);
     this.setBypass(false);
+  }
+
+  /** The flat curve — the device's own defaults as a param map (the preset menu's "Default",
+   *  and what the FX pad throws when nothing else is armed). */
+  static defaults(): Record<string, number> {
+    return {
+      low: 0,
+      mid: 0,
+      high: 0,
+      lowFreq: EQ_BANDS.low.freq,
+      midFreq: EQ_BANDS.mid.freq,
+      highFreq: EQ_BANDS.high.freq,
+      midQ: 0.9,
+      lowQ: 1,
+      highQ: 1,
+      hpFreq: EQ_HP.freq,
+      hpQ: EQ_HP.q,
+      lpFreq: EQ_LP.freq,
+      lpQ: EQ_LP.q,
+      lowShape: EQ_SHAPE_DEFAULT.low,
+      midShape: EQ_SHAPE_DEFAULT.mid,
+      highShape: EQ_SHAPE_DEFAULT.high,
+    };
   }
 
   /** Combined magnitude (dB) at each frequency in `freqHz`, into `outDb` — the real
@@ -331,9 +389,9 @@ export class Eq3 implements FxDevice {
     get: (e: Eq3) => number;
     set: (e: Eq3, v: number) => void;
   }> = [
-    { id: "low", get: (e) => e.low.gain.value, set: (e, v) => e.setLow(v) },
-    { id: "mid", get: (e) => e.mid.gain.value, set: (e, v) => e.setMid(v) },
-    { id: "high", get: (e) => e.high.gain.value, set: (e, v) => e.setHigh(v) },
+    { id: "low", get: (e) => e.lowDb, set: (e, v) => e.setLow(v) },
+    { id: "mid", get: (e) => e.midDb, set: (e, v) => e.setMid(v) },
+    { id: "high", get: (e) => e.highDb, set: (e, v) => e.setHigh(v) },
     { id: "lowFreq", get: (e) => e.lowFreq, set: (e, v) => e.setLowFreq(v) },
     { id: "midFreq", get: (e) => e.midFreq, set: (e, v) => e.setMidFreq(v) },
     { id: "highFreq", get: (e) => e.highFreq, set: (e, v) => e.setHighFreq(v) },

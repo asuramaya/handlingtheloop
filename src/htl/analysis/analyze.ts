@@ -432,6 +432,31 @@ export function foldTempoOctave(target: number, ref: number): number | null {
   return t;
 }
 
+/** The SYNC slave's tempo target (BPM) that keeps it beat-density-locked to a master running at
+ *  `masterEff`, plus the octave `factor` (a power of 2 = target/masterEff) used to get there.
+ *
+ *  Off a commanded ramp (`heldFactor` null) this just folds the master into the slave's octave —
+ *  the plain foldTempoOctave. The load-bearing case is a Smart Fader throw / auto-mix glide, where
+ *  the master's tempo is being MORPHED continuously across up to a √2 span: re-folding fresh every
+ *  step makes the fold flip an octave the instant masterEff crosses `slaveBpm/√2`, doubling the
+ *  slave's tempo in ONE step (the trace-confirmed 87→174 jump). Passing back the `factor` captured
+ *  on the throw's first step and threading it in as `heldFactor` LOCKS the octave for the whole
+ *  morph, so the slave's absolute tempo sweeps continuously with the master (still an exact octave
+ *  apart, so the phase lock holds) and never pops. Returns null on a degenerate 0/NaN grid. */
+export function slaveFoldTarget(
+  masterEff: number,
+  slaveBpm: number,
+  heldFactor: number | null,
+): { target: number; factor: number } | null {
+  if (!(Number.isFinite(masterEff) && masterEff > 0)) return null;
+  if (heldFactor != null && Number.isFinite(heldFactor) && heldFactor > 0) {
+    return { target: masterEff * heldFactor, factor: heldFactor };
+  }
+  const folded = foldTempoOctave(masterEff, slaveBpm);
+  if (folded == null) return null;
+  return { target: folded, factor: folded / masterEff };
+}
+
 /** Phase error between a SYNC slave and master, measured against a COMMON audible beat so a
  *  half/double-detected grid doesn't poison the lock. Inputs are each deck's beat phase in [0,1)
  *  (from beatPhase) plus `fold` = the grid-beat-frequency ratio slave/master (≈ slaveRate·sBpm /

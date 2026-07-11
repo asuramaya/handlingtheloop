@@ -21,6 +21,7 @@ import {
   barAnchor,
   barPhase,
   foldTempoOctave,
+  slaveFoldTarget,
   commonPhaseError,
   piTrim,
   serializeGrid,
@@ -512,6 +513,68 @@ describe("foldTempoOctave", () => {
     expect(foldTempoOctave(128, Infinity)).toBeNull();
     expect(foldTempoOctave(-128, 128)).toBeNull();
     expect(foldTempoOctave(128, -1)).toBeNull();
+  });
+});
+
+// slaveFoldTarget — the SYNC slave's tempo target during a master tempo move. The regression it
+// guards: during a Smart Fader throw the master's tempo is MORPHED across up to a √2 span, and a
+// fresh fold each step flips an octave the instant masterEff crosses slaveBpm/√2 → the slave's
+// tempo doubles in one step (the trace-confirmed 87→174 mid-throw jump). Holding the octave factor
+// captured on the first step keeps the sweep continuous.
+describe("slaveFoldTarget", () => {
+  it("off a ramp (held null) folds fresh, matching foldTempoOctave", () => {
+    for (const m of [130, 118, 174, 87, 200]) {
+      const r = slaveFoldTarget(m, 174, null)!;
+      expect(r.target).toBeCloseTo(foldTempoOctave(m, 174)!, 6);
+    }
+  });
+
+  it("reports the octave factor = target / masterEff (a power of 2)", () => {
+    const r = slaveFoldTarget(118, 174, null)!; // folds UP ×2 (118/174 < 1/√2)
+    expect(r.factor).toBeCloseTo(2, 6);
+    expect(r.target).toBeCloseTo(236, 6);
+    const r1 = slaveFoldTarget(130, 174, null)!; // stays ×1
+    expect(r1.factor).toBeCloseTo(1, 6);
+  });
+
+  it("a held factor locks the octave across the √2 boundary — no mid-sweep jump", () => {
+    // Master morphs 130 → 118 (slaveBpm 174, boundary 174/√2 ≈ 123.04). Fresh folding flips ×1→×2
+    // as it crosses; the held factor (captured at 130) keeps the slave continuous.
+    const sweep = [130, 126, 123, 120, 118];
+    const held = slaveFoldTarget(sweep[0], 174, null)!.factor; // capture on the first step
+
+    const heldTargets = sweep.map((m) => slaveFoldTarget(m, 174, held)!.target);
+    const freshTargets = sweep.map((m) => slaveFoldTarget(m, 174, null)!.target);
+
+    // Held: the target tracks the master exactly (factor 1), monotone, no doubling.
+    for (let i = 0; i < sweep.length; i++) expect(heldTargets[i]).toBeCloseTo(sweep[i], 6);
+    const heldMaxStep = Math.max(...heldTargets.slice(1).map((t, i) => Math.abs(t - heldTargets[i])));
+    expect(heldMaxStep).toBeLessThan(5); // a few BPM per step — smooth
+
+    // Fresh: somewhere in the sweep the fold doubles the slave in one step (the bug).
+    const freshMaxStep = Math.max(...freshTargets.slice(1).map((t, i) => Math.abs(t - freshTargets[i])));
+    expect(freshMaxStep).toBeGreaterThan(90); // ~124 → ~244, the octave pop
+  });
+
+  it("a held target stays an exact octave multiple of masterEff (phase lock holds)", () => {
+    const held = 2;
+    for (const m of [130, 122, 100, 90]) {
+      const r = slaveFoldTarget(m, 174, held)!;
+      expect(r.target / m).toBeCloseTo(held, 9); // exact power-of-2 ratio → commonPhaseError locks
+    }
+  });
+
+  it("falls back to a fresh fold when the held factor is invalid (0 / NaN / negative)", () => {
+    for (const bad of [0, NaN, -2, Infinity]) {
+      const r = slaveFoldTarget(118, 174, bad)!;
+      expect(r.target).toBeCloseTo(foldTempoOctave(118, 174)!, 6);
+    }
+  });
+
+  it("returns null on a degenerate master tempo (0 / NaN) even with a held factor", () => {
+    expect(slaveFoldTarget(0, 174, 1)).toBeNull();
+    expect(slaveFoldTarget(NaN, 174, 2)).toBeNull();
+    expect(slaveFoldTarget(-120, 174, null)).toBeNull();
   });
 });
 

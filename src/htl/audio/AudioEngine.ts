@@ -1,4 +1,5 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, foldTempoOctave, localTempoDev, nearestBeat, piTrim, smartKeyShift } from "../analysis/analyze";
+import { trace } from "../debug/trace";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
@@ -853,6 +854,10 @@ export class AudioEngine {
       feedFwd: ff,
       saturated: Math.abs(this.syncFF + pi.raw) - Deck.SYNC_TRIM_MAX > 1e-6,
     };
+    // Trace only when the loop is STRUGGLING (trim saturated, or a big residual phase error) —
+    // the "tries to sync but can't settle" signature — so this per-tick path stays quiet otherwise.
+    if (this.syncDiagState.saturated || Math.abs(err) > 0.25)
+      trace("sync.pc", { slave: sid, err: +err.toFixed(3), fold: fold == null ? null : +fold.toFixed(3), ff: +ff.toFixed(4), trim: +slave.syncTrim.toFixed(4), sat: this.syncDiagState.saturated, cmd: this.commandedRamp });
   }
 
   /** Which deck is the SYNC slave (null = off) — the absolute setpoint to send over a
@@ -903,8 +908,12 @@ export class AudioEngine {
     // bail) on a degenerate 0/NaN BPM grid — the raw while-loop here used to hang the thread.
     const target = foldTempoOctave(master.effectiveBpm ?? mg.bpm, sg.bpm);
     if (target == null) return;
+    const slavePct = (target / sg.bpm - 1) * 100;
+    // The smoking gun for a mid-throw "jumps up": this fold can flip an octave (target 174→348 /
+    // 87→174) when masterEff crosses √2·slaveBpm, doubling the slave's tempo in one step.
+    trace("sync.match", { slave: sid, mEff: +(master.effectiveBpm ?? mg.bpm).toFixed(1), sBpm: +sg.bpm.toFixed(1), fold: +target.toFixed(1), sPct: +slavePct.toFixed(2), cmd: this.commandedRamp });
     this.propagating = true; // this setTempo is the echo — don't let it release sync
-    slave.setTempo((target / sg.bpm - 1) * 100);
+    slave.setTempo(slavePct);
     this.propagating = false;
   }
 

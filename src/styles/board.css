@@ -293,6 +293,27 @@
   font-weight: 600;
   opacity: 0.85;
 }
+/* Loop-live chip — shows only while a loop is active. `color` is set inline to the loop hue, so
+   the tint + hairline derive from currentColor; the gentle pulse reads as "looping NOW" without
+   a colour-filled pill fighting the waveform. */
+.lane-loop {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 0 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+  animation: lane-loop-pulse 1.15s ease-in-out infinite;
+}
+@keyframes lane-loop-pulse {
+  50% { opacity: 0.5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lane-loop { animation: none; }
+}
 .lane-status {
   color: var(--shift);
   font-weight: 600;

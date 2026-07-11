@@ -784,28 +784,11 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fillRect(lx, 0, 2 * dpr, h);
       ctx.fillRect(lx + lw - 2 * dpr, 0, 2 * dpr, h);
     }
-    // Playhead loop badge — a glanceable "you're looping NOW" cue pinned at the top of the
-    // playhead (centre). The loop region itself scrolls off at deep zoom, so this is the always-
-    // visible state read: present + its beat length = in a live loop; gone = the loop exited.
-    if (loop && loop.active) {
-      const beats = loop.beats;
-      const txt = `⟳ ${beats >= 1 ? String(beats) : `1/${Math.round(1 / beats)}`}`;
-      ctx.font = `700 ${10 * dpr}px ui-monospace, SFMono-Regular, monospace`;
-      const prevAlign = ctx.textAlign;
-      const prevBase = ctx.textBaseline;
-      const bw = ctx.measureText(txt).width + 10 * dpr;
-      const bh = 15 * dpr;
-      const bx = w / 2 - bw / 2;
-      const by = 3 * dpr;
-      ctx.fillStyle = rgba(p.loopColor, 0.92);
-      ctx.fillRect(bx, by, bw, bh);
-      ctx.fillStyle = "#0a0a0f";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(txt, w / 2, by + bh / 2 + 0.5 * dpr);
-      ctx.textAlign = prevAlign;
-      ctx.textBaseline = prevBase;
-    }
+    // The "you're looping NOW" state read + its beat length lives in the lane HEADER (a pulsing
+    // ⟳ chip in DeckLane), not on the waveform — an opaque pill pinned at the playhead centre
+    // collided with the cue flags + the loop-out edge. Here the loop region's brighter fill
+    // (active 0.2 vs armed 0.1) + edge bars carry the WHERE; the header chip carries the STATE,
+    // and stays visible when the region scrolls off at deep zoom.
 
     // Waveform — presented from the offscreen layer. A rebuild (the heavy 3×-wide
     // re-rasterise) is forced ONLY when the layer's CONTENT is stale (track/stems/mute/

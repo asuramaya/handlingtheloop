@@ -248,6 +248,14 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
             </span>
           );
         })()}
+        {/* Loop state — a pulsing ⟳ chip that shows ONLY while a loop is live (its beat length in
+            bars/fractions). Replaces the on-waveform pill that fought the cue flags; always visible
+            here even when the loop region scrolls off at deep zoom. Coloured with the loop hue. */}
+        {deck.loop?.active && (
+          <span className="lane-loop" style={{ color: loopColor }} title={`Looping · ${deck.loop.beats >= 1 ? `${deck.loop.beats} bar${deck.loop.beats > 1 ? "s" : ""}` : `1/${Math.round(1 / deck.loop.beats)} beat`}`}>
+            ⟳ {deck.loop.beats >= 1 ? deck.loop.beats : `1/${Math.round(1 / deck.loop.beats)}`}
+          </span>
+        )}
         {/* Beat-grid size — also the beat-jump / loop-move resolution. */}
         <span className="lane-grid" title="Beat-grid size (− / +)">
           <button

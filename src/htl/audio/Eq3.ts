@@ -11,8 +11,14 @@
 //     just one band's frequency region while you hunt for the problem spot.
 //   • BYPASS: feed input straight to output (compare with the EQ out of circuit).
 
-export const EQ_MIN_DB = -26;
-export const EQ_MAX_DB = 6;
+// Band gain range. The cut side reaches a TRUE KILL (−40 dB is gone, not "quiet") because a DJ
+// bass swap wants the low band to vanish, not to leave a ghost under the incoming track. The boost
+// side reaches +12 so a preset can be a real gesture — the old +6 ceiling made every boost a
+// mastering nudge. What makes +12 safe is EQ_OUT_DB: the curve now carries its own output trim,
+// so a boost-heavy preset level-matches itself instead of eating the channel's headroom.
+export const EQ_MIN_DB = -40;
+export const EQ_MAX_DB = 12;
+export const EQ_OUT_DB = 12; // output trim travel, ± (0 = unity)
 
 // Movable band frequencies (Hz) + travel range. Defaults match the classic layout.
 export const EQ_BANDS = {
@@ -54,6 +60,7 @@ export class Eq3 implements FxDevice {
   private readonly dry: GainNode; // parallel dry path for the wet/dry blend
   private readonly wet: GainNode; // EQ-chain output for the wet/dry blend
   private _mix = 1; // wet/dry: 0 = flat/dry, 1 = full EQ (default)
+  private _out = 0; // output trim (dB), applied to the WET path only — see setOut
   private route: EqRoute = "normal";
   private lowShapeIdx: number = EQ_SHAPE_DEFAULT.low;
   private midShapeIdx: number = EQ_SHAPE_DEFAULT.mid;
@@ -148,7 +155,18 @@ export class Eq3 implements FxDevice {
   }
   private applyMix() {
     this.dry.gain.value = 1 - this._mix;
-    this.wet.gain.value = this._mix;
+    this.wet.gain.value = this._mix * Math.pow(10, this._out / 20);
+  }
+  /** OUTPUT TRIM (dB) — makeup gain for the curve, on the WET path only. A boost-heavy preset
+   *  can now pay for itself (pull the trim down) instead of eating the channel's headroom, which
+   *  is what lets the band gains reach +12 at all. Dry stays at unity: trimming the EQ must never
+   *  move the level of a signal the EQ isn't touching (mix 0 / bypass are both untouched). */
+  setOut(db: number) {
+    this._out = Math.max(-EQ_OUT_DB, Math.min(EQ_OUT_DB, db));
+    if (this.route === "normal") this.applyMix();
+  }
+  get out() {
+    return this._out;
   }
 
   get routeMode(): EqRoute {
@@ -358,6 +376,7 @@ export class Eq3 implements FxDevice {
       lowShape: EQ_SHAPE_DEFAULT.low,
       midShape: EQ_SHAPE_DEFAULT.mid,
       highShape: EQ_SHAPE_DEFAULT.high,
+      out: 0,
     };
   }
 
@@ -369,7 +388,7 @@ export class Eq3 implements FxDevice {
       this.mag = new Float32Array(n);
       this.phase = new Float32Array(n);
     }
-    outDb.fill(0);
+    outDb.fill(this._out); // the output trim shifts the whole curve — draw it where it really sits
     const f = freqHz as Float32Array<ArrayBuffer>;
     for (const band of [this.hp, this.low, this.mid, this.high, this.lp]) {
       band.getFrequencyResponse(f, this.mag, this.phase!);
@@ -405,6 +424,7 @@ export class Eq3 implements FxDevice {
     { id: "highShape", get: (e) => e.highShape, set: (e, v) => e.setHighShape(v) },
     { id: "lowQ", get: (e) => e.lowQ, set: (e, v) => e.setLowQ(v) },
     { id: "highQ", get: (e) => e.highQ, set: (e, v) => e.setHighQ(v) },
+    { id: "out", get: (e) => e.out, set: (e, v) => e.setOut(v) },
   ];
 
   setParam(id: string, value: number) {

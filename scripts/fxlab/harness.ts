@@ -26,7 +26,7 @@ interface Spec {
   kind: FxKind;
   presetName?: string | null;
   params?: Record<string, number> | null;
-  signal?: "impulse" | "burst" | "noise" | "tone" | "silence";
+  signal?: "impulse" | "burst" | "noise" | "pink" | "tone" | "silence";
   seconds?: number;
   bpm?: number;
   sampleRate?: number;
@@ -73,13 +73,33 @@ function makeSignal(ctx: Ctx, signal: string, sr: number): AudioScheduledSourceN
     s.offset.value = 0;
     return s;
   }
-  // Buffer-backed stimuli: impulse / burst / noise.
-  const len = Math.round(sr * (signal === "impulse" ? 0.003 : 0.12));
+  // Buffer-backed stimuli: impulse / burst / noise / pink.
+  // PINK is the one to judge LOUDNESS with. White noise is flat per-Hz, so half its energy lives in
+  // the top two octaves — under white, killing the bass looks free and killing the highs looks
+  // catastrophic, which is the opposite of what happens to music. Pink is equal-energy-per-octave,
+  // which is roughly what a mixed track looks like, so a level delta measured against it means
+  // something. Pink runs the whole render (a sustained bed), not a 120 ms burst.
+  const isPink = signal === "pink";
+  const len = Math.round(sr * (signal === "impulse" ? 0.003 : isPink ? 1.0 : 0.12));
   const buf = ctx.createBuffer(2, Math.max(1, len), sr);
   for (let ch = 0; ch < 2; ch++) {
     const d = buf.getChannelData(ch);
     if (signal === "impulse") {
       for (let i = 0; i < d.length; i++) d[i] = 1; // ~3 ms click at full scale
+    } else if (isPink) {
+      // Paul Kellet's economy pink filter (the same one NoiseFx uses).
+      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      for (let i = 0; i < d.length; i++) {
+        const w = Math.random() * 2 - 1;
+        b0 = 0.99886 * b0 + w * 0.0555179;
+        b1 = 0.99332 * b1 + w * 0.0750759;
+        b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856;
+        b4 = 0.55 * b4 + w * 0.5329522;
+        b5 = -0.7616 * b5 - w * 0.016898;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11 * 3.2;
+        b6 = w * 0.115926;
+      }
     } else if (signal === "noise") {
       for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.7;
     } else {

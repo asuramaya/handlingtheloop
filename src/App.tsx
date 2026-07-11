@@ -23,8 +23,6 @@ import { useGamepad } from "@htl/gamepad";
 import {
   AudioEngine,
   type Deck,
-  EQ_MIN_DB,
-  EQ_MAX_DB,
   analyzeTrackAsync,
   serializeGrid,
   deserializeGrid,
@@ -223,6 +221,7 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqLpQ: deck.eqLpQ,
     eqBypass: deck.eqBypassed,
     eqMix: deck.eqMix,
+    eqOut: deck.eqOut,
     filter: deck.filterValue,
     fx: deck.fxSnapshot(), // post-EQ effect chain (delay/reverb…) — EQ stays in the eq* fields
     keylock: deck.keylock,
@@ -298,6 +297,7 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqLpQ != null) deck.setEqLpQ(s.eqLpQ);
   deck.setEqBypass(!!s.eqBypass);
   if (s.eqMix != null) deck.setEqMix(s.eqMix);
+  if (s.eqOut != null) deck.setEqOut(s.eqOut);
   deck.applyFxSnapshot(s.fx); // FX chain (undefined = old snapshot → keep default; [] = explicitly empty)
   deck.setKeylock(s.keylock);
   deck.setPitch(s.pitchSemis ?? 0);
@@ -747,8 +747,11 @@ function AppBody() {
   // "dB" gain-match: nudge this deck's TRIM so its trimmed loudness equals the
   // other deck's, clamped to the trim knob's range so a near-silent track can't
   // demand absurd gain. Loudness is the cached integrated RMS of each buffer.
-  const MIN_TRIM = Math.pow(10, EQ_MIN_DB / 20);
-  const MAX_TRIM = Math.pow(10, EQ_MAX_DB / 20);
+  // The trim has its OWN range (−26…+6 dB): it used to borrow the EQ's band-gain
+  // constants, so widening the EQ to a true kill would have silently dragged the
+  // trim knob down to 1% gain. Different controls, different limits.
+  const MIN_TRIM = Math.pow(10, -26 / 20);
+  const MAX_TRIM = Math.pow(10, 6 / 20);
   const matchGain = useCallback(
     (id: DeckId) => {
       const self = engine.deck(id);
@@ -2128,6 +2131,7 @@ function AppBody() {
       emit({ kind: "control", deck: id, param: "eqLpFreq", value: d.eqLpFreq });
       emit({ kind: "control", deck: id, param: "eqLpQ", value: d.eqLpQ });
       emit({ kind: "control", deck: id, param: "eqMix", value: d.eqMix });
+      emit({ kind: "control", deck: id, param: "eqOut", value: d.eqOut });
       emit({ kind: "toggle", deck: id, param: "eqBypass", value: d.eqBypassed });
       emit({ kind: "control", deck: id, param: "filter", value: d.filterValue });
       emit({ kind: "control", deck: id, param: "pitch", value: d.pitch });

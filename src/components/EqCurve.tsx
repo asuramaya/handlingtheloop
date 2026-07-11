@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useEmit } from "../App/spine";
 import type { Deck } from "@htl/audio";
-import { EQ_MIN_DB, EQ_MAX_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
+import { EQ_MIN_DB, EQ_MAX_DB, EQ_OUT_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { clamp } from "../util/math";
 import { fmtHz, fmtDb } from "../util/format";
@@ -527,6 +527,24 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
               onChange={(v) => {
                 deck.setEqMix(v);
                 emit({ kind: "control", deck: id, param: "eqMix", value: v });
+                dirty.current = true;
+                bump((x) => x + 1);
+              }}
+            />
+            {/* OUTPUT TRIM (dB) — makeup for the curve, wet path only. A preset that pushes +12
+                pays for itself here instead of eating the channel's headroom; it's what lets the
+                band gains reach +12 in the first place. */}
+            <ValueCell
+              label="OUT"
+              value={deck.eqOut}
+              min={-EQ_OUT_DB}
+              max={EQ_OUT_DB}
+              step={0.5}
+              reset={0}
+              format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`}
+              onChange={(v) => {
+                deck.setEqOut(v);
+                emit({ kind: "control", deck: id, param: "eqOut", value: v });
                 dirty.current = true;
                 bump((x) => x + 1);
               }}

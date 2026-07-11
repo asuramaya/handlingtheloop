@@ -131,6 +131,7 @@ export type ControlParam =
   | "eqLpFreq"
   | "eqLpQ"
   | "eqMix"
+  | "eqOut"
   | "filter"
   | "pitch";
 export type ToggleParam = "fx" | "keylock" | "quantize" | "eqBypass";

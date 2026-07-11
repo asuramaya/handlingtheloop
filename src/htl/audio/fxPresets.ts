@@ -110,15 +110,29 @@ export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
   // EQ — the per-deck parametric channel EQ (Eq3). No `mix` in its param bus; gains are dB in the
   // ASYMMETRIC DJ range −26…+6 (big cuts, modest boosts). `*Shape` sets each band's filter (0 BELL/
   // 1 LO-SH/2 HI-SH/3 NOTCH); `hpFreq`/`lpFreq` are the sweepable cut filters (parked at 20/20000 = off).
+  // EQ — the channel EQ, and (since it took the 8th FX pad) a PERFORMANCE curve. These are all
+  // THROWS: hold the pad, the curve slams in; let go, your ride comes back. So every one of them
+  // is a gesture you'd hear from the back of the room — not a mastering nudge. (The first bank was
+  // 5 tone-shaping curves averaging ±3 dB; on a pad that's a dead button.)
+  //   • band gains reach ±40/+12 now, so a "kill" is a real kill (the low shelf at −40 is GONE).
+  //   • `out` is the curve's own output trim: a preset that guts half the spectrum pays itself
+  //     back here, so throws land at roughly the level you left. Values below are measured in
+  //     fxlab against a full-scale tone, not guessed.
+  //   • shapes: 0 = bell, 1 = low-shelf, 2 = high-shelf, 3 = notch.
   eq: [
-    { name: "Bass Boost", params: { low: 5, mid: 0, high: 0, lowFreq: 120, midFreq: 1000, highFreq: 3200, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Bright Air", params: { low: 0, mid: 0, high: 5, lowFreq: 200, midFreq: 1000, highFreq: 8000, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Vocal Presence", params: { low: -3, mid: 4, high: 2, lowFreq: 200, midFreq: 2500, highFreq: 8000, midQ: 1.2, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Smile Scoop", params: { low: 3, mid: -6, high: 3, lowFreq: 120, midFreq: 800, highFreq: 6000, midQ: 0.8, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Low-Cut", params: { low: 0, mid: 0, high: 0, lowFreq: 200, midFreq: 1000, highFreq: 3200, midQ: 0.9, hpFreq: 200, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Telephone", params: { low: 0, mid: 3, high: 0, lowFreq: 200, midFreq: 1500, highFreq: 3200, midQ: 1, hpFreq: 500, hpQ: 0.7, lpFreq: 3000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Kill Highs", params: { low: 0, mid: 0, high: -20, lowFreq: 200, midFreq: 1000, highFreq: 3000, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 8000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
-    { name: "Warm Tape", params: { low: 3, mid: 1, high: -3, lowFreq: 150, midFreq: 500, highFreq: 6000, midQ: 0.8, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1 } },
+    // The two swap tools. A bass kill you can hold through a transition, and its mirror.
+    { name: "Bass Kill", params: { low: -40, mid: 0, high: 0, lowFreq: 90, midFreq: 1000, highFreq: 3200, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 0 } },
+    { name: "High Kill", params: { low: 0, mid: 0, high: -40, lowFreq: 200, midFreq: 1000, highFreq: 6000, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 0 } },
+    // Hollow it out — the drums and the sub stay, the body leaves.
+    { name: "Mid Scoop", params: { low: 0, mid: -14, high: 0, lowFreq: 200, midFreq: 800, highFreq: 3200, midQ: 0.7, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 1 } },
+    // Band-limited voices. TELEPHONE is the wide one (500 Hz – 3 kHz), RADIO is the tight one.
+    { name: "Telephone", params: { low: 0, mid: 6, high: 0, lowFreq: 200, midFreq: 1500, highFreq: 3200, midQ: 1, hpFreq: 500, hpQ: 0.9, lpFreq: 3000, lpQ: 0.9, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 0 } },
+    { name: "Radio", params: { low: 0, mid: 5, high: 0, lowFreq: 200, midFreq: 1400, highFreq: 3200, midQ: 2, hpFreq: 800, hpQ: 1.5, lpFreq: 2200, lpQ: 1.5, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 1.5 } },
+    // The two filter PARKS — a resonant cutoff dropped on the track and held there.
+    { name: "Sub Drop", params: { low: 0, mid: 0, high: 0, lowFreq: 200, midFreq: 1000, highFreq: 3200, midQ: 0.9, hpFreq: 20, hpQ: 0.7, lpFreq: 320, lpQ: 5, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 2 } },
+    { name: "Riser", params: { low: 0, mid: 0, high: 0, lowFreq: 200, midFreq: 1000, highFreq: 3200, midQ: 0.9, hpFreq: 1000, hpQ: 8, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 0, highShape: 2, lowQ: 1, highQ: 1, out: 0 } },
+    // A deep null through the middle — the track goes hollow without losing its ends.
+    { name: "Deep Notch", params: { low: 0, mid: 0, high: 0, lowFreq: 200, midFreq: 1000, highFreq: 3200, midQ: 1.2, hpFreq: 20, hpQ: 0.7, lpFreq: 20000, lpQ: 0.7, lowShape: 1, midShape: 3, highShape: 2, lowQ: 1, highQ: 1, out: 0 } },
   ],
 };
 

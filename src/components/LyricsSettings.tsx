@@ -52,6 +52,15 @@ export function LyricsSettings({ settings, onChange }: { settings: Settings; onC
               ? "YouTube captions directly — instant and GPU-free, but only as accurate as the uploader's captions and looser on timing."
               : active.blurb}
           </p>
+          {/* Whisper transcribes the ISOLATED VOCAL STEM, so it cannot run at all while separation
+              is off — and "Single" is the default. Without this the deck just sat silent waiting
+              for a stem that was never coming, which read as a hang. Say it where the choice is made. */}
+          {settings.lyricsModel !== "youtube" && settings.stemModel === "off" && (
+            <p className="settings-hint warn">
+              Whisper reads the isolated vocal stem — turn on stem separation above, or these tracks fall back to YouTube
+              captions.
+            </p>
+          )}
         </>
       )}
       <p className="settings-hint muted">

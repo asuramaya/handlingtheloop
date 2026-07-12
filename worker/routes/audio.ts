@@ -275,14 +275,20 @@ export async function handleAudioRoutes(url: URL, req: Request, env: Env, ctx: E
         const row = await getLyrics(env.DB, v).catch(() => null);
         if (!row) return json(200, { transcript: null });
         return json(200, {
-          transcript: { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, lines: row.lines, createdAt: 0 },
+          // `ver` is the transcript-FORMAT version that produced these lines. The client compares
+          // it against its own LYRICS_VER: behind → re-decode and upgrade the row; at-or-ahead →
+          // reuse as-is. Without it the pool would keep serving a stale format forever.
+          transcript: { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, ver: row.ver, lines: row.lines, createdAt: 0 },
         });
       }
       if (req.method === "POST") {
         if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
-        const b = (await req.json().catch(() => ({}))) as { videoId?: string; model?: string; lang?: string; conf?: number; lines?: unknown };
+        const b = (await req.json().catch(() => ({}))) as { videoId?: string; model?: string; lang?: string; conf?: number; ver?: number; lines?: unknown };
         if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
         const model = b.model === "small" ? "small" : "base";
+        // Transcript-format version (client LYRICS_VER). Bounded so a poster can't claim an absurd
+        // version to make their row permanently un-overwritable by the don't-downgrade guard.
+        const ver = Math.max(1, Math.min(100, Math.floor(Number(b.ver) || 1)));
         // Shape-validate + bound the payload so no anonymous poster can store garbage or an
         // oversized blob: {start,end,text, words?:[{t,w}]} clamped, capped at 2000 lines /
         // 40 words. The optional per-word timings drive the karaoke highlight.
@@ -311,13 +317,23 @@ export async function handleAudioRoutes(url: URL, req: Request, env: Env, ctx: E
           })
           .filter((l) => l.text.length > 0);
         if (!lines.length) return json(400, { error: "no valid lines" });
+        // Loop-hallucination guard. Whisper's classic failure on an instrumental passage is to emit
+        // ONE phrase over and over; that transcript is worthless and, once pooled, it is served to
+        // every other device. A transcript whose every line is the same text is never real lyrics.
+        // (The client gates harder before contributing — this is the backstop for any poster.)
+        if (lines.length >= 4 && new Set(lines.map((l) => l.text.toLowerCase())).size === 1) {
+          return json(400, { error: "rejected: degenerate transcript" });
+        }
         if (env.DB) {
           ctx.waitUntil(
             putLyrics(env.DB, {
               videoId: b.videoId!,
               model,
-              lang: cleanText(b.lang ?? "en", 8) || "en",
+              // "und" (undetermined) is the honest default: the decoder AUTO-detects language and
+              // does not report it back, so anything else here would be a guess stored as fact.
+              lang: cleanText(b.lang ?? "und", 8) || "und",
               conf: clampNum(b.conf, 0, 1) ?? 0,
+              ver,
               lines,
               contributor: null,
             }).catch(() => {}),

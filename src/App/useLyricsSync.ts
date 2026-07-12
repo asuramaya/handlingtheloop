@@ -26,6 +26,8 @@ export interface LyricsSyncDeps {
   loadSeq: MutableRefObject<Record<DeckId, number>>;
   // Read-only here → covariant `current` so App's MutableRefObject<LyricsModel> assigns in.
   lyricsModelRef: { readonly current: string };
+  // Whisper decodes the NEURAL VOCAL STEM — without separation there is nothing to transcribe.
+  stemModelRef: { readonly current: string };
 }
 
 export interface LyricsSync {
@@ -46,6 +48,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
     captionVidRef,
     loadSeq,
     lyricsModelRef,
+    stemModelRef,
   } = deps;
 
   // The host streams its resolved, word-timed lyrics → apply them to this deck's caption ribbon
@@ -90,6 +93,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
         engine: eng,
         force: true,
         enabled: true, // explicit user action → decode even if auto-lyrics is off
+        stemsEnabled: stemModelRef.current !== "off",
         sampleRate: engine.ctx.sampleRate,
         stale,
         onCues: (cues, source) => {

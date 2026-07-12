@@ -674,21 +674,22 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           const row = await devStore.getLyrics(v);
           sendJson(res, 200, {
             transcript: row
-              ? { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, lines: row.lines, createdAt: 0 }
+              ? { v: 1, videoId: v, model: row.model, lang: row.lang, source: "pool", conf: row.conf, ver: row.ver ?? 1, lines: row.lines, createdAt: 0 }
               : null,
           });
           return true;
         }
         if (req.method === "POST") {
-          const b = (await readJsonBody(req)) as { videoId?: string; model?: string; lang?: string; conf?: number; lines?: unknown };
+          const b = (await readJsonBody(req)) as { videoId?: string; model?: string; lang?: string; conf?: number; ver?: number; lines?: unknown };
           if (!b.videoId || !/^[\w-]{11}$/.test(b.videoId) || !Array.isArray(b.lines) || !b.lines.length) {
             sendJson(res, 400, { error: "bad payload" });
             return true;
           }
           await devStore.putLyrics(b.videoId, {
             model: b.model === "small" ? "small" : "base",
-            lang: typeof b.lang === "string" ? b.lang : "en",
+            lang: typeof b.lang === "string" ? b.lang : "und",
             conf: typeof b.conf === "number" ? b.conf : 0,
+            ver: Math.max(1, Math.min(100, Math.floor(Number(b.ver) || 1))),
             lines: b.lines,
           });
           sendJson(res, 200, { ok: true });

@@ -28,9 +28,11 @@ export interface LyricsTranscript {
   v: 1; // schema version
   videoId: string;
   model: string; // whisper model id it was decoded with (see WHISPER_MODELS)
-  lang: string; // detected / forced language (e.g. "en")
+  lang: string; // language: "und" (undetermined) unless a decoder actually reports one
   source: LyricsSource;
   conf: number; // mean confidence 0..1; 0 = unknown (v1 leaves it 0)
+  ver?: number; // transcript-FORMAT version (LYRICS_VER) that produced these lines — drives the
+  // pool's reuse-vs-recompute gate; absent on a pre-0026 row, which means "oldest" (1).
   lines: LyricsLine[];
   createdAt: number; // epoch ms
 }

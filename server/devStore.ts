@@ -207,11 +207,16 @@ export interface DevLyricsRow {
   model: string;
   lang: string;
   conf: number;
+  ver: number; // transcript-FORMAT version (client LYRICS_VER) — see migrations/0026
   lines: unknown;
 }
 export async function getLyrics(videoId: string): Promise<DevLyricsRow | null> {
   return readJson<DevLyricsRow | null>(path.join(LYRICS_DIR, `${videoId}.json`), null);
 }
+/** Don't-downgrade, mirroring the D1 upsert: a stored transcript is only replaced by one whose
+ *  format version is at least as new, so dev converges the same way prod does. */
 export async function putLyrics(videoId: string, row: DevLyricsRow): Promise<void> {
+  const prev = await getLyrics(videoId);
+  if (prev && (prev.ver ?? 1) > (row.ver ?? 1)) return;
   await writeJson(path.join(LYRICS_DIR, `${videoId}.json`), row);
 }

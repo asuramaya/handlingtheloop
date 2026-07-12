@@ -1,0 +1,23 @@
+-- Give pooled lyric transcripts the SAME convergence contract the analysis dataset has
+-- (see 0023_analysis_grid + track_analysis.version): a version stamp in D1, so the pool can
+-- self-heal instead of serving a stale transcript format forever.
+--
+-- THE BUG THIS FIXES. The client already had a transcript-FORMAT version (LYRICS_VER, currently
+-- 4: 1 = segment-only, 2 = word-timed, 3 = words carry held-duration, 4 = word onsets snapped to
+-- the vocal transients). It gated the LOCAL IndexedDB cache correctly — but the pool had no
+-- version column at all, so:
+--   * a stale transcript decoded by an old client was served from the pool to a new one, stamped
+--     with the CURRENT version on the way into IndexedDB, and never re-decoded. Bumping
+--     LYRICS_VER did nothing for any track already in the pool — i.e. exactly the popular ones.
+--   * putLyrics was an unconditional last-write-wins upsert, so a client on a stale tab could
+--     OVERWRITE a good word-timed transcript with a segment-only one.
+-- With `ver` in the row, a client reuses a pooled transcript only when it is at least as new as
+-- its own format, otherwise re-decodes and UPGRADES the row — and a write can never downgrade
+-- what's already there. The pool converges monotonically upward instead of ratcheting down.
+--
+-- BACKFILL: every existing row becomes ver 1 (the floor). We cannot tell a v4 row from a v3 one
+-- by shape — the onset-snap changes the word TIMES, not the JSON — so we deliberately understate
+-- rather than over-claim. The cost is that each pooled track is re-decoded ONCE by the next
+-- desktop GPU that plays it, then upgraded for everyone; the benefit is that no stale-format row
+-- can survive. That is the right trade for a pool this young.
+ALTER TABLE lyrics ADD COLUMN ver INTEGER NOT NULL DEFAULT 1;

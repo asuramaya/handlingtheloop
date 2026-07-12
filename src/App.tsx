@@ -1535,6 +1535,10 @@ function AppBody() {
           model: lyricsModelRef.current === "small" ? "small" : "base",
           engine: lyricsModelRef.current === "youtube" ? "youtube" : "whisper",
           enabled: lyricsAutoRef.current,
+          // Whisper transcribes the NEURAL VOCAL STEM, so it is dead in the water without
+          // separation — which is off by default. Telling the resolver lets it say so instead of
+          // waiting in silence for a stem that is never coming.
+          stemsEnabled: stemModelRef.current !== "off",
           sampleRate: engine.ctx.sampleRate,
           stale,
           onCues: (cues, source) => {
@@ -1948,6 +1952,7 @@ function AppBody() {
     captionVidRef,
     loadSeq,
     lyricsModelRef,
+    stemModelRef,
   });
 
   // What the broadcast directory shows as "now playing": the loaded deck the crossfader

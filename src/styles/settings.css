@@ -869,6 +869,10 @@
   line-height: 1.5;
   color: var(--muted);
 }
+/* A hint that names a setting the user must actually change for the one above it to work. */
+.settings-hint.warn {
+  color: #ffb454;
+}
 .link-btn.danger {
   color: #ff5d73;
 }

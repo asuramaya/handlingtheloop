@@ -59,13 +59,20 @@ function getPipe(repo: string): Promise<AsrPipe> {
       if (WEBGPU) {
         try {
           return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" });
-        } catch (err) {
+        } catch {
           (self as any).postMessage({ type: "progress", phase: "model", pct: 100 });
           return await build("webgpu", "fp32"); // repo has no q4 export → full-precision
         }
       }
       return await build("wasm", "q8"); // non-Chromium: stable CPU bundle
     })();
+    // ★ EVICT A FAILED BUILD. The memo used to keep the REJECTED promise, so a single transient
+    // failure — a CDN blip, an interrupted model download — was cached and every later transcribe
+    // for this repo failed instantly with that same stale error, for the whole life of the page.
+    // Lyrics were dead until a reload. Dropping the entry lets the next attempt genuinely retry.
+    p.catch(() => {
+      if (pipes.get(repo) === p) pipes.delete(repo);
+    });
     pipes.set(repo, p);
   }
   return p;
@@ -323,13 +330,19 @@ self.onmessage = async (e: MessageEvent) => {
       (self as any).postMessage({ type: "progress", phase: "decode", pct: Math.round(((ci + 1) / nChunks) * 95), id });
     }
 
+    // ★ THE GPU IS FREE FROM HERE ON. Everything below is CPU: grouping, and the spectral-flux
+    // onset pass (~30k FFTs on a 5-minute track). The caller holds the app-wide GPU semaphore
+    // across this call, and stem separation is the other consumer — so tell it to hand the GPU
+    // back NOW rather than blocking separation for seconds of zero GPU work.
+    (self as any).postMessage({ type: "gpu-done", id });
+
     let lines: OutLine[] = wordMode ? groupWords(wChunks) : cleanSegments(sChunks);
     // Snap word onsets to the real vocal transients (word mode only — segments have no words).
     if (wordMode && lines.some((l) => l.words?.length)) {
       (self as any).postMessage({ type: "progress", phase: "align", id });
       lines = snapToOnsets(lines, detectOnsets(audio));
     }
-    (self as any).postMessage({ type: "done", id, lines, lang: language || "en" });
+    (self as any).postMessage({ type: "done", id, lines, lang: language || "und" });
   } catch (err: any) {
     (self as any).postMessage({ type: "error", id, message: String(err?.message || err) });
   }

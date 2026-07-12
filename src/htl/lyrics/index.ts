@@ -3,3 +3,6 @@
 export * from "./types";
 export * from "./models";
 export * from "./client";
+// The pool's reuse-vs-recompute + don't-publish-garbage rules, pure and tested. Exported so any
+// future surface uses THE gate rather than reimplementing a second, subtly different one.
+export { planLyrics, looksDegenerate, type LyricsPlan } from "./convergence";

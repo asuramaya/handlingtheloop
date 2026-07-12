@@ -10,12 +10,44 @@
      aligned. Tall enough for the delay's viz-over-knobs-over-chips stack. */
   --fx-body-h: 192px;
 }
+/* The header: the scrolling tab row + the POWER glyph, which must NOT scroll with it. */
+.fx-head {
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+/* COPY — touched about once a session. Deliberately quiet, and out of the way of the three
+   controls you actually perform with (which live in the foot). */
+.fx-copy {
+  flex: 0 0 auto;
+  width: 26px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--panel));
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.12s, border-color 0.12s, color 0.12s;
+}
+.fx-copy:hover {
+  opacity: 1;
+  color: #fff;
+  border-color: var(--accent);
+}
 /* The BEAT FX FX SELECT + ◀▶ highlight a row in the existing + palette (cand). */
 .fx-tabs {
   display: flex;
   gap: 4px;
   align-items: stretch;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
   /* The fixed bank (EQ + 7 effects) can outrun a narrow deck — slide the row instead of
      squishing the chips. The scrollbar is HIDDEN: touch drags natively, the mouse wheel is
      mapped to horizontal scroll in JS (see FxStrip), and the selected tab is scrolled into
@@ -450,55 +482,37 @@ body:not(.no-glow) .fx-chip.on {
 .eq-row .eq-subrow .vcell {
   height: 100%;
 }
-.eq-subrow-band {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  padding: 0 9px;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  border-radius: 6px;
-  color: var(--band);
-  border: 1px solid color-mix(in srgb, var(--band) 50%, transparent);
-  background: color-mix(in srgb, var(--band) 14%, transparent);
-}
+/* No band selector lives down here: the curve's NODES are the selector. A rail of band chips
+   was built and cut — it was a second selector for a job the nodes already do. */
 /* The currently-edited node reads as selected (a brighter ring) so the subrow's
    band is unambiguous. */
 .eq-node.selected {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--node) 70%, #fff 30%), 0 0 10px var(--node);
 }
-/* SHAPE is a SWITCH button (discrete: bell / lo-shelf / hi-shelf), not a buttonoid —
-   it cycles on tap. Sized to sit in the subrow next to the FREQ/GAIN/Q cells. */
+/* SHAPE is a SWITCH (discrete: bell / lo-shelf / hi-shelf / notch) — it cycles on tap. It sits
+   in the band rail, in the SELECTED band's hue, because it describes that band. Absent
+   entirely for HP/LP, which have no shape to choose. */
 .eq-shape-btn {
   flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  min-width: 50px;
+  min-width: 52px;
   padding: 0 8px;
-  border-radius: 7px;
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 70%, #000 10%);
-  color: var(--text);
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--band) 45%, transparent);
+  background: color-mix(in srgb, var(--band) 12%, transparent);
+  color: var(--band);
   cursor: pointer;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+  transition: background 0.1s, border-color 0.1s;
 }
 .eq-shape-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
-}
-.eq-shape-cap {
-  font-size: 7.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  opacity: 0.55;
-}
-.eq-shape-val {
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--accent);
+  border-color: var(--band);
+  background: color-mix(in srgb, var(--band) 22%, transparent);
 }
 /* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
 .eq-node {
@@ -1962,4 +1976,189 @@ button.room-tog:hover {
 }
 .comp-panel .comp-sc button {
   min-width: 72px;
+}
+
+/* --- the device foot: RESET · the universal wet/dry · COPY --------------------------------
+   Every device wears the same foot. It replaced a row of three equal full-width bars
+   (BYPASS / RESET / COPY) that gave identical weight to a control you slam mid-mix, one you
+   use deliberately, and one you touch once a session. Power went to the header; what's left
+   is sized by how much it's actually used. */
+.fx-bar {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+/* RESET and POWER are the foot's two end-caps and they are the SAME SIZE — the wet/dry takes
+   everything between them. (RESET keeps the neon .eq-tool language, but stops being flex:1:
+   it's a button, not a third of the panel.) */
+.fx-bar .eq-tool,
+.fx-bar .fx-power {
+  flex: 0 0 var(--fx-cap-w, 58px);
+  width: var(--fx-cap-w, 58px);
+  padding: 0;
+}
+/* POWER — engage/bypass, sitting with the wet/dry it gates. Lit in the deck accent when the
+   effect is in the signal, drained when dormant. */
+.fx-power {
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--panel));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+.fx-power:hover {
+  color: #fff;
+  border-color: var(--accent);
+}
+.fx-power.on {
+  color: #08111a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+body:not(.no-glow) .fx-power.on {
+  box-shadow: 0 0 16px -2px color-mix(in srgb, var(--accent) 85%, transparent);
+}
+/* The power stays FULLY lit when the device is dormant — the whole point of it is to be the
+   way back in. Only the blend it gates drains. (.fx-bar.off dims the fader, not this.) */
+.fx-bar.off .fx-power {
+  opacity: 1;
+}
+
+/* The wet/dry. A FADER, not a number cell — it's a sweep, not a setting. Absolute: press
+   anywhere and the blend goes there. Fills in the deck accent so "how much effect" reads at a
+   glance from across the room, which is the whole point of hoisting it out of the cell rows. */
+.fx-mix {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  cursor: ew-resize;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--panel));
+  transition: opacity 0.12s, border-color 0.12s;
+}
+.fx-mix:hover {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--panel));
+}
+.fx-mix-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-right: 1px solid var(--accent);
+}
+body:not(.no-glow) .fx-mix-fill {
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--accent) 75%, transparent);
+}
+.fx-mix-label,
+.fx-mix-val {
+  position: relative; /* above the fill */
+  pointer-events: none;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  text-shadow: 0 0 7px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.fx-mix-label {
+  padding-left: 10px;
+}
+.fx-mix-val {
+  margin-left: auto;
+  padding-right: 10px;
+  font-variant-numeric: tabular-nums;
+}
+/* A dormant device still shows its blend — it just stops claiming to be doing anything. */
+.fx-bar.off .fx-mix {
+  opacity: 0.42;
+}
+/* A real target: the foot is stretch-aligned, so without a floor the fader inherits the
+   RESET button's ~22px and reads as a hairline. Thumb-sized on a phone. */
+.fx-bar {
+  min-height: 26px;
+}
+@media (max-width: 768px) {
+  .fx-bar {
+    min-height: 32px;
+    gap: 5px;
+    --fx-cap-w: 62px;
+  }
+}
+
+/* --- OUTPUT TRIM: the graph's baseline, made grabbable -------------------------------------
+   It used to be a number cell sitting in the BAND row, which was a category error — the trim
+   isn't a property of a band. And it never needed a widget: the curve is already drawn sitting
+   ON it (Eq3.magnitude offsets the response by the trim), so the trim IS where zero is. Drag
+   the zero line, the curve rides with it. Right-click / double-click parks it back at 0. */
+.eq-out {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  /* Clear of the LP node, which is PARKED at the right edge (20 kHz) and would sit on top of
+     the label. The HP node parks at the left edge for the same reason, so the label can't go
+     there either. */
+  padding-right: 34px;
+  cursor: ns-resize;
+  touch-action: none;
+  /* The grab strip is taller than the hairline it draws — a 1px target is not a target. It
+     sits BEFORE the node buttons in the DOM, so where they cross, the node wins the pointer:
+     a band at 0 dB has its node sitting exactly ON this line, and grabbing the node is far
+     more likely to be what you meant. There's plenty of bare line to either side. */
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  box-sizing: border-box;
+  z-index: 1;
+}
+.eq-out::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -7px;
+  height: 14px; /* the real hit area */
+}
+.eq-out:hover {
+  border-top-color: var(--accent);
+}
+.eq-out-cap,
+.eq-out-val {
+  position: relative;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--accent) 65%, transparent);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.eq-out-val {
+  font-variant-numeric: tabular-nums;
+}
+/* Once it's off zero it stops being a quiet reference line and starts being a control that's
+   DOING something — say so. */
+.eq-out.trimmed {
+  border-top-style: solid;
+  border-top-color: var(--accent);
+}
+.eq-out.trimmed .eq-out-cap,
+.eq-out.trimmed .eq-out-val {
+  color: var(--accent);
+}
+.eq-out:hover .eq-out-cap,
+.eq-out:hover .eq-out-val {
+  color: var(--accent);
 }

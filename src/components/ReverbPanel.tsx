@@ -54,7 +54,6 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
             non-spatial knobs — MIX (wet presence) and DUCK (the breathing sidechain) — keep a
             numeric cell. This also kills the old 12-cell-beside-a-square-dome mobile crush. */}
         <div className="fx-knobs rv-knobs">
-          <ValueCell label="MIX" value={get("mix")} min={0} max={1} step={0.01} reset={0.3} onChange={(v) => tweak("mix", v)} format={fmtPct} />
           <ValueCell label="DUCK" value={get("duck")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("duck", v)} format={fmtPct} />
         </div>
       </div>

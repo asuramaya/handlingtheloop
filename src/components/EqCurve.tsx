@@ -89,6 +89,8 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
+  const outRef = useRef<HTMLDivElement>(null); // the draggable output baseline (the graph's zero)
+  const outPillRef = useRef<HTMLSpanElement>(null);
   const handleRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const size = useRef({ w: 0, h: 0, dpr: 1 });
   const freqs = useRef<Float32Array>(new Float32Array(0));
@@ -100,6 +102,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const eqSig = useRef(0); // cheap signature of the EQ params → redraw when it changes (e.g. a MIDI knob while paused)
   // active gesture on a node: a drag (sweep).
   const drag = useRef<{ i: number } | null>(null);
+  const outDrag = useRef(false); // dragging the output baseline
   const [sel, setSel] = useState(2); // band whose numeric subrow is shown (default MID)
   const [, bump] = useState(0);
 
@@ -269,9 +272,13 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       for (let i = 0; i < pk.length; i++) pk[i] = Math.max(specBuf.current[i], pk[i] > 2 ? pk[i] - 2 : 0);
       drawSpectrum(ctx, pk, accent, w, h, false, 0.5);
 
-      // the real combined EQ response curve + fill to the 0 dB line
+      // The real combined EQ response curve, filled to the OUTPUT BASELINE — not to 0 dB.
+      // `eqMagnitude` already draws the curve sitting on the output trim, so the trim IS where
+      // zero is; filling to it means the shaded area reads as the EQ's SHAPING, independent of
+      // how loud the whole curve was pushed. (Fill to a hard 0 dB and a flat curve trimmed +6
+      // would show a solid block of "boost" that isn't shaping anything.)
       deck.eqMagnitude(freqs.current, magBuf.current);
-      const y0 = yFromDb(0, h);
+      const y0 = yFromDb(deck.eqOut, h);
       const curveY = (x: number) => clamp(yFromDb(magBuf.current[x], h), -6, h + 6);
       ctx.beginPath();
       for (let x = 0; x < w; x++) {
@@ -298,6 +305,16 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       ctx.stroke();
       ctx.shadowBlur = 0;
 
+      // The output baseline rides with the trim (see y0 above) — it IS the graph's zero.
+      const outEl = outRef.current;
+      if (outEl) {
+        outEl.style.top = `${clamp(y0, 0, h)}px`;
+        const pill = outPillRef.current;
+        const o = deck.eqOut;
+        if (pill) pill.textContent = `${o > 0 ? "+" : ""}${o.toFixed(1)}`;
+        outEl.classList.toggle("trimmed", Math.abs(o) > 0.05);
+      }
+
       // reposition node dots to match the live filter
       for (let i = 0; i < NODES.length; i++) {
         const el = handleRefs.current[i];
@@ -306,7 +323,11 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         // Keep the dot (and its label) a hair inside the box so the edge HP/LP nodes
         // parked at 20 Hz / 20 kHz don't clip off-screen.
         el.style.left = `${clamp(xFromFreq(n.getFreq(deck), w), 11, w - 11)}px`;
-        el.style.top = `${n.vert === "gain" ? yFromDb(n.getGain(deck), h) : yFromQ(n.getQ(deck), h)}px`;
+        // A gain node rides the OUTPUT BASELINE, not absolute 0 dB — the curve does (it's drawn
+        // offset by the trim), and a node that didn't would float off the curve it's meant to be
+        // sitting on the moment you moved the baseline. The cut nodes (HP/LP) are on the Q axis,
+        // not the dB axis, so the trim doesn't move them.
+        el.style.top = `${n.vert === "gain" ? yFromDb(n.getGain(deck) + deck.eqOut, h) : yFromQ(n.getQ(deck), h)}px`;
       }
     };
     raf = requestAnimationFrame(tick);
@@ -327,7 +348,9 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     n.setFreq(deck, hz);
     emit({ kind: "control", deck: id, param: n.fParam, value: n.getFreq(deck) });
     if (n.vert === "gain" && n.gParam) {
-      const db = clamp(dbFromY(clientY - rect.top, h), DB_BOT, EQ_MAX_DB);
+      // The node is drawn relative to the output baseline, so read its drag back relative to it
+      // too — otherwise, with the trim off zero, the dot jumps out from under the cursor.
+      const db = clamp(dbFromY(clientY - rect.top, h) - deck.eqOut, DB_BOT, EQ_MAX_DB);
       n.setGain(deck, db);
       emit({ kind: "control", deck: id, param: n.gParam, value: n.getGain(deck) });
     } else if (n.vert === "q" && n.qParam) {
@@ -338,7 +361,30 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     dirty.current = true;
   };
 
+  // OUTPUT TRIM, as the graph's baseline. Drag the zero line and the whole curve rides with
+  // it — which is what the trim literally does (Eq3.magnitude offsets the response by it). It
+  // was a number cell in the band row, where it didn't belong: it isn't a property of a band.
+  const applyOutDrag = (clientY: number) => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const { h } = size.current;
+    const db = clamp(dbFromY(clientY - wrap.getBoundingClientRect().top, h), -EQ_OUT_DB, EQ_OUT_DB);
+    deck.setEqOut(db);
+    emit({ kind: "control", deck: id, param: "eqOut", value: db });
+    dirty.current = true;
+  };
+  const resetOut = () => {
+    deck.setEqOut(0);
+    emit({ kind: "control", deck: id, param: "eqOut", value: 0 });
+    dirty.current = true;
+    bump((x) => x + 1);
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    if (outDrag.current) {
+      applyOutDrag(e.clientY);
+      return;
+    }
     // cursor readout (when not dragging a node)
     const ro = readoutRef.current;
     const wrap = wrapRef.current;
@@ -367,6 +413,10 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     setSel(i); // touching a node selects its band for the numeric subrow
   };
   const endDrag = (e: React.PointerEvent) => {
+    if (outDrag.current) {
+      outDrag.current = false;
+      bump((x) => x + 1);
+    }
     if (!drag.current) return;
     drag.current = null;
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
@@ -407,6 +457,31 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       >
         <canvas ref={canvasRef} className="eq-curve-canvas" />
         <div ref={readoutRef} className="eq-readout" style={{ opacity: 0 }} />
+        {/* OUTPUT TRIM — the graph's zero line, grabbable. Drag it and the curve rides with it.
+            Sits UNDER the node buttons in the DOM so a node always wins the pointer where they
+            cross. Right-click / double-click parks it back at 0. */}
+        <div
+          ref={outRef}
+          className="eq-out"
+          title="Output trim — drag the baseline (double-click to reset)"
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+            outDrag.current = true;
+            applyOutDrag(e.clientY);
+          }}
+          onDoubleClick={resetOut}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            resetOut();
+          }}
+        >
+          <span className="eq-out-cap">OUT</span>
+          <span ref={outPillRef} className="eq-out-val">
+            0.0
+          </span>
+        </div>
         {NODES.map((n, i) => (
           <button
             key={n.key}
@@ -426,13 +501,17 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         ))}
       </div>
 
-      {/* Pro-Q-style band-edit subrow: precise numeric cells for the SELECTED node's
-          secondary params. Freq/gain/Q are still drag-able on the curve; these give a
-          numeric companion (and harder kill / finer Q than the 2D drag allows). The cells
-          keep the DECK accent (don't override --accent); only the band chip carries the
-          node's hue via --band — so the select indicator reads as the band, the buttonoids
-          read as the deck. They emit the same `control` intents as the nodes so session-
-          sync + MIDI converge 1:1. */}
+      {/* The band-edit row, for the SELECTED node — the node you last touched ON THE CURVE. The
+          nodes ARE the selector; there is deliberately no second one down here (a band rail was
+          tried and cut as redundant). What's left is only what the selection reassigns:
+          (1) SHAPE leads the row, in the band's hue — it isn't a value, it's what the other cells
+              MEAN, and its colour is how the row says whose values these are.
+          (2) Cells appear and disappear with the shape instead of greying out. A shelf has no Q,
+              a notch has no gain — an inert-but-present cell eats width and makes you read a
+              label to find out it's dead. What's on screen is what's live.
+          Freq/gain/Q stay drag-able on the curve; these are the numeric companion (and a harder
+          kill / finer Q than the 2D drag allows). They emit the same `control` intents as the
+          nodes, so session-sync + MIDI converge 1:1. */}
       {(() => {
         const n = NODES[clamp(sel, 0, NODES.length - 1)];
         const commit = (param: NonNullable<NodeDef["fParam"] | NodeDef["gParam"] | NodeDef["qParam"] | NodeDef["sParam"]>, getNow: () => number) => {
@@ -441,14 +520,33 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
           bump((x) => x + 1);
         };
         const qReset = n.key === "mid" ? 0.9 : n.key === "hp" ? EQ_HP.q : n.key === "lp" ? EQ_LP.q : 1;
-        // Which cells are live depends on the shape: shelves ignore Q, a notch ignores
-        // gain. Grey the inert cell out rather than letting it look active.
         const shapeType = n.getShape ? EQ_SHAPE_TYPES[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_TYPES.length - 1)] : null;
-        const qLive = shapeType == null || shapeType === "peaking" || shapeType === "notch";
-        const gainLive = shapeType == null || shapeType !== "notch";
+        // A shelf's Q is meaningless; a notch's gain is meaningless. Don't render them.
+        const showQ = !!n.qParam && (shapeType == null || shapeType === "peaking" || shapeType === "notch");
+        const showGain = !!n.gParam && shapeType !== "notch";
         return (
           <div className="eq-subrow" style={{ ["--band" as string]: n.color } as CSSProperties}>
-            <span className="eq-subrow-band">{n.label}</span>
+            {/* SHAPE — what the band IS, so it leads the row rather than sitting out among the
+                band's values. Carries the band's hue, which is also how the row says WHOSE values
+                these are. Absent for HP/LP, which have no shape to choose. */}
+            {n.sParam && n.getShape && n.setShape && (
+              <button
+                className="eq-shape-btn"
+                title={`${n.label} band shape — tap to cycle bell / lo-shelf / hi-shelf / notch · right-click resets`}
+                onClick={() => {
+                  const next = (Math.round(n.getShape!(deck)) + 1) % EQ_SHAPE_TYPES.length;
+                  n.setShape!(deck, next);
+                  commit(n.sParam!, () => n.getShape!(deck));
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  n.setShape!(deck, n.sDefault ?? 0);
+                  commit(n.sParam!, () => n.getShape!(deck));
+                }}
+              >
+                {EQ_SHAPE_LABELS[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_LABELS.length - 1)]}
+              </button>
+            )}
             <ValueCell
               label="FREQ"
               value={n.getFreq(deck)}
@@ -462,7 +560,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
                 commit(n.fParam, () => n.getFreq(deck));
               }}
             />
-            {n.gParam && (
+            {showGain && (
               <ValueCell
                 label="GAIN"
                 value={n.getGain(deck)}
@@ -471,14 +569,13 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
                 step={0.5}
                 pivot={0}
                 format={fmtDb}
-                disabled={!gainLive}
                 onChange={(v) => {
                   n.setGain(deck, v);
                   commit(n.gParam!, () => n.getGain(deck));
                 }}
               />
             )}
-            {n.qParam && (
+            {showQ && (
               <ValueCell
                 label={n.sParam ? "Q" : "RES"}
                 value={n.getQ(deck)}
@@ -487,72 +584,18 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
                 step={0.1}
                 reset={qReset}
                 format={fmtQ}
-                disabled={!qLive}
                 onChange={(v) => {
                   n.setQ(deck, v);
                   commit(n.qParam!, () => n.getQ(deck));
                 }}
               />
             )}
-            {n.sParam && n.getShape && n.setShape && (
-              <button
-                className="eq-shape-btn"
-                title="Band shape — tap to cycle bell / lo-shelf / hi-shelf · right-click resets"
-                onClick={() => {
-                  const next = (Math.round(n.getShape!(deck)) + 1) % EQ_SHAPE_TYPES.length;
-                  n.setShape!(deck, next);
-                  commit(n.sParam!, () => n.getShape!(deck));
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  n.setShape!(deck, n.sDefault ?? 0);
-                  commit(n.sParam!, () => n.getShape!(deck));
-                }}
-              >
-                <span className="eq-shape-cap">SHAPE</span>
-                <span className="eq-shape-val">{EQ_SHAPE_LABELS[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_LABELS.length - 1)]}</span>
-              </button>
-            )}
-            {/* EQ wet/dry — global to the whole EQ (not per-band), parked at the end of the control
-                row. 100 = full EQ, 0 = flat/dry. Emits the eqMix control intent so session-sync +
-                MIDI converge like every other cell here. */}
-            <ValueCell
-              label="MIX"
-              value={deck.eqMix}
-              min={0}
-              max={1}
-              step={0.01}
-              reset={1}
-              format={(v) => `${Math.round(v * 100)}`}
-              onChange={(v) => {
-                deck.setEqMix(v);
-                emit({ kind: "control", deck: id, param: "eqMix", value: v });
-                dirty.current = true;
-                bump((x) => x + 1);
-              }}
-            />
-            {/* OUTPUT TRIM (dB) — makeup for the curve, wet path only. A preset that pushes +12
-                pays for itself here instead of eating the channel's headroom; it's what lets the
-                band gains reach +12 in the first place. */}
-            <ValueCell
-              label="OUT"
-              value={deck.eqOut}
-              min={-EQ_OUT_DB}
-              max={EQ_OUT_DB}
-              step={0.5}
-              reset={0}
-              format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`}
-              onChange={(v) => {
-                deck.setEqOut(v);
-                emit({ kind: "control", deck: id, param: "eqOut", value: v });
-                dirty.current = true;
-                bump((x) => x + 1);
-              }}
-            />
+            {/* No OUT cell, and no wet/dry: neither is a property of the selected BAND. OUT is
+                now the draggable baseline on the graph (it always WAS the graph's zero — the
+                curve is drawn sitting on it); wet/dry lives in the shared device foot. */}
           </div>
         );
       })()}
-      {/* BYPASS / RESET / COPY now live in the shared FxStrip toolbar (every device gets them). */}
     </div>
   );
 }

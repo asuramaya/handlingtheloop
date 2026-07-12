@@ -12,14 +12,23 @@ import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
+import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
-// the EQ curve keeps its full height) and a shared BYPASS / RESET / COPY toolbar that acts
-// on whichever device is selected. EVERY device — the EQ included — is a first-class member:
-// add from the +, remove by RIGHT-CLICKING its tab, reorder later. The EQ is a single
-// instance (only one EQ); its params ride the eq* ControlParams while presence/order ride
-// the fxRack intent. One device's surface shows at a time.
+// the EQ curve keeps its full height). EVERY device — the EQ included — is a first-class
+// member; the EQ is a single instance, its params ride the eq* ControlParams while the rest
+// ride the fxRack intent. One device's surface shows at a time.
+//
+// The shell around the panel is three CLASSES of control, and they used to be one
+// undifferentiated row of nine equal boxes. Now each has its own home:
+//   HEADER  — the POWER glyph: engage/bypass the selected device. The control you hit most,
+//             mid-mix, so it sits proud in the tab row and reads as the device's power state.
+//   FOOT    — RESET (heavily used, stays a real labelled button you can hit without aiming),
+//             the universal MIX fader (see MixFader), and COPY demoted to an end-cap.
+// Per-device params stay inside the device's own panel. Every device gets the same shell, so
+// wet/dry is always in the same place — it used to be cell 6-of-12 on the delay and cell
+// 9-of-10 on the comp.
 
 const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE", comp: "COMP" };
 interface FxStripProps {
@@ -302,9 +311,24 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     emitControls(otherId); // eq params (and the rest of the other deck's control state)
     refresh();
   };
+  // The universal wet/dry. The EQ rides the eq* ControlParams (eqMix); every other device
+  // rides the per-param fxParam intent — the SAME seams the old in-panel MIX cells used, so
+  // session-sync and MIDI converge exactly as before. Only the surface moved.
+  const setMix = (v: number) => {
+    if (!selDev) return;
+    if (isEq) {
+      deck.setEqMix(v);
+      emit({ kind: "control", deck: id, param: "eqMix", value: v });
+    } else {
+      deck.setFxParam(cur, "mix", v);
+      emit({ kind: "fxParam", deck: id, slot: cur, param: "mix", value: v });
+    }
+    refresh();
+  };
 
   return (
     <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
+      <div className="fx-head">
       <div className="fx-tabs" role="tablist" ref={tabsRef}>
         {devices.map((d, i) => (
           <button
@@ -361,6 +385,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         {/* Fixed-membership rack: the EQ + the pad-FX bank are permanent residents — no add/remove.
             Reorder by dragging a tab; dial / save presets by right-clicking one. */}
       </div>
+        {/* COPY — touched about once a session. Tucked into the header, out of the way of the
+            three controls you actually perform with. Parked outside the scrolling tab row so it
+            doesn't slide off. */}
+        {selDev && (
+          <button className="fx-copy" title={`Copy this device to deck ${otherId}`} aria-label={`Copy this device to deck ${otherId}`} onClick={copyToOther}>
+            ⇄
+          </button>
+        )}
+      </div>
 
       <div className="fx-stage">
         {!selDev ? (
@@ -388,17 +421,24 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         )}
       </div>
 
-      {/* Shared device toolbar — same shell for every effect (reuses the EQ tool styling). */}
+      {/* The device foot — same shell for every effect, and it holds the three controls you
+          actually PERFORM with, side by side: kill it back to neutral, ride the blend, cut it in
+          or out. POWER sits with MIX because that's what it acts on — an on/off across the room
+          from the wet/dry it gates reads as unrelated chrome. COPY went to the header. */}
       {selDev && (
-        <div className="eq-tools">
-          <button className={`eq-tool bypass ${bypassed ? "on" : ""}`} title="Bypass this device (A/B)" onClick={toggleBypass}>
-            BYPASS
-          </button>
-          <button className="eq-tool reset" title="Reset this device" onClick={reset}>
+        <div className={`fx-bar ${bypassed ? "off" : ""}`}>
+          <button className="eq-tool fx-reset" title="Reset this device to its defaults" onClick={reset}>
             RESET
           </button>
-          <button className="eq-tool copy" title={`Copy this device to deck ${otherId}`} onClick={copyToOther}>
-            COPY
+          <MixFader value={selDev.getParam("mix")} reset={selDev.paramDefault("mix")} onChange={setMix} disabled={bypassed} />
+          <button
+            className={`fx-power ${bypassed ? "" : "on"}`}
+            title={bypassed ? "Engage this effect" : "Bypass this effect (A/B)"}
+            aria-label={bypassed ? "Engage effect" : "Bypass effect"}
+            aria-pressed={!bypassed}
+            onClick={toggleBypass}
+          >
+            ⏻
           </button>
         </div>
       )}

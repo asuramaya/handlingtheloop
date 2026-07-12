@@ -109,7 +109,6 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         <ValueCell label="FBK" value={get("feedback")} min={0} max={0.95} step={0.01} reset={0.38} onChange={(v) => tweak("feedback", v)} format={fmtPct} />
         <ValueCell label="HP" value={get("hp")} min={20} max={18000} step={20} reset={120} onChange={(v) => setFilter("hp", v)} format={fmtHz} />
         <ValueCell label="LP" value={get("lp")} min={200} max={18000} step={50} reset={6500} onChange={(v) => setFilter("lp", v)} format={fmtHz} />
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} step={0.01} reset={0.28} onChange={(v) => tweak("mix", v)} format={fmtPct} />
         <ValueCell label="DEPTH" value={get("modDepth")} min={0} max={0.012} step={0.0002} reset={0} onChange={(v) => tweak("modDepth", v)} format={(v) => `${Math.round((v / 0.012) * 100)}`} />
         <ValueCell label="RATE" value={get("modRate")} min={0.02} max={8} step={0.02} reset={0.5} onChange={(v) => tweak("modRate", v)} format={(v) => `${v.toFixed(2)}`} />
         <ValueCell label="DRIVE" value={get("analog")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("analog", v)} format={fmtPct} />

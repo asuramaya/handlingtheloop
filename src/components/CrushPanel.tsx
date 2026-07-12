@@ -47,7 +47,6 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
         <ValueCell label="JITTER" value={get("jitter")} min={0} max={1} onChange={(v) => setParam("jitter", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="CUT" value={get("cut")} min={0} max={1} onChange={(v) => setParam("cut", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="RES" value={get("res")} min={0} max={1} onChange={(v) => setParam("res", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} reset={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

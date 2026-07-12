@@ -72,7 +72,6 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
         <ValueCell label="F.BACK" value={get("feedback")} min={0} max={1} onChange={(v) => setParam("feedback", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
         {mode === 2 && <ValueCell label="STAGES" value={get("stages")} min={2} max={12} step={1} onChange={(v) => setParam("stages", v)} format={(v) => `${Math.round(v)}`} />}
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

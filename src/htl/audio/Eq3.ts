@@ -459,6 +459,10 @@ export class Eq3 implements FxDevice {
     for (const p of Eq3.PARAMS) out[p.id] = p.get(this);
     return out;
   }
+  paramDefault(id: string): number {
+    if (id === "mix") return 1; // fully wet — the EQ is an in-series device, not a send
+    return Eq3.defaults()[id] ?? 0;
+  }
 }
 
 function clampDb(db: number): number {

@@ -67,6 +67,11 @@ function findChromium() {
       .reverse();
     for (const d of dirs) {
       for (const rel of [
+        // Current Playwright builds unpack to *-linux64; the older -linux names are kept for
+        // an older cache. Without the 64 variants this whole branch silently misses and we
+        // fall through to a system Chrome — which works, but isn't the pinned build.
+        "chrome-linux64/chrome",
+        "chrome-headless-shell-linux64/chrome-headless-shell",
         "chrome-linux/chrome",
         "chrome-linux/headless_shell",
         "chrome-linux/chrome-headless-shell",

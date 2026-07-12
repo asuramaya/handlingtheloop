@@ -52,7 +52,6 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
         <ValueCell label="BIAS" value={get("bias")} min={0} max={1} onChange={(v) => setParam("bias", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
         <ValueCell label="OUT" value={get("out")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("out", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} reset={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

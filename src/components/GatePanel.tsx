@@ -50,7 +50,6 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
         <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="DUTY" value={get("duty")} min={0} max={1} onChange={(v) => setParam("duty", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="SMOOTH" value={get("smooth")} min={0} max={1} onChange={(v) => setParam("smooth", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

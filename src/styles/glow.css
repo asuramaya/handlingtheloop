@@ -143,13 +143,9 @@ body.no-glow .lane.focused::after {
 .eq-pro.bypassed .eq-curve {
   opacity: 0.6;
 }
-.eq-tools {
-  display: flex;
-  gap: 5px;
-  align-items: stretch;
-}
-/* Bottom EQ tools — neon, glowing in the DECK's colour (--accent). The glow gates on
-   the global no-glow toggle like the rest of the neon UI. */
+/* The neon button language shared by the device foot (RESET / COPY — see .fx-bar in fx.css,
+   which overrides the flex so they stop claiming a third of the panel each). Glows in the
+   DECK's colour (--accent), gated on the global no-glow toggle like the rest of the neon UI. */
 .eq-tool {
   flex: 1 1 0;
   padding: 4px 2px;

@@ -43,6 +43,10 @@ export interface FxDevice {
   /** Compact param snapshot for serialization (profiles + session rack state). */
   snapshotParams(): Record<string, number>;
 
+  /** What `reset()` would put this param back to — so a control can offer its own
+   *  neutral on a double-click (the delay's wet/dry rests at 28%, the saturator's at 100%). */
+  paramDefault(id: string): number;
+
   /** Free any held nodes/buffers when removed from the rack (reverb IR, delay lines). */
   dispose?(): void;
 }
@@ -368,6 +372,9 @@ export abstract class BaseFxDevice implements FxDevice {
     const out: Record<string, number> = {};
     for (const p of this.params) out[p.id] = p.get();
     return out;
+  }
+  paramDefault(id: string): number {
+    return this.params.find((p) => p.id === id)?.def ?? 0;
   }
   reset() {
     for (const p of this.params) p.set(p.def);

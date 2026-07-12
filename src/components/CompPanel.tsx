@@ -80,7 +80,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
         <span className="comp-meter-unit">dB GR</span>
       </div>
 
-      <div className="sat-cells">
+      <div className="sat-shared">
         <ValueCell label={isLimit ? "CEIL" : "THRESH"} value={isLimit ? get("ceiling") : get("threshold")} min={isLimit ? -12 : -60} max={0} step={0.5} reset={isLimit ? -0.3 : -18} format={(v) => v.toFixed(1)} onChange={(v) => setParam(isLimit ? "ceiling" : "threshold", v)} />
         {!isLimit && <ValueCell label="RATIO" value={get("ratio")} min={1} max={20} step={0.5} reset={4} format={(v) => `${v.toFixed(1)}:1`} onChange={(v) => setParam("ratio", v)} />}
         <ValueCell label="ATTACK" value={get("attack")} min={0.02} max={100} step={0.02} reset={10} format={(v) => (v < 1 ? `${(v * 1000).toFixed(0)}µs` : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("attack", v)} />
@@ -93,7 +93,6 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
         <ValueCell label="LOOK" value={get("lookahead")} min={0} max={10} step={0.1} reset={0} format={(v) => (v <= 0 ? "OFF" : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("lookahead", v)} />
         {/* MIX below 100 is parallel compression — squash it hard, then blend the crushed copy back
             under the untouched one. The New York drum trick, for free. */}
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} step={0.01} reset={1} format={(v) => `${Math.round(v * 100)}`} onChange={(v) => setParam("mix", v)} />
       </div>
 
       {/* The DJ move: let the OTHER deck drive this deck's compressor, so the incoming track carves

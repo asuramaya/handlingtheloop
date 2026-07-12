@@ -49,7 +49,6 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
         <ValueCell label="RES" value={get("res")} min={0} max={1} onChange={(v) => setParam("res", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="TONE" value={get("tone")} min={0} max={1} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round(v * 100)}`} />
         {rise && <ValueCell label="BARS" value={get("bars")} min={1} max={8} step={1} onChange={(v) => setParam("bars", v)} format={(v) => `${Math.round(v)}`} />}
-        <ValueCell label="MIX" value={get("mix")} min={0} max={1} onChange={(v) => setParam("mix", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

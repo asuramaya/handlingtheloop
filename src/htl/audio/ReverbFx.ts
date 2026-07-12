@@ -49,6 +49,9 @@ export class ReverbFx extends BaseFxDevice {
   private readonly seriesDuck: GainNode;
 
   private _width = 1;
+  // The commanded values of the params that GLIDE (see the params block). Their AudioParams chase
+  // these; the getters must not.
+  private readonly _cmd = { predelay: 0.012, lowCut: 20, highCut: 18000, postLow: 0, postHigh: 0 };
   private _drive = 0;
   private _duckWired = false;
   private _duckGen = 0;
@@ -135,19 +138,25 @@ export class ReverbFx extends BaseFxDevice {
 
     this.applyWidth();
 
+    // ★ The five gliding params below report their COMMANDED value, not the AudioParam's live one.
+    // setTargetAtTime is exponential — it never exactly arrives — so a getter reading `.value` is
+    // permanently chasing the target. The DOME is a direct-manipulation surface that renders from
+    // these getters, so a lagging read-back makes a dragged handle spring back at the hand that
+    // moved it. The audio still glides; only the read-back is honest. (Same fix as DelayFx/Eq3.)
+    const cmd = this._cmd;
     this.params.push(
       { id: "size", def: 0.6, get: () => this.wp.size, set: (v) => this.postWp("size", clamp01(v)) },
       { id: "decay", def: 0.5, get: () => this.wp.decay, set: (v) => this.postWp("decay", clamp01(v)) },
       { id: "brightness", def: 0.6, get: () => this.wp.brightness, set: (v) => this.postWp("brightness", clamp01(v)) },
-      { id: "predelay", def: 0.012, get: () => this.preDelay.delayTime.value, set: (v) => this.preDelay.delayTime.setTargetAtTime(clamp(v, 0, 0.2), ctx.currentTime, 0.02) },
+      { id: "predelay", def: 0.012, get: () => cmd.predelay, set: (v) => { cmd.predelay = clamp(v, 0, 0.2); this.preDelay.delayTime.setTargetAtTime(cmd.predelay, ctx.currentTime, 0.02); } },
       { id: "width", def: 1, get: () => this._width, set: (v) => this.setWidth(clamp(v, 0, 1.5)) },
-      { id: "lowCut", def: 20, get: () => this.inHP.frequency.value, set: (v) => this.inHP.frequency.setTargetAtTime(clamp(v, 20, 2000), ctx.currentTime, 0.02) },
-      { id: "highCut", def: 18000, get: () => this.inLP.frequency.value, set: (v) => this.inLP.frequency.setTargetAtTime(clamp(v, 1000, 20000), ctx.currentTime, 0.02) },
+      { id: "lowCut", def: 20, get: () => cmd.lowCut, set: (v) => { cmd.lowCut = clamp(v, 20, 2000); this.inHP.frequency.setTargetAtTime(cmd.lowCut, ctx.currentTime, 0.02); } },
+      { id: "highCut", def: 18000, get: () => cmd.highCut, set: (v) => { cmd.highCut = clamp(v, 1000, 20000); this.inLP.frequency.setTargetAtTime(cmd.highCut, ctx.currentTime, 0.02); } },
       { id: "drive", def: 0, get: () => this._drive, set: (v) => this.setDrive(clamp01(v)) },
       { id: "character", def: 0, get: () => this.wp.character, set: (v) => this.postWp("character", clamp01(v)) },
       { id: "modRate", def: 0.35, get: () => this.wp.modRate, set: (v) => this.postWp("modRate", clamp(v, 0.02, 6)) },
-      { id: "postLow", def: 0, get: () => this.postLow.gain.value, set: (v) => this.postLow.gain.setTargetAtTime(clamp(v, -18, 12), ctx.currentTime, 0.02) },
-      { id: "postHigh", def: 0, get: () => this.postHigh.gain.value, set: (v) => this.postHigh.gain.setTargetAtTime(clamp(v, -18, 12), ctx.currentTime, 0.02) },
+      { id: "postLow", def: 0, get: () => cmd.postLow, set: (v) => { cmd.postLow = clamp(v, -18, 12); this.postLow.gain.setTargetAtTime(cmd.postLow, ctx.currentTime, 0.02); } },
+      { id: "postHigh", def: 0, get: () => cmd.postHigh, set: (v) => { cmd.postHigh = clamp(v, -18, 12); this.postHigh.gain.setTargetAtTime(cmd.postHigh, ctx.currentTime, 0.02); } },
       { id: "duck", def: 0, get: () => this._duckAmt, set: (v) => this.setDuck(clamp01(v)) },
       { id: "freeze", def: 0, get: () => this.wp.freeze, set: (v) => this.postWp("freeze", v ? 1 : 0) },
       { id: "style", def: 0, get: () => this.wp.style, set: (v) => this.postWp("style", clamp(Math.round(v), 0, REVERB_STYLES.length - 1)) },

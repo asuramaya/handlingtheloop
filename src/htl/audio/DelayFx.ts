@@ -81,7 +81,23 @@ export class DelayFx extends BaseFxDevice {
   private _analog = 0; // 0..1 tape/tube drive on the repeats
   private _lofi = 0; // 0/1 old-digital-delay bitcrush + bandwidth loss
   private _spread = 0; // 0..1 — L/R delay-time offset (organic stereo width; Eternity "offset")
+  // ★ COMMANDED-VALUE MIRRORS. Every continuous param here GLIDES — setTargetAtTime(…, 0.02) —
+  // and setTargetAtTime is exponential: it asymptotically approaches its target and never exactly
+  // arrives. So reading the getter off the live AudioParam (`delayTime.value`, `frequency.value`)
+  // returns a value that is permanently CHASING what you asked for.
+  //
+  // That read-back is what a direct-manipulation surface renders from. Drag a tap: the viz
+  // commands 0.5 s, reads back 0.28 mid-glide, and paints the tap back where it came from — the
+  // surface appears to shove your hand away. The band sweep was worse: it multiplies hp and lp by
+  // a ratio each frame, so it was COMPOUNDING on a lagging value and lurching.
+  //
+  // The audio still glides (that's the point — a stepped delay time clicks). The GETTERS just
+  // report what was commanded. Same fix Eq3 already carries.
   private _targetTime = 0.375; // last requested delay time (so a SPREAD change re-applies it)
+  private _hpHz = 120;
+  private _lpHz = 6500;
+  private _modDepth = 0;
+  private _modRate = 0.5;
 
   constructor(ctx: AudioContext) {
     super(ctx, 0.28); // ~quarter wet by default
@@ -185,10 +201,10 @@ export class DelayFx extends BaseFxDevice {
     this.rewire(); // wire input routing + fbL/fbR → delays per the topology
 
     this.params.push(
-      { id: "time", def: 0.375, get: () => this.delayL.delayTime.value, set: (v) => this.applyTime(clamp(v, 0.001, DELAY_MAX_SECONDS)) },
+      { id: "time", def: 0.375, get: () => this._targetTime, set: (v) => this.applyTime(clamp(v, 0.001, DELAY_MAX_SECONDS)) },
       { id: "feedback", def: 0.38, get: () => this._fb, set: (v) => this.setFeedback(clamp(v, 0, FB_MAX)) },
-      { id: "hp", def: 120, get: () => this.hpL.frequency.value, set: (v) => this.setFilterFreq("hp", clamp(v, 20, 18000)) },
-      { id: "lp", def: 6500, get: () => this.lpL.frequency.value, set: (v) => this.setFilterFreq("lp", clamp(v, 200, 18000)) },
+      { id: "hp", def: 120, get: () => this._hpHz, set: (v) => this.setFilterFreq("hp", clamp(v, 20, 18000)) },
+      { id: "lp", def: 6500, get: () => this._lpHz, set: (v) => this.setFilterFreq("lp", clamp(v, 200, 18000)) },
       // metadata (persist + sync; the panel turns them into behaviour)
       { id: "sync", def: 1, get: () => this._sync, set: (v) => (this._sync = v ? 1 : 0) },
       { id: "div", def: 2, get: () => this._div, set: (v) => (this._div = Math.round(v)) },
@@ -199,8 +215,8 @@ export class DelayFx extends BaseFxDevice {
       // Tier 2 — character
       { id: "analog", def: 0, get: () => this._analog, set: (v) => this.setColor(clamp(v, 0, 1), this._lofi) },
       { id: "lofi", def: 0, get: () => this._lofi, set: (v) => this.setColor(this._analog, v ? 1 : 0) },
-      { id: "modDepth", def: 0, get: () => this.modL.gain.value, set: (v) => this.setMod(clamp(v, 0, 0.012), undefined) },
-      { id: "modRate", def: 0.5, get: () => this.lfo.frequency.value, set: (v) => this.setMod(undefined, clamp(v, 0.02, 8)) },
+      { id: "modDepth", def: 0, get: () => this._modDepth, set: (v) => this.setMod(clamp(v, 0, 0.012), undefined) },
+      { id: "modRate", def: 0.5, get: () => this._modRate, set: (v) => this.setMod(undefined, clamp(v, 0.02, 8)) },
       // Tier 3 — ducking (repeats duck under the dry input)
       { id: "duck", def: 0, get: () => this._duckAmt, set: (v) => this.setDuck(clamp(v, 0, 1)) },
       { id: "spread", def: 0, get: () => this._spread, set: (v) => this.setSpread(clamp(v, 0, 1)) },
@@ -308,10 +324,14 @@ export class DelayFx extends BaseFxDevice {
   private setMod(depth: number | undefined, rate: number | undefined) {
     const now = this.ctx.currentTime;
     if (depth != null) {
+      this._modDepth = depth;
       this.modL.gain.setTargetAtTime(depth, now, 0.02);
       this.modR.gain.setTargetAtTime(depth, now, 0.02);
     }
-    if (rate != null) this.lfo.frequency.setTargetAtTime(rate, now, 0.02);
+    if (rate != null) {
+      this._modRate = rate;
+      this.lfo.frequency.setTargetAtTime(rate, now, 0.02);
+    }
   }
 
   // --- ducking: the dry-input envelope pushes the repeats down. Lazily wired — the
@@ -352,6 +372,8 @@ export class DelayFx extends BaseFxDevice {
   // --- filters ---
   private setFilterFreq(which: "hp" | "lp", hz: number) {
     const now = this.ctx.currentTime;
+    if (which === "hp") this._hpHz = hz;
+    else this._lpHz = hz;
     if (which === "hp") {
       this.hpL.frequency.setTargetAtTime(hz, now, 0.02);
       this.hpR.frequency.setTargetAtTime(hz, now, 0.02);

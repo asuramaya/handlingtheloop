@@ -325,6 +325,55 @@ body:not(.no-glow) .fx-tab.sel {
      clearance inside the grid box so the bottom row's dots never spill onto the chip strip. */
   padding-bottom: 7px;
 }
+/* Delay v2 — the SAME move the reverb dome made: the viz is the control surface. TIME, FBK, HP
+   and LP live on the tap timeline now (and LINK is gone: on a filter ribbon, "sweep both" is
+   just dragging the band's body), so nine cells in two rows collapse to five in ONE. Flex, not
+   grid, because the row is now grouped by FAMILY and the separators are hairlines between the
+   groups — motion · colour · dynamics — so the eye finds the family before the knob. */
+.fx-delay .fx-knobs.dly-knobs {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  grid-template-columns: none;
+  height: 40px;
+}
+.dly-knobs .vcell {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* A family boundary. Used in the knob row AND the chip strip. */
+.fx-sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 60%;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+/* ★ A CYCLER must not look like a toggle. RPT/MONO step through 3 and 2 modes but were styled
+   identically to the LINK/LOFI/FRZ toggles beside them — so two of the six chips had invisible
+   contents and you had to hover to learn they held anything at all. */
+.fx-chip.cyc {
+  position: relative;
+  padding-right: 15px;
+}
+.cyc-mark {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 7px;
+  opacity: 0.65;
+}
+/* FREEZE is a performance move — an infinite hold you slam mid-phrase — so it carries weight the
+   settings-chips beside it don't. */
+.fx-chip.dly-freeze {
+  flex: 1.3 1 0;
+  font-weight: 800;
+}
+.fx-chip.dly-freeze.on {
+  box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) 85%, transparent);
+}
+
 /* Reverb v3: the dome is the control surface (drag-handles for every spatial param), so the
    only cells left are the two NON-spatial knobs — MIX · DUCK — stacked in a narrow companion
    column beside the round viz. A fixed-width pair (not a 12-cell grid) is what un-busts the

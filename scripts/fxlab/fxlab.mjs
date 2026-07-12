@@ -49,6 +49,7 @@ function parseArgs(argv) {
       case "--bypass-at": a.bypassAt = Number(v); i++; break;
       case "--bank": a.bank = true; break;
       case "--coverage": a.coverage = true; break;
+      case "--tone-hz": a.toneHz = Number(v); i++; break;
       default: break;
     }
   }
@@ -281,6 +282,7 @@ async function main() {
       throwAt: args.throwAt ?? null,
       throwOff: args.throwOff ?? null,
       stepped: !!args.stepped,
+      toneHz: args.toneHz ?? 1000,
       padThrow: !!args.padThrow,
       startBypassed: !!args.startBypassed,
       bypassAt: args.bypassAt ?? null,

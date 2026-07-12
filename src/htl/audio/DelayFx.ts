@@ -95,11 +95,20 @@ export class DelayFx extends BaseFxDevice {
     this.delayL.delayTime.value = 0.375;
     this.delayR.delayTime.value = 0.375;
 
+    // ★ For LOWPASS and HIGHPASS, Web Audio reads `Q` in DECIBELS — not as a linear Q factor.
+    // (Spec: alpha = sin(w0) / (2 · 10^(Q/20)), unlike bandpass/peaking/notch where Q is linear.)
+    // So Q = 0.7 is not Butterworth, it is 0.7 dB of RESONANCE: linear Q ≈ 1.08, a +1.7 dB peak at
+    // the corner. Two of those sit INSIDE the feedback loop, where a peak IS a loop-gain multiplier
+    // — which is why the true feedback overshot the knob at the top of its range (set 0.70 measured
+    // 0.82; set 0.90 measured 1.054 and BUILT), FB_MAX = 0.95 was already unstable, and Freeze
+    // (fb = 1.0) self-oscillated to +42 dB instead of holding. −3.01 dB IS Butterworth: 10^(−3.01/20)
+    // = 0.7071. Same class of bug as the analog drive (a >1 gain hidden inside a feedback path).
+    const FLAT_Q_DB = -3.01;
     const mkFilter = (type: BiquadFilterType, freq: number) => {
       const f = ctx.createBiquadFilter();
       f.type = type;
       f.frequency.value = freq;
-      f.Q.value = 0.7;
+      f.Q.value = FLAT_Q_DB;
       return f;
     };
     this.hpL = mkFilter("highpass", 120);

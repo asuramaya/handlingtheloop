@@ -17,6 +17,10 @@ const extToRate = (e: number) => 1 + clamp01(e) * clamp01(e) * 63;
 // 0..1 → filter cutoff, log 200 Hz‥18 kHz (1 = effectively open).
 const extToHz = logMap(200, 18000);
 
+// RES → the post filter's resonance. Web Audio reads a lowpass/highpass Q in DECIBELS, so res=0
+// used to mean 0.7 dB — already resonant. −3.01 dB is flat, and the knob climbs from there.
+const resQdB = (res: number) => -3.01 + res * 11;
+
 export class CrushFx extends BaseFxDevice {
   readonly kind: FxKind = "crush";
   private node: AudioWorkletNode | null = null;
@@ -34,7 +38,7 @@ export class CrushFx extends BaseFxDevice {
     this.post = ctx.createBiquadFilter();
     this.post.type = "lowpass";
     this.post.frequency.value = extToHz(this._cut);
-    this.post.Q.value = 0.7 + this._res * 8;
+    this.post.Q.value = resQdB(this._res);
     try {
       this.node = new AudioWorkletNode(ctx, "crush", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit" });
       this.input.connect(this.node).connect(this.post).connect(this.wet);
@@ -86,7 +90,7 @@ export class CrushFx extends BaseFxDevice {
   }
   private setRes(e: number) {
     this._res = clamp01(e);
-    this.post.Q.setTargetAtTime(0.7 + this._res * 8, this.ctx.currentTime, 0.01);
+    this.post.Q.setTargetAtTime(resQdB(this._res), this.ctx.currentTime, 0.01);
   }
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + smash to a heavy crush while held;

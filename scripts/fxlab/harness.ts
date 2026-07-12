@@ -30,6 +30,7 @@ interface Spec {
   seconds?: number;
   bpm?: number;
   sampleRate?: number;
+  toneHz?: number; // probe frequency for signal="tone" (default 1 kHz) — lets a response be sampled point by point
   // A mid-render THROW: slam `throwPreset` in at `throwAt` and restore the previous state at
   // `throwOff` — the FX-pad gesture, rendered. OfflineAudioContext.suspend() is what makes this
   // possible: the render halts at a wall-clock we choose, we mutate the device on the main thread
@@ -66,12 +67,12 @@ function buildDevice(ctx: Ctx, kind: FxKind): FxDevice {
 }
 
 // One test stimulus. Returns a started-able source node feeding the device input.
-function makeSignal(ctx: Ctx, signal: string, sr: number): AudioScheduledSourceNode {
+function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000): AudioScheduledSourceNode {
   if (signal === "tone") {
-    // Steady-state 1 kHz sine (±1) — for gate/mod/eq where the response, not a transient, matters.
+    // Steady-state sine (±1) — for gate/mod/eq where the response, not a transient, matters.
     const o = ctx.createOscillator();
     o.type = "sine";
-    o.frequency.value = 1000;
+    o.frequency.value = toneHz;
     return o;
   }
   if (signal === "silence") {
@@ -305,8 +306,16 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
       echoes.push({ n: m, tSec: at / sr, amp, db: dbOf(amp) });
     }
     report.echoes = echoes;
+    // Ratio each repeat against the one before it — but ONLY while there IS a repeat. Once the tail
+    // has decayed below the noise floor every later window is silence, and silence/silence poisons
+    // the median: a short, low-feedback delay whose tail dies by repeat 5 would read "effective
+    // feedback 0.003" out of 24 windows of nothing. Score the LIVE part of the ladder.
+    const floorAmp = Math.max(peak * 0.002, 1e-5); // −54 dB of the loudest thing in the render
     const ratios: number[] = [];
-    for (let i = 0; i + 1 < echoes.length; i++) if (echoes[i].amp > 1e-5) ratios.push(echoes[i + 1].amp / echoes[i].amp);
+    for (let i = 0; i + 1 < echoes.length; i++) {
+      if (echoes[i].amp <= floorAmp) break; // the ladder is over — everything past here is silence
+      ratios.push(echoes[i + 1].amp / echoes[i].amp);
+    }
     if (ratios.length) {
       const sorted = [...ratios].sort((a, b) => a - b);
       const med = sorted[Math.floor(sorted.length / 2)];
@@ -416,8 +425,11 @@ export interface Coverage {
   }
   if (spec.params) Object.assign(applied, spec.params);
   for (const k in applied) dev.setParam(k, applied[k]);
-  // Snapshot the ACTUAL device state after applying (so the report shows clamped/derived values).
-  const actual = dev.snapshotParams();
+  // Snapshot the device state after applying — but let what we COMMANDED win over the read-back.
+  // Ramped params (the delay's `time` rides a setTargetAtTime) still read their OLD value the
+  // instant after they're set, and the echo ladder spaces its windows by `time`: trust the
+  // read-back and the ladder measures a 0.5 s delay at 0.375 s intervals, i.e. it measures noise.
+  const actual = { ...dev.snapshotParams(), ...applied };
 
   // Mid-render THROW (the FX pad, rendered). suspend() halts the offline render at a chosen time
   // so the device can be driven from the main thread exactly as a pad press would drive it — the
@@ -462,7 +474,7 @@ export interface Coverage {
     }
   }
 
-  const source = makeSignal(ctx, signal, sr);
+  const source = makeSignal(ctx, signal, sr, spec.toneHz ?? 1000);
   source.connect(dev.input);
   dev.output.connect(ctx.destination);
   source.start(0);

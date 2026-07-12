@@ -118,7 +118,7 @@ export class NoiseFx extends BaseFxDevice {
     if (this._type === 2) this.tonalOsc.frequency.setTargetAtTime(sweepHzOf(this._sweep) * 0.5, this.ctx.currentTime, 0.01);
   }
   private applyRes() {
-    this.sweep.Q.setTargetAtTime(0.7 + clamp01(this._res) * 22, this.ctx.currentTime, 0.02);
+    this.sweep.Q.setTargetAtTime(-3.01 + clamp01(this._res) * 25, this.ctx.currentTime, 0.02); // Q is in dB for a highpass: −3.01 = flat, up = resonant
   }
   private applyTone() {
     this.tone.frequency.setTargetAtTime(toneHzOf(this._tone), this.ctx.currentTime, 0.02);

@@ -28,10 +28,23 @@ export const EQ_BANDS = {
 } as const;
 
 // Cut filters sit "off" at the spectrum extremes until dragged inward.
-export const EQ_HP = { freq: 20, min: 20, max: 2200, q: 0.7 } as const;
-export const EQ_LP = { freq: 20000, min: 320, max: 20000, q: 0.7 } as const;
+export const EQ_HP = { freq: 20, min: 20, max: 2200, q: 0.3 } as const;
+export const EQ_LP = { freq: 20000, min: 320, max: 20000, q: 0.3 } as const;
 export const EQ_Q_MIN = 0.3;
 export const EQ_Q_MAX = 12;
+
+// ★ Web Audio reads Q in DECIBELS for LOWPASS and HIGHPASS (alpha = sin(w0)/(2·10^(Q/20))) — but
+// LINEARLY for peaking/notch/bandpass. One `Q` param, two meanings. So the HP/LP cuts were never
+// flat: a "Butterworth" 0.7 was really 0.7 dB of resonance (linear Q ≈ 1.08, a +1.7 dB bump right
+// at the corner), which is why a supposedly-flat EQ still had a lump at 20 Hz. The bells are fine —
+// their Q really is linear.
+//
+// The knob keeps its 0.3‥12 face (profiles, presets and the drag mapping all speak it), and we map
+// it onto the resonance the filter actually wants: EQ_Q_MIN is now genuinely FLAT (−3.01 dB is
+// Butterworth: 10^(−3.01/20) = 0.7071), climbing to a strong peak at the top of the travel.
+const RES_FLAT_DB = -3.01;
+const RES_SPAN_DB = 15; // knob top → +12 dB of resonance (linear Q ≈ 4)
+const resDb = (q: number) => RES_FLAT_DB + ((clampQ(q) - EQ_Q_MIN) / (EQ_Q_MAX - EQ_Q_MIN)) * RES_SPAN_DB;
 
 // Per-band SHAPE — each of LOW/MID/HIGH can switch filter character, so the three bands
 // carry a consistent control. Web-Audio honours Q only for the "peaking" (bell) type;
@@ -214,16 +227,19 @@ export class Eq3 implements FxDevice {
   // from here rather than from `AudioParam.value` — mid-ramp a param reads back somewhere between
   // the old and new curve, and a snapshot taken there would bake the in-between into a preset.
   private readonly cmd: Record<string, number> = {};
-  private write(p: AudioParam, id: string, v: number) {
+  // `audio` lets a param STORE one number and WRITE another — the cut resonance keeps its 0.3‥12
+  // knob face in `cmd` (what presets and profiles carry) while the filter gets the dB it actually
+  // reads. Everything else stores what it writes.
+  private write(p: AudioParam, id: string, v: number, audio = v) {
     this.cmd[id] = v;
     if (this.tau <= 0) {
-      p.value = v;
+      p.value = audio;
       return;
     }
     const t = this.ctx.currentTime;
     p.cancelScheduledValues(t);
-    p.setTargetAtTime(v, t, this.tau);
-    p.setValueAtTime(v, t + this.tau * 5);
+    p.setTargetAtTime(audio, t, this.tau);
+    p.setValueAtTime(audio, t + this.tau * 5);
   }
   /** Apply a whole param map as a smooth MORPH — the FX-pad curve throw (and its restore).
    *  Band SHAPES still switch instantly (a biquad type has no in-between), so a preset that
@@ -328,7 +344,7 @@ export class Eq3 implements FxDevice {
     this.write(this.hp.frequency, "hpFreq", clampHz(hz, EQ_HP));
   }
   setHpQ(q: number) {
-    this.write(this.hp.Q, "hpQ", clampQ(q));
+    this.write(this.hp.Q, "hpQ", clampQ(q), resDb(q)); // knob 0.3‥12 → dB of resonance (0.3 = flat)
   }
   get hpFreq() {
     return this.cmd.hpFreq;
@@ -340,7 +356,7 @@ export class Eq3 implements FxDevice {
     this.write(this.lp.frequency, "lpFreq", clampHz(hz, EQ_LP));
   }
   setLpQ(q: number) {
-    this.write(this.lp.Q, "lpQ", clampQ(q));
+    this.write(this.lp.Q, "lpQ", clampQ(q), resDb(q));
   }
   get lpFreq() {
     return this.cmd.lpFreq;

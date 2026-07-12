@@ -20,7 +20,12 @@ export type SatStyle = (typeof SAT_STYLES)[number];
 
 const CURVE_LEN = 2048;
 const DC_BLOCK_HZ = 12;
-const LR_Q = 0.7071; // Butterworth; two cascaded = Linkwitz-Riley LR4 (flat sum)
+// ★ Web Audio reads Q in DECIBELS for lowpass/highpass (alpha = sin(w0)/(2·10^(Q/20))), so the
+// old `0.7071` here was not Butterworth — it was 0.7071 dB of resonance (linear Q ≈ 1.085, a
+// +1.7 dB peak at each corner). The whole point of Linkwitz-Riley is that the bands SUM FLAT, and
+// they didn't: the split coloured the signal by ~+0.7 dB broadband before a single band was driven.
+// −3.01 dB IS Butterworth (10^(−3.01/20) = 0.7071); two cascaded = LR4, which sums flat.
+const LR_Q = -3.01;
 
 // 0..1 knob → pre-gain into the curve (0 ≈ unity, 1 ≈ +20 dB hot).
 const driveGain = (ext: number) => Math.pow(10, (clamp01(ext) * 20) / 20);

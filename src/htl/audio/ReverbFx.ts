@@ -22,6 +22,10 @@ import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
 // the index that rides the `style` param).
 export const REVERB_STYLES = ["HALL", "ROOM", "PLATE", "AMBIENT"] as const;
 
+// Web Audio reads Q in DECIBELS for lowpass/highpass, so "0.7" is 0.7 dB of RESONANCE, not a
+// Butterworth Q — it put a +1.7 dB bump right at lowCut/highCut on the wet path. −3.01 dB is flat.
+const FLAT_Q_DB = -3.01;
+
 export class ReverbFx extends BaseFxDevice {
   readonly kind: FxKind = "reverb";
 
@@ -62,11 +66,11 @@ export class ReverbFx extends BaseFxDevice {
     this.inHP = ctx.createBiquadFilter();
     this.inHP.type = "highpass";
     this.inHP.frequency.value = 20;
-    this.inHP.Q.value = 0.7;
+    this.inHP.Q.value = FLAT_Q_DB;
     this.inLP = ctx.createBiquadFilter();
     this.inLP.type = "lowpass";
     this.inLP.frequency.value = 18000;
-    this.inLP.Q.value = 0.7;
+    this.inLP.Q.value = FLAT_Q_DB;
 
     this.input.connect(this.drive);
     this.drive.connect(this.preDelay);

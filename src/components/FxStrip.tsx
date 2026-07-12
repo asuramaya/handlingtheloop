@@ -427,8 +427,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           from the wet/dry it gates reads as unrelated chrome. COPY went to the header. */}
       {selDev && (
         <div className={`fx-bar ${bypassed ? "off" : ""}`}>
-          <button className="eq-tool fx-reset" title="Reset this device to its defaults" onClick={reset}>
-            RESET
+          {/* A glyph, not a word — so it shrinks to a square end-cap matching POWER, and the
+              fader keeps the whole middle at any width. The panel narrows a LOT (two decks
+              side by side on a laptop, and again on a phone) and a 6-letter label is the first
+              thing that stops fitting. */}
+          <button className="eq-tool fx-reset" title="Reset this device to its defaults" aria-label="Reset this device" onClick={reset}>
+            ↺
           </button>
           <MixFader value={selDev.getParam("mix")} reset={selDev.paramDefault("mix")} onChange={setMix} disabled={bypassed} />
           <button

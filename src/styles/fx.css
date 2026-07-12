@@ -1990,14 +1990,20 @@ button.room-tog:hover {
   flex: 0 0 auto;
   min-width: 0;
 }
-/* RESET and POWER are the foot's two end-caps and they are the SAME SIZE — the wet/dry takes
-   everything between them. (RESET keeps the neon .eq-tool language, but stops being flex:1:
-   it's a button, not a third of the panel.) */
+/* RESET and POWER are the foot's two end-caps: same size, both glyphs, both square. The wet/dry
+   takes everything between them — which is the whole middle, at any width. (RESET keeps the neon
+   .eq-tool language, but stops being flex:1: it's a button, not a third of the panel.) */
 .fx-bar .eq-tool,
 .fx-bar .fx-power {
-  flex: 0 0 var(--fx-cap-w, 58px);
-  width: var(--fx-cap-w, 58px);
+  flex: 0 0 var(--fx-cap-w, 40px);
+  width: var(--fx-cap-w, 40px);
   padding: 0;
+}
+.fx-bar .fx-reset {
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  line-height: 1;
 }
 /* POWER — engage/bypass, sitting with the wet/dry it gates. Lit in the deck accent when the
    effect is in the signal, drained when dormant. */
@@ -2040,6 +2046,7 @@ body:not(.no-glow) .fx-power.on {
   min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   overflow: hidden;
   border-radius: 6px;
   cursor: ew-resize;
@@ -2060,23 +2067,19 @@ body:not(.no-glow) .fx-power.on {
 body:not(.no-glow) .fx-mix-fill {
   box-shadow: 0 0 12px -2px color-mix(in srgb, var(--accent) 75%, transparent);
 }
-.fx-mix-label,
+/* Just the number, centred — no "MIX" caption. The bar is the only fader down here, so the
+   caption bought nothing and cost width the fill wanted. Centred means it stays legible whether
+   the fill is behind it or not, at any deck width. */
 .fx-mix-val {
   position: relative; /* above the fill */
+  margin: 0 auto;
   pointer-events: none;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.06em;
-  color: var(--accent);
-  text-shadow: 0 0 7px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-.fx-mix-label {
-  padding-left: 10px;
-}
-.fx-mix-val {
-  margin-left: auto;
-  padding-right: 10px;
+  letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
 }
 /* A dormant device still shows its blend — it just stops claiming to be doing anything. */
 .fx-bar.off .fx-mix {
@@ -2089,9 +2092,12 @@ body:not(.no-glow) .fx-mix-fill {
 }
 @media (max-width: 768px) {
   .fx-bar {
-    min-height: 32px;
+    min-height: 34px;
     gap: 5px;
-    --fx-cap-w: 62px;
+    --fx-cap-w: 46px; /* thumb-sized, still square */
+  }
+  .fx-mix-val {
+    font-size: 12px;
   }
 }
 

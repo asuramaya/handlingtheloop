@@ -243,7 +243,16 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   const community = useCommunityPool();
 
   useEffect(() => {
-    fetchMe().then(setMe);
+    const load = () => void fetchMe().then(setMe);
+    load();
+    // Auth connect is a full-page redirect (it remounts + refetches on return), but a service can
+    // also be connected/disconnected out-of-band — in Settings on this page, or in another tab — so
+    // refresh the account whenever the tab regains visibility to keep MY SPOTIFY/TIDAL in step.
+    const onVis = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
   // The not-yet-imported service playlists, split so the main list stays clean: ones you
@@ -266,7 +275,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         onClick={() => importServicePlaylist(service, p)}
       >
         <span className="lib-nav-ico">♫</span>
-        <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
+        <span className="lib-pl-name">{cleanPlaylistName(p.title) || p.title}</span>
         {p.count > 0 && <span className="lib-count">{p.count}</span>}
       </button>
     );
@@ -489,10 +498,18 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           className="lib-pl-src"
           role="button"
           tabIndex={0}
+          aria-label="Re-sync from source"
           title={`Re-sync from ${p.sourceService === "spotify" ? "Spotify" : p.sourceService === "tidal" ? "TIDAL" : "YouTube"}${p.lastSynced ? ` — last synced ${new Date(p.lastSynced).toLocaleString()}` : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             void resyncPlaylist(p);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              void resyncPlaylist(p);
+            }
           }}
         >
           {syncingId === p.id ? "⟳" : "⇄"}
@@ -501,10 +518,20 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       <span className="lib-count">{p.trackIds.length}</span>
       <span
         className="lib-del"
+        role="button"
+        tabIndex={0}
+        aria-label={`Delete playlist ${p.name}`}
         title="Delete playlist"
         onClick={(e) => {
           e.stopPropagation();
           deletePlaylist(p.id, p.name);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            deletePlaylist(p.id, p.name);
+          }
         }}
       >
         ✕
@@ -707,7 +734,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                         onClick={() => importPlaylistId(p.id, p.title)}
                       >
                         <span className="lib-nav-ico">▶</span>
-                        <span className="lib-pl-name">{cleanPlaylistName(p.title)}</span>
+                        <span className="lib-pl-name">{cleanPlaylistName(p.title) || p.title}</span>
                         {p.count > 0 && <span className="lib-count">{p.count}</span>}
                       </button>
                     ))}

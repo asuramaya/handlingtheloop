@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Library, Playlist, TrackMeta } from "@htl/library";
 import { fetchPlaylist } from "@htl/media";
 import {
@@ -22,6 +22,25 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
   const [importing, setImporting] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null); // the playlist whose ⇄ resync is in flight (per-row spinner, not a global one)
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const msgTimer = useRef<number | null>(null);
+
+  // Set the status line. `ttl` (ms) auto-clears it — but only if it's STILL the same message, so a
+  // newer status started meanwhile is never clobbered; any prior auto-clear timer is cancelled first.
+  // Terminal messages (success / "kept local" / failures) pass a ttl; in-flight ones don't (they're
+  // replaced by the next flash).
+  const flash = useCallback((msg: string, ttl?: number) => {
+    if (msgTimer.current != null) {
+      clearTimeout(msgTimer.current);
+      msgTimer.current = null;
+    }
+    setImportMsg(msg);
+    if (ttl) {
+      msgTimer.current = window.setTimeout(() => {
+        msgTimer.current = null;
+        setImportMsg((m) => (m === msg ? null : m));
+      }, ttl);
+    }
+  }, []);
 
   // Stable identity for a SOURCE track (before it's matched to a video): ISRC first (cross-service),
   // then the Spotify id, else a normalized artist|title. Keys the sourceMatch map so re-sync follows
@@ -90,9 +109,13 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       }
       library.setSourceMatch(id, map);
       setView({ playlistId: id });
-      setImportMsg(null);
+      // Unmatched source tracks are dropped silently otherwise — surface the shortfall so a partial
+      // import (and any resulting under-count) is visible, not a mystery.
+      const dropped = tracks.length - matched.length;
+      if (dropped > 0) flash(`Imported ${matched.length} of ${tracks.length} from ${label} — ${dropped} had no YouTube match.`, 5000);
+      else setImportMsg(null);
     } catch (e) {
-      setImportMsg(`${label} import failed — ${friendlySyncError((e as Error).message)}`);
+      flash(`${label} import failed — ${friendlySyncError((e as Error).message)}`, 6000);
     } finally {
       setImporting(false);
     }
@@ -105,7 +128,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
   async function resyncPlaylist(pl: Playlist) {
     if (!pl.sourceListId || !pl.sourceService) return;
     if (importing) {
-      setImportMsg("Hang on — a sync is already running."); // don't silently swallow the click
+      flash("Hang on — a sync is already running.", 2500); // don't silently swallow the click
       return;
     }
     const service = pl.sourceService;
@@ -117,7 +140,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       // tracks — must NEVER be read as "the playlist is now empty": that would prune a curated copy
       // to nothing. Keep what we have; a genuinely-emptied source is indistinguishable from a failed
       // read here, and not destroying local data is the safe default.
-      const keptLocal = () => setImportMsg(`Couldn’t read “${cleanPlaylistName(pl.name)}” — kept your local copy.`);
+      const keptLocal = () => flash(`Couldn’t read “${cleanPlaylistName(pl.name)}” — kept your local copy.`, 4000);
       const have = new Set(pl.trackIds);
       let added = 0;
       let removed = 0;
@@ -162,10 +185,9 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       }
 
       library.markSynced(pl.id, Date.now());
-      setImportMsg(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date");
-      window.setTimeout(() => setImportMsg((m) => ((m && m.startsWith("Synced")) || m === "Already up to date" ? null : m)), 2500);
+      flash(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date", 2500);
     } catch (e) {
-      setImportMsg(`Re-sync failed: ${(e as Error).message}`);
+      flash(`Re-sync failed: ${(e as Error).message}`, 6000);
     } finally {
       setImporting(false);
       setSyncingId(null);
@@ -205,7 +227,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       await ingestPlaylist(listId, fallbackTitle);
       setImportMsg(null);
     } catch (e) {
-      setImportMsg(`Import failed: ${(e as Error).message}`);
+      flash(`Import failed: ${(e as Error).message}`, 6000);
     } finally {
       setImporting(false);
     }

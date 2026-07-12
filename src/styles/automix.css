@@ -247,7 +247,3 @@
   color: var(--accent);
 }
 
-/* Re-sync affordance on imported playlists. */
-.lib-pl-src { cursor: pointer; opacity: 0.6; transition: opacity 0.12s, color 0.12s; }
-.lib-pl-src:hover { opacity: 1; color: var(--accent); }
-

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Store, migrateLegacyKey } from "../persistence";
-import { canonicalizeTrack, trackKey } from "./identity";
+import { canonicalizeTrack, canonicalVideoId, trackKey } from "./identity";
 import type { Playlist, TrackMeta } from "./types";
 
 // Persistent library: the collection (every track you've saved) plus playlists
@@ -139,9 +139,12 @@ export function useLibrary(): Library {
       const collection = d.collection.some((x) => trackKey(x) === key)
         ? d.collection
         : [{ ...t, addedAt: Date.now() }, ...d.collection];
+      // Membership is compared on the CANONICAL id (bare 11-char), so a track already present as a
+      // URL/whitespace form isn't double-added — mirroring the collection's trackKey dedup above.
+      const cid = t.videoId; // canonicalizeTrack already normalized this
       const playlists = d.playlists.map((p) =>
-        p.id === playlistId && !p.trackIds.includes(t.videoId)
-          ? { ...p, trackIds: [...p.trackIds, t.videoId] }
+        p.id === playlistId && !p.trackIds.some((id) => (canonicalVideoId(id) || id) === cid)
+          ? { ...p, trackIds: [...p.trackIds, cid] }
           : p,
       );
       return { collection, playlists };
@@ -149,10 +152,11 @@ export function useLibrary(): Library {
   }, []);
 
   const removeFromPlaylist = useCallback((playlistId: string, videoId: string) => {
+    const vid = canonicalVideoId(videoId) || videoId; // match the canonical form stored on add
     setData((d) => ({
       ...d,
       playlists: d.playlists.map((p) =>
-        p.id === playlistId ? { ...p, trackIds: p.trackIds.filter((id) => id !== videoId) } : p,
+        p.id === playlistId ? { ...p, trackIds: p.trackIds.filter((id) => (canonicalVideoId(id) || id) !== vid) } : p,
       ),
     }));
   }, []);

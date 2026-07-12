@@ -84,12 +84,18 @@
   font-variant-numeric: tabular-nums;
   font-size: 11px;
 }
-/* "Synced with a service" marker on a linked local playlist. */
+/* "Synced with a service" marker + re-sync affordance on a linked local playlist. */
 .lib-pl-src {
   margin-left: 6px;
   color: var(--accent, #36c2ff);
   font-size: 11px;
   opacity: 0.8;
+  cursor: pointer;
+  transition: opacity 0.12s, color 0.12s;
+}
+.lib-pl-src:hover {
+  opacity: 1;
+  color: var(--accent);
 }
 .lib-del {
   margin-left: 6px;

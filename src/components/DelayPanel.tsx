@@ -106,6 +106,11 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
     }
   };
   const onFeedback = (v: number) => live("feedback", v);
+  // The wobble is ONE gesture, so it arrives as one call — depth and rate together.
+  const onMod = (depth: number, rate: number) => {
+    live("modDepth", depth);
+    live("modRate", rate);
+  };
   const onFilters = (hp: number, lp: number) => {
     if (Math.abs(hp - get("hp")) > 0.5) live("hp", hp);
     if (Math.abs(lp - get("lp")) > 0.5) live("lp", lp);
@@ -142,11 +147,15 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         onTime={onTime}
         onFeedback={onFeedback}
         onFilters={onFilters}
+        onMod={onMod}
       />
       {/* The character params, in families. MOTION · COLOUR · DYNAMICS. */}
       <div className="fx-knobs dly-knobs">
-        <ValueCell label="DEPTH" value={get("modDepth")} min={0} max={0.012} step={0.0002} reset={0} onChange={(v) => tweak("modDepth", v)} format={(v) => `${Math.round((v / 0.012) * 100)}`} />
-        <ValueCell label="RATE" value={get("modRate")} min={0.02} max={8} step={0.02} reset={0.5} onChange={(v) => tweak("modRate", v)} format={(v) => `${v.toFixed(2)}`} />
+        {/* DEPTH and RATE are NOT here. They were never two knobs — depth without rate is silent,
+            rate without depth is inaudible; neither half means anything alone, which is the tell
+            that they're one control wearing two costumes. They're the WAVE on the viz now: grab it,
+            up/down is how deep, sideways stretches it. At depth 0 the wave is flat, which is
+            exactly the centre line — so the resting wobble is a thing you can grab, not a ghost. */}
         <ValueCell label="WIDTH" value={get("spread")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("spread", v)} format={fmtPct} />
         <span className="fx-sep" aria-hidden="true" />
         <ValueCell label="DRIVE" value={get("analog")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("analog", v)} format={fmtPct} />

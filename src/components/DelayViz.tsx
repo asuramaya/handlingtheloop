@@ -17,9 +17,21 @@ import { useEffect, useRef } from "react";
 //                         cut; drag the BODY to sweep the whole band. That body-drag is what the
 //                         old LINK chip did, so LINK is deleted, not redesigned — it only ever
 //                         existed because HP and LP were two separate cells.
+//   • THE WAVE          → the wobble. DEPTH and RATE were never two knobs: depth without rate is
+//                         silent, rate without depth is inaudible, and neither half means anything
+//                         alone. That's the tell that they're ONE control wearing two costumes. So
+//                         it's one gesture on the shape the wobble actually makes — up/down is how
+//                         deep (the crest follows your finger), sideways STRETCHES it (right is
+//                         slower, left faster, log-scaled so every octave feels the same width).
+//                         ★ At depth 0 the wave is flat — and a flat wave is exactly the centre
+//                         line, which is already drawn. So the resting wobble isn't a ghost with
+//                         nothing to grab: it IS that line. Pull it off centre and the wobble is
+//                         born. That's what keeps this a control instead of a decoration you can
+//                         happen to poke.
 //
-// Still drawn, still read-only (they have their own cells): DEPTH/RATE as a live scrolling LFO,
-// DUCK as a sidechain dip on the early taps, WIDTH as an L/R split, DRIVE as a warm glow.
+// Right-click resets whatever is under the cursor — a gesture you can't undo isn't a control, it's
+// a trap. Still drawn, still read-only (they keep their cells): DUCK as a sidechain dip on the
+// early taps, WIDTH as an L/R split, DRIVE as a warm glow.
 
 interface DelayVizProps {
   time: number; // seconds between taps
@@ -44,6 +56,7 @@ interface DelayVizProps {
   onTime: (seconds: number) => void; // the panel snaps to the note grid when synced
   onFeedback: (v: number) => void;
   onFilters: (hp: number, lp: number) => void;
+  onMod: (depth: number, rate: number) => void; // the wobble — one gesture, two axes
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -54,6 +67,12 @@ const MAX_TIME = 2; // the delay line's ceiling (DelayFx clamps here too)
 const HP_MIN = 20;
 const LP_MAX = 18000;
 const BAND_MIN_RATIO = 1.35; // the cuts may not cross (or meet) — a band needs to stay a band
+const RATE_MIN = 0.02;
+const RATE_MAX = 8;
+// The wave's height at FULL depth, as a fraction of the timeline half — and therefore ALSO the
+// drag distance that reaches full depth, because the crest follows your finger. At 0.22 the whole
+// range lived in ~21px of travel: the wobble slammed to 100% the moment you touched it.
+const LFO_AMP_FRAC = 0.38;
 const GRIP_PX = 10; // how close counts as "on" a filter edge
 const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
@@ -67,9 +86,10 @@ type Grab =
   | { kind: "tap"; n: number }
   | { kind: "hp" }
   | { kind: "lp" }
-  | { kind: "band"; lastX: number };
+  | { kind: "band"; lastX: number }
+  | { kind: "lfo"; startX: number; startRate: number };
 
-export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters }: DelayVizProps) {
+export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -78,8 +98,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters });
-  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters };
+  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod });
+  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see.
@@ -204,12 +224,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.lineTo(w, midY + 0.5);
       ctx.stroke();
 
-      // === DEPTH/RATE — a live LFO that actually scrolls. Flat (invisible) at depth 0. ===
+      // === THE WOBBLE — DEPTH × RATE, and it is ONE OBJECT, not two knobs. Neither half means
+      // anything alone: depth without rate is silent, rate without depth is inaudible. So it's one
+      // gesture on the shape the wobble actually makes. Grab the wave: UP/DOWN is how deep, and
+      // dragging sideways STRETCHES it — right is slower, left is faster, and the wavelength
+      // follows your hand.
+      //
+      // ★ At depth 0 the wave is FLAT — and a flat wave is exactly the centre line, which is
+      // already drawn. So the resting wobble isn't a ghost with nothing to grab: it's that line.
+      // Pull the line off centre and the wobble is born. That's what makes this a control and not
+      // a decoration you can happen to poke.
       const modN = clamp01(s.modDepth / MOD_MAX);
       const phase = 2 * Math.PI * s.modRate * elapsed;
       const lfoNow = modN * Math.sin(-phase);
+      const lfoHot = hover.current === "lfo" || grab.current?.kind === "lfo";
       if (modN > 0.001 && s.modRate > 0) {
-        const lfoAmp = modN * (h - top) * 0.22;
+        const lfoAmp = modN * (h - top) * LFO_AMP_FRAC;
         const cycles = Math.max(0.5, s.modRate * windowSec);
         ctx.beginPath();
         for (let x = 0; x <= w; x += 2) {
@@ -217,12 +247,34 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
           x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
         ctx.strokeStyle = accent;
-        ctx.globalAlpha = 0.5;
-        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = lfoHot ? 0.95 : 0.5;
+        ctx.lineWidth = lfoHot ? 2.5 : 1.5;
         ctx.shadowColor = accent;
-        ctx.shadowBlur = 6;
+        ctx.shadowBlur = lfoHot ? 10 : 6;
         ctx.stroke();
         ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      } else if (lfoHot) {
+        // At rest: light the centre line, so the thing you're about to grab announces itself.
+        ctx.beginPath();
+        ctx.moveTo(0, midY + 0.5);
+        ctx.lineTo(w, midY + 0.5);
+        ctx.strokeStyle = accent;
+        ctx.globalAlpha = 0.75;
+        ctx.lineWidth = 2;
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = 8;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      }
+      if (lfoHot) {
+        ctx.font = "800 9px ui-monospace, monospace";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.95;
+        ctx.fillText(`WOBBLE  ${Math.round(modN * 100)}%  ·  ${s.modRate.toFixed(2)} Hz`, w - 6, top + 3);
         ctx.globalAlpha = 1;
       }
 
@@ -384,7 +436,17 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
           best = n;
         }
       }
-      return best >= 0 ? { kind: "tap", n: best } : null;
+      if (best >= 0) return { kind: "tap", n: best }; // a tap always wins — it's the primary gesture
+      // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre
+      // line, so there's always something to grab — the resting wobble is never a ghost.
+      const { midY: my, top: tp } = geom(h);
+      const modN = clamp01(s.modDepth / MOD_MAX);
+      const lfoAmp = modN * (h - tp) * LFO_AMP_FRAC;
+      // Hit-test the BAND the wave sweeps, not one frozen phase of it — the wave is scrolling, so
+      // testing the instantaneous curve would move the target out from under a stationary cursor
+      // sixty times a second. Anywhere within its swing counts as "on the wave".
+      const reach = Math.max(GRIP_PX, lfoAmp + GRIP_PX);
+      return Math.abs(py - my) <= reach ? { kind: "lfo" } : null;
     };
 
     // ★ Paint from what we just computed — never wait for a React round-trip. The handlers push
@@ -406,6 +468,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     const setFeedback = (v: number) => {
       p.current.feedback = v;
       p.current.onFeedback(v);
+    };
+    const setMod = (depth: number, rate: number) => {
+      p.current.modDepth = depth;
+      p.current.modRate = rate;
+      p.current.onMod(depth, rate);
     };
 
     const apply = (px: number, py: number) => {
@@ -434,6 +501,19 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         setFilters(nHp, nLp);
         return;
       }
+      if (g.kind === "lfo") {
+        // DEPTH is absolute: the wave's height follows your finger off the centre line.
+        const { midY, top } = geom(h);
+        const full = Math.max(1, (h - top) * LFO_AMP_FRAC);
+        const depth = clamp01(Math.abs(py - midY) / full) * MOD_MAX;
+        // RATE is a STRETCH, and stretches are relative: drag right and the wave lengthens under
+        // your hand (slower), left and it compresses (faster). Log-scaled, so one full-width drag
+        // spans the whole 0.02‥8 Hz range and every octave of it feels the same width.
+        const span = Math.log(RATE_MAX / RATE_MIN);
+        const rate = clamp(g.startRate * Math.exp((-(px - g.startX) / w) * span), RATE_MIN, RATE_MAX);
+        setMod(depth, rate);
+        return;
+      }
       // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
       const { midY, maxBar } = geom(h);
       const beat = s.bpm ? 60 / s.bpm : 0;
@@ -459,6 +539,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       canvas.setPointerCapture(e.pointerId);
       if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n! };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
+      else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };
       apply(px, py);
       kick();
@@ -473,7 +554,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const id = !hit ? "" : hit.kind === "tap" ? `tap${hit.n}` : hit.kind;
       if (id !== hover.current) {
         hover.current = id;
-        canvas.style.cursor = !hit ? "default" : hit.kind === "band" ? "grab" : hit.kind === "tap" ? "move" : "ew-resize";
+        canvas.style.cursor = !hit ? "default" : hit.kind === "band" ? "grab" : hit.kind === "tap" ? "move" : hit.kind === "lfo" ? "crosshair" : "ew-resize";
         kick();
       }
     };
@@ -481,6 +562,18 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!grab.current) return;
       grab.current = null;
       canvas.releasePointerCapture?.(e.pointerId);
+      kick();
+    };
+    // A gesture you can't undo isn't a control, it's a trap. Right-click resets whatever's under
+    // the cursor — the same contract the EQ's nodes already have.
+    const onContext = (e: MouseEvent) => {
+      const r = canvas.getBoundingClientRect();
+      const hit = hitAt(e.clientX - r.left, e.clientY - r.top);
+      if (!hit) return;
+      e.preventDefault();
+      if (hit.kind === "lfo") setMod(0, 0.5); // still, again
+      else if (hit.kind === "tap") setFeedback(0.38);
+      else setFilters(120, 6500); // the band, wide open again
       kick();
     };
     const onLeave = () => {
@@ -495,6 +588,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("contextmenu", onContext);
     const ro = new ResizeObserver(kick);
     ro.observe(wrap);
     return () => {
@@ -505,6 +599,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onUp);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("contextmenu", onContext);
       ro.disconnect();
     };
     // Attached ONCE — every live value is read through `p.current` inside the handlers.

@@ -14,6 +14,22 @@ export interface FxPreset {
 // must fully define the device state (otherwise it inherits whatever knobs happened to be set).
 // Seeded one effect at a time; the operator auditions + tweaks, then the bank is locked.
 export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
+  // COMP — the dynamics machine. MODE is the instrument (its ballistics), the rest is taste.
+  // `scHp` is the one to notice: without a sidechain high-pass the kick drives the reduction and
+  // pumps the entire track, which is most of why a buss comp sounds like a buss comp. `mix` under
+  // 100 is parallel compression — squash a copy flat and slide it under the untouched one.
+  // `scExt:1` hands the detector to the OTHER deck, so the incoming track ducks the outgoing one.
+  comp: [
+    { name: "Buss Glue", params: { mode: 0, threshold: -18, ratio: 4, attack: 10, release: 250, knee: 6, makeup: 0, auto: 1, scHp: 80, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Gentle Glue", params: { mode: 0, threshold: -14, ratio: 2, attack: 30, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 60, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Punch (slow attack)", params: { mode: 0, threshold: -20, ratio: 4, attack: 30, release: 120, knee: 3, makeup: 0, auto: 1, scHp: 100, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "FET Grab", params: { mode: 1, threshold: -22, ratio: 8, attack: 0.05, release: 120, knee: 2, makeup: 0, auto: 1, scHp: 60, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "All Buttons", params: { mode: 1, threshold: -30, ratio: 20, attack: 0.02, release: 60, knee: 0, makeup: 0, auto: 1, scHp: 0, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Parallel Smash", params: { mode: 1, threshold: -34, ratio: 20, attack: 0.05, release: 90, knee: 0, makeup: 0, auto: 1, scHp: 0, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 0.45 } },
+    { name: "Opto Levelling", params: { mode: 2, threshold: -20, ratio: 3, attack: 10, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 0, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Duck the Other Deck", params: { mode: 0, threshold: -26, ratio: 6, attack: 5, release: 220, knee: 4, makeup: 0, auto: 0, scHp: 120, scExt: 1, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Brickwall", params: { mode: 3, threshold: -18, ratio: 20, attack: 0.2, release: 80, knee: 1, makeup: 0, auto: 0, scHp: 0, scExt: 0, lookahead: 1.5, ceiling: -0.3, mix: 1 } },
+  ],
   // SATURATOR — the 5 style curves (TUBE/TAPE/CLIP/FOLD/DIODE) crossed with the multiband drives
   // (drive0=low <250 Hz, drive1=mid, drive2=high >2.5 kHz) so a style becomes several sounds:
   // saturate just the lows (weight, no fizz) or just the highs (air). `mix` sets how hard it hits

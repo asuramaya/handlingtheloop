@@ -244,7 +244,7 @@ async function main() {
     if (args.coverage) {
       // Which knobs does each bank never touch? A `dead` param is a capability of the effect that
       // no factory preset demonstrates.
-      const kinds = args.kind && args.kind !== "all" ? [args.kind] : ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator"];
+      const kinds = args.kind && args.kind !== "all" ? [args.kind] : ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator", "comp"];
       console.log("");
       for (const k of kinds) {
         const c = await page.evaluate((kk) => globalThis.fxlabCoverage(kk), k);

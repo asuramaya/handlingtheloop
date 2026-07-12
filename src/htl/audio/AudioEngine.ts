@@ -9,6 +9,8 @@ import { STRETCH_WORKLET_SRC } from "./stretchWorklet";
 import { REVERB_WORKLET_SRC } from "./reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
+import { COMP_WORKLET_SRC } from "./compWorklet";
+import { makeMasterLimiter, type CompFx } from "./CompFx";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
 import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
@@ -167,7 +169,56 @@ export class AudioEngine {
     void this.ensureWorklets().then(() => {
       this.deckA.ensurePadFx();
       this.deckB.ensurePadFx();
+      this.installMasterLimiter();
+      this.patchSidechains();
     });
+  }
+
+  // ★ THE REAL MASTER BRICKWALL. What was here before was a DynamicsCompressorNode at ratio 20 with
+  // a 3 ms attack and NO lookahead — which is not a limiter. A peak shorter than its attack sails
+  // straight through, and 20:1 is a slope, not a wall (20 dB over threshold still leaves you 1 dB
+  // over). With the EQ now reaching +12 and the saturator driving +20, that gap is where the crackle
+  // lives. The comp worklet in LIMIT mode DELAYS the audio and looks ahead, so the gain is already
+  // down before the peak lands, and it hard-clamps anything that still slips past. The ceiling is a
+  // guarantee now — which is precisely what lets every other device be aggressive.
+  private masterLimiter: CompFx | null = null;
+  private installMasterLimiter() {
+    if (this.masterLimiter) return;
+    try {
+      const lim = makeMasterLimiter(this.ctx);
+      this.master.disconnect(this.limiter); // retire the old soft "brick-wall-ish" compressor
+      try {
+        this.limiter.disconnect();
+      } catch {
+        /* wasn't connected */
+      }
+      this.master.connect(lim.input);
+      lim.output.connect(this.ctx.destination);
+      this.masterLimiter = lim;
+    } catch (e) {
+      console.warn("[htl] master limiter unavailable, keeping the native compressor:", e);
+    }
+  }
+  /** Live gain reduction on the master, in dB (≥ 0) — for the master meter's GR needle. */
+  get masterGr(): number {
+    return this.masterLimiter?.gainReduction ?? 0;
+  }
+
+  // CROSS-DECK SIDECHAIN. Each deck's compressor gets the OTHER deck patched into its sidechain
+  // input, so flipping that comp to EXT makes the incoming track duck the outgoing one — it carves
+  // its own hole in the mix instead of two tracks fighting for the same space. The detector reads a
+  // PRE-rack tap of the other deck (see Deck.sidechainTap), because patching deck OUTPUTS into each
+  // other's comps makes the two racks mutually dependent — a genuine cycle in the audio graph, which
+  // Web Audio mutes.
+  private patchSidechains() {
+    try {
+      const a = this.deckA.compDevice;
+      const b = this.deckB.compDevice;
+      if (a) this.deckB.sidechainTap.connect(a.sidechain);
+      if (b) this.deckA.sidechainTap.connect(b.sidechain);
+    } catch (e) {
+      console.warn("[htl] cross-deck sidechain patch failed:", e);
+    }
   }
 
   // Modules we've successfully addModule()'d — so a re-run never double-registers (which
@@ -228,6 +279,7 @@ export class AudioEngine {
       await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
       await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
       await this.addModuleOnce("moddelay", MOD_DELAY_WORKLET_SRC); // ModFx chorus/flanger
+      await this.addModuleOnce("comp", COMP_WORKLET_SRC); // CompFx (deck dynamics + the master brickwall)
       if (!this.ringNode && (await this.addModuleOnce("ringrec", RING_REC_WORKLET_SRC))) {
         try {
           const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);

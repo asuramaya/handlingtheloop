@@ -16,9 +16,11 @@ import { ModFx } from "../../src/htl/audio/ModFx";
 import { GateFx } from "../../src/htl/audio/GateFx";
 import { NoiseFx } from "../../src/htl/audio/NoiseFx";
 import { Eq3 } from "../../src/htl/audio/Eq3";
+import { CompFx } from "../../src/htl/audio/CompFx";
 import { REVERB_WORKLET_SRC } from "../../src/htl/audio/reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "../../src/htl/audio/crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "../../src/htl/audio/modDelayWorklet";
+import { COMP_WORKLET_SRC } from "../../src/htl/audio/compWorklet";
 import { factoryFxPresets } from "../../src/htl/audio/fxPresets";
 import type { FxDevice, FxKind } from "../../src/htl/audio/Fx";
 
@@ -63,6 +65,7 @@ function buildDevice(ctx: Ctx, kind: FxKind): FxDevice {
     case "gate": return new GateFx(c);
     case "noise": return new NoiseFx(c);
     case "eq": return new Eq3(c);
+    case "comp": return new CompFx(c);
     default: throw new Error(`fxlab: unknown kind ${kind}`);
   }
 }
@@ -358,7 +361,7 @@ export interface Coverage {
 }
 (globalThis as unknown as { fxlabCoverage: (k: FxKind) => Promise<Coverage> }).fxlabCoverage = async (kind: FxKind) => {
   const ctx = new OfflineAudioContext(2, 128, 48000);
-  for (const src of [REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, MOD_DELAY_WORKLET_SRC]) {
+  for (const src of [REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, MOD_DELAY_WORKLET_SRC, COMP_WORKLET_SRC]) {
     const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
     await ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
@@ -399,6 +402,7 @@ export interface Coverage {
     ["reverbfdn", REVERB_WORKLET_SRC],
     ["crush", CRUSH_WORKLET_SRC],
     ["moddelay", MOD_DELAY_WORKLET_SRC],
+    ["comp", COMP_WORKLET_SRC],
   ];
   const moduleErrors: string[] = [];
   for (const [name, src] of modules) {
@@ -414,7 +418,7 @@ export interface Coverage {
   // in their constructors and degrade to a native path with a console.warn — which means a harness
   // that swallows the addModule failure will confidently report the FALLBACK's numbers as the real
   // DSP. That is worse than no measurement, so it's a hard error here.
-  const WORKLET_KINDS: Record<string, boolean> = { reverb: true, crush: true, mod: true };
+  const WORKLET_KINDS: Record<string, boolean> = { reverb: true, crush: true, mod: true, comp: true };
   if (WORKLET_KINDS[kind] && moduleErrors.length) {
     throw new Error(`fxlab: worklet module(s) failed to load — a ${kind} render would silently be its native fallback, not the real DSP. ${moduleErrors.join("; ")}`);
   }

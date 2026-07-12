@@ -1919,3 +1919,47 @@ button.room-tog:hover {
   touch-action: none;
   cursor: crosshair;
 }
+
+/* COMP — the gain-reduction meter. It reads RIGHT-to-LEFT, like every hardware GR meter ever
+   made: the bar grows leftward as the compressor clamps down, so "nothing happening" is an empty
+   meter and you read the depth of the grab as a distance. The bar is driven imperatively from a
+   rAF in CompPanel (never React state) — it moves at 60 Hz and must never re-render the rack. */
+.comp-panel .comp-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.comp-meter-track {
+  flex: 1;
+  height: 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  overflow: hidden;
+  display: flex;
+  justify-content: flex-end; /* the bar grows from the right — GR pulls the level DOWN */
+}
+.comp-meter-bar {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 35%, transparent), var(--accent) 70%, #ff6a3d);
+  transition: none; /* rAF drives it; a CSS transition would smear the ballistics we're trying to show */
+}
+.comp-meter-read {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text);
+  min-width: 40px;
+  text-align: right;
+}
+.comp-meter-unit {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+.comp-panel .comp-sc button {
+  min-width: 72px;
+}

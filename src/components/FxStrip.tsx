@@ -10,6 +10,7 @@ import { CrushPanel } from "./CrushPanel";
 import { ModPanel } from "./ModPanel";
 import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
+import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
 import { useLongPress } from "./useLongPress";
 
@@ -20,7 +21,7 @@ import { useLongPress } from "./useLongPress";
 // instance (only one EQ); its params ride the eq* ControlParams while presence/order ride
 // the fxRack intent. One device's surface shows at a time.
 
-const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE" };
+const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE", comp: "COMP" };
 interface FxStripProps {
   deck: Deck;
   id: "A" | "B";
@@ -378,6 +379,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           <ModPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "gate" ? (
           <GatePanel deck={deck} id={id} slot={cur} accent={accent} />
+        ) : selDev.kind === "comp" ? (
+          <CompPanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : selDev.kind === "noise" ? (
           <NoisePanel deck={deck} id={id} slot={cur} accent={accent} />
         ) : (

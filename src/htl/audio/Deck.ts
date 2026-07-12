@@ -88,6 +88,7 @@ import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
 import { FxRack, type FxDevice, type FxKind, type FxSlot } from "./Fx";
 import { FACTORY_PRESETS, type FxPreset } from "./fxPresets";
+import { CompFx } from "./CompFx";
 import { DelayFx } from "./DelayFx";
 import { ReverbFx } from "./ReverbFx";
 import { SaturatorFx } from "./SaturatorFx";
@@ -1975,9 +1976,13 @@ export class Deck {
   // AND one right-click from its control surface. "Opening" an effect just reveals an always-live
   // device — nothing is loaded on demand (DSP is decoupled from display).
   private static readonly PAD_FX_ORDER: readonly FxKind[] = ["delay", "reverb", "saturator", "crush", "mod", "gate", "noise"];
+  // The full permanent rack, in SIGNAL ORDER. The comp sits LAST on purpose: it is the thing that
+  // catches whatever the EQ boosted and the saturator drove, so it has to see the finished channel.
+  // It has no pad (the bank is full, and a compressor isn't a throw) — it lives in the strip.
+  private static readonly RACK_ORDER: readonly FxKind[] = [...Deck.PAD_FX_ORDER, "comp"];
   // Devices that can never be removed/added at runtime (fixed-membership rack): the EQ channel
   // strip + the whole pad-FX bank. Reorder still applies (chain order is musical); presence doesn't.
-  private static readonly PERMANENT_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", ...Deck.PAD_FX_ORDER]);
+  private static readonly PERMANENT_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", ...Deck.RACK_ORDER]);
   private makeFx(kind: string): FxDevice | null {
     if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
     switch (kind) {
@@ -1995,6 +2000,8 @@ export class Deck {
         return new ModFx(this.ctx);
       case "gate":
         return new GateFx(this.ctx);
+      case "comp":
+        return new CompFx(this.ctx);
       case "noise":
         return new NoiseFx(this.ctx);
       default:
@@ -2008,6 +2015,20 @@ export class Deck {
   fxDeviceAt(i: number): FxDevice | undefined {
     return this.rack.deviceAt(i);
   }
+  /** This deck's signal BEFORE its own rack — what the other deck's compressor listens to when its
+   *  sidechain is set to EXT. It has to be the pre-rack tap: patch a deck's OUTPUT into the other
+   *  deck's comp and the two racks depend on each other, which is a genuine cycle in the audio graph
+   *  (A.out → B.comp → B.out → A.comp → A.out) and Web Audio will mute it. Upstream of both racks,
+   *  there is no cycle. The cost is that it hears the other deck even with its fader down — which is
+   *  why EXT is opt-in per deck, not the default. */
+  get sidechainTap(): AudioNode {
+    return this.rack.input;
+  }
+  /** The channel's compressor (a permanent rack resident) — for the engine's sidechain patching. */
+  get compDevice(): CompFx | undefined {
+    return this.rack.deviceAt(this.rack.indexOf("comp")) as CompFx | undefined;
+  }
+
   hasFxKind(kind: FxKind): boolean {
     return this.rack.list.some((d) => d.kind === kind);
   }
@@ -2037,7 +2058,7 @@ export class Deck {
    *  constructors, and before addModule() those throw and the device degrades to its native
    *  fallback for good. AudioEngine calls this once ensureWorklets() resolves (see its ctor). */
   ensurePadFx() {
-    for (const kind of Deck.PAD_FX_ORDER) {
+    for (const kind of Deck.RACK_ORDER) {
       if (this.rack.indexOf(kind) >= 0) continue; // already resident (re-run guard)
       const d = this.makeFx(kind);
       if (!d) continue;

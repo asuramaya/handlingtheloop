@@ -581,7 +581,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 
 /** Phase 1: the source playlist's tracks (with anchors). */
 export const syncReadSource = (source: Service, sourcePlaylistId: string) =>
-  postJson<{ name: string; tracks: SourceTrack[] }>("/api/sync/source", { source, sourcePlaylistId });
+  postJson<{ name: string; tracks: SourceTrack[]; truncated?: boolean }>("/api/sync/source", { source, sourcePlaylistId });
 
 /** Phase 2: match a slice of source tracks on the destination (no writes). */
 export const syncMatch = (dest: Service, tracks: SourceTrack[], startIndex: number) =>

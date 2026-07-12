@@ -213,3 +213,9 @@ export async function getSpotifyPlaylistTracks(token: string, playlistId: string
   }
   return out;
 }
+
+/** A playlist's display NAME — one cheap call (the /items endpoint carries tracks, not the name). */
+export async function getSpotifyPlaylistName(token: string, playlistId: string): Promise<string> {
+  const j = await sget(`/playlists/${encodeURIComponent(playlistId)}?fields=name`, token);
+  return (j.name as string) || "";
+}

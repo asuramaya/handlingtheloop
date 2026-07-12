@@ -193,8 +193,10 @@ export interface TidalTrack extends TrackMeta {
   tidalId: string | null;
 }
 
-/** A playlist's tracks (paginated), normalized + ISRC-tagged for cross-matching. */
-export async function getTidalPlaylistTracks(token: string, playlistId: string): Promise<TidalTrack[]> {
+/** A playlist's tracks (paginated), normalized + ISRC-tagged for cross-matching. `truncated` is true
+ *  when the page guard tripped before the list was exhausted — the caller must NOT treat the result
+ *  as the complete playlist (e.g. re-sync must not prune the unread tail). */
+export async function getTidalPlaylistTracks(token: string, playlistId: string): Promise<{ tracks: TidalTrack[]; truncated: boolean }> {
   const out: TidalTrack[] = [];
   // JSON:API relationship traversal: the playlist's items, with the track resources
   // sideloaded via `include=items`.
@@ -212,7 +214,14 @@ export async function getTidalPlaylistTracks(token: string, playlistId: string):
     }
     url = j.links?.next ?? null;
   }
-  return out;
+  return { tracks: out, truncated: url != null }; // url still set → we stopped at the guard, not the end
+}
+
+/** A playlist's display NAME — one cheap metadata call (the items relationship carries tracks, not the name). */
+export async function getTidalPlaylistName(token: string, playlistId: string): Promise<string> {
+  const j = await tget(`/playlists/${encodeURIComponent(playlistId)}?countryCode=${COUNTRY}`, token);
+  const a = (Array.isArray(j.data) ? j.data[0] : j.data)?.attributes ?? {};
+  return (a.name as string) || (a.title as string) || "";
 }
 
 /** TIDAL's "track radio" — the algorithmic next-track graph for a seed track,

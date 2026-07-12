@@ -16,11 +16,12 @@ import { addToYouTubePlaylist, createYouTubePlaylist, fetchPlaylistData } from "
 import {
   addSpotifyTracks,
   createSpotifyPlaylist,
+  getSpotifyPlaylistName,
   getSpotifyPlaylistTracks,
   getSpotifyUserId,
   searchSpotifyTracks,
 } from "./spotifyData";
-import { addTidalTracks, createTidalPlaylist, getTidalPlaylistTracks, searchTidalTracks } from "./tidalData";
+import { addTidalTracks, createTidalPlaylist, getTidalPlaylistName, getTidalPlaylistTracks, searchTidalTracks } from "./tidalData";
 import { type Candidate, type Confidence, confidenceOf, rank } from "./match";
 
 export type Service = "youtube" | "spotify" | "tidal";
@@ -80,14 +81,20 @@ export async function readSource(
   userId: string,
   source: Service,
   playlistId: string,
-): Promise<{ name: string; tracks: SourceTrack[] }> {
+): Promise<{ name: string; tracks: SourceTrack[]; truncated?: boolean }> {
   const token = await getValidToken(env, userId, providerOf(source));
   if (!token) throw new Error(`${source} is not connected`);
 
   if (source === "spotify") {
-    const tracks = await getSpotifyPlaylistTracks(token, playlistId);
+    // Fetch the real playlist name alongside the tracks — the /items endpoint doesn't carry it.
+    // Tolerate a name-fetch failure (→ "") so the import still succeeds; the client falls back to
+    // the title it already holds from the playlist list.
+    const [name, tracks] = await Promise.all([
+      getSpotifyPlaylistName(token, playlistId).catch(() => ""),
+      getSpotifyPlaylistTracks(token, playlistId),
+    ]);
     return {
-      name: "Playlist",
+      name,
       tracks: tracks.map((t) => ({
         title: t.title,
         artist: t.artist,
@@ -101,12 +108,16 @@ export async function readSource(
   }
 
   if (source === "tidal") {
-    const tracks = await getTidalPlaylistTracks(token, playlistId);
+    const [name, page] = await Promise.all([
+      getTidalPlaylistName(token, playlistId).catch(() => ""),
+      getTidalPlaylistTracks(token, playlistId),
+    ]);
     return {
-      name: "Playlist",
+      name,
+      truncated: page.truncated, // very large playlist capped by the page guard → NOT the full list
       // ISRC carries the cross-service match; tidalId isn't kept as an anchor (ISRC
       // + title/artist is enough for the resolver).
-      tracks: tracks.map((t) => ({
+      tracks: page.tracks.map((t) => ({
         title: t.title,
         artist: t.artist,
         duration: t.duration,

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { Library, Playlist, TrackMeta } from "@htl/library";
+import { reconcileResync, resyncNeedsMatch, sourceTrackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchPlaylist } from "@htl/media";
 import {
   friendlySyncError,
@@ -41,15 +41,6 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       }, ttl);
     }
   }, []);
-
-  // Stable identity for a SOURCE track (before it's matched to a video): ISRC first (cross-service),
-  // then the Spotify id, else a normalized artist|title. Keys the sourceMatch map so re-sync follows
-  // a song across re-matches instead of by whatever video it happened to resolve to that run.
-  function sourceKey(t: SourceTrack): string {
-    if (t.isrc) return `isrc:${t.isrc.toUpperCase()}`;
-    if (t.spotifyId) return `sp:${t.spotifyId}`;
-    return `q:${(t.artist ?? "").trim().toLowerCase()}|${(t.title ?? "").trim().toLowerCase()}`;
-  }
 
   // Match provider source-tracks to playable YouTube videos (paged to stay under the Worker
   // subrequest cap). Returns each match paired with its SOURCE row so callers can key the
@@ -105,7 +96,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       const map: Record<string, string> = { ...(existing?.sourceMatch ?? {}) };
       for (const { track, source } of matched) {
         library.addToPlaylist(id, track);
-        map[sourceKey(source)] = track.videoId;
+        map[sourceTrackKey(source)] = track.videoId;
       }
       library.setSourceMatch(id, map);
       setView({ playlistId: id });
@@ -156,36 +147,51 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
         // Spotify / TIDAL: fuzzy-matched. Follow each song by SOURCE identity (the sourceMatch map),
         // so a re-match that drifts to a different video keeps the song once instead of accreting a
         // duplicate, and only a song actually gone from the source is pruned.
-        const { tracks: sources } = await syncReadSource(service, pl.sourceListId);
+        const { tracks: sources, truncated } = await syncReadSource(service, pl.sourceListId);
         if (!sources.length) { keptLocal(); return; }
         const oldMap = pl.sourceMatch ?? {};
-        const newMap: Record<string, string> = {};
-        const toMatch: SourceTrack[] = [];
-        for (const s of sources) {
-          const key = sourceKey(s);
-          const prev = oldMap[key];
-          if (prev && have.has(prev)) newMap[key] = prev; // already have this source track — keep its video
-          else toMatch.push(s); // new source track (or its video was removed) → (re)match it
+        // Only (re)match songs we don't already carry a live video for — a carried song keeps its
+        // exact video, so nothing drifts or churns. Every identity/prune DECISION below is pure and
+        // unit-tested (src/htl/library/resync.ts); this just does the network and applies the result.
+        const toMatch = resyncNeedsMatch(sources, sourceTrackKey, oldMap, have);
+        const pairs = await matchTracksToYouTube(toMatch, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
+        const matched: Record<string, string> = {};
+        const trackByVid = new Map<string, TrackMeta>();
+        for (const { track, source } of pairs) {
+          matched[sourceTrackKey(source)] = track.videoId;
+          trackByVid.set(track.videoId, track);
         }
-        const matched = await matchTracksToYouTube(toMatch, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
-        for (const { track, source } of matched) {
-          newMap[sourceKey(source)] = track.videoId;
-          if (!have.has(track.videoId)) { library.addToPlaylist(pl.id, track); added++; }
+        const { newMap, addIds, removeIds } = reconcileResync({
+          oldMap,
+          currentIds: have,
+          sourceKeys: sources.map(sourceTrackKey),
+          matched,
+          truncated: !!truncated,
+        });
+        for (const vid of addIds) {
+          const t = trackByVid.get(vid);
+          if (t) { library.addToPlaylist(pl.id, t); added++; }
         }
-        // Prune a source-managed video only when its source row is truly gone (key absent from the
-        // rebuilt map). A carried key stays mapped; a this-run match MISS leaves the old video in
-        // place (prev was carried, or there's nothing to prune); a manual add (never in oldMap) is
-        // invisible here — so transient match failures and hand-curated tracks are both safe.
-        for (const [key, vid] of Object.entries(oldMap)) {
-          if (!(key in newMap) && have.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
-        }
+        for (const vid of removeIds) { library.removeFromPlaylist(pl.id, vid); removed++; } // always [] on a truncated read
         library.setSourceMatch(pl.id, newMap);
+        if (truncated) {
+          // The source was too large to read in full (provider page guard) — this is NOT the whole
+          // playlist, so NOTHING was pruned (a prune would delete tracks the user never removed).
+          library.markSynced(pl.id, Date.now());
+          flash(`Synced “${cleanPlaylistName(pl.name)}”: +${added} · playlist too large to read fully — nothing removed.`, 6000);
+          return;
+        }
       } else {
         return; // unknown service — nothing to re-sync
       }
 
       library.markSynced(pl.id, Date.now());
-      flash(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date", 2500);
+      // Make removals EXPLICIT and give them time to read — a re-sync can legitimately nuke a
+      // playlist (the source was emptied) and that must never be a silent surprise.
+      const summary = added || removed
+        ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` · removed ${removed} no longer in the source` : ""}`
+        : "Already up to date";
+      flash(summary, removed ? 6000 : 2500);
     } catch (e) {
       flash(`Re-sync failed: ${(e as Error).message}`, 6000);
     } finally {

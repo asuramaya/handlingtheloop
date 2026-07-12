@@ -106,6 +106,21 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const [sel, setSel] = useState(2); // band whose numeric subrow is shown (default MID)
   const [, bump] = useState(0);
 
+  // The canvas repaints itself in its own rAF loop, but the numeric cells are REACT — so a drag
+  // that only marked the canvas dirty left FREQ/GAIN/Q frozen until pointer-up, and the numbers
+  // visibly lagged the node you were holding. Re-render them live, but COALESCE to one render per
+  // frame: a pointermove can fire several times per frame and each would otherwise be its own
+  // React pass.
+  const bumpPending = useRef(0);
+  const bumpNow = () => {
+    if (bumpPending.current) return;
+    bumpPending.current = requestAnimationFrame(() => {
+      bumpPending.current = 0;
+      bump((x) => x + 1);
+    });
+  };
+  useEffect(() => () => { if (bumpPending.current) cancelAnimationFrame(bumpPending.current); }, []);
+
   // (Re)size canvas + per-pixel buffers to the element box.
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -359,6 +374,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       emit({ kind: "control", deck: id, param: n.qParam, value: q });
     }
     dirty.current = true;
+    bumpNow(); // the cells track the node you're holding, not the mouse you released
   };
 
   // OUTPUT TRIM, as the graph's baseline. Drag the zero line and the whole curve rides with
@@ -372,6 +388,8 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     deck.setEqOut(db);
     emit({ kind: "control", deck: id, param: "eqOut", value: db });
     dirty.current = true;
+    // No bump: nothing React-rendered reads eqOut. The badge text and the line's position are
+    // both written imperatively in the rAF tick, so an OUT drag is already live.
   };
   const resetOut = () => {
     deck.setEqOut(0);

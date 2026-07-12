@@ -237,6 +237,28 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.fillRect(1, round(midY - maxBar), barW, round(maxBar * 2));
       ctx.globalAlpha = 1;
 
+      // THE DECAY ENVELOPE — the tail, drawn as a curve through the tap tips. Without it the tail
+      // is a row of ever-shorter bars fading to nothing, so "grab the tail and pull it up" means
+      // aiming at a 2px stub you can barely see. The curve shows you where the tail IS.
+      if (!s.frozen) {
+        ctx.beginPath();
+        for (let n = 0; n < 64; n++) {
+          const ts = (n + 1) * t;
+          if (ts > windowSec) break;
+          const a = Math.pow(Math.max(0, Math.min(0.999, s.feedback)), n) * duckGain(ts);
+          const x = xOf(ts);
+          const y = midY - maxBar * a;
+          n === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = accent;
+        ctx.globalAlpha = 0.3;
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+
       ctx.shadowColor = "rgba(255,170,90,0.9)";
       ctx.shadowBlur = clamp01(s.drive) * 8;
       for (let n = 0; n < 64; n++) {
@@ -291,7 +313,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         if (Math.abs(px - lo) <= GRIP_PX) return { kind: "hp" };
         if (Math.abs(px - hi) <= GRIP_PX) return { kind: "lp" };
         if (px > lo && px < hi) return { kind: "band" };
-        return null;
+        // NO DEAD ZONE. Outside the band, the nearer cut jumps to where you pressed — the whole
+        // ribbon is live. A strip that ignores you over most of its width reads as broken.
+        return { kind: px < lo ? "hp" : "lp" };
       }
       if (py < top) return null;
       const t = Math.max(0.001, s.time);
@@ -302,6 +326,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       for (let n = 0; n < 64; n++) {
         const ts = (n + 1) * t;
         if (ts > windowSec) break;
+        // Only grab a tap you can SEE. An invisible one (decayed past the draw threshold) offered
+        // absurd leverage — fb = amp^(1/n) with a big n turns a 2px nudge into a jump to 95%.
+        const base = s.frozen ? 1 : Math.pow(Math.max(0, Math.min(0.999, s.feedback)), n);
+        if (!s.frozen && base < 0.02) break;
         const d = Math.abs(px - (ts / windowSec) * w);
         if (d < bestD) {
           bestD = d;
@@ -309,6 +337,27 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         }
       }
       return best >= 0 ? { kind: "tap", n: best } : null;
+    };
+
+    // ★ Paint from what we just computed — never wait for a React round-trip. The handlers push
+    // the new value into the device AND into `p.current`, so the very next frame draws the gesture
+    // that produced it. Before, the canvas only learned its own values when React re-rendered and
+    // reassigned the props mirror: it was always at least a render behind its own input, and any
+    // batching or throttling of that render read as a dead surface. (The next real render
+    // overwrites the mirror with the device's own values, which agree — so this is a lead, not a
+    // lie.)
+    const setFilters = (hp: number, lp: number) => {
+      p.current.hp = hp;
+      p.current.lp = lp;
+      p.current.onFilters(hp, lp);
+    };
+    const setTime = (sec: number) => {
+      p.current.time = sec;
+      p.current.onTime(sec);
+    };
+    const setFeedback = (v: number) => {
+      p.current.feedback = v;
+      p.current.onFeedback(v);
     };
 
     const apply = (px: number, py: number) => {
@@ -320,29 +369,31 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (g.kind === "hp" || g.kind === "lp") {
         const f = xToF(px, w);
         // The cuts may not cross: a band that isn't a band is just a mute.
-        if (g.kind === "hp") s.onFilters(clamp(f, HP_MIN, s.lp / BAND_MIN_RATIO), s.lp);
-        else s.onFilters(s.hp, clamp(f, s.hp * BAND_MIN_RATIO, LP_MAX));
+        if (g.kind === "hp") setFilters(clamp(f, HP_MIN, s.lp / BAND_MIN_RATIO), s.lp);
+        else setFilters(s.hp, clamp(f, s.hp * BAND_MIN_RATIO, LP_MAX));
         return;
       }
       if (g.kind === "band") {
         // Sweep BOTH by the same log-distance — the band keeps its width. (This is the old LINK.)
+        // At a rail, SLIDE the band along it rather than freezing: a hard stop reads as "broken",
+        // and the whole point of the body-drag is that the band's width survives the sweep.
         const dLog = ((px - g.lastX) / w) * Math.log(1000);
         g.lastX = px;
-        const k = Math.exp(dLog);
-        const nHp = s.hp * k;
-        const nLp = s.lp * k;
-        if (nHp < HP_MIN || nLp > LP_MAX) return; // hit the rail — hold, don't squash the band
-        s.onFilters(nHp, nLp);
+        const ratio = s.lp / s.hp;
+        let nHp = clamp(s.hp * Math.exp(dLog), HP_MIN, LP_MAX / ratio);
+        const nLp = clamp(nHp * ratio, HP_MIN * ratio, LP_MAX);
+        nHp = nLp / ratio;
+        setFilters(nHp, nLp);
         return;
       }
       // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
       const { midY, maxBar } = geom(h);
       const secAt = (clamp(px, 1, w) / w) * g.win;
-      s.onTime(clamp(secAt / (g.n + 1), 0.02, 2));
+      setTime(clamp(secAt / (g.n + 1), 0.02, 2));
       if (g.n >= 1) {
         const amp = clamp01(Math.abs(py - midY) / Math.max(1, maxBar));
         // amp = fb^n  ⇒  fb = amp^(1/n). Solve for the tap you're actually holding.
-        s.onFeedback(clamp(Math.pow(Math.max(amp, 1e-4), 1 / g.n), 0, FB_MAX));
+        setFeedback(clamp(Math.pow(Math.max(amp, 1e-4), 1 / g.n), 0, FB_MAX));
       }
     };
 

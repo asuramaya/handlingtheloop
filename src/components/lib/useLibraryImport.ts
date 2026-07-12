@@ -137,10 +137,19 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       let removed = 0;
 
       if (service === "youtube") {
-        // Exact-id source: the fetched list IS the playlist, so it's authoritative — add new, prune gone.
-        const fresh = (await fetchPlaylist(pl.sourceListId)).tracks;
+        // Exact-id source. The fetch is PAGE-CAPPED on both server paths (the OAuth Data API stops at
+        // MAX_ITEM_PAGES ≈ 200 items; the public path reads a single page and never follows
+        // continuations), so a big playlist comes back SHORT. Pruning against a short read would
+        // delete every track past the cap — so prune ONLY when the server confirms it read the whole
+        // thing. A complete read still prunes (the user may well have cleared it out) — disclosed below.
+        const { tracks: fresh, truncated } = await fetchPlaylist(pl.sourceListId);
         if (!fresh.length) { keptLocal(); return; }
         for (const t of fresh) if (!have.has(t.videoId)) { library.addToPlaylist(pl.id, t); added++; }
+        if (truncated) {
+          library.markSynced(pl.id, Date.now());
+          flash(`Synced “${cleanPlaylistName(pl.name)}”: +${added} · playlist too large to read fully — nothing removed.`, 6000);
+          return;
+        }
         const freshIds = new Set(fresh.map((t) => t.videoId));
         for (const vid of pl.trackIds) if (!freshIds.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
       } else if (service === "spotify" || service === "tidal") {

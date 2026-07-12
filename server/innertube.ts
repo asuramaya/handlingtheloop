@@ -138,7 +138,7 @@ export interface MyPlaylist {
 export interface InnertubeApi {
   searchYouTube(query: string, limit?: number): Promise<TrackMeta[]>;
   // auth is optional — supply it to reach the user's PRIVATE playlists.
-  fetchPlaylist(listId: string, auth?: BrowseAuth): Promise<{ title: string; tracks: TrackMeta[] }>;
+  fetchPlaylist(listId: string, auth?: BrowseAuth): Promise<{ title: string; tracks: TrackMeta[]; truncated?: boolean }>;
   // The signed-in user's own playlists (requires an OAuth token).
   getMyPlaylists(auth: BrowseAuth): Promise<MyPlaylist[]>;
   // YouTube watch-next / autoplay graph for a video — the universal "what plays
@@ -302,7 +302,14 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       const t = normalize(v as AnyNode);
       if (t) tracks.push(t);
     }
-    return { title: pl.info?.title ?? "Playlist", tracks };
+    // This public path reads ONE page and never follows continuations, so a long playlist comes back
+    // SHORT. Report that — a destructive consumer (re-sync prunes whatever it doesn't see) must never
+    // mistake a partial read for the whole list. Evidence of more: a pending continuation, or a
+    // declared item count above what we actually got.
+    const node = pl as unknown as { has_continuation?: boolean; info?: { total_items?: number } };
+    const total = node.info?.total_items;
+    const truncated = node.has_continuation === true || (typeof total === "number" && tracks.length < total);
+    return { title: pl.info?.title ?? "Playlist", tracks, truncated };
   }
 
   return {

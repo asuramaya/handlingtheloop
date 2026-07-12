@@ -25,7 +25,7 @@ export async function searchYouTube(
 export async function fetchPlaylist(
   listOrUrl: string,
   signal?: AbortSignal,
-): Promise<{ title: string; tracks: TrackMeta[] }> {
+): Promise<{ title: string; tracks: TrackMeta[]; truncated?: boolean }> {
   // Send auth so the user's PRIVATE playlists resolve too (public ones don't need it).
   return getJson(`/api/playlist?list=${encodeURIComponent(listOrUrl)}`, signal, await ytAuthHeaders());
 }

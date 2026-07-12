@@ -128,8 +128,13 @@ interface VideosItem {
   statistics?: { viewCount?: string };
 }
 
-/** A playlist's tracks (the user's own/private included), via OAuth. */
-export async function fetchPlaylistData(token: string, playlistId: string): Promise<{ title: string; tracks: TrackMeta[] }> {
+/** A playlist's tracks (the user's own/private included), via OAuth. `truncated` = the page cap was
+ *  hit before the list ran out, so this is NOT the whole playlist — a destructive consumer (re-sync
+ *  prunes anything it doesn't see) must not treat it as authoritative. */
+export async function fetchPlaylistData(
+  token: string,
+  playlistId: string,
+): Promise<{ title: string; tracks: TrackMeta[]; truncated: boolean }> {
   // Title from the playlist resource (mine context covers private ones).
   let title = "Playlist";
   try {
@@ -157,6 +162,8 @@ export async function fetchPlaylistData(token: string, playlistId: string): Prom
     pageToken = (j.nextPageToken as string) || "";
     if (!pageToken) break;
   }
+  // A page token still in hand = we stopped at MAX_ITEM_PAGES, not at the end of the playlist.
+  const truncated = !!pageToken;
 
   // Enrich with duration + views via videos.list (batched by 50).
   const details = new Map<string, VideosItem>();
@@ -179,5 +186,5 @@ export async function fetchPlaylistData(token: string, playlistId: string): Prom
       views: d?.statistics?.viewCount ? Number(d.statistics.viewCount) || null : null,
     });
   }
-  return { title, tracks };
+  return { title, tracks, truncated };
 }

@@ -3,8 +3,9 @@ import { useEmit, useRefresh } from "../App/spine";
 import type { Deck } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { DelayViz } from "./DelayViz";
+import { useFrameSync } from "./useFrameSync";
 import { clamp } from "../util/math";
-import { fmtPct, fmtMs } from "../util/format";
+import { fmtPct } from "../util/format";
 
 // The Delay surface. Its four big params — TIME, FEEDBACK, HP, LP — are not down here: they're
 // ON the viz, which already drew every one of them (see DelayViz). Grab a tap to set the time and
@@ -30,6 +31,8 @@ const DIVISIONS: { label: string; beats: number }[] = [
   { label: "3/4", beats: 3 },
   { label: "1 bar", beats: 4 },
 ];
+const DIVISION_BEATS = DIVISIONS.map((d) => d.beats); // the magnet the viz draws while you drag a tap
+const DIVISION_LABELS = DIVISIONS.map((d) => d.label);
 const DEFAULT_DIV = 2;
 const TIME_MODES = ["RPT", "DIG", "FADE"]; // Repitch / Digital / Fade
 const STEREO_MODES = ["MONO", "PING"]; // Single / Ping-Pong
@@ -60,10 +63,16 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
     deck.setFxParam(slot, param, value);
     emit({ kind: "fxParam", deck: id, slot, param, value });
   };
-  const tweak = (param: string, value: number) => {
-    setParam(param, value);
-    refresh();
+  // ★ LIVE path — see useFrameSync. The AUDIO moves on the pointer event (it must never wait),
+  // but the React render and the session emit are folded into ONE pass per frame. Doing both on
+  // every pointermove spent the frame budget re-rendering the deck instead of painting the thing
+  // under your finger, and flooded the socket with intents no remote could use.
+  const sync = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    sync(param, value);
   };
+  const tweak = live;
 
   // Beat-locked time = the division × the beat period. Pushed from an EFFECT (never during
   // render — an emit in render would spam the session); re-fires when the division or tempo
@@ -90,18 +99,16 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
           best = i;
         }
       });
-      if (best !== divIdx) setParam("div", best);
-      setParam("time", (60 / bpm) * DIVISIONS[best].beats);
+      if (best !== divIdx) live("div", best);
+      live("time", (60 / bpm) * DIVISIONS[best].beats);
     } else {
-      setParam("time", clamp(sec, 0.02, 2));
+      live("time", clamp(sec, 0.02, 2));
     }
-    refresh();
   };
-  const onFeedback = (v: number) => tweak("feedback", v);
+  const onFeedback = (v: number) => live("feedback", v);
   const onFilters = (hp: number, lp: number) => {
-    if (Math.abs(hp - get("hp")) > 0.5) setParam("hp", hp);
-    if (Math.abs(lp - get("lp")) > 0.5) setParam("lp", lp);
-    refresh();
+    if (Math.abs(hp - get("hp")) > 0.5) live("hp", hp);
+    if (Math.abs(lp - get("lp")) > 0.5) live("lp", lp);
   };
 
   const cycle = (param: string, count: number) => {
@@ -130,7 +137,8 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         drive={get("analog")}
         duck={get("duck")}
         width={get("spread")}
-        timeLabel={synced ? DIVISIONS[divIdx].label : fmtMs(get("time"))}
+        snapBeats={synced ? DIVISION_BEATS : undefined}
+        snapLabels={synced ? DIVISION_LABELS : undefined}
         onTime={onTime}
         onFeedback={onFeedback}
         onFilters={onFilters}

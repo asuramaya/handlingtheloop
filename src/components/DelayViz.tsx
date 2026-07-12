@@ -36,7 +36,11 @@ interface DelayVizProps {
   drive: number; // analog saturation (0..1)
   duck: number; // sidechain ducking (0..1)
   width: number; // stereo L/R time spread (0..1)
-  timeLabel: string; // "1/8" or "375ms" — TIME left the cell row, so the viz has to say it
+  // TIME left the cell row, so the viz has to SAY it — and it has to say it from the value it just
+  // painted, not from a string React hands back a render later (mid-drag that lags a division
+  // behind the tap you're holding). So: the grid, and the viz names the note itself.
+  snapBeats?: number[]; // the note divisions TIME snaps to (absent when free-running)
+  snapLabels?: string[]; // …and their names, index-matched
   onTime: (seconds: number) => void; // the panel snaps to the note grid when synced
   onFeedback: (v: number) => void;
   onFilters: (hp: number, lp: number) => void;
@@ -46,6 +50,7 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const MOD_MAX = 0.012; // matches DELAY modDepth cell max — normalises depth to 0..1
 const FB_MAX = 0.95;
+const MAX_TIME = 2; // the delay line's ceiling (DelayFx clamps here too)
 const HP_MIN = 20;
 const LP_MAX = 18000;
 const BAND_MIN_RATIO = 1.35; // the cuts may not cross (or meet) — a band needs to stay a band
@@ -59,12 +64,12 @@ const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Mat
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
 type Grab =
-  | { kind: "tap"; n: number; win: number }
+  | { kind: "tap"; n: number }
   | { kind: "hp" }
   | { kind: "lp" }
   | { kind: "band"; lastX: number };
 
-export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeLabel, onTime, onFeedback, onFilters }: DelayVizProps) {
+export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -73,8 +78,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeLabel, onTime, onFeedback, onFilters });
-  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeLabel, onTime, onFeedback, onFilters };
+  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters });
+  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see.
@@ -84,10 +89,18 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     const midY = top + (h - top) / 2;
     return { ribbonH, top, midY, maxBar: (h - top) * 0.42 };
   };
-  // The visible span of time. It normally follows the beat, but it must be FROZEN while dragging
-  // a tap: it depends on `time`, so a live recompute would rescale the axis under the cursor and
-  // the tap would slide away from the finger it's supposed to be following.
-  const windowOf = (t: number, beat: number) => Math.max(beat > 0 ? beat * 4 : 2, t * 4.5, 0.4);
+  // ★ A STABLE TIME AXIS — a ruler, not a rubber band.
+  //
+  // It used to be derived from the value it was displaying: max(beat·4, time·4.5, 0.4). Once the
+  // time term won, the window grew WITH the time, so tap 1 sat at t/(4.5·t) = 22% of the width
+  // FOREVER. A fixed point. You could drag a tap to 85%, and on release the axis rescaled under
+  // it and hauled it back to 22% — measured: dragging to 25/45/65/85% landed at 21% every time.
+  // That is the surface literally fighting you, and no amount of drag smoothing would have fixed
+  // it, because the ruler was made of the thing being measured.
+  //
+  // Now: two bars when we know the tempo, else the delay's full range. The taps move; the ruler
+  // never does.
+  const windowOf = (beat: number) => (beat > 0 ? beat * 8 : MAX_TIME * 1.2);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -127,7 +140,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
       const g = grab.current;
-      const windowSec = g && g.kind === "tap" ? g.win : windowOf(t, beat);
+      const windowSec = windowOf(beat);
       const xOf = (sec: number) => (sec / windowSec) * w;
       const { ribbonH, top, midY, maxBar } = geom(h);
       const elapsed = (now - start) / 1000;
@@ -166,10 +179,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.textBaseline = "middle";
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.85;
-      const label = `${fmtF(s.hp)} — ${fmtF(s.lp)}`;
-      const tw = ctx.measureText(label).width;
+      const bandLabel = `${fmtF(s.hp)} — ${fmtF(s.lp)}`;
+      const tw = ctx.measureText(bandLabel).width;
       ctx.textAlign = hi - lo > tw + 14 ? "center" : "left";
-      ctx.fillText(label, hi - lo > tw + 14 ? (lo + hi) / 2 : Math.min(hi + 6, w - tw - 4), rH / 2);
+      ctx.fillText(bandLabel, hi - lo > tw + 14 ? (lo + hi) / 2 : Math.min(hi + 6, w - tw - 4), rH / 2);
       ctx.globalAlpha = 1;
 
       // beat grid + centre line (in the timeline half only)
@@ -237,6 +250,24 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.fillRect(1, round(midY - maxBar), barW, round(maxBar * 2));
       ctx.globalAlpha = 1;
 
+      // THE MAGNET, shown only while you're dragging a tap. TIME snaps to note divisions, so the
+      // tap jumps from one to the next — and an unexplained jump reads as jitter, as the surface
+      // misbehaving. Draw the targets and the same jump reads as magnetism, which is what it is.
+      if (g && g.kind === "tap" && beat > 0 && s.snapBeats?.length) {
+        ctx.strokeStyle = accent;
+        ctx.globalAlpha = 0.28;
+        ctx.lineWidth = 1;
+        for (const b of s.snapBeats) {
+          const x = Math.round(xOf(b * beat * (g.n + 1))) + 0.5;
+          if (x > w) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, midY - maxBar - 4);
+          ctx.lineTo(x, midY + maxBar + 4);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
       // THE DECAY ENVELOPE — the tail, drawn as a curve through the tap tips. Without it the tail
       // is a row of ever-shorter bars fading to nothing, so "grab the tail and pull it up" means
       // aiming at a 2px stub you can barely see. The curve shows you where the tail IS.
@@ -282,7 +313,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.textBaseline = "bottom";
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.9;
-      ctx.fillText(`${s.timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, h - 3);
+      // Name the note from the time we just drew — never from a prop that arrives a render late.
+      let label = `${Math.round(t * 1000)}ms`;
+      if (s.snapBeats?.length && s.snapLabels?.length && beat > 0) {
+        const beats = t / beat;
+        let bi = 0;
+        let bd = Infinity;
+        s.snapBeats.forEach((bv, i) => {
+          const d = Math.abs(Math.log(bv / Math.max(1e-4, beats)));
+          if (d < bd) {
+            bd = d;
+            bi = i;
+          }
+        });
+        label = s.snapLabels[bi] ?? label;
+      }
+      ctx.fillText(`${label}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, h - 3);
       ctx.globalAlpha = 1;
     };
 
@@ -320,9 +366,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (py < top) return null;
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
-      const windowSec = windowOf(t, beat);
+      const windowSec = windowOf(beat);
       let best = -1;
-      let bestD = TAP_GRIP;
+      // The grip can never be wider than half the gap to the next tap, or neighbouring grips
+      // overlap and you grab the wrong echo. At 1/16 in a two-bar window the taps are ~24px apart.
+      let bestD = Math.min(TAP_GRIP, Math.max(4, ((t / windowSec) * w) / 2));
       for (let n = 0; n < 64; n++) {
         const ts = (n + 1) * t;
         if (ts > windowSec) break;
@@ -388,8 +436,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       }
       // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
       const { midY, maxBar } = geom(h);
-      const secAt = (clamp(px, 1, w) / w) * g.win;
-      setTime(clamp(secAt / (g.n + 1), 0.02, 2));
+      const beat = s.bpm ? 60 / s.bpm : 0;
+      const secAt = (clamp(px, 1, w) / w) * windowOf(beat);
+      setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
       if (g.n >= 1) {
         const amp = clamp01(Math.abs(py - midY) / Math.max(1, maxBar));
         // amp = fb^n  ⇒  fb = amp^(1/n). Solve for the tap you're actually holding.
@@ -408,12 +457,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!hit) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      const s = p.current;
-      if (hit.kind === "tap") {
-        const beat = s.bpm ? 60 / s.bpm : 0;
-        // Freeze the time axis for the whole drag (see windowOf).
-        grab.current = { kind: "tap", n: hit.n!, win: windowOf(Math.max(0.001, s.time), beat) };
-      } else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
+      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n! };
+      else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };
       apply(px, py);
       kick();

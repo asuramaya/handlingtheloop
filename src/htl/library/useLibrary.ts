@@ -41,6 +41,7 @@ export interface Library {
   addToPlaylist: (playlistId: string, track: TrackMeta) => void;
   removeFromPlaylist: (playlistId: string, videoId: string) => void;
   markSynced: (id: string, ts: number) => void;
+  setSourceMatch: (id: string, sourceMatch: Record<string, string>) => void;
   /** Replace the whole library wholesale — used by cross-device sync when it adopts a
    *  newer remote blob. Bypasses the per-op dedupe (the blob is already canonical). */
   replaceAll: (next: LibraryData) => void;
@@ -164,6 +165,15 @@ export function useLibrary(): Library {
     }));
   }, []);
 
+  // Record the source-track → matched-videoId map for a synced (Spotify/TIDAL) playlist, so the
+  // next re-sync dedups/prunes by SOURCE identity instead of the drifting fuzzy match.
+  const setSourceMatch = useCallback((id: string, sourceMatch: Record<string, string>) => {
+    setData((d) => ({
+      ...d,
+      playlists: d.playlists.map((p) => (p.id === id ? { ...p, sourceMatch } : p)),
+    }));
+  }, []);
+
   const replaceAll = useCallback((next: LibraryData) => {
     setData({
       collection: Array.isArray(next.collection) ? next.collection : [],
@@ -185,6 +195,7 @@ export function useLibrary(): Library {
     addToPlaylist,
     removeFromPlaylist,
     markSynced,
+    setSourceMatch,
     replaceAll,
   };
 }

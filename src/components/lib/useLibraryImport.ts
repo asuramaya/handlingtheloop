@@ -6,6 +6,7 @@ import {
   syncReadSource,
   syncMatch,
   type ServicePlaylist,
+  type SourceTrack,
 } from "@htl/account";
 import { cleanPlaylistName } from "./libraryUtils";
 
@@ -19,21 +20,35 @@ type ViewToPlaylist = (v: { playlistId: string }) => void;
 // sidebar surfaces. Behaviour identical to the inline version it replaced.
 export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
   const [importing, setImporting] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null); // the playlist whose ⇄ resync is in flight (per-row spinner, not a global one)
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
-  // Match provider source-tracks to playable YouTube videos (paged to stay under the
-  // Worker subrequest cap). Shared by import + re-sync.
+  // Stable identity for a SOURCE track (before it's matched to a video): ISRC first (cross-service),
+  // then the Spotify id, else a normalized artist|title. Keys the sourceMatch map so re-sync follows
+  // a song across re-matches instead of by whatever video it happened to resolve to that run.
+  function sourceKey(t: SourceTrack): string {
+    if (t.isrc) return `isrc:${t.isrc.toUpperCase()}`;
+    if (t.spotifyId) return `sp:${t.spotifyId}`;
+    return `q:${(t.artist ?? "").trim().toLowerCase()}|${(t.title ?? "").trim().toLowerCase()}`;
+  }
+
+  // Match provider source-tracks to playable YouTube videos (paged to stay under the Worker
+  // subrequest cap). Returns each match paired with its SOURCE row so callers can key the
+  // sourceMatch map. Shared by import + re-sync.
   async function matchTracksToYouTube(
-    tracks: Parameters<typeof syncMatch>[1],
+    tracks: SourceTrack[],
     onProgress?: (done: number, total: number) => void,
-  ): Promise<TrackMeta[]> {
-    const matched: TrackMeta[] = [];
+  ): Promise<{ track: TrackMeta; source: SourceTrack }[]> {
+    const matched: { track: TrackMeta; source: SourceTrack }[] = [];
     const SLICE = 15;
     for (let i = 0; i < tracks.length; i += SLICE) {
       const rows = await syncMatch("youtube", tracks.slice(i, i + SLICE), i);
       for (const r of rows) {
         if (r.best && r.best.kind === "video") {
-          matched.push({ videoId: r.best.id, title: r.best.title, artist: r.best.artist, duration: r.best.duration, thumbnail: r.best.thumbnail, views: null });
+          matched.push({
+            track: { videoId: r.best.id, title: r.best.title, artist: r.best.artist, duration: r.best.duration, thumbnail: r.best.thumbnail, views: null },
+            source: r.source,
+          });
         }
       }
       onProgress?.(Math.min(i + SLICE, tracks.length), tracks.length);
@@ -57,12 +72,23 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       );
       if (!matched.length) throw new Error("no YouTube matches found");
       const cleanTitle = cleanPlaylistName(name || sp.title);
+      // Reuse a playlist ONLY if it's the same source list, or an UNLINKED local playlist of this
+      // service with the same name (the "link my local copy to its source" case). Never fold into a
+      // playlist already linked to a DIFFERENT source — otherwise two distinct source playlists that
+      // share a generic name ("Playlist", ".", "Untitled") collapse into one.
       const existing =
         library.playlists.find((p) => p.sourceListId === sp.id) ??
-        library.playlists.find((p) => p.sourceService === service && cleanPlaylistName(p.name) === cleanTitle);
+        library.playlists.find(
+          (p) => !p.sourceListId && p.sourceService === service && cleanPlaylistName(p.name) === cleanTitle,
+        );
       const id = existing?.id ?? library.createPlaylist(cleanTitle, sp.id, service);
       if (existing && !existing.sourceListId) library.linkSource(existing.id, sp.id, service);
-      for (const t of matched) library.addToPlaylist(id, t);
+      const map: Record<string, string> = { ...(existing?.sourceMatch ?? {}) };
+      for (const { track, source } of matched) {
+        library.addToPlaylist(id, track);
+        map[sourceKey(source)] = track.videoId;
+      }
+      library.setSourceMatch(id, map);
       setView({ playlistId: id });
       setImportMsg(null);
     } catch (e) {
@@ -77,35 +103,72 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
   // tracks are pruned only for exact-id YouTube sources — matched (Spotify/TIDAL) playlists
   // can re-match to a different video, so we never prune those.
   async function resyncPlaylist(pl: Playlist) {
-    if (!pl.sourceListId || !pl.sourceService || importing) return;
+    if (!pl.sourceListId || !pl.sourceService) return;
+    if (importing) {
+      setImportMsg("Hang on — a sync is already running."); // don't silently swallow the click
+      return;
+    }
     const service = pl.sourceService;
     setImporting(true);
+    setSyncingId(pl.id);
     setImportMsg(`Re-syncing “${cleanPlaylistName(pl.name)}”…`);
     try {
-      let fresh: TrackMeta[];
-      if (service === "youtube") {
-        fresh = (await fetchPlaylist(pl.sourceListId)).tracks;
-      } else if (service === "spotify" || service === "tidal") {
-        const { tracks } = await syncReadSource(service, pl.sourceListId);
-        fresh = await matchTracksToYouTube(tracks, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
-      } else {
-        return;
-      }
+      // An EMPTY source read — private / deleted / region-blocked, or a transient 200 with no
+      // tracks — must NEVER be read as "the playlist is now empty": that would prune a curated copy
+      // to nothing. Keep what we have; a genuinely-emptied source is indistinguishable from a failed
+      // read here, and not destroying local data is the safe default.
+      const keptLocal = () => setImportMsg(`Couldn’t read “${cleanPlaylistName(pl.name)}” — kept your local copy.`);
       const have = new Set(pl.trackIds);
       let added = 0;
-      for (const t of fresh) if (!have.has(t.videoId)) { library.addToPlaylist(pl.id, t); added++; }
       let removed = 0;
+
       if (service === "youtube") {
+        // Exact-id source: the fetched list IS the playlist, so it's authoritative — add new, prune gone.
+        const fresh = (await fetchPlaylist(pl.sourceListId)).tracks;
+        if (!fresh.length) { keptLocal(); return; }
+        for (const t of fresh) if (!have.has(t.videoId)) { library.addToPlaylist(pl.id, t); added++; }
         const freshIds = new Set(fresh.map((t) => t.videoId));
         for (const vid of pl.trackIds) if (!freshIds.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
+      } else if (service === "spotify" || service === "tidal") {
+        // Spotify / TIDAL: fuzzy-matched. Follow each song by SOURCE identity (the sourceMatch map),
+        // so a re-match that drifts to a different video keeps the song once instead of accreting a
+        // duplicate, and only a song actually gone from the source is pruned.
+        const { tracks: sources } = await syncReadSource(service, pl.sourceListId);
+        if (!sources.length) { keptLocal(); return; }
+        const oldMap = pl.sourceMatch ?? {};
+        const newMap: Record<string, string> = {};
+        const toMatch: SourceTrack[] = [];
+        for (const s of sources) {
+          const key = sourceKey(s);
+          const prev = oldMap[key];
+          if (prev && have.has(prev)) newMap[key] = prev; // already have this source track — keep its video
+          else toMatch.push(s); // new source track (or its video was removed) → (re)match it
+        }
+        const matched = await matchTracksToYouTube(toMatch, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
+        for (const { track, source } of matched) {
+          newMap[sourceKey(source)] = track.videoId;
+          if (!have.has(track.videoId)) { library.addToPlaylist(pl.id, track); added++; }
+        }
+        // Prune a source-managed video only when its source row is truly gone (key absent from the
+        // rebuilt map). A carried key stays mapped; a this-run match MISS leaves the old video in
+        // place (prev was carried, or there's nothing to prune); a manual add (never in oldMap) is
+        // invisible here — so transient match failures and hand-curated tracks are both safe.
+        for (const [key, vid] of Object.entries(oldMap)) {
+          if (!(key in newMap) && have.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
+        }
+        library.setSourceMatch(pl.id, newMap);
+      } else {
+        return; // unknown service — nothing to re-sync
       }
+
       library.markSynced(pl.id, Date.now());
       setImportMsg(added || removed ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` −${removed}` : ""}` : "Already up to date");
-      window.setTimeout(() => setImportMsg((m) => (m && m.startsWith("Synced") || m === "Already up to date" ? null : m)), 2500);
+      window.setTimeout(() => setImportMsg((m) => ((m && m.startsWith("Synced")) || m === "Already up to date" ? null : m)), 2500);
     } catch (e) {
       setImportMsg(`Re-sync failed: ${(e as Error).message}`);
     } finally {
       setImporting(false);
+      setSyncingId(null);
     }
   }
 
@@ -121,9 +184,14 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
     const { title, tracks } = await fetchPlaylist(listId);
     if (tracks.length === 0) throw new Error("no tracks found");
     const cleanTitle = cleanPlaylistName(title || fallbackTitle);
+    // Same rule as the service import: reuse the same source list, else an UNLINKED local/YouTube
+    // playlist of the same name — never a playlist already linked elsewhere (which would fold a
+    // YouTube list into a Spotify/TIDAL one that happens to share a name).
     const existing =
       library.playlists.find((p) => p.sourceListId === listId) ??
-      library.playlists.find((p) => cleanPlaylistName(p.name) === cleanTitle);
+      library.playlists.find(
+        (p) => !p.sourceListId && (!p.sourceService || p.sourceService === "youtube") && cleanPlaylistName(p.name) === cleanTitle,
+      );
     const id = existing?.id ?? library.createPlaylist(cleanTitle, listId, "youtube");
     if (existing && !existing.sourceListId) library.linkSource(existing.id, listId, "youtube");
     for (const t of tracks) library.addToPlaylist(id, t);
@@ -143,5 +211,5 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
     }
   }
 
-  return { importing, importMsg, importServicePlaylist, resyncPlaylist, ingestPlaylist, importPlaylistId };
+  return { importing, syncingId, importMsg, importServicePlaylist, resyncPlaylist, ingestPlaylist, importPlaylistId };
 }

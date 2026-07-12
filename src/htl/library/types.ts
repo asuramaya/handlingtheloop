@@ -30,4 +30,10 @@ export interface Playlist {
   sourceListId?: string; // YouTube/Spotify playlist id this was imported from (dedup re-imports)
   sourceService?: string; // "youtube" | "spotify" | … — which service section it belongs to
   lastSynced?: number; // epoch ms of the last re-sync from the source provider
+  // Spotify/TIDAL only: stable SOURCE-track key (isrc / spotifyId / artist|title) → the matched
+  // YouTube videoId. Lets re-sync dedup by SOURCE identity instead of the fuzzy match (which drifts
+  // to a different video for the same song across runs and used to accrete duplicates forever), and
+  // prune only tracks whose source row is actually gone — never manual additions. Absent on YouTube
+  // (exact-id) and legacy playlists (they just re-match afresh once).
+  sourceMatch?: Record<string, string>;
 }

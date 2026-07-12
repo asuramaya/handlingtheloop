@@ -187,7 +187,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
     }
   }, [view, searchView, syncOpen]);
   // Playlist import / re-sync engine (owns the importing/importMsg status).
-  const { importing, importMsg, importServicePlaylist, resyncPlaylist, ingestPlaylist, importPlaylistId } =
+  const { importing, syncingId, importMsg, importServicePlaylist, resyncPlaylist, ingestPlaylist, importPlaylistId } =
     useLibraryImport(library, setView);
 
   // Selecting any library section (Collection / Community / a playlist…) returns to the
@@ -495,7 +495,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             void resyncPlaylist(p);
           }}
         >
-          {importing ? "⟳" : "⇄"}
+          {syncingId === p.id ? "⟳" : "⇄"}
         </span>
       )}
       <span className="lib-count">{p.trackIds.length}</span>

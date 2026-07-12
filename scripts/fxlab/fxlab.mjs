@@ -50,6 +50,7 @@ function parseArgs(argv) {
       case "--bank": a.bank = true; break;
       case "--coverage": a.coverage = true; break;
       case "--tone-hz": a.toneHz = Number(v); i++; break;
+      case "--tone-amp": a.toneAmp = Number(v); i++; break;
       default: break;
     }
   }
@@ -283,6 +284,7 @@ async function main() {
       throwOff: args.throwOff ?? null,
       stepped: !!args.stepped,
       toneHz: args.toneHz ?? 1000,
+      toneAmp: args.toneAmp ?? 1,
       padThrow: !!args.padThrow,
       startBypassed: !!args.startBypassed,
       bypassAt: args.bypassAt ?? null,

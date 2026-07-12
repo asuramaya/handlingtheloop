@@ -30,6 +30,7 @@ interface Spec {
   seconds?: number;
   bpm?: number;
   sampleRate?: number;
+  toneAmp?: number; // tone amplitude (default 1.0) — a saturator's gain is level-DEPENDENT, so the probe level is the experiment
   toneHz?: number; // probe frequency for signal="tone" (default 1 kHz) — lets a response be sampled point by point
   // A mid-render THROW: slam `throwPreset` in at `throwAt` and restore the previous state at
   // `throwOff` — the FX-pad gesture, rendered. OfflineAudioContext.suspend() is what makes this
@@ -67,13 +68,18 @@ function buildDevice(ctx: Ctx, kind: FxKind): FxDevice {
 }
 
 // One test stimulus. Returns a started-able source node feeding the device input.
-function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000): AudioScheduledSourceNode {
+function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000, toneAmp = 1): AudioScheduledSourceNode {
   if (signal === "tone") {
     // Steady-state sine (±1) — for gate/mod/eq where the response, not a transient, matters.
     const o = ctx.createOscillator();
     o.type = "sine";
     o.frequency.value = toneHz;
-    return o;
+    if (toneAmp === 1) return o;
+    const g = ctx.createGain();
+    g.gain.value = toneAmp;
+    o.connect(g);
+    (g as unknown as { start?: () => void }).start = () => o.start();
+    return g as unknown as AudioScheduledSourceNode;
   }
   if (signal === "silence") {
     // A muted constant source — feeds nothing, so any output is self-generated (self-oscillation).
@@ -474,7 +480,7 @@ export interface Coverage {
     }
   }
 
-  const source = makeSignal(ctx, signal, sr, spec.toneHz ?? 1000);
+  const source = makeSignal(ctx, signal, sr, spec.toneHz ?? 1000, spec.toneAmp ?? 1);
   source.connect(dev.input);
   dev.output.connect(ctx.destination);
   source.start(0);

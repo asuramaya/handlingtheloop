@@ -27,8 +27,13 @@ const DC_BLOCK_HZ = 12;
 // −3.01 dB IS Butterworth (10^(−3.01/20) = 0.7071); two cascaded = LR4, which sums flat.
 const LR_Q = -3.01;
 
-// 0..1 knob → pre-gain into the curve (0 ≈ unity, 1 ≈ +20 dB hot).
-const driveGain = (ext: number) => Math.pow(10, (clamp01(ext) * 20) / 20);
+// 0..1 knob → pre-gain into the curve: −10 dB … +20 dB.
+// It starts BELOW unity on purpose. A WaveShaper's domain is [−1,1], so the curve has to do all its
+// bending inside that window — which means a pre-gain of 1.0 parks a mastered, full-scale track
+// right ON the knee, and the "drive" knob is already saturating at zero. Starting at −10 dB puts a
+// hot input in the curve's LINEAR region, so drive 0 is genuinely transparent and the knob walks the
+// signal up into the bend. makeupFor() takes the 10 dB back out, so the level doesn't move.
+const driveGain = (ext: number) => Math.pow(10, (clamp01(ext) * 30 - 10) / 20);
 // 0..1 → log frequency 20 Hz‥20 kHz (crossover points).
 const extToHz = logMap(20, 20000);
 const hzToExt = (hz: number) => Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000);
@@ -36,7 +41,7 @@ const hzToExt = (hz: number) => Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1
 // Per-style transfer function over x∈[-1,1]. WaveShaperNode clamps its INPUT to [-1,1] then
 // looks up the curve, so drive (pre-gain) pushes the signal toward the saturated/folded
 // edges. FOLD bakes the fold into the domain since pre-gain can't push past the clamp.
-function makeCurve(style: number, punish: boolean) {
+function makeCurve(style: number, punish: boolean): Float32Array<ArrayBuffer> {
   const c = new Float32Array(CURVE_LEN);
   const hot = punish ? 2.2 : 1.4; // steepness into the nonlinear region
   for (let i = 0; i < CURVE_LEN; i++) {
@@ -69,7 +74,56 @@ function makeCurve(style: number, punish: boolean) {
     }
     c[i] = clamp(y, -1, 1);
   }
+  return normalizeSlope(c);
+}
+
+// ★ UNITY SMALL-SIGNAL SLOPE. Every curve above was EXPANSIVE near zero — `hot` (1.4) scales the
+// input and then each curve adds its own slope on top (TUBE's tanh(1.5k) → 2.1×, FOLD's sine →
+// 4.2×). So with the drive knob at ZERO the saturator still added +7 dB and squashed 6 dB of range:
+// a compressor nobody asked for, flattering itself the oldest way in audio — louder reads as better.
+// A saturator must be TRANSPARENT at zero drive and bend only as it's pushed, so each curve is
+// divided by its own slope at the origin. (Same fix as the delay's analog drive: a >1 small-signal
+// gain is never what you meant.) The peak is deliberately NOT renormalised afterwards — the curve is
+// supposed to saturate below full scale, and makeupFor() pays the loudness back.
+function normalizeSlope(c: Float32Array<ArrayBuffer>): Float32Array<ArrayBuffer> {
+  const i0 = Math.floor((c.length - 1) / 2);
+  const dx = 2 / (c.length - 1);
+  const slope = (c[i0 + 1] - c[i0]) / dx;
+  if (!(slope > 0.01)) return c; // degenerate curve — don't divide by ~0
+  for (let i = 0; i < c.length; i++) c[i] = clamp(c[i] / slope, -1, 1);
   return c;
+}
+
+// The curve as the WaveShaper reads it: input clamped to [−1,1], then linear interpolation.
+function curveAt(c: Float32Array<ArrayBuffer>, x: number): number {
+  const t = ((clamp(x, -1, 1) + 1) / 2) * (c.length - 1);
+  const i = Math.floor(t);
+  const f = t - i;
+  return i + 1 < c.length ? c[i] * (1 - f) + c[i + 1] * f : c[i];
+}
+
+// ★ REAL AUTO-MAKEUP. The old comp was `1 / driveGain` — the inverse of the PRE-gain, which knows
+// nothing about what the curve then does. At drive 0 that is 1/1, i.e. no compensation at all (while
+// the curve was quietly adding 7 dB), and under heavy drive it over-corrects, because a saturated
+// signal is nowhere near input×drive. So MEASURE it: push a reference tone through the ACTUAL curve
+// at the ACTUAL drive, take its RMS, compensate by exactly that. DC is removed first because the
+// per-band DC blocker removes it downstream too (TUBE's even-harmonic k² term would otherwise
+// inflate the reading). Now DRIVE changes character, not loudness — the only way an A/B of the drive
+// knob tells you the truth.
+const MAKEUP_REF = 0.25; // reference amplitude ≈ −12 dBFS: a real programme level, not full scale
+function makeupFor(c: Float32Array<ArrayBuffer>, drive: number): number {
+  const N = 512;
+  let sum = 0;
+  let sumSq = 0;
+  for (let i = 0; i < N; i++) {
+    const y = curveAt(c, drive * MAKEUP_REF * Math.sin((2 * Math.PI * i) / N));
+    sum += y;
+    sumSq += y * y;
+  }
+  const mean = sum / N;
+  const rmsOut = Math.sqrt(Math.max(0, sumSq / N - mean * mean)); // DC-removed, like the band's dc blocker
+  const rmsIn = MAKEUP_REF / Math.SQRT2;
+  return clamp(rmsOut > 1e-6 ? rmsIn / rmsOut : 1, 0.05, 20);
 }
 
 interface Xover {
@@ -164,7 +218,7 @@ export class SaturatorFx extends BaseFxDevice {
       dc.frequency.value = DC_BLOCK_HZ;
       dc.Q.value = LR_Q;
       const g = ctx.createGain();
-      g.gain.value = 1 / driveGain(this._drive[i]); // auto gain-comp (see applyDrive)
+      g.gain.value = makeupFor(this._curve, driveGain(this._drive[i])); // measured makeup (see applyDrive)
       drive.connect(shaperIn);
       this.bias.connect(shaperIn); // global DC bias → asymmetry, removed by dc below
       shaperIn.connect(shaper).connect(dc).connect(g).connect(this.bandSum);
@@ -191,9 +245,11 @@ export class SaturatorFx extends BaseFxDevice {
     }
   }
 
+  private _curve: Float32Array<ArrayBuffer> = makeCurve(0, false); // the LIVE curve — makeup is measured against it
   private refreshCurves() {
-    const curve = makeCurve(this._style, this._punish);
-    for (const s of this.shapers) s.curve = curve; // global style → all bands share the curve
+    this._curve = makeCurve(this._style, this._punish);
+    for (const s of this.shapers) s.curve = this._curve; // global style → all bands share the curve
+    for (let i = 0; i < this.drives.length; i++) this.applyDrive(i); // makeup depends on the CURVE, not just the drive
   }
   private applyVoicing() {
     const v = VOICING[this._style] ?? VOICING[0];
@@ -221,12 +277,13 @@ export class SaturatorFx extends BaseFxDevice {
   private applyDrive(i: number) {
     const g = driveGain(this._drive[i]);
     this.drives[i].gain.setTargetAtTime(g * this._throwBoost, this.ctx.currentTime, 0.01);
-    // AUTO GAIN-COMP: the band output undoes the drive PRE-gain, so cranking drive pushes the
-    // signal harder INTO the curve (more saturation) at a roughly constant level — dirt, not
-    // loudness. This is what makes MIX a perceptually even dry↔wet blend (the wet path was
-    // ~10–15 dB hotter, tipping the knob fully wet by ~10%). The throwBoost is NOT comped (a
-    // pad throw should hit harder + a touch louder); OUT trims the rest.
-    this.bandGains[i].gain.setTargetAtTime(1 / g, this.ctx.currentTime, 0.01);
+    // AUTO GAIN-COMP, measured (see makeupFor): push a reference tone through the actual curve at
+    // this drive and compensate by the RMS it actually comes back with — so cranking drive pushes
+    // the signal harder INTO the curve (more saturation) at a constant level. Dirt, not loudness.
+    // That is what makes MIX a perceptually even dry↔wet blend, and what lets you A/B the drive
+    // knob honestly. The throwBoost is deliberately left uncompensated (a pad throw should hit
+    // harder AND a touch louder); OUT trims the rest.
+    this.bandGains[i].gain.setTargetAtTime(makeupFor(this._curve, g), this.ctx.currentTime, 0.01);
   }
   private setStyle(v: number) {
     this._style = clamp(Math.round(v), 0, SAT_STYLES.length - 1);

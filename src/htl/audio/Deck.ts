@@ -1917,6 +1917,14 @@ export class Deck {
     this.eq.reset();
   }
 
+  /** Reset the CURVE only — the wet/dry and the bypass are performance state the DJ is holding,
+   *  not settings. This is what the panel's RESET does; `resetEq()` (blend + bypass too) stays
+   *  for a full teardown, e.g. loading a fresh deck. */
+  resetEqParams() {
+    this.clearEqThrow();
+    this.eq.resetParams();
+  }
+
   // --- EQ CURVE THROW (the EQ's FX pad) ----------------------------------------------------
   // The EQ can't go dormant-and-throw like SAT/CRUSH — it IS the channel EQ, always in circuit.
   // So its pad throws a CURVE instead: press snapshots the whole curve and morphs to the ARMED
@@ -2077,6 +2085,10 @@ export class Deck {
   }
   resetFxAt(i: number) {
     this.rack.deviceAt(i)?.reset();
+  }
+  /** Character only — keeps the wet/dry and the on/off (see FxDevice.resetParams). */
+  resetFxParamsAt(i: number) {
+    this.rack.deviceAt(i)?.resetParams();
   }
   // ECHO OUT / REVERB OUT — the two time-based pad throws. They used to run their own
   // snapshot-and-restore here (a `wasBypassed` capture + a 2.4 s re-bypass timer), which meant a

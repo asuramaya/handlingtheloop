@@ -477,9 +477,14 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
             resetOut();
           }}
         >
-          <span className="eq-out-cap">OUT</span>
-          <span ref={outPillRef} className="eq-out-val">
-            0.0
+          {/* Contextual: silent at zero (it's doing nothing), a legible badge on hover or once
+              it's trimmed. A permanent 8px caption over a live spectrum is pollution AND
+              unreadable — the two failure modes at once. */}
+          <span className="eq-out-badge">
+            <span className="eq-out-cap">OUT</span>
+            <span ref={outPillRef} className="eq-out-val">
+              0.0
+            </span>
           </span>
         </div>
         {NODES.map((n, i) => (

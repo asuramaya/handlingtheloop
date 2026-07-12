@@ -2061,11 +2061,42 @@ body:not(.no-glow) .fx-power.on {
   position: absolute;
   inset: 0 auto 0 0;
   pointer-events: none;
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-  border-right: 1px solid var(--accent);
+  /* The fill BUILDS toward its leading edge instead of being a flat slab of colour — so the bar
+     reads as energy pushed up to a point, which is what a wet/dry is. */
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 16%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 30%, transparent) 55%,
+    color-mix(in srgb, var(--accent) 52%, transparent) 100%
+  );
 }
-body:not(.no-glow) .fx-mix-fill {
-  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--accent) 75%, transparent);
+/* The leading edge — the thing your eye actually tracks while riding the blend. Its own element
+   so it can glow without the whole fill blooming. */
+.fx-mix-fill::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: var(--accent);
+}
+body:not(.no-glow) .fx-mix-fill::after {
+  box-shadow: 0 0 10px 1px var(--accent), 0 0 22px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+/* Detents under the track: quarter marks, so a glance tells you roughly where you are without
+   reading the number. They sit in the TRACK, so the fill passes over them. */
+.fx-mix-ticks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 26%, transparent) 0 1px,
+    transparent 1px 25%
+  );
+  background-position: 0 0;
+  opacity: 0.5;
 }
 /* Just the number, centred — no "MIX" caption. The bar is the only fader down here, so the
    caption bought nothing and cost width the fill wanted. Centred means it stays legible whether
@@ -2074,30 +2105,30 @@ body:not(.no-glow) .fx-mix-fill {
   position: relative; /* above the fill */
   margin: 0 auto;
   pointer-events: none;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 /* A dormant device still shows its blend — it just stops claiming to be doing anything. */
 .fx-bar.off .fx-mix {
   opacity: 0.42;
 }
-/* A real target: the foot is stretch-aligned, so without a floor the fader inherits the
-   RESET button's ~22px and reads as a hairline. Thumb-sized on a phone. */
+/* A real target, and a FAT one: the foot is stretch-aligned, so without a floor the fader
+   inherits the RESET cap's height and reads as a hairline. */
 .fx-bar {
-  min-height: 26px;
+  min-height: 30px;
 }
 @media (max-width: 768px) {
   .fx-bar {
-    min-height: 34px;
+    min-height: 36px;
     gap: 5px;
     --fx-cap-w: 46px; /* thumb-sized, still square */
   }
   .fx-mix-val {
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 
@@ -2140,31 +2171,44 @@ body:not(.no-glow) .fx-mix-fill {
 .eq-out:hover {
   border-top-color: var(--accent);
 }
-.eq-out-cap,
-.eq-out-val {
+/* CONTEXTUAL: at zero the trim is doing nothing, so it says nothing — the line is a bare, quiet
+   baseline and the graph stays clean. The badge appears when it's WORTH reading: on hover (you're
+   reaching for it) or when the trim is off zero (it's actually doing something). Then it's a real
+   badge — a solid chip that can be read over a spectrum, not 8px of text lost in the noise. */
+.eq-out-badge {
   position: relative;
   transform: translateY(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
   pointer-events: none;
-  font-size: 8.5px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  background: color-mix(in srgb, var(--panel) 82%, #000 18%);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.eq-out:hover .eq-out-badge,
+.eq-out.trimmed .eq-out-badge {
+  opacity: 1;
+}
+.eq-out-cap {
+  font-size: 8px;
   font-weight: 800;
-  letter-spacing: 0.06em;
-  color: color-mix(in srgb, var(--accent) 65%, transparent);
-  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 .eq-out-val {
+  font-size: 12px;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-/* Once it's off zero it stops being a quiet reference line and starts being a control that's
-   DOING something — say so. */
+/* Off zero it stops being a quiet reference and becomes a control that's DOING something. */
 .eq-out.trimmed {
   border-top-style: solid;
   border-top-color: var(--accent);
-}
-.eq-out.trimmed .eq-out-cap,
-.eq-out.trimmed .eq-out-val {
-  color: var(--accent);
-}
-.eq-out:hover .eq-out-cap,
-.eq-out:hover .eq-out-val {
-  color: var(--accent);
 }

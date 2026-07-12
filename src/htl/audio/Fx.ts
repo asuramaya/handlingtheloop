@@ -40,6 +40,11 @@ export interface FxDevice {
   /** Flat/neutral: all params back to defaults, bypass off. */
   reset(): void;
 
+  /** Reset the device's CHARACTER only — every param except `mix`, and never bypass. The
+   *  wet/dry and the on/off are performance state a DJ is holding mid-mix; they are not
+   *  settings, and a "reset the sound" gesture has no business throwing them away. */
+  resetParams(): void;
+
   /** Compact param snapshot for serialization (profiles + session rack state). */
   snapshotParams(): Record<string, number>;
 
@@ -379,6 +384,9 @@ export abstract class BaseFxDevice implements FxDevice {
   reset() {
     for (const p of this.params) p.set(p.def);
     this.setBypass(false);
+  }
+  resetParams() {
+    for (const p of this.params) if (p.id !== "mix") p.set(p.def);
   }
   dispose() {
     this._wetGen++; // cancel any pending wet-disconnect timer

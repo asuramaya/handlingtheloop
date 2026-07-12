@@ -154,19 +154,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         let pi = presetIdxRef.current[dev.kind] ?? 0;
         pi = (((pi + dir) % n) + n) % n;
         presetIdxRef.current[dev.kind] = pi;
-        const mix = dev.getParam("mix"); // wet/dry is a live performance control — hold it across the browse
+        // Wet/dry and bypass are live performance state — a preset browse never touches either.
         if (pi === 0) {
-          deck.resetFxAt(at);
-          if (dev.kind === "eq") {
-            emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
-            deck.armEqPreset({ name: "Default", params: dev.snapshotParams() }); // browsing also arms the pad
-          }
+          deck.resetFxParamsAt(at);
+          if (dev.kind === "eq") deck.armEqPreset({ name: "Default", params: dev.snapshotParams() }); // browsing also arms the pad
         } else {
           const p = bank[pi - 1];
           for (const k in p.params) if (k !== "mix") deck.setFxParam(at, k, p.params[k]);
           if (dev.kind === "eq") deck.armEqPreset(p);
         }
-        deck.setFxParam(at, "mix", mix); // restore the blend for every device incl. EQ (covers the Default reset)
         if (dev.kind === "eq") emitControls(id);
         else broadcastRack();
         // Pop the SAME floaty preset menu a tab right-click opens, anchored under the selected tab, so
@@ -249,14 +245,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setMenu(null);
     refresh();
   };
+  // "Default" is the flat PRESET, and a preset never touches the blend or the on/off — same rule
+  // as RESET and as every other preset in the bank.
   const applyDefault = (slot: number) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
     presetIdxRef.current[d.kind] = 0; // keep the hardware FX-SELECT cursor in sync with a mouse apply
-    const mix = d.getParam("mix"); // preserve the live wet/dry across a Default (character resets, blend doesn't)
-    deck.resetFxAt(slot);
-    deck.setFxParam(slot, "mix", mix); // preserve wet/dry incl. EQ (Eq3 now maps "mix" → setMix)
-    if (d.kind === "eq") emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
+    deck.resetFxParamsAt(slot);
     armEq(d, "Default"); // the device is AT its defaults now → snapshot them as the armed curve
     syncDevice(d);
     setMenu(null);
@@ -292,15 +287,18 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     }
     refresh();
   };
+  // RESET aims at the device's CHARACTER — the params. It does NOT touch the wet/dry or the
+  // on/off: those are performance state you're holding mid-mix, independent of what the effect
+  // is dialled to. (It used to blow away both, so "put this delay back to sane" also yanked
+  // your blend to 28% and forced the effect back into the signal.)
   const reset = () => {
     if (!selDev) return;
     if (isEq) {
-      deck.resetEq();
+      deck.resetEqParams();
       emitControls(id);
-      emit({ kind: "toggle", deck: id, param: "eqBypass", value: false });
     } else {
-      deck.resetFxAt(cur);
-      broadcastRack(); // params + bypass changed → resync the chain
+      deck.resetFxParamsAt(cur);
+      broadcastRack();
     }
     refresh();
   };

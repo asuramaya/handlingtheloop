@@ -91,6 +91,7 @@ export function MixFader({ value, reset, onChange, disabled }: MixFaderProps) {
       {/* No "MIX" caption: the bar is the only fader in the foot and the number is the value.
           A label would just cost width the fill wants — and at a narrow deck width, width is
           the scarce thing. */}
+      <div className="fx-mix-ticks" />
       <div className="fx-mix-fill" style={{ width: `${pct}%` }} />
       <span className="fx-mix-val">{pct}</span>
     </div>

@@ -367,9 +367,14 @@ export class Eq3 implements FxDevice {
 
   /** Flat: all gains 0, every node back to default freq/Q, cuts parked off-screen. */
   reset() {
-    this.applyCurve(Eq3.defaults(), 0); // through the setters → the commanded mirror stays true
+    this.resetParams();
     this.setMix(1);
     this.setBypass(false);
+  }
+
+  /** The curve only. Wet/dry and bypass are performance state — left alone. */
+  resetParams() {
+    this.applyCurve(Eq3.defaults(), 0); // through the setters → the commanded mirror stays true
   }
 
   /** The flat curve — the device's own defaults as a param map (the preset menu's "Default",

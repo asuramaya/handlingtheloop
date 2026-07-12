@@ -535,7 +535,7 @@ body:not(.no-glow) .fx-chip.on {
    was built and cut — it was a second selector for a job the nodes already do. */
 /* The currently-edited node reads as selected (a brighter ring) so the subrow's
    band is unambiguous. */
-.eq-node.selected {
+.eq-node.selected::before {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--node) 70%, #fff 30%), 0 0 10px var(--node);
 }
 /* SHAPE is a SWITCH (discrete: bell / lo-shelf / hi-shelf / notch) — it cycles on tap. It sits
@@ -564,32 +564,48 @@ body:not(.no-glow) .fx-chip.on {
   background: color-mix(in srgb, var(--band) 22%, transparent);
 }
 /* A draggable band node: a ringed dot in the band's colour, sitting on the curve. */
+/* ★ THE HIT BOX AND THE DOT ARE DIFFERENT THINGS. They used to be the same element, which forces
+   an impossible trade: big enough for a thumb means big enough to bury the curve. On a 172px phone
+   canvas five 24px blobs left almost no curve to look at — and shrinking them would have made the
+   EQ untouchable. So the button is now an invisible TARGET (--eq-hit) and the visible dot is a
+   ::before inside it (--eq-dot). The dot can shrink on a narrow deck while the target grows. */
 .eq-node {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: var(--eq-hit, 26px);
+  height: var(--eq-hit, 26px);
   margin: 0;
   padding: 0;
   transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 2px solid var(--node);
-  background: color-mix(in srgb, var(--node) 35%, #000 40%);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--node) 60%, transparent), inset 0 0 4px color-mix(in srgb, var(--node) 50%, transparent);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  box-shadow: none;
   cursor: grab;
   touch-action: none;
   z-index: 2;
 }
-.eq-node:hover {
+.eq-node::before {
+  content: "";
+  width: var(--eq-dot, 22px);
+  height: var(--eq-dot, 22px);
+  border-radius: 50%;
+  border: 2px solid var(--node);
+  background: color-mix(in srgb, var(--node) 35%, #000 40%);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--node) 60%, transparent), inset 0 0 4px color-mix(in srgb, var(--node) 50%, transparent);
+  transition: width 0.1s, height 0.1s;
+}
+.eq-node:hover::before {
   background: var(--node);
 }
 .eq-node:active {
   cursor: grabbing;
 }
 /* Cut nodes (HP / LP) read as squares to distinguish from the round band nodes. */
-.eq-node.cut {
+.eq-node.cut::before {
   border-radius: 6px;
-  width: 22px;
-  height: 22px;
+  width: calc(var(--eq-dot, 22px) - 2px);
+  height: calc(var(--eq-dot, 22px) - 2px);
 }
 /* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
 @media (min-width: 769px) {
@@ -2260,4 +2276,40 @@ body:not(.no-glow) .fx-mix-fill::after {
 .eq-out.trimmed {
   border-top-style: solid;
   border-top-color: var(--accent);
+}
+
+/* ── PHONE: the rack gets ~180 CSS px (two decks side by side in a 393px viewport) ─────────────
+   The rule for every panel here: SHRINK WHAT YOU LOOK AT, GROW WHAT YOU TOUCH. They're different
+   things, and a design that conflates them has to sacrifice one. */
+@media (max-width: 768px) {
+  /* The dot gets out of the curve's way; the target gets BIGGER, for a thumb. */
+  .eq-curve {
+    --eq-dot: 15px;
+    --eq-hit: 30px;
+  }
+  /* SHAPE stops hogging the band row — the three cells beside it need the width more than it does. */
+  .eq-shape-btn {
+    min-width: 40px;
+    padding: 0 5px;
+    font-size: 8.5px;
+  }
+  .eq-subrow {
+    gap: 5px;
+  }
+  /* The delay's chips CANNOT be allowed to clip: FREEZE was running off the right edge of a phone,
+     which made a performance control literally unreachable. The row slides instead — same pattern
+     as the tab bar, which already scrolls. FREEZE and SYNC lead it, so the two you actually reach
+     for mid-mix are visible without scrolling at all. */
+  .fx-delay .fx-foot {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .fx-delay .fx-foot::-webkit-scrollbar {
+    display: none;
+  }
+  .fx-delay .fx-chip {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+  }
 }

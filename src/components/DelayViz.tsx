@@ -73,6 +73,7 @@ const RATE_MAX = 8;
 // drag distance that reaches full depth, because the crest follows your finger. At 0.22 the whole
 // range lived in ~21px of travel: the wobble slammed to 100% the moment you touched it.
 const LFO_AMP_FRAC = 0.38;
+const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
 const GRIP_PX = 10; // how close counts as "on" a filter edge
 const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
@@ -103,8 +104,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see.
-  const geom = (h: number) => {
-    const ribbonH = Math.max(20, Math.round(h * 0.2));
+  // The ribbon needs to be a THUMB target on a phone, not a hairline: a 20px strip is a miss
+  // waiting to happen. It costs a little of the timeline's height, which the timeline can spare.
+  const geom = (h: number, w = 999) => {
+    const ribbonH = w < NARROW_PX ? Math.max(26, Math.round(h * 0.22)) : Math.max(20, Math.round(h * 0.2));
     const top = ribbonH + 3;
     const midY = top + (h - top) / 2;
     return { ribbonH, top, midY, maxBar: (h - top) * 0.42 };
@@ -120,7 +123,17 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
   //
   // Now: two bars when we know the tempo, else the delay's full range. The taps move; the ruler
   // never does.
-  const windowOf = (beat: number) => (beat > 0 ? beat * 8 : MAX_TIME * 1.2);
+  //
+  // ★ AND IT'S NARROWER ON A NARROW DECK. On a phone this canvas is ~172px, and at 1/8 in a
+  // two-bar window the taps land ~11px apart — which forces the grip down to ~5px (it can never
+  // exceed half the gap, or you grab the wrong echo). A 5px target is not a thumb target: the
+  // whole instrument was unusable on touch. The answer isn't a bigger grip, it's FEWER TAPS ON
+  // SCREEN — one bar instead of two doubles every gap, and doubles every grip with it. You lose
+  // nothing but empty tail you couldn't see anyway.
+  const windowOf = (beat: number, w: number) => {
+    const bars = w < NARROW_PX ? 4 : 8; // beats of timeline
+    return beat > 0 ? beat * bars : MAX_TIME * (w < NARROW_PX ? 0.6 : 1.2);
+  };
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -160,9 +173,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
       const g = grab.current;
-      const windowSec = windowOf(beat);
+      const windowSec = windowOf(beat, w);
       const xOf = (sec: number) => (sec / windowSec) * w;
-      const { ribbonH, top, midY, maxBar } = geom(h);
+      const { ribbonH, top, midY, maxBar } = geom(h, w);
       const elapsed = (now - start) / 1000;
       const accent = s.accent;
 
@@ -404,12 +417,13 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const w = lastW;
       const h = lastH;
       const s = p.current;
-      const { ribbonH, top } = geom(h);
+      const { ribbonH, top } = geom(h, w);
       if (py <= ribbonH) {
         const lo = fToX(s.hp, w);
         const hi = fToX(s.lp, w);
-        if (Math.abs(px - lo) <= GRIP_PX) return { kind: "hp" };
-        if (Math.abs(px - hi) <= GRIP_PX) return { kind: "lp" };
+        const grip = w < NARROW_PX ? GRIP_PX * 1.6 : GRIP_PX; // a thumb is not a mouse
+        if (Math.abs(px - lo) <= grip) return { kind: "hp" };
+        if (Math.abs(px - hi) <= grip) return { kind: "lp" };
         if (px > lo && px < hi) return { kind: "band" };
         // NO DEAD ZONE. Outside the band, the nearer cut jumps to where you pressed — the whole
         // ribbon is live. A strip that ignores you over most of its width reads as broken.
@@ -418,7 +432,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (py < top) return null;
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
-      const windowSec = windowOf(beat);
+      const windowSec = windowOf(beat, w);
       let best = -1;
       // The grip can never be wider than half the gap to the next tap, or neighbouring grips
       // overlap and you grab the wrong echo. At 1/16 in a two-bar window the taps are ~24px apart.
@@ -439,7 +453,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (best >= 0) return { kind: "tap", n: best }; // a tap always wins — it's the primary gesture
       // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre
       // line, so there's always something to grab — the resting wobble is never a ghost.
-      const { midY: my, top: tp } = geom(h);
+      const { midY: my, top: tp } = geom(h, w);
       const modN = clamp01(s.modDepth / MOD_MAX);
       const lfoAmp = modN * (h - tp) * LFO_AMP_FRAC;
       // Hit-test the BAND the wave sweeps, not one frozen phase of it — the wave is scrolling, so
@@ -503,7 +517,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       }
       if (g.kind === "lfo") {
         // DEPTH is absolute: the wave's height follows your finger off the centre line.
-        const { midY, top } = geom(h);
+        const { midY, top } = geom(h, w);
         const full = Math.max(1, (h - top) * LFO_AMP_FRAC);
         const depth = clamp01(Math.abs(py - midY) / full) * MOD_MAX;
         // RATE is a STRETCH, and stretches are relative: drag right and the wave lengthens under
@@ -515,9 +529,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return;
       }
       // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
-      const { midY, maxBar } = geom(h);
+      const { midY, maxBar } = geom(h, w);
       const beat = s.bpm ? 60 / s.bpm : 0;
-      const secAt = (clamp(px, 1, w) / w) * windowOf(beat);
+      const secAt = (clamp(px, 1, w) / w) * windowOf(beat, w);
       setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
       if (g.n >= 1) {
         const amp = clamp01(Math.abs(py - midY) / Math.max(1, maxBar));

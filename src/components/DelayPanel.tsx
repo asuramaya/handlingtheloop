@@ -162,12 +162,21 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         <span className="fx-sep" aria-hidden="true" />
         <ValueCell label="DUCK" value={get("duck")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("duck", v)} format={fmtPct} />
       </div>
+      {/* ★ ORDERED BY WHEN YOU REACH FOR IT, NOT BY TOPIC. On a phone this rack is ~180px and the
+          row has to slide; whatever sits at the far right is, in practice, unreachable — FREEZE
+          was literally clipped off the edge of an iPhone. So the two you touch MID-MIX lead:
+          FREEZE (an infinite hold you slam) and SYNC. The set-and-forget ones (repitch / stereo /
+          lofi) live to their right, where scrolling to them costs nothing. */}
       <div className="fx-foot">
-        {/* SYNC + the time-change behaviour: both are about how TIME moves, so they sit together
-            (TIME itself is on the viz). */}
+        {/* FREEZE is a performance move, not a setting. It gets the weight of one — and the first
+            slot, because a control you can't reach in a hurry isn't a performance control. */}
+        <button className={`fx-chip dly-freeze ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")} title="Freeze — infinite hold of the current tail">
+          ❄ FREEZE
+        </button>
         <button className={`fx-chip ${synced ? "on" : ""}`} onClick={() => toggle("sync")} title={synced ? "Beat-locked — tap for free ms" : "Free time — tap to beat-lock"}>
           {synced ? "SYNC" : "ms"}
         </button>
+        <span className="fx-sep" aria-hidden="true" />
         {/* ★ A CYCLER, and it has to LOOK like one. RPT/MONO used to be styled exactly like the
             toggles beside them, so nothing said that tapping RPT gives you DIG and FADE — two of
             the six chips had invisible contents. The ▸ says "there's more behind me". */}
@@ -175,19 +184,12 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
           {TIME_MODES[timeMode] ?? "RPT"}
           <span className="cyc-mark">▸</span>
         </button>
-        <span className="fx-sep" aria-hidden="true" />
         <button className="fx-chip cyc" onClick={() => cycle("stereo", STEREO_MODES.length)} title="Stereo — tap to cycle: Mono (independent) / Ping-Pong (bounce L↔R)">
           {STEREO_MODES[stereo] ?? "MONO"}
           <span className="cyc-mark">▸</span>
         </button>
         <button className={`fx-chip ${get("lofi") >= 0.5 ? "on" : ""}`} onClick={() => toggle("lofi")} title="LoFi — old-digital-delay bitcrush + bandwidth loss">
           LOFI
-        </button>
-        <span className="fx-sep" aria-hidden="true" />
-        {/* FREEZE is a performance move — an infinite hold you SLAM mid-phrase — not a setting.
-            It gets the weight of one. */}
-        <button className={`fx-chip dly-freeze ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")} title="Freeze — infinite hold of the current tail">
-          ❄ FREEZE
         </button>
       </div>
     </div>

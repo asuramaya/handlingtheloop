@@ -3,6 +3,7 @@ export { AudioEngine } from "./AudioEngine";
 export { Deck, HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED, type Loop, type StemView, type PadMode } from "./Deck";
 export { Eq3, EQ_MIN_DB, EQ_MAX_DB, EQ_OUT_DB, EQ_BANDS, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT, type EqRoute } from "./Eq3";
 export { FxRack, BaseFxDevice, type FxDevice, type FxKind, type FxParam } from "./Fx";
+export { snapIndex } from "./snap";
 export { DelayFx, DELAY_MAX_SECONDS } from "./DelayFx";
 export { ReverbFx, REVERB_STYLES } from "./ReverbFx";
 export { SaturatorFx, SAT_STYLES, type SatStyle } from "./SaturatorFx";

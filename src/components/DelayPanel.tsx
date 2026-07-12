@@ -4,6 +4,7 @@ import type { Deck } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { DelayViz } from "./DelayViz";
 import { useFrameSync } from "./useFrameSync";
+import { snapIndex } from "@htl/audio";
 import { clamp } from "../util/math";
 import { fmtPct } from "../util/format";
 
@@ -33,6 +34,9 @@ const DIVISIONS: { label: string; beats: number }[] = [
 ];
 const DIVISION_BEATS = DIVISIONS.map((d) => d.beats); // the magnet the viz draws while you drag a tap
 const DIVISION_LABELS = DIVISIONS.map((d) => d.label);
+// The wobble's ladder — one LFO cycle per N beats. It locks to the grid whenever the delay does.
+const LFO_BEATS = [0.25, 0.5, 1, 2, 4, 8, 16];
+const LFO_LABELS = ["1/16", "1/8", "1/4", "1/2", "1 bar", "2 bar", "4 bar"];
 const DEFAULT_DIV = 2;
 const TIME_MODES = ["RPT", "DIG", "FADE"]; // Repitch / Digital / Fade
 const STEREO_MODES = ["MONO", "PING"]; // Single / Ping-Pong
@@ -87,33 +91,50 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
   // The viz hands back raw seconds; the note grid is the panel's business. Snap by LOG distance,
   // not linear — 1/8 and 1/8T are close in seconds but a triplet is never "nearly" a straight
   // eighth, and a linear nearest would make the long divisions impossible to land on.
-  const onTime = (sec: number) => {
+  // ★ EVERY HANDLER RETURNS WHAT IT COMMITTED. The viz mirrors that, never the request — see the
+  // note on DelayVizProps. The current rung is read FRESH off the device, not from the
+  // render-scoped `divIdx`, which is a frame stale inside a pointermove burst.
+  const onTime = (sec: number): number => {
     if (synced && bpm != null) {
-      const beats = sec / (60 / bpm);
-      let best = DEFAULT_DIV;
-      let bestD = Infinity;
-      DIVISIONS.forEach((d, i) => {
-        const dist = Math.abs(Math.log(d.beats / Math.max(1e-4, beats)));
-        if (dist < bestD) {
-          bestD = dist;
-          best = i;
-        }
-      });
-      if (best !== divIdx) live("div", best);
-      live("time", (60 / bpm) * DIVISIONS[best].beats);
-    } else {
-      live("time", clamp(sec, 0.02, 2));
+      const beatSec = 60 / bpm;
+      const held = Math.round(get("div"));
+      // snapIndex, not a bare "nearest": nearest, recomputed every frame, flips on a pixel of hand
+      // jitter anywhere near a midpoint — the tap machine-guns between two divisions. See snap.ts.
+      const i = snapIndex(sec / beatSec, DIVISION_BEATS, held);
+      if (i !== held) live("div", i);
+      const locked = beatSec * DIVISIONS[i].beats;
+      live("time", locked);
+      return locked;
     }
+    const free = clamp(sec, 0.02, 2);
+    live("time", free);
+    return free;
   };
-  const onFeedback = (v: number) => live("feedback", v);
-  // The wobble is ONE gesture, so it arrives as one call — depth and rate together.
-  const onMod = (depth: number, rate: number) => {
+  const onFeedback = (v: number): number => {
+    live("feedback", v);
+    return v;
+  };
+  // The wobble is ONE gesture, so it arrives as one call — depth and rate together. Its RATE locks
+  // to musical periods whenever the delay is beat-locked: a free-running wobble drifts against the
+  // track, and drifting is the whole difference between a dub delay's wobble sitting IN the groove
+  // and sitting beside it.
+  const onMod = (depth: number, rate: number): [number, number] => {
+    let r = rate;
+    if (synced && bpm != null) {
+      const beatSec = 60 / bpm;
+      const beatsPerCycle = (v: number) => 1 / Math.max(1e-4, v) / beatSec; // Hz → beats per cycle
+      const held = snapIndex(beatsPerCycle(get("modRate")), LFO_BEATS, -1);
+      const i = snapIndex(beatsPerCycle(rate), LFO_BEATS, held);
+      r = 1 / (LFO_BEATS[i] * beatSec);
+    }
     live("modDepth", depth);
-    live("modRate", rate);
+    live("modRate", r);
+    return [depth, r];
   };
-  const onFilters = (hp: number, lp: number) => {
+  const onFilters = (hp: number, lp: number): [number, number] => {
     if (Math.abs(hp - get("hp")) > 0.5) live("hp", hp);
     if (Math.abs(lp - get("lp")) > 0.5) live("lp", lp);
+    return [get("hp"), get("lp")]; // the device clamps — report what it actually took
   };
 
   const cycle = (param: string, count: number) => {
@@ -144,6 +165,8 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         width={get("spread")}
         snapBeats={synced ? DIVISION_BEATS : undefined}
         snapLabels={synced ? DIVISION_LABELS : undefined}
+        modSnapBeats={synced ? LFO_BEATS : undefined}
+        modSnapLabels={synced ? LFO_LABELS : undefined}
         onTime={onTime}
         onFeedback={onFeedback}
         onFilters={onFilters}

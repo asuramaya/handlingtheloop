@@ -53,10 +53,20 @@ interface DelayVizProps {
   // behind the tap you're holding). So: the grid, and the viz names the note itself.
   snapBeats?: number[]; // the note divisions TIME snaps to (absent when free-running)
   snapLabels?: string[]; // …and their names, index-matched
-  onTime: (seconds: number) => void; // the panel snaps to the note grid when synced
-  onFeedback: (v: number) => void;
-  onFilters: (hp: number, lp: number) => void;
-  onMod: (depth: number, rate: number) => void; // the wobble — one gesture, two axes
+  modSnapBeats?: number[]; // the wobble's ladder — beats per LFO cycle
+  modSnapLabels?: string[];
+  // ★ EVERY HANDLER RETURNS WHAT THE DEVICE ACTUALLY COMMITTED, and the canvas mirrors THAT — not
+  // what the pointer asked for. When a value is quantised (TIME snaps to the note grid) or clamped,
+  // the request and the commit are DIFFERENT NUMBERS. Mirroring the request paints the tap under
+  // your finger; the next React render then overwrites the mirror with the committed value and the
+  // tap jumps back to the grid. The surface alternates between the lie and the truth on every
+  // render — and while the deck is PLAYING the transport forces extra renders, so it alternates
+  // faster. That is the chop. (The filter never chopped because it's continuous: request == commit,
+  // so there was nothing to alternate between.)
+  onTime: (seconds: number) => number; // → the seconds it LOCKED to (snapped to the note grid)
+  onFeedback: (v: number) => number;
+  onFilters: (hp: number, lp: number) => [number, number];
+  onMod: (depth: number, rate: number) => [number, number]; // the wobble — one gesture, two axes
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -84,13 +94,13 @@ const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Mat
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
 type Grab =
-  | { kind: "tap"; n: number }
+  | { kind: "tap"; n: number; ghostX: number }
   | { kind: "hp" }
   | { kind: "lp" }
   | { kind: "band"; lastX: number }
   | { kind: "lfo"; startX: number; startRate: number };
 
-export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod }: DelayVizProps) {
+export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -99,8 +109,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod });
-  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, onTime, onFeedback, onFilters, onMod };
+  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod });
+  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see.
@@ -287,7 +297,21 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.textBaseline = "top";
         ctx.fillStyle = accent;
         ctx.globalAlpha = 0.95;
-        ctx.fillText(`WOBBLE  ${Math.round(modN * 100)}%  ·  ${s.modRate.toFixed(2)} Hz`, w - 6, top + 3);
+        let rateLabel = `${s.modRate.toFixed(2)} Hz`;
+        if (s.modSnapBeats?.length && s.modSnapLabels?.length && beat > 0) {
+          const cyc = 1 / Math.max(1e-4, s.modRate) / beat; // beats per LFO cycle
+          let bi = 0;
+          let bd = Infinity;
+          s.modSnapBeats.forEach((bv, i) => {
+            const d = Math.abs(Math.log(bv / Math.max(1e-4, cyc)));
+            if (d < bd) {
+              bd = d;
+              bi = i;
+            }
+          });
+          rateLabel = s.modSnapLabels[bi] ?? rateLabel;
+        }
+        ctx.fillText(`WOBBLE  ${Math.round(modN * 100)}%  ·  ${rateLabel}`, w - 6, top + 3);
         ctx.globalAlpha = 1;
       }
 
@@ -319,17 +343,41 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // tap jumps from one to the next — and an unexplained jump reads as jitter, as the surface
       // misbehaving. Draw the targets and the same jump reads as magnetism, which is what it is.
       if (g && g.kind === "tap" && beat > 0 && s.snapBeats?.length) {
-        ctx.strokeStyle = accent;
-        ctx.globalAlpha = 0.28;
-        ctx.lineWidth = 1;
-        for (const b of s.snapBeats) {
+        // The rungs. The one we're LOCKED to burns bright; the rest are faint. A lock you can see
+        // is a magnet; a lock you can't see is the surface disobeying you.
+        const lockedSec = t * (g.n + 1);
+        let lit = -1;
+        let bd = Infinity;
+        s.snapBeats.forEach((b, i) => {
+          const d = Math.abs(b * beat * (g.n + 1) - lockedSec);
+          if (d < bd) {
+            bd = d;
+            lit = i;
+          }
+        });
+        s.snapBeats.forEach((b, i) => {
           const x = Math.round(xOf(b * beat * (g.n + 1))) + 0.5;
-          if (x > w) continue;
+          if (x > w) return;
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = i === lit ? 0.9 : 0.2;
+          ctx.lineWidth = i === lit ? 2 : 1;
           ctx.beginPath();
           ctx.moveTo(x, midY - maxBar - 4);
           ctx.lineTo(x, midY + maxBar + 4);
           ctx.stroke();
-        }
+        });
+        // THE GHOST — where your finger actually is. The tap can't follow it (the value is
+        // quantised; there is no in-between to move to), so instead of pretending, SHOW the pull.
+        // The distance between the ghost and the lit rung IS the magnet, made visible.
+        ctx.strokeStyle = "#fff";
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(g.ghostX) + 0.5, midY - maxBar - 6);
+        ctx.lineTo(Math.round(g.ghostX) + 0.5, midY + maxBar + 6);
+        ctx.stroke();
+        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
 
@@ -471,22 +519,20 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     // overwrites the mirror with the device's own values, which agree — so this is a lead, not a
     // lie.)
     const setFilters = (hp: number, lp: number) => {
-      p.current.hp = hp;
-      p.current.lp = lp;
-      p.current.onFilters(hp, lp);
+      const [chp, clp] = p.current.onFilters(hp, lp);
+      p.current.hp = chp;
+      p.current.lp = clp;
     };
     const setTime = (sec: number) => {
-      p.current.time = sec;
-      p.current.onTime(sec);
+      p.current.time = p.current.onTime(sec); // the LOCKED seconds, not the requested ones
     };
     const setFeedback = (v: number) => {
-      p.current.feedback = v;
-      p.current.onFeedback(v);
+      p.current.feedback = p.current.onFeedback(v);
     };
     const setMod = (depth: number, rate: number) => {
-      p.current.modDepth = depth;
-      p.current.modRate = rate;
-      p.current.onMod(depth, rate);
+      const [cd, cr] = p.current.onMod(depth, rate);
+      p.current.modDepth = cd;
+      p.current.modRate = cr;
     };
 
     const apply = (px: number, py: number) => {
@@ -529,6 +575,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return;
       }
       // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
+      g.ghostX = px; // where the FINGER is, as distinct from where the value LOCKED
       const { midY, maxBar } = geom(h, w);
       const beat = s.bpm ? 60 / s.bpm : 0;
       const secAt = (clamp(px, 1, w) / w) * windowOf(beat, w);
@@ -551,7 +598,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!hit) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n! };
+      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, ghostX: px };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };

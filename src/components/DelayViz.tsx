@@ -9,10 +9,11 @@ import { useEffect, useRef } from "react";
 //   • GRAB A TAP        → drag sideways = TIME (the tap you're holding follows your cursor, so
 //                         grabbing the 3rd echo and pulling right sets time to a third of where
 //                         you drop it). With SYNC lit it snaps to the note grid.
-//                       → drag up/down = FEEDBACK, solved so THAT tap lands at that height
-//                         (fb = amp^(1/n)). The first echo is pinned at unity by the topology —
-//                         out = x(t−T) + fb·out(t−T) — so grabbing it is pure TIME. Which is
-//                         right: the further out the tap, the more it's about the tail.
+//                       → drag up/down = FEEDBACK, on a MONOTONIC fader: the bottom of the tap's
+//                         swing is 0%, the top is 100%, and every tap turns the same way. Solved
+//                         so THAT tap lands at that height (fb = amp^(1/n)), which is why a far
+//                         tap gives fine control of the tail — the further out, the more the
+//                         gesture is about the tail and the less about the first hit.
 //   • THE FILTER RIBBON → the echoes' tone window on a log-freq scale. Drag an EDGE to move one
 //                         cut; drag the BODY to sweep the whole band. That body-drag is what the
 //                         old LINK chip did, so LINK is deleted, not redesigned — it only ever
@@ -94,7 +95,7 @@ const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Mat
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
 type Grab =
-  | { kind: "tap"; n: number; ghostX: number }
+  | { kind: "tap"; n: number; ghostX: number; startY: number; startFb: number }
   | { kind: "hp" }
   | { kind: "lp" }
   | { kind: "band"; lastX: number }
@@ -614,11 +615,31 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const beat = s.bpm ? 60 / s.bpm : 0;
       const secAt = (clamp(px, 1, w) / w) * windowOf(beat, w);
       setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
+      // ★ THE VERTICAL LAW IS MONOTONIC — the bottom of a tap's swing is 0%, the top is 100%.
+      // It used to be |py − midY| / maxBar: the DISTANCE from the centre line. That made the CENTRE
+      // 0% and BOTH the top and the bottom 100% — a bipolar law on a control with no negative half.
+      // Nothing said which way was "more", and half the travel mirrored the other half.
+      const swing = Math.max(1, 2 * maxBar); // the full drawn height of a tap, bottom tip to top tip
       if (g.n >= 1) {
-        const amp = clamp01(Math.abs(py - midY) / Math.max(1, maxBar));
-        // amp = fb^n  ⇒  fb = amp^(1/n). Solve for the tap you're actually holding.
+        // amp = fb^n  ⇒  fb = amp^(1/n): solve for the tap you're actually HOLDING, so it lands
+        // under your finger. Absolute, and jump-free by construction — a tap's tip already sits at
+        // its own value, so grabbing it by the tip moves nothing.
+        const amp = clamp01((midY + maxBar - py) / swing);
         setFeedback(clamp(Math.pow(Math.max(amp, 1e-4), 1 / g.n), 0, FB_MAX));
+        return;
       }
+      // ★ THE FIRST ECHO IS PINNED AT UNITY by the topology — out = x(t−T) + fb·out(t−T) — so fb⁰=1
+      // whatever fb is, and its HEIGHT cannot encode the tail. That was taken as a reason to make it
+      // the one bar you CAN'T set the tail with, which is backwards: it's the biggest, nearest,
+      // loudest bar on the surface, so it's the one a hand reaches for first.
+      //
+      // It just can't be ABSOLUTE. A full-height bar that doesn't stand for its value means grabbing
+      // it anywhere near the top would slam feedback to the rail — you'd click the fattest thing on
+      // screen and the delay would run away. So this one drag is RELATIVE: it starts from wherever
+      // the tail already is and moves with your hand, at exactly the sensitivity of the taps beside
+      // it (a full swing = the full 0‥100 range). The bar can't follow you, but the tail and the
+      // readout do, and those are what the gesture is actually about.
+      setFeedback(clamp(g.startFb + (g.startY - py) / swing, 0, FB_MAX));
     };
 
     const local = (e: PointerEvent) => {
@@ -632,7 +653,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!hit) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, ghostX: px };
+      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, ghostX: px, startY: py, startFb: p.current.feedback };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };

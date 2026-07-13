@@ -41,6 +41,18 @@ const DEFAULT_DIV = 2;
 const TIME_MODES = ["RPT", "DIG", "FADE"]; // Repitch / Digital / Fade
 const STEREO_MODES = ["MONO", "PING"]; // Single / Ping-Pong
 
+// The depth of a layered control, made visible: one pip per mode, the current one filled. Without
+// it a cycler is a button that lies — it shows you a value and hides the fact that it's a stack.
+function Pips({ n, at }: { n: number; at: number }) {
+  return (
+    <span className="cyc-pips" aria-hidden="true">
+      {Array.from({ length: n }, (_, i) => (
+        <i key={i} className={i === at ? "on" : ""} />
+      ))}
+    </span>
+  );
+}
+
 interface DelayPanelProps {
   deck: Deck;
   id: "A" | "B";
@@ -200,16 +212,17 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
           {synced ? "SYNC" : "ms"}
         </button>
         <span className="fx-sep" aria-hidden="true" />
-        {/* ★ A CYCLER, and it has to LOOK like one. RPT/MONO used to be styled exactly like the
-            toggles beside them, so nothing said that tapping RPT gives you DIG and FADE — two of
-            the six chips had invisible contents. The ▸ says "there's more behind me". */}
-        <button className="fx-chip cyc" onClick={() => cycle("timeMode", TIME_MODES.length)} title="Time-change behaviour — tap to cycle: Repitch (pitch slur) / Digital / Fade">
+        {/* ★ A CYCLER IS A STACK, AND IT MUST SHOW ITS DEPTH. RPT/MONO used to be styled exactly
+            like the toggles beside them, so nothing said that tapping RPT gives you DIG and FADE —
+            two of the chips had invisible contents. A ▸ only says "there's more"; the PIPS say how
+            many more and WHERE YOU ARE in them, which is the question you actually have. */}
+        <button className="fx-chip cyc" onClick={() => cycle("timeMode", TIME_MODES.length)} title={`Time-change behaviour — tap to cycle: ${TIME_MODES.join(" / ")} (Repitch slurs the pitch, Digital jumps, Fade crossfades)`}>
           {TIME_MODES[timeMode] ?? "RPT"}
-          <span className="cyc-mark">▸</span>
+          <Pips n={TIME_MODES.length} at={timeMode} />
         </button>
-        <button className="fx-chip cyc" onClick={() => cycle("stereo", STEREO_MODES.length)} title="Stereo — tap to cycle: Mono (independent) / Ping-Pong (bounce L↔R)">
+        <button className="fx-chip cyc" onClick={() => cycle("stereo", STEREO_MODES.length)} title={`Stereo — tap to cycle: ${STEREO_MODES.join(" / ")} (Ping-Pong bounces L↔R)`}>
           {STEREO_MODES[stereo] ?? "MONO"}
-          <span className="cyc-mark">▸</span>
+          <Pips n={STEREO_MODES.length} at={stereo} />
         </button>
         <button className={`fx-chip ${get("lofi") >= 0.5 ? "on" : ""}`} onClick={() => toggle("lofi")} title="LoFi — old-digital-delay bitcrush + bandwidth loss">
           LOFI

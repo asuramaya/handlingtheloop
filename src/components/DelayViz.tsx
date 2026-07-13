@@ -194,38 +194,72 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const lo = fToX(s.hp, w);
       const hi = fToX(s.lp, w);
       const rH = ribbonH - 4;
-      ctx.fillStyle = "rgba(255,255,255,0.035)";
+      const bandHot = hover.current === "band" || grab.current?.kind === "band";
+      ctx.fillStyle = "rgba(255,255,255,0.03)";
       ctx.fillRect(0, 0, w, rH);
-      ctx.globalAlpha = 0.22;
+
+      // A SPECTRUM RULER — decade ticks only, NO text. The strip is ~20px tall and the band already
+      // labels its own two edges in Hz; adding 100/1k/10k captions on top of that just collided
+      // with them. The ticks give the scale, the edges give the numbers, and neither repeats the
+      // other.
+      ctx.strokeStyle = "rgba(255,255,255,0.09)";
+      ctx.lineWidth = 1;
+      for (const f of [100, 1000, 10000]) {
+        const x = Math.round(fToX(f, w)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, rH);
+        ctx.stroke();
+      }
+
+      // ★ THE BAND IS DRAWN AS THE FILTER IT IS — a plateau with SLOPED SHOULDERS, not a rectangle.
+      // A rectangle reads as a progress bar (a quantity), and the eye asks "how full is it?". A
+      // shape with skirts reads as a response curve (a shape), and the eye asks "what gets through?"
+      // — which is the actual question. The shoulders lean the way the real filters roll off.
+      const skirt = Math.min(26, Math.max(6, (hi - lo) * 0.18));
+      ctx.beginPath();
+      ctx.moveTo(Math.max(0, lo - skirt), rH);
+      ctx.lineTo(lo, 2);
+      ctx.lineTo(hi, 2);
+      ctx.lineTo(Math.min(w, hi + skirt), rH);
+      ctx.closePath();
       ctx.fillStyle = accent;
-      ctx.fillRect(lo, 0, Math.max(1, hi - lo), rH);
+      ctx.globalAlpha = bandHot ? 0.3 : 0.2;
+      ctx.fill();
+      ctx.globalAlpha = bandHot ? 0.95 : 0.6;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = bandHot ? 2 : 1.25;
+      ctx.stroke();
       ctx.globalAlpha = 1;
-      // the two grips
+
+      // The grips are HANDLES, with a grab-notch — not hairlines. You should be able to see what to
+      // take hold of without discovering it with the mouse.
       for (const [x, id] of [
         [lo, "hp"],
         [hi, "lp"],
       ] as [number, string][]) {
         const on = hover.current === id || grab.current?.kind === id;
+        const gx = round(x);
         ctx.fillStyle = accent;
-        ctx.globalAlpha = on ? 1 : 0.8;
-        ctx.fillRect(round(x) - (id === "hp" ? 0 : 2), 0, 2, rH);
+        ctx.globalAlpha = on ? 1 : 0.85;
+        ctx.fillRect(gx - 1, 0, 3, rH);
+        // the notch: three ribs, the universal "grab me"
+        ctx.globalAlpha = on ? 0.9 : 0.55;
+        ctx.fillStyle = "#000";
+        for (let k = -1; k <= 1; k++) ctx.fillRect(gx, rH / 2 + k * 3, 1, 1);
         ctx.globalAlpha = 1;
       }
-      if (hover.current === "band" || grab.current?.kind === "band") {
-        ctx.strokeStyle = accent;
-        ctx.globalAlpha = 0.6;
-        ctx.strokeRect(round(lo) + 0.5, 0.5, Math.max(1, hi - lo) - 1, rH - 1);
-        ctx.globalAlpha = 1;
-      }
-      // the band's numbers, inside the band when it's wide enough, outside when it isn't
-      ctx.font = "700 9px ui-monospace, monospace";
+
+      // The numbers live AT the grips they belong to, not merged into one label in the middle —
+      // so each cut says its own value, which is what you're actually setting.
+      ctx.font = "700 8.5px ui-monospace, monospace";
       ctx.textBaseline = "middle";
       ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.85;
-      const bandLabel = `${fmtF(s.hp)} — ${fmtF(s.lp)}`;
-      const tw = ctx.measureText(bandLabel).width;
-      ctx.textAlign = hi - lo > tw + 14 ? "center" : "left";
-      ctx.fillText(bandLabel, hi - lo > tw + 14 ? (lo + hi) / 2 : Math.min(hi + 6, w - tw - 4), rH / 2);
+      ctx.globalAlpha = 0.95;
+      ctx.textAlign = "right";
+      ctx.fillText(fmtF(s.hp), Math.max(20, lo - 5), rH / 2);
+      ctx.textAlign = "left";
+      ctx.fillText(fmtF(s.lp), Math.min(w - 20, hi + 5), rH / 2);
       ctx.globalAlpha = 1;
 
       // beat grid + centre line (in the timeline half only)

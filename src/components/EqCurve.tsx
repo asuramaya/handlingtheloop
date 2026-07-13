@@ -69,10 +69,24 @@ const xFromFreq = (hz: number, w: number) => (Math.log10(hz / F_MIN) / F_SPAN) *
 const freqFromX = (x: number, w: number) => F_MIN * Math.pow(10, (x / w) * F_SPAN);
 const yFromDb = (db: number, h: number) => ((DB_TOP - db) / (DB_TOP - DB_BOT)) * h;
 const dbFromY = (y: number, h: number) => DB_TOP - (y / h) * (DB_TOP - DB_BOT);
+// ★ THE CUT NODES HANG ON THE CURVE, and resonance is the whole height above it.
+//
+// They used to sit at h/2 on an abstract Q axis — which is NOT where the curve is (0 dB draws at
+// 12/24 of the height, not the middle), so the HP/LP handles floated below the line they belong
+// to. Worse, their resting resonance IS their minimum: flat. So dragging DOWN did nothing at all —
+// half the vertical axis was dead, and the first instinct on grabbing a handle is to pull it
+// somewhere. It read as "this one only goes sideways".
+//
+// Resonance is genuinely UNIPOLAR — there is no "less than flat" — so the honest design is not to
+// invent a downward meaning. It's to stop the handle pretending to be a 2D one. A cut node now
+// rides a visible RESONANCE RAIL: a track from the flat line up to full resonance, drawn whenever
+// you're near it. The handle sits at the bottom of its own rail, which is exactly what "flat"
+// means, and the rail says plainly which way there is to go. (It also hangs on the OUTPUT baseline
+// rather than a hardcoded h/2, so it stays on the curve when the trim moves it.)
 const qNorm = (q: number) => Math.log(q / EQ_Q_MIN) / Math.log(EQ_Q_MAX / EQ_Q_MIN);
-const yFromQ = (q: number, h: number) => h / 2 - clamp(qNorm(q), 0, 1) * (h / 2 - h * Q_TOP_PAD);
-const qFromY = (y: number, h: number) => {
-  const n = clamp((h / 2 - y) / (h / 2 - h * Q_TOP_PAD), 0, 1);
+const yFromQ = (q: number, h: number, baseY: number) => baseY - clamp(qNorm(q), 0, 1) * (baseY - h * Q_TOP_PAD);
+const qFromY = (y: number, h: number, baseY: number) => {
+  const n = clamp((baseY - y) / Math.max(1, baseY - h * Q_TOP_PAD), 0, 1);
   return EQ_Q_MIN * Math.pow(EQ_Q_MAX / EQ_Q_MIN, n);
 };
 
@@ -104,6 +118,11 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const drag = useRef<{ i: number } | null>(null);
   const outDrag = useRef(false); // dragging the output baseline
   const [sel, setSel] = useState(2); // band whose numeric subrow is shown (default MID)
+  // The rAF draw loop is created once (deps: deck/accent), so it would close over the FIRST `sel`
+  // forever — the resonance rail drew for whatever band happened to be selected at mount. Mirror it
+  // in a ref: the loop is imperative, so it must read live values, not render-time snapshots.
+  const selRef = useRef(sel);
+  selRef.current = sel;
   const [, bump] = useState(0);
 
   // The canvas repaints itself in its own rAF loop, but the numeric cells are REACT — so a drag
@@ -320,6 +339,34 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       ctx.stroke();
       ctx.shadowBlur = 0;
 
+      // THE RESONANCE RAIL — the cut nodes' one honest axis, made visible. Only drawn for the cut
+      // you're actually working (selected or being dragged), so it never clutters the curve.
+      for (let i = 0; i < NODES.length; i++) {
+        const n = NODES[i];
+        if (n.vert !== "q") continue;
+        const live = drag.current?.i === i || selRef.current === i;
+        if (!live) continue;
+        const rx = clamp(xFromFreq(n.getFreq(deck), w), 11, w - 11);
+        const railTop = h * Q_TOP_PAD;
+        const railBot = yFromDb(deck.eqOut, h);
+        ctx.strokeStyle = n.color;
+        ctx.globalAlpha = 0.28;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(rx) + 0.5, railTop);
+        ctx.lineTo(Math.round(rx) + 0.5, railBot);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // the rail's ceiling, so "how far up can this go" is answerable at a glance
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(rx) - 4.5, railTop + 0.5);
+        ctx.lineTo(Math.round(rx) + 4.5, railTop + 0.5);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
       // The output baseline rides with the trim (see y0 above) — it IS the graph's zero.
       const outEl = outRef.current;
       if (outEl) {
@@ -342,7 +389,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         // offset by the trim), and a node that didn't would float off the curve it's meant to be
         // sitting on the moment you moved the baseline. The cut nodes (HP/LP) are on the Q axis,
         // not the dB axis, so the trim doesn't move them.
-        el.style.top = `${n.vert === "gain" ? yFromDb(n.getGain(deck) + deck.eqOut, h) : yFromQ(n.getQ(deck), h)}px`;
+        el.style.top = `${n.vert === "gain" ? yFromDb(n.getGain(deck) + deck.eqOut, h) : yFromQ(n.getQ(deck), h, yFromDb(deck.eqOut, h))}px`;
       }
     };
     raf = requestAnimationFrame(tick);
@@ -369,7 +416,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       n.setGain(deck, db);
       emit({ kind: "control", deck: id, param: n.gParam, value: n.getGain(deck) });
     } else if (n.vert === "q" && n.qParam) {
-      const q = clamp(qFromY(clientY - rect.top, h), EQ_Q_MIN, EQ_Q_MAX);
+      const q = clamp(qFromY(clientY - rect.top, h, yFromDb(deck.eqOut, h)), EQ_Q_MIN, EQ_Q_MAX);
       n.setQ(deck, q);
       emit({ kind: "control", deck: id, param: n.qParam, value: q });
     }

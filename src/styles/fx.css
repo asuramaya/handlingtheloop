@@ -354,15 +354,28 @@ body:not(.no-glow) .fx-tab.sel {
    contents and you had to hover to learn they held anything at all. */
 .fx-chip.cyc {
   position: relative;
-  padding-right: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
-.cyc-mark {
-  position: absolute;
-  right: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 7px;
-  opacity: 0.65;
+/* A cycler is a STACK. The pips are its depth — how many modes are behind this one, and which of
+   them you're standing on. A chip that only shows its current value is a button that lies. */
+.cyc-pips {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.cyc-pips i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.28;
+}
+.cyc-pips i.on {
+  opacity: 1;
+  box-shadow: 0 0 4px currentColor;
 }
 /* FREEZE is a performance move — an infinite hold you slam mid-phrase — so it carries weight the
    settings-chips beside it don't. */

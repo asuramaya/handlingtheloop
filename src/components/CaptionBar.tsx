@@ -2,10 +2,14 @@ import { useEffect, useRef } from "react";
 import type { Deck } from "@htl/audio";
 import type { LyricsSource, LyricsLine } from "@htl/lyrics";
 
+// The three sources are NOT interchangeable and the badge must not pretend they are: whisper and
+// pool used to share both the icon AND the label, so you could not tell whether YOUR GPU had
+// actually transcribed the track or whether it had simply downloaded someone else's transcript —
+// which is half of "I can't tell if the lyrics are even firing".
 const SOURCE_TAG: Record<LyricsSource, { icon: string; label: string }> = {
-  whisper: { icon: "🎤", label: "auto lyrics (word-timed)" },
-  pool: { icon: "🎤", label: "auto lyrics (word-timed)" },
-  youtube: { icon: "▶", label: "YouTube captions" },
+  whisper: { icon: "🎤", label: "transcribed on THIS device (word-timed)" },
+  pool: { icon: "☁", label: "from the community pool (someone else's GPU)" },
+  youtube: { icon: "▶", label: "YouTube captions (not word-timed)" },
 };
 
 // A word marker shows its label once it has at least this many px to the next word; the song's
@@ -25,6 +29,7 @@ export function CaptionBar({
   accent,
   cues,
   source,
+  status,
   windowSec,
   onSeek,
   onReprocess,
@@ -33,6 +38,7 @@ export function CaptionBar({
   accent: string;
   cues: LyricsLine[];
   source?: LyricsSource | null;
+  status?: string | null; // live lyric state — model download, decode %, waiting for the vocal stem
   windowSec: number;
   onSeek?: (position: number) => void;
   onReprocess?: (engine: "whisper" | "youtube") => void; // wrong lyrics → re-resolve from scratch
@@ -158,10 +164,65 @@ export function CaptionBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck, cues]);
 
-  if (cues.length === 0) return null;
   const tag = source ? SOURCE_TAG[source] : null;
+  const tools = (
+    <span className="caption-tools">
+      {tag && (
+        <span className="caption-source" title={tag.label} aria-label={tag.label}>
+          {tag.icon}
+        </span>
+      )}
+      {onReprocess && (
+        <span className="caption-reprocess">
+          <button
+            className="caption-redo"
+            title="Wrong lyrics? Re-transcribe from the vocal stem (Whisper)"
+            aria-label="Re-transcribe lyrics with Whisper"
+            onClick={() => onReprocess("whisper")}
+          >
+            🎤↻
+          </button>
+          <button
+            className="caption-redo"
+            title="Wrong lyrics? Reload YouTube captions instead"
+            aria-label="Reload YouTube captions"
+            onClick={() => onReprocess("youtube")}
+          >
+            ▶↻
+          </button>
+        </span>
+      )}
+    </span>
+  );
+
+  // ★ THE BAR MUST EXIST WHILE IT IS WORKING. It used to `return null` on zero cues, so for the
+  // entire time Whisper was downloading a model, waiting for the vocal stem, decoding, or failing,
+  // there was NOTHING ON SCREEN AT ALL — which is precisely why "I can't tell when or if they're
+  // firing". Now: no cues + no state → genuinely idle, render nothing. No cues but something IS
+  // happening → render the state, with the retry buttons in reach.
+  if (cues.length === 0) {
+    if (!status) return null;
+    return (
+      <div className="caption-bar caption-idle" ref={wrapRef} style={{ ["--accent" as string]: accent }}>
+        <span className="caption-state" aria-live="polite">
+          <span className="lane-proc-dot" />
+          {status}
+        </span>
+        {tools}
+      </div>
+    );
+  }
+
   return (
     <div className="caption-bar beatlock" ref={wrapRef} style={{ ["--accent" as string]: accent }}>
+      {/* Keep the state visible even once lyrics ARE showing — a re-decode (🎤↻) or a Whisper pass
+          upgrading a stale pooled transcript is otherwise completely invisible. */}
+      {status && (
+        <span className="caption-state over" aria-live="polite">
+          <span className="lane-proc-dot" />
+          {status}
+        </span>
+      )}
       <div className="caption-track" ref={trackRef}>
         <div className="caption-phrases" ref={phrasesRef}>
           {cues.map((c, i) => (
@@ -182,33 +243,7 @@ export function CaptionBar({
           ))}
         </div>
       </div>
-      <span className="caption-tools">
-        {tag && (
-          <span className="caption-source" title={tag.label} aria-label={tag.label}>
-            {tag.icon}
-          </span>
-        )}
-        {onReprocess && (
-          <span className="caption-reprocess">
-            <button
-              className="caption-redo"
-              title="Wrong lyrics? Re-transcribe from the vocal stem (Whisper)"
-              aria-label="Re-transcribe lyrics with Whisper"
-              onClick={() => onReprocess("whisper")}
-            >
-              🎤↻
-            </button>
-            <button
-              className="caption-redo"
-              title="Wrong lyrics? Reload YouTube captions instead"
-              aria-label="Reload YouTube captions"
-              onClick={() => onReprocess("youtube")}
-            >
-              ▶↻
-            </button>
-          </span>
-        )}
-      </span>
+      {tools}
     </div>
   );
 }

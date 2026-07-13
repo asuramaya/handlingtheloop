@@ -22,6 +22,10 @@ type AsrPipe = (audio: Float32Array, opts: Record<string, unknown>) => Promise<{
 
 let tjs: any = null;
 const pipes = new Map<string, Promise<AsrPipe>>();
+// What the GPU ACTUALLY ran, per repo — the q4 path or the fp32 fallback — plus the library
+// version. Both are reported in the alignment diagnostic: transformers.js has shipped genuinely
+// broken word timestamps more than once, so "which version produced these times" is evidence.
+const pipeMeta = new Map<string, { dtype: string; tjs: string }>();
 
 const UA = (typeof navigator !== "undefined" && navigator.userAgent) || "";
 const WEBGPU = typeof navigator !== "undefined" && !!(navigator as any).gpu && /Chrome\/|Chromium\//.test(UA);
@@ -54,17 +58,25 @@ function getPipe(repo: string): Promise<AsrPipe> {
           (self as any).postMessage({ type: "progress", phase: "model", pct: Math.round(e.progress) });
         }
       };
-      const build = (device: string, dtype: any) =>
-        t.pipeline("automatic-speech-recognition", repo, { device, dtype, progress_callback: onProg }) as Promise<AsrPipe>;
+      const ver = String(t.env?.version ?? "?");
+      const build = async (device: string, dtype: any, label: string) => {
+        const p = (await t.pipeline("automatic-speech-recognition", repo, {
+          device,
+          dtype,
+          progress_callback: onProg,
+        })) as AsrPipe;
+        pipeMeta.set(repo, { dtype: `${device}/${label}`, tjs: ver });
+        return p;
+      };
       if (WEBGPU) {
         try {
-          return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" });
+          return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" }, "enc:fp32+dec:q4");
         } catch {
           (self as any).postMessage({ type: "progress", phase: "model", pct: 100 });
-          return await build("webgpu", "fp32"); // repo has no q4 export → full-precision
+          return await build("webgpu", "fp32", "fp32"); // repo has no q4 export → full-precision
         }
       }
-      return await build("wasm", "q8"); // non-Chromium: stable CPU bundle
+      return await build("wasm", "q8", "q8"); // non-Chromium: stable CPU bundle
     })();
     // ★ EVICT A FAILED BUILD. The memo used to keep the REJECTED promise, so a single transient
     // failure — a CDN blip, an interrupted model download — was cached and every later transcribe
@@ -171,6 +183,68 @@ function detectOnsets(audio: Float32Array): number[] {
     }
   }
   return onsets;
+}
+
+// ---- alignment MEASUREMENT (see LyricsDiag in types.ts) ---------------------------------
+// Run BEFORE snapping, over a WIDE window, so we see the true error instead of the error the
+// snap is able to reach. This is what turns "the lyrics don't line up" from a complaint into a
+// number that names its own fix.
+const DIAG_SEARCH_S = 2.0;
+
+function median(xs: number[]): number {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function measureAlignment(lines: OutLine[], onsets: number[]): {
+  words: number;
+  matched: number;
+  medianLag: number;
+  madLag: number;
+  driftMsPerMin: number;
+  within160: number;
+} {
+  const ts: number[] = [];
+  const lags: number[] = [];
+  let words = 0;
+  for (const ln of lines) {
+    for (const wd of ln.words ?? []) {
+      words++;
+      if (!onsets.length) continue;
+      const near = nearestOnset(onsets, wd.t);
+      const lag = near - wd.t; // + = the real vocal starts AFTER Whisper said it did
+      if (Math.abs(lag) <= DIAG_SEARCH_S) {
+        ts.push(wd.t);
+        lags.push(lag);
+      }
+    }
+  }
+  if (!lags.length) {
+    return { words, matched: 0, medianLag: 0, madLag: 0, driftMsPerMin: 0, within160: 0 };
+  }
+  const med = median(lags);
+  const mad = median(lags.map((l) => Math.abs(l - med)));
+  // Least-squares slope of lag vs track time → a chunk/rate bug drifts, a pipeline offset doesn't.
+  const n = lags.length;
+  const mt = ts.reduce((a, b) => a + b, 0) / n;
+  const ml = lags.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (ts[i] - mt) * (lags[i] - ml);
+    den += (ts[i] - mt) ** 2;
+  }
+  const slope = den > 1e-9 ? num / den : 0; // seconds of lag per second of track
+  return {
+    words,
+    matched: n,
+    medianLag: med,
+    madLag: mad,
+    driftMsPerMin: slope * 60 * 1000,
+    within160: lags.filter((l) => Math.abs(l) <= 0.16).length / n,
+  };
 }
 
 function nearestOnset(onsets: number[], t: number): number {
@@ -289,6 +363,8 @@ self.onmessage = async (e: MessageEvent) => {
     const langOpt = language ? { language } : {};
 
     let wordMode = true;
+    let wordError: string | undefined; // set if word timestamps were abandoned — see the catch below
+    const t0 = Date.now();
     const wChunks: AsrChunk[] = []; // accumulated WORD chunks at ABSOLUTE time (word mode)
     const sChunks: AsrChunk[] = []; // accumulated SEGMENT chunks at absolute time (fallback)
 
@@ -316,9 +392,13 @@ self.onmessage = async (e: MessageEvent) => {
       if (wordMode) {
         try {
           push(wChunks, await pipe(seg, { return_timestamps: "word", ...langOpt }));
-        } catch {
+        } catch (err: any) {
           // The model lacks word-alignment heads → drop to segment mode for the WHOLE track and
           // restart from chunk 0 so the result is never half word / half segment.
+          // ★ RECORD WHY. This fallback used to be silent, and a silent drop to segment timestamps
+          // looks EXACTLY like "the lyrics don't line up" — coarse whole-line cues instead of the
+          // word comb. If it fires, the diagnostic now names it instead of leaving us guessing.
+          wordError = String(err?.message || err);
           wordMode = false;
           wChunks.length = 0;
           ci = -1;
@@ -337,11 +417,36 @@ self.onmessage = async (e: MessageEvent) => {
     (self as any).postMessage({ type: "gpu-done", id });
 
     let lines: OutLine[] = wordMode ? groupWords(wChunks) : cleanSegments(sChunks);
-    // Snap word onsets to the real vocal transients (word mode only — segments have no words).
+
+    // MEASURE, then snap. The measurement runs on the RAW Whisper times against the real vocal
+    // onsets, before we touch anything — measuring after the snap would only tell us what the snap
+    // did, not how wrong the model was. (Suspect the layer you didn't think was interesting.)
+    const meta = pipeMeta.get(repo);
+    let diag: Record<string, unknown> = {
+      mode: wordMode ? "word" : "segment",
+      wordError,
+      model: repo,
+      dtype: meta?.dtype ?? "?",
+      tjs: meta?.tjs,
+      lines: lines.length,
+      words: 0,
+      onsets: 0,
+      matched: 0,
+      medianLag: 0,
+      madLag: 0,
+      driftMsPerMin: 0,
+      within160: 0,
+      decodeMs: Date.now() - t0,
+    };
+
     if (wordMode && lines.some((l) => l.words?.length)) {
       (self as any).postMessage({ type: "progress", phase: "align", id });
-      lines = snapToOnsets(lines, detectOnsets(audio));
+      const onsets = detectOnsets(audio);
+      const m = measureAlignment(lines, onsets);
+      diag = { ...diag, ...m, onsets: onsets.length, decodeMs: Date.now() - t0 };
+      lines = snapToOnsets(lines, onsets);
     }
+    (self as any).postMessage({ type: "diag", id, diag });
     (self as any).postMessage({ type: "done", id, lines, lang: language || "und" });
   } catch (err: any) {
     (self as any).postMessage({ type: "error", id, message: String(err?.message || err) });

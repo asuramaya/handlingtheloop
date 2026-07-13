@@ -37,6 +37,37 @@ export interface LyricsTranscript {
   createdAt: number; // epoch ms
 }
 
+// ---- alignment diagnostics -------------------------------------------------------------
+// The instrument for "why don't the lyrics line up?". We have something most transcription
+// pipelines don't: a CLEAN isolated vocal stem, so the REAL vocal onsets are recoverable with
+// confidence. Comparing Whisper's word times against those onsets tells us WHICH kind of wrong
+// we are, and the three kinds have completely different fixes:
+//
+//   medianLag ≈ 0, small spread  → alignment is fine; the bug is elsewhere (render/time-base).
+//   medianLag = a constant       → a PIPELINE OFFSET (ours). Exactly fixable: shift by it.
+//   driftMsPerMin large          → a RATE / CHUNK-OFFSET bug (ours). Exactly fixable.
+//   medianLag ≈ 0, HUGE spread   → the MODEL is guessing per word. No offset can fix it;
+//                                  needs real forced alignment or a better model.
+//
+// Measured over a WIDE (±2 s) search window ON PURPOSE: the shipped snap only looks ±160 ms, so
+// it would clip — and hide — exactly the error we're hunting.
+export interface LyricsDiag {
+  mode: "word" | "segment"; // did word-level timestamps engage, or did we fall back?
+  wordError?: string; // why word mode was abandoned (the fallback used to be silent)
+  model: string; // repo actually loaded
+  dtype: string; // what the GPU actually ran (q4, or the fp32 fallback)
+  tjs?: string; // transformers.js version that produced this (word timestamps have had real bugs)
+  lines: number;
+  words: number;
+  onsets: number; // vocal transients detected in the stem
+  matched: number; // words with ANY onset inside the wide search window
+  medianLag: number; // seconds, signed: onset − whisperWordTime. THE headline number.
+  madLag: number; // median absolute deviation — systematic (small) vs random (large)
+  driftMsPerMin: number; // slope of lag over time — a rate/chunk bug shows up here
+  within160: number; // fraction of words the SHIPPED ±160 ms snap could even reach (0..1)
+  decodeMs: number;
+}
+
 // Lines render through the existing caption ribbon unchanged.
 export function toCues(t: { lines: LyricsLine[] }): CaptionCue[] {
   return t.lines.map((l) => ({ start: l.start, end: l.end, text: l.text }));

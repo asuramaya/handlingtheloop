@@ -6,3 +6,5 @@ export * from "./client";
 // The pool's reuse-vs-recompute + don't-publish-garbage rules, pure and tested. Exported so any
 // future surface uses THE gate rather than reimplementing a second, subtly different one.
 export { planLyrics, looksDegenerate, type LyricsPlan } from "./convergence";
+// The alignment measurement + how to read it — see formatLyricsDiag for what each number MEANS.
+export { formatLyricsDiag, lyricsVerdict } from "./diag";

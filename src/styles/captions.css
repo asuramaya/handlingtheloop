@@ -21,6 +21,39 @@
   background: color-mix(in srgb, var(--accent) 45%, transparent);
   pointer-events: none;
 }
+/* ★ The lyric STATE, on the ribbon itself. The bar used to render nothing at all until cues
+   existed, so the whole time Whisper was downloading a model / waiting for a vocal stem /
+   decoding / failing, there was no evidence on screen that anything was happening. This is the
+   tell. `.caption-idle` = the bar exists ONLY to say what it's doing; `.over` = lyrics are already
+   showing and a re-decode is running on top of them. */
+.caption-idle {
+  display: flex;
+  align-items: center;
+}
+.caption-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.caption-state.over {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  background: color-mix(in srgb, var(--surface) 88%, #000);
+  border-radius: 0 3px 3px 0;
+  padding: 2px 8px 2px 6px;
+}
+
 /* Provenance tag, pinned to the ribbon's right edge. Whisper/pool vs YouTube. */
 .caption-tools {
   position: absolute;

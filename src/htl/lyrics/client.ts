@@ -1,7 +1,7 @@
 import { fetchCaptions } from "@htl/media";
 import { getLyricsLocal, putLyricsLocal, deleteLyricsLocal } from "@htl/persistence";
 import type { Deck } from "@htl/audio";
-import type { LyricsLine, LyricsSource, LyricsTranscript } from "./types";
+import type { LyricsDiag, LyricsLine, LyricsSource, LyricsTranscript } from "./types";
 import type { LyricsModel } from "./models";
 import { whisperModel } from "./models";
 import { planLyrics, looksDegenerate } from "./convergence";
@@ -64,8 +64,17 @@ type Job = {
   reject: (e: Error) => void;
   onProgress?: (phase: string, pct: number) => void;
   onGpuDone?: () => void; // the GPU phase is over; the CPU align pass is still running
+  onDiag?: (d: LyricsDiag) => void; // the alignment measurement (see LyricsDiag)
 };
 const jobs = new Map<number, Job>();
+
+// The last alignment measurement per track — the answer to "are the lyrics even firing, and if
+// they are, WHY don't they line up?". Surfaced in Settings ▸ Debug ▸ Lyrics. Kept out of the
+// transcript itself: it describes THIS decode, not the lyrics.
+const diags = new Map<string, LyricsDiag>();
+export function getLyricsDiag(videoId: string): LyricsDiag | null {
+  return diags.get(videoId) ?? null;
+}
 
 function ensureWorker(): Worker {
   if (!worker) {
@@ -77,6 +86,8 @@ function ensureWorker(): Worker {
         else jobs.forEach((j) => j.onProgress?.(m.phase, m.pct)); // model-load progress has no id
       } else if (m?.type === "gpu-done") {
         jobs.get(m.id)?.onGpuDone?.(); // decode finished — hand the GPU back before we align
+      } else if (m?.type === "diag") {
+        jobs.get(m.id)?.onDiag?.(m.diag as LyricsDiag);
       } else if (m?.type === "done") {
         const j = jobs.get(m.id);
         jobs.delete(m.id);
@@ -97,11 +108,12 @@ function transcribe(
   repo: string,
   onProgress?: (p: string, pct: number) => void,
   onGpuDone?: () => void,
+  onDiag?: (d: LyricsDiag) => void,
 ): Promise<LyricsLine[]> {
   const w = ensureWorker();
   const id = ++seq;
   return new Promise((resolve, reject) => {
-    jobs.set(id, { resolve, reject, onProgress, onGpuDone });
+    jobs.set(id, { resolve, reject, onProgress, onGpuDone, onDiag });
     const buf = pcm.slice(); // COPY — the deck keeps its live stem buffer; we transfer the copy
     w.postMessage({ type: "transcribe", id, pcm: buf, sampleRate, repo }, [buf.buffer]);
   });
@@ -207,15 +219,20 @@ function transcribeOnce(
       });
       let decode!: Promise<LyricsLine[]>;
       await gpuRun(() => {
-        decode = transcribe(vocals, sampleRate, m.repo, (phase, pct) =>
-          onStatus?.(
-            phase === "model"
-              ? `whisper ${code} ↓${pct}%`
-              : phase === "align"
-                ? `whisper ${code} align…`
-                : `whisper ${code} ${pct}%`,
-          ),
+        decode = transcribe(
+          vocals,
+          sampleRate,
+          m.repo,
+          (phase, pct) =>
+            onStatus?.(
+              phase === "model"
+                ? `whisper ${code} ↓${pct}%`
+                : phase === "align"
+                  ? `whisper ${code} align…`
+                  : `whisper ${code} ${pct}%`,
+            ),
           releaseGpu,
+          (d) => diags.set(videoId, d), // keep the measurement even if the caller goes stale
         );
         decode.then(releaseGpu, releaseGpu); // belt-and-braces: never strand the queue
         return gpuPhase;

@@ -98,7 +98,7 @@ import {
   type AutoMixStatus,
   type AutoMixMirror,
 } from "@htl";
-import { resolveLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
@@ -3142,6 +3142,31 @@ function AppBody() {
           ["error", room.error || "none"],
         ],
       },
+      // ★ LYRICS — "are they firing, and if they are, why don't they line up?". The decode measures
+      // its own word times against the REAL vocal onsets in the isolated stem, and the verdict names
+      // which of the four failures it is (segment fallback / constant offset / drift / model scatter)
+      // and whose fault it is. Per deck, because the two can be on different tracks and engines.
+      ...(["A", "B"] as DeckId[]).map((id): DebugSection => {
+        const vid = loaded[id];
+        const dg = vid ? getLyricsDiag(vid) : null;
+        const cues = captions[id] ?? [];
+        const hasWords = cues.some((l) => l.words?.length);
+        return {
+          title: `Lyrics ${id}`,
+          rows: dg
+            ? formatLyricsDiag(dg)
+            : [
+                // No decode on this device — say what IS showing and where it came from, so
+                // "nothing is happening" and "it came from the pool" are never confused.
+                ["state", lyricStatus[id] ? `⟳ ${lyricStatus[id]}` : cues.length ? "idle (lyrics loaded)" : "idle (no lyrics)"],
+                ["engine", lyricsModelRef.current === "youtube" ? "YouTube captions" : `whisper ${lyricsModelRef.current}`],
+                ["source", captionSource[id] ?? "—"],
+                ["lines / word-timed", `${cues.length} / ${hasWords ? "yes" : "no"}`],
+                ["stems", settings.stemModel === "off" ? "OFF — whisper cannot run without a vocal stem" : settings.stemModel],
+                ["measured", "no decode on this device (cached, pooled, or never ran)"],
+              ],
+        };
+      }),
       {
         title: "Device",
         rows: [

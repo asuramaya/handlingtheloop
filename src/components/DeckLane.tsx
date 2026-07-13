@@ -353,7 +353,19 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           }
         }}
       />
-      <CaptionBar deck={deck} accent={accent} cues={captions} source={captionSource} windowSec={windowSec} onSeek={onSeek} onReprocess={onReprocessLyrics} />
+      {/* The lyric state goes to the CAPTION bar, where a user looking for lyrics is actually
+          looking — not only to the deck header, where it competes with (and loses to) the stem
+          separation tell. With no cues yet, this is the ONLY thing on screen saying it's working. */}
+      <CaptionBar
+        deck={deck}
+        accent={accent}
+        cues={captions}
+        source={captionSource}
+        status={lyricStatus}
+        windowSec={windowSec}
+        onSeek={onSeek}
+        onReprocess={onReprocessLyrics}
+      />
     </section>
   );
 }

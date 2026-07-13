@@ -87,10 +87,24 @@ describe("lyricsVerdict — the measurement must name its own fix", () => {
 describe("formatLyricsDiag", () => {
   it("leads with the verdict and the fix, then the evidence", () => {
     const rows = formatLyricsDiag(d({ medianLag: -0.35, madLag: 0.05 }));
-    expect(rows[0][0]).toBe("verdict");
+    expect(rows[0][0]).toBe("verdict (raw model)");
     expect(rows[0][1]).toMatch(/^OFFSET/);
     expect(rows[1][0]).toBe("fix");
     expect(rows.find((r) => r[0] === "fault")?.[1]).toMatch(/OURS/);
     expect(rows.find((r) => r[0] === "transformers.js")?.[1]).toBe("3.8.1");
+  });
+
+  it("★ reports what the ALIGNER did — and says plainly when it declined to act", () => {
+    const acted = formatLyricsDiag(
+      d({ medianLag: -0.35, align: { bias: 0.35, drift: 0.0002, snapped: 280, free: 20, medianMove: 0.34, applied: true } }),
+    ).find((r) => r[0] === "ALIGNER")?.[1];
+    expect(acted).toMatch(/removed 350 ms offset/);
+    expect(acted).toMatch(/280\/300 words placed on a real vocal onset/);
+
+    // An aligner that quietly does nothing is the bug we are replacing. If it declines, it SAYS so.
+    const declined = formatLyricsDiag(
+      d({ align: { bias: 0, drift: 0, snapped: 0, free: 300, medianMove: 0, applied: false } }),
+    ).find((r) => r[0] === "ALIGNER")?.[1];
+    expect(declined).toMatch(/DECLINED/);
   });
 });

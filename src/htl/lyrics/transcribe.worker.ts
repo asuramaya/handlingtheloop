@@ -12,6 +12,10 @@
 const TJS = "https://esm.sh/@huggingface/transformers@3";
 
 import { FFT, hannPeriodic } from "../stems/fft";
+// ONE nearestOnset, imported — not a second copy living in this file. Two implementations of the
+// same measurement is how they quietly drift apart, and this particular one has already been wrong
+// once (it aliases; see align.ts).
+import { alignWords, estimateBias, nearestOnset, type AlignReport } from "./align";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface AsrChunk {
@@ -112,7 +116,7 @@ interface OutLine {
   start: number;
   end: number;
   text: string;
-  words?: { t: number; w: string }[];
+  words?: { t: number; w: string; d?: number }[]; // d = how long the word is HELD (sustained vowel)
 }
 
 // Strip Whisper's NON-SPEECH annotations — the tags it emits over silence / instrumentals:
@@ -206,79 +210,80 @@ function measureAlignment(lines: OutLine[], onsets: number[]): {
   driftMsPerMin: number;
   within160: number;
 } {
-  const ts: number[] = [];
-  const lags: number[] = [];
-  let words = 0;
-  for (const ln of lines) {
-    for (const wd of ln.words ?? []) {
-      words++;
-      if (!onsets.length) continue;
-      const near = nearestOnset(onsets, wd.t);
-      const lag = near - wd.t; // + = the real vocal starts AFTER Whisper said it did
-      if (Math.abs(lag) <= DIAG_SEARCH_S) {
-        ts.push(wd.t);
-        lags.push(lag);
-      }
-    }
-  }
-  if (!lags.length) {
+  const times: number[] = [];
+  for (const ln of lines) for (const wd of ln.words ?? []) times.push(wd.t);
+  const words = times.length;
+  if (!words || !onsets.length) {
     return { words, matched: 0, medianLag: 0, madLag: 0, driftMsPerMin: 0, within160: 0 };
   }
-  const med = median(lags);
-  const mad = median(lags.map((l) => Math.abs(l - med)));
-  // Least-squares slope of lag vs track time → a chunk/rate bug drifts, a pipeline offset doesn't.
-  const n = lags.length;
-  const mt = ts.reduce((a, b) => a + b, 0) / n;
-  const ml = lags.reduce((a, b) => a + b, 0) / n;
-  let num = 0;
-  let den = 0;
-  for (let i = 0; i < n; i++) {
-    num += (ts[i] - mt) * (lags[i] - ml);
-    den += (ts[i] - mt) ** 2;
+
+  // ★ THE SYSTEMATIC ERROR COMES FROM THE SAME ESTIMATOR THE ALIGNER USES — deliberately, because
+  // the obvious alternative is WRONG and was shipped: averaging the distance to the nearest onset
+  // ALIASES. With onsets 500 ms apart, words 400 ms early are each NEARER the previous onset than
+  // their own, so that method reports −100 ms and pronounces a badly misaligned track healthy. Two
+  // implementations of one measurement is also how they drift apart; there is one.
+  const { bias, drift } = estimateBias(times, onsets);
+
+  // The RESIDUAL scatter — what's left once the systematic part is accounted for. This is the number
+  // that separates "we have a pipeline bug" (small residual, big bias/drift) from "the model is
+  // guessing" (small bias/drift, big residual).
+  const t0 = times[0];
+  const resid: number[] = [];
+  for (const t of times) {
+    const x = t + bias + drift * (t - t0);
+    const d = nearestOnset(onsets, x) - x;
+    if (Math.abs(d) <= DIAG_SEARCH_S) resid.push(d);
   }
-  const slope = den > 1e-9 ? num / den : 0; // seconds of lag per second of track
+  const med = resid.length ? median(resid) : 0;
+  const mad = resid.length ? median(resid.map((l) => Math.abs(l - med))) : 0;
+
   return {
     words,
-    matched: n,
-    medianLag: med,
-    madLag: mad,
-    driftMsPerMin: slope * 60 * 1000,
-    within160: lags.filter((l) => Math.abs(l) <= 0.16).length / n,
+    matched: resid.length,
+    medianLag: bias, // the systematic offset, measured without the aliasing blind spot
+    madLag: mad, // residual spread: how much the model is guessing, per word
+    driftMsPerMin: drift * 60 * 1000,
+    // What fraction of words the OLD ±160 ms snap could even have reached. When this is low, that
+    // "alignment pass" was doing nothing at all — which is exactly what we suspect it was doing.
+    within160: resid.length ? resid.filter((l) => Math.abs(l - med) <= 0.16).length / resid.length : 0,
   };
 }
 
-function nearestOnset(onsets: number[], t: number): number {
-  let lo = 0;
-  let hi = onsets.length - 1;
-  if (t <= onsets[0]) return onsets[0];
-  if (t >= onsets[hi]) return onsets[hi];
-  while (lo < hi) {
-    const m = (lo + hi) >> 1;
-    if (onsets[m] < t) lo = m + 1;
-    else hi = m;
-  }
-  const a = onsets[lo - 1];
-  const b = onsets[lo];
-  return t - a <= b - t ? a : b;
-}
-
-// Snap each word's onset to the nearest vocal onset within ±WIN; keep its held duration and
-// stay strictly increasing (don't reorder words onto the same/earlier onset).
-function snapToOnsets(lines: OutLine[], onsets: number[]): OutLine[] {
-  if (onsets.length < 2) return lines;
-  const WIN = 0.16;
+// ★ FORCED ALIGNMENT, replacing the old ±160 ms nearest-onset snap.
+//
+// The snap was a patch with a window SMALLER than the error it was patching: Whisper's word times on
+// SUNG vocals are routinely 300 ms+ out, so most words had no onset inside ±160 ms and the pass
+// silently did nothing — an "alignment step" that had, in all likelihood, never moved a word.
+//
+// Worse, it snapped each word INDEPENDENTLY, which cannot fix a systematic error at all (every word
+// is dragged to whatever happens to be nearest, including the wrong onset) and shreds the internal
+// rhythm of a fast line (a run of syllables between two onsets collapses onto one tick).
+//
+// The aligner in ./align.ts takes the whole word sequence at once: it removes the systematic part
+// (constant offset and drift) by scanning for the correction that puts the most words on real
+// onsets, then assigns each word an onset with a monotonic DP that cannot reorder words, cannot put
+// two words on the same vocal transient, and can DECLINE an onset where a held vowel genuinely has
+// none. It also refuses to act at all when it cannot justify the correction — an aligner that can
+// make things worse is worse than no aligner.
+function alignToOnsets(lines: OutLine[], onsets: number[]): { lines: OutLine[]; report: AlignReport } {
+  const flat: { ln: OutLine; wi: number }[] = [];
+  const times: number[] = [];
   for (const ln of lines) {
     if (!ln.words?.length) continue;
-    let prevT = -Infinity;
-    for (const wd of ln.words) {
-      const near = nearestOnset(onsets, wd.t);
-      if (Math.abs(near - wd.t) <= WIN && near > prevT) wd.t = near;
-      prevT = wd.t;
+    for (let i = 0; i < ln.words.length; i++) {
+      flat.push({ ln, wi: i });
+      times.push(ln.words[i].t);
     }
-    ln.start = ln.words[0].t;
-    ln.end = Math.max(ln.end, ln.words[ln.words.length - 1].t);
   }
-  return lines;
+  const { times: aligned, report } = alignWords(times, onsets);
+  for (let i = 0; i < flat.length; i++) flat[i].ln.words![flat[i].wi].t = aligned[i];
+  for (const ln of lines) {
+    if (!ln.words?.length) continue;
+    ln.start = ln.words[0].t;
+    const last = ln.words[ln.words.length - 1];
+    ln.end = Math.max(ln.end, last.t + (last.d ?? 0.2));
+  }
+  return { lines, report };
 }
 
 // Group Whisper WORD chunks into lines. SILENCE is handled here: a gap between words longer
@@ -442,9 +447,18 @@ self.onmessage = async (e: MessageEvent) => {
     if (wordMode && lines.some((l) => l.words?.length)) {
       (self as any).postMessage({ type: "progress", phase: "align", id });
       const onsets = detectOnsets(audio);
+      // MEASURE the raw model error first (this is the diagnosis), THEN align. Measuring after would
+      // only tell us what the aligner did to itself.
       const m = measureAlignment(lines, onsets);
-      diag = { ...diag, ...m, onsets: onsets.length, decodeMs: Date.now() - t0 };
-      lines = snapToOnsets(lines, onsets);
+      const aligned = alignToOnsets(lines, onsets);
+      lines = aligned.lines;
+      diag = {
+        ...diag,
+        ...m,
+        onsets: onsets.length,
+        align: aligned.report, // what the aligner DID — never a score it grades itself on
+        decodeMs: Date.now() - t0,
+      };
     }
     (self as any).postMessage({ type: "diag", id, diag });
     (self as any).postMessage({ type: "done", id, lines, lang: language || "und" });

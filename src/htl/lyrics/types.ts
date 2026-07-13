@@ -64,8 +64,19 @@ export interface LyricsDiag {
   medianLag: number; // seconds, signed: onset − whisperWordTime. THE headline number.
   madLag: number; // median absolute deviation — systematic (small) vs random (large)
   driftMsPerMin: number; // slope of lag over time — a rate/chunk bug shows up here
-  within160: number; // fraction of words the SHIPPED ±160 ms snap could even reach (0..1)
+  within160: number; // fraction of words the OLD ±160 ms snap could even reach (0..1)
   decodeMs: number;
+  // What the forced aligner DID about it (see align.ts). Reported, never used to grade itself:
+  // it snaps words to onsets, so "distance to the nearest onset" afterwards is ~0 by construction
+  // and would be an instrument pointed at the part we're proud of. The ear is the acceptance test.
+  align?: {
+    bias: number; // constant lag removed, seconds
+    drift: number; // linear drift removed, seconds per second
+    snapped: number; // words placed on a real vocal onset
+    free: number; // words left on the model's corrected time (held vowels, legato)
+    medianMove: number; // median distance a word actually moved, seconds
+    applied: boolean; // false = it declined to act (too little to go on, or it couldn't justify it)
+  };
 }
 
 // Lines render through the existing caption ribbon unchanged.

@@ -8,3 +8,5 @@ export * from "./client";
 export { planLyrics, looksDegenerate, type LyricsPlan } from "./convergence";
 // The alignment measurement + how to read it — see formatLyricsDiag for what each number MEANS.
 export { formatLyricsDiag, lyricsVerdict } from "./diag";
+// The forced aligner — Whisper gives the words, the vocal stem gives the times.
+export { alignWords, estimateBias, globalLag, nearestOnset, type AlignReport, type AlignOpts } from "./align";

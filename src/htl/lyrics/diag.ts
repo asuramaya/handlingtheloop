@@ -96,17 +96,28 @@ export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
 export function formatLyricsDiag(d: LyricsDiag): [string, string][] {
   const v = lyricsVerdict(d);
   const ms = (s: number) => `${(s * 1000).toFixed(0)} ms`;
+  const a = d.align;
   return [
-    ["verdict", `${v.kind.toUpperCase()} — ${v.headline}`],
+    ["verdict (raw model)", `${v.kind.toUpperCase()} — ${v.headline}`],
     ["fix", v.fix],
     ["fault", v.ours ? "OURS (pipeline)" : v.kind === "aligned" ? "none" : "model / library"],
     ["mode", d.mode === "word" ? "word timestamps ✓" : `SEGMENT fallback${d.wordError ? ` (${d.wordError})` : ""}`],
-    ["median lag", ms(d.medianLag)],
-    ["spread (MAD)", `±${ms(d.madLag)}`],
-    ["drift", `${d.driftMsPerMin.toFixed(0)} ms/min`],
+    // ── what the raw model gave us ──
+    ["model offset", ms(d.medianLag)],
+    ["model drift", `${d.driftMsPerMin.toFixed(0)} ms/min`],
+    ["model scatter (MAD)", `±${ms(d.madLag)}`],
     ["words / matched", `${d.words} / ${d.matched}`],
     ["vocal onsets", String(d.onsets)],
-    ["snap can reach", `${Math.round(d.within160 * 100)}% of words (±160 ms window)`],
+    ["old ±160ms snap", `could reach ${Math.round(d.within160 * 100)}% of words`],
+    // ── what WE did about it ──
+    [
+      "ALIGNER",
+      a
+        ? a.applied
+          ? `removed ${ms(a.bias)} offset + ${(a.drift * 60 * 1000).toFixed(0)} ms/min drift · ${a.snapped}/${a.snapped + a.free} words placed on a real vocal onset · moved a word by ${ms(a.medianMove)} typically`
+          : "DECLINED — could not justify a correction, times left untouched"
+        : "did not run (segment mode / no words)",
+    ],
     ["model", d.model],
     ["ran as", d.dtype],
     ["transformers.js", d.tjs ?? "?"],

@@ -19,7 +19,14 @@ export function canTranscribe(): boolean {
 
 // Transcript-FORMAT version. Bump when the decode/shape changes so stale transcripts are
 // re-decoded instead of served forever. 1 = segment-only; 2 = word-timed + non-speech
-// stripped; 3 = words carry held-duration (d); 4 = onsets snapped to vocal transients.
+// stripped; 3 = words carry held-duration (d); 4 = onsets snapped to vocal transients (a ±160 ms
+// nearest-onset snap that, on sung vocals, mostly reached nothing); 5 = FORCED ALIGNMENT — the word
+// sequence is fitted to the real vocal onsets as a whole (systematic offset + drift removed, then a
+// monotonic assignment), so the TIMES no longer come from Whisper at all.
+//
+// ★ This bump is the convergence contract's first real job: every v4 transcript — local and pooled —
+// is now behind, so the next capable device re-decodes it with the aligner and upgrades the row for
+// everyone. That is the machinery working exactly as designed.
 //
 // ★ THIS NUMBER TRAVELS. It is stamped into the IndexedDB record AND into the shared D1 pool
 // row (migration 0026), and the rule is the same in both places — the one the analysis dataset
@@ -28,7 +35,7 @@ export function canTranscribe(): boolean {
 // ever move a row forward. Before 0026 the pool had no version at all, so a stale transcript was
 // served to every client, stamped current on the way into the local cache, and never re-decoded
 // — bumping this constant did nothing for any track that was already pooled.
-const LYRICS_VER = 4;
+const LYRICS_VER = 5;
 
 // ---- community pool (D1) — graceful: any failure is a miss, we fall through ----------
 async function poolGet(videoId: string): Promise<LyricsTranscript | null> {

@@ -4,16 +4,29 @@ import { useEffect, useRef } from "react";
 //
 // It used to be read-only, which made the panel absurd: a rack of number cells sitting under a
 // canvas that already drew every one of those same params. Now the canvas IS the control surface,
-// the way the EQ's curve is:
+// the way the EQ's curve is. There is no cell row left at all.
 //
-//   • GRAB A TAP        → drag sideways = TIME (the tap you're holding follows your cursor, so
+//   • A TAP, ABOVE THE AXIS → sideways = TIME (the tap you're holding follows your cursor, so
 //                         grabbing the 3rd echo and pulling right sets time to a third of where
-//                         you drop it). With SYNC lit it snaps to the note grid.
-//                       → drag up/down = FEEDBACK, on a MONOTONIC fader: the bottom of the tap's
-//                         swing is 0%, the top is 100%, and every tap turns the same way. Solved
-//                         so THAT tap lands at that height (fb = amp^(1/n)), which is why a far
-//                         tap gives fine control of the tail — the further out, the more the
-//                         gesture is about the tail and the less about the first hit.
+//                         you drop it; SYNC snaps it to the note grid). Up/down = FEEDBACK, on a
+//                         MONOTONIC fader — bottom of the swing 0%, top 100% — solved so THAT tap
+//                         lands at that height (fb = amp^(1/n)), which is why a far tap gives fine
+//                         control of the tail.
+//   • A TAP, BELOW THE AXIS → the same tap's OTHER CHANNEL. The up/down mirror has always been the
+//                         stereo axis (it's why ping-pong alternates across it), so the bar below
+//                         the line is the RIGHT channel — and WIDTH *is* an L/R time spread. Drag
+//                         it sideways and you are literally pulling the right channel off the left
+//                         in time. That's not a metaphor for width; it's what width does.
+//   • THE ROOF          → DRIVE. Saturation is a ceiling the signal runs into, so it's drawn as
+//                         one: a line over the taps that you pull DOWN onto them. The tips that
+//                         poke through go hot. At zero it rests exactly on a full-scale tap —
+//                         nothing clips — and every pixel you pull it down is another echo driven
+//                         into the curve. There's a grip at the right edge, but the whole line is
+//                         live wherever a tap isn't.
+//   • THE ENVELOPE'S HEAD → DUCK. The scoop the sidechain digs out of the front of the tail was
+//                         ALREADY drawn here; it just wasn't grabbable. Pull the head of the decay
+//                         curve down and the echoes duck harder under the dry. ★ This one is a
+//                         RELATIVE drag, and the reason is the rule below.
 //   • THE FILTER RIBBON → the echoes' tone window on a log-freq scale. Drag an EDGE to move one
 //                         cut; drag the BODY to sweep the whole band. That body-drag is what the
 //                         old LINK chip did, so LINK is deleted, not redesigned — it only ever
@@ -26,25 +39,28 @@ import { useEffect, useRef } from "react";
 //                         slower, left faster, log-scaled so every octave feels the same width).
 //                         ★ At depth 0 the wave is flat — and a flat wave is exactly the centre
 //                         line, which is already drawn. So the resting wobble isn't a ghost with
-//                         nothing to grab: it IS that line. Pull it off centre and the wobble is
-//                         born. That's what keeps this a control instead of a decoration you can
-//                         happen to poke.
-//   • THE RAIL          → WIDTH · DRIVE · DUCK, at the foot. These three were the last cells left
-//                         in a DOM row under the canvas — boxes with a dot, in a rack where every
-//                         other control is a thing you grab on the surface. Unlike the rest they
-//                         have NO geometry of their own: no time, no frequency, no shape to seize.
-//                         So they get the honest form for a bare 0‥1 quantity — a fader each, in
-//                         the canvas, mirroring the tone ribbon at the top. The viz is symmetric
-//                         now: TONE above, THE ECHOES between, CHARACTER below.
+//                         nothing to grab: it IS that line.
 //
-// ★ AND ONE READOUT, in one place, always. The numbers used to be scattered by whatever drew them:
-// the cuts labelled themselves at the ribbon's edges, TIME·FB sat bottom-left, and the wobble
-// printed itself top-right — but only while hovered. So the numbers MOVED depending on what you
-// were touching, which is the one thing a readout must never do. Now there's a single line at the
-// foot of the timeline: what the delay IS on the left, what you're touching on the right.
+// ★★ THE RULE THAT DECIDES ABSOLUTE vs RELATIVE, and it decides every gesture here:
+// A HANDLE MAY ONLY BE DRAGGED ABSOLUTELY IF ITS POSITION ACTUALLY STANDS FOR THE VALUE.
+//   · a tap's height IS fb^n           → absolute (grab it by the tip and nothing moves)
+//   · the shear IS the width           → absolute
+//   · the roof's height IS the drive   → absolute
+//   · the FIRST tap is pinned at unity by the topology (fb⁰ = 1 whatever fb is), so its height
+//     stands for NOTHING                → relative, or clicking the fattest bar on screen would
+//                                         slam feedback to the rail
+//   · the envelope's height is fb AND duck together — it stands for neither alone → relative
+//
+// ★ AND ONE READOUT, ON TOP, ALWAYS. The numbers used to be scattered by whatever drew them: the
+// cuts labelled themselves at the ribbon's edges, TIME·FB sat bottom-left, the wobble printed
+// itself top-right but only while hovered. They MOVED depending on what you touched, which is the
+// one thing a readout must never do. Now: one strip across the top. What the delay IS on the left,
+// what you're TOUCHING in the middle, its tone on the right.
 //
 // Right-click resets whatever is under the cursor — a gesture you can't undo isn't a control, it's
 // a trap.
+
+type CharId = "width" | "drive" | "duck";
 
 interface DelayVizProps {
   time: number; // seconds between taps
@@ -58,12 +74,9 @@ interface DelayVizProps {
   lp: number; // feedback band-pass high-cut (Hz)
   modDepth: number; // LFO → delay-time depth (0..0.012 s)
   modRate: number; // LFO rate (Hz)
-  drive: number; // analog saturation (0..1)
-  duck: number; // sidechain ducking (0..1)
-  width: number; // stereo L/R time spread (0..1)
-  // TIME left the cell row, so the viz has to SAY it — and it has to say it from the value it just
-  // painted, not from a string React hands back a render later (mid-drag that lags a division
-  // behind the tap you're holding). So: the grid, and the viz names the note itself.
+  drive: number; // analog saturation (0..1) — the roof
+  duck: number; // sidechain ducking (0..1) — the envelope's head
+  width: number; // stereo L/R time spread (0..1) — the shear
   snapBeats?: number[]; // the note divisions TIME snaps to (absent when free-running)
   snapLabels?: string[]; // …and their names, index-matched
   modSnapBeats?: number[]; // the wobble's ladder — beats per LFO cycle
@@ -74,28 +87,13 @@ interface DelayVizProps {
   // your finger; the next React render then overwrites the mirror with the committed value and the
   // tap jumps back to the grid. The surface alternates between the lie and the truth on every
   // render — and while the deck is PLAYING the transport forces extra renders, so it alternates
-  // faster. That is the chop. (The filter never chopped because it's continuous: request == commit,
-  // so there was nothing to alternate between.)
+  // faster. That is the chop.
   onTime: (seconds: number) => number; // → the seconds it LOCKED to (snapped to the note grid)
   onFeedback: (v: number) => number;
   onFilters: (hp: number, lp: number) => [number, number];
   onMod: (depth: number, rate: number) => [number, number]; // the wobble — one gesture, two axes
-  onChar: (id: CharId, v: number) => number; // the rail — width / drive / duck
+  onChar: (id: CharId, v: number) => number; // width (the shear) · drive (the roof) · duck (the head)
 }
-
-// The character rail's members, in the order they're drawn. Each is a plain 0‥1 quantity that
-// defaults to 0, which is exactly why they get faders and not geometry.
-type CharId = "width" | "drive" | "duck";
-const CHAR: { id: CharId; label: string }[] = [
-  { id: "width", label: "WIDTH" },
-  { id: "drive", label: "DRIVE" },
-  { id: "duck", label: "DUCK" },
-];
-const RAIL_GAP = 3;
-const railCell = (i: number, w: number) => {
-  const cw = (w - RAIL_GAP * (CHAR.length - 1)) / CHAR.length;
-  return { x0: i * (cw + RAIL_GAP), cw };
-};
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -112,29 +110,42 @@ const RATE_MAX = 8;
 // range lived in ~21px of travel: the wobble slammed to 100% the moment you touched it.
 const LFO_AMP_FRAC = 0.38;
 const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
-const READOUT_H = 12; // the one readout line, between the timeline's floor and the rail
+const READOUT_H = 13; // the one readout strip, across the top
 const GRIP_PX = 10; // how close counts as "on" a filter edge
 const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
+const SHEAR_MAX = 26; // the R channel's biggest shear, in px — capped again by the tap spacing, or
+// a wide delay would fling the right channel on top of the NEXT echo and the row would read as mush.
+const DUCK_BEATS = 2; // how far into the tail the duck's scoop reaches — and so how far it's grabbable
+const CEIL_GRIP = 7; // vertical reach of the roof line
+const CEIL_TAB = 26; // ...and the width of its always-wins grip, at the right edge
+const HOT = "#ffb066"; // what a tap looks like once it's poking through the roof
 const fmtF = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`);
 
 // log-frequency ↔ x, 20 Hz‥20 kHz across the width
 const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Math.log(1000)) * w;
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
+// THE ROOF. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is driven. At
+// drive 1 it has come down to 28% of the swing, and everything above that is in the curve.
+const CEIL_LO = 0.72; // how far down the roof travels, as a fraction of maxBar
+const ceilOf = (drive: number, midY: number, maxBar: number) => midY - maxBar * (1 - CEIL_LO * clamp01(drive));
+const driveOf = (y: number, midY: number, maxBar: number) => clamp01((1 - (midY - y) / Math.max(1, maxBar)) / CEIL_LO);
+
 type Grab =
-  | { kind: "tap"; n: number; ghostX: number; startY: number; startFb: number }
+  | { kind: "tap"; n: number; lower: boolean; ghostX: number; startY: number; startFb: number }
   | { kind: "hp" }
   | { kind: "lp" }
   | { kind: "band"; lastX: number }
   | { kind: "lfo"; startX: number; startRate: number }
-  | { kind: "rail"; i: number };
+  | { kind: "drive" }
+  | { kind: "duck"; startY: number; startDuck: number };
 
 export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
-  const hover = useRef<string>(""); // which handle the cursor is over → cursor shape + highlight
+  const hover = useRef<string>(""); // which handle the cursor is over → cursor shape + highlight + readout
   const kickRef = useRef<() => void>(() => {}); // request one repaint (the loop idles when nothing moves)
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
@@ -143,18 +154,19 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
   p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
-  // grab won't be the thing you see.
-  // The ribbon needs to be a THUMB target on a phone, not a hairline: a 20px strip is a miss
-  // waiting to happen. It costs a little of the timeline's height, which the timeline can spare.
+  // grab won't be the thing you see. Top to bottom: the READOUT strip, the tone RIBBON, then the
+  // timeline, which now runs all the way to the floor (the character rail is gone — its three
+  // params became gestures on the echoes themselves).
   const geom = (h: number, w = 999) => {
     const narrow = w < NARROW_PX;
+    // The ribbon needs to be a THUMB target on a phone, not a hairline — it costs a little of the
+    // timeline's height, which the timeline can spare.
     const ribbonH = narrow ? Math.max(26, Math.round(h * 0.22)) : Math.max(20, Math.round(h * 0.2));
-    const railH = narrow ? Math.max(26, Math.round(h * 0.2)) : Math.max(20, Math.round(h * 0.18));
-    const top = ribbonH + 3; // the timeline's ceiling
-    const railY = h - railH; // the rail's ceiling
-    const botY = railY - READOUT_H; // the timeline's floor — the readout line lives between them
+    const ribY = READOUT_H;
+    const top = ribY + ribbonH + 3;
+    const botY = h - 2;
     const midY = top + (botY - top) / 2;
-    return { ribbonH, railH, railY, top, botY, midY, maxBar: Math.max(6, (botY - top) * 0.42) };
+    return { ribbonH, ribY, top, botY, midY, maxBar: Math.max(6, (botY - top) * 0.42) };
   };
   // ★ A STABLE TIME AXIS — a ruler, not a rubber band.
   //
@@ -165,19 +177,18 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
   // That is the surface literally fighting you, and no amount of drag smoothing would have fixed
   // it, because the ruler was made of the thing being measured.
   //
-  // Now: two bars when we know the tempo, else the delay's full range. The taps move; the ruler
-  // never does.
-  //
   // ★ AND IT'S NARROWER ON A NARROW DECK. On a phone this canvas is ~172px, and at 1/8 in a
   // two-bar window the taps land ~11px apart — which forces the grip down to ~5px (it can never
   // exceed half the gap, or you grab the wrong echo). A 5px target is not a thumb target: the
   // whole instrument was unusable on touch. The answer isn't a bigger grip, it's FEWER TAPS ON
-  // SCREEN — one bar instead of two doubles every gap, and doubles every grip with it. You lose
-  // nothing but empty tail you couldn't see anyway.
+  // SCREEN — one bar instead of two doubles every gap, and doubles every grip with it.
   const windowOf = (beat: number, w: number) => {
     const bars = w < NARROW_PX ? 4 : 8; // beats of timeline
     return beat > 0 ? beat * bars : MAX_TIME * (w < NARROW_PX ? 0.6 : 1.2);
   };
+  // The shear, in pixels, at width = 1 — capped by the gap to the next echo so a wide delay can
+  // never throw the right channel across its neighbour.
+  const shearOf = (t: number, windowSec: number, w: number) => Math.min(SHEAR_MAX, Math.max(6, (t / windowSec) * w * 0.34));
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -215,6 +226,16 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     let phase = 0;
     let lastNow = 0;
 
+    // The decay envelope, as a continuous function of x — the curve the taps' tips ride, and the
+    // thing the DUCK gesture grabs. Shared by the renderer and the hit-test, or you'd be pulling on
+    // a curve that isn't the one you can see.
+    const envAt = (sec: number, s: typeof p.current, beat: number) => {
+      const t = Math.max(0.001, s.time);
+      const tau = (beat > 0 ? beat : 0.5) * 0.5;
+      const decay = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), Math.max(0, sec / t - 1));
+      return decay * (1 - clamp01(s.duck) * Math.exp(-sec / tau));
+    };
+
     const draw = (now: number) => {
       const { w, h, dpr } = sizeCanvas();
       const ctx = canvas.getContext("2d");
@@ -229,7 +250,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const g = grab.current;
       const windowSec = windowOf(beat, w);
       const xOf = (sec: number) => (sec / windowSec) * w;
-      const { ribbonH, railH, railY, top, botY, midY, maxBar } = geom(h, w);
+      const { ribbonH, ribY, top, botY, midY, maxBar } = geom(h, w);
       const tlH = botY - top; // the timeline's height — the wave scales to THIS, not to the canvas
       // dt is CLAMPED: the loop idles whenever the wobble is still and nothing is being dragged, so
       // the first frame after a long idle would otherwise integrate minutes of phase in one step.
@@ -237,20 +258,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       lastNow = now;
       phase = (phase + 2 * Math.PI * s.modRate * dt) % (2 * Math.PI);
       const accent = s.accent;
+      const held = g ? (g.kind === "tap" ? (g.lower ? "width" : "tap") : g.kind) : "";
+      const hot = held || hover.current.replace(/^tap\d+$/, "tap").replace(/^lower\d+$/, "width");
 
       // === THE FILTER RIBBON — the echoes' tone window, and a control. Edges are grips; the body
-      // sweeps the band. ===
+      // sweeps the band. It sits UNDER the readout strip, so everything it draws is offset. ===
+      ctx.save();
+      ctx.translate(0, ribY);
       const lo = fToX(s.hp, w);
       const hi = fToX(s.lp, w);
       const rH = ribbonH - 4;
-      const bandHot = hover.current === "band" || grab.current?.kind === "band";
+      const bandHot = hot === "band";
       ctx.fillStyle = "rgba(255,255,255,0.03)";
       ctx.fillRect(0, 0, w, rH);
 
-      // A SPECTRUM RULER — decade ticks only, NO text. The strip is ~20px tall and the band already
-      // labels its own two edges in Hz; adding 100/1k/10k captions on top of that just collided
-      // with them. The ticks give the scale, the edges give the numbers, and neither repeats the
-      // other.
+      // A SPECTRUM RULER — decade ticks only, NO text. The strip is ~20px tall and the band's Hz
+      // now live in the readout, so captions here would just be a second place numbers can hide.
       ctx.strokeStyle = "rgba(255,255,255,0.09)";
       ctx.lineWidth = 1;
       for (const f of [100, 1000, 10000]) {
@@ -287,23 +310,19 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         [lo, "hp"],
         [hi, "lp"],
       ] as [number, string][]) {
-        const on = hover.current === id || grab.current?.kind === id;
+        const on = hot === id;
         const gx = round(x);
         ctx.fillStyle = accent;
         ctx.globalAlpha = on ? 1 : 0.85;
         ctx.fillRect(gx - 1, 0, 3, rH);
-        // the notch: three ribs, the universal "grab me"
         ctx.globalAlpha = on ? 0.9 : 0.55;
         ctx.fillStyle = "#000";
         for (let k = -1; k <= 1; k++) ctx.fillRect(gx, rH / 2 + k * 3, 1, 1);
         ctx.globalAlpha = 1;
       }
+      ctx.restore();
 
-      // The cuts' NUMBERS are not here — they're in the one readout at the foot. A label pinned to a
-      // grip moves when the grip moves, so the two of them together made the ribbon a place where
-      // text wandered around. The grips say WHERE; the readout says WHAT.
-
-      // beat grid + centre line (in the timeline only — never through the readout or the rail)
+      // beat grid + centre line (in the timeline only)
       if (beat > 0) {
         ctx.lineWidth = 1;
         for (let sec = beat, k = 1; sec < windowSec; sec += beat, k++) {
@@ -325,16 +344,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // === THE WOBBLE — DEPTH × RATE, and it is ONE OBJECT, not two knobs. Neither half means
       // anything alone: depth without rate is silent, rate without depth is inaudible. So it's one
       // gesture on the shape the wobble actually makes. Grab the wave: UP/DOWN is how deep, and
-      // dragging sideways STRETCHES it — right is slower, left is faster, and the wavelength
-      // follows your hand.
-      //
-      // ★ At depth 0 the wave is FLAT — and a flat wave is exactly the centre line, which is
-      // already drawn. So the resting wobble isn't a ghost with nothing to grab: it's that line.
-      // Pull the line off centre and the wobble is born. That's what makes this a control and not
-      // a decoration you can happen to poke.
+      // dragging sideways STRETCHES it — right is slower, left is faster.
       const modN = clamp01(s.modDepth / MOD_MAX);
       const lfoNow = modN * Math.sin(-phase);
-      const lfoHot = hover.current === "lfo" || grab.current?.kind === "lfo";
+      const lfoHot = hot === "lfo";
       if (modN > 0.001 && s.modRate > 0) {
         const lfoAmp = modN * tlH * LFO_AMP_FRAC;
         const cycles = Math.max(0.5, s.modRate * windowSec);
@@ -365,21 +378,35 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
       }
+
       // === THE TAPS ===
       const wet = 0.35 + 0.65 * clamp01(s.mix);
       const modShift = lfoNow * 8;
-      const widthOff = clamp01(s.width) * 7;
-      const duckTau = (beat > 0 ? beat : 0.5) * 0.5;
-      const duckGain = (sec: number) => 1 - clamp01(s.duck) * Math.exp(-sec / duckTau);
+      const shear = clamp01(s.width) * shearOf(t, windowSec, w);
+      const ceilY = ceilOf(s.drive, midY, maxBar);
+      const floorY = 2 * midY - ceilY; // the roof's mirror — the taps run both ways
       const barW = 3;
-      const held = g && g.kind === "tap" ? g.n : -1;
+      const heldTap = g && g.kind === "tap" ? g.n : -1;
+      // A tap, drawn from the axis outward — and CUT at the roof: the part that pokes through is
+      // the part being driven into the curve, so it's drawn hot. The bar keeps its true height (the
+      // drive doesn't lower the echo, it saturates it) — the roof is a threshold, not a limiter.
       const tap = (x: number, amp: number, side: "up" | "down", alpha: number, lit: boolean) => {
         const bh = Math.max(1, maxBar * amp);
+        const bw = lit ? barW + 2 : barW;
+        const bx = round(x - bw / 2);
+        const y0 = side === "up" ? round(midY - bh) : round(midY);
+        const y1 = side === "up" ? round(midY) : round(midY + bh);
+        const cut = side === "up" ? ceilY : floorY;
         ctx.globalAlpha = alpha;
         ctx.fillStyle = lit ? "#fff" : accent;
-        const bw = lit ? barW + 2 : barW;
-        if (side === "up") ctx.fillRect(round(x - bw / 2), round(midY - bh), bw, round(bh));
-        else ctx.fillRect(round(x - bw / 2), round(midY), bw, round(bh));
+        if (side === "up") ctx.fillRect(bx, Math.max(y0, cut), bw, Math.max(0, y1 - Math.max(y0, cut)));
+        else ctx.fillRect(bx, y0, bw, Math.max(0, Math.min(y1, cut) - y0));
+        // …and the driven part, above the roof
+        if (s.drive > 0.001) {
+          ctx.fillStyle = HOT;
+          if (side === "up" && y0 < cut) ctx.fillRect(bx, y0, bw, cut - y0);
+          if (side === "down" && y1 > cut) ctx.fillRect(bx, cut, bw, y1 - cut);
+        }
         ctx.globalAlpha = 1;
       };
 
@@ -389,12 +416,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       ctx.fillRect(1, round(midY - maxBar), barW, round(maxBar * 2));
       ctx.globalAlpha = 1;
 
-      // THE MAGNET, shown only while you're dragging a tap. TIME snaps to note divisions, so the
-      // tap jumps from one to the next — and an unexplained jump reads as jitter, as the surface
-      // misbehaving. Draw the targets and the same jump reads as magnetism, which is what it is.
-      if (g && g.kind === "tap" && beat > 0 && s.snapBeats?.length) {
-        // The rungs. The one we're LOCKED to burns bright; the rest are faint. A lock you can see
-        // is a magnet; a lock you can't see is the surface disobeying you.
+      // THE MAGNET, shown only while you're dragging a tap's TIME. TIME snaps to note divisions, so
+      // the tap jumps from one to the next — and an unexplained jump reads as jitter. Draw the
+      // targets and the same jump reads as magnetism, which is what it is.
+      if (g && g.kind === "tap" && !g.lower && beat > 0 && s.snapBeats?.length) {
         const lockedSec = t * (g.n + 1);
         let lit = -1;
         let bd = Infinity;
@@ -418,7 +443,6 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         });
         // THE GHOST — where your finger actually is. The tap can't follow it (the value is
         // quantised; there is no in-between to move to), so instead of pretending, SHOW the pull.
-        // The distance between the ghost and the lit rung IS the magnet, made visible.
         ctx.strokeStyle = "#fff";
         ctx.globalAlpha = 0.35;
         ctx.lineWidth = 1;
@@ -431,26 +455,30 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.globalAlpha = 1;
       }
 
-      // THE DECAY ENVELOPE — the tail, drawn as a curve through the tap tips. Without it the tail
-      // is a row of ever-shorter bars fading to nothing, so "grab the tail and pull it up" means
-      // aiming at a 2px stub you can barely see. The curve shows you where the tail IS.
+      // === THE DECAY ENVELOPE — and the DUCK's handle. Without the curve the tail is a row of
+      // ever-shorter bars fading to nothing, so "grab the tail" means aiming at a 2px stub. With it,
+      // the SCOOP the sidechain digs out of the head is a shape you can see — and therefore one you
+      // can pull. The head is drawn fat and live; the rest of the curve is just a guide.
+      const duckX = xOf(Math.min(windowSec, (beat > 0 ? beat : 0.5) * DUCK_BEATS));
+      const duckHot = hot === "duck";
       if (!s.frozen) {
-        ctx.beginPath();
-        for (let n = 0; n < 64; n++) {
-          const ts = (n + 1) * t;
-          if (ts > windowSec) break;
-          const a = Math.pow(Math.max(0, Math.min(0.999, s.feedback)), n) * duckGain(ts);
-          const x = xOf(ts);
-          const y = midY - maxBar * a;
-          n === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        for (const head of [true, false]) {
+          ctx.beginPath();
+          let moved = false;
+          for (let x = 0; x <= w; x += 2) {
+            if (head !== (x <= duckX)) continue;
+            const y = midY - maxBar * envAt((x / w) * windowSec, s, beat);
+            moved ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+            moved = true;
+          }
+          ctx.strokeStyle = head && duckHot ? "#fff" : accent;
+          ctx.globalAlpha = head ? (duckHot ? 0.95 : 0.5) : 0.28;
+          ctx.lineWidth = head ? (duckHot ? 2.5 : 1.5) : 1;
+          ctx.setLineDash(head ? [] : [3, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
         }
-        ctx.strokeStyle = accent;
-        ctx.globalAlpha = 0.3;
-        ctx.setLineDash([3, 3]);
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
       }
 
       ctx.shadowColor = "rgba(255,170,90,0.9)";
@@ -458,24 +486,47 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       for (let n = 0; n < 64; n++) {
         const ts = (n + 1) * t;
         if (ts > windowSec) break;
-        const base = s.frozen ? 1 : Math.pow(Math.max(0, Math.min(0.999, s.feedback)), n);
+        const base = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), n);
         if (!s.frozen && base < 0.02) break;
-        const amp = base * duckGain(ts);
+        const amp = envAt(ts, s, beat); // = fb^n × the duck gain — the very curve the envelope draws
         const where = s.pingpong ? (n % 2 === 0 ? "up" : "down") : "both";
         const x = xOf(ts) + modShift;
         const a = 0.55 + 0.45 * amp * wet;
-        const lit = n === held || hover.current === `tap${n}`;
-        if (where === "up" || where === "both") tap(x - (where === "both" ? widthOff : 0), amp, "up", a, lit);
-        if (where === "down" || where === "both") tap(x + (where === "both" ? widthOff : 0), amp, "down", a, lit);
+        const lit = n === heldTap || hover.current === `tap${n}` || hover.current === `lower${n}`;
+        // ★ THE SHEAR IS THE WIDTH. The up/down mirror has always been the stereo axis — it's why
+        // ping-pong alternates across it — so the left channel leads and the right channel lags by
+        // the spread. In ping-pong each echo is only ONE channel, so it still shears, just alone.
+        if (where === "up" || where === "both") tap(x - shear, amp, "up", a, lit);
+        if (where === "down" || where === "both") tap(x + shear, amp, "down", a, lit);
       }
       ctx.shadowBlur = 0;
 
-      // === THE ONE READOUT — every number the delay says, said in the same place, always.
-      // LEFT: what the delay IS (its time and its tail) — the two values you want at a glance while
-      // your hands are elsewhere. RIGHT: what you're TOUCHING. At rest that's the tone band, so the
-      // cuts are still legible without the labels that used to chase their grips around the ribbon.
-      // Nearest-rung naming is done from the value we just PAINTED, never from a prop that arrives a
-      // render late (mid-drag, that lags a whole division behind the tap under your finger).
+      // === THE ROOF — DRIVE. A line you pull down onto the echoes; what pokes through goes hot.
+      // Live along its whole length (wherever a tap isn't), with a grip at the right edge that
+      // always wins, so there is never a drive setting you can't reach.
+      const driveHot = hot === "drive";
+      ctx.strokeStyle = s.drive > 0.001 ? HOT : accent;
+      ctx.globalAlpha = driveHot ? 0.95 : s.drive > 0.001 ? 0.55 : 0.3;
+      ctx.lineWidth = driveHot ? 2 : 1;
+      ctx.setLineDash([5, 4]);
+      for (const y of [ceilY, floorY]) {
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w - CEIL_TAB, Math.round(y) + 0.5);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      // the grip — a solid tab, the one part of the roof that can never be stolen by a tap
+      ctx.fillStyle = s.drive > 0.001 ? HOT : accent;
+      ctx.globalAlpha = driveHot ? 1 : 0.7;
+      ctx.fillRect(w - CEIL_TAB + 2, Math.round(ceilY) - 1, CEIL_TAB - 2, 3);
+      ctx.globalAlpha = 1;
+
+      // === THE ONE READOUT — topmost, three fixed zones, always in the same place.
+      // LEFT: what the delay IS. MIDDLE: what you're TOUCHING (blank when you aren't). RIGHT: its
+      // tone. Nearest-rung naming is done from the value we just PAINTED, never from a prop that
+      // arrives a render late (mid-drag, that lags a whole division behind the tap under your hand).
       const nameOf = (v: number, rungs?: number[], names?: string[]) => {
         if (!rungs?.length || !names?.length) return null;
         let bi = 0;
@@ -489,52 +540,36 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         });
         return names[bi] ?? null;
       };
-      const ry = botY + READOUT_H / 2;
-      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(0, 0, w, READOUT_H - 1);
+      const ry = (READOUT_H - 1) / 2;
+      ctx.font = "800 9px ui-monospace, monospace";
       ctx.textBaseline = "middle";
       ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.9;
       ctx.textAlign = "left";
+      ctx.globalAlpha = 0.9;
       const timeLabel = (beat > 0 && nameOf(t / beat, s.snapBeats, s.snapLabels)) || `${Math.round(t * 1000)}ms`;
       ctx.fillText(`${timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, ry);
       ctx.textAlign = "right";
-      ctx.globalAlpha = lfoHot ? 0.95 : 0.62;
-      if (lfoHot) {
-        const rateLabel = (beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`;
-        ctx.fillText(`WOBBLE ${Math.round(modN * 100)}%  ·  ${rateLabel}`, w - 5, ry);
-      } else {
-        ctx.fillText(`${fmtF(s.hp)} – ${fmtF(s.lp)}`, w - 5, ry);
+      ctx.globalAlpha = 0.55;
+      ctx.fillText(`${fmtF(s.hp)} – ${fmtF(s.lp)}`, w - 5, ry);
+      // the middle — the contextual "this is the thing in my hand"
+      const pct = (v: number) => `${Math.round(clamp01(v) * 100)}%`;
+      const ctxLabel =
+        hot === "width" ? `WIDTH ${pct(s.width)}`
+        : hot === "drive" ? `DRIVE ${pct(s.drive)}`
+        : hot === "duck" ? `DUCK ${pct(s.duck)}`
+        : hot === "lfo" ? `WOBBLE ${pct(modN)} · ${(beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`}`
+        : hot === "hp" || hot === "lp" || hot === "band" ? `${fmtF(s.hp)} Hz – ${fmtF(s.lp)} Hz`
+        : hot === "tap" ? `ECHO ${(heldTap >= 0 ? heldTap : Number(hover.current.slice(3))) + 1}`
+        : "";
+      if (ctxLabel) {
+        ctx.textAlign = "center";
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = held ? "#fff" : accent;
+        ctx.fillText(ctxLabel, w / 2, ry);
       }
       ctx.globalAlpha = 1;
-
-      // === THE CHARACTER RAIL — WIDTH · DRIVE · DUCK. A fill IS its value, so the drag is absolute:
-      // press anywhere in a cell and the level goes there. (The tap gesture can't do that — see the
-      // note in apply() — but a fader can, because the handle stands for the thing.)
-      const railVals = [clamp01(s.width), clamp01(s.drive), clamp01(s.duck)];
-      const rh = railH - 3;
-      const rty = railY + 2;
-      ctx.font = "700 8.5px ui-monospace, monospace";
-      ctx.textBaseline = "middle";
-      for (let i = 0; i < CHAR.length; i++) {
-        const { x0, cw } = railCell(i, w);
-        const on = hover.current === `char${i}` || (g?.kind === "rail" && g.i === i);
-        const v = railVals[i];
-        ctx.fillStyle = "rgba(255,255,255,0.03)";
-        ctx.fillRect(x0, rty, cw, rh);
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = on ? 0.34 : 0.18;
-        ctx.fillRect(x0, rty, cw * v, rh);
-        // The level edge is a HANDLE — visible even at zero, or the cell reads as a dead box you
-        // have to discover with the mouse.
-        ctx.globalAlpha = on ? 1 : 0.75;
-        ctx.fillRect(clamp(Math.round(x0 + cw * v) - 1, x0, x0 + cw - 2), rty, 2, rh);
-        ctx.globalAlpha = on ? 1 : 0.7;
-        ctx.textAlign = "left";
-        ctx.fillText(CHAR[i].label, x0 + 5, rty + rh / 2);
-        ctx.textAlign = "right";
-        ctx.fillText(`${Math.round(v * 100)}`, x0 + cw - 5, rty + rh / 2);
-        ctx.globalAlpha = 1;
-      }
     };
 
     // Redraw on demand (a drag) as well as on the LFO's own clock.
@@ -553,19 +588,19 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     kick();
 
     // --- hit-testing + gestures -------------------------------------------------------------
-    const hitAt = (px: number, py: number): { kind: string; n?: number } | null => {
+    // PRIORITY, and every clash in it is deliberate:
+    //   the roof's GRIP  — a tab at the right edge that nothing may steal, so drive is always reachable
+    //   a TAP            — the primary gesture; it owns its ±grip of x, at any height
+    //   the DUCK head    — the fat part of the envelope, over the first couple of beats
+    //   the ROOF line    — everywhere else along it
+    //   the WOBBLE       — the centre band
+    const hitAt = (px: number, py: number): { kind: string; n?: number; lower?: boolean } | null => {
       const w = lastW;
       const h = lastH;
       const s = p.current;
-      const { ribbonH, railY, top, botY } = geom(h, w);
-      if (py >= railY) {
-        for (let i = 0; i < CHAR.length; i++) {
-          const { x0, cw } = railCell(i, w);
-          if (px >= x0 && px <= x0 + cw) return { kind: "rail", n: i };
-        }
-        return null; // the gaps between cells — a fader you can't hit by accident
-      }
-      if (py <= ribbonH) {
+      const { ribbonH, ribY, top, botY, midY, maxBar } = geom(h, w);
+      if (py < ribY) return null; // the readout strip is a label, not a control
+      if (py <= ribY + ribbonH) {
         const lo = fToX(s.hp, w);
         const hi = fToX(s.lp, w);
         const grip = w < NARROW_PX ? GRIP_PX * 1.6 : GRIP_PX; // a thumb is not a mouse
@@ -576,47 +611,67 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         // ribbon is live. A strip that ignores you over most of its width reads as broken.
         return { kind: px < lo ? "hp" : "lp" };
       }
-      if (py < top || py > botY) return null; // the readout line is a label, not a control
+      if (py < top || py > botY) return null;
+
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
       const windowSec = windowOf(beat, w);
+      const ceilY = ceilOf(s.drive, midY, maxBar);
+      const floorY = 2 * midY - ceilY;
+      // the roof's grip — highest priority, and the reason the rest of the line may fight with taps
+      if (px >= w - CEIL_TAB && (Math.abs(py - ceilY) <= CEIL_GRIP + 3 || Math.abs(py - floorY) <= CEIL_GRIP + 3)) return { kind: "drive" };
+
       let best = -1;
       // The grip can never be wider than half the gap to the next tap, or neighbouring grips
       // overlap and you grab the wrong echo. At 1/16 in a two-bar window the taps are ~24px apart.
       let bestD = Math.min(TAP_GRIP, Math.max(4, ((t / windowSec) * w) / 2));
+      const shear = clamp01(s.width) * shearOf(t, windowSec, w);
       for (let n = 0; n < 64; n++) {
         const ts = (n + 1) * t;
         if (ts > windowSec) break;
         // Only grab a tap you can SEE. An invisible one (decayed past the draw threshold) offered
         // absurd leverage — fb = amp^(1/n) with a big n turns a 2px nudge into a jump to 95%.
-        const base = s.frozen ? 1 : Math.pow(Math.max(0, Math.min(0.999, s.feedback)), n);
+        const base = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), n);
         if (!s.frozen && base < 0.02) break;
-        const d = Math.abs(px - (ts / windowSec) * w);
+        // measure to the HALF you're actually over — the two channels are sheared apart
+        const cx = (ts / windowSec) * w + (py > midY ? shear : -shear);
+        const d = Math.abs(px - cx);
         if (d < bestD) {
           bestD = d;
           best = n;
         }
       }
-      if (best >= 0) return { kind: "tap", n: best }; // a tap always wins — it's the primary gesture
-      // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre
-      // line, so there's always something to grab — the resting wobble is never a ghost.
-      const { midY: my, top: tp, botY: bt } = geom(h, w);
+      if (best >= 0) {
+        // ★ BELOW THE AXIS IS THE RIGHT CHANNEL, and dragging it in time IS the width. Except in
+        // ping-pong, where an even echo has no lower half at all — there's no right channel there
+        // to pull, so it stays a plain TIME grab.
+        const lower = py > midY && (!s.pingpong || best % 2 === 1);
+        return { kind: "tap", n: best, lower };
+      }
+
+      // the DUCK head — the fat part of the envelope, where the scoop actually lives
+      const duckX = ((beat > 0 ? beat : 0.5) * DUCK_BEATS * w) / windowSec;
+      if (px <= duckX && py < midY) {
+        const envY = midY - maxBar * envAt((px / lastW) * windowSec, s, beat);
+        if (Math.abs(py - envY) <= 14) return { kind: "duck" };
+      }
+      // the ROOF, along the rest of its length
+      if (Math.abs(py - ceilY) <= CEIL_GRIP || Math.abs(py - floorY) <= CEIL_GRIP) return { kind: "drive" };
+
+      // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre line,
+      // so there's always something to grab — the resting wobble is never a ghost. Hit-test the BAND
+      // the wave sweeps, not one frozen phase of it: the wave is scrolling, so testing the
+      // instantaneous curve would move the target out from under a stationary cursor 60×/second.
       const modN = clamp01(s.modDepth / MOD_MAX);
-      const lfoAmp = modN * (bt - tp) * LFO_AMP_FRAC;
-      // Hit-test the BAND the wave sweeps, not one frozen phase of it — the wave is scrolling, so
-      // testing the instantaneous curve would move the target out from under a stationary cursor
-      // sixty times a second. Anywhere within its swing counts as "on the wave".
+      const lfoAmp = modN * (botY - top) * LFO_AMP_FRAC;
       const reach = Math.max(GRIP_PX, lfoAmp + GRIP_PX);
-      return Math.abs(py - my) <= reach ? { kind: "lfo" } : null;
+      return Math.abs(py - midY) <= reach ? { kind: "lfo" } : null;
     };
 
-    // ★ Paint from what we just computed — never wait for a React round-trip. The handlers push
-    // the new value into the device AND into `p.current`, so the very next frame draws the gesture
-    // that produced it. Before, the canvas only learned its own values when React re-rendered and
-    // reassigned the props mirror: it was always at least a render behind its own input, and any
-    // batching or throttling of that render read as a dead surface. (The next real render
-    // overwrites the mirror with the device's own values, which agree — so this is a lead, not a
-    // lie.)
+    // ★ Paint from what we just computed — never wait for a React round-trip. The handlers push the
+    // new value into the device AND into `p.current`, so the very next frame draws the gesture that
+    // produced it. (The next real render overwrites the mirror with the device's own values, which
+    // agree — so this is a lead, not a lie.)
     const setFilters = (hp: number, lp: number) => {
       const [chp, clp] = p.current.onFilters(hp, lp);
       p.current.hp = chp;
@@ -633,8 +688,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       p.current.modDepth = cd;
       p.current.modRate = cr;
     };
-    const setChar = (i: number, v: number) => {
-      const id = CHAR[i].id;
+    const setChar = (id: CharId, v: number) => {
       const c = p.current.onChar(id, clamp01(v));
       if (id === "width") p.current.width = c;
       else if (id === "drive") p.current.drive = c;
@@ -647,11 +701,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const w = lastW;
       const h = lastH;
       const s = p.current;
-      if (g.kind === "rail") {
-        const { x0, cw } = railCell(g.i, w);
-        setChar(g.i, (px - x0) / Math.max(1, cw));
-        return;
-      }
+      const { top, botY, midY, maxBar } = geom(h, w);
       if (g.kind === "hp" || g.kind === "lp") {
         const f = xToF(px, w);
         // The cuts may not cross: a band that isn't a band is just a mute.
@@ -672,9 +722,21 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         setFilters(nHp, nLp);
         return;
       }
+      if (g.kind === "drive") {
+        // ABSOLUTE — the roof's height IS the drive. Grab either the roof or its mirror; both come
+        // down together, because the taps run both ways and there is only one ceiling.
+        setChar("drive", driveOf(py > midY ? 2 * midY - py : py, midY, maxBar));
+        return;
+      }
+      if (g.kind === "duck") {
+        // RELATIVE — and this is the rule doing real work. The envelope's height is fb AND duck
+        // TOGETHER; it stands for neither one alone, so an absolute law here would have the head
+        // jump the moment you touched it. Pull DOWN to duck harder.
+        setChar("duck", g.startDuck + (py - g.startY) / Math.max(1, maxBar * 1.5));
+        return;
+      }
       if (g.kind === "lfo") {
         // DEPTH is absolute: the wave's height follows your finger off the centre line.
-        const { midY, top, botY } = geom(h, w);
         const full = Math.max(1, (botY - top) * LFO_AMP_FRAC);
         const depth = clamp01(Math.abs(py - midY) / full) * MOD_MAX;
         // RATE is a STRETCH, and stretches are relative: drag right and the wave lengthens under
@@ -685,36 +747,38 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         setMod(depth, rate);
         return;
       }
-      // A TAP: X = time (this tap follows the cursor), Y = feedback (this tap lands at this height).
-      g.ghostX = px; // where the FINGER is, as distinct from where the value LOCKED
-      const { midY, maxBar } = geom(h, w);
+      // A TAP. Y is FEEDBACK either way. X is TIME above the axis, and WIDTH below it.
+      g.ghostX = px;
       const beat = s.bpm ? 60 / s.bpm : 0;
-      const secAt = (clamp(px, 1, w) / w) * windowOf(beat, w);
-      setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
+      const windowSec = windowOf(beat, w);
+      const swing = Math.max(1, 2 * maxBar); // the full drawn height of a tap, bottom tip to top tip
+
+      if (g.lower) {
+        // ★ WIDTH — absolute, because the shear IS the width: the bar under your finger is the right
+        // channel, and its distance from the echo's true time is the spread. So the bar follows the
+        // cursor exactly, and letting go leaves it where you left it.
+        const trueX = ((g.n + 1) * Math.max(0.001, s.time) * w) / windowSec;
+        setChar("width", (px - trueX) / shearOf(Math.max(0.001, s.time), windowSec, w));
+      } else {
+        const secAt = (clamp(px, 1, w) / w) * windowSec;
+        setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
+      }
+
       // ★ THE VERTICAL LAW IS MONOTONIC — the bottom of a tap's swing is 0%, the top is 100%.
       // It used to be |py − midY| / maxBar: the DISTANCE from the centre line. That made the CENTRE
       // 0% and BOTH the top and the bottom 100% — a bipolar law on a control with no negative half.
-      // Nothing said which way was "more", and half the travel mirrored the other half.
-      const swing = Math.max(1, 2 * maxBar); // the full drawn height of a tap, bottom tip to top tip
       if (g.n >= 1) {
         // amp = fb^n  ⇒  fb = amp^(1/n): solve for the tap you're actually HOLDING, so it lands
-        // under your finger. Absolute, and jump-free by construction — a tap's tip already sits at
-        // its own value, so grabbing it by the tip moves nothing.
+        // under your finger. Jump-free by construction — a tap's tip already sits at its own value.
         const amp = clamp01((midY + maxBar - py) / swing);
         setFeedback(clamp(Math.pow(Math.max(amp, 1e-4), 1 / g.n), 0, FB_MAX));
         return;
       }
       // ★ THE FIRST ECHO IS PINNED AT UNITY by the topology — out = x(t−T) + fb·out(t−T) — so fb⁰=1
-      // whatever fb is, and its HEIGHT cannot encode the tail. That was taken as a reason to make it
-      // the one bar you CAN'T set the tail with, which is backwards: it's the biggest, nearest,
-      // loudest bar on the surface, so it's the one a hand reaches for first.
-      //
-      // It just can't be ABSOLUTE. A full-height bar that doesn't stand for its value means grabbing
-      // it anywhere near the top would slam feedback to the rail — you'd click the fattest thing on
-      // screen and the delay would run away. So this one drag is RELATIVE: it starts from wherever
-      // the tail already is and moves with your hand, at exactly the sensitivity of the taps beside
-      // it (a full swing = the full 0‥100 range). The bar can't follow you, but the tail and the
-      // readout do, and those are what the gesture is actually about.
+      // whatever fb is, and its HEIGHT cannot encode the tail. It can't be absolute: a full-height
+      // bar that doesn't stand for its value would slam feedback to the rail the moment you grabbed
+      // the fattest thing on screen. So this one drag is RELATIVE — same sensitivity as its
+      // neighbours, anchored where the tail already is.
       setFeedback(clamp(g.startFb + (g.startY - py) / swing, 0, FB_MAX));
     };
 
@@ -722,6 +786,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const r = canvas.getBoundingClientRect();
       return { px: e.clientX - r.left, py: e.clientY - r.top };
     };
+    const idOf = (hit: { kind: string; n?: number; lower?: boolean }) => (hit.kind === "tap" ? (hit.lower ? `lower${hit.n}` : `tap${hit.n}`) : hit.kind);
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const { px, py } = local(e);
@@ -729,8 +794,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!hit) return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, ghostX: px, startY: py, startFb: p.current.feedback };
-      else if (hit.kind === "rail") grab.current = { kind: "rail", i: hit.n! };
+      if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, lower: !!hit.lower, ghostX: px, startY: py, startFb: p.current.feedback };
+      else if (hit.kind === "drive") grab.current = { kind: "drive" };
+      else if (hit.kind === "duck") grab.current = { kind: "duck", startY: py, startDuck: p.current.duck };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };
@@ -744,10 +810,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return;
       }
       const hit = hitAt(px, py);
-      const id = !hit ? "" : hit.kind === "tap" ? `tap${hit.n}` : hit.kind === "rail" ? `char${hit.n}` : hit.kind;
+      const id = hit ? idOf(hit) : "";
       if (id !== hover.current) {
         hover.current = id;
-        canvas.style.cursor = !hit ? "default" : hit.kind === "band" ? "grab" : hit.kind === "tap" ? "move" : hit.kind === "lfo" ? "crosshair" : "ew-resize";
+        canvas.style.cursor = !hit
+          ? "default"
+          : hit.kind === "band"
+            ? "grab"
+            : hit.kind === "tap"
+              ? hit.lower
+                ? "ew-resize"
+                : "move"
+              : hit.kind === "lfo"
+                ? "crosshair"
+                : hit.kind === "drive" || hit.kind === "duck"
+                  ? "ns-resize"
+                  : "ew-resize";
         kick();
       }
     };
@@ -765,8 +843,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (!hit) return;
       e.preventDefault();
       if (hit.kind === "lfo") setMod(0, 0.5); // still, again
-      else if (hit.kind === "tap") setFeedback(0.38);
-      else if (hit.kind === "rail") setChar(hit.n!, 0); // all three rest at zero
+      else if (hit.kind === "drive") setChar("drive", 0);
+      else if (hit.kind === "duck") setChar("duck", 0);
+      else if (hit.kind === "tap") hit.lower ? setChar("width", 0) : setFeedback(0.38);
       else setFilters(120, 6500); // the band, wide open again
       kick();
     };

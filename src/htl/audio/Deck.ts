@@ -2127,7 +2127,20 @@ export class Deck {
       this.rack.add(d);
       d.setBypass(true); // dormant: wet pruned (zero CPU) until a pad throws or you un-bypass it
     }
+    this.onRackReady?.();
   }
+  /** ★ Is the rack a RACK yet? The EQ is built in the constructor, but the other eight can only be
+   *  built once the worklets are attached (see ensurePadFx) — so for a beat at boot `fxDevices` is
+   *  the EQ, ALONE. A surface that renders that list faithfully shows a one-tab rack with the EQ
+   *  in it, which is exactly the legacy shape from when the EQ *was* the one special device. It
+   *  isn't a stale render or a missing refresh: the rack really is half-built, and the answer is to
+   *  not present it until it's whole. */
+  get fxRackReady(): boolean {
+    return Deck.RACK_ORDER.every((k) => this.rack.indexOf(k) >= 0);
+  }
+  /** Fired when the rack finishes provisioning — the UI has no other way to learn it (the fill-in
+   *  happens in a promise callback, off React's world entirely). Idempotent: ensurePadFx may re-run. */
+  onRackReady?: () => void;
   moveFx(from: number, to: number) {
     this.rack.move(from, to);
   }

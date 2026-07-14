@@ -71,9 +71,28 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | null>(null);
 
   const devices = deck.fxDevices; // the whole chain, in order
+  // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the other eight
+  // can only be built once the worklets attach, so for a beat at every boot `fxDevices` IS the EQ,
+  // alone — and a strip that renders that list faithfully shows a one-tab rack with the EQ in it.
+  // That's the legacy "EQ is the one special device" surface, reconstructed by accident, at load.
+  const ready = deck.fxRackReady;
+  const tabs = ready ? devices : [];
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
-  const selDev = devices[cur];
+  const selDev = ready ? devices[cur] : undefined;
   const tabsRef = useRef<HTMLDivElement>(null);
+  // The rack fills in from a promise callback (ensureWorklets → ensurePadFx), somewhere React can't
+  // see. Ask the deck to say when. The `ready` dep drops the hook once it has fired, and the
+  // re-check covers the rack landing between this render and this effect.
+  useEffect(() => {
+    if (deck.fxRackReady) {
+      if (!ready) refresh(); // it finished in the gap — don't strand the loading state
+      return;
+    }
+    deck.onRackReady = () => refresh();
+    return () => {
+      deck.onRackReady = undefined;
+    };
+  }, [deck, refresh, ready]);
   useEffect(() => onSelect?.(cur), [cur, onSelect]); // keep App's per-deck "current FX" ref in sync
   // Bring the selected tab into view in the scrollable row — so revealing an off-screen effect
   // (right-click its FX pad → selectKind) actually surfaces its tab. block:nearest = no page jump.
@@ -97,6 +116,35 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
   const otherId: "A" | "B" = id === "A" ? "B" : "A";
+
+  // ★ THE STRIP REOPENS WHERE YOU LEFT IT. It used to always land on rack index 0 — which is the
+  // EQ, so every boot presented the EQ as the thing you'd come to see. That was true once, back when
+  // the EQ *was* the one special device; now it's one resident of nine and no device gets to be the
+  // default. Stored by KIND, not index: the rack is reorderable, and an index would faithfully
+  // reopen slot 2 while the effect you actually wanted had moved to slot 5.
+  const selKey = `htl.fx.sel.${id}`;
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !ready) return;
+    restored.current = true;
+    let kind: string | null = null;
+    try {
+      kind = localStorage.getItem(selKey);
+    } catch { /* private mode — fall through to the default */ }
+    const i = kind ? devices.findIndex((d) => d.kind === kind) : -1;
+    if (i >= 0) setSel(i);
+  }, [ready, devices, selKey]);
+  // Persist at the CALL SITES, not in an effect: an effect keyed on the selection would fire once
+  // with the pre-restore value (the EQ) and overwrite the very thing it was about to read back.
+  const select = (i: number) => {
+    setSel(i);
+    const k = deck.fxDevices[i]?.kind;
+    if (k) {
+      try {
+        localStorage.setItem(selKey, k);
+      } catch { /* private mode — the selection just won't survive a reload */ }
+    }
+  };
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
 
@@ -132,7 +180,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       navSel: (dir) => {
         if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; }
         setMenu(null); // moving to another effect closes the preset browse
-        setSel((s) => Math.max(0, Math.min(live.current.len - 1, s + dir)));
+        select(Math.max(0, Math.min(live.current.len - 1, live.current.cur + dir)));
       },
       moveSel: (dir) => {
         const L = live.current;
@@ -140,7 +188,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       },
       selectKind: (kind) => {
         const idx = deck.fxDevices.findIndex((d) => d.kind === kind);
-        if (idx >= 0) setSel(idx);
+        if (idx >= 0) select(idx);
       },
       // FX SELECT (hardware): step the SELECTED effect through Default → its factory bank → wrap,
       // applying each. Reads the live cur (not a stale render closure) and drives the device
@@ -217,11 +265,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const openPresetMenu = (e: React.MouseEvent, slot: number) => {
     e.preventDefault();
     cancelMenuTimer();
-    setSel(slot);
+    select(slot);
     setMenu({ slot, x: e.clientX, y: e.clientY });
   };
   // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
-  const tabLong = useLongPress<number>((slot, x, y) => { cancelMenuTimer(); setSel(slot); setMenu({ slot, x, y }); });
+  const tabLong = useLongPress<number>((slot, x, y) => { cancelMenuTimer(); select(slot); setMenu({ slot, x, y }); });
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
@@ -328,11 +376,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
       <div className="fx-head">
       <div className="fx-tabs" role="tablist" ref={tabsRef}>
-        {devices.map((d, i) => (
+        {tabs.map((d, i) => (
           <button
             key={d.kind}
             className={`fx-tab ${cur === i ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === i + 1 ? "drop-after" : ""} ${dragFrom === i ? "dragging" : ""}`}
-            onClick={() => { if (tabLong.fired.current) return; setSel(i); }}
+            onClick={() => { if (tabLong.fired.current) return; select(i); }}
             onContextMenu={(e) => openPresetMenu(e, i)}
             {...tabLong.bind(i)}
             draggable

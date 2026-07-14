@@ -1,12 +1,10 @@
 import { useEffect } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck } from "@htl/audio";
-import { ValueCell } from "./ValueCell";
 import { DelayViz } from "./DelayViz";
 import { useFrameSync } from "./useFrameSync";
 import { snapIndex } from "@htl/audio";
 import { clamp } from "../util/math";
-import { fmtPct } from "../util/format";
 
 // The Delay surface. Its four big params — TIME, FEEDBACK, HP, LP — are not down here: they're
 // ON the viz, which already drew every one of them (see DelayViz). Grab a tap to set the time and
@@ -88,7 +86,6 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
     deck.setFxParam(slot, param, value);
     sync(param, value);
   };
-  const tweak = live;
 
   // Beat-locked time = the division × the beat period. Pushed from an EFFECT (never during
   // render — an emit in render would spam the session); re-fires when the division or tempo
@@ -148,6 +145,14 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
     if (Math.abs(lp - get("lp")) > 0.5) live("lp", lp);
     return [get("hp"), get("lp")]; // the device clamps — report what it actually took
   };
+  // The character rail. These three are the only params left with no geometry of their own, so they
+  // ride a fader each at the foot of the viz instead of three cells in a DOM row below it.
+  const CHAR_PARAM = { width: "spread", drive: "analog", duck: "duck" } as const;
+  const onChar = (id: "width" | "drive" | "duck", v: number): number => {
+    const c = clamp(v, 0, 1);
+    live(CHAR_PARAM[id], c);
+    return c;
+  };
 
   const cycle = (param: string, count: number) => {
     setParam(param, (Math.round(get(param)) + 1) % count);
@@ -183,20 +188,13 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         onFeedback={onFeedback}
         onFilters={onFilters}
         onMod={onMod}
+        onChar={onChar}
       />
-      {/* The character params, in families. MOTION · COLOUR · DYNAMICS. */}
-      <div className="fx-knobs dly-knobs">
-        {/* DEPTH and RATE are NOT here. They were never two knobs — depth without rate is silent,
-            rate without depth is inaudible; neither half means anything alone, which is the tell
-            that they're one control wearing two costumes. They're the WAVE on the viz now: grab it,
-            up/down is how deep, sideways stretches it. At depth 0 the wave is flat, which is
-            exactly the centre line — so the resting wobble is a thing you can grab, not a ghost. */}
-        <ValueCell label="WIDTH" value={get("spread")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("spread", v)} format={fmtPct} />
-        <span className="fx-sep" aria-hidden="true" />
-        <ValueCell label="DRIVE" value={get("analog")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("analog", v)} format={fmtPct} />
-        <span className="fx-sep" aria-hidden="true" />
-        <ValueCell label="DUCK" value={get("duck")} min={0} max={1} step={0.01} reset={0} onChange={(v) => tweak("duck", v)} format={fmtPct} />
-      </div>
+      {/* The cell row is GONE. WIDTH · DRIVE · DUCK were the last three params standing in a DOM
+          grid under a canvas that is otherwise the whole instrument — and they're bare 0‥1
+          quantities with no geometry to seize, which is precisely what a fader is for. They're the
+          rail at the foot of the viz now. (DEPTH and RATE left earlier, for the same reason in
+          reverse: they DO have geometry — they're the wave.) */}
       {/* ★ ORDERED BY WHEN YOU REACH FOR IT, NOT BY TOPIC. On a phone this rack is ~180px and the
           row has to slide; whatever sits at the far right is, in practice, unreachable — FREEZE
           was literally clipped off the edge of an iPhone. So the two you touch MID-MIX lead:

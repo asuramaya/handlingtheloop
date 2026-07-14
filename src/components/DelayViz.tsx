@@ -29,10 +29,22 @@ import { useEffect, useRef } from "react";
 //                         nothing to grab: it IS that line. Pull it off centre and the wobble is
 //                         born. That's what keeps this a control instead of a decoration you can
 //                         happen to poke.
+//   • THE RAIL          → WIDTH · DRIVE · DUCK, at the foot. These three were the last cells left
+//                         in a DOM row under the canvas — boxes with a dot, in a rack where every
+//                         other control is a thing you grab on the surface. Unlike the rest they
+//                         have NO geometry of their own: no time, no frequency, no shape to seize.
+//                         So they get the honest form for a bare 0‥1 quantity — a fader each, in
+//                         the canvas, mirroring the tone ribbon at the top. The viz is symmetric
+//                         now: TONE above, THE ECHOES between, CHARACTER below.
+//
+// ★ AND ONE READOUT, in one place, always. The numbers used to be scattered by whatever drew them:
+// the cuts labelled themselves at the ribbon's edges, TIME·FB sat bottom-left, and the wobble
+// printed itself top-right — but only while hovered. So the numbers MOVED depending on what you
+// were touching, which is the one thing a readout must never do. Now there's a single line at the
+// foot of the timeline: what the delay IS on the left, what you're touching on the right.
 //
 // Right-click resets whatever is under the cursor — a gesture you can't undo isn't a control, it's
-// a trap. Still drawn, still read-only (they keep their cells): DUCK as a sidechain dip on the
-// early taps, WIDTH as an L/R split, DRIVE as a warm glow.
+// a trap.
 
 interface DelayVizProps {
   time: number; // seconds between taps
@@ -68,7 +80,22 @@ interface DelayVizProps {
   onFeedback: (v: number) => number;
   onFilters: (hp: number, lp: number) => [number, number];
   onMod: (depth: number, rate: number) => [number, number]; // the wobble — one gesture, two axes
+  onChar: (id: CharId, v: number) => number; // the rail — width / drive / duck
 }
+
+// The character rail's members, in the order they're drawn. Each is a plain 0‥1 quantity that
+// defaults to 0, which is exactly why they get faders and not geometry.
+type CharId = "width" | "drive" | "duck";
+const CHAR: { id: CharId; label: string }[] = [
+  { id: "width", label: "WIDTH" },
+  { id: "drive", label: "DRIVE" },
+  { id: "duck", label: "DUCK" },
+];
+const RAIL_GAP = 3;
+const railCell = (i: number, w: number) => {
+  const cw = (w - RAIL_GAP * (CHAR.length - 1)) / CHAR.length;
+  return { x0: i * (cw + RAIL_GAP), cw };
+};
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -85,6 +112,7 @@ const RATE_MAX = 8;
 // range lived in ~21px of travel: the wobble slammed to 100% the moment you touched it.
 const LFO_AMP_FRAC = 0.38;
 const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
+const READOUT_H = 12; // the one readout line, between the timeline's floor and the rail
 const GRIP_PX = 10; // how close counts as "on" a filter edge
 const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
@@ -99,9 +127,10 @@ type Grab =
   | { kind: "hp" }
   | { kind: "lp" }
   | { kind: "band"; lastX: number }
-  | { kind: "lfo"; startX: number; startRate: number };
+  | { kind: "lfo"; startX: number; startRate: number }
+  | { kind: "rail"; i: number };
 
-export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod }: DelayVizProps) {
+export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -110,18 +139,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod });
-  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod };
+  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
+  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see.
   // The ribbon needs to be a THUMB target on a phone, not a hairline: a 20px strip is a miss
   // waiting to happen. It costs a little of the timeline's height, which the timeline can spare.
   const geom = (h: number, w = 999) => {
-    const ribbonH = w < NARROW_PX ? Math.max(26, Math.round(h * 0.22)) : Math.max(20, Math.round(h * 0.2));
-    const top = ribbonH + 3;
-    const midY = top + (h - top) / 2;
-    return { ribbonH, top, midY, maxBar: (h - top) * 0.42 };
+    const narrow = w < NARROW_PX;
+    const ribbonH = narrow ? Math.max(26, Math.round(h * 0.22)) : Math.max(20, Math.round(h * 0.2));
+    const railH = narrow ? Math.max(26, Math.round(h * 0.2)) : Math.max(20, Math.round(h * 0.18));
+    const top = ribbonH + 3; // the timeline's ceiling
+    const railY = h - railH; // the rail's ceiling
+    const botY = railY - READOUT_H; // the timeline's floor — the readout line lives between them
+    const midY = top + (botY - top) / 2;
+    return { ribbonH, railH, railY, top, botY, midY, maxBar: Math.max(6, (botY - top) * 0.42) };
   };
   // ★ A STABLE TIME AXIS — a ruler, not a rubber band.
   //
@@ -170,7 +203,17 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       return { w, h, dpr };
     };
 
-    const start = window.performance.now();
+    // ★ THE WOBBLE'S PHASE IS INTEGRATED, NOT COMPUTED FROM THE CLOCK.
+    //
+    // It used to be phase = 2π·rate·elapsed, with `elapsed` measured from the canvas's mount. That
+    // is a correct phase only while the rate never moves — the moment you drag the RATE, the phase
+    // TELEPORTS: at 30 s in, nudging 1 Hz → 1.1 Hz jumps it by 2π·0.1·30 ≈ three whole cycles. A
+    // sideways drag changes the rate on every pointermove, so the wave shimmered under your hand,
+    // and because the taps are shifted by that same LFO value, the whole tap row jittered with it.
+    // The fix is the one physics always gives you: a phase is the INTEGRAL of frequency. Accumulate
+    // it — φ += 2π·rate·dt — and it stays continuous no matter what the rate does.
+    let phase = 0;
+    let lastNow = 0;
 
     const draw = (now: number) => {
       const { w, h, dpr } = sizeCanvas();
@@ -186,8 +229,13 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const g = grab.current;
       const windowSec = windowOf(beat, w);
       const xOf = (sec: number) => (sec / windowSec) * w;
-      const { ribbonH, top, midY, maxBar } = geom(h, w);
-      const elapsed = (now - start) / 1000;
+      const { ribbonH, railH, railY, top, botY, midY, maxBar } = geom(h, w);
+      const tlH = botY - top; // the timeline's height — the wave scales to THIS, not to the canvas
+      // dt is CLAMPED: the loop idles whenever the wobble is still and nothing is being dragged, so
+      // the first frame after a long idle would otherwise integrate minutes of phase in one step.
+      const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
+      lastNow = now;
+      phase = (phase + 2 * Math.PI * s.modRate * dt) % (2 * Math.PI);
       const accent = s.accent;
 
       // === THE FILTER RIBBON — the echoes' tone window, and a control. Edges are grips; the body
@@ -251,19 +299,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.globalAlpha = 1;
       }
 
-      // The numbers live AT the grips they belong to, not merged into one label in the middle —
-      // so each cut says its own value, which is what you're actually setting.
-      ctx.font = "700 8.5px ui-monospace, monospace";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.95;
-      ctx.textAlign = "right";
-      ctx.fillText(fmtF(s.hp), Math.max(20, lo - 5), rH / 2);
-      ctx.textAlign = "left";
-      ctx.fillText(fmtF(s.lp), Math.min(w - 20, hi + 5), rH / 2);
-      ctx.globalAlpha = 1;
+      // The cuts' NUMBERS are not here — they're in the one readout at the foot. A label pinned to a
+      // grip moves when the grip moves, so the two of them together made the ribbon a place where
+      // text wandered around. The grips say WHERE; the readout says WHAT.
 
-      // beat grid + centre line (in the timeline half only)
+      // beat grid + centre line (in the timeline only — never through the readout or the rail)
       if (beat > 0) {
         ctx.lineWidth = 1;
         for (let sec = beat, k = 1; sec < windowSec; sec += beat, k++) {
@@ -271,7 +311,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
           const x = Math.round(xOf(sec)) + 0.5;
           ctx.beginPath();
           ctx.moveTo(x, top);
-          ctx.lineTo(x, h);
+          ctx.lineTo(x, botY);
           ctx.stroke();
         }
       }
@@ -293,11 +333,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // Pull the line off centre and the wobble is born. That's what makes this a control and not
       // a decoration you can happen to poke.
       const modN = clamp01(s.modDepth / MOD_MAX);
-      const phase = 2 * Math.PI * s.modRate * elapsed;
       const lfoNow = modN * Math.sin(-phase);
       const lfoHot = hover.current === "lfo" || grab.current?.kind === "lfo";
       if (modN > 0.001 && s.modRate > 0) {
-        const lfoAmp = modN * (h - top) * LFO_AMP_FRAC;
+        const lfoAmp = modN * tlH * LFO_AMP_FRAC;
         const cycles = Math.max(0.5, s.modRate * windowSec);
         ctx.beginPath();
         for (let x = 0; x <= w; x += 2) {
@@ -326,30 +365,6 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
       }
-      if (lfoHot) {
-        ctx.font = "800 9px ui-monospace, monospace";
-        ctx.textAlign = "right";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = 0.95;
-        let rateLabel = `${s.modRate.toFixed(2)} Hz`;
-        if (s.modSnapBeats?.length && s.modSnapLabels?.length && beat > 0) {
-          const cyc = 1 / Math.max(1e-4, s.modRate) / beat; // beats per LFO cycle
-          let bi = 0;
-          let bd = Infinity;
-          s.modSnapBeats.forEach((bv, i) => {
-            const d = Math.abs(Math.log(bv / Math.max(1e-4, cyc)));
-            if (d < bd) {
-              bd = d;
-              bi = i;
-            }
-          });
-          rateLabel = s.modSnapLabels[bi] ?? rateLabel;
-        }
-        ctx.fillText(`WOBBLE  ${Math.round(modN * 100)}%  ·  ${rateLabel}`, w - 6, top + 3);
-        ctx.globalAlpha = 1;
-      }
-
       // === THE TAPS ===
       const wet = 0.35 + 0.65 * clamp01(s.mix);
       const modShift = lfoNow * 8;
@@ -455,29 +470,71 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       }
       ctx.shadowBlur = 0;
 
-      // TIME and FEEDBACK left the cell row — so the viz has to SAY them. Bottom-left, quiet.
-      ctx.font = "800 9.5px ui-monospace, monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.9;
-      // Name the note from the time we just drew — never from a prop that arrives a render late.
-      let label = `${Math.round(t * 1000)}ms`;
-      if (s.snapBeats?.length && s.snapLabels?.length && beat > 0) {
-        const beats = t / beat;
+      // === THE ONE READOUT — every number the delay says, said in the same place, always.
+      // LEFT: what the delay IS (its time and its tail) — the two values you want at a glance while
+      // your hands are elsewhere. RIGHT: what you're TOUCHING. At rest that's the tone band, so the
+      // cuts are still legible without the labels that used to chase their grips around the ribbon.
+      // Nearest-rung naming is done from the value we just PAINTED, never from a prop that arrives a
+      // render late (mid-drag, that lags a whole division behind the tap under your finger).
+      const nameOf = (v: number, rungs?: number[], names?: string[]) => {
+        if (!rungs?.length || !names?.length) return null;
         let bi = 0;
         let bd = Infinity;
-        s.snapBeats.forEach((bv, i) => {
-          const d = Math.abs(Math.log(bv / Math.max(1e-4, beats)));
+        rungs.forEach((r, i) => {
+          const d = Math.abs(Math.log(r / Math.max(1e-4, v)));
           if (d < bd) {
             bd = d;
             bi = i;
           }
         });
-        label = s.snapLabels[bi] ?? label;
+        return names[bi] ?? null;
+      };
+      const ry = botY + READOUT_H / 2;
+      ctx.font = "800 9.5px ui-monospace, monospace";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.9;
+      ctx.textAlign = "left";
+      const timeLabel = (beat > 0 && nameOf(t / beat, s.snapBeats, s.snapLabels)) || `${Math.round(t * 1000)}ms`;
+      ctx.fillText(`${timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, ry);
+      ctx.textAlign = "right";
+      ctx.globalAlpha = lfoHot ? 0.95 : 0.62;
+      if (lfoHot) {
+        const rateLabel = (beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`;
+        ctx.fillText(`WOBBLE ${Math.round(modN * 100)}%  ·  ${rateLabel}`, w - 5, ry);
+      } else {
+        ctx.fillText(`${fmtF(s.hp)} – ${fmtF(s.lp)}`, w - 5, ry);
       }
-      ctx.fillText(`${label}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, h - 3);
       ctx.globalAlpha = 1;
+
+      // === THE CHARACTER RAIL — WIDTH · DRIVE · DUCK. A fill IS its value, so the drag is absolute:
+      // press anywhere in a cell and the level goes there. (The tap gesture can't do that — see the
+      // note in apply() — but a fader can, because the handle stands for the thing.)
+      const railVals = [clamp01(s.width), clamp01(s.drive), clamp01(s.duck)];
+      const rh = railH - 3;
+      const rty = railY + 2;
+      ctx.font = "700 8.5px ui-monospace, monospace";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < CHAR.length; i++) {
+        const { x0, cw } = railCell(i, w);
+        const on = hover.current === `char${i}` || (g?.kind === "rail" && g.i === i);
+        const v = railVals[i];
+        ctx.fillStyle = "rgba(255,255,255,0.03)";
+        ctx.fillRect(x0, rty, cw, rh);
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = on ? 0.34 : 0.18;
+        ctx.fillRect(x0, rty, cw * v, rh);
+        // The level edge is a HANDLE — visible even at zero, or the cell reads as a dead box you
+        // have to discover with the mouse.
+        ctx.globalAlpha = on ? 1 : 0.75;
+        ctx.fillRect(clamp(Math.round(x0 + cw * v) - 1, x0, x0 + cw - 2), rty, 2, rh);
+        ctx.globalAlpha = on ? 1 : 0.7;
+        ctx.textAlign = "left";
+        ctx.fillText(CHAR[i].label, x0 + 5, rty + rh / 2);
+        ctx.textAlign = "right";
+        ctx.fillText(`${Math.round(v * 100)}`, x0 + cw - 5, rty + rh / 2);
+        ctx.globalAlpha = 1;
+      }
     };
 
     // Redraw on demand (a drag) as well as on the LFO's own clock.
@@ -500,7 +557,14 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const w = lastW;
       const h = lastH;
       const s = p.current;
-      const { ribbonH, top } = geom(h, w);
+      const { ribbonH, railY, top, botY } = geom(h, w);
+      if (py >= railY) {
+        for (let i = 0; i < CHAR.length; i++) {
+          const { x0, cw } = railCell(i, w);
+          if (px >= x0 && px <= x0 + cw) return { kind: "rail", n: i };
+        }
+        return null; // the gaps between cells — a fader you can't hit by accident
+      }
       if (py <= ribbonH) {
         const lo = fToX(s.hp, w);
         const hi = fToX(s.lp, w);
@@ -512,7 +576,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         // ribbon is live. A strip that ignores you over most of its width reads as broken.
         return { kind: px < lo ? "hp" : "lp" };
       }
-      if (py < top) return null;
+      if (py < top || py > botY) return null; // the readout line is a label, not a control
       const t = Math.max(0.001, s.time);
       const beat = s.bpm ? 60 / s.bpm : 0;
       const windowSec = windowOf(beat, w);
@@ -536,9 +600,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       if (best >= 0) return { kind: "tap", n: best }; // a tap always wins — it's the primary gesture
       // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre
       // line, so there's always something to grab — the resting wobble is never a ghost.
-      const { midY: my, top: tp } = geom(h, w);
+      const { midY: my, top: tp, botY: bt } = geom(h, w);
       const modN = clamp01(s.modDepth / MOD_MAX);
-      const lfoAmp = modN * (h - tp) * LFO_AMP_FRAC;
+      const lfoAmp = modN * (bt - tp) * LFO_AMP_FRAC;
       // Hit-test the BAND the wave sweeps, not one frozen phase of it — the wave is scrolling, so
       // testing the instantaneous curve would move the target out from under a stationary cursor
       // sixty times a second. Anywhere within its swing counts as "on the wave".
@@ -569,6 +633,13 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       p.current.modDepth = cd;
       p.current.modRate = cr;
     };
+    const setChar = (i: number, v: number) => {
+      const id = CHAR[i].id;
+      const c = p.current.onChar(id, clamp01(v));
+      if (id === "width") p.current.width = c;
+      else if (id === "drive") p.current.drive = c;
+      else p.current.duck = c;
+    };
 
     const apply = (px: number, py: number) => {
       const g = grab.current;
@@ -576,6 +647,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const w = lastW;
       const h = lastH;
       const s = p.current;
+      if (g.kind === "rail") {
+        const { x0, cw } = railCell(g.i, w);
+        setChar(g.i, (px - x0) / Math.max(1, cw));
+        return;
+      }
       if (g.kind === "hp" || g.kind === "lp") {
         const f = xToF(px, w);
         // The cuts may not cross: a band that isn't a band is just a mute.
@@ -598,8 +674,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       }
       if (g.kind === "lfo") {
         // DEPTH is absolute: the wave's height follows your finger off the centre line.
-        const { midY, top } = geom(h, w);
-        const full = Math.max(1, (h - top) * LFO_AMP_FRAC);
+        const { midY, top, botY } = geom(h, w);
+        const full = Math.max(1, (botY - top) * LFO_AMP_FRAC);
         const depth = clamp01(Math.abs(py - midY) / full) * MOD_MAX;
         // RATE is a STRETCH, and stretches are relative: drag right and the wave lengthens under
         // your hand (slower), left and it compresses (faster). Log-scaled, so one full-width drag
@@ -654,6 +730,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, ghostX: px, startY: py, startFb: p.current.feedback };
+      else if (hit.kind === "rail") grab.current = { kind: "rail", i: hit.n! };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };
@@ -667,7 +744,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return;
       }
       const hit = hitAt(px, py);
-      const id = !hit ? "" : hit.kind === "tap" ? `tap${hit.n}` : hit.kind;
+      const id = !hit ? "" : hit.kind === "tap" ? `tap${hit.n}` : hit.kind === "rail" ? `char${hit.n}` : hit.kind;
       if (id !== hover.current) {
         hover.current = id;
         canvas.style.cursor = !hit ? "default" : hit.kind === "band" ? "grab" : hit.kind === "tap" ? "move" : hit.kind === "lfo" ? "crosshair" : "ew-resize";
@@ -689,6 +766,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       e.preventDefault();
       if (hit.kind === "lfo") setMod(0, 0.5); // still, again
       else if (hit.kind === "tap") setFeedback(0.38);
+      else if (hit.kind === "rail") setChar(hit.n!, 0); // all three rest at zero
       else setFilters(120, 6500); // the band, wide open again
       kick();
     };

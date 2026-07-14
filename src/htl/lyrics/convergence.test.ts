@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planLyrics, looksDegenerate } from "./convergence";
-import type { LyricsLine } from "./types";
-
-const line = (text: string, start = 0): LyricsLine => ({ start, end: start + 1, text });
-const lines = (...texts: string[]): LyricsLine[] => texts.map((t, i) => line(t, i));
+import { planLyrics } from "./convergence";
 
 // The client's current format. Kept local to the test on purpose: these rules must hold for ANY
 // version pair, not just today's numbers.
@@ -119,38 +115,3 @@ describe("planLyrics — reuse iff the stored format is at least ours", () => {
   });
 });
 
-describe("looksDegenerate — never publish a loop hallucination to the shared pool", () => {
-  it("passes a normal transcript", () => {
-    expect(looksDegenerate(lines("one", "two", "three", "four", "five", "six", "seven"))).toBe(false);
-  });
-
-  it("★ catches the instrumental loop (one phrase, over and over)", () => {
-    expect(looksDegenerate(lines("Thanks for watching!", "Thanks for watching!", "Thanks for watching!", "Thanks for watching!", "Thanks for watching!", "Thanks for watching!"))).toBe(true);
-  });
-
-  it("★ catches a near-loop: a couple of phrases smeared over a long transcript", () => {
-    const hallucinated = lines(...Array.from({ length: 40 }, (_, i) => (i % 2 ? "subtitles by the amara.org community" : "you")));
-    expect(looksDegenerate(hallucinated)).toBe(true);
-  });
-
-  it("★ does NOT punish a chorus-heavy song", () => {
-    // A real song repeats its hook. 8 distinct lines out of 24 = 0.33, comfortably above the bar.
-    const chorus = ["hook", "hook", "hook"];
-    const song = lines(...["v1a", "v1b", "v1c", ...chorus, "v2a", "v2b", "v2c", ...chorus, "b1", "b2", ...chorus, "v3a", "v3b", "v3c", ...chorus]);
-    expect(looksDegenerate(song)).toBe(false);
-  });
-
-  it("never judges a short transcript — a sparse song is legitimately a few lines", () => {
-    // A false positive costs a real transcript, so below the threshold we simply don't rule.
-    expect(looksDegenerate(lines("hey", "hey", "hey"))).toBe(false);
-    expect(looksDegenerate(lines("hey", "hey", "hey", "hey", "hey"))).toBe(false);
-  });
-
-  it("ignores case and surrounding whitespace when judging repetition", () => {
-    expect(looksDegenerate(lines("Yeah ", "yeah", " YEAH", "Yeah", "yeah ", "YEAH", "yeah"))).toBe(true);
-  });
-
-  it("an empty transcript is not degenerate (there is simply nothing to publish)", () => {
-    expect(looksDegenerate([])).toBe(false);
-  });
-});

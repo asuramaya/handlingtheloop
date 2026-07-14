@@ -2,14 +2,14 @@ import { useEffect, useRef } from "react";
 import type { Deck } from "@htl/audio";
 import type { LyricsSource, LyricsLine } from "@htl/lyrics";
 
-// The three sources are NOT interchangeable and the badge must not pretend they are: whisper and
-// pool used to share both the icon AND the label, so you could not tell whether YOUR GPU had
-// actually transcribed the track or whether it had simply downloaded someone else's transcript —
-// which is half of "I can't tell if the lyrics are even firing".
+// The four sources are NOT interchangeable and the badge must not pretend they are — you should be
+// able to tell at a glance whether these words are GROUND TRUTH aligned to this track's own vocal,
+// or a caption file somebody typed. That distinction is most of "can I trust what I'm reading".
 const SOURCE_TAG: Record<LyricsSource, { icon: string; label: string }> = {
-  whisper: { icon: "🎤", label: "transcribed on THIS device (word-timed)" },
-  pool: { icon: "☁", label: "from the community pool (someone else's GPU)" },
-  youtube: { icon: "▶", label: "YouTube captions (not word-timed)" },
+  aligned: { icon: "🎯", label: "every word placed on this track's own vocal onsets" },
+  lrclib: { icon: "📖", label: "line-synced lyrics — turn on stem separation for word-level timing" },
+  pool: { icon: "☁", label: "aligned by someone else's device, shared to the community pool" },
+  youtube: { icon: "▶", label: "YouTube captions (no word timing, and only as good as the uploader)" },
 };
 
 // A word marker shows its label once it has at least this many px to the next word; the song's
@@ -41,7 +41,7 @@ export function CaptionBar({
   status?: string | null; // live lyric state — model download, decode %, waiting for the vocal stem
   windowSec: number;
   onSeek?: (position: number) => void;
-  onReprocess?: (engine: "whisper" | "youtube") => void; // wrong lyrics → re-resolve from scratch
+  onReprocess?: (engine: "lrclib" | "youtube") => void; // wrong lyrics → re-resolve from scratch
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -176,11 +176,11 @@ export function CaptionBar({
         <span className="caption-reprocess">
           <button
             className="caption-redo"
-            title="Wrong lyrics? Re-transcribe from the vocal stem (Whisper)"
-            aria-label="Re-transcribe lyrics with Whisper"
-            onClick={() => onReprocess("whisper")}
+            title="Wrong lyrics? Look them up again and re-align to the vocal stem"
+            aria-label="Re-fetch and re-align lyrics"
+            onClick={() => onReprocess("lrclib")}
           >
-            🎤↻
+            📖↻
           </button>
           <button
             className="caption-redo"

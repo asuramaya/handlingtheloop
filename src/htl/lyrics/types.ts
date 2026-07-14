@@ -1,9 +1,13 @@
 import type { CaptionCue } from "@htl/media";
 
-// Where the lyrics on a deck's ribbon came from. whisper = decoded on THIS device from the
-// vocal stem; pool = downloaded from the shared community transcript cache (same Whisper
-// output, just someone else's GPU); youtube = the fallback timed-text captions.
-export type LyricsSource = "whisper" | "pool" | "youtube";
+// Where the lyrics on a deck's ribbon came from.
+//   lrclib  = ground-truth words + LRCLIB's own LINE clock. No stem, no model, no GPU — works on a
+//             phone, and is already a usable feature on its own.
+//   aligned = those same words, with every WORD placed on a real onset measured from THIS device's
+//             isolated vocal stem. The upgrade, not the prerequisite.
+//   pool    = someone else's device already did the alignment; we took theirs.
+//   youtube = the last-resort fallback when LRCLIB has never heard of the track.
+export type LyricsSource = "lrclib" | "aligned" | "pool" | "youtube";
 
 // One line of a transcript — start/end in TRACK-seconds, like a CaptionCue, so it still
 // renders through the caption ribbon. `words` carries per-WORD start times (Whisper word-
@@ -37,46 +41,26 @@ export interface LyricsTranscript {
   createdAt: number; // epoch ms
 }
 
-// ---- alignment diagnostics -------------------------------------------------------------
-// The instrument for "why don't the lyrics line up?". We have something most transcription
-// pipelines don't: a CLEAN isolated vocal stem, so the REAL vocal onsets are recoverable with
-// confidence. Comparing Whisper's word times against those onsets tells us WHICH kind of wrong
-// we are, and the three kinds have completely different fixes:
-//
-//   medianLag ≈ 0, small spread  → alignment is fine; the bug is elsewhere (render/time-base).
-//   medianLag = a constant       → a PIPELINE OFFSET (ours). Exactly fixable: shift by it.
-//   driftMsPerMin large          → a RATE / CHUNK-OFFSET bug (ours). Exactly fixable.
-//   medianLag ≈ 0, HUGE spread   → the MODEL is guessing per word. No offset can fix it;
-//                                  needs real forced alignment or a better model.
-//
-// Measured over a WIDE (±2 s) search window ON PURPOSE: the shipped snap only looks ±160 ms, so
-// it would clip — and hide — exactly the error we're hunting.
+// ---- diagnostics -----------------------------------------------------------------------
+// The instrument for "are the lyrics even firing, and if not, WHERE did it stop?". Each field
+// answers one link in the chain, in order, so a blank one names the exact step that failed.
 export interface LyricsDiag {
-  mode: "word" | "segment"; // did word-level timestamps engage, or did we fall back?
-  wordError?: string; // why word mode was abandoned (the fallback used to be silent)
-  model: string; // repo actually loaded
-  dtype: string; // what the GPU actually ran (q4, or the fp32 fallback)
-  tjs?: string; // transformers.js version that produced this (word timestamps have had real bugs)
+  source: LyricsSource;
+  artist: string | null; // canonical, from the acoustic fingerprint (null = never identified)
+  title: string | null;
+  matched: boolean; // LRCLIB had this recording
+  instrumental: boolean; // ...and says it has no vocals. A free, CORRECT "no lyrics".
   lines: number;
   words: number;
-  onsets: number; // vocal transients detected in the stem
-  matched: number; // words with ANY onset inside the wide search window
-  medianLag: number; // seconds, signed: onset − whisperWordTime. THE headline number.
-  madLag: number; // median absolute deviation — systematic (small) vs random (large)
-  driftMsPerMin: number; // slope of lag over time — a rate/chunk bug shows up here
-  within160: number; // fraction of words the OLD ±160 ms snap could even reach (0..1)
-  decodeMs: number;
-  // What the forced aligner DID about it (see align.ts). Reported, never used to grade itself:
-  // it snaps words to onsets, so "distance to the nearest onset" afterwards is ~0 by construction
-  // and would be an instrument pointed at the part we're proud of. The ear is the acceptance test.
-  align?: {
-    bias: number; // constant lag removed, seconds
-    drift: number; // linear drift removed, seconds per second
-    snapped: number; // words placed on a real vocal onset
-    free: number; // words left on the model's corrected time (held vowels, legato)
-    medianMove: number; // median distance a word actually moved, seconds
-    applied: boolean; // false = it declined to act (too little to go on, or it couldn't justify it)
-  };
+  onsets: number; // vocal transients measured in the isolated stem — the timing EVIDENCE
+  offset: number; // whole-track shift removed, seconds (the LRC was timed against another edit)
+  confidence: number; // share of lines that landed on real singing at that offset, 0..1
+  bias: number; // residual constant lag the DP removed, seconds
+  drift: number; // residual linear drift removed, s/s
+  snapped: number; // words placed on a real vocal onset
+  free: number; // words with no onset to sit on (a held vowel genuinely has none)
+  applied: boolean; // false = the input was too thin to align; times passed through untouched
+  ms: number;
 }
 
 // Lines render through the existing caption ribbon unchanged.

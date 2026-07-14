@@ -98,7 +98,7 @@ import {
   type AutoMixStatus,
   type AutoMixMirror,
 } from "@htl";
-import { resolveLyrics, getLyricsDiag, formatLyricsDiag, whisperModel, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
@@ -1532,12 +1532,12 @@ function AppBody() {
         void resolveLyrics({
           videoId: vid,
           deck: engine.deck(id),
-          model: whisperModel(lyricsModelRef.current).id, // tolerates a retired id (e.g. the dropped "base")
-          engine: lyricsModelRef.current === "youtube" ? "youtube" : "whisper",
+          engine: lyricsModelRef.current === "youtube" ? "youtube" : "lrclib",
+          // The uploader's title — the fallback name when acoustic identity has no match (~1 in 5).
+          trackTitle: track.title,
           enabled: lyricsAutoRef.current,
-          // Whisper transcribes the NEURAL VOCAL STEM, so it is dead in the water without
-          // separation — which is off by default. Telling the resolver lets it say so instead of
-          // waiting in silence for a stem that is never coming.
+          // A neural vocal stem UPGRADES lyrics from line-level to word-level. It is no longer a
+          // prerequisite: LRCLIB's own line clock works with no stem, no model and no GPU.
           stemsEnabled: stemModelRef.current !== "off",
           sampleRate: engine.ctx.sampleRate,
           stale,

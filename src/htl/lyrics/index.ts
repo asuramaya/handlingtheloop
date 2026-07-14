@@ -1,12 +1,14 @@
-// Whisper-on-vocal-stem lyric transcription, pooled in the community cache and falling
-// back to YouTube captions. See client.ts for the resolver, models.ts for the picker.
+// Lyrics: the WORDS come from LRCLIB (a published fact), the TIMES from the isolated vocal stem
+// (a measurement). No generative model — see analyze.worker.ts for what that replaced, and why.
 export * from "./types";
-export * from "./models";
 export * from "./client";
-// The pool's reuse-vs-recompute + don't-publish-garbage rules, pure and tested. Exported so any
-// future surface uses THE gate rather than reimplementing a second, subtly different one.
-export { planLyrics, looksDegenerate, type LyricsPlan } from "./convergence";
-// The alignment measurement + how to read it — see formatLyricsDiag for what each number MEANS.
+// The words source + the LRC format, and the title/artist cleanup that makes a real library match.
+export { fetchLrcLib, parseLrc, lrcToLines, cleanTitle, primaryArtist, type LrcLine, type LrcResult } from "./lrclib";
+// The times: a whole-track offset from structure, then every word onto a real vocal onset.
+export { alignLrc, syllables, seedLine, sungSpans, coarseOffset, spanCoverage, type LrcReport } from "./lrcAlign";
+// The pool's reuse-vs-recompute rule, pure and tested — so no surface reimplements a second one.
+export { planLyrics, type LyricsPlan } from "./convergence";
+// What happened, link by link — the answer to "are the lyrics even firing?"
 export { formatLyricsDiag, lyricsVerdict } from "./diag";
-// The forced aligner — Whisper gives the words, the vocal stem gives the times.
+// The monotonic DP the alignment rides on (one onset, one word; may decline).
 export { alignWords, estimateBias, globalLag, nearestOnset, type AlignReport, type AlignOpts } from "./align";

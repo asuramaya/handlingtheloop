@@ -10,7 +10,7 @@
 // only `../App` import erased at build (no cycle). See htl-refactor-monoliths.
 import { useCallback, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-import { resolveLyrics, cacheRemoteLyrics, whisperModel, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
 
@@ -32,7 +32,7 @@ export interface LyricsSyncDeps {
 
 export interface LyricsSync {
   onRoomLyrics: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
-  reprocessLyrics: (id: DeckId, engineOverride?: "whisper" | "youtube") => void;
+  reprocessLyrics: (id: DeckId, engineOverride?: "lrclib" | "youtube") => void;
   sendHostLyrics: (id: DeckId, force?: boolean) => void;
 }
 
@@ -76,20 +76,19 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
   // scratch — the escape hatch for wrong/contaminated lyrics. `engineOverride` picks the
   // source: "whisper" re-decodes the vocal stem on-device; "youtube" pulls fresh captions.
   const reprocessLyrics = useCallback(
-    (id: DeckId, engineOverride?: "whisper" | "youtube") => {
+    (id: DeckId, engineOverride?: "lrclib" | "youtube") => {
       const vid = latest.current.loaded[id];
       if (!vid) return;
       const seq = loadSeq.current[id];
       const stale = () => seq !== loadSeq.current[id];
-      const eng = engineOverride ?? (lyricsModelRef.current === "youtube" ? "youtube" : "whisper");
+      const eng = engineOverride ?? (lyricsModelRef.current === "youtube" ? "youtube" : "lrclib");
       captionVidRef.current[id] = "";
       setCaptions((c) => ({ ...c, [id]: [] })); // drop the wrong lyrics immediately
       setCaptionSource((s) => ({ ...s, [id]: null }));
-      setLyricStatus((s) => ({ ...s, [id]: eng === "youtube" ? "Reloading captions…" : "Reprocessing lyrics…" }));
+      setLyricStatus((s) => ({ ...s, [id]: eng === "youtube" ? "Reloading captions…" : "Re-fetching lyrics…" }));
       void resolveLyrics({
         videoId: vid,
         deck: engine.deck(id),
-        model: whisperModel(lyricsModelRef.current).id, // tolerates a retired id (e.g. the dropped "base")
         engine: eng,
         force: true,
         enabled: true, // explicit user action → decode even if auto-lyrics is off

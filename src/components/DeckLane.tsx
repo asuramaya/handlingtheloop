@@ -67,7 +67,7 @@ interface DeckLaneProps {
   // Blocks scrub / needle-drop / bend (control) but NOT zoom or expand — those stay live so a
   // listener can still inspect the waveform.
   locked?: boolean;
-  onReprocessLyrics?: (engine: "whisper" | "youtube") => void;
+  onReprocessLyrics?: (engine: "lrclib" | "youtube") => void;
 }
 
 // Just the time readout, self-animating via its own rAF. Isolating it here means

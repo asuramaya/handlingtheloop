@@ -52,6 +52,8 @@ export interface LyricsDiag {
   artist: string | null; // canonical, from the acoustic fingerprint (null = never identified)
   title: string | null;
   matched: boolean; // LRCLIB had this recording
+  lookupFailed?: boolean; // ...or the lookup never completed. A TIMEOUT IS NOT A MISS, and saying so
+  // sends you hunting for a lyrics file that was there all along.
   plainOnly?: boolean; // ...but with NO line clock — the words are right, the times are all ours
   instrumental: boolean; // ...and says it has no vocals. A free, CORRECT "no lyrics".
   lines: number;

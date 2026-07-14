@@ -99,10 +99,24 @@ const BASE = "https://lrclib.net/api";
 // LRCLIB asks clients to identify themselves. Be a good citizen of a free service.
 const UA = "handlingtheloop (https://handlingtheloop.com)";
 
+// Each REQUEST gets its own budget. LRCLIB is a free service and it is genuinely slow — a duration-
+// matched /get takes about 4 s and a fuzzy /search about 9 s (measured). Those are not hangs, they
+// are the service working, and a budget that cannot tell the difference will abort a lookup that was
+// about to succeed and report it as "no match".
+const REQ_TIMEOUT_MS = 15000;
 async function get(url: string, signal?: AbortSignal): Promise<unknown> {
-  const r = await fetch(url, { headers: { "Lrclib-Client": UA }, signal });
-  if (!r.ok) return null;
-  return r.json();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+  const onAbort = () => ctrl.abort();
+  signal?.addEventListener("abort", onAbort);
+  try {
+    const r = await fetch(url, { headers: { "Lrclib-Client": UA }, signal: ctrl.signal });
+    if (!r.ok) return null;
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 /**

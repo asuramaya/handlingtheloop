@@ -1535,6 +1535,10 @@ function AppBody() {
           engine: lyricsModelRef.current === "youtube" ? "youtube" : "lrclib",
           // The uploader's title — the fallback name when acoustic identity has no match (~1 in 5).
           trackTitle: track.title,
+          // ★ FROM THE CATALOG, NOT THE DECK. Lyrics resolve BEFORE the audio is decoded, so
+          // deck.duration is still 0 here — and LRCLIB's exact /get is duration-matched, so a zero
+          // silently skips the fast precise lookup and falls through to the slow fuzzy search.
+          duration: track.duration,
           enabled: lyricsAutoRef.current,
           // A neural vocal stem UPGRADES lyrics from line-level to word-level. It is no longer a
           // prerequisite: LRCLIB's own line clock works with no stem, no model and no GPU.

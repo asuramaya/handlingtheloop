@@ -14,7 +14,17 @@ import type { LyricsDiag } from "./types";
 
 /** One verdict on the whole chain: which link failed, and what to do about it. */
 export interface LyricsVerdict {
-  kind: "no-identity" | "no-match" | "instrumental" | "no-stem" | "plain-only" | "estimated" | "low-confidence" | "aligned" | "unknown";
+  kind:
+    | "no-identity"
+    | "lookup-failed"
+    | "no-match"
+    | "instrumental"
+    | "no-stem"
+    | "plain-only"
+    | "estimated"
+    | "low-confidence"
+    | "aligned"
+    | "unknown";
   headline: string;
   fix: string;
 }
@@ -29,6 +39,12 @@ export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
       kind: "no-identity",
       headline: "NOT IDENTIFIED — we don't know what song this is",
       fix: "The acoustic fingerprint found no match, and the uploader's title didn't parse as 'Artist - Title'. Nothing can be looked up without a name.",
+    };
+  if (d.lookupFailed)
+    return {
+      kind: "lookup-failed",
+      headline: `LOOKUP FAILED · ${d.artist} — ${d.title}`,
+      fix: "The lyrics database didn't answer in time (it's a free service and can be slow). This is NOT a miss — the lyrics may well exist. Hit ↻ Re-fetch.",
     };
   if (!d.matched)
     return {
@@ -94,7 +110,9 @@ export function formatLyricsDiag(d: LyricsDiag): [string, string][] {
         ? d.instrumental
           ? "instrumental (no vocals)"
           : `${d.lines} lines${d.plainOnly ? " · PLAIN ONLY (no line clock)" : ""}${d.words ? `, ${d.words} words` : ""}`
-        : "— no match",
+        : d.lookupFailed
+          ? "— LOOKUP FAILED (timed out; not a miss)"
+          : "— no match",
     ],
     ["3 · vocal stem", d.onsets ? `${d.onsets} onsets measured` : "— none (separation off, or no stem yet)"],
     ["4 · offset", d.onsets ? `${ms(d.offset)} · ${Math.round(d.confidence * 100)}% of lines on singing` : "—"],

@@ -135,17 +135,23 @@ function alignOnWorker(
   });
 }
 
-// ★ EVERY NETWORK CALL IN THIS FILE IS BOUNDED. A `fetch` with no timeout does not fail — it HANGS,
-// and a hung lookup leaves the deck's spinner turning for the rest of the session with no error and
-// nothing to click. ("A niche indie song spins forever without a match.") A lookup that hasn't
-// answered in ten seconds is not going to; treat it as a miss and fall through.
-const NET_TIMEOUT_MS = 10000;
-async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>, fallback: T): Promise<T> {
+// ★ BOUNDED, BUT PER REQUEST — NOT PER CHAIN. A `fetch` with no timeout does not fail, it HANGS,
+// and a hung lookup leaves the spinner turning for the rest of the session. But my first cut wrapped
+// the WHOLE three-request lookup in one 10 s budget, and LRCLIB is genuinely slow: /get takes ~4 s
+// and /search ~9 s (measured). So a lookup that was going to SUCCEED got aborted mid-chain, and the
+// diagnostic then told the operator "LRCLIB has never seen this recording" — a timeout reported as a
+// miss, which is the worst kind of wrong answer because it sends you looking in the wrong place.
+// A budget must bound ONE thing that can hang, not a sequence of things that are merely slow.
+// The outer ceiling: a HANG guard for the whole lookup, not a race against a slow service.
+// Each request inside fetchLrcLib carries its own 15 s budget (see lrclib.ts).
+const NET_TIMEOUT_MS = 45000;
+async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>, fallback: T, onFail?: () => void): Promise<T> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), NET_TIMEOUT_MS);
   try {
     return await fn(ctrl.signal);
   } catch {
+    onFail?.(); // ★ a lookup that FAILED is not a lookup that MISSED — the diagnostic must not conflate them
     return fallback;
   } finally {
     clearTimeout(timer);
@@ -252,6 +258,11 @@ export interface ResolveOpts {
   deck: Deck;
   /** The uploader's title — the fallback when acoustic identity has no match for this track. */
   trackTitle?: string;
+  /** Track length, seconds. ★ MUST come from the track METADATA, not from `deck.duration`: lyrics
+   *  resolve starts BEFORE the audio is decoded, so the deck's duration is 0 (or the last track's).
+   *  It reads as a harmless default and it is not — LRCLIB's exact /get is duration-matched, so a
+   *  zero here SKIPS the fast, precise lookup and falls through to the slow fuzzy search. */
+  duration?: number;
   engine?: "lrclib" | "youtube";
   force?: boolean;
   enabled: boolean; // settings.lyricsAuto
@@ -332,7 +343,9 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
     const bornAt = genOf(o.videoId);
     job = (async (): Promise<LyricsLine[] | null> => {
       const t0 = Date.now();
-      const duration = o.deck.duration || 0;
+      // The deck may not have decoded yet — trust the catalog's length, and only fall back to the
+      // deck (which is 0 this early in a load).
+      const duration = o.duration || o.deck.duration || 0;
       const diag: LyricsDiag = {
         source: "lrclib",
         artist: null,
@@ -367,7 +380,11 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
 
       // 2) WHAT was sung? (ground truth, not a guess)
       o.onStatus?.("lyrics — looking up…");
-      const lrc = await bounded((signal) => fetchLrcLib({ ...name, duration }, signal), null);
+      const lrc = await bounded(
+        (signal) => fetchLrcLib({ ...name, duration }, signal),
+        null,
+        () => (diag.lookupFailed = true),
+      );
       if (!lrc) return finish(null);
       diag.matched = true;
       if (lrc.instrumental) {
@@ -385,6 +402,12 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       const lines = lrc.synced?.length ? lrcToLines(lrc.synced, duration) : [];
       diag.lines = lines.length || (lrc.plain?.length ?? 0);
       if (!lines.length && !lrc.plain?.length) return finish(null);
+      // ★ FROM HERE ON, WE KNOW THE REAL WORDS — SO YOUTUBE IS NEVER THE ANSWER AGAIN. Its caption
+      // track for a German industrial single turned out to be nonsense in FRENCH. Falling back to it
+      // when a lyrics database has already handed us the correct words is not a graceful degradation,
+      // it is replacing truth with garbage. Say what's missing (the timing) instead of lying about
+      // what we have (the words).
+      diag.matched = true;
 
       // Show them NOW, at LRCLIB's own clock. This is already a working feature: no stem, no model,
       // no GPU, works on a phone. Everything below is an UPGRADE, not a prerequisite.
@@ -396,8 +419,15 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       // 3) WHEN was it sung? Only if this device actually has an isolated vocal to measure.
       const vocals = await waitForNeuralVocals(o.videoId, o.onStatus);
       if (!vocals) {
+        if (!lines.length) {
+          // We hold the right words and there is no clock anywhere: LRCLIB never timed them, and
+          // there's no vocal stem to measure. Say exactly that, and show nothing — the words are
+          // real and one setting away from being usable. YouTube's captions are NOT the fallback
+          // here (see above): a wrong-language auto-caption is worse than an honest blank.
+          o.onStatus?.("Lyrics found — turn on stem separation to time them");
+          return finish([]);
+        }
         o.onStatus?.(null);
-        if (!lines.length) return finish(null); // plain words + no stem = nothing we can place
         diag.source = "lrclib";
         mem.set(o.videoId, lines);
         void putLyricsLocal(o.videoId, { lines, model: "lrclib", ver: LYRICS_VER });
@@ -464,9 +494,14 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       return;
     }
     if (lines && !lines.length) {
-      // Known instrumental — say so, and don't go fishing in YouTube's captions for a verse.
-      o.onStatus?.("Instrumental — no lyrics");
-      setTimeout(() => !o.stale() && o.onStatus?.(null), 5000);
+      // Either a known instrumental, or the right words with no clock to put them on. Both are
+      // ANSWERS, not failures — and neither is improved by going fishing in YouTube's captions.
+      // The status was set by the branch that knows which; leave it up.
+      const d = diags.get(o.videoId);
+      if (d?.instrumental) {
+        o.onStatus?.("Instrumental — no lyrics");
+        setTimeout(() => !o.stale() && o.onStatus?.(null), 5000);
+      }
       return;
     }
   } catch (err) {

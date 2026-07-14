@@ -359,9 +359,11 @@ export function useSampler(
       const id = regionDeck(i);
       const d = engine.deck(id);
       const vid = id === "A" ? loaded.A : loaded.B;
-      // Need SOME local source to slice: the raw mix buffer, or — once it's been freed on mobile —
-      // our own stems still resident as int16 in the worklet (extractRegion pulls the slice back).
-      if (!vid || (!d.buffer && !d.ownStems)) return;
+      // ★ ASK THE DECK, don't test its cache fields — the same fix playRegion just got, and this is
+      // the WORSE of the two sites: it's the GRAB guard, so a deck whose mix buffer was freed for any
+      // reason other than a stems pack wouldn't even record the region. SHIFT-grab would do nothing
+      // at all, and you could not tell "this deck has no audio" from "the sampler is broken".
+      if (!vid || !d.hasLocalPcm) return;
       let start: number, end: number;
       if (d.loop) {
         start = d.loop.start;
@@ -382,14 +384,16 @@ export function useSampler(
       arr[slot] = { start, end, name: `${id}${slot + 1}`, mode: arr[slot]?.mode ?? "oneshot", gain: arr[slot]?.gain ?? 1, ...(stems ? { stems } : {}) };
       next[vid] = arr;
       persistRegions(next);
-      // Warm the worklet-extracted slice now → first tap is instant. Needed whenever there's no single
-      // live buffer to slice: a mix/single freed on mobile, OR a multi-stem subset (no single buffer,
-      // even on desktop). No-op when a live buffer covers it (desktop mix / resident single stem).
-      const hasLive = !stems ? d.buffer : stems.length === 1 ? d.stemBuffer(stems[0]) : null;
-      if (!hasLive && d.ownStems) {
-        const key = `${vid}:${start.toFixed(3)}:${end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
-        void d.extractRegion(start, end, stems).then((b) => { if (b) regionBufCache.current.set(key, b); });
-      }
+      // Warm the slice now → the first tap is instant. This used to decide FOR the deck whether an
+      // extract was even needed (`!stems ? d.buffer : d.stemBuffer(...)`, gated on ownStems) — which
+      // is regionPcm's resident-vs-worklet choice, re-implemented in the caller, and therefore free
+      // to drift away from it. Just ask, and cache only what's ours to keep: `shared` means the deck
+      // handed back a slice of a LIVE buffer, and pinning that would hold open the very buffer the
+      // memory pager is trying to release (and there's nothing to warm — it's already resident).
+      const key = `${vid}:${start.toFixed(3)}:${end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
+      void d.regionPcm(start, end, stems).then((got) => {
+        if (got && !got.shared) regionBufCache.current.set(key, got.buffer);
+      });
       doEmit({ kind: "sample", pad: i, route: routeOf(i), action: "assign" }); // watcher grabs the same region off its synced deck
     },
     [engine, loaded.A, loaded.B, regions, persistRegions],

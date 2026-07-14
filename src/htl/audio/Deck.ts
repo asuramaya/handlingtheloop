@@ -956,6 +956,22 @@ export class Deck {
    *  is the same disease that killed lyrics for the entire life of the feature (see vocalPcm): a
    *  consumer reaching through the deck's MEMORY POLICY instead of asking it a question. The read is
    *  legal and the answer is legitimately "I don't have that". Found by Metron V, whose grep this is. */
+  /** ★ regionPcm's SYNCHRONOUS companion: can this deck hand out PCM at all, right now?
+   *
+   *  Some callers must decide BEFORE they commit to an async round-trip — the sampler's GRAB, for
+   *  one, which has to know whether there is anything to capture before it writes a pad. Give them a
+   *  real answer rather than leaving them to reconstruct one out of the deck's private fields, which
+   *  is how the whole family of bugs above got started.
+   *
+   *  True whenever the audio is somewhere reachable: the resident float32 mix, or the stretch worklet
+   *  holding it as int16 — and the worklet IS the audio source, so if this deck can PLAY the track it
+   *  can hand it back. The old test was `!buffer && !ownStems`, and ownStems answers "was this track
+   *  separated" — a different question that merely CORRELATED with this one, and only because
+   *  releaseMixBuffer() happens to have a single call site. A proxy that happens to be right is a bug
+   *  waiting for its trigger. */
+  get hasLocalPcm(): boolean {
+    return this._loaded && (!!this.buffer || !!this.stretchNode);
+  }
   async regionPcm(start: number, end: number, stems?: StemName[]): Promise<RegionPcm | null> {
     const want = stems?.length ? stems : null;
     // Zero-copy when one live buffer covers it: the whole mix, or a single resident stem. A

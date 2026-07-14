@@ -5,9 +5,12 @@ import type { CaptionCue } from "@htl/media";
 //             phone, and is already a usable feature on its own.
 //   aligned = those same words, with every WORD placed on a real onset measured from THIS device's
 //             isolated vocal stem. The upgrade, not the prerequisite.
+//   estimated = ground-truth words for a song LRCLIB has no line clock for (6% of a real library).
+//             The times are derived from the vocal alone, with no line anchors — so an error early
+//             has nothing to pull it back. Weaker on purpose, and it says so.
 //   pool    = someone else's device already did the alignment; we took theirs.
 //   youtube = the last-resort fallback when LRCLIB has never heard of the track.
-export type LyricsSource = "lrclib" | "aligned" | "pool" | "youtube";
+export type LyricsSource = "lrclib" | "aligned" | "estimated" | "pool" | "youtube";
 
 // One line of a transcript — start/end in TRACK-seconds, like a CaptionCue, so it still
 // renders through the caption ribbon. `words` carries per-WORD start times (Whisper word-
@@ -49,6 +52,7 @@ export interface LyricsDiag {
   artist: string | null; // canonical, from the acoustic fingerprint (null = never identified)
   title: string | null;
   matched: boolean; // LRCLIB had this recording
+  plainOnly?: boolean; // ...but with NO line clock — the words are right, the times are all ours
   instrumental: boolean; // ...and says it has no vocals. A free, CORRECT "no lyrics".
   lines: number;
   words: number;

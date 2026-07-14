@@ -17,7 +17,7 @@
 // The alignment itself (lrcAlign.ts) is a pure function, so it is unit-tested rather than
 // eyeballed; this worker exists only to keep ~30k FFTs off the UI thread.
 import { FFT, hannPeriodic } from "../stems/fft";
-import { alignLrc } from "./lrcAlign";
+import { alignLrc, alignPlain } from "./lrcAlign";
 import type { LyricsLine } from "./types";
 
 const SR = 16000; // everything below works at 16 kHz mono — plenty for onsets and energy
@@ -121,11 +121,12 @@ function energyEnvelope(audio: Float32Array): Float32Array {
 self.onmessage = (e: MessageEvent) => {
   const msg = e.data;
   if (msg?.type !== "align") return;
-  const { id, pcm, sampleRate, lines, duration } = msg as {
+  const { id, pcm, sampleRate, lines, plain, duration } = msg as {
     id: number;
     pcm: Float32Array;
     sampleRate: number;
-    lines: LyricsLine[];
+    lines?: LyricsLine[]; // line-synced (the good case)
+    plain?: string[]; // ...or the right words with NO clock at all — forced alignment's home ground
     duration: number;
   };
   try {
@@ -135,7 +136,9 @@ self.onmessage = (e: MessageEvent) => {
     (self as unknown as Worker).postMessage({ type: "progress", phase: "energy", pct: 70, id });
     const env = energyEnvelope(audio);
     (self as unknown as Worker).postMessage({ type: "progress", phase: "align", pct: 90, id });
-    const out = alignLrc({ lines, onsets, env, hop: ENV_HOP, duration });
+    const out = plain?.length
+      ? alignPlain({ text: plain, onsets, env, hop: ENV_HOP, duration })
+      : alignLrc({ lines: lines ?? [], onsets, env, hop: ENV_HOP, duration });
     (self as unknown as Worker).postMessage({ type: "done", id, lines: out.lines, report: out.report, onsets: onsets.length });
   } catch (err) {
     (self as unknown as Worker).postMessage({ type: "error", id, message: String((err as Error)?.message ?? err) });

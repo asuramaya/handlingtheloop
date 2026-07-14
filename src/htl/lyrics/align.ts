@@ -59,6 +59,18 @@ export interface AlignOpts {
   freePenalty?: number;
   /** Minimum separation between consecutive words so they never pile onto one tick. */
   minSep?: number;
+  /** Skip the systematic (bias/drift) search and use THIS instead.
+   *
+   *  ★ Pass {bias:0, drift:0} when the caller already has ANCHORS. With LRC line timings, the
+   *  whole-track offset has already been found from structure (a far more robust statistic than a
+   *  word-level lag scan), and every line is an independent anchor — so a second search here has
+   *  nothing left to find and plenty left to break. It did: given crude seeds and quasi-regular
+   *  onsets it locked onto a shift of −0.6 voiced-seconds, which is most of a word, and slid the
+   *  entire train onto the PREVIOUS onset. An estimator with nothing to estimate will estimate noise. */
+  systematic?: { bias: number; drift: number };
+  /** Fewest onsets worth aligning against. High (4) with no anchors — thin evidence invents an
+   *  alignment. Low (1) per LINE, where the anchor makes even two onsets meaningful. */
+  minOnsets?: number;
 }
 
 // ★ THE COST MODEL, and the mistake it took a failing test to see. The first version charged a word
@@ -72,13 +84,14 @@ export interface AlignOpts {
 // are noisier than the timestamps themselves — leaning on them would enslave us to the noise. What
 // actually stops a dense run collapsing onto one onset isn't the gap term at all: it's the
 // ONE-ONSET-ONE-WORD constraint in the DP. Two words cannot start on the same vocal transient.
-const DEF: Required<AlignOpts> = {
+const DEF: Omit<Required<AlignOpts>, "systematic"> = {
   window: 0.35,
   maxCandidates: 6,
   devW: 1,
   gapW: 0.3,
   freePenalty: 0.4,
   minSep: 0.02,
+  minOnsets: 4,
 };
 
 // How far the word train may be slid to find its onsets. Bounded ON PURPOSE — see globalLag. A
@@ -242,11 +255,13 @@ export function alignWords(
   const o = { ...DEF, ...opts };
   const n = wordTimes.length;
   const idle: AlignReport = { bias: 0, drift: 0, snapped: 0, free: n, medianMove: 0, applied: false };
-  if (n < 2 || onsets.length < 4) return { times: [...wordTimes], report: idle };
+  if (n < 1 || onsets.length < o.minOnsets) return { times: [...wordTimes], report: idle };
+  if (n < 2) return { times: [nearestOnset(onsets, wordTimes[0])], report: { ...idle, snapped: 1, free: 0, applied: true } };
 
   // 1) Remove the SYSTEMATIC error first, so the DP is choosing between onsets rather than fighting
-  //    a global offset. (This alone fixes the OFFSET and DRIFT verdicts.)
-  const { bias, drift } = estimateBias(wordTimes, onsets);
+  //    a global offset. (This alone fixes the OFFSET and DRIFT verdicts.) A caller that already holds
+  //    anchors passes it in as zero — see AlignOpts.systematic.
+  const { bias, drift } = opts.systematic ?? estimateBias(wordTimes, onsets);
   const t0 = wordTimes[0];
   const corrected = wordTimes.map((t) => t + bias + drift * (t - t0));
 

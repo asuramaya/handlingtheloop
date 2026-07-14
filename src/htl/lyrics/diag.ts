@@ -14,7 +14,7 @@ import type { LyricsDiag } from "./types";
 
 /** One verdict on the whole chain: which link failed, and what to do about it. */
 export interface LyricsVerdict {
-  kind: "no-identity" | "no-match" | "instrumental" | "no-stem" | "low-confidence" | "aligned" | "unknown";
+  kind: "no-identity" | "no-match" | "instrumental" | "no-stem" | "plain-only" | "estimated" | "low-confidence" | "aligned" | "unknown";
   headline: string;
   fix: string;
 }
@@ -48,6 +48,18 @@ export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
       headline: `LINE-SYNCED · ${d.lines} lines — but no vocal stem to time the WORDS against`,
       fix: "Turn on stem separation to upgrade to word-level. The words are already right; only the per-word timing is missing.",
     };
+  if (d.plainOnly && d.source !== "estimated")
+    return {
+      kind: "plain-only",
+      headline: `PLAIN LYRICS ONLY · ${d.lines} lines, no line clock`,
+      fix: "LRCLIB has the right words for this song but nobody has ever timed them. We can derive the timing from the vocal stem — turn on stem separation.",
+    };
+  if (d.source === "estimated")
+    return {
+      kind: "estimated",
+      headline: `TIMING ESTIMATED · ${d.snapped}/${d.words} words on a real vocal onset`,
+      fix: "No synced file existed, so the times come from the vocal alone with no line anchors to check them against. The words are right; if the timing drifts, that is why.",
+    };
   if (d.confidence < LOW_CONF)
     return {
       kind: "low-confidence",
@@ -76,7 +88,14 @@ export function formatLyricsDiag(d: LyricsDiag): [string, string][] {
     ["fix", v.fix],
     // The chain, in order. The first blank row is the step that broke.
     ["1 · identity", d.artist && d.title ? `${d.artist} — ${d.title}` : "— not identified"],
-    ["2 · LRCLIB", d.matched ? (d.instrumental ? "instrumental (no vocals)" : `${d.lines} lines, ${d.words} words`) : "— no match"],
+    [
+      "2 · LRCLIB",
+      d.matched
+        ? d.instrumental
+          ? "instrumental (no vocals)"
+          : `${d.lines} lines${d.plainOnly ? " · PLAIN ONLY (no line clock)" : ""}${d.words ? `, ${d.words} words` : ""}`
+        : "— no match",
+    ],
     ["3 · vocal stem", d.onsets ? `${d.onsets} onsets measured` : "— none (separation off, or no stem yet)"],
     ["4 · offset", d.onsets ? `${ms(d.offset)} · ${Math.round(d.confidence * 100)}% of lines on singing` : "—"],
     [

@@ -99,7 +99,7 @@ function ensureWorker(): Worker {
 function alignOnWorker(
   pcm: Float32Array,
   sampleRate: number,
-  lines: LyricsLine[],
+  words: { lines?: LyricsLine[]; plain?: string[] },
   duration: number,
   onProgress?: (p: string, pct: number) => void,
 ): Promise<{ lines: LyricsLine[]; report: LrcReport; onsets: number }> {
@@ -108,8 +108,25 @@ function alignOnWorker(
   return new Promise((resolve, reject) => {
     jobs.set(id, { resolve, reject, onProgress });
     const buf = pcm.slice(); // COPY — the deck keeps its live stem buffer; we transfer the copy
-    w.postMessage({ type: "align", id, pcm: buf, sampleRate, lines, duration }, [buf.buffer]);
+    w.postMessage({ type: "align", id, pcm: buf, sampleRate, ...words, duration }, [buf.buffer]);
   });
+}
+
+// ★ EVERY NETWORK CALL IN THIS FILE IS BOUNDED. A `fetch` with no timeout does not fail — it HANGS,
+// and a hung lookup leaves the deck's spinner turning for the rest of the session with no error and
+// nothing to click. ("A niche indie song spins forever without a match.") A lookup that hasn't
+// answered in ten seconds is not going to; treat it as a miss and fall through.
+const NET_TIMEOUT_MS = 10000;
+async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>, fallback: T): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), NET_TIMEOUT_MS);
+  try {
+    return await fn(ctrl.signal);
+  } catch {
+    return fallback;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---- caches --------------------------------------------------------------------------
@@ -319,7 +336,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
 
       // 2) WHAT was sung? (ground truth, not a guess)
       o.onStatus?.("lyrics — looking up…");
-      const lrc = await fetchLrcLib({ ...name, duration }).catch(() => null);
+      const lrc = await bounded((signal) => fetchLrcLib({ ...name, duration }, signal), null);
       if (!lrc) return finish(null);
       diag.matched = true;
       if (lrc.instrumental) {
@@ -328,31 +345,45 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
         diag.instrumental = true;
         return finish([]);
       }
-      if (!lrc.synced?.length) return finish(null); // plain-only: words but no clock (see Tier 2)
-      const lines = lrcToLines(lrc.synced, duration);
-      diag.lines = lines.length;
+      // ★ PLAIN LYRICS ARE NOT A MISS. About 1 song in 16 has the right words on LRCLIB and no line
+      // clock at all — and having no clock is not a missing input, it is the ORDINARY case forced
+      // alignment was invented for. We know the words and their order; the vocal stem tells us where
+      // they land. It needs the stem, though (there is nothing else to go on), so it is not shown
+      // until we have one.
+      diag.plainOnly = !lrc.synced?.length;
+      const lines = lrc.synced?.length ? lrcToLines(lrc.synced, duration) : [];
+      diag.lines = lines.length || (lrc.plain?.length ?? 0);
+      if (!lines.length && !lrc.plain?.length) return finish(null);
 
       // Show them NOW, at LRCLIB's own clock. This is already a working feature: no stem, no model,
       // no GPU, works on a phone. Everything below is an UPGRADE, not a prerequisite.
-      if (!o.stale()) o.onCues(lines, "lrclib");
-      o.onStatus?.(null);
+      if (lines.length && !o.stale()) {
+        o.onCues(lines, "lrclib");
+        o.onStatus?.(null);
+      }
 
       // 3) WHEN was it sung? Only if this device actually has an isolated vocal to measure.
       const vocals = await waitForNeuralVocals(o.videoId, o.onStatus);
       if (!vocals) {
+        o.onStatus?.(null);
+        if (!lines.length) return finish(null); // plain words + no stem = nothing we can place
         diag.source = "lrclib";
         mem.set(o.videoId, lines);
         void putLyricsLocal(o.videoId, { lines, model: "lrclib", ver: LYRICS_VER });
-        o.onStatus?.(null);
         return finish(lines); // line-level. Good enough to sing along to; not pooled (not our best).
       }
       o.onStatus?.("lyrics — aligning to the vocal…");
-      const aligned = await alignOnWorker(vocals, o.sampleRate, lines, duration, (_p, pct) =>
-        o.onStatus?.(`lyrics — aligning ${pct}%`),
+      const aligned = await alignOnWorker(
+        vocals,
+        o.sampleRate,
+        lines.length ? { lines } : { plain: lrc.plain ?? [] },
+        duration,
+        (_p, pct) => o.onStatus?.(`lyrics — aligning ${pct}%`),
       );
       if (genOf(o.videoId) !== bornAt) return finish(null); // superseded by a forced reprocess
+      if (!aligned.lines.length) return finish(null);
 
-      diag.source = "aligned";
+      diag.source = lines.length ? "aligned" : "estimated";
       diag.onsets = aligned.onsets;
       diag.words = aligned.report.words;
       diag.offset = aligned.report.offset;
@@ -364,15 +395,15 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       diag.applied = aligned.report.applied;
 
       mem.set(o.videoId, aligned.lines);
-      void putLyricsLocal(o.videoId, { lines: aligned.lines, model: "aligned", ver: LYRICS_VER });
+      void putLyricsLocal(o.videoId, { lines: aligned.lines, model: diag.source, ver: LYRICS_VER });
       // Contribute. No degeneracy check is needed any more: the WORDS are ground truth, so the worst
       // this can be is mistimed — never fiction. That guard existed only because Whisper could lie.
       void poolPut({
         v: 1,
         videoId: o.videoId,
-        model: "aligned",
+        model: diag.source,
         lang: "und",
-        source: "aligned",
+        source: diag.source,
         conf: aligned.report.confidence,
         ver: LYRICS_VER,
         lines: aligned.lines,
@@ -397,7 +428,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
     });
     if (o.stale()) return;
     if (lines?.length) {
-      o.onCues(lines, "aligned");
+      o.onCues(lines, diags.get(o.videoId)?.source ?? "aligned");
       o.onStatus?.(null);
       return;
     }
@@ -413,7 +444,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
 
   // 4) LRCLIB has never heard of this track → YouTube's captions, warts and all.
   if (best) return; // we already showed something
-  const cues = await fetchCaptions(o.videoId).catch(() => []);
+  const cues = await bounded(() => fetchCaptions(o.videoId), []);
   if (o.stale()) return;
   if (cues.length) {
     o.onCues(cues, "youtube");

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, coarseOffset, spanCoverage, alignLrc } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, coarseOffset, spanCoverage, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -217,5 +217,122 @@ describe("alignLrc — LRC words + a vocal stem → word times", () => {
     const { lines, report } = alignLrc({ lines: lrcFrom(0), onsets: [], env, hop: HOP, duration: DUR });
     expect(report.applied).toBe(false);
     expect(lines.flatMap((l) => l.words ?? []).length).toBe(truthWords.length); // still usable, LRC-timed
+  });
+});
+
+// ---- ★ THE RAMMSTEIN CASE — the bug the operator actually hit ---------------------------
+describe("a line whose words are separated by INSTRUMENTAL BARS", () => {
+  const HOP = 0.05;
+  const DUR = 40;
+
+  // "Du Hast": ONE LRC line — "Du, du hast, du hast mich" — sung across ~10 s with two bars of
+  // guitar in the middle of it. Only ~3 of those 10 seconds contain any voice at all.
+  //   "Du"              at 10.0
+  //   "du hast"         at 13.5  (after 2 bars of guitar)
+  //   "du hast mich"    at 17.0  (after 2 more)
+  const BURSTS: { t: number; words: string[] }[] = [
+    { t: 10.0, words: ["Du,"] },
+    { t: 13.5, words: ["du", "hast,"] },
+    { t: 17.0, words: ["du", "hast", "mich"] },
+    // Line 2 is sung too — a fixture where an LRC line has NO vocal under it isn't a song, and it
+    // let the coarse offset "improve" coverage by sliding the track 12.75 s onto the wrong phrase.
+    { t: 30.0, words: ["Du", "hast", "mich", "gefragt"] },
+  ];
+  const truth: number[] = [];
+  const onsets: number[] = [];
+  const env = new Float32Array(Math.round(DUR / HOP));
+  for (const b of BURSTS) {
+    b.words.forEach((_, i) => {
+      const t = Number((b.t + i * 0.42).toFixed(3));
+      truth.push(t);
+      onsets.push(t);
+    });
+    // Voice is present only for the burst — the bars between are SILENT on the vocal stem.
+    const end = b.t + b.words.length * 0.42 + 0.25;
+    for (let f = Math.round(b.t / HOP); f < Math.round(end / HOP); f++) env[f] = 1;
+  }
+  onsets.sort((a, b) => a - b);
+
+  // What the LRC file actually gives you: one line, one timestamp, and the next line far away.
+  const lines: LyricsLine[] = [
+    { start: 10.0, end: 30.0, text: "Du, du hast, du hast mich" },
+    { start: 30.0, end: DUR, text: "Du hast mich gefragt" },
+  ];
+  const LINE0 = 6; // words in line 0 — the ones we assert on
+
+  it("★★ spreads the words over the VOICED time, not the wall time", () => {
+    const { lines: out, report } = alignLrc({ lines, onsets, env, hop: HOP, duration: DUR });
+    const ws = out[0].words!;
+    expect(ws.map((w) => w.w)).toEqual(["Du,", "du", "hast,", "du", "hast", "mich"]);
+
+    // THE BUG: seeding across the line's 20-second wall-clock span (or crushing it into a
+    // syllable-rate 1.5 s) put nearly every word in a gap where no vocal onset exists — so the DP
+    // declined them all and the whole line slid onto its last reachable onset ("mich"). Every word
+    // must land within a few tens of ms of the note it belongs to.
+    ws.forEach((w, i) => expect(Math.abs(w.t - truth[i])).toBeLessThan(0.06));
+    expect(ws).toHaveLength(LINE0);
+
+    // ...and it did so by SNAPPING to real onsets, not by luck.
+    expect(report.snapped).toBeGreaterThanOrEqual(5);
+  });
+
+  it("★ the words do NOT pile up at the start of the line", () => {
+    const ws = alignLrc({ lines, onsets, env, hop: HOP, duration: DUR }).lines[0].words!;
+    // The last word is ~8 s after the first. A wall-clock or syllable-rate seed would have put them
+    // all inside the first 1.5 s, which is precisely how the line collapsed onto one word.
+    expect(ws[ws.length - 1].t - ws[0].t).toBeGreaterThan(6);
+  });
+});
+
+// ---- ★ PLAIN lyrics: the right words, and NO clock at all -------------------------------
+describe("alignPlain — forced alignment's home ground", () => {
+  const HOP = 0.05;
+  const DUR = 40;
+  // Two sung phrases with a long instrumental break between them. LRCLIB has the words (6% of a real
+  // library is like this — "Coax & Botany" is one) but nobody ever timed them.
+  const PHRASES = [
+    { t: 6.0, text: "hold me in the light" },
+    { t: 24.0, text: "and let the summer go" },
+  ];
+  const truth: number[] = [];
+  const onsets: number[] = [];
+  const env = new Float32Array(Math.round(DUR / HOP));
+  for (const p of PHRASES) {
+    const ws = p.text.split(" ");
+    ws.forEach((_, i) => {
+      const t = Number((p.t + i * 0.5).toFixed(3));
+      truth.push(t);
+      onsets.push(t);
+    });
+    const end = p.t + ws.length * 0.5 + 0.3;
+    for (let f = Math.round(p.t / HOP); f < Math.round(end / HOP); f++) env[f] = 1;
+  }
+  onsets.sort((a, b) => a - b);
+
+  it("★ places un-timed words on the vocal — the instrumental break costs nothing", () => {
+    const { lines, report } = alignPlain({
+      text: PHRASES.map((p) => p.text),
+      onsets,
+      env,
+      hop: HOP,
+      duration: DUR,
+    });
+    expect(lines).toHaveLength(2);
+    const ws = lines.flatMap((l) => l.words ?? []);
+    expect(ws).toHaveLength(truth.length);
+    ws.forEach((w, i) => expect(Math.abs(w.t - truth[i])).toBeLessThan(0.08));
+    expect(report.applied).toBe(true);
+  });
+
+  it("★ reports ZERO confidence — there are no line anchors to check itself against", () => {
+    // Saying "94%" here would be a number with nothing behind it. With no anchors, one missed
+    // ad-lib shifts everything after it and nothing pulls it back. The UI must be able to say so.
+    const { report } = alignPlain({ text: PHRASES.map((p) => p.text), onsets, env, hop: HOP, duration: DUR });
+    expect(report.confidence).toBe(0);
+  });
+
+  it("a silent stem yields nothing rather than a guess", () => {
+    const { lines } = alignPlain({ text: ["some words"], onsets: [], env: new Float32Array(800), hop: HOP, duration: DUR });
+    expect(lines).toHaveLength(0);
   });
 });

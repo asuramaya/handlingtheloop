@@ -8,6 +8,7 @@ import type { LyricsSource, LyricsLine } from "@htl/lyrics";
 const SOURCE_TAG: Record<LyricsSource, { icon: string; label: string }> = {
   aligned: { icon: "🎯", label: "every word placed on this track's own vocal onsets" },
   lrclib: { icon: "📖", label: "line-synced lyrics — turn on stem separation for word-level timing" },
+  estimated: { icon: "〜", label: "right words, but no synced file existed — timing derived from the vocal alone" },
   pool: { icon: "☁", label: "aligned by someone else's device, shared to the community pool" },
   youtube: { icon: "▶", label: "YouTube captions (no word timing, and only as good as the uploader)" },
 };

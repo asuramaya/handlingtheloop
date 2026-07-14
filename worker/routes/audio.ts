@@ -15,6 +15,11 @@ import { audioChunks, diagnoseAudio, diagnoseRelay, fetchCaptions, fetchMeta, ma
 import { upsertCommunityTrack, getCachedCaptions, putCachedCaptions, getLyrics, putLyrics } from "../../server/db";
 import { allow, clientIp, cleanText, clampNum, sniffImage } from "../../server/security";
 
+// Where a pooled transcript's WORDS came from. "aligned"/"estimated"/"lrclib" = a real lyrics
+// database + our own timing. The Whisper ids are gone: they produced INVENTED words, and rows
+// carrying them are refused on read (see getLyrics) rather than ranked.
+const LYRIC_SOURCES = ["aligned", "estimated", "lrclib"];
+
 // Fetch a video's thumbnail from YouTube's CDN, best resolution first. hqdefault always exists;
 // maxresdefault is higher-res but 404s (or returns a tiny placeholder) for some uploads.
 async function fetchYtThumb(id: string): Promise<ArrayBuffer | null> {
@@ -285,7 +290,12 @@ export async function handleAudioRoutes(url: URL, req: Request, env: Env, ctx: E
         if (!(await allow(env.RL_WRITE, clientIp(req)))) return json(429, { error: "rate limited" });
         const b = (await req.json().catch(() => ({}))) as { videoId?: string; model?: string; lang?: string; conf?: number; ver?: number; lines?: unknown };
         if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
-        const model = b.model === "small" ? "small" : "base";
+        // ★ DO NOT COERCE THE PROVENANCE. This was `b.model === "small" ? "small" : "base"` — a
+        // hardcoded Whisper-era whitelist that silently RELABELLED anything it didn't recognise. So
+        // every row the new pipeline posted ("aligned") landed in the pool stamped "base", i.e. as a
+        // Whisper hallucination. A field that quietly rewrites what it's told is worse than no field:
+        // it doesn't lose the provenance, it INVERTS it.
+        const model = LYRIC_SOURCES.includes(b.model ?? "") ? (b.model as string) : "aligned";
         // Transcript-format version (client LYRICS_VER). Bounded so a poster can't claim an absurd
         // version to make their row permanently un-overwritable by the don't-downgrade guard.
         const ver = Math.max(1, Math.min(100, Math.floor(Number(b.ver) || 1)));

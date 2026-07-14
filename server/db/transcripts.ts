@@ -55,16 +55,21 @@ export interface LyricsRow {
   lines: { start: number; end: number; text: string; words?: { t: number; w: string; d?: number }[] }[];
 }
 // Rank the pooled transcripts for a track and serve the best one. FORMAT VERSION leads (a newer
-// aligner beats a better model on stale times — see the convergence contract), then MODEL QUALITY,
-// then recency. The model rank is written out rather than compared to one favoured id, because the
-// lineup changes: it used to be `(model = 'small') DESC`, which as soon as a stronger model shipped
-// would have quietly preferred the WEAKER transcript over it forever. Unknown/retired ids (e.g.
-// "base", dropped for being poor at singing) sort last, and are still served if they're all we have.
-const MODEL_RANK = "CASE model WHEN 'turbo' THEN 3 WHEN 'small' THEN 2 WHEN 'base' THEN 1 ELSE 0 END";
+// derivation beats an older one), then how the times were obtained, then recency.
+//
+// ★ AND THE WHISPER ERA IS NOT RANKED, IT IS REFUSED. Rows below FIRST_TRUSTWORTHY_VER were written
+// by a generative model that INVENTED the words ("(crow cawing) (crow cawing) (crow cawing)"). The
+// convergence contract says a stale transcript beats none — true when stale means worse TIMING,
+// false when it means fiction. There is no version of "show it while we fix it" that is acceptable
+// for made-up content, so the pool simply does not serve it.
+const FIRST_TRUSTWORTHY_VER = 6;
+// aligned = word-times measured against a real vocal stem · estimated = no line clock existed, so
+// the times are derived without anchors · lrclib = the database's own line clock, un-refined.
+const MODEL_RANK = "CASE model WHEN 'aligned' THEN 3 WHEN 'estimated' THEN 2 WHEN 'lrclib' THEN 1 ELSE 0 END";
 export async function getLyrics(db: D1Database, videoId: string): Promise<LyricsRow | null> {
   const row = await db
     .prepare(
-      `SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? ORDER BY ver DESC, ${MODEL_RANK} DESC, created_at DESC LIMIT 1`,
+      `SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? AND ver >= ${FIRST_TRUSTWORTHY_VER} ORDER BY ver DESC, ${MODEL_RANK} DESC, created_at DESC LIMIT 1`,
     )
     .bind(videoId)
     .first<{ model: string; lang: string; conf: number; ver: number; lines: string }>();

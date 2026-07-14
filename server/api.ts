@@ -686,7 +686,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
             return true;
           }
           await devStore.putLyrics(b.videoId, {
-            model: b.model === "small" ? "small" : "base",
+            // Never relabel the provenance (the prod worker had the same bug): a whitelist of
+            // Whisper names silently rewrote every new-path row as "base", i.e. as a hallucination.
+            model: ["aligned", "estimated", "lrclib"].includes(b.model ?? "") ? (b.model as string) : "aligned",
             lang: typeof b.lang === "string" ? b.lang : "und",
             conf: typeof b.conf === "number" ? b.conf : 0,
             ver: Math.max(1, Math.min(100, Math.floor(Number(b.ver) || 1))),

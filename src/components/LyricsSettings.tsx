@@ -43,7 +43,7 @@ export function LyricsSettings({
       <div className="settings-section-head">
         <span className="settings-label">
           Lyrics
-          <span className="settings-sub muted"> · real lyrics, timed to the vocal</span>
+          <span className="settings-sub muted"> · timed to the vocal</span>
         </span>
         <button
           className={`toggle ${settings.lyricsAuto ? "on" : ""}`}
@@ -69,11 +69,8 @@ export function LyricsSettings({
                 {wordLevel && <span className="stem-badge cached">Word-timed</span>}
               </span>
               <span className="stem-model-note">
-                The actual published lyrics, matched to this recording by its acoustic fingerprint — so they're the
-                right words, in any language.{" "}
-                {wordLevel
-                  ? "Stem separation is on, so every word is placed on the vocal's own onsets."
-                  : "Turn on stem separation above to time each individual word; without it you get line-by-line."}
+                Published lyrics, matched by acoustic fingerprint · any language ·{" "}
+                {wordLevel ? "every word timed to the vocal" : "line-by-line until stems are on"}
               </span>
             </button>
             <button
@@ -84,10 +81,7 @@ export function LyricsSettings({
                 YouTube captions
                 <span className="stem-badge ok">Instant</span>
               </span>
-              <span className="stem-model-note">
-                The uploader's own caption track. Line-level only, frequently auto-generated, and often missing or
-                wrong — the fallback, not the choice.
-              </span>
+              <span className="stem-model-note">The uploader's captions · line-level, often auto-generated or missing</span>
             </button>
           </div>
 
@@ -129,19 +123,10 @@ export function LyricsSettings({
             ))}
 
           {!isYt && !wordLevel && !mobile && (
-            <p className="settings-hint warn">
-              Stem separation is off, so lyrics are line-by-line. The words are still correct — only the per-word
-              timing needs an isolated vocal to measure against.
-            </p>
+            <p className="settings-hint warn">Stems are off — right words, line-by-line timing.</p>
           )}
         </>
       )}
-
-      <p className="settings-hint muted">
-        Words come from the lyrics database; the <em>timings</em> are measured from this track's own isolated vocal —
-        so they land on the beat even when the upload has a different intro. Aligned tracks are shared to the
-        community pool, so nobody's device has to do it twice.
-      </p>
     </div>
   );
 }

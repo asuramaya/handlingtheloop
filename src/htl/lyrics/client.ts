@@ -22,11 +22,29 @@ import type { LrcReport } from "./lrcAlign";
 // neural vocal stem UPGRADES them to word-level. Lyrics no longer need anything switched on to work,
 // which is what finally kills the "feature shipped in the off position" problem.
 
-// Transcript-FORMAT version. Bump when the shape/derivation changes so stale rows are re-derived.
-// 1-4 = Whisper eras. 5 = Whisper + forced alignment to onsets. 6 = ★ LRCLIB words + vocal-stem
-// times: the words are now GROUND TRUTH, not a model's guess, so every v≤5 row is not merely stale
-// but potentially FICTION and must be replaced.
-const LYRICS_VER = 6;
+// Transcript-FORMAT version. Bump when the shape OR THE DERIVATION changes, so stored rows are
+// re-derived instead of served forever.
+//   1-4  Whisper eras.
+//   5    Whisper + forced alignment to onsets.
+//   6    ★ LRCLIB words + vocal-stem times — the words became GROUND TRUTH instead of a guess.
+//   7    ★ alignment moved into VOICED time (10dcf22). A v6 row was aligned by the version that
+//        seeded words across a line's WALL clock, so on any song with instrumental bars inside a
+//        line (Rammstein's "Du, du hast, du hast mich") the whole line collapsed onto its last
+//        word. Same words, badly placed — and a v6 stamp said "current", so it would have been
+//        reused forever. ⚠ I FIXED THE DERIVATION AND ALMOST DIDN'T BUMP THIS. The convergence
+//        contract only works if the version tracks the OUTPUT, not just the schema: if the same
+//        input can now produce different times, it is a new version.
+const LYRICS_VER = 7;
+
+// ★ BELOW THIS, A TRANSCRIPT IS NOT STALE — IT IS FICTION, AND MUST NEVER BE SHOWN.
+//
+// The convergence contract's rule is "a stale transcript beats no transcript: show it, and re-derive
+// underneath". That is right when stale means WORSE TIMING. It is dead wrong for the Whisper era,
+// where the WORDS THEMSELVES WERE INVENTED — the cached dev pool is full of "(crow cawing) (crow
+// cawing) (crow cawing)". Displaying that for even a second, while a correct version derives behind
+// it, is showing the user a lie. So a v≤5 row is not adopted, not shown, and not kept: it is deleted
+// on sight. "Something beats nothing" stops being true the moment the something is made up.
+const FIRST_TRUSTWORTHY_VER = 6;
 
 // ---- community pool (D1) — graceful: any failure is a miss, we fall through ----------
 async function poolGet(videoId: string): Promise<LyricsTranscript | null> {
@@ -34,7 +52,12 @@ async function poolGet(videoId: string): Promise<LyricsTranscript | null> {
     const r = await fetch(`/api/lyrics?v=${encodeURIComponent(videoId)}`);
     if (!r.ok) return null;
     const j = (await r.json()) as { transcript?: LyricsTranscript | null };
-    return j?.transcript ?? null;
+    const t = j?.transcript ?? null;
+    // A pooled Whisper transcript is invented words. Refuse it outright — don't show it, don't
+    // adopt it, don't let it beat "nothing". (The server drops these too; this is the client half,
+    // because an old deployed worker is exactly the thing you cannot patch retroactively.)
+    if (t && (t.ver ?? 1) < FIRST_TRUSTWORTHY_VER) return null;
+    return t;
   } catch {
     return null;
   }
@@ -156,7 +179,15 @@ async function cachedLocal(videoId: string): Promise<{ lines: LyricsLine[]; ver:
   const rec = await getLyricsLocal(videoId).catch(() => null);
   const lines = rec?.lines as LyricsLine[] | undefined;
   if (!lines?.length) return null;
-  return { lines, ver: (rec as { ver?: number })?.ver ?? 1 };
+  const ver = (rec as { ver?: number })?.ver ?? 1;
+  // ★ SELF-CLEANING. Whisper-era rows are sitting in every user's IndexedDB from before the rebuild,
+  // and they are invented words, not stale ones. Delete on sight — there is no migration to run and
+  // nothing for the user to clear; the cache repairs itself the first time each track is touched.
+  if (ver < FIRST_TRUSTWORTHY_VER) {
+    void deleteLyricsLocal(videoId).catch(() => {});
+    return null;
+  }
+  return { lines, ver };
 }
 
 // ---- the vocal stem ------------------------------------------------------------------

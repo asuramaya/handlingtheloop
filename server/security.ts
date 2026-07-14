@@ -248,7 +248,7 @@ export const CSP = [
   "connect-src 'self' https:",
   "object-src 'none'",
   "base-uri 'self'",
-  "frame-ancestors 'none'",
+  "frame-ancestors 'self' https://asuramaya.com",
   "form-action 'self'",
 ].join("; ");
 

@@ -181,15 +181,21 @@ describe("alignLrc — LRC words + a vocal stem → word times", () => {
     { start: 27.6, text: "surely changing" },
   ];
   const spacings = [0.31, 0.44, 0.28, 0.52, 0.37];
-  // Ground truth: each word starts on a real onset.
+  // Ground truth: each word STARTS on a real onset — and a singer hits a note per SYLLABLE, so a
+  // two-syllable word ("walking") produces TWO attacks, the first of which is the word's start.
+  // (The old fixture gave one onset per WORD, which no sung vocal does, and it hid the fact that the
+  // seed must divide the attacks by syllables rather than by words.)
   const truthWords: { t: number; w: string; line: number }[] = [];
   const onsets: number[] = [];
   TRUE_LINES.forEach((l, li) => {
     let t = l.start;
     l.text.split(" ").forEach((w, wi) => {
       truthWords.push({ t: Number(t.toFixed(3)), w, line: li });
-      onsets.push(Number(t.toFixed(3)));
-      t += spacings[wi % spacings.length];
+      const syl = syllables(w);
+      for (let k = 0; k < syl; k++) {
+        onsets.push(Number((t + k * 0.18).toFixed(3))); // the word's syllables, as separate notes
+      }
+      t += spacings[wi % spacings.length] + (syl - 1) * 0.18;
     });
   });
   // Some onsets that are NOT word starts (breaths, consonant transients) — the DP must not be
@@ -311,6 +317,45 @@ describe("a line whose words are separated by INSTRUMENTAL BARS", () => {
 
     // ...and it did so by SNAPPING to real onsets, not by luck.
     expect(report.snapped).toBeGreaterThanOrEqual(5);
+  });
+
+  it("★★★ THE HELD NOTE: a sustained 'Duuuu' buys seconds and is still ONE word", () => {
+    // The bug the operator actually caught, and the one my first fixture was too kind to expose.
+    // Till holds the opening "Du" for as long as the whole two-word phrase that follows it. So the
+    // three bursts carry 1, 2 and 3 words but occupy roughly EQUAL voiced time.
+    //
+    // Seed the words across VOICED TIME and two of them land inside the held "Du" — every word after
+    // that is a slot late, and the last one ("mich") ends up past the end of the singing entirely.
+    // That is exactly what the ribbon showed. Time was never the right ruler.
+    //
+    // The ATTACKS have no such problem: a held note rings once however long it lasts. 1 + 2 + 3
+    // attacks, 1 + 2 + 3 words.
+    const DUR2 = 30;
+    const held = [
+      { t: 5.0, words: ["Du,"], sung: 2.2 }, // ONE word, held for 2.2 s
+      { t: 9.0, words: ["du", "hast,"], sung: 1.0 },
+      { t: 13.0, words: ["du", "hast", "mich"], sung: 1.4 },
+    ];
+    const truth2: number[] = [];
+    const on2: number[] = [];
+    const env2 = new Float32Array(Math.round(DUR2 / HOP));
+    for (const b of held) {
+      b.words.forEach((_, i) => {
+        const t = Number((b.t + i * 0.45).toFixed(3));
+        truth2.push(t);
+        on2.push(t); // one attack per word — a held vowel does NOT re-attack
+      });
+      for (let f = Math.round(b.t / HOP); f < Math.round((b.t + b.sung) / HOP); f++) env2[f] = 1;
+    }
+    on2.sort((a, b) => a - b);
+    const lrc2: LyricsLine[] = [{ start: 5.0, end: DUR2, text: "Du, du hast, du hast mich" }];
+
+    const { lines: out2 } = alignLrc({ lines: lrc2, onsets: on2, env: env2, hop: HOP, duration: DUR2 });
+    const ws = out2[0].words!;
+    expect(ws.map((w) => w.w)).toEqual(["Du,", "du", "hast,", "du", "hast", "mich"]);
+    ws.forEach((w, i) => expect(Math.abs(w.t - truth2[i])).toBeLessThan(0.06));
+    // ...and in particular, the SECOND word is not swallowed by the first word's sustain.
+    expect(ws[1].t).toBeGreaterThan(8.5);
   });
 
   it("★ the words do NOT pile up at the start of the line", () => {

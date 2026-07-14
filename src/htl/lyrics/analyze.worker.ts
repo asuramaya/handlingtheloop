@@ -47,9 +47,9 @@ const ON_BINS = ON_N / 2;
 const onFft = new FFT(ON_N);
 const onWin = hannPeriodic(ON_N);
 
-function detectOnsets(audio: Float32Array): number[] {
+function detectOnsets(audio: Float32Array): { times: number[]; strengths: number[] } {
   const frames = Math.floor((audio.length - ON_N) / ON_HOP) + 1;
-  if (frames < 4) return [];
+  if (frames < 4) return { times: [], strengths: [] };
   const re = new Float32Array(ON_N);
   const im = new Float32Array(ON_N);
   let prevMag = new Float32Array(ON_BINS);
@@ -75,7 +75,14 @@ function detectOnsets(audio: Float32Array): number[] {
     curMag = t;
   }
   // Adaptive peak-pick: a local max comfortably above its local mean, ≥50 ms apart.
-  const onsets: number[] = [];
+  //
+  // ★ AND KEEP HOW STRONG EACH ONE WAS. A sung note ATTACK and a vibrato ripple inside a held vowel
+  // are both local maxima of spectral flux, and this detector cannot tell them apart — it fired 647
+  // times on a track with 160 words. But an attack is a far BIGGER spike than a ripple, so the
+  // strength is exactly the evidence that separates them. Throwing it away (as this did) forces
+  // every downstream consumer to treat a vibrato wobble as a possible word start.
+  const times: number[] = [];
+  const strengths: number[] = [];
   const W = 8; // ±80 ms local window
   let lastF = -100;
   for (let f = 1; f < frames - 1; f++) {
@@ -86,12 +93,14 @@ function detectOnsets(audio: Float32Array): number[] {
       s += flux[j];
       c++;
     }
-    if (flux[f] > (s / c) * 1.6 + 1e-6 && f - lastF >= 5) {
-      onsets.push((f * ON_HOP) / SR);
+    const mean = s / c;
+    if (flux[f] > mean * 1.6 + 1e-6 && f - lastF >= 5) {
+      times.push((f * ON_HOP) / SR);
+      strengths.push(flux[f] / (mean + 1e-9)); // how far above its neighbourhood this spike stands
       lastF = f;
     }
   }
-  return onsets;
+  return { times, strengths };
 }
 
 // ---- ENERGY: where is there a voice at all? ----------------------------------------------
@@ -132,13 +141,13 @@ self.onmessage = (e: MessageEvent) => {
   try {
     const audio = to16k(pcm, sampleRate);
     (self as unknown as Worker).postMessage({ type: "progress", phase: "onsets", pct: 30, id });
-    const onsets = detectOnsets(audio);
+    const { times: onsets, strengths } = detectOnsets(audio);
     (self as unknown as Worker).postMessage({ type: "progress", phase: "energy", pct: 70, id });
     const env = energyEnvelope(audio);
     (self as unknown as Worker).postMessage({ type: "progress", phase: "align", pct: 90, id });
     const out = plain?.length
-      ? alignPlain({ text: plain, onsets, env, hop: ENV_HOP, duration })
-      : alignLrc({ lines: lines ?? [], onsets, env, hop: ENV_HOP, duration });
+      ? alignPlain({ text: plain, onsets, strengths, env, hop: ENV_HOP, duration })
+      : alignLrc({ lines: lines ?? [], onsets, strengths, env, hop: ENV_HOP, duration });
     (self as unknown as Worker).postMessage({ type: "done", id, lines: out.lines, report: out.report, onsets: onsets.length });
   } catch (err) {
     (self as unknown as Worker).postMessage({ type: "error", id, message: String((err as Error)?.message ?? err) });

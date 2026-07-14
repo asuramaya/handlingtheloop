@@ -246,6 +246,82 @@ export function seedOnVoiced(text: string, voiced: number[], hop: number): Lyric
 }
 
 /**
+ * ★★ SEED THE WORDS ON THE ATTACKS, NOT ON THE SECONDS. This is the correction to seedOnVoiced, and
+ * a held note is what exposes it.
+ *
+ * Rammstein sings "Du…" (held, long) / "du hast" / "du hast mich" — ONE word, then TWO, then THREE.
+ * But the sustained "Duuuu" occupies nearly as much VOICED TIME as the two-word phrase after it. So
+ * distributing six words evenly across voiced time puts TWO of them inside the first burst, and
+ * every word after that lands a slot late — the last one, "mich", ends up past the end of the
+ * singing altogether. That is exactly what the operator saw, and I had blamed it on the stem.
+ *
+ * ★ THE ASSUMPTION THAT BROKE: voiced duration ∝ syllable count. A HELD VOWEL DESTROYS IT — it buys
+ * a lot of seconds and it is still one word.
+ *
+ * The onsets don't have that problem. A held note produces ONE attack no matter how long it rings;
+ * three words produce three. So the number of attacks in a burst tracks the number of WORDS in it,
+ * which is the quantity we actually need. Time was never the right ruler; events were.
+ *
+ * (`strong` has already been pruned to the strongest attacks in the window — see prunedOnsets. A
+ * vibrato ripple inside a sustained vowel is also a flux peak, just a much smaller one.)
+ */
+export function seedOnAttacks(text: string, attacks: number[]): LyricsWord[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  // Fewer attacks than words → not enough evidence to place them this way; caller falls back.
+  if (!words.length || attacks.length < words.length) return [];
+  const syl = words.map(syllables);
+  const total = syl.reduce((a, b) => a + b, 0);
+  const out: LyricsWord[] = [];
+  let acc = 0;
+  for (let i = 0; i < words.length; i++) {
+    const idx = Math.min(attacks.length - 1, Math.floor((acc / total) * attacks.length));
+    out.push({ t: attacks[idx], w: words[i], d: 0.3 });
+    acc += syl[i];
+  }
+  for (let i = 1; i < out.length; i++) if (out[i].t <= out[i - 1].t) out[i].t = out[i - 1].t + 0.02;
+  return out;
+}
+
+/**
+ * The onsets in [from, to) that are most likely to be WORD STARTS.
+ *
+ * ★ A LINE OF N WORDS HAS ABOUT N ATTACKS, NOT FOUR TIMES THAT. The detector fired 647 times on a
+ * 160-word track because a vibrato ripple inside a held vowel is a local flux maximum too — just a
+ * far weaker one. So keep the strongest, and keep about as many as the line could plausibly need.
+ * The DP still chooses among them (and may decline any of them); this only stops a wobble from
+ * competing with a consonant for the same word.
+ */
+export function prunedOnsets(
+  onsets: number[],
+  strengths: number[] | undefined,
+  from: number,
+  to: number,
+  words: number,
+  mask?: Float32Array,
+  hop = 0.05,
+): number[] {
+  const idx: number[] = [];
+  for (let i = 0; i < onsets.length; i++) {
+    const t = onsets[i];
+    if (t < from || t >= to) continue;
+    // An onset in SILENCE is not a word start — it's a click, a breath, or a reverb tail. It has no
+    // business competing for a word, and worse, it inflates the attack count that the seed divides by.
+    if (mask) {
+      const f = Math.floor(t / hop);
+      if (f < 0 || f >= mask.length || mask[f] <= 0) continue;
+    }
+    idx.push(i);
+  }
+  const keep = Math.max(4, Math.ceil(words * 2.5)); // room for the DP to choose, not to guess
+  if (!strengths || idx.length <= keep) return idx.map((i) => onsets[i]);
+  return idx
+    .sort((a, b) => (strengths[b] ?? 0) - (strengths[a] ?? 0))
+    .slice(0, keep)
+    .sort((a, b) => a - b)
+    .map((i) => onsets[i]);
+}
+
+/**
  * A 0/1 mask from the vocal stem's energy envelope: 1 where someone is actually singing.
  *
  * ★ A THRESHOLD RELATIVE TO THE PEAK IS NOT ROBUST, AND EVERYTHING ELSE HERE RESTS ON THIS MASK.
@@ -395,6 +471,9 @@ export interface LrcAlignInput {
   lines: LyricsLine[];
   /** Vocal-stem onsets, seconds — the evidence. */
   onsets: number[];
+  /** How far above its neighbourhood each onset's flux spike stood. A note ATTACK towers over a
+   *  vibrato ripple inside a held vowel; without this they are indistinguishable. */
+  strengths?: number[];
   /** Vocal-stem energy envelope and its frame period. */
   env: Float32Array;
   hop: number;
@@ -455,14 +534,22 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
   shifted.forEach((l, li) => {
     // Look back a little: an LRC cue is often stamped a beat AFTER the singer actually comes in.
     const from = Math.max(0, l.start - 0.3, li > 0 ? shifted[li - 1].end : 0);
-    const voiced = voicedFrames(vocal, i.hop, from, l.end);
-    // No voice in this window (or fewer frames than words) → the stem has nothing to say about this
-    // line, so fall back to the syllable-rate estimate rather than inventing a placement.
-    const seeds = seedOnVoiced(l.text, voiced, i.hop);
-    const ws = seeds.length ? seeds : seedLine(l.text, l.start, Math.min(l.end, spans[li].end + shift));
+    const nWords = l.text.split(/\s+/).filter(Boolean).length;
+    // THIS line's evidence, and only it — pruned to the strongest attacks, so a vibrato wobble
+    // inside a held vowel can't compete with a consonant for a word.
+    const mine = prunedOnsets(i.onsets, i.strengths, from, l.end, nWords, vocal, i.hop);
+    // ★ Seed on the ATTACKS. Voiced TIME is the wrong ruler: a held "Duuuu" buys a lot of seconds
+    // and is still one word, so a time-proportional seed puts two words inside it and shoves the
+    // rest of the line a slot late. Attacks count EVENTS, which is what a word actually is.
+    let ws = seedOnAttacks(l.text, mine);
+    if (!ws.length) {
+      // Too few attacks to place the words on — fall back to voiced time, then to the LRC's clock.
+      const voiced = voicedFrames(vocal, i.hop, from, l.end);
+      ws = seedOnVoiced(l.text, voiced, i.hop);
+      if (!ws.length) ws = seedLine(l.text, l.start, Math.min(l.end, spans[li].end + shift));
+    }
     if (!ws.length) return;
     words += ws.length;
-    const mine = i.onsets.filter((t) => t >= from && t < l.end); // THIS line's evidence, and only it
     const { times, report } = alignInVoicedTime(ws.map((w) => w.t), mine, vocal, i.hop, true);
     if (report.applied) applied = true;
     snapped += report.snapped;
@@ -519,6 +606,7 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
 export function alignPlain(i: {
   text: string[];
   onsets: number[];
+  strengths?: number[];
   env: Float32Array;
   hop: number;
   duration: number;

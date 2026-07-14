@@ -10,6 +10,17 @@ let _deckMeterSeq = 0;
 
 // WSOLA stretch-engine config posted to the worklet. The preset numbers (frame/
 // search/stride) plus the optional quality toggles wired from the Audio settings tab.
+/** PCM for a region, however the deck happens to be storing it (see Deck.regionPcm).
+ *  `shared: true` = a slice of a LIVE deck buffer — play it with `offset`, and never cache or
+ *  retain it (the memory pager owns it). `shared: false` = a private copy pulled back out of the
+ *  stretch worklet — safe to keep. */
+export interface RegionPcm {
+  buffer: AudioBuffer;
+  offset: number;
+  duration: number;
+  shared: boolean;
+}
+
 export interface StretchEngineConfig {
   frame: number;
   search: number;
@@ -927,6 +938,38 @@ export class Deck {
    *  `this.stems`), so a null here makes the sampler fall back to the full-mix region. */
   stemBuffer(name: StemName): AudioBuffer | null {
     return this.stems ? this.stems[name] : null;
+  }
+
+  /** ★ PCM for [start, end) of these stems — however the deck happens to be storing it right now.
+   *
+   *  ASK FOR WHAT YOU WANT; LET THE OWNER DECIDE WHERE IT LIVES. Returns a buffer plus the offset
+   *  INTO it: the resident AudioBuffer sliced in place when there is one (zero-copy), otherwise the
+   *  region summed back out of the stretch worklet. null ONLY when this deck genuinely has no local
+   *  PCM for that request.
+   *
+   *  ★ WHY THIS EXISTS RATHER THAN A FLAG THE CALLER CHECKS. The sampler used to gate its
+   *  worklet-extract path on `ownStems` — which is not the question it needed answered ("can I get
+   *  PCM?"), only a PROXY for it that happened to be true. It held solely because releaseMixBuffer()
+   *  has exactly one call site today: free the mix buffer for any OTHER reason (memory pressure, a
+   *  cache eviction) and `buffer` is null while `ownStems` is false, so playRegion would return
+   *  SILENTLY and every sampler pad would go dead — no throw, no type error, no failing test. That
+   *  is the same disease that killed lyrics for the entire life of the feature (see vocalPcm): a
+   *  consumer reaching through the deck's MEMORY POLICY instead of asking it a question. The read is
+   *  legal and the answer is legitimately "I don't have that". Found by Metron V, whose grep this is. */
+  async regionPcm(start: number, end: number, stems?: StemName[]): Promise<RegionPcm | null> {
+    const want = stems?.length ? stems : null;
+    // Zero-copy when one live buffer covers it: the whole mix, or a single resident stem. A
+    // multi-stem subset has no single buffer, so it always sums out of the worklet.
+    const live = !want ? this.buffer : want.length === 1 ? this.stemBuffer(want[0]) : null;
+    // `shared` says which we handed back, because the caller cannot tell from `offset` alone — a
+    // region starting at 0 has offset 0 either way, and mistaking a SHARED buffer for an extracted
+    // one would both pin a buffer the pager wants to free and play the whole track instead of a loop.
+    if (live) return { buffer: live, offset: start, duration: end - start, shared: true };
+    // A stem SUBSET can only come back out of the worklet if the worklet is actually holding stems
+    // (a plain-mix deck would hand us silence for a mask it has no groups for).
+    if (want && !this.engineStems) return null;
+    const b = await this.extractRegion(start, end, want ?? undefined);
+    return b ? { buffer: b, offset: 0, duration: b.duration, shared: false } : null;
   }
 
   /** ★ The vocal stem's PCM for `videoId` — the ONE dependable source, whatever the memory

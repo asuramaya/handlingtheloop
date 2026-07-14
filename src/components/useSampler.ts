@@ -265,21 +265,26 @@ export function useSampler(
       const vid = id === "A" ? loaded.A : loaded.B;
       const opts = { route: id, mode: r.mode, gain: r.gain, rate };
       const stems = regionStems(r); // the chopped subset, or undefined = full mix
-      // Fast path — one live AudioBuffer we can slice in place (zero-copy): the mix (deck buffer),
-      // or a SINGLE resident stem. A multi-stem subset has no single buffer, so it always extracts.
-      const live = !stems ? d.buffer : stems.length === 1 ? d.stemBuffer(stems[0]) : null;
-      if (live) {
-        engine.sampler.play(pad, { buffer: live, offset: r.start, duration: r.end - r.start, ...opts });
+      if (!vid) return;
+      // ★ ASK THE DECK FOR THE PCM; DO NOT REACH THROUGH ITS MEMORY POLICY. This used to read
+      // `d.buffer` and fall back to `d.extractRegion` behind an `ownStems` guard — but ownStems
+      // answers "was this track separated", not "can I get PCM", and it only LOOKED right because
+      // releaseMixBuffer() has one call site. Free the mix buffer for any other reason and every
+      // pad would go silent, with nothing to catch it. regionPcm answers the actual question and
+      // owns the resident-vs-worklet choice, which is the deck's business, not the sampler's.
+      const key = `${vid}:${r.start.toFixed(3)}:${r.end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
+      const cached = regionBufCache.current.get(key);
+      if (cached) {
+        engine.sampler.play(pad, { buffer: cached, offset: 0, duration: cached.duration, ...opts });
         return;
       }
-      // Else sum it out of the worklet (mix/single freed on mobile, OR a 2-3 stem subset — no single
-      // buffer even on desktop). Cached per selection so re-taps are instant.
-      if (!vid || !d.ownStems) return;
-      const key = `${vid}:${r.start.toFixed(3)}:${r.end.toFixed(3)}:${stems?.join("+") ?? "mix"}`;
-      const play = (b: AudioBuffer) => engine.sampler.play(pad, { buffer: b, offset: 0, duration: b.duration, ...opts });
-      const cached = regionBufCache.current.get(key);
-      if (cached) { play(cached); return; }
-      void d.extractRegion(r.start, r.end, stems).then((b) => { if (b) { regionBufCache.current.set(key, b); play(b); } });
+      void d.regionPcm(r.start, r.end, stems).then((got) => {
+        if (!got) return;
+        // Cache only a PRIVATE copy. A shared slice of a live deck buffer is already free to take,
+        // and holding one would pin a buffer the memory pager is trying to release.
+        if (!got.shared) regionBufCache.current.set(key, got.buffer);
+        engine.sampler.play(pad, { buffer: got.buffer, offset: got.offset, duration: got.duration, ...opts });
+      });
     },
     [engine, loaded.A, loaded.B],
   );

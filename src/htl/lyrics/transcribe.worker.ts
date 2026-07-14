@@ -48,11 +48,16 @@ async function loadTjs(): Promise<any> {
 // each a separate GPU dispatch — so the decoder's weight precision dominates wall-clock (this
 // is why transcription feels slower than the single-pass demucs forward). Running it at fp32
 // was the bottleneck. q4 (4-bit, the transformers.js whisper-webgpu reference config) roughly
-// halves decode time. The encoder is a SINGLE pass over the whole clip → keep it fp32 for
-// transcription accuracy. q4 uses INTEGER MatMulNBits kernels, NOT the fp16 shader path that
-// ORT-web's WebGPU EP miscomputes / can't compile on Linux+NVIDIA (see the demucs fp16 saga),
-// so it's both faster AND safe here. If a repo lacks q4 files, fall back to fp32 (no hard fail).
-function getPipe(repo: string): Promise<AsrPipe> {
+// halves decode time. q4 uses INTEGER MatMulNBits kernels, NOT the fp16 shader path that ORT-web's
+// WebGPU EP miscomputes / can't compile on Linux+NVIDIA (see the demucs fp16 saga), so it's both
+// faster AND safe here. If a repo lacks q4 files, fall back to fp32 (no hard fail).
+//
+// ★ THE PRECISION NOW TRAVELS WITH THE MODEL (models.ts `dtype`), it is not a constant here.
+// The encoder was pinned to fp32 for accuracy, which is right for Small — but Large-v3-Turbo
+// inherits large-v3's full-size encoder, and at fp32 that ONE file is 2.5 GB. Hardcoding fp32
+// silently made the best model unshippable. Each model now names the precision it can actually
+// be downloaded at, and models.ts derives its advertised size from that same field.
+function getPipe(repo: string, dtype?: Record<string, string>): Promise<AsrPipe> {
   let p = pipes.get(repo);
   if (!p) {
     p = (async () => {
@@ -63,21 +68,23 @@ function getPipe(repo: string): Promise<AsrPipe> {
         }
       };
       const ver = String(t.env?.version ?? "?");
-      const build = async (device: string, dtype: any, label: string) => {
+      const build = async (device: string, dt: any, label: string) => {
         const p = (await t.pipeline("automatic-speech-recognition", repo, {
           device,
-          dtype,
+          dtype: dt,
           progress_callback: onProg,
         })) as AsrPipe;
         pipeMeta.set(repo, { dtype: `${device}/${label}`, tjs: ver });
         return p;
       };
       if (WEBGPU) {
+        const dt = dtype ?? { encoder_model: "fp32", decoder_model_merged: "q4" };
+        const label = `enc:${dt.encoder_model}+dec:${dt.decoder_model_merged}`;
         try {
-          return await build("webgpu", { encoder_model: "fp32", decoder_model_merged: "q4" }, "enc:fp32+dec:q4");
+          return await build("webgpu", dt, label);
         } catch {
           (self as any).postMessage({ type: "progress", phase: "model", pct: 100 });
-          return await build("webgpu", "fp32", "fp32"); // repo has no q4 export → full-precision
+          return await build("webgpu", "fp32", "fp32"); // repo lacks that export → full-precision
         }
       }
       return await build("wasm", "q8", "q8"); // non-Chromium: stable CPU bundle
@@ -340,15 +347,16 @@ function cleanSegments(chunks: AsrChunk[] | undefined): OutLine[] {
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data;
   if (msg?.type !== "transcribe") return;
-  const { id, pcm, sampleRate, repo, language } = msg as {
+  const { id, pcm, sampleRate, repo, dtype, language } = msg as {
     id: number;
     pcm: Float32Array;
     sampleRate: number;
     repo: string;
+    dtype?: Record<string, string>;
     language?: string;
   };
   try {
-    const pipe = await getPipe(repo);
+    const pipe = await getPipe(repo, dtype);
     const audio = to16k(pcm, sampleRate);
     const SR = 16000;
     const total = audio.length;

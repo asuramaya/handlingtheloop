@@ -6,6 +6,7 @@ import { MidiPanel } from "./MidiPanel";
 import { DockResizer } from "./DockResizer";
 import { AboutTab } from "./settings/AboutTab";
 import { AudioTab } from "./settings/AudioTab";
+import type { LyricDeck } from "./LyricsSettings";
 import { ColorTab } from "./settings/ColorTab";
 import { ControlsTab } from "./settings/ControlsTab";
 import { DebugTab } from "./settings/DebugTab";
@@ -19,6 +20,8 @@ interface SettingsPanelProps {
   stemStatus?: Record<"A" | "B", StemStatus | null>; // live per-deck separation status/errors
   loadedDecks?: { id: "A" | "B"; neural: boolean; hasStems: boolean; model: string | null }[];
   onReanalyze?: (modelId: string, deck?: "A" | "B") => void; // fresh separation of one deck (or all)
+  lyricDecks?: LyricDeck[]; // per-deck lyric state (source/line count/live progress) — the "are they firing?" readout
+  onRetranscribe?: (deck: "A" | "B") => void; // wipe one deck's transcript and re-run Whisper on its vocal stem
   onGpuReenable?: () => void; // user opted to re-enable GPU after a crash auto-disabled it
   outputSupported?: boolean; // browser can route to a chosen output device (AudioContext.setSinkId)
   debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)
@@ -46,6 +49,8 @@ export function SettingsPanel({
   loadedDecks = [],
   stemStatus,
   onReanalyze,
+  lyricDecks = [],
+  onRetranscribe,
   onGpuReenable,
   outputSupported = false,
   debug,
@@ -87,6 +92,8 @@ export function SettingsPanel({
               loadedDecks={loadedDecks}
               stemStatus={stemStatus}
               onReanalyze={onReanalyze}
+              lyricDecks={lyricDecks}
+              onRetranscribe={onRetranscribe}
               onGpuReenable={onGpuReenable}
             />
           )}

@@ -98,7 +98,7 @@ import {
   type AutoMixStatus,
   type AutoMixMirror,
 } from "@htl";
-import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, getLyricsDiag, formatLyricsDiag, whisperModel, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
@@ -1532,7 +1532,7 @@ function AppBody() {
         void resolveLyrics({
           videoId: vid,
           deck: engine.deck(id),
-          model: lyricsModelRef.current === "small" ? "small" : "base",
+          model: whisperModel(lyricsModelRef.current).id, // tolerates a retired id (e.g. the dropped "base")
           engine: lyricsModelRef.current === "youtube" ? "youtube" : "whisper",
           enabled: lyricsAutoRef.current,
           // Whisper transcribes the NEURAL VOCAL STEM, so it is dead in the water without
@@ -1774,7 +1774,7 @@ function AppBody() {
         if (stale?.()) return;
         // loadStems throws on failure now (no DSP fallback) → the catch below reports it. A
         // returned set is always the real neural model, so flag it neural (setStems defaults false).
-        engine.deck(id).setStems(stems, true);
+        engine.deck(id).setStems(stems, true, videoId);
         refresh();
         setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready (re-analyzed).` });
       } catch (e) {
@@ -3475,6 +3475,17 @@ function AppBody() {
             })}
           stemStatus={status}
           onReanalyze={reanalyze}
+          // What each deck's lyrics ARE right now — the readout that did not exist, which is why
+          // "I can't tell when or if they are firing" was an unanswerable question.
+          lyricDecks={(["A", "B"] as DeckId[])
+            .filter((id) => loaded[id])
+            .map((id) => ({
+              id,
+              source: captionSource[id] ?? null,
+              lines: captions[id]?.length ?? 0,
+              status: lyricStatus[id] ?? null,
+            }))}
+          onRetranscribe={(deck) => reprocessLyrics(deck)}
           onGpuReenable={() => {
             setGpuCrashed(false);
             refresh();

@@ -88,7 +88,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         const local = await loadStemsLocal(engine.ctx, videoId, mid);
         if (stale?.()) return false;
         if (local) {
-          engine.deck(id).setStems(local, true); // neural → per-stem lanes
+          engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           // Stamp the dedup key with the PROMOTED model so selecting that model later
           // sees "already separated" (deriveStems' hasStems guard) instead of re-running
           // a separation over the stems we just promoted. (The bug: promote never set this.)
@@ -128,7 +128,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           if (stale?.()) return false;
           // loadStems throws (not a DSP fallback) when the set can't be produced → the catch below
           // returns false, nothing to promote. Reaching here means a real neural set downloaded.
-          engine.deck(id).setStems(neural, true); // neural → per-stem lanes
+          engine.deck(id).setStems(neural, true, videoId); // neural → per-stem lanes
           stemLoadedKey.current[id] = `${videoId}:${mid}`; // promoted set → don't re-separate it
           refresh();
           setStatusFor(id, {
@@ -284,7 +284,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           if (res?.kind === "neural") {
             // loadStems throws on any failure (no DSP fallback), and the try above breaks to the
             // plain mix on that — so a "neural" result is always a real downloaded set.
-            engine.deck(id).setStems(res.stems, true); // packs int16 + builds lanes + frees float32
+            engine.deck(id).setStems(res.stems, true, videoId); // packs int16 + builds lanes + frees float32
             stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
             // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
             engine.deck(id).releaseMixBuffer();
@@ -293,7 +293,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             const lanes = Object.keys(engine.deck(id).stemPyramids ?? {}).length;
             setStatusFor(id, { phase: "ready", src: stemSrcLabel(res.mid), detail: `${getStemModel(res.mid).label} stems · ${lanes} lanes` });
           } else if (res?.kind === "neuralPacked") {
-            engine.deck(id).loadPackedStems(res.packed, true); // int16 direct — no float32 set ever held
+            engine.deck(id).loadPackedStems(res.packed, true, videoId); // int16 direct — no float32 set ever held
             stemLoadedKey.current[id] = `${videoId}:${res.mid}`;
             // Stems are the worklet's audio source now → free the ~92 MB float32 mix.
             engine.deck(id).releaseMixBuffer();
@@ -345,7 +345,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         const local = await loadStemsLocal(engine.ctx, videoId, model.id);
         if (local) {
           if (stale?.()) return;
-          engine.deck(id).setStems(local, true); // neural → per-stem lanes
+          engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           stemLoadedKey.current[id] = guardKey;
           refresh();
           // Make a cache hit OBVIOUS (green), so it reads differently from a fresh
@@ -426,7 +426,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         if (stale?.()) return;
         // loadStems throws on a separation failure (no DSP fallback) → the catch below plays the
         // plain mix. Reaching here means a real neural set separated/downloaded.
-        engine.deck(id).setStems(neural, true); // real neural → per-stem lanes
+        engine.deck(id).setStems(neural, true, videoId); // real neural → per-stem lanes
         stemLoadedKey.current[id] = guardKey; // remember it's loaded → never re-separate it
         refresh();
         // Persistent active-stems chip (clears on next track load).

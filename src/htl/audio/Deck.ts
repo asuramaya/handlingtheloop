@@ -283,6 +283,11 @@ export class Deck {
   // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform for DSP
   // stems (or none / mid-separation) — the DSP split is too rough to be worth 4 lanes.
   stemsNeural = false;
+  /** The track the CURRENT stems belong to. Without it, "does this deck have neural vocals?"
+   *  is answerable but "are they THIS song's?" is not — and a fresh load asks the first
+   *  question while the previous track's stems are still attached (the audio download hasn't
+   *  even landed yet). Lyrics used to take that yes and transcribe the wrong song. */
+  stemsVideoId: string | null = null;
 
   private _playing = false;
   private startOffset = 0;
@@ -759,6 +764,8 @@ export class Deck {
     this._bend = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.stemsLoaded = false;
+    this.stemsNeural = false; // ...and it is NOT this track's neural split until one lands
+    this.stemsVideoId = null;
     this.stemMuted = { vocals: false, drums: false, bass: false, other: false };
     this.stemGain = { vocals: 1, drums: 1, bass: 1, other: 1 };
     this.stemPyramids = null;
@@ -921,6 +928,51 @@ export class Deck {
   stemBuffer(name: StemName): AudioBuffer | null {
     return this.stems ? this.stems[name] : null;
   }
+
+  /** ★ The vocal stem's PCM for `videoId` — the ONE dependable source, whatever the memory
+   *  pager has done with it.
+   *
+   *  Whisper reads this. It used to read `stemChannel("vocals")`, which is `this.stems` —
+   *  the float32 AudioBuffers. Those are DELIBERATELY FREED: always on the packed-int16 path
+   *  (which is every load whose stems come from the cache, i.e. every load after the first
+   *  separation), always on mobile, and on desktop past DESKTOP_FREE_STEMS_SECONDS. So the
+   *  transcriber sat waiting four minutes for a buffer that had been thrown away on purpose,
+   *  timed out, and fell back to YouTube captions — every single time. That is why the lyrics
+   *  pool is empty.
+   *
+   *  The PCM was never gone: the stretch worklet holds all four stems as int16 (it is the audio
+   *  source). So pull it back from THERE when the float32 copy is absent — in short chunks, so
+   *  the audio thread never stalls copying a 5-minute track inside one render quantum.
+   *
+   *  Refuses unless the resident stems are a NEURAL split OF THIS TRACK: a DSP split is too
+   *  dirty to transcribe (and would poison the shared pool), and a fresh load asks this question
+   *  while the PREVIOUS track's stems are still attached. */
+  async vocalPcm(videoId: string): Promise<Float32Array | null> {
+    if (!this.stemsLoaded || !this.stemsNeural || !videoId || this.stemsVideoId !== videoId) return null;
+    const resident = this.stems?.vocals.getChannelData(0);
+    if (resident && resident.length > 16000) return resident; // float32 still here → zero-copy
+    const dur = this._duration;
+    const node = this.stretchNode;
+    if (!node || dur < 1) return null;
+    // ~2 s per chunk: a few hundred thousand samples, well under a render quantum's budget, so
+    // a playing deck doesn't click. A 5-minute track is ~150 round trips — under a second, once,
+    // in front of a decode that takes tens of seconds.
+    const CHUNK = 2;
+    const out = new Float32Array(Math.ceil(dur * this.ctx.sampleRate));
+    let n = 0;
+    for (let t = 0; t < dur; t += CHUNK) {
+      // Re-check every chunk: a track change mid-pull must abandon it, or we'd hand Whisper a
+      // Frankenstein of two songs.
+      if (this.stemsVideoId !== videoId) return null;
+      const buf = await this.extractRegion(t, Math.min(dur, t + CHUNK), ["vocals"]);
+      if (!buf) return null;
+      const ch = buf.getChannelData(0);
+      if (n + ch.length > out.length) break; // duration/PCM disagree → take what fits
+      out.set(ch, n);
+      n += ch.length;
+    }
+    return n > 16000 ? out.subarray(0, n) : null;
+  }
   /** Pull a [start,end]-second region's PCM back out of the stretch worklet as a small AudioBuffer.
    *  On mobile the raw mix + stem AudioBuffers are freed once stems pack into the worklet
    *  (releaseMixBuffer + `this.stems = null`), so the local sampler — which slices an AudioBuffer —
@@ -1002,10 +1054,11 @@ export class Deck {
   /** Attach (or clear with null) the stem buffers. Swaps a live source group over
    *  seamlessly — all-on sums to the same mix, so there's no audible jump. Also
    *  builds the per-stem waveform envelopes so the viewport can render them. */
-  setStems(stems: Stems | null, neural = false) {
+  setStems(stems: Stems | null, neural = false, videoId?: string) {
     this.stems = stems;
     this.stemsLoaded = !!stems;
     this.stemsNeural = !!stems && neural;
+    this.stemsVideoId = stems ? (videoId ?? null) : null;
     // Real local stems (desktop neural OR the on-device DSP baseline) are authoritative —
     // this device plays them, so it's no longer just mirroring a host's remote stem view.
     // Clearing this lets local stems win over a session's streamed envelopes (display + audio
@@ -1154,10 +1207,11 @@ export class Deck {
    *  tracks on mobile. Posts the int16 PCM straight to the worklet and builds the LOD pyramids
    *  from the supplied envelopes (no PCM re-scan). `this.stems` stays null (deep-zoom stem render
    *  → LOD only). Mirrors the tail of setStems' mobile branch, minus the float32 pack. */
-  loadPackedStems(packed: PackedStems, neural = false) {
+  loadPackedStems(packed: PackedStems, neural = false, videoId?: string) {
     this.stems = null;
     this.stemsLoaded = true;
     this.stemsNeural = neural;
+    this.stemsVideoId = videoId ?? null;
     this.remoteStems = false; // real local stems — no longer mirroring a host's remote view
     this.engineStems = true;
     this.stemPyramids = null;

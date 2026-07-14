@@ -28,7 +28,7 @@ import {
   type StemModel,
 } from "@htl";
 import type { StemStatus } from "../../App";
-import { LyricsSettings } from "../LyricsSettings";
+import { LyricsSettings, type LyricDeck } from "../LyricsSettings";
 import { Slider } from "./Slider";
 
 // What each model can do on THIS device, as a short badge for the picker.
@@ -62,6 +62,8 @@ export function AudioTab({
   loadedDecks = [],
   stemStatus,
   onReanalyze,
+  lyricDecks = [],
+  onRetranscribe,
   onGpuReenable,
 }: {
   settings: Settings;
@@ -72,6 +74,8 @@ export function AudioTab({
   loadedDecks?: { id: "A" | "B"; neural: boolean; hasStems: boolean; model: string | null }[];
   stemStatus?: Record<"A" | "B", StemStatus | null>;
   onReanalyze?: (modelId: string, deck?: "A" | "B") => void;
+  lyricDecks?: LyricDeck[];
+  onRetranscribe?: (deck: "A" | "B") => void;
   onGpuReenable?: () => void;
 }) {
   // Audio OUTPUT devices (speaker select). enumerateDevices only fills in `label`
@@ -648,7 +652,7 @@ export function AudioTab({
         })()}
       </div>
 
-      <LyricsSettings settings={settings} onChange={onChange} />
+      <LyricsSettings settings={settings} onChange={onChange} decks={lyricDecks} onRetranscribe={onRetranscribe} />
     </>
   );
 }

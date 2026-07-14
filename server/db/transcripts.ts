@@ -54,10 +54,17 @@ export interface LyricsRow {
   ver: number;
   lines: { start: number; end: number; text: string; words?: { t: number; w: string; d?: number }[] }[];
 }
+// Rank the pooled transcripts for a track and serve the best one. FORMAT VERSION leads (a newer
+// aligner beats a better model on stale times — see the convergence contract), then MODEL QUALITY,
+// then recency. The model rank is written out rather than compared to one favoured id, because the
+// lineup changes: it used to be `(model = 'small') DESC`, which as soon as a stronger model shipped
+// would have quietly preferred the WEAKER transcript over it forever. Unknown/retired ids (e.g.
+// "base", dropped for being poor at singing) sort last, and are still served if they're all we have.
+const MODEL_RANK = "CASE model WHEN 'turbo' THEN 3 WHEN 'small' THEN 2 WHEN 'base' THEN 1 ELSE 0 END";
 export async function getLyrics(db: D1Database, videoId: string): Promise<LyricsRow | null> {
   const row = await db
     .prepare(
-      "SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? ORDER BY ver DESC, (model = 'small') DESC, created_at DESC LIMIT 1",
+      `SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? ORDER BY ver DESC, ${MODEL_RANK} DESC, created_at DESC LIMIT 1`,
     )
     .bind(videoId)
     .first<{ model: string; lang: string; conf: number; ver: number; lines: string }>();

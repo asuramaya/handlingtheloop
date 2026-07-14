@@ -2,7 +2,7 @@ import { fetchCaptions } from "@htl/media";
 import { getLyricsLocal, putLyricsLocal, deleteLyricsLocal } from "@htl/persistence";
 import type { Deck } from "@htl/audio";
 import type { LyricsDiag, LyricsLine, LyricsSource, LyricsTranscript } from "./types";
-import type { LyricsModel } from "./models";
+import type { LyricsModel, WhisperModelInfo } from "./models";
 import { whisperModel } from "./models";
 import { planLyrics, looksDegenerate } from "./convergence";
 import { gpuRun } from "../stems/gpuQueue";
@@ -112,7 +112,7 @@ function ensureWorker(): Worker {
 function transcribe(
   pcm: Float32Array,
   sampleRate: number,
-  repo: string,
+  m: WhisperModelInfo,
   onProgress?: (p: string, pct: number) => void,
   onGpuDone?: () => void,
   onDiag?: (d: LyricsDiag) => void,
@@ -122,7 +122,9 @@ function transcribe(
   return new Promise((resolve, reject) => {
     jobs.set(id, { resolve, reject, onProgress, onGpuDone, onDiag });
     const buf = pcm.slice(); // COPY — the deck keeps its live stem buffer; we transfer the copy
-    w.postMessage({ type: "transcribe", id, pcm: buf, sampleRate, repo }, [buf.buffer]);
+    // The precision rides along with the repo: Turbo's encoder MUST be q4 (fp32 is a 2.5 GB file)
+    // while Small's stays fp32. A worker-side constant can't know that — see models.ts `dtype`.
+    w.postMessage({ type: "transcribe", id, pcm: buf, sampleRate, repo: m.repo, dtype: m.dtype }, [buf.buffer]);
   });
 }
 
@@ -207,7 +209,7 @@ function transcribeOnce(
       const vocals = await waitForNeuralVocals(videoId, onStatus);
       if (!vocals) return null; // no neural vocals (Single mode / cancelled / timeout)
       const m = whisperModel(model);
-      const code = m.label[0]; // Base→B, Small→S
+      const code = m.label[0]; // Small→S, Large v3 Turbo→L
       onStatus?.(`whisper ${code} …`);
 
       // Take the shared GPU queue ONLY now — AFTER vocals are ready. Acquiring it earlier would
@@ -229,7 +231,7 @@ function transcribeOnce(
         decode = transcribe(
           vocals,
           sampleRate,
-          m.repo,
+          m,
           (phase, pct) =>
             onStatus?.(
               phase === "model"
@@ -299,21 +301,32 @@ const VOCALS_TIMEOUT_MS = 240000;
 // hang" report: Whisper needs a neural vocal stem, and stem separation is OFF by default.
 const VOCALS_NO_STEMS_MS = 20000;
 
-// Poll until SOME live waiter's deck holds NEURAL vocals (separation finished) — DSP vocals are
-// too dirty to transcribe and would pollute the shared pool. Decoupled from deriveStems on
-// purpose: one cheap property read every 1.2 s. Gives up when every waiter has gone stale.
+// Poll until SOME live waiter's deck holds NEURAL vocals FOR THIS TRACK (separation finished) —
+// DSP vocals are too dirty to transcribe and would pollute the shared pool. Decoupled from
+// deriveStems on purpose: one cheap check every 1.2 s. Gives up when every waiter has gone stale.
+//
+// ★ Ask the DECK for the PCM (`vocalPcm`) — never reach for `stemChannel("vocals")` again. That
+// read the float32 stem buffers, which the deck FREES on purpose: always on the packed-int16 path
+// (every load whose stems come from the cache — i.e. every load after the first separation), always
+// on mobile, and on desktop past 8 minutes. So this loop waited out its full four-minute timeout on
+// a buffer that had been deliberately thrown away, then fell back to YouTube — every time. The PCM
+// was never gone; it lives in the stretch worklet, and vocalPcm knows how to get it back.
+//
+// The videoId argument is load-bearing: the deck answers only for THIS track. A fresh load asks
+// this question while the previous track's stems are still attached (the audio hasn't even
+// downloaded yet), and the honest answer to "do you have vocals for song 2" is no, not "here are
+// song 1's".
 function waitForNeuralVocals(videoId: string, onStatus?: (m: string | null) => void): Promise<Float32Array | null> {
   return new Promise((resolve) => {
     const t0 = Date.now();
     let announced = false;
-    const tick = () => {
+    const tick = async () => {
       const live = [...(waiters.get(videoId) ?? [])].filter((w) => !w.stale());
       if (!live.length) return resolve(null); // every deck that wanted this track has moved on
 
       for (const w of live) {
-        const neural = (w.deck as unknown as { stemsNeural?: boolean }).stemsNeural === true;
-        const ch = neural ? w.deck.stemChannel("vocals") : null;
-        if (ch && ch.length > 16000) return resolve(ch);
+        const pcm = await w.deck.vocalPcm(videoId).catch(() => null);
+        if (pcm && pcm.length > 16000) return resolve(pcm);
       }
 
       // Never wait in silence — the vocal stem is a real dependency and the user can act on it.
@@ -324,9 +337,9 @@ function waitForNeuralVocals(videoId: string, onStatus?: (m: string | null) => v
       }
       const limit = separating ? VOCALS_TIMEOUT_MS : VOCALS_NO_STEMS_MS;
       if (Date.now() - t0 > limit) return resolve(null);
-      setTimeout(tick, 1200);
+      setTimeout(() => void tick(), 1200);
     };
-    tick();
+    void tick();
   });
 }
 

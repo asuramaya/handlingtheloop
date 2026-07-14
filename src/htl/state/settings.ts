@@ -73,7 +73,7 @@ export interface Settings {
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
   lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
-  lyricsModel: string; // lyrics engine: whisper model id "base" | "small" (WHISPER_MODELS), or "youtube" for YouTube captions
+  lyricsModel: string; // lyrics engine: a whisper model id ("small" | "turbo", see WHISPER_MODELS), or "youtube" for YouTube captions
 }
 
 // Time-stretch algorithm. WSOLA = time-domain overlap-add (crisp transients, but
@@ -214,7 +214,8 @@ export const DEFAULT_SETTINGS: Settings = {
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   deckArtAccent: true, // themes the deck accent to the track's artwork; toggle off for a fixed accent
   lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
-  lyricsModel: "youtube", // DEFAULT = YouTube captions (instant, no GPU); pick a Whisper tier (base/small) to transcribe from the vocal stem
+  lyricsModel: "youtube", // DEFAULT = YouTube captions (instant, no GPU, works on a phone). Picking a Whisper tier
+  // turns stem separation ON with it (LyricsSettings) — Whisper reads the vocal stem, so the two are one choice.
 };
 
 // Dark base-colour presets for the background picker (varied dark hues).

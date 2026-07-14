@@ -10,7 +10,7 @@
 // only `../App` import erased at build (no cycle). See htl-refactor-monoliths.
 import { useCallback, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-import { resolveLyrics, cacheRemoteLyrics, type LyricsSource, type LyricsLine } from "@htl/lyrics";
+import { resolveLyrics, cacheRemoteLyrics, whisperModel, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
 
@@ -89,7 +89,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
       void resolveLyrics({
         videoId: vid,
         deck: engine.deck(id),
-        model: lyricsModelRef.current === "small" ? "small" : "base",
+        model: whisperModel(lyricsModelRef.current).id, // tolerates a retired id (e.g. the dropped "base")
         engine: eng,
         force: true,
         enabled: true, // explicit user action → decode even if auto-lyrics is off

@@ -17,16 +17,23 @@ import { useEffect, useRef } from "react";
 //                         the line is the RIGHT channel — and WIDTH *is* an L/R time spread. Drag
 //                         it sideways and you are literally pulling the right channel off the left
 //                         in time. That's not a metaphor for width; it's what width does.
-//   • THE ROOF          → DRIVE. Saturation is a ceiling the signal runs into, so it's drawn as
-//                         one: a line over the taps that you pull DOWN onto them. The tips that
-//                         poke through go hot. At zero it rests exactly on a full-scale tap —
-//                         nothing clips — and every pixel you pull it down is another echo driven
-//                         into the curve. There's a grip at the right edge, but the whole line is
-//                         live wherever a tap isn't.
-//   • THE ENVELOPE'S HEAD → DUCK. The scoop the sidechain digs out of the front of the tail was
-//                         ALREADY drawn here; it just wasn't grabbable. Pull the head of the decay
-//                         curve down and the echoes duck harder under the dry. ★ This one is a
-//                         RELATIVE drag, and the reason is the rule below.
+//   • THE FIRE          → DRIVE, and it is deliberately NOT A LINE. It was a line once, and the
+//                         line read BACKWARDS: a saturation threshold has to come DOWN to bite, so
+//                         it moved toward the axis while meaning "more" — and on a surface where
+//                         distance from the axis IS magnitude (see the grammar note below), the eye
+//                         reads that as a level running in reverse. 100% in the middle, 0% at the
+//                         edges. The physics was never wrong; the LINE was. So there isn't one:
+//                         there's fire, filling in from the outside, and the echoes standing in it
+//                         are the ones being driven into the curve. An AREA, which grows — not a
+//                         boundary, which falls.
+//   • THE DRY HIT       → DUCK. It's the one thing on this canvas that did nothing: t=0, full
+//                         height, white, inert. And it is the SIDECHAIN SOURCE — it is literally
+//                         what does the ducking. So it's the handle, and what it does is throw a
+//                         SHADOW across the head of the tail. ★ Duck used to live on the envelope's
+//                         head, and the envelope's head is exactly where the TAPS are: over the
+//                         first beats their grab zones tile the whole region, so there was nowhere
+//                         left to seize the curve. It wasn't a control, it was a needle in a
+//                         haystack. The dry hit is at x=0, where no tap can ever reach.
 //   • THE FILTER RIBBON → the echoes' tone window on a log-freq scale. Drag an EDGE to move one
 //                         cut; drag the BODY to sweep the whole band. That body-drag is what the
 //                         old LINK chip did, so LINK is deleted, not redesigned — it only ever
@@ -41,15 +48,25 @@ import { useEffect, useRef } from "react";
 //                         line, which is already drawn. So the resting wobble isn't a ghost with
 //                         nothing to grab: it IS that line.
 //
+// ★★ THE GRAMMAR. Every magnitude on this surface is a DISTANCE FROM THE CENTRE LINE: a tap grows
+// outward with feedback, the wobble swells outward with depth, the shear pushes outward with width.
+// The eye learns that in the first second and then reads everything else through it — which is why
+// drive-as-a-descending-line felt inverted even though it was correct. A control may be right and
+// still be unreadable, and the grammar wins, because the grammar is what you actually read.
+//
 // ★★ THE RULE THAT DECIDES ABSOLUTE vs RELATIVE, and it decides every gesture here:
 // A HANDLE MAY ONLY BE DRAGGED ABSOLUTELY IF ITS POSITION ACTUALLY STANDS FOR THE VALUE.
 //   · a tap's height IS fb^n           → absolute (grab it by the tip and nothing moves)
 //   · the shear IS the width           → absolute
-//   · the roof's height IS the drive   → absolute
+//   · the fire's inner edge IS the drive → absolute
+//   · the shadow's depth AT THE ORIGIN is 1 − duck, and the decay hasn't happened yet, so it is
+//     duck and nothing else            → absolute. ★ Note what happened: moving duck to the dry hit
+//     didn't just find it some ROOM, it EARNED it an absolute drag. On the envelope, the height you
+//     grabbed was feedback and duck TOGETHER — it stood for neither alone, so the law had to be
+//     relative. The right home and the right law arrived together, which is usually the tell.
 //   · the FIRST tap is pinned at unity by the topology (fb⁰ = 1 whatever fb is), so its height
 //     stands for NOTHING                → relative, or clicking the fattest bar on screen would
 //                                         slam feedback to the rail
-//   · the envelope's height is fb AND duck together — it stands for neither alone → relative
 //
 // ★ AND ONE READOUT, ON TOP, ALWAYS. The numbers used to be scattered by whatever drew them: the
 // cuts labelled themselves at the ribbon's edges, TIME·FB sat bottom-left, the wobble printed
@@ -117,7 +134,8 @@ const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~
 const SHEAR_MAX = 26; // the R channel's biggest shear, in px — capped again by the tap spacing, or
 // a wide delay would fling the right channel on top of the NEXT echo and the row would read as mush.
 const DUCK_BEATS = 2; // how far into the tail the duck's scoop reaches — and so how far it's grabbable
-const CEIL_GRIP = 7; // vertical reach of the roof line
+const CEIL_GRIP = 7; // vertical reach of the fire's tab
+const DRY_GRIP = 14; // the dry hit's column — DUCK's handle, and the one place no tap can reach
 const CEIL_TAB = 26; // ...and the width of its always-wins grip, at the right edge
 const HOT = "#ffb066"; // what a tap looks like once it's poking through the roof
 const fmtF = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`);
@@ -126,8 +144,9 @@ const fmtF = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.r
 const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Math.log(1000)) * w;
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
-// THE ROOF. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is driven. At
-// drive 1 it has come down to 28% of the swing, and everything above that is in the curve.
+// THE FIRE'S INNER EDGE. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is
+// driven, and there is no fire. At drive 1 it has come in to 28% of the swing, and everything
+// beyond that is in the curve. It is never DRAWN as a line (see the header); only its tab is.
 const CEIL_LO = 0.72; // how far down the roof travels, as a fraction of maxBar
 const ceilOf = (drive: number, midY: number, maxBar: number) => midY - maxBar * (1 - CEIL_LO * clamp01(drive));
 const driveOf = (y: number, midY: number, maxBar: number) => clamp01((1 - (midY - y) / Math.max(1, maxBar)) / CEIL_LO);
@@ -139,7 +158,7 @@ type Grab =
   | { kind: "band"; lastX: number }
   | { kind: "lfo"; startX: number; startRate: number }
   | { kind: "drive" }
-  | { kind: "duck"; startY: number; startDuck: number };
+  | { kind: "duck" };
 
 export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -226,15 +245,19 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     let phase = 0;
     let lastNow = 0;
 
-    // The decay envelope, as a continuous function of x — the curve the taps' tips ride, and the
-    // thing the DUCK gesture grabs. Shared by the renderer and the hit-test, or you'd be pulling on
-    // a curve that isn't the one you can see.
-    const envAt = (sec: number, s: typeof p.current, beat: number) => {
+    // The envelope, split into its two factors — because the DUCK is exactly the gap between them,
+    // and that gap is the shadow you can see and grab.
+    //   decayAt — where the tail WOULD be: fb^n, and nothing else.
+    //   duckAt  — what the dry hit takes away: 1 − duck·e^(−t/τ), which is 1 − duck at the origin
+    //             and recovers over a beat or two. That value AT THE ORIGIN is the whole point: it
+    //             means the shadow's depth where it meets the dry hit IS the duck, full range, so
+    //             the handle's position stands for the value and the drag can be absolute.
+    const decayAt = (sec: number, s: typeof p.current) => {
       const t = Math.max(0.001, s.time);
-      const tau = (beat > 0 ? beat : 0.5) * 0.5;
-      const decay = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), Math.max(0, sec / t - 1));
-      return decay * (1 - clamp01(s.duck) * Math.exp(-sec / tau));
+      return s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), Math.max(0, sec / t - 1));
     };
+    const duckAt = (sec: number, s: typeof p.current, beat: number) => 1 - clamp01(s.duck) * Math.exp(-sec / ((beat > 0 ? beat : 0.5) * 0.5));
+    const envAt = (sec: number, s: typeof p.current, beat: number) => decayAt(sec, s) * duckAt(sec, s, beat);
 
     const draw = (now: number) => {
       const { w, h, dpr } = sizeCanvas();
@@ -410,10 +433,104 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.globalAlpha = 1;
       };
 
-      // the dry hit at t=0 — the source, not an echo. Never grabbable.
-      ctx.globalAlpha = 0.85;
+      // === THE FIRE — DRIVE, and it is NOT A LINE, on purpose.
+      //
+      // It was a line, and the line read backwards. Everything else on this surface says "more" by
+      // moving AWAY from the axis — a tap grows outward with feedback, the wobble swells outward
+      // with depth, the shear pushes outward with width. Distance from the centre IS magnitude; that
+      // is the grammar the eye has already learned by the time it reaches the roof. But a saturation
+      // threshold has to come DOWN to bite, so drawn as a line it moved inward while meaning "more",
+      // and read as a level running backwards — 100% in the middle, 0% at the edges.
+      //
+      // The physics was never wrong; the LINE was. So there isn't one. There is fire, filling in from
+      // the outside, and the echoes standing in it are the ones being driven into the curve. More
+      // drive, more fire — an area, which grows, instead of a boundary, which falls.
+      const heat = clamp01(s.drive);
+      const driveHot = hot === "drive";
+      if (heat > 0.001 || driveHot) {
+        const a = 0.34 * heat + (driveHot ? 0.06 : 0);
+        let grad = ctx.createLinearGradient(0, top, 0, Math.max(top + 1, ceilY));
+        grad.addColorStop(0, `rgba(255,140,60,${a})`);
+        grad.addColorStop(1, "rgba(255,140,60,0)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, top, w, Math.max(0, ceilY - top));
+        grad = ctx.createLinearGradient(0, Math.min(botY - 1, floorY), 0, botY);
+        grad.addColorStop(0, "rgba(255,140,60,0)");
+        grad.addColorStop(1, `rgba(255,140,60,${a})`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, floorY, w, Math.max(0, botY - floorY));
+      }
+      // A HANDLE, though — a small tab at the edge, so the fire is something you can take hold of and
+      // not just weather. It marks the fire's inner edge; it is not a level, and it never spans the
+      // canvas unless you're actually holding it.
+      ctx.fillStyle = heat > 0.001 ? HOT : accent;
+      ctx.globalAlpha = driveHot ? 1 : 0.6;
+      ctx.fillRect(w - CEIL_TAB + 2, Math.round(ceilY) - 1, CEIL_TAB - 2, 3);
+      ctx.globalAlpha = 1;
+      if (driveHot) {
+        ctx.strokeStyle = HOT;
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 5]);
+        for (const y of [ceilY, floorY]) {
+          ctx.beginPath();
+          ctx.moveTo(0, Math.round(y) + 0.5);
+          ctx.lineTo(w - CEIL_TAB, Math.round(y) + 0.5);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+
+      // === THE DRY HIT'S SHADOW — DUCK.
+      //
+      // The dry hit was the one thing on this canvas that did nothing. It sat at t=0, full height,
+      // white, inert — and it is the SIDECHAIN SOURCE. It's what does the ducking. So it is the
+      // handle, and what it does is throw a shadow across the head of the tail: the wedge between
+      // where the echoes would be and where the duck puts them.
+      //
+      // ★ WHY IT HAD TO MOVE HERE. Duck used to live on the envelope's head — and the envelope's head
+      // is exactly where the TAPS are. Over the first couple of beats their grab zones tile the whole
+      // region, so there was almost nowhere left to seize the curve: a 1px dashed line in the one
+      // place on the surface that was already full. It wasn't a control, it was a needle in a
+      // haystack. The dry hit is at x=0, where no tap ever goes, and the shadow's depth where it
+      // meets that bar is EXACTLY the duck — so the handle stands for the value and the drag is
+      // absolute, over the full swing.
+      const duckHot = hot === "duck";
+      const dv = clamp01(s.duck);
+      const shadowX = Math.min(w, xOf((beat > 0 ? beat : 0.5) * DUCK_BEATS * 1.6));
+      if (dv > 0.001) {
+        for (const up of [true, false]) {
+          const yOf = (v: number) => (up ? midY - maxBar * v : midY + maxBar * v);
+          ctx.beginPath();
+          for (let x = 0; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt((x / w) * windowSec, s)));
+          for (let x = shadowX; x >= 0; x -= 2) ctx.lineTo(x, yOf(envAt((x / w) * windowSec, s, beat)));
+          ctx.closePath();
+          ctx.fillStyle = accent;
+          ctx.globalAlpha = duckHot ? 0.2 : 0.11;
+          ctx.fill();
+          // the ghost: where the tail WOULD have been. The shadow only means something against it.
+          ctx.beginPath();
+          for (let x = 0; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt((x / w) * windowSec, s)));
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = duckHot ? 0.5 : 0.3;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+        }
+      }
+      // the dry hit itself — the source, and now the grip. The notch on it sits where the shadow
+      // starts, which is to say: exactly at the duck.
+      ctx.globalAlpha = duckHot ? 1 : 0.85;
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(1, round(midY - maxBar), barW, round(maxBar * 2));
+      ctx.fillRect(1, round(midY - maxBar), duckHot ? barW + 2 : barW, round(maxBar * 2));
+      ctx.globalAlpha = 1;
+      const dGripY = midY - maxBar * (1 - dv);
+      ctx.fillStyle = duckHot ? "#fff" : accent;
+      ctx.globalAlpha = duckHot ? 1 : 0.8;
+      for (const y of [dGripY, 2 * midY - dGripY]) ctx.fillRect(1, Math.round(y) - 1, 9, 3);
       ctx.globalAlpha = 1;
 
       // THE MAGNET, shown only while you're dragging a tap's TIME. TIME snaps to note divisions, so
@@ -455,30 +572,20 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.globalAlpha = 1;
       }
 
-      // === THE DECAY ENVELOPE — and the DUCK's handle. Without the curve the tail is a row of
-      // ever-shorter bars fading to nothing, so "grab the tail" means aiming at a 2px stub. With it,
-      // the SCOOP the sidechain digs out of the head is a shape you can see — and therefore one you
-      // can pull. The head is drawn fat and live; the rest of the curve is just a guide.
-      const duckX = xOf(Math.min(windowSec, (beat > 0 ? beat : 0.5) * DUCK_BEATS));
-      const duckHot = hot === "duck";
+      // THE DECAY GUIDE — the curve the tap tips ride. Without it the tail is a row of ever-shorter
+      // bars fading into nothing, so "grab the tail and pull it up" means aiming at a 2px stub you
+      // can barely see. It is a GUIDE now, not a handle: the duck moved to the dry hit, where there
+      // was room for it.
       if (!s.frozen) {
-        for (const head of [true, false]) {
-          ctx.beginPath();
-          let moved = false;
-          for (let x = 0; x <= w; x += 2) {
-            if (head !== (x <= duckX)) continue;
-            const y = midY - maxBar * envAt((x / w) * windowSec, s, beat);
-            moved ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-            moved = true;
-          }
-          ctx.strokeStyle = head && duckHot ? "#fff" : accent;
-          ctx.globalAlpha = head ? (duckHot ? 0.95 : 0.5) : 0.28;
-          ctx.lineWidth = head ? (duckHot ? 2.5 : 1.5) : 1;
-          ctx.setLineDash(head ? [] : [3, 3]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.globalAlpha = 1;
-        }
+        ctx.beginPath();
+        for (let x = 0; x <= w; x += 2) ctx.lineTo(x, midY - maxBar * envAt((x / w) * windowSec, s, beat));
+        ctx.strokeStyle = accent;
+        ctx.globalAlpha = 0.28;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
       }
 
       ctx.shadowColor = "rgba(255,170,90,0.9)";
@@ -500,28 +607,6 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         if (where === "down" || where === "both") tap(x + shear, amp, "down", a, lit);
       }
       ctx.shadowBlur = 0;
-
-      // === THE ROOF — DRIVE. A line you pull down onto the echoes; what pokes through goes hot.
-      // Live along its whole length (wherever a tap isn't), with a grip at the right edge that
-      // always wins, so there is never a drive setting you can't reach.
-      const driveHot = hot === "drive";
-      ctx.strokeStyle = s.drive > 0.001 ? HOT : accent;
-      ctx.globalAlpha = driveHot ? 0.95 : s.drive > 0.001 ? 0.55 : 0.3;
-      ctx.lineWidth = driveHot ? 2 : 1;
-      ctx.setLineDash([5, 4]);
-      for (const y of [ceilY, floorY]) {
-        ctx.beginPath();
-        ctx.moveTo(0, Math.round(y) + 0.5);
-        ctx.lineTo(w - CEIL_TAB, Math.round(y) + 0.5);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-      // the grip — a solid tab, the one part of the roof that can never be stolen by a tap
-      ctx.fillStyle = s.drive > 0.001 ? HOT : accent;
-      ctx.globalAlpha = driveHot ? 1 : 0.7;
-      ctx.fillRect(w - CEIL_TAB + 2, Math.round(ceilY) - 1, CEIL_TAB - 2, 3);
-      ctx.globalAlpha = 1;
 
       // === THE ONE READOUT — topmost, three fixed zones, always in the same place.
       // LEFT: what the delay IS. MIDDLE: what you're TOUCHING (blank when you aren't). RIGHT: its
@@ -618,8 +703,15 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const windowSec = windowOf(beat, w);
       const ceilY = ceilOf(s.drive, midY, maxBar);
       const floorY = 2 * midY - ceilY;
-      // the roof's grip — highest priority, and the reason the rest of the line may fight with taps
-      if (px >= w - CEIL_TAB && (Math.abs(py - ceilY) <= CEIL_GRIP + 3 || Math.abs(py - floorY) <= CEIL_GRIP + 3)) return { kind: "drive" };
+      // ★ PRIORITY, and every clash in it is deliberate.
+      //   the fire's TAB   — a handle at the right edge that nothing may steal, so drive is reachable
+      //                      even when the fire has burnt down to nothing and has no area to grab
+      //   the DRY HIT      — duck's column, at x=0, where no tap can ever reach it
+      //   a TAP            — the primary gesture; it owns its ±grip of x, at any height
+      //   the FIRE         — anywhere outside the roof, which is where the fire actually is
+      //   the WOBBLE       — the centre band
+      if (px >= w - CEIL_TAB && (Math.abs(py - ceilY) <= CEIL_GRIP + 4 || Math.abs(py - floorY) <= CEIL_GRIP + 4)) return { kind: "drive" };
+      if (px <= DRY_GRIP) return { kind: "duck" };
 
       let best = -1;
       // The grip can never be wider than half the gap to the next tap, or neighbouring grips
@@ -649,14 +741,9 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return { kind: "tap", n: best, lower };
       }
 
-      // the DUCK head — the fat part of the envelope, where the scoop actually lives
-      const duckX = ((beat > 0 ? beat : 0.5) * DUCK_BEATS * w) / windowSec;
-      if (px <= duckX && py < midY) {
-        const envY = midY - maxBar * envAt((px / lastW) * windowSec, s, beat);
-        if (Math.abs(py - envY) <= 14) return { kind: "duck" };
-      }
-      // the ROOF, along the rest of its length
-      if (Math.abs(py - ceilY) <= CEIL_GRIP || Math.abs(py - floorY) <= CEIL_GRIP) return { kind: "drive" };
+      // THE FIRE — everything outside the roof is its territory, so at high drive there is a lot of it
+      // to grab and at zero there is a thin band at the edge (plus the tab, which always works).
+      if (py < ceilY || py > floorY) return { kind: "drive" };
 
       // THE WOBBLE: anywhere on the wave, between the taps. At depth 0 the wave IS the centre line,
       // so there's always something to grab — the resting wobble is never a ghost. Hit-test the BAND
@@ -729,10 +816,12 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         return;
       }
       if (g.kind === "duck") {
-        // RELATIVE — and this is the rule doing real work. The envelope's height is fb AND duck
-        // TOGETHER; it stands for neither one alone, so an absolute law here would have the head
-        // jump the moment you touched it. Pull DOWN to duck harder.
-        setChar("duck", g.startDuck + (py - g.startY) / Math.max(1, maxBar * 1.5));
+        // ★ ABSOLUTE now — and it is the MOVE to the dry hit that earned it. On the envelope, the
+        // height you grabbed was feedback AND duck together, so it stood for neither alone and the
+        // drag had to be relative. At the origin the decay hasn't happened yet: the depth of the
+        // shadow where it meets the dry bar is 1 − duck, and nothing else. So the notch goes exactly
+        // where your finger is, over the whole swing, and letting go leaves it there.
+        setChar("duck", 1 - Math.abs(py - midY) / Math.max(1, maxBar));
         return;
       }
       if (g.kind === "lfo") {
@@ -796,7 +885,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       canvas.setPointerCapture(e.pointerId);
       if (hit.kind === "tap") grab.current = { kind: "tap", n: hit.n!, lower: !!hit.lower, ghostX: px, startY: py, startFb: p.current.feedback };
       else if (hit.kind === "drive") grab.current = { kind: "drive" };
-      else if (hit.kind === "duck") grab.current = { kind: "duck", startY: py, startDuck: p.current.duck };
+      else if (hit.kind === "duck") grab.current = { kind: "duck" };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
       else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };

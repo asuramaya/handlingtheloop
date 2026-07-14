@@ -31,6 +31,18 @@ const pipes = new Map<string, Promise<AsrPipe>>();
 // broken word timestamps more than once, so "which version produced these times" is evidence.
 const pipeMeta = new Map<string, { dtype: string; tjs: string }>();
 
+// Which job a model DOWNLOAD belongs to. The download is memoised per repo and genuinely shared,
+// so its progress events can't be owned by the closure that started it — a later job joining an
+// in-flight download would get nothing while the original (possibly gone) job got the numbers.
+// The decodes are serialised by the app-wide GPU queue, so exactly one job is ever waiting on a
+// model at a time: whoever is waiting, claims the progress.
+//
+// ★ This is also the OTHER half of the jitter. Model progress used to carry NO id, and the client
+// broadcast it to EVERY live job. The GPU is handed back before the CPU align pass, so deck A
+// could be showing "align…" while deck B started a model load — and B's download percentage
+// stomped A's readout. Two independent phases writing one line.
+let progressTarget: number | undefined;
+
 const UA = (typeof navigator !== "undefined" && navigator.userAgent) || "";
 const WEBGPU = typeof navigator !== "undefined" && !!(navigator as any).gpu && /Chrome\/|Chromium\//.test(UA);
 
@@ -62,10 +74,38 @@ function getPipe(repo: string, dtype?: Record<string, string>): Promise<AsrPipe>
   if (!p) {
     p = (async () => {
       const t = await loadTjs();
+      // ★ ONE HONEST NUMBER OUT OF MANY CONCURRENT DOWNLOADS. transformers.js calls
+      // progress_callback PER FILE, and a Whisper pipeline pulls several at once — encoder,
+      // decoder, tokenizer, and three small configs — each reporting its OWN 0→100. We used to
+      // post whichever event landed last, so the readout thrashed: encoder 2% → tokenizer 78% →
+      // decoder 1% → config 100% → encoder 3%. Turbo made it violent (a 425 MB encoder and a
+      // 334 MB decoder racing side by side). Sum the BYTES instead: one number over the whole
+      // download, which is the thing the user actually cares about.
+      const files = new Map<string, { loaded: number; total: number }>();
+      let lastPct = -1;
       const onProg = (e: any) => {
-        if (e?.status === "progress" && typeof e.progress === "number") {
-          (self as any).postMessage({ type: "progress", phase: "model", pct: Math.round(e.progress) });
+        const f = e?.file;
+        if (typeof f !== "string") return;
+        if (e.status === "progress" || e.status === "done") {
+          const total = Number(e.total) || 0;
+          // A "done" event may omit `loaded` — a finished file is, by definition, all of it.
+          const loaded = e.status === "done" ? total : Number(e.loaded) || 0;
+          if (total > 0) files.set(f, { loaded, total });
         }
+        let l = 0;
+        let tot = 0;
+        for (const v of files.values()) {
+          l += v.loaded;
+          tot += v.total;
+        }
+        if (tot <= 0) return;
+        // MONOTONIC: a file that starts late GROWS the denominator, which would otherwise make
+        // the percentage walk backwards. Never report a number lower than one we've already shown.
+        const pct = Math.round((l / tot) * 100);
+        if (pct <= lastPct) return;
+        lastPct = pct;
+        // Addressed to whoever is WAITING on this download, never broadcast — see progressTarget.
+        (self as any).postMessage({ type: "progress", phase: "model", pct, id: progressTarget });
       };
       const ver = String(t.env?.version ?? "?");
       const build = async (device: string, dt: any, label: string) => {
@@ -83,7 +123,7 @@ function getPipe(repo: string, dtype?: Record<string, string>): Promise<AsrPipe>
         try {
           return await build("webgpu", dt, label);
         } catch {
-          (self as any).postMessage({ type: "progress", phase: "model", pct: 100 });
+          (self as any).postMessage({ type: "progress", phase: "model", pct: 100, id: progressTarget });
           return await build("webgpu", "fp32", "fp32"); // repo lacks that export → full-precision
         }
       }
@@ -356,6 +396,7 @@ self.onmessage = async (e: MessageEvent) => {
     language?: string;
   };
   try {
+    progressTarget = id; // claim the model download's progress for THIS job (see progressTarget)
     const pipe = await getPipe(repo, dtype);
     const audio = to16k(pcm, sampleRate);
     const SR = 16000;

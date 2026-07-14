@@ -89,8 +89,11 @@ function ensureWorker(): Worker {
     worker.onmessage = (e: MessageEvent) => {
       const m = e.data;
       if (m?.type === "progress") {
+        // EVERY progress event names its job. Model-load progress used to carry no id and was
+        // BROADCAST to all of them — so a second deck's model download overwrote the first deck's
+        // "align…" line, and one readout showed two unrelated phases at once. An event with no
+        // owner is dropped rather than sprayed.
         if (typeof m.id === "number") jobs.get(m.id)?.onProgress?.(m.phase, m.pct);
-        else jobs.forEach((j) => j.onProgress?.(m.phase, m.pct)); // model-load progress has no id
       } else if (m?.type === "gpu-done") {
         jobs.get(m.id)?.onGpuDone?.(); // decode finished — hand the GPU back before we align
       } else if (m?.type === "diag") {

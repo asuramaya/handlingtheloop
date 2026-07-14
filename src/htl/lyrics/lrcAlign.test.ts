@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, coarseOffset, spanCoverage, alignLrc, alignPlain } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -120,13 +120,50 @@ describe("coarseOffset — the whole-track shift align.ts structurally cannot fi
   });
 });
 
-describe("maskFromEnergy", () => {
+describe("maskFromEnergy — the gate everything else rests on", () => {
   it("calls the loud parts voiced and the quiet parts not", () => {
     const env = Float32Array.from([0, 0, 0.9, 1, 0.8, 0, 0, 0.5]);
     expect(Array.from(maskFromEnergy(env))).toEqual([0, 0, 1, 1, 1, 0, 0, 1]);
   });
+
   it("an all-silent stem is not 'voiced everywhere'", () => {
     expect(Array.from(maskFromEnergy(new Float32Array(8)))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("★★ a LEAKY stem (guitar bleed) must not read as singing everywhere", () => {
+    // Rammstein's vocal stem carries continuous guitar/drum bleed at maybe 30% of the vocal's level.
+    // The old gate was 6% OF PEAK, so the bleed cleared it and EVERY frame came back voiced — which
+    // silently destroyed everything downstream (the voiced clock collapsed to the wall clock, the
+    // word seeds spread back across the instrumental bars, and spanCoverage reported 97% because
+    // every span overlaps a mask of all ones). The confidence looked superb BECAUSE the mask failed.
+    const env = new Float32Array(100);
+    for (let i = 0; i < 100; i++) env[i] = 0.3; // bleed: never stops
+    for (let i = 20; i < 40; i++) env[i] = 1.0; // the singing
+    for (let i = 70; i < 85; i++) env[i] = 0.95;
+    const m = maskFromEnergy(env);
+    expect(voicedFraction(m)).toBeLessThan(0.5); // NOT all ones
+    expect(m[0]).toBe(0); // bleed is not singing
+    expect(m[25]).toBe(1); // singing is
+    expect(m[75]).toBe(1);
+  });
+
+  it("★ and it still works on a CLEAN stem, where the floor really is silence", () => {
+    const env = new Float32Array(100);
+    for (let i = 20; i < 40; i++) env[i] = 1.0;
+    const m = maskFromEnergy(env);
+    expect(voicedFraction(m)).toBeCloseTo(0.2, 1);
+    expect(m[0]).toBe(0);
+    expect(m[30]).toBe(1);
+  });
+
+  it("★ a stem with NO dynamic range finds no singing, rather than claiming all of it", () => {
+    // Constant energy carries no information about where the voice is. The old peak-relative gate
+    // would have called every frame voiced — the maximally confident wrong answer. Gating on the
+    // stem's own distribution makes the floor and the voice the same number, so nothing clears it,
+    // and the aligner falls back to the LRC's own line clock instead of fabricating word times.
+    // Refusing is the honest failure; claiming everything is the dangerous one.
+    expect(voicedFraction(maskFromEnergy(new Float32Array(100).fill(1)))).toBe(0);
+    expect(voicedFraction(new Float32Array(100))).toBe(0);
   });
 });
 

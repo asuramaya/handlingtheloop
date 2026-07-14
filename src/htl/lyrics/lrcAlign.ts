@@ -33,6 +33,10 @@ export interface LrcReport extends AlignReport {
   /** How strongly the LRC's singing-mask agreed with the vocal stem's at that offset, 0..1.
    *  Low = the LRC probably describes a different rendering of the song than the one we're playing. */
   confidence: number;
+  /** Share of the track the vocal stem calls "voiced". ★ Near 1 = the separation is leaky (bleed) and
+   *  the gate failed, so `confidence` is measuring an all-ones mask and means NOTHING. Reported so
+   *  the metric can admit when it has stopped measuring. */
+  voiced: number;
   lines: number;
   words: number;
 }
@@ -241,20 +245,51 @@ export function seedOnVoiced(text: string, voiced: number[], hop: number): Lyric
   return out;
 }
 
-/** A 0/1 mask from the vocal stem's energy envelope: 1 where the stem is actually making sound.
+/**
+ * A 0/1 mask from the vocal stem's energy envelope: 1 where someone is actually singing.
  *
- *  This is trivially reliable ONLY because the vocal is isolated. On a full mix it would be
- *  hopeless — the drums never stop. It is the one place our stem separation buys something no
- *  amount of cleverness could replace. */
-export function maskFromEnergy(env: Float32Array, floorFrac = 0.06): Float32Array {
+ * ★ A THRESHOLD RELATIVE TO THE PEAK IS NOT ROBUST, AND EVERYTHING ELSE HERE RESTS ON THIS MASK.
+ * It used to gate at 6% of the loudest frame. That is fine on a clean separation and useless on a
+ * real one: a Rammstein vocal stem carries continuous guitar and drum BLEED, comfortably above 6%
+ * of peak, so every frame came back "voiced" — and a mask of all ones quietly destroys everything
+ * downstream. The voiced clock collapses back into the wall clock (so the fix for held lines does
+ * nothing). Word seeds spread across the instrumental bars again. Onsets in the gaps can no longer
+ * be filtered, so guitar transients become candidate word starts. And `spanCoverage` reports 97% —
+ * because EVERY span overlaps an all-ones mask, by construction.
+ *
+ * That last one is the trap: the confidence number looked excellent precisely BECAUSE the mask had
+ * failed. An estimator with nothing to estimate will estimate noise, confidently.
+ *
+ * So gate on the stem's OWN distribution, not on its peak: find the noise floor (where the bleed
+ * lives) and the singing, and put the line a quarter of the way up between them. On a clean stem
+ * the floor is ~0 and this is just "a quarter of loud"; on a bleedy one it rises with the bleed and
+ * still separates. `voicedFraction` below is what lets us NOTICE when it hasn't.
+ */
+export function maskFromEnergy(env: Float32Array): Float32Array {
   const m = new Float32Array(env.length);
-  if (!env.length) return m;
-  let peak = 0;
-  for (const v of env) if (v > peak) peak = v;
-  if (peak <= 0) return m;
-  const thr = peak * floorFrac;
-  for (let i = 0; i < env.length; i++) m[i] = env[i] > thr ? 1 : 0;
+  if (env.length < 8) return m;
+  const sorted = Float32Array.from(env).sort(); // TypedArray sorts numerically
+  const pct = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  const floor = pct(0.2); // bleed, room tone, reverb tails — whatever never stops
+  const voice = pct(0.95); // the singing
+  if (voice <= 1e-6) return m; // a silent stem is not "voiced everywhere"
+  // Between the floor and the voice, nearer the floor — a quiet consonant is still singing.
+  // Never below 8% of the voice, so a stem with NO floor at all can't gate on dither.
+  const gate = Math.max(floor + 0.25 * (voice - floor), voice * 0.08);
+  for (let i = 0; i < env.length; i++) m[i] = env[i] > gate ? 1 : 0;
   return m;
+}
+
+/** How much of the track the mask calls "voiced".
+ *
+ *  ★ THE MASK'S OWN HONESTY CHECK. Near 1 means the gate failed and everything measured against it
+ *  — the offset, the coverage, the voiced clock — is meaningless, however confident it looks. A
+ *  metric must be able to tell you when it has stopped measuring. */
+export function voicedFraction(mask: Float32Array): number {
+  if (!mask.length) return 0;
+  let n = 0;
+  for (const v of mask) if (v > 0) n++;
+  return n / mask.length;
 }
 
 /**
@@ -376,6 +411,7 @@ export interface LrcAlignInput {
 export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcReport } {
   const frames = Math.max(1, Math.round(i.duration / i.hop));
   const vocal = maskFromEnergy(i.env);
+  const voiced = voicedFraction(vocal);
   // 1) The whole-track offset, from STRUCTURE. Both masks are BURSTS (a line is sung for as long as
   //    its syllables need, not until the next line starts) — that shape is what makes the
   //    correlation sharp. A solid block from first lyric to last would slide anywhere and score the
@@ -436,7 +472,7 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
   if (!words) {
     return {
       lines: shifted,
-      report: { offset: shift, confidence, lines: shifted.length, words: 0, bias: 0, drift: 0, snapped: 0, free: 0, medianMove: 0, applied: false },
+      report: { offset: shift, confidence, voiced, lines: shifted.length, words: 0, bias: 0, drift: 0, snapped: 0, free: 0, medianMove: 0, applied: false },
     };
   }
   const report: AlignReport = { bias: 0, drift: 0, snapped, free, medianMove: 0, applied };
@@ -460,7 +496,7 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
 
   return {
     lines: out,
-    report: { ...report, offset: shift, confidence, lines: out.length, words },
+    report: { ...report, offset: shift, confidence, voiced, lines: out.length, words },
   };
 }
 
@@ -493,6 +529,7 @@ export function alignPlain(i: {
   const idle: LrcReport = {
     offset: 0,
     confidence: 0,
+    voiced: voicedFraction(vocal),
     lines: texts.length,
     words: 0,
     bias: 0,
@@ -528,5 +565,5 @@ export function alignPlain(i: {
   }
   // confidence stays 0: there is no anchor to measure agreement against. Saying "94%" here would be
   // a number with nothing behind it, which is worse than saying nothing.
-  return { lines: out, report: { ...report, offset: 0, confidence: 0, lines: out.length, words: seeds.length } };
+  return { lines: out, report: { ...report, offset: 0, confidence: 0, voiced: voicedFraction(vocal), lines: out.length, words: seeds.length } };
 }

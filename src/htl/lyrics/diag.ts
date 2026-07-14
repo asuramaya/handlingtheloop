@@ -20,6 +20,7 @@ export interface LyricsVerdict {
     | "no-match"
     | "instrumental"
     | "no-stem"
+    | "leaky-stem"
     | "plain-only"
     | "estimated"
     | "low-confidence"
@@ -32,6 +33,11 @@ export interface LyricsVerdict {
 /** Below this share of lines landing on real singing, the LRC probably describes a different
  *  rendering of the song (a live take, a different edit) and its clock is not ours. */
 const LOW_CONF = 0.4;
+/** Above this share of the track called "voiced", the stem is LEAKY — guitar and drum bleed sit above
+ *  the gate — and every number measured against that mask is worthless, however good it looks. This
+ *  is the check that catches a metric which has stopped measuring: Rammstein's stem reported 97%
+ *  confidence precisely BECAUSE its mask had failed to ones. */
+const LEAKY_STEM = 0.85;
 
 export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
   if (!d.artist || !d.title)
@@ -76,6 +82,12 @@ export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
       headline: `TIMING ESTIMATED · ${d.snapped}/${d.words} words on a real vocal onset`,
       fix: "No synced file existed, so the times come from the vocal alone with no line anchors to check them against. The words are right; if the timing drifts, that is why.",
     };
+  if (d.onsets > 0 && d.voiced >= LEAKY_STEM)
+    return {
+      kind: "leaky-stem",
+      headline: `LEAKY VOCAL STEM — ${Math.round(d.voiced * 100)}% of the track reads as "singing"`,
+      fix: "The separation is bleeding instruments into the vocal, so there is no silence to measure against. The offset and confidence above are meaningless — they scored a mask of all ones. Try Hi-Fi separation quality, or re-analyze the stems.",
+    };
   if (d.confidence < LOW_CONF)
     return {
       kind: "low-confidence",
@@ -115,6 +127,12 @@ export function formatLyricsDiag(d: LyricsDiag): [string, string][] {
           : "— no match",
     ],
     ["3 · vocal stem", d.onsets ? `${d.onsets} onsets measured` : "— none (separation off, or no stem yet)"],
+    [
+      "3b · voiced",
+      d.onsets
+        ? `${Math.round(d.voiced * 100)}% of the track${d.voiced >= LEAKY_STEM ? " — ⚠ LEAKY, everything below is meaningless" : ""}`
+        : "—",
+    ],
     ["4 · offset", d.onsets ? `${ms(d.offset)} · ${Math.round(d.confidence * 100)}% of lines on singing` : "—"],
     [
       "5 · align",

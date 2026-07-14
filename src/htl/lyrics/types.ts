@@ -61,6 +61,9 @@ export interface LyricsDiag {
   onsets: number; // vocal transients measured in the isolated stem — the timing EVIDENCE
   offset: number; // whole-track shift removed, seconds (the LRC was timed against another edit)
   confidence: number; // share of lines that landed on real singing at that offset, 0..1
+  voiced: number; // share of the track the vocal stem calls "voiced". ★ Near 1 = the separation is
+  // LEAKY (guitar/drum bleed) and the gate failed — so `confidence` scored an all-ones mask and is
+  // worthless. A metric that cannot say when it stopped measuring is worse than no metric.
   bias: number; // residual constant lag the DP removed, seconds
   drift: number; // residual linear drift removed, s/s
   snapped: number; // words placed on a real vocal onset

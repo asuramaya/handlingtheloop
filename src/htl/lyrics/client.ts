@@ -357,6 +357,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
         onsets: 0,
         offset: 0,
         confidence: 0,
+        voiced: 0,
         bias: 0,
         drift: 0,
         snapped: 0,
@@ -449,6 +450,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       diag.words = aligned.report.words;
       diag.offset = aligned.report.offset;
       diag.confidence = aligned.report.confidence;
+      diag.voiced = aligned.report.voiced;
       diag.bias = aligned.report.bias;
       diag.drift = aligned.report.drift;
       diag.snapped = aligned.report.snapped;

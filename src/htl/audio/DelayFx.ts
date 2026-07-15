@@ -66,6 +66,14 @@ export class DelayFx extends BaseFxDevice {
   private readonly duckEnv: GainNode; // boosted envelope tap point
   private readonly duckScale: GainNode; // × −amount → seriesDuck.gain
   private readonly seriesDuck: GainNode; // intrinsic 1; envelope subtracts (stays ≥ 0)
+  // ★ AudioParam.value CANNOT see audio-rate modulation delivered via .connect() — it only ever
+  // reflects the param's own scheduled/intrinsic value. Proven: with duck=1 the WET signal
+  // measures dead silent (the sidechain works perfectly) while seriesDuck.gain.value sits frozen
+  // at 1 the entire time — not lagging, structurally blind. So the only legitimate way to read
+  // this live is to tap the actual SIGNAL (an analyser, same pattern SatViz/CrushViz already use
+  // for their own live reads) rather than the param it's driving.
+  private readonly duckMeter: AnalyserNode;
+  private readonly duckMeterBuf: Float32Array<ArrayBuffer>;
   private _duckWired = false; // follower in-circuit only while duck > 0
   private _duckGen = 0; // cancels a pending follower-unwire
   private _duckAmt = 0; // user's duck setting
@@ -192,6 +200,14 @@ export class DelayFx extends BaseFxDevice {
     // the follower feeding its gain is lazy). gain = 1 + (−env·amount) ∈ [1−amount, 1].
     this.merge.connect(this.seriesDuck);
     this.seriesDuck.connect(this.wet);
+    // The live readback — tap duckScale's OWN output (already envelope × −amount, the exact
+    // quantity that gets added to seriesDuck.gain) rather than trying to read the param it
+    // drives. Tap only: this never feeds forward, so it costs nothing extra downstream.
+    this.duckMeter = ctx.createAnalyser();
+    this.duckMeter.fftSize = 256;
+    this.duckMeter.smoothingTimeConstant = 0; // already smoothed upstream (the 12Hz follower)
+    this.duckMeterBuf = new Float32Array(this.duckMeter.fftSize);
+    this.duckScale.connect(this.duckMeter);
     // modulation: one LFO swings both delay times (added to the base time → vibrato).
     this.lfo.connect(this.modL);
     this.lfo.connect(this.modR);
@@ -369,13 +385,17 @@ export class DelayFx extends BaseFxDevice {
     }
   }
 
-  // ★ NOT a commanded-value mirror — the opposite. duckAmt (in `params`) is what you SET; this is
-  // what the sidechain is doing to the signal RIGHT NOW, and nothing in JS ever assigns it — it's
-  // purely the audio thread's own rectify→smooth→gain output. Reading .value here is correct, not
-  // a rule-1 lying getter: there is no commanded target for a viz to disagree with, only a live
-  // envelope. 1 = not ducking; down toward 1−duckAmt while a transient is pushing it down.
+  // ★ Reads a SIGNAL, not a param — see duckMeter's own comment. seriesDuck.gain.value is
+  // permanently frozen at its intrinsic 1 no matter what the sidechain is actually doing,
+  // because that modulation arrives via .connect(), which .value structurally cannot see.
+  // Proven with an isolated instance + a real oscillator: full duck (1.0) measured on the wet
+  // signal is dead silent — the DSP is correct — while .value read 1 the entire time. duckScale's
+  // OWN output is already envelope×−amount, so its most-negative recent sample IS 1−duckGain.
   get duckGain(): number {
-    return this.seriesDuck.gain.value;
+    this.duckMeter.getFloatTimeDomainData(this.duckMeterBuf);
+    let min = 0; // duckScale's output is always ≤ 0
+    for (const v of this.duckMeterBuf) if (v < min) min = v;
+    return clamp(1 + min, 0, 1);
   }
 
   // --- filters ---

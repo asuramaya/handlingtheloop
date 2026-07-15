@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, alignLrc, alignPlain } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, voicedClock, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -363,6 +363,32 @@ describe("a line whose words are separated by INSTRUMENTAL BARS", () => {
     // The last word is ~8 s after the first. A wall-clock or syllable-rate seed would have put them
     // all inside the first 1.5 s, which is precisely how the line collapsed onto one word.
     expect(ws[ws.length - 1].t - ws[0].t).toBeGreaterThan(6);
+  });
+});
+
+// ---- ★★ voicedClock — toWall must CLAMP, or a negative correction reads as wall-time ZERO -
+describe("voicedClock.toWall — a negative or over-total voiced time must not escape the track", () => {
+  const HOP = 0.05;
+  // A long silent intro (30s) then singing — "Coax & Botany"'s real shape. Frame 600 = 30.0s.
+  const mask = new Float32Array(Math.round(60 / HOP));
+  for (let f = 600; f < mask.length; f++) mask[f] = 1;
+
+  it("★★★ a small NEGATIVE voiced-time is the singing's own start, not wall-clock zero", () => {
+    // Measured on the real track: estimateBias found a real, reasonable -80ms correction for the
+    // whole word train, and word 0 (seeded at the very first voiced instant, voiced-time ≈ 0) had
+    // nothing to absorb it — corrected time went to -0.08 voiced-seconds. Before the fix, toWall's
+    // binary search found no cum[m+1] <= a negative v, collapsed to lo=0, and returned TRUE wall
+    // zero — 30 SECONDS before the track even starts singing.
+    const { toWall } = voicedClock(mask, HOP);
+    expect(toWall(-0.08)).toBeCloseTo(30.0, 1);
+    expect(toWall(0)).toBeCloseTo(30.0, 1);
+    expect(toWall(-5)).toBeCloseTo(30.0, 1); // even a large negative correction stays pinned there
+  });
+
+  it("stays pinned at the last voiced instant when v overshoots the track's total voiced time", () => {
+    const { toWall, total } = voicedClock(mask, HOP);
+    expect(toWall(total + 5)).toBeLessThanOrEqual(60);
+    expect(toWall(total + 5)).toBeGreaterThan(29);
   });
 });
 

@@ -133,6 +133,20 @@ export function sungSpans(lines: { start: number; text: string }[], duration: nu
  *
  * A wall time inside a silence maps to the voiced instant the silence began (nothing was sung during
  * it, so it occupies no voiced time at all).
+ *
+ * ★ TO-WALL MUST CLAMP. `estimateBias` can return a small NEGATIVE bias (a few tens of ms — a
+ * perfectly reasonable correction for the bulk of a whole-track word train), and a word seeded
+ * right at the very first instant of singing has a voiced-time of ~0 with nothing to absorb it: bias
+ * pushes it slightly negative. `toWall`'s binary search had no floor for that case — `cum[m+1] <= v`
+ * is false for every m when v is negative, so it silently collapses to lo=0, i.e. TRUE WALL-CLOCK
+ * ZERO, not "the start of the voiced signal". On a track with a long instrumental intro those are
+ * nowhere near each other: measured on "Coax & Botany" (Gus Dapperton), a real -80ms bias put the
+ * first word of the first line at t=0.000 while every other word in that same line correctly landed
+ * ~30 SECONDS later, where the singing actually starts. A negative voiced-time isn't a wall time
+ * before the track; it's a word whose seed already sat at the voiced-clock's origin. Clamping to
+ * [0, total] resolves it to that origin's real wall time — which walks past any leading silence to
+ * the true start of singing, same as toWall(0) always did. Symmetric clamp on the upper end for a
+ * large positive bias/drift, for the same reason.
  */
 export function voicedClock(mask: Float32Array, hop: number) {
   const cum = new Float32Array(mask.length + 1);
@@ -146,6 +160,7 @@ export function voicedClock(mask: Float32Array, hop: number) {
     return cum[f] + (mask[f] > 0 ? Math.max(0, t - f * hop) : 0);
   };
   const toWall = (v: number): number => {
+    v = Math.max(0, Math.min(total, v));
     let lo = 0;
     let hi = mask.length - 1;
     while (lo < hi) {

@@ -242,7 +242,15 @@ body:not(.no-glow) .fx-tab.sel {
   flex: 0 1 auto;
   height: var(--fx-body-h, 178px);
   min-height: 0; /* the shared --fx-body-h is the only height authority (= the EQ) */
-  overflow: hidden;
+  /* x stays clipped (nothing should ever run off the side); y SCROLLS — a viz-less cell
+     grid (COMP: mode row + meter + up to 8 cells + SC toggle) can outgrow --fx-body-h on a
+     narrow phone even after the cells wrap, and silently clipping the bottom rows just moves
+     the old horizontal cut-off bug onto a different axis instead of fixing it. Panels whose
+     canvas already absorbs the slack (delay, EQ…) never hit this — scrollHeight==clientHeight,
+     so the scrollbar never appears for them. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 /* The viz is the pure surplus-absorber: basis 0 so it only appears when there's leftover
    height after the knobs + chips, and collapses FIRST (before the knob rows shrink) when
@@ -1922,6 +1930,7 @@ button.room-tog:hover {
 .sat-shared {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
   justify-content: space-between;
   flex: 0 0 auto;
 }

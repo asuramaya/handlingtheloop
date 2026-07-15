@@ -323,14 +323,16 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // --- shared toolbar (acts on the selected device) ---
   const isEq = selDev?.kind === "eq";
   const bypassed = isEq ? deck.eqBypassed : !!selDev?.bypassed;
-  const toggleBypass = () => {
+  // Shift = hard kill: skip a delay/reverb's ring-out and cut immediately (BaseFxDevice.setBypass's
+  // `hard` flag). EQ has no tail to preserve, so it ignores the modifier entirely.
+  const toggleBypass = (e: React.MouseEvent) => {
     if (!selDev) return;
     closeMenu(); // toggling bypass dismisses the preset browse
     if (isEq) {
       deck.setEqBypass(!deck.eqBypassed);
       emit({ kind: "toggle", deck: id, param: "eqBypass", value: deck.eqBypassed });
     } else {
-      deck.setFxBypass(cur, !selDev.bypassed);
+      deck.setFxBypass(cur, !selDev.bypassed, e.shiftKey);
       emit({ kind: "fxBypass", deck: id, slot: cur, value: selDev.bypassed });
     }
     refresh();
@@ -483,7 +485,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           <MixFader value={selDev.getParam("mix")} reset={selDev.paramDefault("mix")} onChange={setMix} disabled={bypassed} />
           <button
             className={`fx-power ${bypassed ? "" : "on"}`}
-            title={bypassed ? "Engage this effect" : "Bypass this effect (A/B)"}
+            title={bypassed ? "Engage this effect" : "Bypass this effect (A/B) · Shift: hard kill, no ring-out"}
             aria-label={bypassed ? "Engage effect" : "Bypass effect"}
             aria-pressed={!bypassed}
             onClick={toggleBypass}

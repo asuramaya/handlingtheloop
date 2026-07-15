@@ -2184,7 +2184,9 @@ export class Deck {
       const d = this.makeFx(kind);
       if (!d) continue;
       this.rack.add(d);
-      d.setBypass(true); // dormant: wet pruned (zero CPU) until a pad throws or you un-bypass it
+      // hard: this is initial dormant setup, not a live "turn it off" — nothing has ever sounded
+      // yet, so there's no tail to ring out and a delay/reverb shouldn't idle live for 2.4s at boot.
+      d.setBypass(true, true); // dormant: wet pruned (zero CPU) until a pad throws or you un-bypass it
     }
     this.onRackReady?.();
   }
@@ -2206,8 +2208,8 @@ export class Deck {
   setFxParam(i: number, param: string, v: number) {
     this.rack.deviceAt(i)?.setParam(param, v);
   }
-  setFxBypass(i: number, on: boolean) {
-    this.rack.deviceAt(i)?.setBypass(on);
+  setFxBypass(i: number, on: boolean, hard = false) {
+    this.rack.deviceAt(i)?.setBypass(on, hard);
   }
   resetFxAt(i: number) {
     this.rack.deviceAt(i)?.reset();
@@ -2311,7 +2313,7 @@ export class Deck {
     if (!dst) return -1;
     const p = src.snapshotParams();
     for (const k in p) dst.setParam(k, p[k]);
-    dst.setBypass(src.bypassed);
+    dst.setBypass(src.bypassed, true); // administrative copy, not a live toggle — land it instantly
     return dstIdx;
   }
   /** Serialize the WHOLE chain (order + presence) for the session snapshot + profiles. The
@@ -2343,7 +2345,7 @@ export class Deck {
       const d = this.rack.deviceAt(idx);
       if (!d || d.kind === "eq") continue; // EQ params come from the eq* ControlParams
       for (const k in s.params) d.setParam(k, s.params[k]);
-      d.setBypass(s.bypassed);
+      d.setBypass(s.bypassed, true); // restoring a snapshot/room-intent, not a live toggle — instant
     }
     // Match the chain order to the snapshot (listed kinds first, in order; residents the snapshot
     // omits keep their relative tail position). No-op when the order already matches.

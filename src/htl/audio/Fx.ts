@@ -29,7 +29,8 @@ export interface FxDevice {
   /** …and leaves here. The rack chains output→next.input. */
   readonly output: GainNode;
 
-  setBypass(on: boolean): void;
+  /** `hard` skips a device's ring-out (see BaseFxDevice) and cuts immediately; EQ ignores it. */
+  setBypass(on: boolean, hard?: boolean): void;
   readonly bypassed: boolean;
 
   /** Generic param bus — the single seam session-sync/automix/MIDI address. Unknown
@@ -271,25 +272,44 @@ export abstract class BaseFxDevice implements FxDevice {
     return this._bypassed;
   }
 
-  setBypass(on: boolean) {
+  setBypass(on: boolean, hard = false) {
     // A MANUAL bypass toggle (FLX ON/OFF, toolbar BYPASS) is the SINGLE SOURCE OF TRUTH for on/off:
     // it CLEARS any live throw/latch and drops the boost, so "off means off" — no orphaned latch, no
     // stale re-engage. It ALSO cancels a ring-out that's still in flight: without that, un-bypassing
     // during a tail ("actually, keep it on") would get silently re-bypassed when the timer landed.
     // The throw's OWN bypass moves set _settingBypassInternally so they don't self-clear here.
     if (!this._settingBypassInternally) {
-      this._releaseGen++;
-      this._releasePending = false;
       if (this._thrown) {
         this._thrown = false;
         this.applyThrowBoost(false);
       }
+      // Turning a device WITH A TAIL off: let it ring out over the same window a pad throw's
+      // release gets, instead of pruning mid-decay — Shift (hard) skips straight to the cut, and
+      // a device with nothing to ring (throwReleaseMs 0: sat/crush/gate/noise/comp/mod) always cuts now.
+      if (on && !hard && !this._bypassed && this.throwReleaseMs > 0) {
+        this.scheduleBypassRingOut();
+        return;
+      }
+      this._releaseGen++;
+      this._releasePending = false;
     }
     this._bypassed = on;
     this.applyWet();
   }
   get bypassed() {
     return this._bypassed;
+  }
+  // Land a MANUAL soft-bypass after the device's own ring-out window. Distinct from
+  // scheduleRelease() below (a throw's release returns to whatever bypass state preceded the
+  // throw) — a manual bypass ALWAYS lands bypassed, since that's the one thing the user asked for.
+  private scheduleBypassRingOut() {
+    const gen = ++this._releaseGen;
+    this._releasePending = true;
+    setTimeout(() => {
+      if (gen !== this._releaseGen) return; // superseded — re-engaged, hard-killed, or re-scheduled
+      this._releasePending = false;
+      this.internalSetBypass(true);
+    }, this.throwReleaseMs);
   }
 
   // --- throw / latch lifecycle ------------------------------------------------

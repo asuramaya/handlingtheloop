@@ -72,7 +72,7 @@ export interface Settings {
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
-  lyricsAuto: boolean; // transcribe lyrics from the neural vocal stem (Whisper, desktop GPU); pooled + shared
+  lyricsAuto: boolean; // fetch lyrics automatically (LRCLIB words, timed against the vocal stem when one exists); pooled + shared
   lyricsModel: string; // lyrics engine: "lrclib" (database words + vocal-stem times) or "youtube" (captions)
 }
 
@@ -213,7 +213,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   deckArtAccent: true, // themes the deck accent to the track's artwork; toggle off for a fixed accent
-  lyricsAuto: true, // Whisper lyrics primary over YouTube captions when a neural vocal stem exists
+  lyricsAuto: true, // LRCLIB lyrics primary over YouTube captions
   // DEFAULT = the lyrics database. It costs nothing — no model, no GPU, no download — and it is
   // simply better than YouTube's captions, so there is no longer any reason for the good path to be
   // opt-in. (A neural vocal stem upgrades these from line-level to word-level; it is not required.)
@@ -295,6 +295,11 @@ export function loadSettings(): Settings {
   // hidden model doesn't drive separation on the next track load. HT-Demucs (GPU) is
   // the only neural splitter now; the user re-picks it explicitly.
   if (getStemModel(s.stemModel).arch === "openunmix") s.stemModel = "off";
+  // Whisper is retired — a pre-removal install can still have "base"/"small"/"turbo" sitting in
+  // local storage. The engine only understands two values now; anything else reads as garbage in
+  // the debug panel (and would silently mean "not youtube" everywhere else), so coerce it back to
+  // the default rather than let a years-old stored string outlive the feature it named.
+  if (s.lyricsModel !== "lrclib" && s.lyricsModel !== "youtube") s.lyricsModel = "lrclib";
   return s;
 }
 

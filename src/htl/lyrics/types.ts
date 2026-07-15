@@ -34,7 +34,7 @@ export interface LyricsLine {
 export interface LyricsTranscript {
   v: 1; // schema version
   videoId: string;
-  model: string; // whisper model id it was decoded with (see WHISPER_MODELS)
+  model: string; // provenance — mirrors `source` below (kept as its own field for pre-LRCLIB rows)
   lang: string; // language: "und" (undetermined) unless a decoder actually reports one
   source: LyricsSource;
   conf: number; // mean confidence 0..1; 0 = unknown (v1 leaves it 0)

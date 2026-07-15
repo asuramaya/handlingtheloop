@@ -26,7 +26,7 @@ export interface LyricsSyncDeps {
   loadSeq: MutableRefObject<Record<DeckId, number>>;
   // Read-only here → covariant `current` so App's MutableRefObject<LyricsModel> assigns in.
   lyricsModelRef: { readonly current: string };
-  // Whisper decodes the NEURAL VOCAL STEM — without separation there is nothing to transcribe.
+  // Word-level alignment reads the NEURAL VOCAL STEM — without separation there's nothing to align to.
   stemModelRef: { readonly current: string };
 }
 
@@ -62,7 +62,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
       // otherwise a timing race (host on a different track, or mid-load) would paint and
       // persist the wrong track's lyrics (the cross-track contamination). Always cache the
       // (videoId, lines) pair though: it's correct for that id even if not for this deck now.
-      const src = (source as LyricsSource) || "whisper";
+      const src = (source as LyricsSource) || "pool";
       cacheRemoteLyrics(videoId, ls, src);
       if (videoId && videoId !== latest.current.loaded[deck]) return;
       captionVidRef.current[deck] = videoId;
@@ -74,7 +74,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
 
   // User "reprocess lyrics": wipe this deck's cached/pooled transcript and re-resolve from
   // scratch — the escape hatch for wrong/contaminated lyrics. `engineOverride` picks the
-  // source: "whisper" re-decodes the vocal stem on-device; "youtube" pulls fresh captions.
+  // source: "lrclib" re-fetches the words and re-aligns to the vocal stem; "youtube" pulls fresh captions.
   const reprocessLyrics = useCallback(
     (id: DeckId, engineOverride?: "lrclib" | "youtube") => {
       const vid = latest.current.loaded[id];
@@ -131,7 +131,7 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
     if (!lyricsVid || lyricsVid !== latest.current.loaded[id]) return;
     if (!force && lines === lastLyricsSent.current[id]) return;
     lastLyricsSent.current[id] = lines;
-    r.sendLyrics(id, lyricsVid, lines, captionSourceRef.current[id] || "whisper");
+    r.sendLyrics(id, lyricsVid, lines, captionSourceRef.current[id] || "pool");
   }, []);
 
   return { onRoomLyrics, reprocessLyrics, sendHostLyrics };

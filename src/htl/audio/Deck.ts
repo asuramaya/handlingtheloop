@@ -991,13 +991,13 @@ export class Deck {
   /** ★ The vocal stem's PCM for `videoId` — the ONE dependable source, whatever the memory
    *  pager has done with it.
    *
-   *  Whisper reads this. It used to read `stemChannel("vocals")`, which is `this.stems` —
-   *  the float32 AudioBuffers. Those are DELIBERATELY FREED: always on the packed-int16 path
-   *  (which is every load whose stems come from the cache, i.e. every load after the first
-   *  separation), always on mobile, and on desktop past DESKTOP_FREE_STEMS_SECONDS. So the
-   *  transcriber sat waiting four minutes for a buffer that had been thrown away on purpose,
-   *  timed out, and fell back to YouTube captions — every single time. That is why the lyrics
-   *  pool is empty.
+   *  The lyrics aligner reads this. It used to read `stemChannel("vocals")`, which is
+   *  `this.stems` — the float32 AudioBuffers. Those are DELIBERATELY FREED: always on the
+   *  packed-int16 path (which is every load whose stems come from the cache, i.e. every load
+   *  after the first separation), always on mobile, and on desktop past
+   *  DESKTOP_FREE_STEMS_SECONDS. So the old Whisper-era transcriber sat waiting four minutes for
+   *  a buffer that had been thrown away on purpose, timed out, and fell back to YouTube
+   *  captions — every single time. That is why `vocalPcm` exists.
    *
    *  The PCM was never gone: the stretch worklet holds all four stems as int16 (it is the audio
    *  source). So pull it back from THERE when the float32 copy is absent — in short chunks, so
@@ -1020,8 +1020,8 @@ export class Deck {
     const out = new Float32Array(Math.ceil(dur * this.ctx.sampleRate));
     let n = 0;
     for (let t = 0; t < dur; t += CHUNK) {
-      // Re-check every chunk: a track change mid-pull must abandon it, or we'd hand Whisper a
-      // Frankenstein of two songs.
+      // Re-check every chunk: a track change mid-pull must abandon it, or we'd hand the aligner
+      // a Frankenstein of two songs.
       if (this.stemsVideoId !== videoId) return null;
       const buf = await this.extractRegion(t, Math.min(dur, t + CHUNK), ["vocals"]);
       if (!buf) return null;

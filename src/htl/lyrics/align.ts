@@ -1,27 +1,25 @@
-// Forced alignment of Whisper's words onto the REAL vocal onsets.
+// The monotonic DP: snaps a SEEDED word train onto the REAL vocal onsets.
 //
-// ★ THE INVERSION. Whisper is a SPEECH model, and its word timestamps are not measured — they are
-// inferred from cross-attention (a DTW over attention weights). Singing is exactly where that
-// inference collapses: held vowels, melisma, no clean word boundaries. So the shipped design asked
-// the component that is WORST at timing to do the timing, and then patched it with a ±160 ms
-// nearest-onset snap — a window smaller than the error it was patching, so it mostly no-opped.
+// ★ WHAT THIS FILE DOES NOT DO ANY MORE. It used to correct Whisper's word timestamps, which were
+// inferred (a DTW over cross-attention weights) rather than measured, and collapsed exactly on
+// singing — held vowels, melisma, no clean word boundaries. Whisper is gone; the words now come
+// from LRCLIB (a published fact) and the seed times come from lrcAlign.ts (syllable/burst-derived
+// from each line's own span). This file's job narrowed to what's still genuinely hard: the seed is
+// a decent RELATIVE guess (word-to-word spacing) but not a trustworthy ABSOLUTE one, so a monotonic
+// DP slides/snaps it onto real onsets while preserving that internal spacing, rather than snapping
+// each word independently (which would shred the line's own rhythm).
 //
-// We hold an asset almost nobody else does: a CLEAN ISOLATED VOCAL STEM. The real vocal onsets are
-// recoverable from it with confidence. So:
-//
-//        Whisper  →  WHAT was sung, and the RELATIVE structure  (it is good at both)
-//        our DSP  →  WHEN it was sung                            (we have the stem)
-//
-// ★ THE KEY ASSUMPTION, and it is the load-bearing one: Whisper's RELATIVE timing (the gaps
-// between consecutive words) is far more trustworthy than its ABSOLUTE timing. A whole line can be
-// 400 ms late while the words within it are spaced correctly. So we do not snap each word
-// independently — that shreds the line's internal rhythm. We slide and stretch the word sequence
-// onto the onsets while PRESERVING its internal gaps, and only depart from Whisper's structure
-// when an onset makes a strong case.
+// ★ THE KEY ASSUMPTION, still load-bearing: a seed's RELATIVE timing (the gaps between consecutive
+// words) is far more trustworthy than its ABSOLUTE timing. A whole line can be seeded systematically
+// early or late while the words within it keep the right spacing. So we slide and stretch the word
+// sequence onto the onsets while PRESERVING its internal gaps, and only depart from the seed's
+// structure when an onset makes a strong case. (When the caller already has a per-line anchor — see
+// lrcAlign.ts's `systematic: {bias:0, drift:0}` — this file skips the bias/drift search entirely and
+// just runs the DP; the search below only fires for the unanchored, whole-track case.)
 //
 // This one pass subsumes all three failure modes, which is why it is worth building instead of
 // three separate patches: a constant OFFSET is removed by the bias estimate, a DRIFT by the slope
-// estimate, and per-word SCATTER by the DP. It does not care WHY the model's times were wrong.
+// estimate, and per-word SCATTER by the DP. It does not care WHY the seed's times were wrong.
 //
 // ⚠ HONESTY ABOUT MEASUREMENT: do not grade this by "distance to the nearest onset" after it runs.
 // It snaps to onsets, so that number is ~0 by construction and means nothing — it would be an
@@ -31,13 +29,13 @@
 
 /** What the aligner did — reported, never used to grade itself. */
 export interface AlignReport {
-  /** Constant lag removed, seconds (+ = the vocals were LATER than Whisper claimed). */
+  /** Constant lag removed, seconds (+ = the vocals were LATER than the seed claimed). */
   bias: number;
   /** Linear drift removed, seconds of lag per second of track. */
   drift: number;
   /** Words placed on a real detected vocal onset. */
   snapped: number;
-  /** Words left on their (bias/drift-corrected) Whisper time — no onset made a case. */
+  /** Words left on their (bias/drift-corrected) seed time — no onset made a case. */
   free: number;
   /** Median absolute distance a word moved, seconds. */
   medianMove: number;
@@ -53,7 +51,7 @@ export interface AlignOpts {
   /** Cost per second of deviation from the model's corrected time. */
   devW?: number;
   /** Cost per second of distortion to the model's word-to-word GAP. Higher than devW on purpose:
-   *  the relative structure is the part of Whisper's output we actually trust. */
+   *  the relative structure is the part of the seed we actually trust. */
   gapW?: number;
   /** Flat cost of declining every onset and keeping the corrected time (legato, held vowels). */
   freePenalty?: number;
@@ -76,7 +74,7 @@ export interface AlignOpts {
 // ★ THE COST MODEL, and the mistake it took a failing test to see. The first version charged a word
 // for the DISTANCE IT MOVED to reach an onset — so a badly-scattered word preferred to sit still,
 // and the aligner did nothing precisely when it was needed most. That has it backwards: the ONSET is
-// the evidence (a vocal demonstrably started there); Whisper's time is only a PRIOR on which onset
+// the evidence (a vocal demonstrably started there); the seed's time is only a PRIOR on which onset
 // is the right one. So `devW` is a plausibility term, not a punishment, and declining every onset
 // (`freePenalty`) has to cost MORE than a typical in-window snap — otherwise nothing ever snaps.
 //
@@ -156,7 +154,7 @@ export function globalLag(wordTimes: number[], onsets: number[], search = MAX_LA
     // quasi-periodic, so the correlation has SEVERAL near-equal peaks — one per beat of shift — and
     // the scan will happily pick a confidently-wrong one a beat or two away. (It did: it reported
     // +1.51 s when the truth was −0.35 s, and dragged the whole track there.) The tie-break is a
-    // prior we genuinely hold: Whisper is wrong by HUNDREDS OF MILLISECONDS, not by seconds. A
+    // prior we genuinely hold: the seed is wrong by HUNDREDS OF MILLISECONDS, not by seconds. A
     // gentle pull toward zero costs nothing when the true peak is distinct and saves us when it
     // isn't.
     score -= LAG_REG * wordTimes.length * Math.abs(L);
@@ -332,7 +330,7 @@ export function alignWords(
         cost[0][j] = local;
         continue;
       }
-      const want = corrected[i] - corrected[i - 1]; // the gap Whisper claims
+      const want = corrected[i] - corrected[i - 1]; // the gap the seed claims
       const prev = cands[i - 1];
       let best = INF;
       let bestK = -1;

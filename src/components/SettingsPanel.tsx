@@ -21,7 +21,7 @@ interface SettingsPanelProps {
   loadedDecks?: { id: "A" | "B"; neural: boolean; hasStems: boolean; model: string | null }[];
   onReanalyze?: (modelId: string, deck?: "A" | "B") => void; // fresh separation of one deck (or all)
   lyricDecks?: LyricDeck[]; // per-deck lyric state (source/line count/live progress) — the "are they firing?" readout
-  onRetranscribe?: (deck: "A" | "B") => void; // wipe one deck's transcript and re-run Whisper on its vocal stem
+  onRetranscribe?: (deck: "A" | "B") => void; // wipe one deck's transcript and re-resolve it
   onGpuReenable?: () => void; // user opted to re-enable GPU after a crash auto-disabled it
   outputSupported?: boolean; // browser can route to a chosen output device (AudioContext.setSinkId)
   debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)

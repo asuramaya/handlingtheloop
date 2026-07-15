@@ -389,8 +389,8 @@ function AppBody() {
   );
   const [loaded, setLoaded] = useState<Record<DeckId, string | null>>({ A: null, B: null });
   const [captions, setCaptions] = useState<Record<DeckId, LyricsLine[]>>({ A: [], B: [] });
-  // Where each deck's ribbon text came from — Whisper (vocal stem) / pool / YouTube — for the
-  // little source tag on the caption bar. null = none shown yet.
+  // Where each deck's ribbon text came from — aligned to the vocal stem / pool / YouTube — for
+  // the little source tag on the caption bar. null = none shown yet.
   const [captionSource, setCaptionSource] = useState<Record<DeckId, LyricsSource | null>>({ A: null, B: null });
   // Which videoId each deck's CURRENT captions actually belong to — so the host broadcasts
   // the lines paired with their true id (not a momentarily-stale loaded[id]) and a guest only
@@ -1523,10 +1523,10 @@ function AppBody() {
         // Claim this deck's in-flight load so a concurrent room snapshot won't double-load it.
         loadingVid.current[id] = vid;
         claimedVid = vid;
-        // Lyrics, Whisper-first: community pool → on-device Whisper over the neural vocal
-        // stem (desktop GPU, then contributed back) → YouTube captions as the fallback /
-        // instant placeholder. The resolver polls the deck for neural vocals on its own, so
-        // it's decoupled from the stem pipeline; it cancels via stale() on the next load.
+        // Lyrics: cache/pool → LRCLIB words (shown instantly, line-synced) → upgraded to
+        // word-level by aligning to the neural vocal stem (CPU DSP, no GPU, contributed back)
+        // → YouTube captions as the fallback. The resolver polls the deck for neural vocals on
+        // its own, so it's decoupled from the stem pipeline; it cancels via stale() on the next load.
         setCaptionSource((s) => ({ ...s, [id]: null }));
         setLyricStatus((s) => ({ ...s, [id]: null }));
         void resolveLyrics({
@@ -3163,11 +3163,11 @@ function AppBody() {
                 // No decode on this device — say what IS showing and where it came from, so
                 // "nothing is happening" and "it came from the pool" are never confused.
                 ["state", lyricStatus[id] ? `⟳ ${lyricStatus[id]}` : cues.length ? "idle (lyrics loaded)" : "idle (no lyrics)"],
-                ["engine", lyricsModelRef.current === "youtube" ? "YouTube captions" : `whisper ${lyricsModelRef.current}`],
+                ["engine", lyricsModelRef.current === "youtube" ? "YouTube captions" : "LRCLIB"],
                 ["source", captionSource[id] ?? "—"],
                 ["lines / word-timed", `${cues.length} / ${hasWords ? "yes" : "no"}`],
-                ["stems", settings.stemModel === "off" ? "OFF — whisper cannot run without a vocal stem" : settings.stemModel],
-                ["measured", "no decode on this device (cached, pooled, or never ran)"],
+                ["stems", settings.stemModel === "off" ? "OFF — no vocal stem to time words against" : settings.stemModel],
+                ["measured", "no local decode — from cache or the pool"],
               ],
         };
       }),

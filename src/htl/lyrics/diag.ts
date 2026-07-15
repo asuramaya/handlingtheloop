@@ -44,66 +44,66 @@ export function lyricsVerdict(d: LyricsDiag): LyricsVerdict {
     return {
       kind: "no-identity",
       headline: "NOT IDENTIFIED — we don't know what song this is",
-      fix: "The acoustic fingerprint found no match, and the uploader's title didn't parse as 'Artist - Title'. Nothing can be looked up without a name.",
+      fix: "No fingerprint match, and the title didn't parse as 'Artist - Title'.",
     };
   if (d.lookupFailed)
     return {
       kind: "lookup-failed",
       headline: `LOOKUP FAILED · ${d.artist} — ${d.title}`,
-      fix: "The lyrics database didn't answer in time (it's a free service and can be slow). This is NOT a miss — the lyrics may well exist. Hit ↻ Re-fetch.",
+      fix: "LRCLIB didn't respond in time — not necessarily a miss. ↻ Re-fetch.",
     };
   if (!d.matched)
     return {
       kind: "no-match",
       headline: `NO LYRICS FOUND · ${d.artist} — ${d.title}`,
-      fix: "LRCLIB has never seen this recording. Falling back to YouTube's captions.",
+      fix: "LRCLIB has never seen this recording. Falling back to YouTube captions.",
     };
   if (d.instrumental)
     return {
       kind: "instrumental",
       headline: "INSTRUMENTAL — this recording has no vocals",
-      fix: "Nothing to show, and that is the CORRECT answer. Whisper used to hallucinate a verse here.",
+      fix: "",
     };
   if (d.source === "lrclib")
     return {
       kind: "no-stem",
       headline: `LINE-SYNCED · ${d.lines} lines — but no vocal stem to time the WORDS against`,
-      fix: "Turn on stem separation to upgrade to word-level. The words are already right; only the per-word timing is missing.",
+      fix: "Turn on stem separation for word-level timing.",
     };
   if (d.plainOnly && d.source !== "estimated")
     return {
       kind: "plain-only",
       headline: `PLAIN LYRICS ONLY · ${d.lines} lines, no line clock`,
-      fix: "LRCLIB has the right words for this song but nobody has ever timed them. We can derive the timing from the vocal stem — turn on stem separation.",
+      fix: "No line clock on LRCLIB. Turn on stem separation to derive timing from the vocal.",
     };
   if (d.source === "estimated")
     return {
       kind: "estimated",
       headline: `TIMING ESTIMATED · ${d.snapped}/${d.words} words on a real vocal onset`,
-      fix: "No synced file existed, so the times come from the vocal alone with no line anchors to check them against. The words are right; if the timing drifts, that is why.",
+      fix: "No line anchors — the whole timing comes from the vocal alone.",
     };
   if (d.onsets > 0 && d.voiced >= LEAKY_STEM)
     return {
       kind: "leaky-stem",
       headline: `LEAKY VOCAL STEM — ${Math.round(d.voiced * 100)}% of the track reads as "singing"`,
-      fix: "The separation is bleeding instruments into the vocal, so there is no silence to measure against. The offset and confidence above are meaningless — they scored a mask of all ones. Try Hi-Fi separation quality, or re-analyze the stems.",
+      fix: "No silence to measure against — offset/confidence below are meaningless. Try Hi-Fi separation, or re-analyze.",
     };
   if (d.confidence < LOW_CONF)
     return {
       kind: "low-confidence",
       headline: `LOW CONFIDENCE — only ${Math.round(d.confidence * 100)}% of lines landed on singing`,
-      fix: "These lyrics likely belong to a different edit (a live take, a remix). The words are right; the offset was NOT applied, because a wrong shift is worse than none.",
+      fix: "Likely a different edit (live take, remix). Offset not applied.",
     };
   if (d.applied)
     return {
       kind: "aligned",
       headline: `ALIGNED · ${d.snapped}/${d.words} words on a real vocal onset`,
-      fix: "Words are ground truth, times are measured. If it still looks wrong, the bug is in the ribbon's render — not in the alignment.",
+      fix: "",
     };
   return {
     kind: "unknown",
     headline: "NOT ALIGNED — too few onsets in the vocal stem to work with",
-    fix: "Showing LRCLIB's own line timings. A very quiet or heavily-processed vocal can leave the onset detector nothing to find.",
+    fix: "Showing LRCLIB's own line timings.",
   };
 }
 
@@ -113,7 +113,7 @@ export function formatLyricsDiag(d: LyricsDiag): [string, string][] {
   const v = lyricsVerdict(d);
   return [
     ["verdict", v.headline],
-    ["fix", v.fix],
+    ...(v.fix ? ([["fix", v.fix]] as [string, string][]) : []),
     // The chain, in order. The first blank row is the step that broke.
     ["1 · identity", d.artist && d.title ? `${d.artist} — ${d.title}` : "— not identified"],
     [

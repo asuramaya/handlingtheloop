@@ -45,7 +45,7 @@ interface DeckLaneProps {
   status: StemBadge | null;
   stemStatus: StemStatus | null; // full status for the on-waveform processing overlay
   captions: LyricsLine[];
-  captionSource?: LyricsSource | null; // provenance tag on the ribbon (whisper / pool / youtube)
+  captionSource?: LyricsSource | null; // provenance tag on the ribbon (lrclib / aligned / estimated / pool / youtube)
   lyricStatus?: string | null; // lyric processing/failure tell shown on the caption bar
   windowSec: number;
   expanded: boolean; // this lane is maximized to single-deck view

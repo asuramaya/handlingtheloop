@@ -120,9 +120,9 @@ export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
   demucsQuality = { shifts: Math.max(0, q.shifts | 0), overlap: Math.min(0.5, Math.max(0, q.overlap)) };
 }
 
-// Separation shares the app-wide GPU queue (see gpuQueue): one heavy WebGPU job at a time
-// across BOTH separation and Whisper, so two decks / a dev StrictMode double-fire / a model
-// switch / a concurrent transcription can't stack GPU work or thrash the compositor.
+// Separation shares the app-wide GPU queue (see gpuQueue): one heavy WebGPU job at a time,
+// so two decks / a dev StrictMode double-fire / a model switch can't stack GPU work or thrash
+// the compositor.
 export function separateOpenUnmix(mix: AudioBuffer, model: StemModel, onProgress?: SeparateProgress): Promise<Stems> {
   // On a PHONE, demucs would OOM-crash if the worker built the whole-track output
   // (4 full-length stereo float32 buffers ≈ 424 MB) in one pass. So mobile demucs

@@ -284,15 +284,31 @@ function voicedFrameFor(mask: Float32Array, f: number): number {
 /** Every voiced onset in [from, to), sorted ascending. The window+mask filter every line-level
  *  seeder needs, deliberately UNPRUNED by count — see seedOnBursts for why a flat top-K cap is the
  *  wrong place to decide what to keep. */
+/** An edge-admitted onset with an in-run onset THIS close behind it is the same attack detected
+ *  twice (a pre-echo), not two attacks. Measured on the htdemucs Du Hast stem: 32.30 fires 0.11s
+ *  before the true "du" at 32.41 — admitting both shoved every following word one slot early. */
+const EDGE_DEDUPE_S = 0.2;
+
 function windowedOnsets(onsets: number[], from: number, to: number, mask: Float32Array, hop: number): number[] {
   const out: number[] = [];
+  const own: boolean[] = []; // voiced at its OWN frame (vs admitted by the edge tolerance)
   for (const t of onsets) {
     if (t < from || t >= to) continue;
     // An onset in SILENCE is not a word start — it's a click, a breath, or a reverb tail.
-    if (voicedFrameFor(mask, Math.floor(t / hop)) < 0) continue;
+    const f = Math.floor(t / hop);
+    if (voicedFrameFor(mask, f) < 0) continue;
     out.push(t);
+    own.push(f >= 0 && f < mask.length && mask[f] > 0);
   }
-  return out; // onsets[] is ascending, so this is too
+  // Edge-tolerated onsets are for a genuine attack the gate reacts to a frame late (Coax's "You":
+  // onset 29.22, mask opens 29.25, next onset 0.73s away). When the run's own first onset sits
+  // within EDGE_DEDUPE_S, the edge one is that attack's pre-echo — keep the in-run one.
+  const keep: number[] = [];
+  for (let k = 0; k < out.length; k++) {
+    if (!own[k] && k + 1 < out.length && own[k + 1] && out[k + 1] - out[k] < EDGE_DEDUPE_S) continue;
+    keep.push(out[k]);
+  }
+  return keep; // onsets[] is ascending, so this is too
 }
 
 interface Burst {
@@ -538,7 +554,13 @@ export function coarseOffset(
     // offset cost 0.4 against a Dice score that cannot exceed 1.0 — so the true peak could never
     // win and this function returned zero every single time. The regulariser must be small enough
     // that it only ever breaks a TIE; if it can outvote the evidence it isn't a prior, it's a veto.
-    const score = dice - 0.004 * Math.abs(lag * hop);
+    //
+    // ★ AND CAPPED, for the same reason at the other end of the scale. Repetition aliases live a
+    // verse apart (~15-30s); past that the penalty stops breaking ties and starts vetoing GENUINE
+    // far offsets — Britney's video sings the song 37.5s late behind an interview, the true Dice
+    // peak is right there (0.63 vs 0.43 at zero, measured), and an uncapped 0.15 penalty would have
+    // eaten most of that margin.
+    const score = dice - 0.004 * Math.min(Math.abs(lag * hop), 15);
     if (score > bestScore) {
       bestScore = score;
       best = lag;
@@ -592,34 +614,34 @@ const MIN_CONFIDENCE = 0.6;
  *  landing is 33% and two is 67% — the statistic has no resolution. Leave the clock alone. */
 const MIN_LINES_FOR_SHIFT = 4;
 
-/** When the LRC's own clock is already credible, a shift may only POLISH it — no further than a
- *  line's own slack. Anything bigger pushes every line's evidence window past its own first attack
- *  and onto its neighbour's audio. */
+/** A shift no bigger than a line's own slack is a POLISH — it cannot push a line's evidence window
+ *  onto its neighbour's audio, so any real improvement justifies it. */
 const MAX_POLISH_SHIFT = 0.5;
+/** A YANK (anything bigger) must be DECISIVE. Measured: Britney's true offset (+37.5s — the video
+ *  sings the whole song behind an interview) improves span coverage 0.68 → 0.98, a +0.30 gain; the
+ *  same track's NOISE peak (+1.15s, a 3-line gain on 50 lines) improved it 0.06. The bar sits
+ *  between them with margin on both sides. */
+const MIN_DECISIVE_GAIN = 0.15;
 
 /**
  * The whole-track shift decision, extracted so it can be tested (convergence.ts's pattern: extract
  * the decision, test the decision). Returns the shift to apply — 0 means "leave the LRC clock alone".
  *
- * ★ CALIBRATED ON TWO REAL TRACKS, AND THE SECOND ONE WAS A LIVE REGRESSION. The rule used to be
- * "shift whenever coverage improves at all", and on Britney's "I Wanna Go" (video cut, LRC duration-
- * matched and essentially CORRECT: first line stamped 9.04, voice enters 9.25) the correlator still
- * found +1.15 s, because 0.740 beats 0.680 — a THREE-line gain on a fifty-line song, pure noise on a
- * 62%-voiced mask. The shift pushed every line's window past its own first attack, the DP could only
- * snap late, and the whole track came out seconds behind the singer. Meanwhile Du Hast's stamps
- * really are ~0.4 s late (31.13 vs a measured attack at 30.73), as-is coverage 0.750, shifted 0.906 —
- * a small shift a credible clock genuinely needs.
- *
- * What separates the true case from the false one is NOT the coverage delta (a per-line statistic
- * with N-dependent noise) — it is the SIZE of the move against a clock that already clears the trust
- * bar. A credible clock may be polished (≤ MAX_POLISH_SHIFT); it may never be yanked. A clock that
- * FAILS the bar as-is is the different-cut case the shift was built for, and the full rescue stays.
+ * ★ CALIBRATED ON THREE REAL FAILURES OF THREE DIFFERENT RULES. (1) "Shift whenever coverage
+ * improves at all" yanked Britney's clock +1.15s on a 3-line coverage gain — noise — and every line
+ * sang ahead of its ribbon. (2) "Never yank a credible clock" then blocked the SAME track's genuine
+ * rescue: the video embeds the song 37.5s behind an interview, and the interview SPEECH sits in the
+ * vocal stem, inflating as-is coverage to a credible-looking 0.68 — the mask cannot tell speech from
+ * singing. (3) Du Hast's stamps really are ~0.4s late, a small shift it must keep. The rule that
+ * survives all three: a POLISH (≤ MAX_POLISH_SHIFT) needs only a real improvement; a YANK needs a
+ * DECISIVE one (≥ MIN_DECISIVE_GAIN — the noise ceiling and the true-offset floor are a factor of
+ * five apart, measured). A yank on a marginal gain is repetition-chasing; leave the clock alone.
  */
 export function decideShift(o: { lines: number; offset: number; confidence: number; asIs: number }): number {
   const trust = o.lines >= MIN_LINES_FOR_SHIFT && o.confidence >= MIN_CONFIDENCE && o.confidence > o.asIs;
   if (!trust) return 0;
-  if (o.asIs >= MIN_CONFIDENCE && Math.abs(o.offset) > MAX_POLISH_SHIFT) return 0;
-  return o.offset;
+  if (Math.abs(o.offset) <= MAX_POLISH_SHIFT) return o.offset;
+  return o.confidence - o.asIs >= MIN_DECISIVE_GAIN ? o.offset : 0;
 }
 
 export interface LrcAlignInput {
@@ -653,7 +675,12 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
   //    same.
   const spans = sungSpans(i.lines, i.duration);
   const lrcMask = maskFromLines(spans, frames, i.hop);
-  const { offset } = coarseOffset(lrcMask, vocal, i.hop);
+  // Search as far as the clocks' own slack allows: a video that embeds the song behind an intro
+  // (Britney's interview cut: +37.5s, measured) leaves exactly `duration − last LRC line` of room,
+  // and a ±30s fence simply could not reach the true peak.
+  const lastStart = i.lines.length ? i.lines[i.lines.length - 1].start : 0;
+  const maxLagSec = Math.max(30, i.duration - lastStart + 15);
+  const { offset } = coarseOffset(lrcMask, vocal, i.hop, maxLagSec);
   // How much of the song actually agrees at that offset — see spanCoverage for why this and not the
   // correlation score. Compare against doing nothing: a shift has to EARN its place.
   const confidence = spanCoverage(spans, vocal, i.hop, offset);

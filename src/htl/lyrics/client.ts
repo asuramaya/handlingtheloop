@@ -56,7 +56,16 @@ import type { LrcReport } from "./lrcAlign";
 //        path. Kills the measured Coax & Botany failure where every unprinted "oh-whoa" repeat
 //        dragged the following printed line one burst early (the verse-3 reprise showed a whole
 //        silence-gap before it was sung). Every `estimated` row predates this and must re-derive.
-const LYRICS_VER = 10;
+//   11   ★ the offset search can now actually REACH a far-away truth, and a yank must be DECISIVE.
+//        Britney's video sings the whole song +37.5s behind an interview whose SPEECH sits in the
+//        vocal stem (a mask cannot tell speech from singing, so the wrong clock looked credible);
+//        the true peak (coverage 0.68→0.98, dice 0.43→0.63, both measured) was unreachable behind a
+//        ±30s search fence, an uncapped distance penalty, and v9's own never-yank-a-credible-clock
+//        rule. Search now extends to the clocks' real slack, the penalty is capped at repetition
+//        scale, and decideShift takes a big offset iff the coverage gain is decisive (≥0.15).
+//        Plus: the onset edge-tolerance (v10) admitted htdemucs pre-echo onsets and slid Du Hast's
+//        words a slot early — edge onsets now dedupe against the run's own first attack.
+const LYRICS_VER = 11;
 
 // ★ BELOW THIS, A TRANSCRIPT IS NOT STALE — IT IS FICTION, AND MUST NEVER BE SHOWN.
 //

@@ -457,6 +457,14 @@ describe("decideShift — rescue or polish, never a yank (the numbers are the tw
   it("a clock that fails the bar as-is gets the full rescue — the different-cut case", () => {
     expect(decideShift({ lines: 40, offset: 12.5, confidence: 0.9, asIs: 0.2 })).toBe(12.5);
   });
+  it("Britney's TRUE offset: a far yank with a DECISIVE gain goes through — even past a credible as-is", () => {
+    // Measured: the video sings the song +37.5s behind an interview whose SPEECH inflates as-is
+    // coverage to 0.68 (the mask can't tell speech from singing). Coverage at the true offset: 0.98.
+    expect(decideShift({ lines: 50, offset: 37.5, confidence: 0.98, asIs: 0.68 })).toBe(37.5);
+  });
+  it("a big yank on a sub-decisive gain stays refused, wherever as-is sits", () => {
+    expect(decideShift({ lines: 50, offset: 8.0, confidence: 0.7, asIs: 0.58 })).toBe(0);
+  });
   it("a weak correlation never moves anything, however bad as-is looks", () => {
     expect(decideShift({ lines: 40, offset: 12.75, confidence: 0.5, asIs: 0.2 })).toBe(0);
   });

@@ -52,6 +52,7 @@ import {
   stretchConfig,
   stemConfig,
   setDemucsQuality,
+  setCpuBenchSeparation,
   loadSettings,
   saveSettings,
   useSettingsSync,
@@ -1205,6 +1206,7 @@ function AppBody() {
       tThresh: settings.stretchTThresh,
     });
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
+    setCpuBenchSeparation(settings.stemCpuBench); // experimental CPU-EP separation bench (any device)
   }, [settings, engine]);
 
   // Route the mix to the chosen output device (only re-applies when it changes, so a

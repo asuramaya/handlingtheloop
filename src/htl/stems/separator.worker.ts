@@ -95,13 +95,17 @@ function loadOrt(threads: number): Promise<any> {
 }
 const sessions = new Map<string, Promise<any>>();
 function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<any> {
-  const cached = sessions.get(url);
+  // Keyed by EP list AND url: the CPU-bench runs the same model on ["wasm"] right after
+  // a GPU run may have cached it on ["webgpu","wasm"] — a url-only key would silently
+  // hand the bench the GPU session and the measurement would be a lie.
+  const key = `${eps.join(",")}|${url}`;
+  const cached = sessions.get(key);
   if (cached) return cached;
   // GPU as an option: demucs-core passes ['webgpu','wasm'] so its Conv/MatMul/attention
   // run on the GPU with per-op CPU fallback. Open-Unmix keeps ['wasm'] (it's LSTM —
   // WebGPU has no LSTM kernel, so GPU would just shuttle data and slow it down).
   const p: Promise<any> = ort.InferenceSession.create(url, { executionProviders: eps });
-  sessions.set(url, p);
+  sessions.set(key, p);
   return p;
 }
 
@@ -547,6 +551,8 @@ interface SeparateMsg {
   selfCheck?: boolean; // fp16 model: numerically compare ONE segment vs the fp32 refUrl on WebGPU
   refUrl?: string; // fp32 reference model URL for the fp16 self-check
   threads: number;
+  /** CPU-bench: force the wasm CPU EP even where WebGPU is available (Settings opt-in). */
+  benchCpu?: boolean;
 }
 
 self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
@@ -559,9 +565,22 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
     const N = msg.frames;
     const post: Post = (pct) => self.postMessage({ type: "progress", id, pct });
 
+    // The CPU-bench pins demucs-core to the wasm EP (and skips the fp16 GPU self-check,
+    // which is a WebGPU question). Same graph, same stems — only the backend differs.
+    const useGpu = USE_WEBGPU && !msg.benchCpu;
     const acc =
       msg.arch === "demucs-core"
-        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps, msg.quality, msg.selfCheck, msg.refUrl)
+        ? await runDemucsCore(
+            ort,
+            msg.url!,
+            full,
+            N,
+            post,
+            useGpu ? msg.eps : ["wasm"],
+            msg.quality,
+            msg.selfCheck && useGpu,
+            msg.refUrl,
+          )
         : msg.arch === "demucs"
           ? await runDemucs(ort, msg.url!, full, N, post)
           : await runOpenUnmix(ort, msg.urls!, full, N, post);
@@ -574,7 +593,11 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
       stems[t] = [lb, rb];
       transfer.push(lb, rb);
     }
-    self.postMessage({ type: "done", id, stems }, transfer);
+    // ep/threads: the FACTS only this side knows, for the bench line. `numThreads` is
+    // what ORT actually initialized with (1 without cross-origin isolation — report it
+    // honestly; a 1-thread number must never masquerade as the machine's verdict).
+    const ep = msg.arch === "demucs-core" ? (useGpu ? "webgpu" : "wasm") : "wasm";
+    self.postMessage({ type: "done", id, stems, ep, threads: ort.env.wasm.numThreads }, transfer);
   } catch (err) {
     self.postMessage({ type: "error", id, message: String((err as Error)?.message ?? err) });
   }

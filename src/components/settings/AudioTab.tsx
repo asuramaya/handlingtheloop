@@ -12,6 +12,7 @@ import {
   STEM_PRESETS,
   STEM_MODELS,
   getStemModel,
+  lastStemBench,
   modelSupport,
   isMobileDevice,
   isChromium,
@@ -502,9 +503,10 @@ export function AudioTab({
               // neural splitter we offer now. The registry entry stays so already-
               // cached umx stems still resolve; it's just no longer selectable.
               .filter((m) => m.arch !== "openunmix")
-              // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
-              // rest stay, shown as download-only on mobile.
-              .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
+              // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari) — UNLESS the
+              // CPU-bench opt-in is on: then it runs the wasm CPU EP (no WebGPU at all)
+              // and must be pickable here for the on-device experiment.
+              .filter((m) => !(isMobileDevice() && m.tier === "gpu" && !settings.stemCpuBench))
               // The fp16 demucs model only works where the adapter exposes shader-f16
               // (absent on today's Linux+NVIDIA WebGPU → its f16 shaders → noise). Hide
               // it until the feature appears, then it auto-shows.
@@ -554,6 +556,39 @@ export function AudioTab({
             </button>
           </div>
         )}
+
+        <div className="settings-row stem-cpubench">
+          <span className="settings-label">
+            CPU separation bench
+            <span className="settings-sub muted">
+              {" "}
+              · experimental — separate on this device's CPU (wasm EP) and report the timing
+            </span>
+          </span>
+          <button
+            className={`toggle ${settings.stemCpuBench ? "on" : ""}`}
+            onClick={() => set({ stemCpuBench: !settings.stemCpuBench })}
+            role="switch"
+            aria-checked={settings.stemCpuBench}
+            title="Force stem separation onto the wasm CPU backend — works on phones too (crash-guarded). Each run logs threads and ×realtime here and in the console."
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
+        {settings.stemCpuBench &&
+          (() => {
+            const b = lastStemBench();
+            return (
+              <p className="settings-hint muted">
+                {b
+                  ? `Last run — ${b.line}`
+                  : "No run measured yet — load a track with a neural model selected (uncached tracks separate on-device)."}
+                {typeof crossOriginIsolated !== "undefined" && !crossOriginIsolated
+                  ? " ⚠ Not cross-origin isolated here → single-threaded; the number will read far slower than the device's real ceiling."
+                  : ""}
+              </p>
+            );
+          })()}
 
         {!isMobileDevice() && getStemModel(settings.stemModel).tier === "gpu" && (
           <div className="stem-quality">

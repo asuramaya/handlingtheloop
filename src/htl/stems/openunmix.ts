@@ -4,7 +4,7 @@
 // PCM to the worker, and resample the returned stems back to the deck's rate so
 // they line up sample-for-sample with the mix buffer.
 import { STEM_NAMES, type Stems } from "./index";
-import { type StemModel, isMobileDevice } from "./models";
+import { type StemModel, isMobileDevice, cpuBenchSeparation } from "./models";
 import { stemTrace } from "./trace";
 import { gpuRun } from "./gpuQueue";
 import { putStemBlobs, getStemBlobs, deleteStemBlobs, clearStemBlobsByPrefix } from "../persistence";
@@ -60,6 +60,10 @@ function getWorker(): Worker {
       if (type === "progress") job.onProgress?.(e.data.pct);
       else if (type === "done") {
         jobs.delete(id);
+        if (benchAcc) {
+          benchAcc.ep = e.data.ep ?? benchAcc.ep;
+          benchAcc.threads = e.data.threads ?? benchAcc.threads;
+        }
         job.resolve(e.data.stems);
       } else if (type === "error") {
         jobs.delete(id);
@@ -120,6 +124,46 @@ export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
   demucsQuality = { shifts: Math.max(0, q.shifts | 0), overlap: Math.min(0.5, Math.max(0, q.overlap)) };
 }
 
+// ─── Separation bench accounting ───────────────────────────────────────────────
+// Jobs are serialized (the gpuRun queue; the windowed path posts its windows in order),
+// so one module-level accumulator is safe. It measures EVERY separation — wall-clock at
+// job granularity from this side, EP + actual ORT thread count from the worker — and on
+// completion prints one honest line + stashes it for Settings to show. This is how the
+// "CPU route sucks" verdict gets replaced with a number: the old experience may have
+// been a 1-thread run (separationThreads returns 1 without cross-origin isolation).
+let benchAcc: { ms: number; audioSec: number; jobs: number; ep?: string; threads?: number } | null = null;
+export interface StemBenchResult {
+  model: string;
+  line: string;
+  xRealtime: number;
+  ep: string;
+  threads: number;
+  when: string;
+}
+function finishBench(model: StemModel): void {
+  const b = benchAcc;
+  benchAcc = null;
+  if (!b || b.ms <= 0 || b.audioSec <= 0) return;
+  const x = b.audioSec / (b.ms / 1000);
+  const line = `${model.id}: ${b.audioSec.toFixed(0)}s of audio in ${(b.ms / 1000).toFixed(1)}s — ${x.toFixed(2)}× realtime · ${b.ep ?? "?"} EP · ${b.threads ?? "?"} thread(s) · ${b.jobs} job(s)`;
+  console.log(`[htl] stem bench — ${line}`);
+  try {
+    const r: StemBenchResult = { model: model.id, line, xRealtime: x, ep: b.ep ?? "?", threads: b.threads ?? 0, when: new Date().toISOString() };
+    localStorage.setItem("htl:stemBench", JSON.stringify(r));
+  } catch {
+    /* private mode — the console line still tells the story */
+  }
+}
+/** The last completed separation's measurements (for Settings), or null. */
+export function lastStemBench(): StemBenchResult | null {
+  try {
+    const raw = localStorage.getItem("htl:stemBench");
+    return raw ? (JSON.parse(raw) as StemBenchResult) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Separation shares the app-wide GPU queue (see gpuQueue): one heavy WebGPU job at a time,
 // so two decks / a dev StrictMode double-fire / a model switch can't stack GPU work or thrash
 // the compositor.
@@ -130,7 +174,20 @@ export function separateOpenUnmix(mix: AudioBuffer, model: StemModel, onProgress
   // its own (the worker only ever holds one window's output), then crossfaded back
   // together on the main thread. Desktop / Open-Unmix keep the one-shot path.
   const windowed = isMobileDevice() && model.arch === "demucs-core";
-  const inner = () => (windowed ? separateDemucsWindowed(mix, model, onProgress) : separateInner(mix, model, onProgress));
+  const inner = () => {
+    benchAcc = { ms: 0, audioSec: 0, jobs: 0 }; // reset at RUN time (the queue may hold us behind another job)
+    const run = windowed ? separateDemucsWindowed(mix, model, onProgress) : separateInner(mix, model, onProgress);
+    return run.then(
+      (stems) => {
+        finishBench(model);
+        return stems;
+      },
+      (err) => {
+        benchAcc = null;
+        throw err;
+      },
+    );
+  };
   return gpuRun(inner);
 }
 
@@ -146,7 +203,20 @@ function runWorkerJob(
   const id = ++jobId;
   const w = getWorker();
   return new Promise<Record<string, ArrayBuffer[]>>((resolve, reject) => {
-    jobs.set(id, { resolve, reject, onProgress });
+    const t0 = performance.now();
+    const audioSec = L.length / MODEL_SR;
+    jobs.set(id, {
+      resolve: (stems) => {
+        if (benchAcc) {
+          benchAcc.ms += performance.now() - t0;
+          benchAcc.audioSec += audioSec;
+          benchAcc.jobs++;
+        }
+        resolve(stems);
+      },
+      reject,
+      onProgress,
+    });
     w.postMessage(
       {
         type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length, arch: model.arch,
@@ -157,6 +227,7 @@ function runWorkerJob(
         selfCheck: model.arch === "demucs-core" && !!model.refUrl,
         refUrl: model.refUrl,
         threads,
+        benchCpu: cpuBenchSeparation(),
       },
       [L.buffer, R.buffer],
     );

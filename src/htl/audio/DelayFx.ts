@@ -369,6 +369,15 @@ export class DelayFx extends BaseFxDevice {
     }
   }
 
+  // ★ NOT a commanded-value mirror — the opposite. duckAmt (in `params`) is what you SET; this is
+  // what the sidechain is doing to the signal RIGHT NOW, and nothing in JS ever assigns it — it's
+  // purely the audio thread's own rectify→smooth→gain output. Reading .value here is correct, not
+  // a rule-1 lying getter: there is no commanded target for a viz to disagree with, only a live
+  // envelope. 1 = not ducking; down toward 1−duckAmt while a transient is pushing it down.
+  get duckGain(): number {
+    return this.seriesDuck.gain.value;
+  }
+
   // --- filters ---
   private setFilterFreq(which: "hp" | "lp", hz: number) {
     const now = this.ctx.currentTime;

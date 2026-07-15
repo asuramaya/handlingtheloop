@@ -166,6 +166,8 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
   return (
     <div className="fx-panel fx-delay" style={{ ["--accent" as string]: accent }}>
       <DelayViz
+        deck={deck}
+        slot={slot}
         time={get("time")}
         feedback={get("feedback")}
         mix={get("mix")}

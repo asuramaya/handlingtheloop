@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { Deck, DelayFx } from "@htl/audio";
 
 // The Delay's instrument — an echo-tap timeline you PLAY, not a picture of one.
 //
@@ -100,6 +101,10 @@ import { useEffect, useRef } from "react";
 type CharId = "width" | "drive" | "duck";
 
 interface DelayVizProps {
+  deck: Deck; // ★ for duckGain ONLY — the live sidechain readback has no JS-side commanded value,
+  // so it can't travel through the same prop channel as everything else here; it's read straight
+  // off the device each frame, the one place on this canvas that's audio-reactive, not state-driven.
+  slot: number;
   time: number; // seconds between taps
   feedback: number; // 0..1 decay per tap
   mix: number; // 0..1 — overall wet, dims the taps
@@ -153,7 +158,6 @@ const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
 const SHEAR_MAX = 26; // the R channel's biggest shear, in px — capped again by the tap spacing, or
 // a wide delay would fling the right channel on top of the NEXT echo and the row would read as mush.
-const DUCK_BEATS = 2; // how far into the tail the duck's scoop reaches — and so how far it's grabbable
 // ★ THE TWO GUTTERS — a full-height column at each END of the timeline. DUCK on the left (the dry
 // hit already WAS such a column: t=0, full height, and the literal sidechain source), DRIVE on the
 // right. Nothing else can reach these pixels, which is the whole point: a control whose law spans
@@ -187,7 +191,7 @@ type Grab =
   | { kind: "drive" }
   | { kind: "duck" };
 
-export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
+export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -196,8 +200,8 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
-  p.current = { time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
+  const p = useRef({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
+  p.current = { deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see. Top to bottom: the READOUT strip, the tone RIBBON, then the
@@ -277,19 +281,22 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     let phase = 0;
     let lastNow = 0;
 
-    // The envelope, split into its two factors — because the DUCK is exactly the gap between them,
-    // and that gap is the shadow you can see and grab.
-    //   decayAt — where the tail WOULD be: fb^n, and nothing else.
-    //   duckAt  — what the dry hit takes away: 1 − duck·e^(−t/τ), which is 1 − duck at the origin
-    //             and recovers over a beat or two. That value AT THE ORIGIN is the whole point: it
-    //             means the shadow's depth where it meets the dry hit IS the duck, full range, so
-    //             the handle's position stands for the value and the drag can be absolute.
+    // The envelope, split into its two factors.
+    //   decayAt  — where the tail WOULD be: fb^n, and nothing else. Position-based; it's a
+    //              property of the delay line, so it only depends on WHERE an echo sits.
+    //   duckGain — ★ NOT position-based. It used to be — 1 − duck·e^(−t/τ), a fixed decay drawn
+    //              once from t=0 — but that shape was FICTION: the real duck (DelayFx.duckGain) is
+    //              a live sidechain, a 12Hz-smoothed envelope follower on the actual dry input,
+    //              scaling the WHOLE merged wet signal together, uniformly, in real time — it
+    //              doesn't care how far an echo is from the start, it cares whether something is
+    //              hitting the input RIGHT NOW. So it's read once per frame (see draw()) and
+    //              applied as a single scalar, not a function of `sec` — the picture now pumps
+    //              with the actual audio instead of drawing a shape that was never really there.
     const decayAt = (sec: number, s: typeof p.current) => {
       const t = Math.max(0.001, s.time);
       return s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), Math.max(0, sec / t - 1));
     };
-    const duckAt = (sec: number, s: typeof p.current, beat: number) => 1 - clamp01(s.duck) * Math.exp(-sec / ((beat > 0 ? beat : 0.5) * 0.5));
-    const envAt = (sec: number, s: typeof p.current, beat: number) => decayAt(sec, s) * duckAt(sec, s, beat);
+    const envAt = (sec: number, s: typeof p.current, duckGain: number) => decayAt(sec, s) * duckGain;
 
     // ★ THE TIMELINE'S OWN SPACE EXCLUDES THE GUTTERS — reserved geometrically, not refereed.
     //
@@ -323,6 +330,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const beat = s.bpm ? 60 / s.bpm : 0;
       const g = grab.current;
       const windowSec = windowOf(beat, w);
+      // The one audio-reactive read on this whole canvas — everything else here is state, this is
+      // sound. Falls back to 1 (not ducking) if the device isn't resolved yet.
+      const dev = s.deck.fxDeviceAt(s.slot) as DelayFx | undefined;
+      const duckGain = dev ? clamp01(dev.duckGain) : 1;
+      const duckPulse = clamp01(1 - duckGain); // 0 = quiet, rises toward duck's ceiling on a hit
       const xOf = (sec: number) => secToX(sec, w, windowSec);
       const xOfInv = (x: number) => xToSec(x, w, windowSec);
       const { ribbonH, ribY, top, botY, midY, maxBar } = geom(h, w);
@@ -529,38 +541,35 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         ctx.globalAlpha = 1;
       }
 
-      // === THE DRY HIT'S SHADOW — DUCK.
+      // === THE DRY HIT'S SHADOW — DUCK, LIVE.
       //
-      // The dry hit was the one thing on this canvas that did nothing. It sat at t=0, full height,
-      // white, inert — and it is the SIDECHAIN SOURCE. It's what does the ducking. So it is the
-      // handle, and what it does is throw a shadow across the head of the tail: the wedge between
-      // where the echoes would be and where the duck puts them.
-      //
-      // ★ WHY IT HAD TO MOVE HERE. Duck used to live on the envelope's head — and the envelope's head
-      // is exactly where the TAPS are. Over the first couple of beats their grab zones tile the whole
-      // region, so there was almost nowhere left to seize the curve: a 1px dashed line in the one
-      // place on the surface that was already full. It wasn't a control, it was a needle in a
-      // haystack. The dry hit is at x=0, where no tap ever goes, and the shadow's depth where it
-      // meets that bar is EXACTLY the duck — so the handle stands for the value and the drag is
-      // absolute, over the full swing.
+      // The dry hit is the SIDECHAIN SOURCE — it's what does the ducking — so it stays the handle's
+      // conceptual home, and the shadow it throws is duck made visible. ★ But the shadow used to be
+      // FICTION: a fixed decay drawn once from t=0, `1 − duck·e^(−t/τ)`, that never changed unless
+      // you dragged the knob. The real duck is a LIVE sidechain (DelayFx.duckGain) reacting to the
+      // actual dry signal, uniformly, across the WHOLE tail at once — it doesn't fade out after a
+      // couple of beats, and it doesn't care about position. So the shadow now spans the full
+      // timeline (not a `shadowX` window) and its depth is ONE scalar — duckGain, read fresh every
+      // frame — not a curve over `sec`. The dashed ghost is the reference (what the tail would be
+      // with duck off); the filled gap between it and the live-scaled curve is what's ACTUALLY
+      // happening to the signal right now, and it will visibly breathe with the music.
       const duckHot = hot === "duck";
       const dv = clamp01(s.duck);
-      const shadowX = Math.min(w - gw, xOf((beat > 0 ? beat : 0.5) * DUCK_BEATS * 1.6));
       if (dv > 0.001) {
         for (const up of [true, false]) {
           const yOf = (v: number) => (up ? midY - maxBar * v : midY + maxBar * v);
           ctx.beginPath();
-          for (let x = gw; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
-          for (let x = shadowX; x >= gw; x -= 2) ctx.lineTo(x, yOf(envAt(xOfInv(x), s, beat)));
+          for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
+          for (let x = w - gw; x >= gw; x -= 2) ctx.lineTo(x, yOf(envAt(xOfInv(x), s, duckGain)));
           ctx.closePath();
           ctx.fillStyle = accent;
-          ctx.globalAlpha = duckHot ? 0.2 : 0.11;
+          ctx.globalAlpha = duckHot ? 0.22 : 0.08 + 0.14 * duckPulse;
           ctx.fill();
           // the ghost: where the tail WOULD have been. The shadow only means something against it.
           ctx.beginPath();
-          for (let x = gw; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
+          for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
           ctx.strokeStyle = accent;
-          ctx.globalAlpha = duckHot ? 0.5 : 0.3;
+          ctx.globalAlpha = duckHot ? 0.5 : 0.28;
           ctx.lineWidth = 1;
           ctx.setLineDash([3, 3]);
           ctx.stroke();
@@ -568,12 +577,23 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
           ctx.globalAlpha = 1;
         }
       }
-      // the dry hit itself — the source. It sits at x=gw now: t=0 on the timeline's OWN
-      // coordinate space (secToX(0) === gw exactly), immediately right of the duck rail rather
-      // than floating at an arbitrary offset that just happened to look adjacent.
+      // the dry hit itself — the source. It sits at x=gw: t=0 on the timeline's OWN coordinate
+      // space (secToX(0) === gw exactly). ★ It PULSES with duckPulse now — the source glowing
+      // brighter exactly when it's actually pushing the tail down, so the causality reads at a
+      // glance: this bar lights up, that's why the tail just dipped.
       ctx.globalAlpha = 0.85;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(gw, round(midY - maxBar), barW, round(maxBar * 2));
+      if (duckPulse > 0.02) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = duckPulse * 0.9;
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = 4 + duckPulse * 10;
+        ctx.fillStyle = accent;
+        ctx.fillRect(gw - 1, round(midY - maxBar) - 1, barW + 2, round(maxBar * 2) + 2);
+        ctx.shadowBlur = 0;
+        ctx.globalCompositeOperation = "source-over";
+      }
       ctx.globalAlpha = 1;
 
       // === THE TWO GUTTERS — DUCK on the left, DRIVE on the right.
@@ -654,7 +674,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // was room for it.
       if (!s.frozen) {
         ctx.beginPath();
-        for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, midY - maxBar * envAt(xOfInv(x), s, beat));
+        for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, midY - maxBar * envAt(xOfInv(x), s, duckGain));
         ctx.strokeStyle = accent;
         ctx.globalAlpha = 0.28;
         ctx.lineWidth = 1;
@@ -671,7 +691,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         if (ts > windowSec) break;
         const base = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), n);
         if (!s.frozen && base < 0.02) break;
-        const amp = envAt(ts, s, beat); // = fb^n × the duck gain — the very curve the envelope draws
+        const amp = envAt(ts, s, duckGain); // = fb^n × the LIVE duck gain — every tap breathes together
         const where = s.pingpong ? (n % 2 === 0 ? "up" : "down") : "both";
         const x = xOf(ts) + modShift;
         const a = 0.55 + 0.45 * amp * wet;
@@ -739,8 +759,12 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     const loop = (now: number) => {
       if (!alive) return;
       draw(now);
-      const animated = clamp01(p.current.modDepth / MOD_MAX) > 0.001 && p.current.modRate > 0;
-      raf = animated || grab.current ? window.requestAnimationFrame(loop) : 0;
+      // ★ Duck's pulse is audio-reactive, not state-driven — nothing SETS it, so nothing calls
+      // kick() when it changes. It only keeps animating if the loop keeps re-scheduling itself,
+      // same as the wobble's own clock.
+      const wobbling = clamp01(p.current.modDepth / MOD_MAX) > 0.001 && p.current.modRate > 0;
+      const ducking = p.current.duck > 0.001;
+      raf = wobbling || ducking || grab.current ? window.requestAnimationFrame(loop) : 0;
     };
     const kick = () => {
       if (!raf && alive) raf = window.requestAnimationFrame(loop);

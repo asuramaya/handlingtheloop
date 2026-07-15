@@ -541,31 +541,37 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         ctx.globalAlpha = 1;
       }
 
-      // === THE DRY HIT'S SHADOW — DUCK, LIVE.
+      // === THE DRY HIT'S SHADOW — THE CEILING, plus the LIVE line inside it.
       //
-      // The dry hit is the SIDECHAIN SOURCE — it's what does the ducking — so it stays the handle's
-      // conceptual home, and the shadow it throws is duck made visible. ★ But the shadow used to be
-      // FICTION: a fixed decay drawn once from t=0, `1 − duck·e^(−t/τ)`, that never changed unless
-      // you dragged the knob. The real duck is a LIVE sidechain (DelayFx.duckGain) reacting to the
-      // actual dry signal, uniformly, across the WHOLE tail at once — it doesn't fade out after a
-      // couple of beats, and it doesn't care about position. So the shadow now spans the full
-      // timeline (not a `shadowX` window) and its depth is ONE scalar — duckGain, read fresh every
-      // frame — not a curve over `sec`. The dashed ghost is the reference (what the tail would be
-      // with duck off); the filled gap between it and the live-scaled curve is what's ACTUALLY
-      // happening to the signal right now, and it will visibly breathe with the music.
+      // ★ ONE LIVE SCALAR ISN'T ENOUGH — a silent room can't owe you nothing just because nothing's
+      // playing. duckGain sits at 1 whenever there's no signal (correctly — nothing IS ducking), so
+      // a shadow drawn ONLY from the live value goes flat-out invisible the moment you drag the
+      // gutter with no track running: the knob visibly moved, the picture didn't. That's a real
+      // regression, not a live-feed purity win.
+      //
+      // So there are two curves now, and they answer two different questions:
+      //   THE CEILING (filled band) — how far duck COULD reach, at the knob's CURRENT setting. Pure
+      //   function of dv (the set amount): decayAt(sec)·(1−dv). Moves the instant you drag, with or
+      //   without a signal — the feedback a silent room still owes you.
+      //   THE LIVE LINE — where the pump actually IS, right now: decayAt(sec)·duckGain. Sits exactly
+      //   ON the dry-reference ghost at rest (duckGain=1, nothing to show) and sweeps down toward the
+      //   ceiling as something hits the input — the honest, audio-reactive half.
       const duckHot = hot === "duck";
       const dv = clamp01(s.duck);
       if (dv > 0.001) {
+        const ceilGain = 1 - dv;
         for (const up of [true, false]) {
           const yOf = (v: number) => (up ? midY - maxBar * v : midY + maxBar * v);
+          // the ceiling band — what the SETTING allows, independent of whether anything's playing.
           ctx.beginPath();
           for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
-          for (let x = w - gw; x >= gw; x -= 2) ctx.lineTo(x, yOf(envAt(xOfInv(x), s, duckGain)));
+          for (let x = w - gw; x >= gw; x -= 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s) * ceilGain));
           ctx.closePath();
           ctx.fillStyle = accent;
-          ctx.globalAlpha = duckHot ? 0.22 : 0.08 + 0.14 * duckPulse;
+          ctx.globalAlpha = duckHot ? 0.2 : 0.11;
           ctx.fill();
-          // the ghost: where the tail WOULD have been. The shadow only means something against it.
+          // the ghost: where the tail WOULD be with duck off — the ceiling only means something
+          // against it, and the live line rests here at rest, not on a separate invisible value.
           ctx.beginPath();
           for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
           ctx.strokeStyle = accent;
@@ -574,6 +580,15 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
           ctx.setLineDash([3, 3]);
           ctx.stroke();
           ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+          // the live line — bright exactly when it's doing something, near-invisible (it's sitting
+          // on the ghost) when it isn't.
+          ctx.beginPath();
+          for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, yOf(envAt(xOfInv(x), s, duckGain)));
+          ctx.strokeStyle = "#fff";
+          ctx.globalAlpha = 0.12 + 0.75 * duckPulse;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
           ctx.globalAlpha = 1;
         }
       }

@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { CRUSH_MODES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { CrushViz } from "./CrushViz";
+import { useFrameSync } from "./useFrameSync";
 
 // Minimal Bitcrusher surface (Phase 1) — MODE selector + the shared controls, mutated on the
 // deck's device and broadcast as fxParam. Phase 2 drops the CrushViz pixel scope in above the
@@ -26,6 +27,12 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
     emit({ kind: "fxParam", deck: id, slot, param, value });
     refresh();
   };
+  // ★ The XY pad drags continuously — see useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
   const mode = Math.round(get("mode"));
 
   return (
@@ -39,7 +46,7 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
       </div>
 
       {/* Pixel scope — live staircase over the quantization grid; also an XY pad (X=RATE, Y=BITS). */}
-      <CrushViz deck={deck} slot={slot} accent={accent} set={setParam} />
+      <CrushViz deck={deck} slot={slot} accent={accent} set={live} />
 
       <div className="sat-shared">
         <ValueCell label="BITS" value={get("bits")} min={0} max={1} onChange={(v) => setParam("bits", v)} format={() => dev.bitsValue.toFixed(1)} />

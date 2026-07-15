@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { NOISE_TYPES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { NoiseViz } from "./NoiseViz";
+import { useFrameSync } from "./useFrameSync";
 
 // NOISE riser surface — TYPE selector + RISE toggle, the climbing sweep WYSIWYG, and the shared
 // cells (SWEEP / RES / TONE / BARS / MIX). Mirrors the family contract, reuses the .sat-* classes.
@@ -25,6 +26,12 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
     emit({ kind: "fxParam", deck: id, slot, param, value });
     refresh();
   };
+  // ★ The XY pad drags continuously — see useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
   const type = Math.round(get("type"));
   const rise = get("rise") >= 0.5;
 
@@ -42,7 +49,7 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
       </div>
 
       {/* The sweep response climbs over the live noise; XY pad (X=SWEEP, Y=RES). */}
-      <NoiseViz deck={deck} slot={slot} accent={accent} set={setParam} />
+      <NoiseViz deck={deck} slot={slot} accent={accent} set={live} />
 
       <div className="sat-shared">
         <ValueCell label="SWEEP" value={get("sweep")} min={0} max={1} onChange={(v) => setParam("sweep", v)} format={() => `${dev.sweepHz < 1000 ? Math.round(dev.sweepHz) : `${(dev.sweepHz / 1000).toFixed(1)}k`}`} />

@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { SAT_STYLES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { SatViz } from "./SatViz";
+import { useFrameSync } from "./useFrameSync";
 
 // Minimal Saturator surface (Phase 1) — per-band DRIVE + the shared controls, mutated on the
 // deck's device and broadcast as fxParam (a session converges; an old client ignores the
@@ -28,6 +29,13 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
     emit({ kind: "fxParam", deck: id, slot, param, value });
     refresh();
   };
+  // ★ The XY pad drags continuously — a pointermove-rate emit+refresh spends the frame budget
+  // re-rendering the deck instead of painting the drag, and floods the socket. See useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
   const style = Math.round(get("style"));
   const punish = get("punish") >= 0.5;
 
@@ -46,7 +54,7 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
 
       {/* WYSIWYG: log-freq display — drag a crossover line to retune the split, drag inside a
           band to set its drive; the transfer curve reads out bottom-right. */}
-      <SatViz deck={deck} slot={slot} accent={accent} set={setParam} />
+      <SatViz deck={deck} slot={slot} accent={accent} set={live} />
 
       <div className="sat-shared">
         <ValueCell label="BIAS" value={get("bias")} min={0} max={1} onChange={(v) => setParam("bias", v)} format={(v) => `${Math.round(v * 100)}`} />

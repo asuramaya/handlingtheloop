@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { MOD_MODES, MOD_WAVES, MOD_SOURCES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { ModViz } from "./ModViz";
+import { useFrameSync } from "./useFrameSync";
 
 // Minimal Modulation surface (Phase 1) — MODE / SOURCE / WAVE selectors + the shared knobs.
 // Phase 2 drops the ModViz (sweeping notch/comb response + LFO inset) in above the cells.
@@ -25,6 +26,12 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
     deck.setFxParam(slot, param, value);
     emit({ kind: "fxParam", deck: id, slot, param, value });
     refresh();
+  };
+  // ★ The XY pad drags continuously — see useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
   };
   const mode = Math.round(get("mode"));
   const src = Math.round(get("src"));
@@ -64,7 +71,7 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
 
       {/* Live spectrum — the comb/notches sweep with the LFO; LFO waveform in the side panel.
           Also an XY mod pad (X=RATE, Y=DEPTH). */}
-      <ModViz deck={deck} slot={slot} accent={accent} set={setParam} />
+      <ModViz deck={deck} slot={slot} accent={accent} set={live} />
 
       <div className="sat-shared">
         <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => (sync ? dev.divLabel : `${dev.rateHz.toFixed(2)}`)} />

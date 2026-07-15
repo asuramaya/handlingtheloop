@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { GATE_SHAPES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { GateViz } from "./GateViz";
+import { useFrameSync } from "./useFrameSync";
 
 // Trance GATE surface — SHAPE selector + SYNC toggle, the sweeping gate-envelope WYSIWYG, and
 // the shared cells (RATE / DEPTH / DUTY / SMOOTH / MIX). Mirrors the Mod/Sat/Crush contract and
@@ -26,6 +27,12 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
     emit({ kind: "fxParam", deck: id, slot, param, value });
     refresh();
   };
+  // ★ The XY pad drags continuously — see useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
   const shape = Math.round(get("shape"));
   const sync = get("sync") >= 0.5;
 
@@ -43,7 +50,7 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
       </div>
 
       {/* The gate envelope sweeps under a playhead; an XY pad (X=RATE, Y=DEPTH). */}
-      <GateViz deck={deck} slot={slot} accent={accent} set={setParam} />
+      <GateViz deck={deck} slot={slot} accent={accent} set={live} />
 
       <div className="sat-shared">
         <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => (sync ? dev.divLabel : `${dev.freqHz.toFixed(1)}`)} />

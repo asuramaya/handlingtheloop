@@ -4,6 +4,7 @@ import { REVERB_STYLES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { ReverbViz } from "./ReverbViz";
 import { fmtPct } from "../util/format";
+import { useFrameSync } from "./useFrameSync";
 
 // The Reverb device surface (v3 layout): the round decay-rate dome IS the control surface —
 // every spatial param is a drag-handle ON it (the EQ-curve pattern, see ReverbViz). Only the
@@ -37,6 +38,14 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
     setParam(param, value);
     refresh();
   };
+  // ★ The dome's grips drag continuously (and the wheel-nudge can burst just as fast) — see
+  // useFrameSync. Only the ReverbViz callback moves to it; the ValueCell below stays on `tweak`,
+  // consistent with every other cell in the rack.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
   const toggle = (param: string) => {
     setParam(param, get(param) >= 0.5 ? 0 : 1);
     refresh();
@@ -49,7 +58,7 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
   return (
     <div className="fx-panel fx-reverb" style={{ ["--accent" as string]: accent }}>
       <div className="rv-body">
-        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={tweak} deck={deck} slot={slot} />
+        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={live} deck={deck} slot={slot} />
         {/* Every spatial param is a drag-handle ON the dome now (the EQ pattern). Only the two
             non-spatial knobs — MIX (wet presence) and DUCK (the breathing sidechain) — keep a
             numeric cell. This also kills the old 12-cell-beside-a-square-dome mobile crush. */}

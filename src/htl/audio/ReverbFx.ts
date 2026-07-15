@@ -47,6 +47,11 @@ export class ReverbFx extends BaseFxDevice {
   private readonly rect: WaveShaperNode;
   private readonly duckScale: GainNode;
   private readonly seriesDuck: GainNode;
+  // ★ AudioParam.value cannot see modulation delivered via .connect() — seriesDuck.gain.value would
+  // read frozen at its intrinsic 1 forever, exactly like DelayFx's identical bug (see
+  // htl-webaudio-footguns memory). Tap duckScale's own output instead — same fix, same reason.
+  private readonly duckMeter: AnalyserNode;
+  private readonly duckMeterBuf: Float32Array<ArrayBuffer>;
 
   private _width = 1;
   // The commanded values of the params that GLIDE (see the params block). Their AudioParams chase
@@ -123,6 +128,11 @@ export class ReverbFx extends BaseFxDevice {
     this.postLow.connect(this.postHigh);
     this.postHigh.connect(this.seriesDuck);
     this.seriesDuck.connect(this.wet);
+    this.duckMeter = ctx.createAnalyser();
+    this.duckMeter.fftSize = 256;
+    this.duckMeter.smoothingTimeConstant = 0; // already smoothed upstream (the 12Hz follower)
+    this.duckMeterBuf = new Float32Array(this.duckMeter.fftSize);
+    this.duckScale.connect(this.duckMeter);
 
     // The FDN tank worklet. The module is registered at engine init; if it isn't ready (a
     // very early add) we degrade to the filtered signal so nothing crashes.
@@ -244,9 +254,19 @@ export class ReverbFx extends BaseFxDevice {
     }
   }
 
+  // ★ Reads a SIGNAL, not the param — see duckMeter's own comment and htl-webaudio-footguns.
+  // duckScale's OWN output is already envelope × −amount, the exact quantity added to
+  // seriesDuck.gain, so its most-negative recent sample IS 1 − duckGain.
+  get duckGain(): number {
+    this.duckMeter.getFloatTimeDomainData(this.duckMeterBuf);
+    let min = 0; // duckScale's output is always ≤ 0
+    for (const v of this.duckMeterBuf) if (v < min) min = v;
+    return clamp(1 + min, 0, 1);
+  }
+
   override dispose() {
     super.dispose();
-    const nodes: (AudioNode | null)[] = [this.drive, this.preDelay, this.inHP, this.inLP, this.node, this.wSplit, this.wLL, this.wRL, this.wLR, this.wRR, this.wMerge, this.postLow, this.postHigh, this.rect, this.duckScale, this.seriesDuck];
+    const nodes: (AudioNode | null)[] = [this.drive, this.preDelay, this.inHP, this.inLP, this.node, this.wSplit, this.wLL, this.wRL, this.wLR, this.wRR, this.wMerge, this.postLow, this.postHigh, this.rect, this.duckScale, this.seriesDuck, this.duckMeter];
     for (const n of nodes) {
       try {
         n?.disconnect();

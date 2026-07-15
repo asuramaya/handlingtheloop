@@ -71,8 +71,18 @@ function loadOrt(threads: number): Promise<any> {
       if (USE_WEBGPU) {
         try {
           const gpu: any = (navigator as any).gpu;
+          // Belt: if our own device request below fails, ORT's self-created adapter should
+          // still ask for the DISCRETE GPU — the default request on a dual-GPU machine
+          // returns the integrated one.
+          ort.env.webgpu.powerPreference = "high-performance";
           const adapter = gpu && (await gpu.requestAdapter({ powerPreference: "high-performance" }));
-          if (adapter?.features?.has?.("shader-f16")) {
+          // ★ Hand ORT OUR device WHENEVER we got an adapter — not only in the f16 case.
+          // This code used to bail unless the adapter exposed shader-f16, which meant on
+          // exactly the machines where f16 lags (Linux+NVIDIA Chrome) ORT silently created
+          // its own DEFAULT adapter — the integrated GPU on a dual-GPU box — and every
+          // "GPU" separation quietly ran ~severalfold slower on the wrong silicon. Found
+          // by the operator watching the wrong GPU light up during the CPU-bench session.
+          if (adapter) {
             const lim: any = adapter.limits;
             const want = [
               "maxStorageBufferBindingSize", "maxBufferSize", "maxStorageBuffersPerShaderStage",
@@ -82,7 +92,9 @@ function loadOrt(threads: number): Promise<any> {
             ];
             const requiredLimits: Record<string, number> = {};
             for (const k of want) if (typeof lim?.[k] === "number") requiredLimits[k] = lim[k]; // adapter max → ≥ ORT's needs
-            ort.env.webgpu.device = await adapter.requestDevice({ requiredFeatures: ["shader-f16"], requiredLimits });
+            // shader-f16 only where the adapter has it (the fp16 model's enabler); fp32 needs no feature.
+            const requiredFeatures: string[] = adapter.features?.has?.("shader-f16") ? ["shader-f16"] : [];
+            ort.env.webgpu.device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
           }
         } catch {
           /* keep ORT's own device — fp32 unaffected; fp16 just can't compile here */

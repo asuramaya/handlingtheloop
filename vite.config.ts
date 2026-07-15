@@ -124,6 +124,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Listen on the LAN, not just loopback — the iPhone hits the dev build directly
+    // (http://<this-machine>:5173). Note: plain-http LAN is NOT a secure context on the
+    // phone → no cross-origin isolation there → wasm runs single-threaded; for a real
+    // threaded phone number, front this with `cloudflared tunnel --url http://localhost:5173`.
+    host: true,
     // Cross-origin isolation → multi-threaded wasm (fast on-device stem separation).
     // `credentialless` keeps cross-origin <img> thumbnails (i.ytimg.com) working
     // without CORP headers. ORT is now self-hosted (same-origin), so it needs no

@@ -34,7 +34,16 @@ import type { LrcReport } from "./lrcAlign";
 //        reused forever. ⚠ I FIXED THE DERIVATION AND ALMOST DIDN'T BUMP THIS. The convergence
 //        contract only works if the version tracks the OUTPUT, not just the schema: if the same
 //        input can now produce different times, it is a new version.
-const LYRICS_VER = 7;
+//   8    ★★ AND I DID IT AGAIN — the exact mistake #7's own comment warns about, twice in one
+//        session, before the operator's own re-test caught it (the transcript kept serving
+//        "same bug, not fixed yet" off a v7-stamped row, because nothing told the cache the
+//        derivation had changed). Two real derivation fixes landed as v7 by mistake: seedOnBursts
+//        (5cc8ab5, replaces the flat seedOnAttacks split with burst-partitioned seeding) and the
+//        voicedClock.toWall floor (28bf60e, a word seeded at a track's own singing-start could get
+//        pushed to a negative voiced-time and collapse to wall-clock zero). Both are real, both
+//        change actual output for real tracks (Du Hast, Coax & Botany), and neither could reach a
+//        single user until this bump forces every stored v7 row to re-derive.
+const LYRICS_VER = 8;
 
 // ★ BELOW THIS, A TRANSCRIPT IS NOT STALE — IT IS FICTION, AND MUST NEVER BE SHOWN.
 //

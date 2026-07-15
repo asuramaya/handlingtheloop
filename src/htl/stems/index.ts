@@ -10,10 +10,9 @@
 // So the heavy compute happens once, on whoever can do it, and is shared via R2.
 import { decodeAudio } from "../audio/decode";
 import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
-import { separateOpenUnmix } from "./openunmix";
-export { setDemucsQuality } from "./openunmix";
-import { separateDemucs } from "./demucs";
-import { getStemModel, deviceSupportsModel, type StemModel } from "./models";
+import { separateNeural } from "./separate";
+export { setDemucsQuality } from "./separate";
+import { getStemModel, deviceSupportsModel, LEGACY_STEM_IDS, type StemModel } from "./models";
 import { opusStemsSupported, encodeStemOpus, isOpusStem, decodeStemOpus } from "./opus";
 
 export * from "./models";
@@ -34,17 +33,34 @@ export type Stems = Record<StemName, AudioBuffer>;
 export interface StemManifest {
   stems: StemName[];
   complete: boolean;
+  /** The namespace that actually answered — the model id, or a pre-rename legacy
+   *  namespace (LEGACY_STEM_IDS). Downloads MUST use this, not the model id. */
+  ns?: string;
 }
 
 // Every cache call is namespaced by `model` so each backend's stems live apart.
 export async function fetchStemManifest(videoId: string, model: string): Promise<StemManifest> {
-  try {
-    const res = await fetch(`/api/stems?v=${encodeURIComponent(videoId)}&model=${encodeURIComponent(model)}`);
-    if (!res.ok) return { stems: [], complete: false };
-    return (await res.json()) as StemManifest;
-  } catch {
-    return { stems: [], complete: false };
+  const probe = async (ns: string): Promise<StemManifest> => {
+    try {
+      const res = await fetch(`/api/stems?v=${encodeURIComponent(videoId)}&model=${encodeURIComponent(ns)}`);
+      if (!res.ok) return { stems: [], complete: false };
+      return (await res.json()) as StemManifest;
+    } catch {
+      return { stems: [], complete: false };
+    }
+  };
+  const own = await probe(model);
+  if (own.complete) return { ...own, ns: model };
+  // ★ THE RENAME'S READ-FALLBACK. Every artifact separated before the onnx rip lives
+  // under the OLD namespace ("htdemucs-onnx/…") in R2 and the dev cache. Reads fall
+  // back so no cache is orphaned; `ns` carries the namespace that actually answered,
+  // and downloads must use it. Writes always go to the new id, so the pool converges.
+  for (const [legacy, next] of Object.entries(LEGACY_STEM_IDS)) {
+    if (next !== model) continue;
+    const old = await probe(legacy);
+    if (old.complete) return { ...old, ns: legacy };
   }
+  return { ...own, ns: model };
 }
 
 async function downloadStemBytes(videoId: string, name: StemName, model: string): Promise<ArrayBuffer> {
@@ -104,12 +120,12 @@ async function uploadStem(
 }
 
 // Whether THIS device should attempt on-device separation. Phones and tablets
-// NEVER do — they rely on the shared R2 cache, and fall back to the instant DSP
-// split on a cold cache. This is deliberate: loading the multi-MB neural runtime
-// (ORT wasm / the 11 MB demucs-rs wasm + WebGPU) on iOS Safari or a mobile
-// browser OOMs and crashes the tab. iOS 18 now exposes `navigator.gpu`, so we
-// must NOT treat "has WebGPU" as "can separate" — that let phones in and crashed
-// them. Only reasonably capable desktops separate.
+// NEVER do — they rely on the shared R2 cache. This is deliberate: loading the
+// multi-MB neural runtime on iOS Safari or a mobile browser OOMs and crashes the
+// tab (and the CPU route was benched and killed — separation is GPU-parallel
+// work). iOS 18 now exposes `navigator.gpu`, so we must NOT treat "has WebGPU"
+// as "can separate" — that let phones in and crashed them. Only reasonably
+// capable desktops separate.
 export function canSeparate(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent;
@@ -238,7 +254,7 @@ export async function loadStems(
       const out = {} as Stems;
       const wav: ArrayBuffer[] = [];
       for (let i = 0; i < STEM_NAMES.length; i++) {
-        const bytes = await downloadStemBytes(videoId, STEM_NAMES[i], m.id);
+        const bytes = await downloadStemBytes(videoId, STEM_NAMES[i], manifest.ns ?? m.id);
         wav.push(bytes);
         out[STEM_NAMES[i]] = await decodeStemBlob(ctx, bytes.slice(0));
         onProgress?.((i + 1) / STEM_NAMES.length);
@@ -255,13 +271,12 @@ export async function loadStems(
   // THROW — the caller plays the plain mix (no fabricated DSP split).
   if (!deviceSupportsModel(m)) throw new Error(`loadStems: device can't run "${m.id}" and no cached set`);
 
-  // route to the engine for this model's architecture (both run in workers). ANY failure
-  // (model weights 404 on the edge, worker crash, OOM) is logged (so a desktop separation
-  // failure is diagnosable) and RE-THROWN — the caller catches it and plays the plain mix.
-  // We never fabricate a DSP split to keep the buttons lit.
+  // ONE engine (demucs, in a worker). ANY failure (model weights 404 on the edge,
+  // worker crash, OOM) is logged (so a desktop separation failure is diagnosable) and
+  // RE-THROWN — the caller catches it and plays the plain mix. We never fabricate a
+  // DSP split to keep the buttons lit.
   try {
-    const separate = m.arch === "demucs" ? separateDemucs : separateOpenUnmix;
-    const stems = await separate(mix, m, onProgress);
+    const stems = await separateNeural(mix, m, onProgress);
     void persistStems(videoId, m.id, stems); // cache locally (refresh) + share to R2
     return stems;
   } catch (err) {
@@ -305,6 +320,7 @@ export async function loadStemsPackedInt16(
   try {
     const manifest = await fetchStemManifest(videoId, m.id);
     if (!manifest.complete) return null;
+    const ns = manifest.ns ?? m.id;
     let sr = 0;
     let N = 0;
     let gL: Int16Array[] = [];
@@ -312,7 +328,7 @@ export async function loadStemsPackedInt16(
     const base = {} as PackedStems["base"];
     const wav: ArrayBuffer[] = []; // compressed bytes kept for the local cache (parity w/ loadStems)
     for (let gi = 0; gi < STEM_NAMES.length; gi++) {
-      const bytes = await downloadStemBytes(videoId, STEM_NAMES[gi], m.id);
+      const bytes = await downloadStemBytes(videoId, STEM_NAMES[gi], ns);
       wav.push(bytes); // decode on a COPY so the original survives for saveStemsLocal
       const buf = await decodeStemBlob(ctx, bytes.slice(0));
       if (gi === 0) {

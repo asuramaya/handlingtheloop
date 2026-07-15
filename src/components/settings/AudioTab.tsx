@@ -24,7 +24,7 @@ import {
   unblockGpu,
   stemFailLevel,
   resetStemGuard,
-  isUntestedGpuPlatform,
+  webGpuSoleAdapter,
   type StemModel,
 } from "@htl";
 import type { StemStatus } from "../../App";
@@ -37,19 +37,13 @@ function supportBadge(m: StemModel): { text: string; cls: string } {
     case "instant":
       return { text: "Instant", cls: "ok" };
     case "runs":
-      // demucs on the CPU backend runs everywhere but is SLOW — set the expectation.
-      if (m.tier === "cpu")
-        return { text: `Runs here (slow) · ${m.sizeMB} MB`, cls: "warn" };
-      return { text: isMobileDevice() ? `Runs on phone · ${m.sizeMB} MB` : `Runs here · ${m.sizeMB} MB`, cls: "ok" };
-    case "needs-gpu":
-      // On a phone it's gated for memory; on desktop it just needs WebGPU enabled.
-      return { text: isMobileDevice() ? "Desktop GPU only" : "Enable WebGPU to run here", cls: "warn" };
+      return { text: `Runs here · ${m.sizeMB} MB`, cls: "ok" };
     case "blocked":
       return { text: "Disabled — crashed here", cls: "warn" };
     default:
-      // Mobile can't separate neural on-device (OOM-crashes Safari) — it's
-      // download-only: adopt the stems once a desktop has separated that track.
-      return { text: isMobileDevice() ? "Cached only · a desktop separates" : "Desktop separates", cls: "warn" };
+      // needs-gpu: on a phone that's by design (cache-only consumer); on desktop it
+      // just needs WebGPU enabled.
+      return { text: isMobileDevice() ? "Cached only · a desktop separates" : "Enable WebGPU to run here", cls: "warn" };
   }
 }
 
@@ -498,12 +492,8 @@ export function AudioTab({
         ) : (
           <div className="stem-models">
             {STEM_MODELS
-              // Open-Unmix is retired from the picker — HT-Demucs (GPU) is the only
-              // neural splitter we offer now. The registry entry stays so already-
-              // cached umx stems still resolve; it's just no longer selectable.
-              .filter((m) => m.arch !== "openunmix")
-              // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); the
-              // rest stay, shown as download-only on mobile.
+              // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); phones are
+              // cache-only consumers, so the picker shows just Single there.
               .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
               // The fp16 demucs model only works where the adapter exposes shader-f16
               // (absent on today's Linux+NVIDIA WebGPU → its f16 shaders → noise). Hide
@@ -514,20 +504,16 @@ export function AudioTab({
                 const badge = supportBadge(m);
                 const cached = cachedModels[m.id];
                 const blocked = sup === "blocked" && !cached;
-                const untested = m.tier === "gpu" && sup === "runs" && isUntestedGpuPlatform();
                 return (
                   <button
                     key={m.id}
-                    className={`stem-model ${settings.stemModel === m.id ? "on" : ""} ${blocked ? "blocked" : ""} ${
-                      untested ? "untested" : ""
-                    }`}
+                    className={`stem-model ${settings.stemModel === m.id ? "on" : ""} ${blocked ? "blocked" : ""}`}
                     disabled={blocked}
                     onClick={() => !blocked && set({ stemModel: m.id })}
                   >
                     <span className="stem-model-label">
                       {m.label}
                       {m.kind !== "dsp" && <span className={`stem-badge ${badge.cls}`}>{badge.text}</span>}
-                      {untested && <span className="stem-badge warn">Untested here — may crash</span>}
                       {cached && <span className="stem-badge cached">✓ cached for loaded track</span>}
                     </span>
                     <span className="stem-model-note">{m.note}</span>
@@ -643,11 +629,26 @@ export function AudioTab({
             : sel.kind === "dsp"
               ? "Plain mix · no stem separation"
               : "Neural · ORT WebAssembly";
+          // Dual-GPU truth: when high-performance and low-power requests resolve to the
+          // SAME adapter, the browser exposes exactly ONE GPU — there is no picker we
+          // could offer, because no powerPreference can reach the other card. The fix
+          // lives at browser LAUNCH (PRIME render offload / switcherooctl on Linux), so
+          // say that instead of letting the user hunt for a setting that can't exist.
+          const sole = onGpu && webGpuSoleAdapter();
           return (
-            <div className={`stem-device ${kind}`}>
-              <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
-              <span className="stem-device-text">{text}</span>
-            </div>
+            <>
+              <div className={`stem-device ${kind}`}>
+                <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
+                <span className="stem-device-text">{text}</span>
+              </div>
+              {sole && (
+                <p className="settings-hint muted">
+                  This is the only GPU the browser exposes to WebGPU. On a dual-GPU machine, launch the browser on the
+                  discrete GPU to use it here (Linux: <code>switcherooctl launch</code> or PRIME render offload
+                  <code> __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>).
+                </p>
+              )}
+            </>
           );
         })()}
       </div>

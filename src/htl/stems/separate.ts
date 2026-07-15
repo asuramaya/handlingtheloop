@@ -1,8 +1,8 @@
-// In-browser Open-Unmix separation — main-thread orchestrator. The heavy pipeline
-// (STFT → 4 ONNX nets → softmask → ISTFT) runs in separator.worker.ts so the app
-// never stalls; here we only resample the mix to the model's 44.1 kHz, ship the
-// PCM to the worker, and resample the returned stems back to the deck's rate so
-// they line up sample-for-sample with the mix buffer.
+// In-browser stem separation — main-thread orchestrator for THE engine (demucs).
+// The heavy pipeline (JS STFT → the demucs core on ORT → JS iSTFT) runs in
+// separator.worker.ts so the app never stalls; here we only resample the mix to the
+// model's 44.1 kHz, ship the PCM to the worker, and resample the returned stems back
+// to the deck's rate so they line up sample-for-sample with the mix buffer.
 import { STEM_NAMES, type Stems } from "./index";
 import { type StemModel, isMobileDevice } from "./models";
 import { stemTrace } from "./trace";
@@ -25,7 +25,7 @@ function separationThreads(): number {
   return Math.max(1, Math.min(cores - 2, 6)); // keep ≥2 cores free for UI + audio; cap at 6
 }
 
-// One long-lived worker; jobs are serialized (see separateOpenUnmix) so it only
+// One long-lived worker; jobs are serialized (see separateNeural) so it only
 // ever processes one track at a time.
 let worker: Worker | null = null;
 let jobId = 0;
@@ -113,8 +113,7 @@ export type SeparateProgress = (pct: number) => void;
 
 // Desktop demucs-GPU quality knobs (shift-TTA + segment overlap), set from Settings
 // and forwarded to the worker per job. Default = the original single aligned pass at
-// 25% overlap, so unset behaviour is unchanged. Only consumed by the demucs-core arch
-// (Open-Unmix ignores it). See STEM_PRESETS in @htl/state.
+// 25% overlap, so unset behaviour is unchanged. See STEM_PRESETS in @htl/state.
 let demucsQuality = { shifts: 0, overlap: 0.25 };
 export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
   demucsQuality = { shifts: Math.max(0, q.shifts | 0), overlap: Math.min(0.5, Math.max(0, q.overlap)) };
@@ -123,12 +122,12 @@ export function setDemucsQuality(q: { shifts: number; overlap: number }): void {
 // Separation shares the app-wide GPU queue (see gpuQueue): one heavy WebGPU job at a time,
 // so two decks / a dev StrictMode double-fire / a model switch can't stack GPU work or thrash
 // the compositor.
-export function separateOpenUnmix(mix: AudioBuffer, model: StemModel, onProgress?: SeparateProgress): Promise<Stems> {
+export function separateNeural(mix: AudioBuffer, model: StemModel, onProgress?: SeparateProgress): Promise<Stems> {
   // On a PHONE, demucs would OOM-crash if the worker built the whole-track output
   // (4 full-length stereo float32 buffers ≈ 424 MB) in one pass. So mobile demucs
   // runs WINDOWED: the track is split into overlapping windows, each separated on
   // its own (the worker only ever holds one window's output), then crossfaded back
-  // together on the main thread. Desktop / Open-Unmix keep the one-shot path.
+  // together on the main thread. Desktop keeps the one-shot path.
   const windowed = isMobileDevice() && model.arch === "demucs-core";
   const inner = () => (windowed ? separateDemucsWindowed(mix, model, onProgress) : separateInner(mix, model, onProgress));
   return gpuRun(inner);
@@ -149,12 +148,12 @@ function runWorkerJob(
     jobs.set(id, { resolve, reject, onProgress });
     w.postMessage(
       {
-        type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length, arch: model.arch,
-        urls: model.urls, url: model.url, eps: model.eps,
-        quality: model.arch === "demucs-core" ? demucsQuality : undefined,
+        type: "separate", id, l: L.buffer, r: R.buffer, frames: L.length,
+        url: model.url,
+        quality: demucsQuality,
         // fp16 A/B: the experimental fp16 core carries a fp32 refUrl → the worker runs ONE
         // segment through both on WebGPU and logs the max error (is f16 correct on this GPU?).
-        selfCheck: model.arch === "demucs-core" && !!model.refUrl,
+        selfCheck: !!model.refUrl,
         refUrl: model.refUrl,
         threads,
       },
@@ -164,7 +163,7 @@ function runWorkerJob(
 }
 
 async function separateInner(mix: AudioBuffer, model: StemModel, onProgress?: SeparateProgress): Promise<Stems> {
-  if (!model.urls && !model.url) throw new Error("model has no ONNX url(s)");
+  if (!model.url) throw new Error("model has no weights url");
   // resample → 44.1k (OfflineAudioContext renders off the main thread)
   const m44 = await resample(mix, MODEL_SR, Math.round(mix.duration * MODEL_SR));
   const L = m44.getChannelData(0).slice();

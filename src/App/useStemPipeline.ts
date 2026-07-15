@@ -28,12 +28,12 @@ import { useSpine } from "./spine";
 
 // Stem names in the fixed deck order. Shared with App (snapshot apply) + the session stem-sync.
 export const STEM_KEYS = ["drums", "bass", "vocals", "other"] as const;
-// Neural models to auto-promote a DSP deck to, best quality first: cached HT-Demucs, else Open-Unmix.
-export const PROMOTE_ORDER = ["htdemucs-onnx", "umxl-int8"];
-// Short engine label for the deck chip: "HT-Demucs (GPU)" → "Demucs", "umx*" → "Open-Unmix".
+// Neural models to auto-promote a DSP deck to. ONE engine now — demucs (its manifest
+// probe transparently falls back to the pre-rename "htdemucs-onnx" cache namespace).
+export const PROMOTE_ORDER = ["htdemucs"];
+// Short engine label for the deck chip: any demucs variant → "Demucs".
 export function stemSrcLabel(modelId: string): string {
   if (modelId.startsWith("htdemucs")) return "Demucs";
-  if (modelId.startsWith("umx")) return "Open-Unmix";
   return getStemModel(modelId).label;
 }
 // Cross-device AGGREGATE stem budget (mobile), the iOS memory SEATBELT. Byte-accurate: a resident

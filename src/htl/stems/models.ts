@@ -1,64 +1,49 @@
-// Stem-separation backends the user can pick in Settings. The menu grows over
-// time — each model id is also its R2 cache namespace, so a track's stems cache
-// per model and switching never clobbers another model's results.
+// Stem-separation backends the user can pick in Settings. ★ THE LINEUP IS SETTLED
+// (operator, 2026-07-15): DEMUCS IS THE ONLY SEPARATOR. Open-Unmix (every tier), the
+// demucs-rs Burn/CubeCL wasm engine, and the CPU route are all dead — separation is
+// GPU-parallel work, and one engine means one cache namespace and one quality tier
+// to reason about. Each model id is also its R2 cache namespace; artifacts separated
+// under the pre-rip id "htdemucs-onnx" are still readable via LEGACY_STEM_IDS (the
+// manifest probe in index.ts falls back to legacy namespaces on a miss).
 //
 // `arch` selects the worker pipeline:
-//   • "dsp"       — the "Single" no-stems sentinel (kind/arch typed dsp to satisfy the union;
-//                   plays the plain mix, no separation — there is NO band/centre DSP split)
-//   • "openunmix" — spectrogram magnitude nets + softmask (separator.worker.ts)
-//   • "demucs"    — waveform-domain (reserved; pending an ONNX export)
-import type { StemName } from "./index";
+//   • "dsp"         — the "Single" no-stems sentinel (plays the plain mix, no separation)
+//   • "demucs-core" — the demucs body on ORT (JS STFT/iSTFT), the only real pipeline
 
-export type StemArch = "dsp" | "openunmix" | "demucs" | "demucs-core";
+export type StemArch = "dsp" | "demucs-core";
 
-// How heavy a model is to RUN on-device, which decides where it can separate:
-//   • instant — DSP, no model, everywhere
-//   • light   — small int8 net (CPU wasm): desktop AND modern phones
-//   • heavy   — fp32 net: desktop only (too much RAM for a phone tab)
-//   • gpu     — demucs core on WebGPU: desktop GPU only (mobile WebGPU = JSEP crash)
-//   • cpu     — demucs core on the wasm/CPU backend: runs ON-DEVICE anywhere with
-//               ≥2 cores (incl. iPhone — the stable backend that doesn't crash),
-//               just slow; it's the no-GPU fallback / iPhone on-device path
-// ANY tier's RESULT is downloadable on ANY device once it's in the shared R2 cache,
-// so a phone can use every model — it just can't *separate* the heavy/gpu ones itself.
-export type StemTier = "instant" | "light" | "heavy" | "gpu" | "cpu";
+// Where a model can RUN:
+//   • instant — no model, nothing to run
+//   • gpu     — demucs core on WebGPU: desktop GPU only (mobile WebGPU = JSEP crash;
+//               the CPU EP was benched and killed — "this is gpu parallel work")
+// ANY result is downloadable on ANY device once it's in the shared R2 cache, so a
+// phone uses every model — it just never *separates* (cache-only consumer).
+export type StemTier = "instant" | "gpu";
 
 export interface StemModel {
   id: string; // also the R2 cache key namespace
   label: string;
-  kind: "dsp" | "onnx";
+  kind: "dsp" | "neural";
   arch: StemArch;
   tier: StemTier;
   sizeMB: number; // approx weights download (0 for DSP); shown in the picker
   note: string; // shown under the picker
-  urls?: Record<StemName, string>; // per-target onnx (openunmix arch)
-  url?: string; // single weights file (demucs arch): safetensors
-  refUrl?: string; // fp32 reference model (demucs-core fp16 self-check compares against this)
+  url?: string; // the ONNX graph (demucs-core), hosted on HF, fetched once + browser-cached
+  refUrl?: string; // fp32 reference model (the fp16 self-check compares against this)
   needsShaderF16?: boolean; // fp16 model: only offer it when the adapter exposes the shader-f16 feature
-  wasmModel?: string; // (legacy demucs-rs model id — no longer used by any model)
-  eps?: string[]; // ORT execution providers (demucs-core): GPU → default, CPU → ["wasm"]
 }
 
-// Open-Unmix ONNX exports live on HuggingFace (our own repo) — same pattern:
-// fetched cross-origin once (CORS-enabled, COEP-credentialless-friendly) and cached
-// by the browser, so they sidestep Cloudflare's 25 MiB/asset limit and ship nothing
-// in dist. To add a tier, upload its .onnx and point a registry entry's urls here.
-const UMX_HF = "https://huggingface.co/asuramaya/htl-stems/resolve/main/";
-
-const UMX = (file: (t: StemName) => string): Record<StemName, string> => ({
-  vocals: file("vocals"),
-  drums: file("drums"),
-  bass: file("bass"),
-  other: file("other"),
-});
+// Model weights live on HuggingFace (our own repo): fetched cross-origin once
+// (CORS-enabled, COEP-credentialless-friendly) and cached by the browser, so they
+// sidestep Cloudflare's 25 MiB/asset limit and ship nothing in dist.
+const HF = "https://huggingface.co/asuramaya/htl-stems/resolve/main/";
 
 export const STEM_MODELS: StemModel[] = [
   {
     // "Single" — no stem separation; the deck plays the plain mix and the per-stem mixer is
-    // hidden. The DEFAULT and the lightest path (no split, no 4× buffers). Typed `dsp`/
-    // `instant` to satisfy the unions; `deriveStems` special-cases the id "off" (applies NO
-    // stems, optionally auto-promoting a cached neural set on desktop). The old "DSP split"
-    // entry was dropped — its band/centre approximation was poor, so it's single OR neural.
+    // hidden. The DEFAULT and the lightest path (no split, no 4× buffers). `deriveStems`
+    // special-cases the id "off" (applies NO stems, optionally auto-promoting a cached
+    // neural set on desktop).
     id: "off",
     label: "Single",
     kind: "dsp",
@@ -68,84 +53,69 @@ export const STEM_MODELS: StemModel[] = [
     note: "No stem separation — plain mix only (no stem mixer, lightest on memory)",
   },
   {
-    // The ONLY Open-Unmix tier we ship. By ear, int8 "L" is the best Open-Unmix —
-    // the fp32 difference is negligible — and it's light enough to separate
-    // on-device on a phone CPU (ORT wasm, no WebGPU), so it's the default neural
-    // splitter on iPhone. The HQ + fp32 variants were dropped (all platforms).
-    id: "umxl-int8",
-    label: "Open-Unmix",
-    kind: "onnx",
-    arch: "openunmix",
-    tier: "light",
-    sizeMB: 112,
-    note: "Neural · runs on desktop & phones, then cached for everyone",
-    urls: UMX((t) => `${UMX_HF}openunmix-l/${t}.int8.onnx`),
-  },
-  {
-    // The demucs CORE on onnxruntime-web's WebGPU EP (lean spectrogram-in graph,
-    // STFT/iSTFT in JS). ~1s per 7.8s segment on a desktop GPU — no autotune, no
-    // wasm OOM. This is the fast path; the Burn/CubeCL "htdemucs" above is legacy.
-    // Hosted on HF (asuramaya/htl-stems), fetched once + browser-cached like the others.
-    id: "htdemucs-onnx",
-    label: "HT-Demucs (GPU)",
-    kind: "onnx",
+    // THE separator: the demucs core on onnxruntime-web's WebGPU EP (lean spectrogram-in
+    // graph, STFT/iSTFT in JS). ~1s per 7.8s segment on a desktop GPU. fp32 — proven
+    // bit-faithful vs PyTorch (maxErr 3e-6, ORT 1.21+).
+    // ★ RENAMED from "htdemucs-onnx" in the onnx rip — reads of the old cache namespace
+    // still work via LEGACY_STEM_NS in index.ts; writes converge on this id.
+    id: "htdemucs",
+    label: "Demucs",
+    kind: "neural",
     arch: "demucs-core",
     tier: "gpu",
     sizeMB: 170,
-    // fp32 core. We tried the fp16 core (86 MB) but ORT-web's WebGPU EP MISCOMPUTES
-    // it → corrupted/noisy stems on desktop (the CPU EP runs fp16 fine, but the
-    // WebGPU f16 shader path is wrong, like the older 1.20 fp32 freq-branch bug). So
-    // GPU demucs stays fp32 (proven correct on WebGPU). It's desktop-only anyway —
-    // demucs-GPU is hidden on mobile (iOS WebGPU crashes), so the 170 MB / 128 MiB
-    // iOS buffer-binding limit is moot here.
     note: "Neural · best quality · needs a WebGPU desktop GPU (phones use the cache)",
-    url: `${UMX_HF}demucs/htdemucs-core.onnx`,
+    url: `${HF}demucs/htdemucs-core.onnx`,
   },
   {
-    // EXPERIMENTAL fp16 demucs core (86 MB, half of fp32). A past attempt saw the ORT-web
-    // WebGPU EP miscompute f16 → noisy stems, but that was never root-caused and ORT is now
-    // 1.22 (which already FIXED the 1.20 fp32 freq-branch miscompute — same bug class). The
-    // export is mixed-precision (explicit Cast around each InstanceNorm, the f16-sensitive op),
-    // so it's carefully built. fp16 is the one speedup that LOWERS GPU contention (half the
-    // compute → the compositor gets more paint windows → smoother UI, not worse), so it's worth
-    // re-verifying on 1.22 + a modern GPU. Non-default — pick it to A/B. On the first segment the
-    // worker self-checks fp16 vs the fp32 ref and logs the max error (open devtools console).
-    id: "htdemucs-onnx-f16",
-    label: "HT-Demucs fp16 (test)",
-    kind: "onnx",
+    // EXPERIMENTAL fp16 demucs core (86 MB, half of fp32). The old "fp16 miscomputes"
+    // folklore was root-caused: a forgotten `shader-f16` DEVICE FEATURE, not broken
+    // kernels — the worker now enables it when the adapter has it, and self-checks one
+    // segment vs the fp32 ref on the first run (see console). Kept THROUGH the rip on
+    // purpose: 86 MB is the only demucs under iOS's 128 MiB GPU buffer-binding limit,
+    // so this is the designated candidate for the day a non-JSEP WebGPU runtime makes
+    // on-device iPhone separation possible (onnxruntime#26827 blocks it today).
+    id: "htdemucs-f16",
+    label: "Demucs fp16 (experimental)",
+    kind: "neural",
     arch: "demucs-core",
     tier: "gpu",
     sizeMB: 86,
-    note: "Experimental fp16 — faster IF WebGPU computes it right; self-checks vs fp32 (see console)",
-    url: `${UMX_HF}demucs/htdemucs-core-fp16.onnx`,
-    refUrl: `${UMX_HF}demucs/htdemucs-core.onnx`,
+    note: "Half-size demucs — faster and lighter IF this GPU computes f16 right; self-checks vs fp32 (see console)",
+    url: `${HF}demucs/htdemucs-core-fp16.onnx`,
+    refUrl: `${HF}demucs/htdemucs-core.onnx`,
     needsShaderF16: true, // hidden from the picker until the adapter exposes shader-f16 (else f16 shaders → noise)
   },
-  // (HT-Demucs CPU removed — demucs only runs on the GPU. The CPU/wasm path is too
-  // memory-heavy for a phone, and on a desktop the GPU path is strictly better.
-  // Lineup: Single (no stems) everywhere, Open-Unmix (CPU) desktop+mobile, HT-Demucs
-  // (GPU) desktop. The old DSP band/centre split was dropped — single OR neural.)
 ];
 
 export const DEFAULT_STEM_MODEL = "off";
 
+// Pre-rip model ids → their successors. Consulted at every id lookup (so a stored
+// setting, a room snapshot, or a pool row minted before the rename still resolves)
+// and by the R2 read-fallback (LEGACY_STEM_NS in index.ts).
+export const LEGACY_STEM_IDS: Record<string, string> = {
+  "htdemucs-onnx": "htdemucs",
+  "htdemucs-onnx-f16": "htdemucs-f16",
+};
+
 export function getStemModel(id: string): StemModel {
-  return STEM_MODELS.find((m) => m.id === id) ?? STEM_MODELS[0];
+  const mapped = LEGACY_STEM_IDS[id] ?? id;
+  return STEM_MODELS.find((m) => m.id === mapped) ?? STEM_MODELS[0];
 }
 
-// Whether the CURRENT device can actually run WebGPU for the demucs-rs path.
+// Whether the CURRENT device can actually run WebGPU for demucs.
 // `"gpu" in navigator` only says the API EXISTS — an adapter can still be
 // unavailable (driver blocklisted, or WebGPU not enabled in the browser, common
 // on Linux Chrome even with a real GPU). So we ACTIVELY REQUEST the GPU: ask for
 // the high-performance (discrete) adapter — on dual-GPU machines the default can
-// return the weak integrated one or none, and this matches what wgpu/demucs-rs
-// requests — then confirm a real device is grantable. That device acquisition is
+// return the weak integrated one or none — then confirm a real device is grantable. That device acquisition is
 // the actual WebGPU "permission/access". The result is cached and the badge/gating
 // reflect what genuinely runs, flipping to usable the moment WebGPU is enabled.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let gpuAdapterOk: boolean | null = null;
 let gpuProbe: Promise<boolean> | null = null;
 let gpuAdapterInfo: string | null = null;
+let gpuSoleAdapter = false; // the browser exposes only ONE adapter (choosing is impossible from JS)
 let gpuShaderF16 = false; // does the acquired adapter expose the WGSL `shader-f16` feature?
 
 // Human-readable description of the WebGPU adapter we acquired (vendor/arch/device),
@@ -153,6 +123,16 @@ let gpuShaderF16 = false; // does the acquired adapter expose the WGSL `shader-f
 // Browsers often blank vendor/device for privacy; we show whatever is populated.
 export function webGpuAdapterInfo(): string | null {
   return gpuAdapterInfo;
+}
+// True when high-performance and low-power adapter requests resolve to the SAME
+// adapter — i.e. the browser exposes exactly one GPU to WebGPU, and no JS-side
+// `powerPreference` can ever reach the other one. On a dual-GPU Linux box this is
+// the common case: Chromium's GPU process runs on one card and only that card is
+// enumerated; switching means LAUNCHING the browser on the discrete GPU (PRIME
+// render offload / switcherooctl), not a website setting. The UI uses this to say
+// so instead of letting the user hunt for a picker that cannot exist.
+export function webGpuSoleAdapter(): boolean {
+  return gpuSoleAdapter;
 }
 // Does the acquired WebGPU adapter expose the WGSL `shader-f16` feature? (Gates the fp16
 // demucs model — without it, f16 shaders fail to compile → garbage stems, so we hide it.)
@@ -180,15 +160,24 @@ export function probeWebGPU(): Promise<boolean> {
       gpuShaderF16 = !!adapter.features?.has?.("shader-f16");
       // Record which GPU we got (so Settings can show Intel iGPU vs NVIDIA). `info`
       // is sync in current browsers; older ones expose requestAdapterInfo().
-      try {
-        const info: any =
-          adapter.info ?? (typeof adapter.requestAdapterInfo === "function" ? await adapter.requestAdapterInfo() : null);
-        if (info) {
-          gpuAdapterInfo =
-            [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ").trim() || null;
+      const infoOf = async (a: any): Promise<string | null> => {
+        try {
+          const info: any = a.info ?? (typeof a.requestAdapterInfo === "function" ? await a.requestAdapterInfo() : null);
+          return info
+            ? [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ").trim() || null
+            : null;
+        } catch {
+          return null;
         }
+      };
+      gpuAdapterInfo = await infoOf(adapter);
+      // Ask for the OTHER end of the power scale too: if low-power resolves to the same
+      // adapter, the browser exposes exactly one GPU and no preference can change it.
+      try {
+        const lp = await gpu.requestAdapter({ powerPreference: "low-power" });
+        gpuSoleAdapter = !lp || (await infoOf(lp)) === gpuAdapterInfo;
       } catch {
-        /* adapter info unavailable; ignore */
+        gpuSoleAdapter = true;
       }
       // Adapter present ≠ usable — confirm a device is actually grantable.
       const device = await adapter.requestDevice();
@@ -403,54 +392,21 @@ export function gpuRuntimeAvailable(): boolean {
   return isChromium() && hasWebGPU();
 }
 
-// Browsers where on-device GPU separation would be UNTESTED / known-flaky. Now that
-// non-Chromium falls back to the stable wasm bundle (the JSEP/WebGPU path runs ONLY on
-// Chromium, where it's proven), no platform attempts an untested GPU path — so there's
-// nothing left to warn about. Kept exported (callers reference it) but always false.
-export function isUntestedGpuPlatform(): boolean {
-  return false;
-}
-
 // What this device can do with a given model RIGHT NOW (ignoring the cache):
 //   • "instant"     — DSP, runs anywhere with no download
 //   • "runs"        — this device can separate it on-device
-//   • "desktop"     — too heavy here; a desktop must separate it (then it caches)
-//   • "needs-gpu"   — needs a WebGPU desktop
+//   • "needs-gpu"   — needs a WebGPU desktop (phones: use the cache)
 //   • "blocked"     — GPU separation disabled after it crashed the tab (re-enable in Settings)
-export type ModelSupport = "instant" | "runs" | "desktop" | "needs-gpu" | "blocked";
+export type ModelSupport = "instant" | "runs" | "needs-gpu" | "blocked";
 
 export function modelSupport(model: StemModel): ModelSupport {
   if (model.tier === "instant") return "instant";
-  const mobile = isMobileDevice();
-  const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 2;
-  if (model.tier === "gpu") {
-    // Hard-disabled after a prior tab crash, until the user re-enables it.
-    if (gpuBlocked) return "blocked";
-    // demucs-rs (Burn wasm + WebGPU). Decouple the two paths so the mobile gate
-    // never gets vetoed by the desktop probe:
-    //   • mobile → iOS-with-WebGPU (experimental); the wasm + DSP fallback handle
-    //     the actual capability, so don't also require the async probe to pass.
-    //   • desktop → require a probed, grantable device (hasWebGPU).
-    if (mobile) return mobileGpuEligible() ? "runs" : "needs-gpu";
-    return hasWebGPU() ? "runs" : "needs-gpu";
-  }
-  if (model.tier === "light") {
-    // small int8 nets (CPU wasm). PHONES DO NOT SEPARATE — even the int8 Open-Unmix
-    // OOM-crashes iOS Safari mid-job, and since nothing is persisted until it
-    // finishes, the still-selected model re-separates on reload → crash LOOP (there's
-    // no crash-guard on the CPU/wasm path like there is for GPU). Phones are
-    // cache-first → DSP fallback; a desktop separates once and shares via R2.
-    if (mobile) return "desktop";
-    return cores >= 2 ? "runs" : "desktop";
-  }
-  if (model.tier === "cpu") {
-    // demucs core on the wasm/CPU backend. Desktop only, same reason as "light":
-    // on-device neural separation on a phone OOM-crash-loops Safari.
-    if (mobile) return "desktop";
-    return cores >= 2 ? "runs" : "desktop";
-  }
-  // heavy fp32 — desktop only.
-  return !mobile && cores >= 4 ? "runs" : "desktop";
+  // gpu — the only real tier. Hard-disabled after a prior tab crash, until the user
+  // re-enables it. Phones never separate (iOS WebGPU = JSEP crash; the CPU EP was
+  // benched and killed) — they consume the shared cache.
+  if (gpuBlocked) return "blocked";
+  if (isMobileDevice()) return mobileGpuEligible() ? "runs" : "needs-gpu";
+  return hasWebGPU() ? "runs" : "needs-gpu";
 }
 
 // Can this device separate this model on-device (so loadStems should attempt it)?

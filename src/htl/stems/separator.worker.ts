@@ -1,16 +1,14 @@
 /// <reference lib="webworker" />
-// Stem-separation worker: the ENTIRE heavy pipeline (STFT → 4 ONNX nets → softmask
-// → ISTFT) runs here, off the main thread, so the app stays responsive while a
-// track separates. The main thread only resamples to/from 44.1 kHz (async, cheap)
-// and ships planar Float32 channels in/out as transferables (zero-copy).
-import { FFT, hannPeriodic, reflectPad, demucsMag, demucsIstftChannel, DEMUCS_BINS } from "./fft";
+// Stem-separation worker: the ENTIRE heavy pipeline (JS STFT → the demucs core on
+// ORT → JS iSTFT + combine) runs here, off the main thread, so the app stays
+// responsive while a track separates. The main thread only resamples to/from
+// 44.1 kHz (async, cheap) and ships planar Float32 channels in/out as transferables
+// (zero-copy). Demucs is the ONLY separator — Open-Unmix and the demucs-rs wasm
+// engine were ripped (the project settled on one engine).
+import { FFT, demucsMag, demucsIstftChannel, DEMUCS_BINS } from "./fft";
 
 const NFFT = 4096;
-const HOP = 1024;
-const BINS = NFFT / 2 + 1; // 2049
 const MODEL_SR = 44100;
-const CHUNK_SEC = 8;
-const OVERLAP_SEC = 0.75;
 const TARGETS = ["vocals", "drums", "bass", "other"] as const;
 type Target = (typeof TARGETS)[number];
 
@@ -23,7 +21,8 @@ const SEGMENT_YIELD_MS = 16; // ~one frame, so the compositor gets a full paint 
 const yieldSegment = () => new Promise((r) => setTimeout(r, SEGMENT_YIELD_MS));
 
 const fft = new FFT(NFFT);
-const WIN = hannPeriodic(NFFT);
+
+type Post = (pct: number) => void;
 
 // ---- onnxruntime-web (CDN), inside the worker --------------------------------
 // 1.22.0, NOT 1.20.1: the 1.20 WebGPU EP miscomputes the demucs freq branch
@@ -117,162 +116,10 @@ function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<an
   return p;
 }
 
-// ---- STFT / ISTFT (bin-major: index = bin*nframes + frame) -------------------
-interface Spec {
-  re: Float32Array;
-  im: Float32Array;
-  nframes: number;
-}
-function stft(x: Float32Array): Spec {
-  const xp = reflectPad(x, NFFT / 2);
-  const nframes = 1 + Math.floor(x.length / HOP);
-  const re = new Float32Array(BINS * nframes);
-  const im = new Float32Array(BINS * nframes);
-  const fr = new Float32Array(NFFT);
-  const fi = new Float32Array(NFFT);
-  for (let t = 0; t < nframes; t++) {
-    const off = t * HOP;
-    for (let i = 0; i < NFFT; i++) {
-      fr[i] = xp[off + i] * WIN[i];
-      fi[i] = 0;
-    }
-    fft.transform(fr, fi, false);
-    for (let b = 0; b < BINS; b++) {
-      re[b * nframes + t] = fr[b];
-      im[b * nframes + t] = fi[b];
-    }
-  }
-  return { re, im, nframes };
-}
-function istft(re: Float32Array, im: Float32Array, nframes: number, outLen: number): Float32Array {
-  const pad = NFFT / 2;
-  const full = (nframes - 1) * HOP + NFFT;
-  const y = new Float32Array(full);
-  const ws = new Float32Array(full);
-  const fr = new Float32Array(NFFT);
-  const fi = new Float32Array(NFFT);
-  for (let t = 0; t < nframes; t++) {
-    for (let b = 0; b < BINS; b++) {
-      fr[b] = re[b * nframes + t];
-      fi[b] = im[b * nframes + t];
-    }
-    for (let b = 1; b < NFFT / 2; b++) {
-      fr[NFFT - b] = re[b * nframes + t];
-      fi[NFFT - b] = -im[b * nframes + t];
-    }
-    fft.transform(fr, fi, true);
-    const off = t * HOP;
-    for (let i = 0; i < NFFT; i++) {
-      y[off + i] += fr[i] * WIN[i];
-      ws[off + i] += WIN[i] * WIN[i];
-    }
-  }
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const d = ws[pad + i];
-    out[i] = d > 1e-8 ? y[pad + i] / d : 0;
-  }
-  return out;
-}
 
-async function separateChunk(
-  ort: any,
-  urls: Record<string, string>,
-  ch: Float32Array[],
-): Promise<Record<Target, Float32Array[]>> {
-  const specs = ch.map(stft);
-  const nframes = specs[0].nframes;
-  const stride = BINS * nframes;
-  const mag = new Float32Array(2 * stride);
-  for (let c = 0; c < 2; c++) {
-    const s = specs[c];
-    const base = c * stride;
-    for (let k = 0; k < stride; k++) mag[base + k] = Math.hypot(s.re[k], s.im[k]);
-  }
-
-  const ests: Record<string, Float32Array> = {};
-  for (const t of TARGETS) {
-    const sess = await getSession(ort, urls[t]);
-    const res = await sess.run({ mag: new ort.Tensor("float32", mag, [1, 2, BINS, nframes]) });
-    ests[t] = res.est.data as Float32Array;
-  }
-
-  const denom = new Float32Array(2 * stride);
-  for (const t of TARGETS) {
-    const e = ests[t];
-    for (let k = 0; k < denom.length; k++) denom[k] += e[k] * e[k];
-  }
-  for (let k = 0; k < denom.length; k++) denom[k] += 1e-10;
-
-  const out = {} as Record<Target, Float32Array[]>;
-  const outLen = ch[0].length;
-  for (const t of TARGETS) {
-    const est = ests[t];
-    const chans: Float32Array[] = [];
-    for (let c = 0; c < 2; c++) {
-      const base = c * stride;
-      const mre = new Float32Array(stride);
-      const mim = new Float32Array(stride);
-      for (let k = 0; k < stride; k++) {
-        const e = est[base + k];
-        const mask = (e * e) / denom[base + k];
-        mre[k] = mask * specs[c].re[k];
-        mim[k] = mask * specs[c].im[k];
-      }
-      chans.push(istft(mre, mim, nframes, outLen));
-    }
-    out[t] = chans;
-  }
-  return out;
-}
-
-type Post = (pct: number) => void;
-
-// --- Open-Unmix arch: magnitude STFT → mask → ISTFT, chunked + crossfaded ------
-async function runOpenUnmix(
-  ort: any,
-  urls: Record<string, string>,
-  full: Float32Array[],
-  N: number,
-  post: Post,
-): Promise<Record<Target, Float32Array[]>> {
-  const chunk = CHUNK_SEC * MODEL_SR;
-  const overlap = Math.round(OVERLAP_SEC * MODEL_SR);
-  const hop = chunk - overlap;
-  const nchunks = N <= chunk ? 1 : Math.ceil((N - overlap) / hop);
-  const acc: Record<Target, Float32Array[]> = {} as never;
-  for (const t of TARGETS) acc[t] = [new Float32Array(N), new Float32Array(N)];
-
-  for (let ci = 0; ci < nchunks; ci++) {
-    const start = ci * hop;
-    const end = Math.min(N, start + chunk);
-    let stems: Record<Target, Float32Array[]> | null = await separateChunk(ort, urls, [
-      full[0].slice(start, end),
-      full[1].slice(start, end),
-    ]);
-    const segLen = end - start;
-    for (const t of TARGETS) {
-      for (let c = 0; c < 2; c++) {
-        const dst = acc[t][c];
-        const src = stems[t][c];
-        for (let i = 0; i < segLen; i++) {
-          let w = 1;
-          if (ci > 0 && i < overlap) w = i / overlap;
-          else if (end < N && i >= segLen - overlap) w = (segLen - i) / overlap;
-          dst[start + i] += src[i] * w;
-        }
-      }
-    }
-    stems = null;
-    post((ci + 1) / nchunks);
-    await yieldSegment();
-  }
-  return acc;
-}
-
-// --- Demucs arch: single waveform model. Fixed 7.8s segments, triangular-window
-// overlap-add (matches demucs-onnx). Output is [1,4,2,N] in source order
-// drums,bass,other,vocals — same names as TARGETS, so no index remap. -----------
+// --- Demucs-core constants: fixed 7.8s segments, triangular-window overlap-add
+// (matches demucs-onnx). Sources in graph order drums,bass,other,vocals — same
+// names as TARGETS, so no index remap. -------------------------------------------
 const DEMUCS_SEG = 343980; // round(7.8 * 44100), the graph is hard-bound to this
 const DEMUCS_SOURCES = ["drums", "bass", "other", "vocals"] as const;
 function transitionWindow(seg: number, overlap: number): Float32Array {
@@ -283,52 +130,6 @@ function transitionWindow(seg: number, overlap: number): Float32Array {
     w[seg - 1 - i] = v;
   }
   return w;
-}
-async function runDemucs(
-  ort: any,
-  url: string,
-  full: Float32Array[],
-  N: number,
-  post: Post,
-): Promise<Record<Target, Float32Array[]>> {
-  const seg = DEMUCS_SEG;
-  const overlap = Math.floor(seg / 4);
-  const stride = seg - overlap;
-  const sess = await getSession(ort, url);
-  const win = transitionWindow(seg, overlap);
-  const acc: Record<Target, Float32Array[]> = {} as never;
-  for (const t of TARGETS) acc[t] = [new Float32Array(N), new Float32Array(N)];
-  const weight = new Float32Array(N);
-  const nchunks = Math.max(1, Math.ceil(N / stride));
-  const chunkBuf = new Float32Array(2 * seg);
-
-  for (let ci = 0; ci < nchunks; ci++) {
-    const start = ci * stride;
-    const end = Math.min(start + seg, N);
-    const segLen = end - start;
-    chunkBuf.fill(0);
-    for (let c = 0; c < 2; c++) chunkBuf.subarray(c * seg, c * seg + segLen).set(full[c].subarray(start, end));
-    const res = await sess.run({ mix: new ort.Tensor("float32", chunkBuf, [1, 2, seg]) });
-    const stems = res.stems.data as Float32Array; // [1,4,2,seg]
-    for (let si = 0; si < DEMUCS_SOURCES.length; si++) {
-      const t = DEMUCS_SOURCES[si] as Target;
-      for (let c = 0; c < 2; c++) {
-        const rowStart = (si * 2 + c) * seg;
-        const dst = acc[t][c];
-        for (let s = 0; s < segLen; s++) dst[start + s] += stems[rowStart + s] * win[s];
-      }
-    }
-    for (let s = 0; s < segLen; s++) weight[start + s] += win[s];
-    post((ci + 1) / nchunks);
-    await yieldSegment();
-  }
-  for (const t of TARGETS) {
-    for (let c = 0; c < 2; c++) {
-      const a = acc[t][c];
-      for (let s = 0; s < N; s++) a[s] /= Math.max(weight[s], 1e-8);
-    }
-  }
-  return acc;
 }
 
 // --- Demucs CORE arch: the spectrogram-in ONNX (STFT/iSTFT in JS), run on the
@@ -551,10 +352,7 @@ interface SeparateMsg {
   l: ArrayBuffer;
   r: ArrayBuffer;
   frames: number;
-  arch: string;
-  urls?: Record<string, string>;
-  url?: string;
-  eps?: string[]; // demucs-core EP override: GPU → default ["webgpu","wasm"], CPU → ["wasm"]
+  url: string;
   quality?: DemucsQuality; // demucs-core shift-TTA + overlap (desktop quality knobs)
   selfCheck?: boolean; // fp16 model: numerically compare ONE segment vs the fp32 refUrl on WebGPU
   refUrl?: string; // fp32 reference model URL for the fp16 self-check
@@ -571,12 +369,9 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
     const N = msg.frames;
     const post: Post = (pct) => self.postMessage({ type: "progress", id, pct });
 
-    const acc =
-      msg.arch === "demucs-core"
-        ? await runDemucsCore(ort, msg.url!, full, N, post, msg.eps, msg.quality, msg.selfCheck, msg.refUrl)
-        : msg.arch === "demucs"
-          ? await runDemucs(ort, msg.url!, full, N, post)
-          : await runOpenUnmix(ort, msg.urls!, full, N, post);
+    // ONE architecture lives here now: the demucs core. Open-Unmix and the whole-model
+    // demucs export were ripped with the rest of the retired separators (the onnx rip).
+    const acc = await runDemucsCore(ort, msg.url, full, N, post, undefined, msg.quality, msg.selfCheck, msg.refUrl);
 
     const transfer: ArrayBuffer[] = [];
     const stems: Record<string, ArrayBuffer[]> = {};

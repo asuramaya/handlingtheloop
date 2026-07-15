@@ -223,8 +223,12 @@ export class NoiseFx extends BaseFxDevice {
   get rising() {
     return this._rise;
   }
+  // ★ Commanded, not live — `.value` chases setTargetAtTime and freezes solid whenever the
+  // AudioContext isn't actively rendering (e.g. before the first user gesture resumes it), which
+  // reads as "the drag did nothing" even though the param moved. See htl-direct-manipulation
+  // rule 1.
   get sweepHz() {
-    return this.sweep.frequency.value;
+    return sweepHzOf(this._sweep);
   }
   get engaged() {
     return this._throw;

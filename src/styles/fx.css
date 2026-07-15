@@ -278,9 +278,10 @@ body:not(.no-glow) .fx-tab.sel {
   gap: 8px;
 }
 .rv-viz {
-  /* The dome is now the primary control surface — let it absorb the body width; the polar
-     draw centres on min(w,h) so the circle stays round at any aspect. The companion rail
-     (MIX·DUCK) holds its fixed width on the right. */
+  /* The dome IS the whole control surface now — DUCK's cell was the last thing beside it
+     (MIX lives in the universal wet/dry fader every device already has). Nothing left to
+     share .rv-body's width with, so the dome just fills it; the polar draw centres on
+     min(w,h) so the circle stays round at any aspect. */
   flex: 1 1 0;
   height: 100%;
   min-width: 0;
@@ -296,27 +297,11 @@ body:not(.no-glow) .fx-tab.sel {
   width: 100%;
   height: 100%;
 }
-/* Knob grid (the device body's control row). Pinned height so it doesn't steal the viz's
-   space. Default: auto-fit spread (for future effects); per-effect overrides set a fixed
-   column count for a balanced, grouped layout. */
-.fx-knobs {
-  flex: 0 0 auto;
-  /* Clip the grid box so a knob's arc/dot can't bleed DOWNWARD onto the chip toolbar
-     when the panel is squeezed short (viz collapsed). Without this the value-0 dots
-     (parked at the cell's bottom edge) spilled into the gaps BETWEEN the chips and read
-     as stray marks overlapping the button row. The delay's 7px padding-bottom keeps the
-     dot's normal glow inside the box, so this only trims the would-be overlap. */
-  overflow: hidden;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
-  grid-auto-rows: 40px;
-  justify-content: center;
-  gap: 8px 10px; /* row col — enough that adjacent knob outlines don't visually collide */
-}
 /* Delay v3 — the cell row is GONE. TIME · FBK · HP · LP live on the tap timeline, DEPTH · RATE
    are the wave, and WIDTH · DRIVE · DUCK are the character rail at the viz's foot: bare 0‥1
-   quantities with no geometry to seize, which is exactly what a fader is for. The delay panel is
-   now the canvas plus the chip strip — no .fx-knobs row at all, so its grid rules are gone with it. */
+   quantities with no geometry to seize, which is exactly what a fader is for. Reverb v3 followed
+   (DUCK moved onto the dome as a 9th grip) — no panel has a `.fx-knobs` cell row left at all, so
+   its grid rules (and `.rv-knobs`, and the leak-guards that protected them) are gone with it. */
 /* A family boundary. Used in the knob row AND the chip strip. */
 .fx-sep {
   flex: 0 0 auto;
@@ -363,41 +348,11 @@ body:not(.no-glow) .fx-tab.sel {
   box-shadow: 0 0 14px -2px color-mix(in srgb, var(--accent) 85%, transparent);
 }
 
-/* Reverb v3: the dome is the control surface (drag-handles for every spatial param), so the
-   only cells left are the two NON-spatial knobs — MIX · DUCK — stacked in a narrow companion
-   column beside the round viz. A fixed-width pair (not a 12-cell grid) is what un-busts the
-   mobile deck column: square dome + a thin 2-cell rail always fit, at any width. */
-.fx-reverb .rv-knobs {
-  flex: 0 0 auto;
-  width: clamp(58px, 24%, 92px);
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  grid-template-columns: 1fr;
-  grid-auto-rows: minmax(28px, 1fr);
-  row-gap: 8px;
-  padding-bottom: 7px;
-}
 /* MODE chip — reads as a value selector (accent), not a toggle, in the FRZ foot strip. */
 .fx-chip.fx-chip-mode {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
   font-weight: 800;
-}
-.fx-knobs .vcell {
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  max-width: none;
-}
-/* The FX panel lives INSIDE .eq-row (DeckControls wraps <FxStrip> in it), so the
-   `.eq-row .vcell { height: 50px }` foot-row rule (desktop AND mobile) was leaking onto
-   the delay's knob cells — forcing them to 50px inside their compact 22–34px grid rows,
-   so they overflowed and overlapped (and pushed up under the chin). The knob cells must
-   fill their GRID row, not the foot-row tile height. Higher specificity (0,3,0) so it
-   wins over `.eq-row .vcell` (0,2,0) regardless of source order, on every breakpoint. */
-.eq-row .fx-knobs .vcell {
-  height: 100%;
 }
 /* The chip toolbar — spreads to fill the width (like the EQ tools) so it reads as the
    same shell. Mode/toggle chips grow; the small ON / ✕ controls hold their size at the end. */

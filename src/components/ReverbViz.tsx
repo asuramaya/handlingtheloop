@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Deck } from "@htl/audio";
+import type { Deck, ReverbFx } from "@htl/audio";
 
 // Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim,
 // AND a direct-control surface. Read the dome from the centre out:
@@ -58,7 +58,8 @@ const WARM = "255,150,70"; // DRIVE glow colour
 const GRAB_PX = 26; // pointer-to-grip hit radius (generous — the grips ARE the controls)
 const NODE_R = 6.5; // grip dot radius
 const T = -Math.PI / 2; // 12 o'clock
-const Q = Math.PI / 2;
+const N_GRIPS = 9; // DUCK joined the ring — was 8, evenly spaced at 45°; now 40°
+const STEP = TWO_PI / N_GRIPS;
 
 // The live dome geometry the grips measure against (set each draw, read by the handlers).
 interface Ctx {
@@ -99,13 +100,18 @@ const GRIPS: Grip[] = [
   // OUTSIDE the orange core instead of buried in it; the outer end reaches the boundary. The
   // dome's core / disc / bloom / boundary still grow live from the params as the readout.
   { id: "decay", param: "decay", label: "DECAY", angle: T, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
-  { id: "size", param: "size", label: "SIZE", angle: T + Q / 2, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "highCut", param: "highCut", label: "HI CUT", angle: T + Q, rIn: 0.42, rOut: 1.0, min: 1000, max: 20000, def: 18000, log: true, fmt: hz },
-  { id: "width", param: "width", label: "WIDTH", angle: T + Q * 1.5, rIn: 0.42, rOut: 1.0, min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
-  { id: "drive", param: "drive", label: "DRIVE", angle: T + Q * 2, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
-  { id: "bright", param: "brightness", label: "BRIGHT", angle: T + Q * 2.5, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "lowCut", param: "lowCut", label: "LO CUT", angle: T + Q * 3, rIn: 0.42, rOut: 1.0, min: 20, max: 2000, def: 20, log: true, fmt: hz },
-  { id: "predelay", param: "predelay", label: "PREDLY", angle: T + Q * 3.5, rIn: 0.42, rOut: 1.0, min: 0, max: 0.2, def: 0.012, fmt: ms },
+  { id: "size", param: "size", label: "SIZE", angle: T + STEP, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "highCut", param: "highCut", label: "HI CUT", angle: T + STEP * 2, rIn: 0.42, rOut: 1.0, min: 1000, max: 20000, def: 18000, log: true, fmt: hz },
+  { id: "width", param: "width", label: "WIDTH", angle: T + STEP * 3, rIn: 0.42, rOut: 1.0, min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
+  { id: "drive", param: "drive", label: "DRIVE", angle: T + STEP * 4, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
+  // ★ DUCK joins the ring — it never had a feature of its own to sit ON (its effect is a
+  // multiplier applied to features drive/decay already own — the core glow, the fog bloom),
+  // so it rides a plain VALUE track like BRIGHT/WIDTH. Sits next to DRIVE: one is the
+  // character going IN, the other is the character's live REACTION coming back out.
+  { id: "duck", param: "duck", label: "DUCK", angle: T + STEP * 5, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
+  { id: "bright", param: "brightness", label: "BRIGHT", angle: T + STEP * 6, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "lowCut", param: "lowCut", label: "LO CUT", angle: T + STEP * 7, rIn: 0.42, rOut: 1.0, min: 20, max: 2000, def: 20, log: true, fmt: hz },
+  { id: "predelay", param: "predelay", label: "PREDLY", angle: T + STEP * 8, rIn: 0.42, rOut: 1.0, min: 0, max: 0.2, def: 0.012, fmt: ms },
 ];
 // VALUE grip: norm (0..1 along track) ⇄ param value.
 const gripNorm = (g: Grip, v: number) => (g.log ? clamp01(Math.log(clamp(v, g.min, g.max) / g.min) / Math.log(g.max / g.min)) : clamp01((v - g.min) / (g.max - g.min)));
@@ -234,7 +240,14 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const reachBase = frozen ? 1 : 0.18 + clamp01(decay) * 0.82;
       const mixA = 0.32 + clamp01(mix) * 0.68;
       const dr = clamp01(drive);
-      const duckPulse = duck > 0 ? 1 - clamp01(duck) * 0.3 * (0.5 + 0.5 * Math.sin(elapsed * 2.4)) : 1;
+      // ★ THE REAL SIDECHAIN, not a canned oscillation. This used to be a synthetic
+      // Math.sin(elapsed·2.4) — a fake breathing rate that had nothing to do with the actual
+      // audio — capped at a 30% dip regardless of the duck knob. ReverbFx.duckGain reads the
+      // true live envelope (same fix as the delay: an AnalyserNode tap, since AudioParam.value
+      // can't see modulation delivered via .connect() — see htl-webaudio-footguns). The dome now
+      // breathes with whatever's actually hitting the input, down to fully ducked at duck=1.
+      const dev = deck?.fxDeviceAt(slot ?? -1) as ReverbFx | undefined;
+      const duckPulse = dev ? clamp01(dev.duckGain) : 1;
       const loN = f2n(lowCut);
       const hiN = f2n(highCut);
       const coreR = Math.max(3, R * 0.14) * (1 + dr * 1.1) * duckPulse;
@@ -452,7 +465,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       window.cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent]);
+  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, deck, slot]);
 
   // --- direct control: hit-test grips, map drag → param (absolute along the spoke radius) ---
   const localPt = (e: { clientX: number; clientY: number }) => {

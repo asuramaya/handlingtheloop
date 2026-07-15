@@ -1257,11 +1257,6 @@
   .eq-curve {
     min-height: 48px;
   }
-  .fx-delay .fx-knobs {
-    grid-auto-rows: minmax(20px, 28px);
-    gap: 6px 7px;
-    padding-bottom: 4px;
-  }
   .fx-foot {
     gap: 3px;
   }

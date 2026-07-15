@@ -321,6 +321,12 @@ export abstract class BaseFxDevice implements FxDevice {
     // during a tail ("actually, keep it on") would get silently re-bypassed when the timer landed.
     // The throw's OWN bypass moves set _settingBypassInternally so they don't self-clear here.
     if (!this._settingBypassInternally) {
+      // A REDUNDANT "turn off" while already reporting off (mid ring-out, or long since fully
+      // pruned) must be a no-op. Without this, a duplicate call — the same intent arriving
+      // twice, another listener applying state that's already applied — falls through to the
+      // code below, reads as a FRESH bypass request, and hard-cuts a ring-out already in
+      // flight: the tail dies almost immediately instead of over the full throwReleaseMs.
+      if (on && this._bypassed && !hard) return;
       if (this._thrown) {
         this._thrown = false;
         this.applyThrowBoost(false);

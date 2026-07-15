@@ -291,10 +291,10 @@ migrateLegacyKey("htl.settings", store); // pre-versioned key
 
 export function loadSettings(): Settings {
   const s = store.get();
-  // The onnx rip: demucs is the ONLY separator. Stored ids from before the rename
-  // ("htdemucs-onnx", "htdemucs-onnx-f16") resolve to their successors via getStemModel's
-  // legacy map — persist the mapped id so the raw string never resurfaces in debug UIs.
-  // Anything else that isn't in the registry (umx*, dead experiments) reads as Single.
+  // The onnx rip: demucs is the ONLY separator. A stored "htdemucs-onnx" resolves to
+  // "htdemucs" via getStemModel's legacy map — persist the mapped id so the raw string
+  // never resurfaces in debug UIs. Anything else that isn't in the registry (umx*,
+  // the fp16 experiment, dead ids) reads as Single.
   s.stemModel = getStemModel(s.stemModel).id; // unknown ids fall back to "off" (Single)
   // Whisper is retired — a pre-removal install can still have "base"/"small"/"turbo" sitting in
   // local storage. The engine only understands two values now; anything else reads as garbage in

@@ -29,8 +29,6 @@ export interface StemModel {
   sizeMB: number; // approx weights download (0 for DSP); shown in the picker
   note: string; // shown under the picker
   url?: string; // the ONNX graph (demucs-core), hosted on HF, fetched once + browser-cached
-  refUrl?: string; // fp32 reference model (the fp16 self-check compares against this)
-  needsShaderF16?: boolean; // fp16 model: only offer it when the adapter exposes the shader-f16 feature
 }
 
 // Model weights live on HuggingFace (our own repo): fetched cross-origin once
@@ -67,25 +65,10 @@ export const STEM_MODELS: StemModel[] = [
     note: "Neural · best quality · needs a WebGPU desktop GPU (phones use the cache)",
     url: `${HF}demucs/htdemucs-core.onnx`,
   },
-  {
-    // EXPERIMENTAL fp16 demucs core (86 MB, half of fp32). The old "fp16 miscomputes"
-    // folklore was root-caused: a forgotten `shader-f16` DEVICE FEATURE, not broken
-    // kernels — the worker now enables it when the adapter has it, and self-checks one
-    // segment vs the fp32 ref on the first run (see console). Kept THROUGH the rip on
-    // purpose: 86 MB is the only demucs under iOS's 128 MiB GPU buffer-binding limit,
-    // so this is the designated candidate for the day a non-JSEP WebGPU runtime makes
-    // on-device iPhone separation possible (onnxruntime#26827 blocks it today).
-    id: "htdemucs-f16",
-    label: "Demucs fp16 (experimental)",
-    kind: "neural",
-    arch: "demucs-core",
-    tier: "gpu",
-    sizeMB: 86,
-    note: "Half-size demucs — faster and lighter IF this GPU computes f16 right; self-checks vs fp32 (see console)",
-    url: `${HF}demucs/htdemucs-core-fp16.onnx`,
-    refUrl: `${HF}demucs/htdemucs-core.onnx`,
-    needsShaderF16: true, // hidden from the picker until the adapter exposes shader-f16 (else f16 shaders → noise)
-  },
+  // (The fp16 core was removed with the rest of the experiments — every stem in the
+  // shared pool is fp32, and it stays that way: one engine, one precision, one
+  // namespace. If an on-device mobile future ever materializes, resurrect it from
+  // history — the weights are still on HF.)
 ];
 
 export const DEFAULT_STEM_MODEL = "off";
@@ -95,7 +78,6 @@ export const DEFAULT_STEM_MODEL = "off";
 // and by the R2 read-fallback (LEGACY_STEM_NS in index.ts).
 export const LEGACY_STEM_IDS: Record<string, string> = {
   "htdemucs-onnx": "htdemucs",
-  "htdemucs-onnx-f16": "htdemucs-f16",
 };
 
 export function getStemModel(id: string): StemModel {
@@ -115,29 +97,12 @@ export function getStemModel(id: string): StemModel {
 let gpuAdapterOk: boolean | null = null;
 let gpuProbe: Promise<boolean> | null = null;
 let gpuAdapterInfo: string | null = null;
-let gpuSoleAdapter = false; // the browser exposes only ONE adapter (choosing is impossible from JS)
-let gpuShaderF16 = false; // does the acquired adapter expose the WGSL `shader-f16` feature?
 
 // Human-readable description of the WebGPU adapter we acquired (vendor/arch/device),
 // once probed — so the UI can show WHICH GPU is in use (e.g. Intel iGPU vs NVIDIA).
 // Browsers often blank vendor/device for privacy; we show whatever is populated.
 export function webGpuAdapterInfo(): string | null {
   return gpuAdapterInfo;
-}
-// True when high-performance and low-power adapter requests resolve to the SAME
-// adapter — i.e. the browser exposes exactly one GPU to WebGPU, and no JS-side
-// `powerPreference` can ever reach the other one. On a dual-GPU Linux box this is
-// the common case: Chromium's GPU process runs on one card and only that card is
-// enumerated; switching means LAUNCHING the browser on the discrete GPU (PRIME
-// render offload / switcherooctl), not a website setting. The UI uses this to say
-// so instead of letting the user hunt for a picker that cannot exist.
-export function webGpuSoleAdapter(): boolean {
-  return gpuSoleAdapter;
-}
-// Does the acquired WebGPU adapter expose the WGSL `shader-f16` feature? (Gates the fp16
-// demucs model — without it, f16 shaders fail to compile → garbage stems, so we hide it.)
-export function webGpuShaderF16(): boolean {
-  return gpuShaderF16;
 }
 export function probeWebGPU(): Promise<boolean> {
   if (gpuProbe) return gpuProbe;
@@ -146,38 +111,24 @@ export function probeWebGPU(): Promise<boolean> {
       // Mobile generally doesn't run the GPU path on-device — EXCEPT iOS 26+,
       // which ships WebGPU (compute shaders) default-on. There we DO acquire a
       // device and let HT-Demucs attempt separation (experimental). Older iOS and
-      // Android stay cache-only (the Burn wasm OOMs them).
+      // Android stay cache-only.
       if (isMobileDevice() && !mobileGpuEligible()) return (gpuAdapterOk = false);
       const gpu: any = (navigator as any).gpu;
       if (!gpu) return (gpuAdapterOk = false);
       const adapter =
         (await gpu.requestAdapter({ powerPreference: "high-performance" })) || (await gpu.requestAdapter());
       if (!adapter) return (gpuAdapterOk = false);
-      // Whether f16 WGSL shaders can run at all (gates the fp16 demucs model's visibility).
-      // Brand-new on the Linux+NVIDIA WebGPU path (Chrome 147–148 enabled WebGPU there; the
-      // shader-f16 feature lags) — so this is false on that stack today, true on most macOS/
-      // Windows. The fp16 model auto-appears in the picker the day this flips true.
-      gpuShaderF16 = !!adapter.features?.has?.("shader-f16");
       // Record which GPU we got (so Settings can show Intel iGPU vs NVIDIA). `info`
       // is sync in current browsers; older ones expose requestAdapterInfo().
-      const infoOf = async (a: any): Promise<string | null> => {
-        try {
-          const info: any = a.info ?? (typeof a.requestAdapterInfo === "function" ? await a.requestAdapterInfo() : null);
-          return info
-            ? [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ").trim() || null
-            : null;
-        } catch {
-          return null;
-        }
-      };
-      gpuAdapterInfo = await infoOf(adapter);
-      // Ask for the OTHER end of the power scale too: if low-power resolves to the same
-      // adapter, the browser exposes exactly one GPU and no preference can change it.
       try {
-        const lp = await gpu.requestAdapter({ powerPreference: "low-power" });
-        gpuSoleAdapter = !lp || (await infoOf(lp)) === gpuAdapterInfo;
+        const info: any =
+          adapter.info ?? (typeof adapter.requestAdapterInfo === "function" ? await adapter.requestAdapterInfo() : null);
+        if (info) {
+          gpuAdapterInfo =
+            [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ").trim() || null;
+        }
       } catch {
-        gpuSoleAdapter = true;
+        /* adapter info unavailable; ignore */
       }
       // Adapter present ≠ usable — confirm a device is actually grantable.
       const device = await adapter.requestDevice();
@@ -230,8 +181,9 @@ export function isIOSDevice(): boolean {
 // (onnxruntime#26827: runaway memory, tab killed), not a soft failure a try/catch
 // can catch. So phones do NOT attempt on-device GPU separation; they use the R2
 // cache for demucs results (desktop separates once → every phone downloads it).
-// The fp16 core is ready for the day we move to a NON-JSEP WebGPU runtime
-// (transformers.js v4 / ORT per-segment device recycling); flip this back then.
+// If a NON-JSEP WebGPU runtime ever ships for Safari, this is the flag to revisit —
+// note #26827's root cause is a WebKit wasm-COMPILE pathology, so per-segment device
+// recycling can NOT work around it (verified upstream 2026-07-15).
 export function mobileGpuEligible(): boolean {
   return false;
 }

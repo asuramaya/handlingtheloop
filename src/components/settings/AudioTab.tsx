@@ -19,12 +19,10 @@ import {
   hasStemsLocal,
   probeWebGPU,
   webGpuAdapterInfo,
-  webGpuShaderF16,
   isGpuBlocked,
   unblockGpu,
   stemFailLevel,
   resetStemGuard,
-  webGpuSoleAdapter,
   type StemModel,
 } from "@htl";
 import type { StemStatus } from "../../App";
@@ -495,10 +493,6 @@ export function AudioTab({
               // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); phones are
               // cache-only consumers, so the picker shows just Single there.
               .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
-              // The fp16 demucs model only works where the adapter exposes shader-f16
-              // (absent on today's Linux+NVIDIA WebGPU → its f16 shaders → noise). Hide
-              // it until the feature appears, then it auto-shows.
-              .filter((m) => !m.needsShaderF16 || webGpuShaderF16())
               .map((m) => {
                 const sup = modelSupport(m);
                 const badge = supportBadge(m);
@@ -629,26 +623,11 @@ export function AudioTab({
             : sel.kind === "dsp"
               ? "Plain mix · no stem separation"
               : "Neural · ORT WebAssembly";
-          // Dual-GPU truth: when high-performance and low-power requests resolve to the
-          // SAME adapter, the browser exposes exactly ONE GPU — there is no picker we
-          // could offer, because no powerPreference can reach the other card. The fix
-          // lives at browser LAUNCH (PRIME render offload / switcherooctl on Linux), so
-          // say that instead of letting the user hunt for a setting that can't exist.
-          const sole = onGpu && webGpuSoleAdapter();
           return (
-            <>
-              <div className={`stem-device ${kind}`}>
-                <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
-                <span className="stem-device-text">{text}</span>
-              </div>
-              {sole && (
-                <p className="settings-hint muted">
-                  This is the only GPU the browser exposes to WebGPU. On a dual-GPU machine, launch the browser on the
-                  discrete GPU to use it here (Linux: <code>switcherooctl launch</code> or PRIME render offload
-                  <code> __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia</code>).
-                </p>
-              )}
-            </>
+            <div className={`stem-device ${kind}`}>
+              <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
+              <span className="stem-device-text">{text}</span>
+            </div>
           );
         })()}
       </div>

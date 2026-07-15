@@ -17,9 +17,12 @@ import { useEffect, useRef } from "react";
 //                         the line is the RIGHT channel — and WIDTH *is* an L/R time spread. Drag
 //                         it sideways and you are literally pulling the right channel off the left
 //                         in time. That's not a metaphor for width; it's what width does.
-//   • THE TWO GUTTERS  → DUCK (left) and DRIVE (right): a full-height column at each end of the
-//                         timeline, where nothing else can reach. Bottom 0 → top 100, absolute; the
-//                         fill level IS the value, so it lands under your finger.
+//   • THE TWO GUTTERS  → DUCK (left) and DRIVE (right): a full-height LANE at each end of the
+//                         timeline, reserved in the timeline's own coordinate space (secToX), not
+//                         just in hit-test priority — an echo cannot land here any more. A thin
+//                         rail + a puck riding it, the same shrink-what-you-look-at split the taps
+//                         use: the full lane stays the touch target, only the paint got smaller.
+//                         Bottom 0 → top 100, absolute; the puck's level IS the value.
 //                         ★ THE LAW CHOSE THE HANDLE, not the other way round. Once every vertical
 //                         magnitude here runs bottom-to-top over the full height, a handle has to
 //                         span that height too — grab the FIRE, which lives at the top edge, and a
@@ -158,7 +161,11 @@ const DUCK_BEATS = 2; // how far into the tail the duck's scoop reaches — and 
 // somewhere you didn't ask for. The fire and the shadow are what these two DO — they are not what
 // you grab. Show the effect; hand me the handle.
 const GUTTER = 15;
-const GUTTER_WIDE = 22; // a thumb is not a mouse
+const GUTTER_WIDE = 22; // a thumb is not a mouse — this is now purely a HIT-ZONE + timeline-
+// exclusion width; the PAINT is much thinner (below), same split the taps already use.
+const GUTTER_MARGIN = 2; // the rail's distance from the true canvas edge
+const RAIL_W = 3; // the always-visible track
+const PUCK_W = 11; // the level indicator riding the rail
 const fmtF = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`);
 
 // log-frequency ↔ x, 20 Hz‥20 kHz across the width
@@ -226,8 +233,13 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     return beat > 0 ? beat * bars : MAX_TIME * (w < NARROW_PX ? 0.6 : 1.2);
   };
   // The shear, in pixels, at width = 1 — capped by the gap to the next echo so a wide delay can
-  // never throw the right channel across its neighbour.
-  const shearOf = (t: number, windowSec: number, w: number) => Math.min(SHEAR_MAX, Math.max(6, (t / windowSec) * w * 0.34));
+  // never throw the right channel across its neighbour. Scaled to the INNER span (w minus both
+  // gutters) — the taps' own usable width, not the full canvas.
+  const shearOf = (t: number, windowSec: number, w: number) => {
+    const gw = w < NARROW_PX ? GUTTER_WIDE : GUTTER;
+    const innerW = Math.max(1, w - 2 * gw);
+    return Math.min(SHEAR_MAX, Math.max(6, (t / windowSec) * innerW * 0.34));
+  };
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -279,6 +291,25 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
     const duckAt = (sec: number, s: typeof p.current, beat: number) => 1 - clamp01(s.duck) * Math.exp(-sec / ((beat > 0 ? beat : 0.5) * 0.5));
     const envAt = (sec: number, s: typeof p.current, beat: number) => decayAt(sec, s) * duckAt(sec, s, beat);
 
+    // ★ THE TIMELINE'S OWN SPACE EXCLUDES THE GUTTERS — reserved geometrically, not refereed.
+    //
+    // It used to be that xOf mapped seconds across the FULL 0..w, and the gutters were painted
+    // OVER whatever landed underneath — a hit-test priority check (`px <= gw` wins) kept a click
+    // from reaching a tap in that zone, but the tap could still be DRAWN there, and at a
+    // compressed enough window it could be the ONLY thing at that x — silently unreachable, not
+    // merely crowded. secToX/xToSec make gw..w-gw the timeline's actual coordinate space, so an
+    // echo can no longer land where duck/drive live, at any width. There's nothing left to
+    // referee after the fact.
+    const gutterOf = (w: number) => (w < NARROW_PX ? GUTTER_WIDE : GUTTER);
+    const secToX = (sec: number, w: number, windowSec: number) => {
+      const gw = gutterOf(w);
+      return gw + (sec / windowSec) * Math.max(1, w - 2 * gw);
+    };
+    const xToSec = (x: number, w: number, windowSec: number) => {
+      const gw = gutterOf(w);
+      return ((x - gw) / Math.max(1, w - 2 * gw)) * windowSec;
+    };
+
     const draw = (now: number) => {
       const { w, h, dpr } = sizeCanvas();
       const ctx = canvas.getContext("2d");
@@ -292,10 +323,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const beat = s.bpm ? 60 / s.bpm : 0;
       const g = grab.current;
       const windowSec = windowOf(beat, w);
-      const xOf = (sec: number) => (sec / windowSec) * w;
+      const xOf = (sec: number) => secToX(sec, w, windowSec);
+      const xOfInv = (x: number) => xToSec(x, w, windowSec);
       const { ribbonH, ribY, top, botY, midY, maxBar } = geom(h, w);
       const tlH = botY - top; // the timeline's height — the wave scales to THIS, not to the canvas
-      const gw = w < NARROW_PX ? GUTTER_WIDE : GUTTER; // the gutters' width
+      const gw = gutterOf(w); // the gutters' width — also the timeline's own left/right margin now
       // dt is CLAMPED: the loop idles whenever the wobble is still and nothing is being dragged, so
       // the first frame after a long idle would otherwise integrate minutes of phase in one step.
       const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
@@ -394,11 +426,13 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const lfoHot = hot === "lfo";
       if (modN > 0.001 && s.modRate > 0) {
         const lfoAmp = modN * tlH * LFO_AMP_FRAC;
-        const cycles = Math.max(0.5, s.modRate * windowSec);
+        // Same wave the taps ride (x = xOf(ts) + modShift) — drawn from each pixel's OWN time via
+        // xOfInv, not a spatial-frequency approximation, so it can span the inset timeline (gw..
+        // w-gw) without the gutters distorting its period.
         ctx.beginPath();
-        for (let x = 0; x <= w; x += 2) {
-          const y = midY + lfoAmp * Math.sin((2 * Math.PI * cycles * x) / w - phase);
-          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        for (let x = gw; x <= w - gw; x += 2) {
+          const y = midY + lfoAmp * Math.sin(2 * Math.PI * s.modRate * xOfInv(x) - phase);
+          x === gw ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
         ctx.strokeStyle = accent;
         ctx.globalAlpha = lfoHot ? 0.95 : 0.5;
@@ -477,18 +511,20 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // INTENSITY alone.
       const heat = clamp01(s.drive);
       if (heat > 0.001) {
+        // Washes the ECHOES' own span (gw..w-gw) now, not the full canvas — the gutters are a
+        // separate lane with their own visual language (the rail below), not more fuel for the fire.
         ctx.globalCompositeOperation = "lighter";
         ctx.globalAlpha = 0.42 * heat;
         let grad = ctx.createLinearGradient(0, top, 0, Math.max(top + 1, ceilY));
         grad.addColorStop(0, accent);
         grad.addColorStop(1, "transparent");
         ctx.fillStyle = grad;
-        ctx.fillRect(0, top, w, Math.max(0, ceilY - top));
+        ctx.fillRect(gw, top, Math.max(0, w - 2 * gw), Math.max(0, ceilY - top));
         grad = ctx.createLinearGradient(0, Math.min(botY - 1, floorY), 0, botY);
         grad.addColorStop(0, "transparent");
         grad.addColorStop(1, accent);
         ctx.fillStyle = grad;
-        ctx.fillRect(0, floorY, w, Math.max(0, botY - floorY));
+        ctx.fillRect(gw, floorY, Math.max(0, w - 2 * gw), Math.max(0, botY - floorY));
         ctx.globalCompositeOperation = "source-over";
         ctx.globalAlpha = 1;
       }
@@ -509,20 +545,20 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // absolute, over the full swing.
       const duckHot = hot === "duck";
       const dv = clamp01(s.duck);
-      const shadowX = Math.min(w, xOf((beat > 0 ? beat : 0.5) * DUCK_BEATS * 1.6));
+      const shadowX = Math.min(w - gw, xOf((beat > 0 ? beat : 0.5) * DUCK_BEATS * 1.6));
       if (dv > 0.001) {
         for (const up of [true, false]) {
           const yOf = (v: number) => (up ? midY - maxBar * v : midY + maxBar * v);
           ctx.beginPath();
-          for (let x = 0; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt((x / w) * windowSec, s)));
-          for (let x = shadowX; x >= 0; x -= 2) ctx.lineTo(x, yOf(envAt((x / w) * windowSec, s, beat)));
+          for (let x = gw; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
+          for (let x = shadowX; x >= gw; x -= 2) ctx.lineTo(x, yOf(envAt(xOfInv(x), s, beat)));
           ctx.closePath();
           ctx.fillStyle = accent;
           ctx.globalAlpha = duckHot ? 0.2 : 0.11;
           ctx.fill();
           // the ghost: where the tail WOULD have been. The shadow only means something against it.
           ctx.beginPath();
-          for (let x = 0; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt((x / w) * windowSec, s)));
+          for (let x = gw; x <= shadowX; x += 2) ctx.lineTo(x, yOf(decayAt(xOfInv(x), s)));
           ctx.strokeStyle = accent;
           ctx.globalAlpha = duckHot ? 0.5 : 0.3;
           ctx.lineWidth = 1;
@@ -532,11 +568,12 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
           ctx.globalAlpha = 1;
         }
       }
-      // the dry hit itself — the source. It lives IN the left gutter, because the gutter IS its
-      // column: the thing that does the ducking, and the thing you grab to set it.
+      // the dry hit itself — the source. It sits at x=gw now: t=0 on the timeline's OWN
+      // coordinate space (secToX(0) === gw exactly), immediately right of the duck rail rather
+      // than floating at an arbitrary offset that just happened to look adjacent.
       ctx.globalAlpha = 0.85;
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(gw + 1, round(midY - maxBar), barW, round(maxBar * 2));
+      ctx.fillRect(gw, round(midY - maxBar), barW, round(maxBar * 2));
       ctx.globalAlpha = 1;
 
       // === THE TWO GUTTERS — DUCK on the left, DRIVE on the right.
@@ -548,21 +585,27 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // bottom-to-top law would slam it to 100% the instant you touched it. The handle and the law
       // have to agree or the control lies on touch-down.
       //
-      // So: a column at each END of the timeline, where nothing else can reach. The fire and the
-      // shadow stay — but as what these two DO, not as what you grab. Show the effect; hand me the
-      // handle.
-      for (const [id, x0, v] of [["duck", 0, dv], ["drive", w - gw, heat]] as [string, number, number][]) {
+      // ★ RESERVED FOR REAL, NOT JUST REFEREED. secToX/xToSec (above) make gw..w-gw the timeline's
+      // actual coordinate space now — an echo cannot land in a gutter's zone anymore, so there's
+      // nothing left here for hit-test priority to referee. Which means the gutter doesn't need to
+      // CLAIM every one of its gw pixels to be seen: the SAME split the taps already use (a 3px bar,
+      // a 16px grab) — shrink what you look at, grow what you touch. A thin rail (always visible, so
+      // the lane never reads as dead space) + a puck riding it at the current level. The full gw
+      // stays the hit zone; only the paint got smaller, which is most of what was crowding the dry
+      // hit in the first place.
+      for (const [id, atLeft, v] of [["duck", true, dv], ["drive", false, heat]] as [string, boolean, number][]) {
         const on = hot === id;
         const lvl = botY - v * (botY - top);
-        ctx.fillStyle = "rgba(255,255,255,0.04)";
-        ctx.fillRect(x0, top, gw, botY - top);
+        const railX = atLeft ? GUTTER_MARGIN : w - GUTTER_MARGIN - RAIL_W;
         ctx.fillStyle = accent;
-        ctx.globalAlpha = on ? 0.4 : 0.24;
-        ctx.fillRect(x0, lvl, gw, botY - lvl);
-        // the level edge IS the value — visible at zero too, or the column reads as a dead box you
-        // have to discover with the mouse.
-        ctx.globalAlpha = on ? 1 : 0.85;
-        ctx.fillRect(x0, clamp(Math.round(lvl) - 1, top, botY - 2), gw, 2);
+        ctx.globalAlpha = on ? 0.22 : 0.12;
+        ctx.fillRect(railX, top, RAIL_W, botY - top);
+        // the puck — the level IS the value, riding the rail. Visible at zero too, or the lane
+        // reads as a dead box you have to discover with the mouse.
+        const puckH = on ? 9 : 7;
+        const puckW = on ? PUCK_W + 2 : PUCK_W;
+        ctx.globalAlpha = on ? 1 : 0.88;
+        ctx.fillRect(railX + RAIL_W / 2 - puckW / 2, clamp(Math.round(lvl - puckH / 2), top, botY - puckH), puckW, puckH);
         ctx.globalAlpha = 1;
       }
 
@@ -611,7 +654,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       // was room for it.
       if (!s.frozen) {
         ctx.beginPath();
-        for (let x = 0; x <= w; x += 2) ctx.lineTo(x, midY - maxBar * envAt((x / w) * windowSec, s, beat));
+        for (let x = gw; x <= w - gw; x += 2) ctx.lineTo(x, midY - maxBar * envAt(xOfInv(x), s, beat));
         ctx.strokeStyle = accent;
         ctx.globalAlpha = 0.28;
         ctx.lineWidth = 1;
@@ -735,20 +778,24 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
       const beat = s.bpm ? 60 / s.bpm : 0;
       const windowSec = windowOf(beat, w);
       // ★ PRIORITY. The GUTTERS come first and win outright — they are the only two handles on this
-      // surface whose law spans the full height, so they need pixels nothing else can take.
+      // surface whose law spans the full height, so they need pixels nothing else can take. This is
+      // now a belt-and-braces check, not the only thing stopping a tap landing here — secToX already
+      // excludes this zone from the timeline's own coordinate space, so a tap can't geometrically
+      // reach it any more either.
       //   the GUTTERS  — duck (left) and drive (right), full height, bottom 0 → top 100
       //   a TAP        — the primary gesture; it owns its ±grip of x, at any height
       //   the WOBBLE   — the centre band
       // The FIRE and the SHADOW are not in this list. They are what drive and duck DO; the gutters
       // are what you grab. An effect drawn at the top edge cannot also be a bottom-to-top fader.
-      const gw = w < NARROW_PX ? GUTTER_WIDE : GUTTER;
+      const gw = gutterOf(w);
       if (px <= gw) return { kind: "duck" };
       if (px >= w - gw) return { kind: "drive" };
 
       let best = -1;
       // The grip can never be wider than half the gap to the next tap, or neighbouring grips
       // overlap and you grab the wrong echo. At 1/16 in a two-bar window the taps are ~24px apart.
-      let bestD = Math.min(TAP_GRIP, Math.max(4, ((t / windowSec) * w) / 2));
+      const innerW = Math.max(1, w - 2 * gw);
+      let bestD = Math.min(TAP_GRIP, Math.max(4, ((t / windowSec) * innerW) / 2));
       const shear = clamp01(s.width) * shearOf(t, windowSec, w);
       for (let n = 0; n < 64; n++) {
         const ts = (n + 1) * t;
@@ -758,7 +805,7 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         const base = s.frozen ? 1 : Math.pow(clamp(s.feedback, 0, 0.999), n);
         if (!s.frozen && base < 0.02) break;
         // measure to the HALF you're actually over — the two channels are sheared apart
-        const cx = (ts / windowSec) * w + (py > midY ? shear : -shear);
+        const cx = secToX(ts, w, windowSec) + (py > midY ? shear : -shear);
         const d = Math.abs(px - cx);
         if (d < bestD) {
           bestD = d;
@@ -859,8 +906,11 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         // RATE is a STRETCH, and stretches are relative: drag right and the wave lengthens under
         // your hand (slower), left and it compresses (faster). Log-scaled, so one full-width drag
         // spans the whole 0.02‥8 Hz range and every octave of it feels the same width.
+        // Stretched relative to the INNER span — the wave itself only spans gw..w-gw now, so the
+        // drag that stretches it should be measured against the same span it's dragging.
+        const innerWLfo = Math.max(1, w - 2 * gutterOf(w));
         const span = Math.log(RATE_MAX / RATE_MIN);
-        const rate = clamp(g.startRate * Math.exp((-(px - g.startX) / w) * span), RATE_MIN, RATE_MAX);
+        const rate = clamp(g.startRate * Math.exp((-(px - g.startX) / innerWLfo) * span), RATE_MIN, RATE_MAX);
         setMod(depth, rate);
         return;
       }
@@ -874,11 +924,10 @@ export function DelayViz({ time, feedback, mix, pingpong, frozen, bpm, accent, h
         // ★ WIDTH — absolute, because the shear IS the width: the bar under your finger is the right
         // channel, and its distance from the echo's true time is the spread. So the bar follows the
         // cursor exactly, and letting go leaves it where you left it.
-        const trueX = ((g.n + 1) * Math.max(0.001, s.time) * w) / windowSec;
+        const trueX = secToX((g.n + 1) * Math.max(0.001, s.time), w, windowSec);
         setChar("width", (px - trueX) / shearOf(Math.max(0.001, s.time), windowSec, w));
       } else {
-        const secAt = (clamp(px, 1, w) / w) * windowSec;
-        setTime(clamp(secAt / (g.n + 1), 0.02, MAX_TIME));
+        setTime(clamp(xToSec(px, w, windowSec) / (g.n + 1), 0.02, MAX_TIME));
       }
 
       // ★ THE VERTICAL LAW IS MONOTONIC — the bottom of a tap's swing is 0%, the top is 100%.

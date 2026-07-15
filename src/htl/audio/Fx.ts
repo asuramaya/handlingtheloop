@@ -220,6 +220,9 @@ export abstract class BaseFxDevice implements FxDevice {
   // "tap a SIGNAL, never a param" rule the duck sidechain readback needed (see htl-webaudio-footguns).
   private readonly wetMeter: AnalyserNode;
   private readonly wetMeterBuf: Float32Array<ArrayBuffer>;
+  // wetLevel's meter ballistics — see the getter. Persisted across calls, not local to it.
+  private _wetEnvelope = 0;
+  private _wetEnvelopeT = 0;
 
   constructor(ctx: AudioContext, defaultMix = 0.3) {
     this.ctx = ctx;
@@ -232,15 +235,22 @@ export abstract class BaseFxDevice implements FxDevice {
     this.wet.connect(this.output);
     this.wet.gain.value = this._mix;
     this.wetMeter = ctx.createAnalyser();
-    this.wetMeter.fftSize = 256;
-    this.wetMeter.smoothingTimeConstant = 0;
+    // 2048 (~43ms @ 48kHz) so a once-per-frame read (~16ms) never samples a gap between windows —
+    // a delay's repeats and a reverb's early reflections are each a loud transient followed by a
+    // near-silent stretch, so a SHORT window (256, ~5ms) point-samples that unevenness directly.
+    this.wetMeter.fftSize = 2048;
+    this.wetMeter.smoothingTimeConstant = 0; // irrelevant to time-domain reads; explicit anyway
     this.wetMeterBuf = new Float32Array(this.wetMeter.fftSize);
     this.wet.connect(this.wetMeter);
     // "mix" is a universal param every wet/dry device exposes.
     this.params.push({ id: "mix", def: this._mix, get: () => this._mix, set: (v) => this.setMix(v) });
   }
-  /** Live wet-signal level (0..1, peak-abs), post the mix/bypass gain — what's ACTUALLY still
-   *  sounding right now. For a UI fading a ring-out with the real tail rather than a timer. */
+  /** Live wet-signal level (0..1), post the mix/bypass gain — for a UI fading a ring-out with the
+   *  real tail rather than a timer. NOT the raw instantaneous peak: a delay/reverb tail is a series
+   *  of discrete hits, so the raw signal genuinely spikes and drops between them — a UI painting
+   *  that directly flickers. This runs it through METER BALLISTICS instead (soft attack, slow
+   *  release — the same shape any VU/peak meter uses to read as a graceful fade, not noise), so
+   *  it still tracks every real peak, it just doesn't snap back to the floor between them. */
   get wetLevel(): number {
     this.wetMeter.getFloatTimeDomainData(this.wetMeterBuf);
     let peak = 0;
@@ -248,7 +258,14 @@ export abstract class BaseFxDevice implements FxDevice {
       const a = v < 0 ? -v : v;
       if (a > peak) peak = a;
     }
-    return peak > 1 ? 1 : peak;
+    if (peak > 1) peak = 1;
+    const now = this.ctx.currentTime;
+    const dt = this._wetEnvelopeT ? Math.min(0.25, Math.max(0, now - this._wetEnvelopeT)) : 0;
+    this._wetEnvelopeT = now;
+    const tau = peak > this._wetEnvelope ? 0.04 : 0.35; // attack / release time constants
+    const k = dt > 0 ? Math.exp(-dt / tau) : 0;
+    this._wetEnvelope = peak * (1 - k) + this._wetEnvelope * k;
+    return this._wetEnvelope;
   }
 
   protected setMix(v: number) {

@@ -104,6 +104,12 @@ const UA = "handlingtheloop (https://handlingtheloop.com)";
 // are the service working, and a budget that cannot tell the difference will abort a lookup that was
 // about to succeed and report it as "no match".
 const REQ_TIMEOUT_MS = 15000;
+// ★ A 404 IS A MISS; EVERYTHING ELSE IS A FAILURE, AND THE TWO MUST NOT BLUR. This used to return
+// null for any non-ok status, so a 429 (we lean on a free service, and it is measurably slow — a
+// /get takes 7-10s live) read exactly like "LRCLIB has never seen this recording". A timeout
+// reported as a miss sends the caller to the WRONG fallback: captions for a track whose lyrics
+// exist. Misses return null; failures throw, and fetchLrcLib re-throws them at the end unless some
+// other request genuinely answered.
 async function get(url: string, signal?: AbortSignal): Promise<unknown> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
@@ -111,7 +117,8 @@ async function get(url: string, signal?: AbortSignal): Promise<unknown> {
   signal?.addEventListener("abort", onAbort);
   try {
     const r = await fetch(url, { headers: { "Lrclib-Client": UA }, signal: ctrl.signal });
-    if (!r.ok) return null;
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`lrclib ${r.status}`);
     return await r.json();
   } finally {
     clearTimeout(timer);
@@ -133,6 +140,18 @@ export async function fetchLrcLib(
   const artist = q.artist.trim();
   const title = q.title.trim();
   if (!artist || !title) return null;
+  // Any request that FAILED (threw) rather than MISSED (404). If nothing hits and at least one
+  // request failed, we don't know the track is absent — so the whole lookup throws, and the
+  // caller's `bounded` records it as lookupFailed instead of a miss.
+  let failed = false;
+  const tryGet = async (url: string): Promise<unknown> => {
+    try {
+      return await get(url, signal);
+    } catch {
+      failed = true;
+      return null;
+    }
+  };
 
   // 1) Exact — with duration, so a 3-minute radio edit can't match a 7-minute extended mix.
   if (q.duration && q.duration > 0) {
@@ -142,7 +161,7 @@ export async function fetchLrcLib(
       duration: String(Math.round(q.duration)),
     });
     if (q.album) p.set("album_name", q.album);
-    const hit = readRow((await get(`${BASE}/get?${p}`, signal).catch(() => null)) as LrcLibRow | null);
+    const hit = readRow((await tryGet(`${BASE}/get?${p}`)) as LrcLibRow | null);
     if (hit) return hit;
   }
 
@@ -154,7 +173,7 @@ export async function fetchLrcLib(
   ]) {
     if (!a || !t) continue;
     const p = new URLSearchParams({ artist_name: a, track_name: t });
-    const rows = (await get(`${BASE}/search?${p}`, signal).catch(() => null)) as LrcLibRow[] | null;
+    const rows = (await tryGet(`${BASE}/search?${p}`)) as LrcLibRow[] | null;
     if (!Array.isArray(rows) || !rows.length) continue;
     // Prefer a row whose duration is close to ours AND that carries real line timings.
     const scored = rows
@@ -167,6 +186,8 @@ export async function fetchLrcLib(
     const hit = readRow(scored[0].r);
     if (hit) return hit;
   }
+  // No hit anywhere, and at least one request DIED rather than answered: this is not a miss.
+  if (failed) throw new Error("lrclib lookup failed");
   return null;
 }
 

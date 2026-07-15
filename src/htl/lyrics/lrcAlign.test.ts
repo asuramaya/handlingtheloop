@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, voicedClock, decideShift, alignLrc, alignPlain } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, voicedClock, decideShift, voicedRuns, assignLinesToRuns, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -465,6 +465,56 @@ describe("decideShift — rescue or polish, never a yank (the numbers are the tw
   });
   it("no shift unless it actually improves on doing nothing", () => {
     expect(decideShift({ lines: 40, offset: 0.3, confidence: 0.7, asIs: 0.7 })).toBe(0);
+  });
+});
+
+describe("assignLinesToRuns — plain lyrics get anchors from the audio's own structure", () => {
+  // The REAL measured voiced runs of "Coax & Botany" (gap-merged at 0.6s): three ~25s verse blocks,
+  // three short mid-song "oh-whoa" bursts where the sheet prints TWO lines, and seven bridge bursts
+  // where it prints FOUR. The recording sings more ad-lib repeats than the sheet prints — the flat
+  // seed consumed bursts in order and dragged the verse-3 reprise a whole silence-gap early.
+  const caps = [25.0, 2.2, 1.5, 2.2, 25.1, 1.9, 1.0, 1.8, 1.1, 1.9, 1.1, 1.8, 24.3];
+  const verse = 10; // syllables of a typical dense line here
+  const hook = 4; // "Oh, oh-whoa, oh"
+  const syl = [verse, verse, verse, verse, hook, hook, 12, verse, verse, verse, hook, hook, hook, hook, verse, verse, verse, verse];
+
+  it("the three verse stanzas land on the three long runs, never on a burst they can't fit", () => {
+    const runOf = assignLinesToRuns(syl, caps)!;
+    expect(runOf).not.toBeNull();
+    // verse 1 → run 0, verse 2 → run 4, verse 3 → run 12 (the reprise the operator caught)
+    for (const li of [0, 1, 2, 3]) expect(runOf[li]).toBe(0);
+    for (const li of [6, 7, 8, 9]) expect(runOf[li]).toBe(4);
+    for (const li of [14, 15, 16, 17]) expect(runOf[li]).toBe(12);
+    // and NO dense line sits on a short burst anywhere
+    for (let li = 0; li < syl.length; li++) {
+      if (syl[li] >= verse) expect(caps[runOf[li]]).toBeGreaterThan(20);
+    }
+  });
+
+  it("extra unprinted ad-lib bursts are allowed to hold NOTHING", () => {
+    const runOf = assignLinesToRuns(syl, caps)!;
+    const used = new Set(runOf);
+    // 13 runs, 18 lines — but the sheet under-prints the hooks, so some short runs stay empty
+    expect(used.size).toBeLessThan(caps.length);
+    // monotone: lines never go backwards through the runs
+    for (let li = 1; li < runOf.length; li++) expect(runOf[li]).toBeGreaterThanOrEqual(runOf[li - 1]);
+  });
+
+  it("returns null when the lines cannot fit the runs at all (the flat-seed fallback)", () => {
+    expect(assignLinesToRuns([40, 40], [1.0, 1.2])).toBeNull();
+  });
+
+  it("voicedRuns merges a breath but not a real gap", () => {
+    const hop = 0.05;
+    const mask = new Float32Array(200); // 10s
+    for (let f = 20; f < 40; f++) mask[f] = 1; // 1.0-2.0
+    for (let f = 46; f < 60; f++) mask[f] = 1; // 2.3-3.0 — a 0.3s breath away
+    for (let f = 100; f < 120; f++) mask[f] = 1; // 5.0-6.0 — a 2s real gap away
+    const runs = voicedRuns(mask, hop);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].start).toBeCloseTo(1.0, 5);
+    expect(runs[0].end).toBeCloseTo(3.0, 5);
+    expect(runs[1].start).toBeCloseTo(5.0, 5);
   });
 });
 

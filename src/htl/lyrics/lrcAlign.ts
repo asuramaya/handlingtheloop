@@ -267,6 +267,20 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+/** A flux peak fires on the RISING edge — physically a frame or two before the energy gate
+ *  crosses. Measured on "Coax & Botany": the true "You" attack onsets at 29.22, the mask opens at
+ *  29.25, and requiring `mask > 0` at the onset's own frame threw the genuine attack away — which
+ *  slid the whole word train one onset late. An onset this close ahead of a voiced run IS that
+ *  run's attack; return the frame where the mask opens (or -1 if it never does within reach). */
+const ONSET_EDGE_FRAMES = 2;
+function voicedFrameFor(mask: Float32Array, f: number): number {
+  for (let k = 0; k <= ONSET_EDGE_FRAMES; k++) {
+    const j = f + k;
+    if (j >= 0 && j < mask.length && mask[j] > 0) return j;
+  }
+  return -1;
+}
+
 /** Every voiced onset in [from, to), sorted ascending. The window+mask filter every line-level
  *  seeder needs, deliberately UNPRUNED by count — see seedOnBursts for why a flat top-K cap is the
  *  wrong place to decide what to keep. */
@@ -275,8 +289,7 @@ function windowedOnsets(onsets: number[], from: number, to: number, mask: Float3
   for (const t of onsets) {
     if (t < from || t >= to) continue;
     // An onset in SILENCE is not a word start — it's a click, a breath, or a reverb tail.
-    const f = Math.floor(t / hop);
-    if (f < 0 || f >= mask.length || mask[f] <= 0) continue;
+    if (voicedFrameFor(mask, Math.floor(t / hop)) < 0) continue;
     out.push(t);
   }
   return out; // onsets[] is ascending, so this is too
@@ -306,7 +319,10 @@ function burstsFromOnsets(onsets: number[], mask: Float32Array, hop: number): Bu
     cur = [];
   };
   for (const t of onsets) {
-    const f = Math.floor(t / hop);
+    // The onset may sit a frame or two ahead of the gate (see voicedFrameFor) — walk continuity
+    // from where the mask actually opens, or the edge onset would wrongly split its own burst.
+    const f = voicedFrameFor(mask, Math.floor(t / hop));
+    if (f < 0) continue; // callers pre-filter; belt and braces
     if (cur.length) {
       let broke = false;
       for (let k = lastFrame; k <= f; k++) {
@@ -415,7 +431,12 @@ export function seedOnBursts(text: string, onsets: number[], mask: Float32Array,
     const total = mySyl.reduce((a, c) => a + c, 0) || q;
     let acc = 0;
     for (let k = 0; k < q; k++) {
-      const idx = Math.min(b.attacks.length - 1, Math.floor((acc / total) * b.attacks.length));
+      // The syllable prior exists to decide which attacks to SKIP when the burst over-fired. When
+      // words and attacks match exactly the assignment is forced — one each, in order — and letting
+      // the prior reshuffle it maps a 2-syllable word's neighbours onto the same attack (found on a
+      // fixture: "and let the summer go", 5 words on 5 attacks, "summer" doubled attack 0 and
+      // starved attack 3, and the monotone DP cannot undo an early collision).
+      const idx = q === b.attacks.length ? k : Math.min(b.attacks.length - 1, Math.floor((acc / total) * b.attacks.length));
       out.push({ t: b.attacks[idx], w: words[wi + k], d: 0.3 });
       acc += mySyl[k] || 1;
     }
@@ -740,6 +761,97 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
  * pull it back. So it reports confidence 0 and a source of its own, and the ribbon says the timing is
  * estimated. The words are still ground truth; only their placement is a derivation.
  */
+/** The voiced mask as RUNS — maximal singing stretches, with sub-`mergeGap` silences (a breath, a
+ *  consonant stop) folded in so a phrase reads as one run, not five. */
+export function voicedRuns(mask: Float32Array, hop: number, mergeGap = 0.6): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let from = -1;
+  for (let f = 0; f <= mask.length; f++) {
+    const v = f < mask.length && mask[f] > 0;
+    if (v && from < 0) from = f;
+    else if (!v && from >= 0) {
+      const start = from * hop;
+      const end = f * hop;
+      if (out.length && start - out[out.length - 1].end < mergeGap) out[out.length - 1].end = end;
+      else out.push({ start, end });
+      from = -1;
+    }
+  }
+  return out;
+}
+
+/** No line may be asked to sing faster than this. 5 syllables a second, SUSTAINED for a whole line,
+ *  is already patter — a 10-syllable lyric physically does not fit a 1.8-second burst, and that
+ *  impossibility is the only content-free evidence we have against seating it there. */
+const MIN_SEC_PER_SYL = 0.2;
+
+/**
+ * Assign ordered LINES to ordered voiced RUNS — the anchors plain lyrics don't come with.
+ *
+ * ★ WHY THIS EXISTS — MEASURED ON THE OPERATOR'S "COAX & BOTANY", NOT GUESSED. The sheet prints
+ * "Oh, oh-whoa, oh" twice mid-song and four times in the bridge; the recording SINGS it three and
+ * seven times. A flat proportional seed consumes bursts strictly in order, so every unprinted
+ * ad-lib repeat dragged the following printed line one burst early — the verse-3 reprise displayed
+ * an entire silence-gap before it was sung (the exact live complaint). The fix is not to know the
+ * content; it is to respect two structural facts: a dense line cannot fit a short burst (the hard
+ * constraint above), and a run nothing fits may simply hold NO printed line — showing nothing
+ * during an ad-lib the sheet doesn't print is correct, and pulling a verse onto it is not.
+ *
+ * DP over (lines consumed, runs consumed); each run takes a contiguous — possibly empty — slice of
+ * lines, subject to fit; cost per run is the squared gap between the syllables it received and the
+ * syllables its share of the voiced time predicts (rate R = total syllables / total voiced time).
+ * Returns the run index per line, or null when the lines can't fit the runs at all (fall back to
+ * the flat seed — a wrong ruler beats no ruler).
+ */
+export function assignLinesToRuns(syl: number[], caps: number[]): number[] | null {
+  const N = syl.length;
+  const M = caps.length;
+  if (!N || !M) return null;
+  const totalSyl = syl.reduce((a, b) => a + b, 0);
+  const totalCap = caps.reduce((a, b) => a + b, 0);
+  if (totalSyl <= 0 || totalCap <= 0) return null;
+  const R = totalSyl / totalCap;
+  // prefix sums: syllables and minimum seconds of lines [0, k)
+  const pSyl = [0];
+  const pMin = [0];
+  for (let k = 0; k < N; k++) {
+    pSyl.push(pSyl[k] + syl[k]);
+    pMin.push(pMin[k] + syl[k] * MIN_SEC_PER_SYL);
+  }
+  const INF = Infinity;
+  // f[j][k] = best cost with the first j runs holding the first k lines
+  const f: number[][] = Array.from({ length: M + 1 }, () => new Array<number>(N + 1).fill(INF));
+  const from: number[][] = Array.from({ length: M + 1 }, () => new Array<number>(N + 1).fill(-1));
+  f[0][0] = 0;
+  for (let j = 1; j <= M; j++) {
+    const cap = caps[j - 1];
+    const want = R * cap;
+    for (let k = 0; k <= N; k++) {
+      // run j-1 takes lines [m, k) — m === k is the empty run
+      for (let m = k; m >= 0; m--) {
+        if (pMin[k] - pMin[m] > cap) break; // one more line can only make the slice longer
+        const prev = f[j - 1][m];
+        if (prev === INF) continue;
+        const got = pSyl[k] - pSyl[m];
+        const cost = prev + (got - want) * (got - want);
+        if (cost < f[j][k]) {
+          f[j][k] = cost;
+          from[j][k] = m;
+        }
+      }
+    }
+  }
+  if (f[M][N] === INF) return null;
+  const runOf = new Array<number>(N).fill(-1);
+  let k = N;
+  for (let j = M; j >= 1; j--) {
+    const m = from[j][k];
+    for (let x = m; x < k; x++) runOf[x] = j - 1;
+    k = m;
+  }
+  return runOf;
+}
+
 export function alignPlain(i: {
   text: string[];
   onsets: number[];
@@ -766,7 +878,41 @@ export function alignPlain(i: {
   };
   if (!texts.length || voiced.length < 20) return { lines: [], report: idle };
 
-  // One word train across the whole track's voiced time, grouped back into lines afterwards.
+  // ★ STRUCTURE FIRST. Assign the lines to the mask's own voiced runs (see assignLinesToRuns — an
+  // unprinted ad-lib burst may hold NO line, and a dense line may not sit on a burst it can't fit),
+  // synthesize each line's clock from its run, and from there this is exactly the anchored problem
+  // alignLrc already solves. Plain lyrics stop being anchorless; the anchors come from the audio.
+  const runs = voicedRuns(vocal, i.hop);
+  const lineSyl = texts.map((t) =>
+    t
+      .split(/\s+/)
+      .filter(Boolean)
+      .reduce((a, w) => a + syllables(w), 0),
+  );
+  const runOf = runs.length >= 2 ? assignLinesToRuns(lineSyl, runs.map((r) => r.end - r.start)) : null;
+  if (runOf) {
+    const anchored: LyricsLine[] = [];
+    for (let j = 0; j < runs.length; j++) {
+      const mine: number[] = [];
+      for (let li = 0; li < texts.length; li++) if (runOf[li] === j) mine.push(li);
+      if (!mine.length) continue;
+      // Slice the run among its lines by syllable share — the same prior the seeds use.
+      const total = mine.reduce((a, li) => a + lineSyl[li], 0) || mine.length;
+      let at = runs[j].start;
+      for (const li of mine) {
+        const span = ((lineSyl[li] || 1) / total) * (runs[j].end - runs[j].start);
+        anchored.push({ start: at, end: at + span, text: texts[li] });
+        at += span;
+      }
+    }
+    const { lines, report } = alignLrc({ ...i, lines: anchored });
+    // The anchors were derived from this very audio, so agreement with it measures nothing.
+    // Estimated stays confidence 0, offset 0 — same honesty rule as below.
+    return { lines, report: { ...report, offset: 0, confidence: 0 } };
+  }
+
+  // No usable run structure (or the lines can't fit it) — the flat seed: one word train across the
+  // whole track's voiced time, grouped back into lines afterwards. A wrong ruler beats no ruler.
   const seeds = seedOnVoiced(texts.join(" "), voiced, i.hop);
   if (!seeds.length) return { lines: [], report: idle };
   const { times, report } = alignInVoicedTime(seeds.map((w) => w.t), i.onsets, vocal, i.hop, false);

@@ -23,7 +23,7 @@ import type { LyricsLine } from "./types";
 const SR = 16000; // everything below works at 16 kHz mono — plenty for onsets and energy
 
 /** Linear-resample mono PCM to 16 kHz. */
-function to16k(pcm: Float32Array, sampleRate: number): Float32Array {
+export function to16k(pcm: Float32Array, sampleRate: number): Float32Array {
   if (Math.abs(sampleRate - SR) < 1) return pcm;
   const ratio = sampleRate / SR;
   const n = Math.floor(pcm.length / ratio);
@@ -47,7 +47,7 @@ const ON_BINS = ON_N / 2;
 const onFft = new FFT(ON_N);
 const onWin = hannPeriodic(ON_N);
 
-function detectOnsets(audio: Float32Array): { times: number[]; strengths: number[] } {
+export function detectOnsets(audio: Float32Array): { times: number[]; strengths: number[] } {
   const frames = Math.floor((audio.length - ON_N) / ON_HOP) + 1;
   if (frames < 4) return { times: [], strengths: [] };
   const re = new Float32Array(ON_N);
@@ -106,7 +106,7 @@ function detectOnsets(audio: Float32Array): { times: number[]; strengths: number
 // ---- ENERGY: where is there a voice at all? ----------------------------------------------
 /** RMS per `hop` seconds. Smoothed a little, so one glottal gap doesn't read as silence. */
 export const ENV_HOP = 0.05; // 50 ms — fine enough to place a line, coarse enough to be cheap
-function energyEnvelope(audio: Float32Array): Float32Array {
+export function energyEnvelope(audio: Float32Array): Float32Array {
   const hop = Math.round(ENV_HOP * SR);
   const frames = Math.max(1, Math.floor(audio.length / hop));
   const env = new Float32Array(frames);

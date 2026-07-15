@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, alignLrc, alignPlain } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -363,6 +363,56 @@ describe("a line whose words are separated by INSTRUMENTAL BARS", () => {
     // The last word is ~8 s after the first. A wall-clock or syllable-rate seed would have put them
     // all inside the first 1.5 s, which is precisely how the line collapsed onto one word.
     expect(ws[ws.length - 1].t - ws[0].t).toBeGreaterThan(6);
+  });
+});
+
+// ---- ★★ THE REAL DATA — measured off the operator's own "Du Hast" vocal stem ------------
+describe("seedOnBursts — against the ACTUAL onsets/mask measured from the real vocal stem", () => {
+  const HOP = 0.05;
+
+  // Not a fixture I wrote to match my own theory. This is the operator's own htdemucs vocal
+  // separation of the actual YouTube upload (.stem-cache/htdemucs/W3q8Od5qJio), decoded and run
+  // through the REAL detectOnsets/energyEnvelope/maskFromEnergy, at the real -0.4s coarse offset
+  // this track measures. Every number below is copy-pasted off that run, not invented.
+  //
+  // "Du, du hast, du hast mich" sings in THREE bursts — "Du," / "du hast," / "du hast mich" — but
+  // the real detector puts TWO onsets on the held "Du," (a consonant pluck, then the vowel), not
+  // one, and the line's own search window (bounded by the NEXT line's timestamp) catches one stray
+  // onset from that next line's own pickup note. 8 raw attacks for 6 words: 2+2+3 real + 1 leaked.
+  const mkMask = (bursts: [number, number][], frames: number): Float32Array => {
+    const m = new Float32Array(frames);
+    for (const [s, e] of bursts) for (let f = Math.round(s / HOP); f < Math.round(e / HOP); f++) m[f] = 1;
+    return m;
+  };
+  const BURSTS: [number, number][] = [
+    [30.7, 31.4], // "Du,"          — measured: 2 onsets (30.74, 31.09)
+    [32.35, 33.4], // "du hast,"     — measured: 2 onsets (32.41, 33.24)
+    [34.3, 35.65], // "du hast mich" — measured: 3 onsets (34.36, 34.96, 35.06)
+    [38.35, 39.05], // the NEXT line's own pickup — measured: 1 onset (38.39), inside this line's window
+  ];
+  const ONSETS = [30.74, 31.09, 32.41, 33.24, 34.36, 34.96, 35.06, 38.39];
+  const mask = mkMask(BURSTS, Math.round(40 / HOP));
+
+  it("★★★ puts each phrase's words on ITS OWN burst — the bug the operator actually heard", () => {
+    const ws = seedOnBursts("Du, du hast, du hast mich", ONSETS, mask, HOP);
+    expect(ws.map((w) => w.w)).toEqual(["Du,", "du", "hast,", "du", "hast", "mich"]);
+    // "Du," alone in burst 0 — not sharing it with "du" (the held note's spurious second onset
+    // must not borrow a slot from the next phrase).
+    expect(ws[0].t).toBeCloseTo(30.74, 2);
+    // "du" AND "hast," both land in burst 1 (32.35–33.4) — this is the actual regression: before
+    // this fix, "du" was stolen by burst 0 and "hast," ended up alone on burst 1's first onset.
+    expect(ws[1].t).toBeCloseTo(32.41, 2);
+    expect(ws[2].t).toBeCloseTo(33.24, 2);
+    expect(ws[1].t).toBeGreaterThan(32.0);
+    expect(ws[2].t).toBeLessThan(33.5);
+    // "du hast mich" fill burst 2, and NONE of them land on the leaked next-line onset (38.39) —
+    // this was the operator's literal complaint: "mich" landing past the end of the singing.
+    for (const w of ws.slice(3)) expect(w.t).toBeLessThan(36);
+  });
+
+  it("the leaked next-line onset (38.39) is never chosen", () => {
+    const ws = seedOnBursts("Du, du hast, du hast mich", ONSETS, mask, HOP);
+    for (const w of ws) expect(w.t).not.toBeCloseTo(38.39, 1);
   });
 });
 

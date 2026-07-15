@@ -245,80 +245,170 @@ export function seedOnVoiced(text: string, voiced: number[], hop: number): Lyric
   return out;
 }
 
-/**
- * ★★ SEED THE WORDS ON THE ATTACKS, NOT ON THE SECONDS. This is the correction to seedOnVoiced, and
- * a held note is what exposes it.
- *
- * Rammstein sings "Du…" (held, long) / "du hast" / "du hast mich" — ONE word, then TWO, then THREE.
- * But the sustained "Duuuu" occupies nearly as much VOICED TIME as the two-word phrase after it. So
- * distributing six words evenly across voiced time puts TWO of them inside the first burst, and
- * every word after that lands a slot late — the last one, "mich", ends up past the end of the
- * singing altogether. That is exactly what the operator saw, and I had blamed it on the stem.
- *
- * ★ THE ASSUMPTION THAT BROKE: voiced duration ∝ syllable count. A HELD VOWEL DESTROYS IT — it buys
- * a lot of seconds and it is still one word.
- *
- * The onsets don't have that problem. A held note produces ONE attack no matter how long it rings;
- * three words produce three. So the number of attacks in a burst tracks the number of WORDS in it,
- * which is the quantity we actually need. Time was never the right ruler; events were.
- *
- * (`strong` has already been pruned to the strongest attacks in the window — see prunedOnsets. A
- * vibrato ripple inside a sustained vowel is also a flux peak, just a much smaller one.)
- */
-export function seedOnAttacks(text: string, attacks: number[]): LyricsWord[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  // Fewer attacks than words → not enough evidence to place them this way; caller falls back.
-  if (!words.length || attacks.length < words.length) return [];
-  const syl = words.map(syllables);
-  const total = syl.reduce((a, b) => a + b, 0);
-  const out: LyricsWord[] = [];
-  let acc = 0;
-  for (let i = 0; i < words.length; i++) {
-    const idx = Math.min(attacks.length - 1, Math.floor((acc / total) * attacks.length));
-    out.push({ t: attacks[idx], w: words[i], d: 0.3 });
-    acc += syl[i];
+function median(xs: number[]): number {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Every voiced onset in [from, to), sorted ascending. The window+mask filter every line-level
+ *  seeder needs, deliberately UNPRUNED by count — see seedOnBursts for why a flat top-K cap is the
+ *  wrong place to decide what to keep. */
+function windowedOnsets(onsets: number[], from: number, to: number, mask: Float32Array, hop: number): number[] {
+  const out: number[] = [];
+  for (const t of onsets) {
+    if (t < from || t >= to) continue;
+    // An onset in SILENCE is not a word start — it's a click, a breath, or a reverb tail.
+    const f = Math.floor(t / hop);
+    if (f < 0 || f >= mask.length || mask[f] <= 0) continue;
+    out.push(t);
   }
-  for (let i = 1; i < out.length; i++) if (out[i].t <= out[i - 1].t) out[i].t = out[i - 1].t + 0.02;
-  return out;
+  return out; // onsets[] is ascending, so this is too
+}
+
+interface Burst {
+  attacks: number[];
+  /** The CONTAINING voiced run's true edges (extended out from the onsets to the mask's own silence
+   *  boundary) — how long was actually sung here, independent of how many times the detector fired. */
+  start: number;
+  end: number;
+}
+
+/** Split a line's onsets into BURSTS — maximal runs where the voiced mask never drops to zero
+ *  between consecutive onsets. `onsets` must already be voiced-only and time-ascending. */
+function burstsFromOnsets(onsets: number[], mask: Float32Array, hop: number): Burst[] {
+  const bursts: Burst[] = [];
+  let cur: number[] = [];
+  let lastFrame = -1;
+  const flush = () => {
+    if (!cur.length) return;
+    let a = Math.floor(cur[0] / hop);
+    while (a > 0 && mask[a - 1] > 0) a--;
+    let b = Math.floor(cur[cur.length - 1] / hop);
+    while (b + 1 < mask.length && mask[b + 1] > 0) b++;
+    bursts.push({ attacks: cur, start: a * hop, end: (b + 1) * hop });
+    cur = [];
+  };
+  for (const t of onsets) {
+    const f = Math.floor(t / hop);
+    if (cur.length) {
+      let broke = false;
+      for (let k = lastFrame; k <= f; k++) {
+        if (k < 0 || k >= mask.length || mask[k] <= 0) {
+          broke = true;
+          break;
+        }
+      }
+      if (broke) flush();
+    }
+    cur.push(t);
+    lastFrame = f;
+  }
+  flush();
+  return bursts;
+}
+
+/** Divide `total` integer units across buckets in proportion to `weights` (largest-remainder), then
+ *  clamp each bucket to its own `caps` — pushing any overflow to whichever bucket has the most spare
+ *  room. Guarantees every bucket's result ≤ its cap whenever sum(caps) ≥ total. */
+function allocateQuotas(weights: number[], caps: number[], total: number): number[] {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  const q = sum > 0 ? weights.map((w) => (w / sum) * total) : weights.map(() => 0);
+  const floors = q.map(Math.floor);
+  let used = floors.reduce((a, b) => a + b, 0);
+  const order = q.map((r, i) => ({ i, frac: r - floors[i] })).sort((a, b) => b.frac - a.frac);
+  for (let k = 0; used < total && k < order.length; k++, used++) floors[order[k].i]++;
+  let overflow = 0;
+  for (let i = 0; i < floors.length; i++) {
+    if (floors[i] > caps[i]) {
+      overflow += floors[i] - caps[i];
+      floors[i] = caps[i];
+    }
+  }
+  while (overflow > 0) {
+    let best = -1;
+    for (let i = 0; i < floors.length; i++) {
+      if (floors[i] < caps[i] && (best < 0 || caps[i] - floors[i] > caps[best] - floors[best])) best = i;
+    }
+    if (best < 0) break;
+    floors[best]++;
+    overflow--;
+  }
+  return floors;
 }
 
 /**
- * The onsets in [from, to) that are most likely to be WORD STARTS.
+ * ★★★ SEED PER BURST, NOT PER FLAT ATTACK LIST. The correction to the previous attempt
+ * (`seedOnAttacks`), found by running this pipeline against the operator's own "Du Hast" vocal stem
+ * instead of a synthetic fixture — the real onsets falsify an assumption a fixture couldn't catch.
  *
- * ★ A LINE OF N WORDS HAS ABOUT N ATTACKS, NOT FOUR TIMES THAT. The detector fired 647 times on a
- * 160-word track because a vibrato ripple inside a held vowel is a local flux maximum too — just a
- * far weaker one. So keep the strongest, and keep about as many as the line could plausibly need.
- * The DP still chooses among them (and may decline any of them); this only stops a wobble from
- * competing with a consonant for the same word.
+ * `seedOnAttacks` divided a line's words across every attack in its window in one flat pass, on the
+ * theory that a held note attacks once however long it rings. On the real stem it doesn't: "Du," —
+ * one word, held — fires TWO onsets (a consonant pluck, then the vowel settling). A flat proportional
+ * split can't see those two belong to the SAME word, so it hands the second one to the NEXT word —
+ * which then has nothing of its own, and every word after it inherits the shift. Separately, the
+ * window reaches to the next LRC line's own timestamp, and if that line's singer comes in even
+ * slightly early, its first attack leaks into THIS line's pool and eats a slot near the end. Measured
+ * on "Du, du hast, du hast mich": 8 raw attacks for 6 words — 2 from the held "Du," alone, 1 leaked
+ * from the next line's pickup — and the flat split put "mich" on the leaked one, past the true end.
+ *
+ * The fix works in two passes, because the two failures live at different scales.
+ *
+ * OUTER — which words belong to which BURST: allocated by each burst's own voiced DURATION (not its
+ * raw attack count — a burst that over-fired must not also claim an inflated word share, or the
+ * held-note bug just reappears one level up), capped so no burst is ever handed more words than it
+ * has attacks to put them on (see allocateQuotas). Because the window can leak at most ONE trailing
+ * burst — it's already bounded by the next line's own start — a silence gap that dwarfs every other
+ * gap in this line is that leak, not a breath inside it, and is dropped before the split ever sees it.
+ *
+ * INNER — which attack each word in a burst gets: the SAME syllable-weighted proportional index
+ * `seedOnAttacks` used, just scoped to one burst's own words and attacks. This is what makes a
+ * multi-syllable word still claim several consecutive attacks correctly, and what makes a single-word
+ * burst with a spurious extra onset simply take its first (index 0 is where a word starts).
  */
-export function prunedOnsets(
-  onsets: number[],
-  strengths: number[] | undefined,
-  from: number,
-  to: number,
-  words: number,
-  mask?: Float32Array,
-  hop = 0.05,
-): number[] {
-  const idx: number[] = [];
-  for (let i = 0; i < onsets.length; i++) {
-    const t = onsets[i];
-    if (t < from || t >= to) continue;
-    // An onset in SILENCE is not a word start — it's a click, a breath, or a reverb tail. It has no
-    // business competing for a word, and worse, it inflates the attack count that the seed divides by.
-    if (mask) {
-      const f = Math.floor(t / hop);
-      if (f < 0 || f >= mask.length || mask[f] <= 0) continue;
-    }
-    idx.push(i);
+export function seedOnBursts(text: string, onsets: number[], mask: Float32Array, hop: number): LyricsWord[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length || !onsets.length) return [];
+
+  let bursts = burstsFromOnsets(onsets, mask, hop);
+  if (bursts.length >= 3) {
+    const gaps: number[] = [];
+    for (let i = 1; i < bursts.length; i++) gaps.push(bursts[i].start - bursts[i - 1].end);
+    const lastGap = gaps[gaps.length - 1];
+    const ref = median(gaps.slice(0, -1));
+    if (ref > 0 && lastGap > ref * 1.8) bursts = bursts.slice(0, -1); // the next line's pickup, not this line's breath
   }
-  const keep = Math.max(4, Math.ceil(words * 2.5)); // room for the DP to choose, not to guess
-  if (!strengths || idx.length <= keep) return idx.map((i) => onsets[i]);
-  return idx
-    .sort((a, b) => (strengths[b] ?? 0) - (strengths[a] ?? 0))
-    .slice(0, keep)
-    .sort((a, b) => a - b)
-    .map((i) => onsets[i]);
+
+  const totalAttacks = bursts.reduce((a, b) => a + b.attacks.length, 0);
+  // Fewer attacks than words, even across every burst → not enough evidence; caller falls back.
+  if (totalAttacks < words.length) return [];
+
+  const syl = words.map(syllables);
+  const quotas = allocateQuotas(
+    bursts.map((b) => b.end - b.start),
+    bursts.map((b) => b.attacks.length),
+    words.length,
+  );
+
+  const out: LyricsWord[] = [];
+  let wi = 0;
+  bursts.forEach((b, bi) => {
+    const q = quotas[bi];
+    if (q <= 0) return;
+    const mySyl = syl.slice(wi, wi + q);
+    const total = mySyl.reduce((a, c) => a + c, 0) || q;
+    let acc = 0;
+    for (let k = 0; k < q; k++) {
+      const idx = Math.min(b.attacks.length - 1, Math.floor((acc / total) * b.attacks.length));
+      out.push({ t: b.attacks[idx], w: words[wi + k], d: 0.3 });
+      acc += mySyl[k] || 1;
+    }
+    wi += q;
+  });
+
+  for (let i = 1; i < out.length; i++) if (out[i].t <= out[i - 1].t) out[i].t = out[i - 1].t + 0.02;
+  return out;
 }
 
 /**
@@ -534,14 +624,16 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
   shifted.forEach((l, li) => {
     // Look back a little: an LRC cue is often stamped a beat AFTER the singer actually comes in.
     const from = Math.max(0, l.start - 0.3, li > 0 ? shifted[li - 1].end : 0);
-    const nWords = l.text.split(/\s+/).filter(Boolean).length;
-    // THIS line's evidence, and only it — pruned to the strongest attacks, so a vibrato wobble
-    // inside a held vowel can't compete with a consonant for a word.
-    const mine = prunedOnsets(i.onsets, i.strengths, from, l.end, nWords, vocal, i.hop);
-    // ★ Seed on the ATTACKS. Voiced TIME is the wrong ruler: a held "Duuuu" buys a lot of seconds
-    // and is still one word, so a time-proportional seed puts two words inside it and shoves the
-    // rest of the line a slot late. Attacks count EVENTS, which is what a word actually is.
-    let ws = seedOnAttacks(l.text, mine);
+    // THIS line's evidence, and only it — every voiced onset in the window. Burst structure, not a
+    // flat count, decides what each word gets (see seedOnBursts).
+    const windowed = windowedOnsets(i.onsets, from, l.end, vocal, i.hop);
+    const mine = windowed;
+    // ★ Seed PER BURST. Voiced TIME is the wrong ruler (a held "Duuuu" buys seconds and is still one
+    // word), and a FLAT attack list is only half the fix — a held note can re-attack, and the window
+    // can catch the next line's own pickup note, so a flat proportional split silently borrows a
+    // slot from the wrong word. Bursts (the mask's own silences) are partitions neither mistake can
+    // cross.
+    let ws = seedOnBursts(l.text, windowed, vocal, i.hop);
     if (!ws.length) {
       // Too few attacks to place the words on — fall back to voiced time, then to the LRC's clock.
       const voiced = voicedFrames(vocal, i.hop, from, l.end);

@@ -11,9 +11,9 @@
 import { decodeAudio } from "../audio/decode";
 import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
 import { separateOpenUnmix } from "./openunmix";
-export { setDemucsQuality, lastStemBench, type StemBenchResult } from "./openunmix";
+export { setDemucsQuality } from "./openunmix";
 import { separateDemucs } from "./demucs";
-import { getStemModel, deviceSupportsModel, cpuBenchSeparation, type StemModel } from "./models";
+import { getStemModel, deviceSupportsModel, type StemModel } from "./models";
 import { opusStemsSupported, encodeStemOpus, isOpusStem, decodeStemOpus } from "./opus";
 
 export * from "./models";
@@ -116,10 +116,7 @@ export function canSeparate(): boolean {
   // iPadOS ≥13 reports a desktop UA, so also catch touch-capable "Mac".
   const iPadOS = navigator.maxTouchPoints > 1 && /Macintosh/.test(ua);
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || iPadOS;
-  // Phones/tablets: cache-only — UNLESS the operator opted into the CPU-bench, which
-  // runs the wasm CPU EP (no JSEP, no mobile-WebGPU crash class) under the escalating
-  // stem crash guard. The bench exists to measure whether this retreat is still earned.
-  if (mobile) return cpuBenchSeparation();
+  if (mobile) return false; // phones/tablets: cache or DSP only — never crash
   const cores = navigator.hardwareConcurrency ?? 2;
   const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4;
   return cores >= 4 && mem >= 4;

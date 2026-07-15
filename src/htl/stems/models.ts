@@ -133,23 +133,6 @@ export function getStemModel(id: string): StemModel {
   return STEM_MODELS.find((m) => m.id === id) ?? STEM_MODELS[0];
 }
 
-// ─── CPU-bench separation (experimental) ─────────────────────────────────────────
-// Settings ▸ Stems opt-in: run demucs on the plain wasm CPU EP — the backend upstream
-// confirms STABLE on Safari/WebKit (the JSEP WebGPU leak, onnxruntime#26827, is a
-// wasm-COMPILE pathology in the JSEP bundle; the plain bundle doesn't trigger it).
-// Purpose: measure, on THIS device, what a threaded SIMD CPU separation actually
-// costs — the desktop CPU verdict predates cross-origin isolation (separationThreads
-// returns 1 without COI), so it may have been rendered on a single thread. On a
-// phone this is the first on-device separation attempt since the OOM retreat; the
-// escalating stem crash guard stays armed around it.
-let cpuBenchSep = false;
-export function setCpuBenchSeparation(v: boolean): void {
-  cpuBenchSep = v;
-}
-export function cpuBenchSeparation(): boolean {
-  return cpuBenchSep;
-}
-
 // Whether the CURRENT device can actually run WebGPU for the demucs-rs path.
 // `"gpu" in navigator` only says the API EXISTS — an adapter can still be
 // unavailable (driver blocklisted, or WebGPU not enabled in the browser, common
@@ -441,10 +424,6 @@ export function modelSupport(model: StemModel): ModelSupport {
   const mobile = isMobileDevice();
   const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 2;
   if (model.tier === "gpu") {
-    // CPU-bench opt-in: the demucs core runs on the wasm CPU EP on ANY device — phones
-    // included, and desktops whose GPU is absent or crash-blocked (the block is about
-    // the GPU path; a CPU run can't re-trigger it).
-    if (cpuBenchSep) return "runs";
     // Hard-disabled after a prior tab crash, until the user re-enables it.
     if (gpuBlocked) return "blocked";
     // demucs-rs (Burn wasm + WebGPU). Decouple the two paths so the mobile gate

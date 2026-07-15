@@ -59,7 +59,6 @@ export interface Settings {
   stretchAa: boolean; // WSOLA: anti-aliased windowed-sinc resampling when pitching up
   stretchTThresh: number; // WSOLA transient-detector threshold (flux/EMA ratio); lower = more sensitive
   stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
-  stemCpuBench: boolean; // EXPERIMENTAL: separate on the wasm CPU EP (any device, phones included) and report timing
   audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
   audioCueOutputId: string; // separate cue/headphone output device (PFL pre-listen); "" = no separate cue (single output)
   audioInputId: string; // chosen microphone input device (getUserMedia deviceId); "" = system default mic
@@ -199,7 +198,6 @@ export const DEFAULT_SETTINGS: Settings = {
   stretchAa: true, // anti-alias pitch-ups by default
   stretchTThresh: 2.2, // matches the worklet's built-in default
   stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
-  stemCpuBench: false, // opt-in per device — the whole point is measuring THIS device
   audioOutputId: "", // system default output until the user picks a device
   audioCueOutputId: "", // no separate cue device by default (CUE stays a plain button)
   audioInputId: "", // system default microphone until the user picks one

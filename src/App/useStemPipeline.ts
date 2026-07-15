@@ -16,9 +16,6 @@ import {
   fetchStemManifest,
   armGpu,
   disarmGpu,
-  armStemLoad,
-  disarmStemLoad,
-  cpuBenchSeparation,
   stemTrace,
   dropCachedBuffer,
   type Stems,
@@ -277,30 +274,6 @@ export function useStemPipeline(deps: StemPipelineDeps) {
                 return { kind: "neural" as const, stems, mid };
               } catch {
                 break; // download failed → plain mix
-              }
-            }
-            // CPU-BENCH (experimental, Settings opt-in): nothing cached, and the operator asked
-            // this phone to try separating ON-DEVICE — the wasm CPU EP through the windowed
-            // mobile path (one window's output resident at a time), with the escalating stem
-            // crash guard armed so an OOM can never loop the tab. The result persists + shares
-            // to the pool like any desktop separation: this phone warms the cache for everyone.
-            if (cpuBenchSeparation()) {
-              const bm = model.arch === "demucs-core" ? model : getStemModel("htdemucs-onnx");
-              if (bm.arch === "demucs-core" && bm.id !== "off") {
-                const src = stemSrcLabel(bm.id);
-                setStatusFor(id, { phase: "separating", src, detail: `On-device ${bm.label} (CPU bench)…` });
-                armStemLoad();
-                try {
-                  const stems = await loadStems(engine.ctx, videoId, mix, bm, (pct: number) => {
-                    const p = Math.round(pct * 100);
-                    setStatusFor(id, { phase: "separating", src, pct: p, detail: `On-device separation… ${p}%` });
-                  });
-                  return { kind: "neural" as const, stems, mid: bm.id };
-                } catch (e) {
-                  console.warn("[htl] CPU-bench on-device separation failed:", e);
-                } finally {
-                  disarmStemLoad();
-                }
               }
             }
             return { kind: "none" as const }; // nothing cached → plain mix (NO on-device separation)

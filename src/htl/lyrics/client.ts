@@ -160,6 +160,13 @@ async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>, fallback: T, 
 
 // ---- caches --------------------------------------------------------------------------
 const mem = new Map<string, LyricsLine[]>();
+// The provenance of whatever's in `mem` — a SEPARATE map, not a guess. It used to be hardcoded
+// "aligned" at every read site regardless of how the lines were actually derived, so a track with
+// no LRCLIB line clock (alignPlain's "estimated" — the weakest, no-anchors case) displayed its
+// debug source as the STRONGEST possible one. Real bug, found on "Coax & Botany".
+const memSource = new Map<string, LyricsSource>();
+const SOURCES: readonly LyricsSource[] = ["lrclib", "aligned", "estimated", "pool", "youtube"];
+const asSource = (s: string | undefined): LyricsSource => (SOURCES as readonly string[]).includes(s ?? "") ? (s as LyricsSource) : "pool";
 const inflight = new Map<string, Promise<LyricsLine[] | null>>();
 const gen = new Map<string, number>();
 const genOf = (v: string) => gen.get(v) ?? 0;
@@ -167,6 +174,7 @@ const genOf = (v: string) => gen.get(v) ?? 0;
 export function cacheRemoteLyrics(videoId: string, lines: LyricsLine[], source: LyricsSource): void {
   if (!videoId || !lines?.length) return;
   mem.set(videoId, lines);
+  memSource.set(videoId, source);
   void putLyricsLocal(videoId, { lines, model: source, ver: LYRICS_VER });
 }
 
@@ -174,14 +182,15 @@ export async function clearLyricsCache(videoId: string): Promise<void> {
   if (!videoId) return;
   gen.set(videoId, genOf(videoId) + 1);
   mem.delete(videoId);
+  memSource.delete(videoId);
   inflight.delete(videoId);
   postedLyrics.delete(videoId);
   await deleteLyricsLocal(videoId).catch(() => {});
 }
 
-async function cachedLocal(videoId: string): Promise<{ lines: LyricsLine[]; ver: number } | null> {
+async function cachedLocal(videoId: string): Promise<{ lines: LyricsLine[]; ver: number; source: LyricsSource } | null> {
   const hit = mem.get(videoId);
-  if (hit) return { lines: hit, ver: LYRICS_VER };
+  if (hit) return { lines: hit, ver: LYRICS_VER, source: memSource.get(videoId) ?? "pool" };
   const rec = await getLyricsLocal(videoId).catch(() => null);
   const lines = rec?.lines as LyricsLine[] | undefined;
   if (!lines?.length) return null;
@@ -193,7 +202,7 @@ async function cachedLocal(videoId: string): Promise<{ lines: LyricsLine[]; ver:
     void deleteLyricsLocal(videoId).catch(() => {});
     return null;
   }
-  return { lines, ver };
+  return { lines, ver, source: asSource(rec?.model) };
 }
 
 // ---- the vocal stem ------------------------------------------------------------------
@@ -298,7 +307,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
   if (o.force) await clearLyricsCache(o.videoId);
 
   // 0) Already have it?
-  let local: { lines: LyricsLine[]; ver: number } | null = null;
+  let local: { lines: LyricsLine[]; ver: number; source: LyricsSource } | null = null;
   let pooled: LyricsTranscript | null = null;
   if (!o.force) {
     local = await cachedLocal(o.videoId);
@@ -319,11 +328,12 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
   if (plan.show === "pool" && pooled?.lines?.length) {
     best = { lines: pooled.lines, source: "pool" };
     mem.set(o.videoId, pooled.lines);
+    memSource.set(o.videoId, "pool");
     if (plan.adoptPool) {
       void putLyricsLocal(o.videoId, { lines: pooled.lines, model: pooled.model, ver: pooled.ver ?? 1 });
     }
   } else if (plan.show === "local" && local) {
-    best = { lines: local.lines, source: "aligned" };
+    best = { lines: local.lines, source: local.source };
   }
   if (best) {
     o.onCues(best.lines, best.source);
@@ -431,6 +441,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
         o.onStatus?.(null);
         diag.source = "lrclib";
         mem.set(o.videoId, lines);
+        memSource.set(o.videoId, "lrclib");
         void putLyricsLocal(o.videoId, { lines, model: "lrclib", ver: LYRICS_VER });
         return finish(lines); // line-level. Good enough to sing along to; not pooled (not our best).
       }
@@ -458,6 +469,7 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
       diag.applied = aligned.report.applied;
 
       mem.set(o.videoId, aligned.lines);
+      memSource.set(o.videoId, diag.source);
       void putLyricsLocal(o.videoId, { lines: aligned.lines, model: diag.source, ver: LYRICS_VER });
       // Contribute. No degeneracy check is needed any more: the WORDS are ground truth, so the worst
       // this can be is mistimed — never fiction. That guard existed only because Whisper could lie.

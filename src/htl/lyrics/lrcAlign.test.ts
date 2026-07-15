@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, voicedClock, alignLrc, alignPlain } from "./lrcAlign";
+import { syllables, seedLine, maskFromLines, maskFromEnergy, voicedFraction, coarseOffset, spanCoverage, seedOnBursts, voicedClock, decideShift, alignLrc, alignPlain } from "./lrcAlign";
 import { parseLrc, cleanTitle, primaryArtist } from "./lrclib";
 import type { LyricsLine } from "./types";
 
@@ -443,6 +443,31 @@ describe("seedOnBursts — against the ACTUAL onsets/mask measured from the real
 });
 
 // ---- ★ PLAIN lyrics: the right words, and NO clock at all -------------------------------
+describe("decideShift — rescue or polish, never a yank (the numbers are the two real tracks')", () => {
+  it("Britney 'I Wanna Go': a credible clock may not be yanked +1.15s on a 3-line coverage gain", () => {
+    // Measured live: LRC first line 9.04, voice enters 9.25 — the clock was RIGHT. The correlator
+    // still found +1.15 because 0.740 beats 0.680; the v8 rule applied it and every line came out
+    // seconds behind the singer. This exact case is the regression that forced v9.
+    expect(decideShift({ lines: 50, offset: 1.15, confidence: 0.74, asIs: 0.68 })).toBe(0);
+  });
+  it("Du Hast: a credible clock KEEPS a small polish it genuinely needs", () => {
+    // Measured: stamps run ~0.4s late (31.13 vs a real attack at 30.73); as-is 0.750, shifted 0.906.
+    expect(decideShift({ lines: 32, offset: -0.4, confidence: 0.906, asIs: 0.75 })).toBe(-0.4);
+  });
+  it("a clock that fails the bar as-is gets the full rescue — the different-cut case", () => {
+    expect(decideShift({ lines: 40, offset: 12.5, confidence: 0.9, asIs: 0.2 })).toBe(12.5);
+  });
+  it("a weak correlation never moves anything, however bad as-is looks", () => {
+    expect(decideShift({ lines: 40, offset: 12.75, confidence: 0.5, asIs: 0.2 })).toBe(0);
+  });
+  it("a handful of lines cannot support a whole-track shift", () => {
+    expect(decideShift({ lines: 3, offset: 2.0, confidence: 0.95, asIs: 0.3 })).toBe(0);
+  });
+  it("no shift unless it actually improves on doing nothing", () => {
+    expect(decideShift({ lines: 40, offset: 0.3, confidence: 0.7, asIs: 0.7 })).toBe(0);
+  });
+});
+
 describe("alignPlain — forced alignment's home ground", () => {
   const HOP = 0.05;
   const DUR = 40;

@@ -571,6 +571,36 @@ const MIN_CONFIDENCE = 0.6;
  *  landing is 33% and two is 67% — the statistic has no resolution. Leave the clock alone. */
 const MIN_LINES_FOR_SHIFT = 4;
 
+/** When the LRC's own clock is already credible, a shift may only POLISH it — no further than a
+ *  line's own slack. Anything bigger pushes every line's evidence window past its own first attack
+ *  and onto its neighbour's audio. */
+const MAX_POLISH_SHIFT = 0.5;
+
+/**
+ * The whole-track shift decision, extracted so it can be tested (convergence.ts's pattern: extract
+ * the decision, test the decision). Returns the shift to apply — 0 means "leave the LRC clock alone".
+ *
+ * ★ CALIBRATED ON TWO REAL TRACKS, AND THE SECOND ONE WAS A LIVE REGRESSION. The rule used to be
+ * "shift whenever coverage improves at all", and on Britney's "I Wanna Go" (video cut, LRC duration-
+ * matched and essentially CORRECT: first line stamped 9.04, voice enters 9.25) the correlator still
+ * found +1.15 s, because 0.740 beats 0.680 — a THREE-line gain on a fifty-line song, pure noise on a
+ * 62%-voiced mask. The shift pushed every line's window past its own first attack, the DP could only
+ * snap late, and the whole track came out seconds behind the singer. Meanwhile Du Hast's stamps
+ * really are ~0.4 s late (31.13 vs a measured attack at 30.73), as-is coverage 0.750, shifted 0.906 —
+ * a small shift a credible clock genuinely needs.
+ *
+ * What separates the true case from the false one is NOT the coverage delta (a per-line statistic
+ * with N-dependent noise) — it is the SIZE of the move against a clock that already clears the trust
+ * bar. A credible clock may be polished (≤ MAX_POLISH_SHIFT); it may never be yanked. A clock that
+ * FAILS the bar as-is is the different-cut case the shift was built for, and the full rescue stays.
+ */
+export function decideShift(o: { lines: number; offset: number; confidence: number; asIs: number }): number {
+  const trust = o.lines >= MIN_LINES_FOR_SHIFT && o.confidence >= MIN_CONFIDENCE && o.confidence > o.asIs;
+  if (!trust) return 0;
+  if (o.asIs >= MIN_CONFIDENCE && Math.abs(o.offset) > MAX_POLISH_SHIFT) return 0;
+  return o.offset;
+}
+
 export interface LrcAlignInput {
   /** Lines with LRC's start/end (its own clock) and the text. */
   lines: LyricsLine[];
@@ -608,10 +638,10 @@ export function alignLrc(i: LrcAlignInput): { lines: LyricsLine[]; report: LrcRe
   const confidence = spanCoverage(spans, vocal, i.hop, offset);
   const asIs = spanCoverage(spans, vocal, i.hop, 0);
 
-  // A weak correlation means this LRC probably isn't describing the audio we're holding. Take the
-  // words (they're still right) but don't shove them somewhere on the strength of a coincidence.
-  const trust = i.lines.length >= MIN_LINES_FOR_SHIFT && confidence >= MIN_CONFIDENCE && confidence > asIs;
-  const shift = trust ? offset : 0;
+  // A weak correlation means this LRC probably isn't describing the audio we're holding — and a
+  // STRONG-looking one can still be noise if the clock was already right (see decideShift). Take the
+  // words (they're always right) and move them only as far as the evidence actually warrants.
+  const shift = decideShift({ lines: i.lines.length, offset, confidence, asIs });
 
   // 2) Align EACH LINE INSIDE ITS OWN WINDOW.
   //

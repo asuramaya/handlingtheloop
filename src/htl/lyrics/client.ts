@@ -43,7 +43,14 @@ import type { LrcReport } from "./lrcAlign";
 //        pushed to a negative voiced-time and collapse to wall-clock zero). Both are real, both
 //        change actual output for real tracks (Du Hast, Coax & Botany), and neither could reach a
 //        single user until this bump forces every stored v7 row to re-derive.
-const LYRICS_VER = 8;
+//   9    ★ the whole-track shift became RESCUE-OR-POLISH (decideShift). v8's re-derive exposed it
+//        live on Britney's "I Wanna Go": the LRC clock was already right (first line 9.04, voice at
+//        9.25), but "shift whenever coverage improves at all" let a +1.15 s yank win on a 3-line
+//        coverage gain — noise on a 50-line song — and every v8 line sat seconds behind the singer.
+//        A credible clock may now move at most 0.5 s; the full shift survives only for the
+//        different-cut case (as-is coverage below the trust bar). Every v8 `aligned` row was built
+//        under the old rule and must re-derive.
+const LYRICS_VER = 9;
 
 // ★ BELOW THIS, A TRANSCRIPT IS NOT STALE — IT IS FICTION, AND MUST NEVER BE SHOWN.
 //
@@ -531,8 +538,29 @@ export async function resolveLyrics(o: ResolveOpts): Promise<void> {
     console.warn("[htl] lyrics failed:", err);
   }
 
-  // 4) LRCLIB has never heard of this track → YouTube's captions, warts and all.
+  // 4) Nothing was shown and the job produced nothing. Before YouTube: the POOL. A force wipes the
+  // local copy and skips both cache reads, so when the re-derive then dies on a transient (an LRCLIB
+  // timeout is `lookupFailed`, not a miss — see `bounded`), this resolve is holding NOTHING even
+  // though a perfectly good transcript may still be sitting in the pool. That is exactly how a deck
+  // that HAD real lyrics downgraded itself to YouTube captions live: reprocess → lookup failed →
+  // "never heard of it" branch. A pooled transcript is PROOF the track has lyrics; recover it, say
+  // the lookup failed, and never let a timeout be reported as a miss.
   if (best) return; // we already showed something
+  const recovered = await poolGet(o.videoId);
+  if (o.stale()) return;
+  if (recovered?.lines?.length) {
+    mem.set(o.videoId, recovered.lines);
+    memSource.set(o.videoId, "pool");
+    o.onCues(recovered.lines, "pool");
+    if (diags.get(o.videoId)?.lookupFailed) {
+      o.onStatus?.("Lyrics lookup failed — showing the shared copy");
+      setTimeout(() => !o.stale() && o.onStatus?.(null), 5000);
+    } else {
+      o.onStatus?.(null);
+    }
+    return;
+  }
+  // LRCLIB has genuinely never heard of this track → YouTube's captions, warts and all.
   const cues = await bounded(() => fetchCaptions(o.videoId), []);
   if (o.stale()) return;
   if (cues.length) {

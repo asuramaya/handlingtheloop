@@ -32,6 +32,10 @@ export interface FxDevice {
   /** `hard` skips a device's ring-out (see BaseFxDevice) and cuts immediately; EQ ignores it. */
   setBypass(on: boolean, hard?: boolean): void;
   readonly bypassed: boolean;
+  /** True while a bypassed-off tail is still ringing out. EQ has none — always false. */
+  readonly releasing: boolean;
+  /** Live wet-signal level (0..1). EQ has no separate wet path to fade — always 0. */
+  readonly wetLevel: number;
 
   /** Generic param bus — the single seam session-sync/automix/MIDI address. Unknown
    *  ids are ignored (forward-compatible across versions). */
@@ -211,6 +215,11 @@ export abstract class BaseFxDevice implements FxDevice {
   // the effect is reactivated first.
   private _wetConnected = true;
   private _wetGen = 0;
+  // A passive tap on the wet bus itself — not a param, the actual signal — so a UI can fade
+  // with what's really still sounding during a ring-out instead of a canned decay curve. Same
+  // "tap a SIGNAL, never a param" rule the duck sidechain readback needed (see htl-webaudio-footguns).
+  private readonly wetMeter: AnalyserNode;
+  private readonly wetMeterBuf: Float32Array<ArrayBuffer>;
 
   constructor(ctx: AudioContext, defaultMix = 0.3) {
     this.ctx = ctx;
@@ -222,8 +231,24 @@ export abstract class BaseFxDevice implements FxDevice {
     this.input.connect(this.dry).connect(this.output);
     this.wet.connect(this.output);
     this.wet.gain.value = this._mix;
+    this.wetMeter = ctx.createAnalyser();
+    this.wetMeter.fftSize = 256;
+    this.wetMeter.smoothingTimeConstant = 0;
+    this.wetMeterBuf = new Float32Array(this.wetMeter.fftSize);
+    this.wet.connect(this.wetMeter);
     // "mix" is a universal param every wet/dry device exposes.
     this.params.push({ id: "mix", def: this._mix, get: () => this._mix, set: (v) => this.setMix(v) });
+  }
+  /** Live wet-signal level (0..1, peak-abs), post the mix/bypass gain — what's ACTUALLY still
+   *  sounding right now. For a UI fading a ring-out with the real tail rather than a timer. */
+  get wetLevel(): number {
+    this.wetMeter.getFloatTimeDomainData(this.wetMeterBuf);
+    let peak = 0;
+    for (const v of this.wetMeterBuf) {
+      const a = v < 0 ? -v : v;
+      if (a > peak) peak = a;
+    }
+    return peak > 1 ? 1 : peak;
   }
 
   protected setMix(v: number) {
@@ -287,6 +312,11 @@ export abstract class BaseFxDevice implements FxDevice {
       // release gets, instead of pruning mid-decay — Shift (hard) skips straight to the cut, and
       // a device with nothing to ring (throwReleaseMs 0: sat/crush/gate/noise/comp/mod) always cuts now.
       if (on && !hard && !this._bypassed && this.throwReleaseMs > 0) {
+        // Report OFF immediately — `bypassed` is what the user ASKED for, not whether the wet
+        // path has actually been pruned yet. applyWet() is deliberately NOT called here: the
+        // graph stays exactly as it was (still connected, still at `mix`) so the tail keeps
+        // sounding under its own steam while `releasing` tells a UI it's still ringing.
+        this._bypassed = true;
         this.scheduleBypassRingOut();
         return;
       }
@@ -298,6 +328,12 @@ export abstract class BaseFxDevice implements FxDevice {
   }
   get bypassed() {
     return this._bypassed;
+  }
+  /** True while a bypassed-off device's tail is still ringing out (see throwReleaseMs). A UI
+   *  can use this + `wetLevel` to fade with the real signal instead of snapping on `bypassed`'s
+   *  instant flip. Always false once the ring-out lands or on a hard kill. */
+  get releasing(): boolean {
+    return this._releasePending;
   }
   // Land a MANUAL soft-bypass after the device's own ring-out window. Distinct from
   // scheduleRelease() below (a throw's release returns to whatever bypass state preceded the

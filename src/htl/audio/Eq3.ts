@@ -205,6 +205,9 @@ export class Eq3 implements FxDevice {
   get bypassed() {
     return this.route === "bypass";
   }
+  // EQ is fully-wet in-series (see the class comment) — no ring-out concept, nothing to fade.
+  readonly releasing = false;
+  readonly wetLevel = 0;
   /** Wet/dry blend: 1 = full EQ (default), 0 = flat/dry — dial back the EQ intensity or run it
    *  parallel. Only meaningful on the normal route (bypass is already all-dry). */
   setMix(m: number) {

@@ -2041,6 +2041,19 @@ body:not(.no-glow) .fx-power.on {
 .fx-bar.off .fx-power {
   opacity: 1;
 }
+/* RING-OUT: bypass already reads OFF (the button flipped the instant you clicked it — that's
+   the ask, not a promise about the audio), but a delay/reverb's tail is still actually sounding.
+   --tail (0..1) is the REAL wet signal (BaseFxDevice.wetLevel), written per-frame from FxStrip —
+   not a timed CSS transition standing in for it. The glow fades WITH the tail, then the button
+   is already sitting at its plain dormant look the instant the last of it actually goes quiet. */
+.fx-power.releasing {
+  color: color-mix(in srgb, #08111a calc(var(--tail, 0) * 100%), color-mix(in srgb, var(--accent) 55%, transparent));
+  background: color-mix(in srgb, var(--accent) calc(6% + var(--tail, 0) * 94%), var(--surface));
+  border-color: color-mix(in srgb, var(--accent) calc(30% + var(--tail, 0) * 70%), var(--panel));
+}
+body:not(.no-glow) .fx-power.releasing {
+  box-shadow: 0 0 calc(var(--tail, 0) * 16px) -2px color-mix(in srgb, var(--accent) calc(var(--tail, 0) * 85%), transparent);
+}
 
 /* The wet/dry. A FADER, not a number cell — it's a sweep, not a setting. Absolute: press
    anywhere and the blend goes there. Fills in the deck accent so "how much effect" reads at a

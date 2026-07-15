@@ -337,6 +337,30 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     }
     refresh();
   };
+  const powerRef = useRef<HTMLButtonElement>(null);
+  const [tailFading, setTailFading] = useState(false); // mirrors selDev.releasing, for the CSS class only
+  // The power button fades with the REAL wet signal while a ring-out is in flight, instead of
+  // snapping to "off" while a delay/reverb's tail is still audibly decaying. `--tail` is written
+  // imperatively every frame (a ref, never React state) — the same reason useFrameSync exists:
+  // a re-render just to paint one CSS variable would spend the frame budget on the wrong thing.
+  // `tailFading` itself only flips at the two edges, so it can't cause a per-frame render either.
+  useEffect(() => {
+    if (!selDev) return;
+    let raf = 0;
+    let was = false;
+    const tick = () => {
+      const releasing = selDev.releasing;
+      if (releasing !== was) {
+        was = releasing;
+        setTailFading(releasing);
+        if (!releasing) powerRef.current?.style.removeProperty("--tail");
+      }
+      if (releasing) powerRef.current?.style.setProperty("--tail", String(selDev.wetLevel));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [selDev]);
   // RESET aims at the device's CHARACTER — the params. It does NOT touch the wet/dry or the
   // on/off: those are performance state you're holding mid-mix, independent of what the effect
   // is dialled to. (It used to blow away both, so "put this delay back to sane" also yanked
@@ -484,7 +508,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           </button>
           <MixFader value={selDev.getParam("mix")} reset={selDev.paramDefault("mix")} onChange={setMix} disabled={bypassed} />
           <button
-            className={`fx-power ${bypassed ? "" : "on"}`}
+            ref={powerRef}
+            className={`fx-power ${bypassed ? "" : "on"}${tailFading ? " releasing" : ""}`}
             title={bypassed ? "Engage this effect" : "Bypass this effect (A/B) · Shift: hard kill, no ring-out"}
             aria-label={bypassed ? "Engage effect" : "Bypass effect"}
             aria-pressed={!bypassed}

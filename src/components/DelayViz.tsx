@@ -481,23 +481,69 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const ceilY = ceilOf(s.drive, midY, maxBar);
       const floorY = 2 * midY - ceilY; // the roof's mirror — the taps run both ways
       const barW = 3;
-      const CAP_R = 5; // the time-mode cap's own half-width — fixed, NOT the bar's (see tap())
-      const CAP_H = 5; // the cap's reach beyond the bar's true tip
+      const tapW = 4; // the echo taps' own width — separate from barW (the dry hit, unaffected by
+      // time-mode): a tip-sized cap read as noise on a 3px bar, so the WHOLE bar had to widen to
+      // have room to actually change shape (see fillModeBar below).
+      const SKEW = 3; // REPITCH's lean, in px
       const heldTap = g && g.kind === "tap" ? g.n : -1;
+      // THE BAR'S OWN SHAPE — RPT/DIG/FADE has no magnitude, so it can't grow a fire or throw a
+      // shadow the way drive/duck do. A tip-sized cap on an otherwise-plain rectangle read as noise
+      // (verified: illegible at real scale even once the cap itself was enlarged) — the shape has
+      // to be the WHOLE bar, or there's nothing to actually see at a glance. REPITCH leans into a
+      // parallelogram (a glide has a slope) — the same lean the whole way up, tip to axis, not a
+      // notch at one end. DIGITAL stays the plain rectangle it already was: exact, no slope, no
+      // curve — the ABSENCE of a shape is itself the shape. FADE rounds the OUTER corners only (the
+      // axis end stays flush, since that's where it's anchored) — nothing about a crossfade has a
+      // hard edge.
+      const fillModeBar = (bx: number, y: number, w: number, h: number, side: "up" | "down", mode: number) => {
+        if (h <= 0) return;
+        if (mode === 0) {
+          const tipAtTop = side === "up";
+          const topX = tipAtTop ? bx + SKEW : bx;
+          const botX = tipAtTop ? bx : bx + SKEW;
+          ctx.beginPath();
+          ctx.moveTo(botX, y + h);
+          ctx.lineTo(botX + w, y + h);
+          ctx.lineTo(topX + w, y);
+          ctx.lineTo(topX, y);
+          ctx.closePath();
+          ctx.fill();
+        } else if (mode === 2) {
+          // FADE — the bar TAPERS to a point at the tip: getting thinner is what a fade-out looks
+          // like. A rounded corner alone (tried first) was too subtle to read next to a rectangle —
+          // this changes the SILHOUETTE the same way the parallelogram does, not just an edge.
+          const tipAtTop = side === "up";
+          const tipX = bx + w / 2;
+          ctx.beginPath();
+          if (tipAtTop) {
+            ctx.moveTo(bx, y + h);
+            ctx.lineTo(bx + w, y + h);
+            ctx.lineTo(tipX, y);
+          } else {
+            ctx.moveTo(bx, y);
+            ctx.lineTo(bx + w, y);
+            ctx.lineTo(tipX, y + h);
+          }
+          ctx.closePath();
+          ctx.fill();
+        } else {
+          ctx.fillRect(bx, y, w, h);
+        }
+      };
       // A tap, drawn from the axis outward — and CUT at the roof: the part that pokes through is
       // the part being driven into the curve, so it's drawn hot. The bar keeps its true height (the
       // drive doesn't lower the echo, it saturates it) — the roof is a threshold, not a limiter.
       const tap = (x: number, amp: number, side: "up" | "down", alpha: number, lit: boolean) => {
         const bh = Math.max(1, maxBar * amp);
-        const bw = lit ? barW + 2 : barW;
+        const bw = lit ? tapW + 2 : tapW;
         const bx = round(x - bw / 2);
         const y0 = side === "up" ? round(midY - bh) : round(midY);
         const y1 = side === "up" ? round(midY) : round(midY + bh);
         const cut = side === "up" ? ceilY : floorY;
         ctx.globalAlpha = alpha;
         ctx.fillStyle = lit ? "#fff" : accent;
-        if (side === "up") ctx.fillRect(bx, Math.max(y0, cut), bw, Math.max(0, y1 - Math.max(y0, cut)));
-        else ctx.fillRect(bx, y0, bw, Math.max(0, Math.min(y1, cut) - y0));
+        if (side === "up") fillModeBar(bx, Math.max(y0, cut), bw, Math.max(0, y1 - Math.max(y0, cut)), side, s.timeMode);
+        else fillModeBar(bx, y0, bw, Math.max(0, Math.min(y1, cut) - y0), side, s.timeMode);
         // …and the DRIVEN part — the length of it that stands inside the fire. ★ It is not a new
         // COLOUR, it is more of the SAME one. An arbitrary orange says "a different thing is
         // happening here"; what's actually happening is the same echo, harder. So the driven length
@@ -514,34 +560,6 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
           if (side === "up" && y0 < cut) ctx.fillRect(bx, y0, bw, cut - y0);
           if (side === "down" && y1 > cut) ctx.fillRect(bx, cut, bw, y1 - cut);
           ctx.globalCompositeOperation = "source-over";
-        }
-        // THE CAP — RPT/DIG/FADE has no magnitude, so it can't grow a fire or throw a shadow the
-        // way drive/duck do. Instead it's a SHAPE on every tap's true tip, always visible, not just
-        // mid-drag: REPITCH ramps into a diagonal wedge (a glide has a slope), FADE rounds the
-        // corner off (nothing about a crossfade is a hard edge), DIGITAL gets a crisp crossbar (an
-        // exact, instant switch reads as a hard line). Sized OFF THE BAR'S OWN WIDTH the first pass
-        // was illegible at real scale — a 3px-wide tap can't carry a 3px shape. CAP_R is fixed and
-        // wider than the bar on purpose, so the cap reads regardless of feedback/lit width.
-        const tipY = side === "up" ? y0 : y1;
-        const capAway = side === "up" ? -1 : 1; // the direction OUT of the bar's body
-        const cx = bx + bw / 2;
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = lit ? "#fff" : accent;
-        if (s.timeMode === 0) {
-          ctx.beginPath();
-          ctx.moveTo(cx - CAP_R, tipY);
-          ctx.lineTo(cx + CAP_R, tipY);
-          ctx.lineTo(cx + CAP_R, tipY + capAway * CAP_H);
-          ctx.closePath();
-          ctx.fill();
-        } else if (s.timeMode === 2) {
-          ctx.beginPath();
-          ctx.arc(cx, tipY, CAP_R * 0.7, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          ctx.fillStyle = "#fff";
-          ctx.globalAlpha = Math.min(1, alpha * 1.3);
-          ctx.fillRect(cx - CAP_R, tipY - (side === "up" ? 1.5 : 0), CAP_R * 2, 1.5);
         }
         ctx.globalAlpha = 1;
       };

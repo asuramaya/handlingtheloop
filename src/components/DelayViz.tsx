@@ -492,43 +492,44 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // to be the WHOLE bar, or there's nothing to actually see at a glance. REPITCH leans into a
       // parallelogram (a glide has a slope) — the same lean the whole way up, tip to axis, not a
       // notch at one end. DIGITAL stays the plain rectangle it already was: exact, no slope, no
-      // curve — the ABSENCE of a shape is itself the shape. FADE rounds the OUTER corners only (the
-      // axis end stays flush, since that's where it's anchored) — nothing about a crossfade has a
-      // hard edge.
-      const fillModeBar = (bx: number, y: number, w: number, h: number, side: "up" | "down", mode: number) => {
-        if (h <= 0) return;
+      // curve — the ABSENCE of a shape is itself the shape. FADE tapers to a point at the tip —
+      // getting thinner is what a fade-out looks like.
+      //
+      // ★ THE PATH SPANS THE WHOLE BAR (tip to axis), NEVER JUST THE PART BELOW THE ROOF. It used
+      // to be built only from the post-cut sub-region, with the driven (fire) segment stacked on
+      // top as a separate plain ctx.fillRect — a leaning or tapered edge meeting a square one is a
+      // visible kink, and at real scale it reads as a checkmark glued onto the tap, not one shape.
+      // Building the path across the true full height and CLIPPING every fill to it means the fire
+      // recolours the same silhouette instead of squaring off its own.
+      const modeBarPath = (bx: number, y: number, bw: number, h: number, side: "up" | "down", mode: number): Path2D | null => {
+        if (h <= 0) return null;
+        const path = new Path2D();
         if (mode === 0) {
           const tipAtTop = side === "up";
           const topX = tipAtTop ? bx + SKEW : bx;
           const botX = tipAtTop ? bx : bx + SKEW;
-          ctx.beginPath();
-          ctx.moveTo(botX, y + h);
-          ctx.lineTo(botX + w, y + h);
-          ctx.lineTo(topX + w, y);
-          ctx.lineTo(topX, y);
-          ctx.closePath();
-          ctx.fill();
+          path.moveTo(botX, y + h);
+          path.lineTo(botX + bw, y + h);
+          path.lineTo(topX + bw, y);
+          path.lineTo(topX, y);
+          path.closePath();
         } else if (mode === 2) {
-          // FADE — the bar TAPERS to a point at the tip: getting thinner is what a fade-out looks
-          // like. A rounded corner alone (tried first) was too subtle to read next to a rectangle —
-          // this changes the SILHOUETTE the same way the parallelogram does, not just an edge.
           const tipAtTop = side === "up";
-          const tipX = bx + w / 2;
-          ctx.beginPath();
+          const tipX = bx + bw / 2;
           if (tipAtTop) {
-            ctx.moveTo(bx, y + h);
-            ctx.lineTo(bx + w, y + h);
-            ctx.lineTo(tipX, y);
+            path.moveTo(bx, y + h);
+            path.lineTo(bx + bw, y + h);
+            path.lineTo(tipX, y);
           } else {
-            ctx.moveTo(bx, y);
-            ctx.lineTo(bx + w, y);
-            ctx.lineTo(tipX, y + h);
+            path.moveTo(bx, y);
+            path.lineTo(bx + bw, y);
+            path.lineTo(tipX, y + h);
           }
-          ctx.closePath();
-          ctx.fill();
+          path.closePath();
         } else {
-          ctx.fillRect(bx, y, w, h);
+          path.rect(bx, y, bw, h);
         }
+        return path;
       };
       // A tap, drawn from the axis outward — and CUT at the roof: the part that pokes through is
       // the part being driven into the curve, so it's drawn hot. The bar keeps its true height (the
@@ -540,26 +541,30 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         const y0 = side === "up" ? round(midY - bh) : round(midY);
         const y1 = side === "up" ? round(midY) : round(midY + bh);
         const cut = side === "up" ? ceilY : floorY;
+        const path = modeBarPath(bx, y0, bw, y1 - y0, side, s.timeMode);
+        if (!path) return;
         ctx.globalAlpha = alpha;
         ctx.fillStyle = lit ? "#fff" : accent;
-        if (side === "up") fillModeBar(bx, Math.max(y0, cut), bw, Math.max(0, y1 - Math.max(y0, cut)), side, s.timeMode);
-        else fillModeBar(bx, y0, bw, Math.max(0, Math.min(y1, cut) - y0), side, s.timeMode);
-        // …and the DRIVEN part — the length of it that stands inside the fire. ★ It is not a new
-        // COLOUR, it is more of the SAME one. An arbitrary orange says "a different thing is
-        // happening here"; what's actually happening is the same echo, harder. So the driven length
-        // burns toward white along the deck's own accent — INTENSITY carries the magnitude, and the
-        // hue never leaves the theme. Nothing on this panel should introduce a colour the deck
-        // didn't already own.
-        if (s.drive > 0.001) {
+        ctx.fill(path);
+        // …and the DRIVEN part — the length of it that stands inside the fire, CLIPPED to the same
+        // path so its edge follows the tap's own shape (a lean, a taper) instead of squaring it off
+        // with a straight rectangle. ★ It is not a new COLOUR, it is more of the SAME one. An
+        // arbitrary orange says "a different thing is happening here"; what's actually happening is
+        // the same echo, harder. So the driven length burns toward white along the deck's own
+        // accent — INTENSITY carries the magnitude, and the hue never leaves the theme.
+        const drivenTop = side === "up" ? y0 : cut;
+        const drivenBot = side === "up" ? cut : y1;
+        if (s.drive > 0.001 && drivenBot > drivenTop) {
+          ctx.save();
+          ctx.clip(path);
           ctx.fillStyle = accent;
-          if (side === "up" && y0 < cut) ctx.fillRect(bx, y0, bw, cut - y0);
-          if (side === "down" && y1 > cut) ctx.fillRect(bx, cut, bw, y1 - cut);
+          ctx.fillRect(bx, drivenTop, bw, drivenBot - drivenTop);
           ctx.globalCompositeOperation = "lighter";
           ctx.fillStyle = "#fff";
           ctx.globalAlpha = alpha * 0.75 * clamp01(s.drive);
-          if (side === "up" && y0 < cut) ctx.fillRect(bx, y0, bw, cut - y0);
-          if (side === "down" && y1 > cut) ctx.fillRect(bx, cut, bw, y1 - cut);
+          ctx.fillRect(bx, drivenTop, bw, drivenBot - drivenTop);
           ctx.globalCompositeOperation = "source-over";
+          ctx.restore();
         }
         ctx.globalAlpha = 1;
       };

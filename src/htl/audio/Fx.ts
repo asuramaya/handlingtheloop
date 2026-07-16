@@ -187,6 +187,14 @@ export interface FxParam {
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+// Manual bypass's ring-out ceiling: a SAFETY CAP, not the timer that decides when a tail is done
+// (see scheduleBypassRingOut) — high feedback or a long reverb decay can legitimately still be
+// audible well past a couple seconds (ReverbFx's own decay knob maps up to a 9s RT60; DelayFx's
+// feedback cap of 0.95 can ring for many repeats at a short delay time), and Freeze/near-1.0
+// feedback never truly goes silent at all. 12s comfortably covers the former; SOMETHING still has
+// to force the cut for the latter, or "off" would never actually mean off.
+const RING_CEILING_MS = 12000;
+const RING_QUIET_LEVEL = 0.01; // wetLevel below this reads as "not audibly ringing anymore"
 
 // Base for wet/dry effects (delay, reverb, chorus): a dry pass-through in parallel
 // with the subclass's wet processing graph, summed at `output`. The subclass builds
@@ -282,7 +290,7 @@ export abstract class BaseFxDevice implements FxDevice {
     const active = !this._bypassed && this._mix > 0;
     this.wet.gain.setTargetAtTime(active ? this._mix : 0, this.ctx.currentTime, 0.01);
     if (active) this.connectWet();
-    else this.disconnectWetWhenIdle();
+    else this.disconnectWetWhenIdle(90); // ~5τ of the ramp above — a deliberate/instant bypass
   }
   private connectWet() {
     this._wetGen++; // cancel any pending disconnect
@@ -290,11 +298,14 @@ export abstract class BaseFxDevice implements FxDevice {
     this.wet.connect(this.output);
     this._wetConnected = true;
   }
-  private disconnectWetWhenIdle() {
+  // pruneAfterMs: how long after the gain ramp starts before physically disconnecting. applyWet()
+  // always uses the fast ~90ms default; scheduleBypassRingOut's own closing fade (see below) is
+  // slower and passes a matching, longer delay so the disconnect lands after the fade actually
+  // finishes rather than chopping it.
+  private disconnectWetWhenIdle(pruneAfterMs: number) {
     if (!this._wetConnected) return;
     const gen = ++this._wetGen;
-    // Let the send fade (~5τ ≈ 50 ms) before pruning so the tail rings out instead of being
-    // cut; the generation guard aborts if the effect was reactivated in the meantime.
+    // The generation guard aborts if the effect was reactivated in the meantime.
     setTimeout(() => {
       if (gen !== this._wetGen || !this._wetConnected) return;
       try {
@@ -303,7 +314,7 @@ export abstract class BaseFxDevice implements FxDevice {
         /* already gone */
       }
       this._wetConnected = false;
-    }, 90);
+    }, pruneAfterMs);
   }
   /** Current wet amount (0..1) — for subclasses that briefly automate `wet` themselves
    *  (e.g. a Fade time-mode that dips the wet while it re-times). */
@@ -358,17 +369,35 @@ export abstract class BaseFxDevice implements FxDevice {
   get releasing(): boolean {
     return this._releasePending;
   }
-  // Land a MANUAL soft-bypass after the device's own ring-out window. Distinct from
-  // scheduleRelease() below (a throw's release returns to whatever bypass state preceded the
-  // throw) — a manual bypass ALWAYS lands bypassed, since that's the one thing the user asked for.
+  // Land a MANUAL soft-bypass once the tail has ACTUALLY quieted down, not on a blind fixed timer
+  // (throwReleaseMs is right-sized for a pad throw's release — see scheduleRelease below — but a
+  // long reverb decay or high delay feedback can still be genuinely audible past that, and a snap
+  // there reads as a chop no matter how the button's own glow is fading). Polls the real wetLevel:
+  // a short/typical tail prunes as soon as it's quiet, a long one keeps ringing up to the ceiling.
+  // Distinct from scheduleRelease() (a throw's release returns to whatever bypass state preceded
+  // the throw) — a manual bypass ALWAYS lands bypassed, since that's the one thing the user asked.
   private scheduleBypassRingOut() {
     const gen = ++this._releaseGen;
     this._releasePending = true;
-    setTimeout(() => {
+    const startedAt = this.ctx.currentTime;
+    const poll = () => {
       if (gen !== this._releaseGen) return; // superseded — re-engaged, hard-killed, or re-scheduled
-      this._releasePending = false;
-      this.internalSetBypass(true);
-    }, this.throwReleaseMs);
+      const elapsedMs = (this.ctx.currentTime - startedAt) * 1000;
+      if (this.wetLevel < RING_QUIET_LEVEL || elapsedMs >= RING_CEILING_MS) {
+        this._releasePending = false;
+        this.closeRingOut();
+        return;
+      }
+      setTimeout(poll, 80);
+    };
+    setTimeout(poll, 80);
+  }
+  // The ring-out's own close — NOT applyWet()'s ~90ms snap (right for a deliberate/instant bypass,
+  // wrong here: by the time we land, the tail has genuinely been ringing for seconds, so even the
+  // worst case — the ceiling forcing the cut on a still-audible tail — should fade, not chop).
+  private closeRingOut() {
+    this.wet.gain.setTargetAtTime(0, this.ctx.currentTime, 0.15); // ~750ms to fully settle
+    this.disconnectWetWhenIdle(900);
   }
 
   // --- throw / latch lifecycle ------------------------------------------------

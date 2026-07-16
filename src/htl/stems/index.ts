@@ -12,7 +12,7 @@ import { decodeAudio } from "../audio/decode";
 import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
 import { separateNeural } from "./separate";
 export { setDemucsQuality } from "./separate";
-import { getStemModel, deviceSupportsModel, LEGACY_STEM_IDS, type StemModel } from "./models";
+import { getStemModel, deviceSupportsModel, isChromium, LEGACY_STEM_IDS, type StemModel } from "./models";
 import { opusStemsSupported, encodeStemOpus, isOpusStem, decodeStemOpus } from "./opus";
 
 export * from "./models";
@@ -132,7 +132,8 @@ export function canSeparate(): boolean {
   // iPadOS ≥13 reports a desktop UA, so also catch touch-capable "Mac".
   const iPadOS = navigator.maxTouchPoints > 1 && /Macintosh/.test(ua);
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || iPadOS;
-  if (mobile) return false; // phones/tablets: cache or DSP only — never crash
+  if (mobile) return false; // phones/tablets: cache-only — never crash
+  if (!isChromium()) return false; // no separation path outside Chromium+WebGPU (cache-only)
   const cores = navigator.hardwareConcurrency ?? 2;
   const mem = (navigator as unknown as { deviceMemory?: number }).deviceMemory ?? 4;
   return cores >= 4 && mem >= 4;

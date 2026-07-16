@@ -12,7 +12,6 @@ import {
   getStemModel,
   modelSupport,
   isMobileDevice,
-  isChromium,
   fetchStemManifest,
   armGpu,
   disarmGpu,
@@ -398,14 +397,10 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       // Actual on-device GPU work (not a cached download) can HARD-crash the tab —
       // arm the crash guard so a reload doesn't re-attempt and loop. Disarmed in
       // `finally` (success or caught error both mean the tab survived).
-      // Any on-device GPU separation (legacy Burn "demucs" OR the ORT-WebGPU
-      // "demucs-core") can hard-crash the tab — on iPhone Safari especially (the
-      // ORT JSEP WebGPU memory leak). Guard the whole gpu tier so a crash can't loop.
-      // GPU work can hard-crash the tab — but ONLY the Chromium WebGPU path runs on the
-      // GPU; Safari/Firefox separate this same model on the stable wasm EP (no GPU, no
-      // crash class), so the GPU crash guard must not arm there or it would falsely
-      // block them after an interrupted (merely slow) wasm run.
-      const gpuSeparate = !cached && model.tier === "gpu" && isChromium();
+      // A GPU separation can hard-crash the tab; arm the guard around any fresh
+      // separation so a crash can't loop. (Separation only exists on Chromium+WebGPU —
+      // everywhere else deviceSupportsModel already said no and we never get here.)
+      const gpuSeparate = !cached && model.tier === "gpu";
       if (gpuSeparate) armGpu(model.id);
       setStatusFor(id, { phase, pct: 0, detail: `${verb} ${model.label}…` });
       try {

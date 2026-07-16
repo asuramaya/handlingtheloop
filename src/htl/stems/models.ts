@@ -328,18 +328,17 @@ if (typeof window !== "undefined") {
 
 // Chromium family (Chrome / Edge / Brave / Opera / Chromium). This is the ONLY place
 // we drive the ORT WebGPU (JSEP) execution provider: it's the engine the JSEP backend
-// is built and tested against. Elsewhere the separator worker loads the plain-wasm ORT
-// bundle and runs demucs on the CPU EP instead (see separator.worker.ts ORT_CDN) — so
-// the Safari JSEP memory-leak crash (onnxruntime#26827) and Firefox device-losts can't
-// happen. The worker's own UA check (`USE_WEBGPU`) mirrors this exactly.
+// is built and tested against. Elsewhere there is NO separation at all — no fallback
+// bundle, no CPU EP (benched and killed) — so the Safari JSEP memory-leak crash
+// (onnxruntime#26827) and Firefox device-losts can't happen: those browsers are
+// cache-only consumers, gated by modelSupport/canSeparate before any worker exists.
 export function isChromium(): boolean {
   if (typeof navigator === "undefined") return false;
   return /Chrome\/|Chromium\//.test(navigator.userAgent);
 }
 
-// Is the FAST WebGPU runtime actually in play for separation? Only on Chromium with a
-// usable adapter — everywhere else demucs runs on the stable (slower) wasm CPU EP. The
-// UI uses this to label the device as GPU vs CPU and set the speed expectation.
+// Is the WebGPU runtime actually in play for separation? Only on Chromium with a
+// usable adapter — everywhere else this device does not separate at all.
 export function gpuRuntimeAvailable(): boolean {
   return isChromium() && hasWebGPU();
 }
@@ -353,11 +352,15 @@ export type ModelSupport = "instant" | "runs" | "needs-gpu" | "blocked";
 
 export function modelSupport(model: StemModel): ModelSupport {
   if (model.tier === "instant") return "instant";
-  // gpu — the only real tier. Hard-disabled after a prior tab crash, until the user
-  // re-enables it. Phones never separate (iOS WebGPU = JSEP crash; the CPU EP was
-  // benched and killed) — they consume the shared cache.
+  // gpu — the only real tier, and CHROMIUM-ONLY: the JSEP WebGPU EP is built and
+  // tested against Chromium; Safari's JSEP build leaks catastrophically (#26827) and
+  // Firefox device-losts under heavy compute. There is NO fallback route — the CPU EP
+  // was benched and killed ("this is gpu parallel work") — so a non-Chromium browser
+  // is a cache-only consumer, exactly like a phone. Hard-disabled after a prior tab
+  // crash until the user re-enables it.
   if (gpuBlocked) return "blocked";
   if (isMobileDevice()) return mobileGpuEligible() ? "runs" : "needs-gpu";
+  if (!isChromium()) return "needs-gpu";
   return hasWebGPU() ? "runs" : "needs-gpu";
 }
 

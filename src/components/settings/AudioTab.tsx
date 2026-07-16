@@ -604,28 +604,22 @@ export function AudioTab({
           const sel = getStemModel(settings.stemModel);
           const gpu = sel.tier === "gpu";
           const sup = modelSupport(sel);
-          const chromium = isChromium();
-          // A GPU-tier model only runs on the GPU under CHROMIUM; on Safari/
-          // Firefox the worker runs this same model on the stable wasm CPU EP
-          // (the JSEP/WebGPU path is Chromium-only — see isChromium). Show what's
-          // actually in play so the speed expectation is honest.
-          const onGpu = gpu && chromium && sup === "runs";
+          // Separation is Chromium + WebGPU only — there is no CPU route anywhere.
+          // Everything else (Safari/Firefox, phones) consumes the shared cache.
+          const onGpu = gpu && sup === "runs";
           const adapter = webGpuAdapterInfo();
-          const kind = gpu ? (chromium ? (sup === "runs" ? "gpu" : "none") : "cpu") : "cpu";
           const text = gpu
-            ? chromium
-              ? onGpu
-                ? adapter || "WebGPU"
-                : sup === "blocked"
-                  ? "Disabled after a crash — re-enable above, or use a CPU model / cached result"
-                  : "WebGPU not available here — pick a CPU model, or use a cached result"
-              : "Runs on CPU here (wasm SIMD) — slower than a Chromium GPU, but stable. The result caches for everyone."
-            : sel.kind === "dsp"
-              ? "Plain mix · no stem separation"
-              : "Neural · ORT WebAssembly";
+            ? onGpu
+              ? adapter || "WebGPU"
+              : sup === "blocked"
+                ? "Disabled after a crash — re-enable above, or use a cached result"
+                : isChromium()
+                  ? "WebGPU not available here — cached stems still load"
+                  : "Separation needs a Chromium WebGPU browser — cached stems still load here"
+            : "Plain mix · no stem separation";
           return (
-            <div className={`stem-device ${kind}`}>
-              <span className="stem-device-tag">{gpu && chromium ? "GPU" : "CPU"}</span>
+            <div className={`stem-device ${onGpu ? "gpu" : "none"}`}>
+              <span className="stem-device-tag">GPU</span>
               <span className="stem-device-text">{text}</span>
             </div>
           );

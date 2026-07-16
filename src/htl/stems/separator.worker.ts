@@ -33,23 +33,19 @@ type Post = (pct: number) => void;
 // never trusts an external host at runtime, and same-origin satisfies COEP without any CORS
 // dance. Bump the version in vite.config.ts (path + hashes) when upgrading.
 const ORT_BASE = `/ort/`;
-// We only drive the WebGPU (JSEP) execution provider on CHROMIUM. Outside it, JSEP is
-// unreliable: on Safari/WebKit the JSEP build triggers a severe JSC wasm-compile leak
-// (onnxruntime#26827 — CPU pegs, memory climbs past 10 GB, the tab is killed; still
-// unfixed), and Firefox's WebGPU device-losts under heavy compute. So on non-Chromium
-// we load the PLAIN-WASM bundle (no JSEP at all → the leak can't happen) and run demucs
-// on the CPU EP: slower, but stable. On an Apple-Silicon Mac this means Chrome → Metal-
-// backed WebGPU (fast), Safari → multi-threaded wasm SIMD (stable). The worker has its
-// own `navigator`, so the UA check here matches the main thread's `isChromium()`.
-const UA = (typeof navigator !== "undefined" && navigator.userAgent) || "";
-const USE_WEBGPU = /Chrome\/|Chromium\//.test(UA); // Chromium family only (incl. new Edge/Brave/Opera)
+// Separation is CHROMIUM + WebGPU ONLY — modelSupport/canSeparate gate every entry
+// point, so this worker never runs anywhere else. There is deliberately NO fallback
+// bundle and NO CPU EP route: the CPU path was benched and killed ("this is gpu
+// parallel work"), and on Safari/WebKit the JSEP build triggers a severe JSC
+// wasm-compile leak anyway (onnxruntime#26827). Non-Chromium browsers and phones
+// consume the shared cache instead.
 // Use an ABSOLUTE origin URL, not a bare `/ort/…` path: the vite DEV server's import-analysis
 // resolves a root-relative import to a source-module id, finds it under /public, and refuses it
 // ("this file is in /public … should not be imported from source code" overlay). An absolute URL is
 // treated as external → served statically, so dev works. Prod is unaffected (the worker's own origin
 // already serves /ort/ from the dist root, so this resolves to the same file).
 const ORT_ORIGIN = (typeof self !== "undefined" && self.location?.origin) || "";
-const ORT_CDN = `${ORT_ORIGIN}${ORT_BASE}${USE_WEBGPU ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs"}`;
+const ORT_CDN = `${ORT_ORIGIN}${ORT_BASE}ort.webgpu.min.mjs`;
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let ortPromise: Promise<any> | null = null;
 function loadOrt(threads: number): Promise<any> {
@@ -64,28 +60,26 @@ function loadOrt(threads: number): Promise<any> {
       // (found by the operator watching the wrong GPU light up). We request the
       // adapter's MAX limits so the large demucs storage buffers fit. Best-effort: any
       // failure leaves ORT to make its own device (with the powerPreference belt below).
-      if (USE_WEBGPU) {
-        try {
-          const gpu: any = (navigator as any).gpu;
-          // Belt: if our own device request below fails, ORT's self-created adapter
-          // should still ask for the discrete GPU.
-          ort.env.webgpu.powerPreference = "high-performance";
-          const adapter = gpu && (await gpu.requestAdapter({ powerPreference: "high-performance" }));
-          if (adapter) {
-            const lim: any = adapter.limits;
-            const want = [
-              "maxStorageBufferBindingSize", "maxBufferSize", "maxStorageBuffersPerShaderStage",
-              "maxUniformBufferBindingSize", "maxComputeWorkgroupStorageSize", "maxComputeInvocationsPerWorkgroup",
-              "maxComputeWorkgroupSizeX", "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ",
-              "maxComputeWorkgroupsPerDimension",
-            ];
-            const requiredLimits: Record<string, number> = {};
-            for (const k of want) if (typeof lim?.[k] === "number") requiredLimits[k] = lim[k]; // adapter max → ≥ ORT's needs
-            ort.env.webgpu.device = await adapter.requestDevice({ requiredLimits });
-          }
-        } catch {
-          /* keep ORT's own device */
+      try {
+        const gpu: any = (navigator as any).gpu;
+        // Belt: if our own device request below fails, ORT's self-created adapter
+        // should still ask for the discrete GPU.
+        ort.env.webgpu.powerPreference = "high-performance";
+        const adapter = gpu && (await gpu.requestAdapter({ powerPreference: "high-performance" }));
+        if (adapter) {
+          const lim: any = adapter.limits;
+          const want = [
+            "maxStorageBufferBindingSize", "maxBufferSize", "maxStorageBuffersPerShaderStage",
+            "maxUniformBufferBindingSize", "maxComputeWorkgroupStorageSize", "maxComputeInvocationsPerWorkgroup",
+            "maxComputeWorkgroupSizeX", "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ",
+            "maxComputeWorkgroupsPerDimension",
+          ];
+          const requiredLimits: Record<string, number> = {};
+          for (const k of want) if (typeof lim?.[k] === "number") requiredLimits[k] = lim[k]; // adapter max → ≥ ORT's needs
+          ort.env.webgpu.device = await adapter.requestDevice({ requiredLimits });
         }
+      } catch {
+        /* keep ORT's own device */
       }
       return ort;
     })();
@@ -241,9 +235,9 @@ async function runDemucsCore(
   post: Post,
   quality: DemucsQuality = { shifts: 0, overlap: 0.25 },
 ): Promise<Record<Target, Float32Array[]>> {
-  // Chromium → ["webgpu","wasm"] (per-op CPU fallback). Outside Chromium we loaded the
-  // wasm-only bundle (see ORT_CDN), which has no WebGPU EP, so ask only for the wasm EP.
-  const sess = await getSession(ort, url, USE_WEBGPU ? ["webgpu", "wasm"] : ["wasm"]);
+  // The wasm EP here is ORT's per-OP fallback for kernels the WebGPU EP lacks — not a
+  // separation route; whole-track CPU separation is dead (see ORT_CDN).
+  const sess = await getSession(ort, url, ["webgpu", "wasm"]);
   const overlapFrac = Math.min(0.5, Math.max(0, quality.overlap));
   const shifts = Math.max(0, quality.shifts | 0);
   if (shifts < 1) return demucsCorePass(ort, sess, full, N, overlapFrac, post);

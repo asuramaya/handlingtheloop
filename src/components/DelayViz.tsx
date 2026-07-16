@@ -159,7 +159,7 @@ const LFO_AMP_FRAC = 0.38;
 const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
 const READOUT_H = 13; // the one readout strip, across the top
 const GRIP_PX = 10; // how close counts as "on" a filter edge
-const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a 3px bar and sit ~150px apart, so
+const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a thin bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
 const SHEAR_MAX = 26; // the R channel's biggest shear, in px — capped again by the tap spacing, or
 // a wide delay would fling the right channel on top of the NEXT echo and the row would read as mush.
@@ -182,9 +182,12 @@ const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Mat
 const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
 
 // THE FIRE'S INNER EDGE. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is
-// driven, and there is no fire. At drive 1 it has come in to 28% of the swing, and everything
-// beyond that is in the curve. It is never DRAWN as a line (see the header); only its tab is.
-const CEIL_LO = 0.72; // how far down the roof travels, as a fraction of maxBar
+// driven, and there is no fire. At drive 1 it has come all the way in to the axis — a full-scale
+// tap is entirely in the curve. It is never DRAWN as a line (see the header); only its tab is.
+const CEIL_LO = 1; // how far down the roof travels, as a fraction of maxBar — 1 means full drive
+// can reach the axis. It used to stop at 0.72, leaving a permanent unlit band near the axis no
+// matter how hard drive was pushed — the roof has to be able to close the whole gap, or "more
+// drive" stops meaning anything past that point.
 const ceilOf = (drive: number, midY: number, maxBar: number) => midY - maxBar * (1 - CEIL_LO * clamp01(drive));
 
 type Grab =
@@ -480,8 +483,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const shear = clamp01(s.width) * shearOf(t, windowSec, w);
       const ceilY = ceilOf(s.drive, midY, maxBar);
       const floorY = 2 * midY - ceilY; // the roof's mirror — the taps run both ways
-      const barW = 3;
-      const tapW = 4; // the echo taps' own width — separate from barW (the dry hit, unaffected by
+      const barW = 5;
+      const tapW = 6; // the echo taps' own width — separate from barW (the dry hit, unaffected by
       // time-mode): a tip-sized cap read as noise on a 3px bar, so the WHOLE bar had to widen to
       // have room to actually change shape (see fillModeBar below).
       const SKEW = 3; // REPITCH's lean, in px

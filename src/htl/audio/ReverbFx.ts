@@ -189,6 +189,22 @@ export class ReverbFx extends BaseFxDevice {
   protected get throwReleaseMs() {
     return 2400; // let the tail bloom — see BaseFxDevice.throwReleaseMs
   }
+  // A manual bypass's ring-out (BaseFxDevice.muteWetInput) must stop NEW material reaching the
+  // tank, or whatever's still playing keeps pumping fresh energy into the FDN and the "tail"
+  // never actually decays — it just keeps sounding like the effect never turned off. `drive` is
+  // the tank's true entry point (see the constructor); cutting it here leaves whatever energy is
+  // ALREADY circulating in the FDN to decay out on its own, undisturbed.
+  protected muteWetInput(muted: boolean) {
+    if (muted) {
+      try {
+        this.input.disconnect(this.drive);
+      } catch {
+        /* already disconnected */
+      }
+    } else {
+      this.input.connect(this.drive);
+    }
+  }
   protected applyThrowBoost(on: boolean) {
     if (on) {
       if (!this._throw) this._throwPrevMix = this.mixAmount;

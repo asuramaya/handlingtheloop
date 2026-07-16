@@ -324,6 +324,14 @@ export abstract class BaseFxDevice implements FxDevice {
   protected get isBypassed() {
     return this._bypassed;
   }
+  /** Subclass hook: mute (true) / restore (false) NEW input reaching the wet chain, WITHOUT
+   *  touching wet→output. A manual bypass's ring-out keeps wet connected so the tail already
+   *  inside the DSP can decay — but if `input` also keeps feeding the wet chain's own entry
+   *  point, whatever's still playing keeps RE-EXCITING it (a delay keeps building fresh echoes,
+   *  a reverb keeps getting pumped), and the "ring-out" never actually decays — it just sounds
+   *  like the effect is still on. No-op by default; only devices with a real tail
+   *  (throwReleaseMs > 0) need to override it, at whatever node is their OWN wet-chain entry. */
+  protected muteWetInput(_muted: boolean): void {}
 
   setBypass(on: boolean, hard = false) {
     // A MANUAL bypass toggle (FLX ON/OFF, toolbar BYPASS) is the SINGLE SOURCE OF TRUTH for on/off:
@@ -351,12 +359,17 @@ export abstract class BaseFxDevice implements FxDevice {
         // graph stays exactly as it was (still connected, still at `mix`) so the tail keeps
         // sounding under its own steam while `releasing` tells a UI it's still ringing.
         this._bypassed = true;
+        this.muteWetInput(true); // stop feeding it — only what's ALREADY ringing should decay
         this.scheduleBypassRingOut();
         return;
       }
       this._releaseGen++;
       this._releasePending = false;
     }
+    // Re-engaging (a manual un-bypass, or a throw) always restores live input — hard-kill doesn't
+    // need the mirror call: once wet→output is cut below, the whole upstream chain (mute or not)
+    // has no path to the destination and the engine prunes it regardless.
+    if (!on) this.muteWetInput(false);
     this._bypassed = on;
     this.applyWet();
   }

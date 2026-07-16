@@ -288,6 +288,22 @@ export class DelayFx extends BaseFxDevice {
   protected get throwReleaseMs() {
     return 2400; // the repeats need to ring out — see BaseFxDevice.throwReleaseMs
   }
+  // A manual bypass's ring-out (BaseFxDevice.muteWetInput) must stop NEW material reaching the
+  // delay line, or whatever's still playing keeps re-triggering fresh echoes and the "tail" never
+  // actually decays — it just keeps sounding like the effect never turned off. `split` is the
+  // delay network's true entry point (see the constructor); cutting it here leaves whatever's
+  // ALREADY in flight (echoes mid-feedback-loop) to ring out on their own, undisturbed.
+  protected muteWetInput(muted: boolean) {
+    if (muted) {
+      try {
+        this.input.disconnect(this.split);
+      } catch {
+        /* already disconnected */
+      }
+    } else {
+      this.input.connect(this.split);
+    }
+  }
   protected applyThrowBoost(on: boolean) {
     if (on) {
       if (!this._throw) this._throwPrev = { fb: this._fb, mix: this.mixAmount };

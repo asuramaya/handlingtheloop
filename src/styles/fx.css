@@ -311,7 +311,7 @@ body:not(.no-glow) .fx-tab.sel {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 /* ★ A CYCLER must not look like a toggle. RPT/MONO step through 3 and 2 modes but were styled
-   identically to the LINK/LOFI/FRZ toggles beside them — so two of the six chips had invisible
+   identically to the LINK/FRZ toggles beside them — so two of the chips had invisible
    contents and you had to hover to learn they held anything at all. */
 .fx-chip.cyc {
   position: relative;

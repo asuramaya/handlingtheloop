@@ -119,6 +119,11 @@ interface DelayVizProps {
   drive: number; // analog saturation (0..1) — the roof
   duck: number; // sidechain ducking (0..1) — the envelope's head
   width: number; // stereo L/R time spread (0..1) — the shear
+  // RPT/DIG/FADE — the time-CHANGE behaviour (see DelayFx.TimeMode). It has no drag of its own
+  // (it's a panel cycler chip, not a canvas gesture) and nothing on the timeline currently shows
+  // WHICH one is active — so a flash on the readout is the only confirmation a cycle happened.
+  // Passed pre-formatted (not the raw enum) so the viz never needs its own copy of the label text.
+  timeModeLabel: string;
   snapBeats?: number[]; // the note divisions TIME snaps to (absent when free-running)
   snapLabels?: string[]; // …and their names, index-matched
   modSnapBeats?: number[]; // the wobble's ladder — beats per LFO cycle
@@ -191,17 +196,30 @@ type Grab =
   | { kind: "drive" }
   | { kind: "duck" };
 
-export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
+export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeModeLabel, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
   const hover = useRef<string>(""); // which handle the cursor is over → cursor shape + highlight + readout
   const kickRef = useRef<() => void>(() => {}); // request one repaint (the loop idles when nothing moves)
+  // RPT/DIG/FADE has no drag, so the only way to confirm a cycle landed is a brief flash on the
+  // readout — see the draw loop below. `firstMode` skips the flash on mount (opening the panel
+  // isn't a change); after that, every REAL change to the label fires it.
+  const flash = useRef<{ label: string; time: number } | null>(null);
+  const firstMode = useRef(true);
+  useEffect(() => {
+    if (firstMode.current) {
+      firstMode.current = false;
+      return;
+    }
+    flash.current = { label: timeModeLabel, time: performance.now() };
+    kickRef.current();
+  }, [timeModeLabel]);
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
-  p.current = { deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
+  const p = useRef({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeModeLabel, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
+  p.current = { deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeModeLabel, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see. Top to bottom: the READOUT strip, the tone RIBBON, then the
@@ -738,6 +756,18 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       };
       ctx.fillStyle = "rgba(255,255,255,0.04)";
       ctx.fillRect(0, 0, w, READOUT_H - 1);
+      // RPT/DIG/FADE has no drag of its own — this flash is the only confirmation a cycle
+      // landed. Decays over FLASH_MS; the loop below stays alive while it's still burning.
+      const FLASH_MS = 700;
+      const flashElapsed = flash.current ? now - flash.current.time : Infinity;
+      const flashAlpha = flashElapsed < FLASH_MS ? 1 - flashElapsed / FLASH_MS : 0;
+      if (flashAlpha <= 0 && flash.current) flash.current = null;
+      if (flashAlpha > 0) {
+        ctx.globalAlpha = flashAlpha * 0.5;
+        ctx.fillStyle = accent;
+        ctx.fillRect(0, 0, w, READOUT_H - 1);
+        ctx.globalAlpha = 1;
+      }
       const ry = (READOUT_H - 1) / 2;
       ctx.font = "800 9px ui-monospace, monospace";
       ctx.textBaseline = "middle";
@@ -752,7 +782,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // the middle — the contextual "this is the thing in my hand"
       const pct = (v: number) => `${Math.round(clamp01(v) * 100)}%`;
       const ctxLabel =
-        hot === "width" ? `WIDTH ${pct(s.width)}`
+        flashAlpha > 0 ? s.timeModeLabel
+        : hot === "width" ? `WIDTH ${pct(s.width)}`
         : hot === "drive" ? `DRIVE ${pct(s.drive)}`
         : hot === "duck" ? `DUCK ${pct(s.duck)}`
         : hot === "lfo" ? `WOBBLE ${pct(modN)} · ${(beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`}`
@@ -761,8 +792,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         : "";
       if (ctxLabel) {
         ctx.textAlign = "center";
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = held ? "#fff" : accent;
+        ctx.globalAlpha = flashAlpha > 0 ? flashAlpha : 1;
+        ctx.fillStyle = flashAlpha > 0 || held ? "#fff" : accent;
         ctx.fillText(ctxLabel, w / 2, ry);
       }
       ctx.globalAlpha = 1;
@@ -779,7 +810,7 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // same as the wobble's own clock.
       const wobbling = clamp01(p.current.modDepth / MOD_MAX) > 0.001 && p.current.modRate > 0;
       const ducking = p.current.duck > 0.001;
-      raf = wobbling || ducking || grab.current ? window.requestAnimationFrame(loop) : 0;
+      raf = wobbling || ducking || grab.current || flash.current ? window.requestAnimationFrame(loop) : 0;
     };
     const kick = () => {
       if (!raf && alive) raf = window.requestAnimationFrame(loop);

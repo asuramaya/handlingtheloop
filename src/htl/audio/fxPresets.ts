@@ -47,7 +47,7 @@ export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
   // DELAY (ECHO) — a dub/DJ delay. Beat-locked (`sync:1`), so `div` (0=1/16…8=1 bar) is the
   // musical identity and `time` is just the 120-BPM echo of it (recomputed live from the deck
   // tempo). `feedback` sets the tail length; the in-loop HP/LP narrow each repeat (dub sweep);
-  // `analog`/`lofi` colour the tails; `stereo:1` = ping-pong; `spread` drifts L/R for width.
+  // `analog` colours the tails; `stereo:1` = ping-pong; `spread` drifts L/R for width.
   //
   // Three of the device's powers were dead in the first bank, and each is worth a preset:
   //   • `duck` — the repeats duck under the dry input. This is what makes a dub delay usable OVER
@@ -56,15 +56,15 @@ export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
   //     throw), 1 Digital (clean retune, can click), 2 Fade (dip the wet, switch, restore).
   //   • `sync:0` — free ms. The only way to get a slapback that ISN'T beat-locked.
   delay: [
-    { name: "Slapback", params: { mix: 0.25, time: 0.09, feedback: 0.18, hp: 240, lp: 7000, sync: 0, div: 2, timeMode: 1, stereo: 0, link: 0, freeze: 0, analog: 0.25, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
-    { name: "1/8 Slap", params: { mix: 0.26, time: 0.25, feedback: 0.28, hp: 200, lp: 8000, sync: 1, div: 2, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
-    { name: "Ducked Dub", params: { mix: 0.38, time: 0.5, feedback: 0.55, hp: 180, lp: 3800, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 1, freeze: 0, analog: 0.4, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0.65, spread: 0.15 } },
-    { name: "Ping-Pong 1/8", params: { mix: 0.3, time: 0.25, feedback: 0.42, hp: 160, lp: 7000, sync: 1, div: 2, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0.3, spread: 0.3 } },
-    { name: "Triplet Throw", params: { mix: 0.3, time: 0.167, feedback: 0.42, hp: 150, lp: 6000, sync: 1, div: 1, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.2, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
-    { name: "Tape Echo", params: { mix: 0.3, time: 0.5, feedback: 0.46, hp: 220, lp: 3200, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.6, lofi: 0, modDepth: 0.007, modRate: 0.9, duck: 0, spread: 0.2 } },
-    { name: "Lo-Fi Bounce", params: { mix: 0.3, time: 0.375, feedback: 0.44, hp: 200, lp: 5000, sync: 1, div: 3, timeMode: 1, stereo: 1, link: 0, freeze: 0, analog: 0.15, lofi: 1, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.25 } },
-    { name: "Half-Bar Wash", params: { mix: 0.3, time: 1.0, feedback: 0.4, hp: 300, lp: 2600, sync: 1, div: 6, timeMode: 2, stereo: 1, link: 1, freeze: 0, analog: 0.3, lofi: 0, modDepth: 0.004, modRate: 0.35, duck: 0.4, spread: 0.4 } },
-    { name: "Freeze Hold", params: { mix: 0.4, time: 0.5, feedback: 0.6, hp: 140, lp: 5500, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 1, analog: 0, lofi: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
+    { name: "Slapback", params: { mix: 0.25, time: 0.09, feedback: 0.18, hp: 240, lp: 7000, sync: 0, div: 2, timeMode: 1, stereo: 0, link: 0, freeze: 0, analog: 0.25, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
+    { name: "1/8 Slap", params: { mix: 0.26, time: 0.25, feedback: 0.28, hp: 200, lp: 8000, sync: 1, div: 2, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
+    { name: "Ducked Dub", params: { mix: 0.38, time: 0.5, feedback: 0.55, hp: 180, lp: 3800, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 1, freeze: 0, analog: 0.4, modDepth: 0, modRate: 0.5, duck: 0.65, spread: 0.15 } },
+    { name: "Ping-Pong 1/8", params: { mix: 0.3, time: 0.25, feedback: 0.42, hp: 160, lp: 7000, sync: 1, div: 2, timeMode: 0, stereo: 1, link: 0, freeze: 0, analog: 0, modDepth: 0, modRate: 0.5, duck: 0.3, spread: 0.3 } },
+    { name: "Triplet Throw", params: { mix: 0.3, time: 0.167, feedback: 0.42, hp: 150, lp: 6000, sync: 1, div: 1, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.2, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
+    { name: "Tape Echo", params: { mix: 0.3, time: 0.5, feedback: 0.46, hp: 220, lp: 3200, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 0, analog: 0.6, modDepth: 0.007, modRate: 0.9, duck: 0, spread: 0.2 } },
+    { name: "Digital Bounce", params: { mix: 0.3, time: 0.375, feedback: 0.44, hp: 200, lp: 5000, sync: 1, div: 3, timeMode: 1, stereo: 1, link: 0, freeze: 0, analog: 0.15, modDepth: 0, modRate: 0.5, duck: 0, spread: 0.25 } },
+    { name: "Half-Bar Wash", params: { mix: 0.3, time: 1.0, feedback: 0.4, hp: 300, lp: 2600, sync: 1, div: 6, timeMode: 2, stereo: 1, link: 1, freeze: 0, analog: 0.3, modDepth: 0.004, modRate: 0.35, duck: 0.4, spread: 0.4 } },
+    { name: "Freeze Hold", params: { mix: 0.4, time: 0.5, feedback: 0.6, hp: 140, lp: 5500, sync: 1, div: 4, timeMode: 0, stereo: 0, link: 0, freeze: 1, analog: 0, modDepth: 0, modRate: 0.5, duck: 0, spread: 0 } },
   ],
   // REVERB (VERB) — the Jot FDN tank. `style` (0 HALL/1 ROOM/2 PLATE/3 AMBIENT) picks the voicing;
   // `size`×`decay` set the space and tail; `lowCut`/`highCut` keep the wet out of the mud and the

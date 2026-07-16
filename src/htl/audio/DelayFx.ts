@@ -13,7 +13,7 @@
 //
 // The HP→LP filters sit in the loop, so every repeat is re-filtered → the classic dub
 // sweep / narrowing tails. `time` is beat-locked by the panel (division→seconds from the
-// deck BPM). Tier 2 (analog/lofi/mod) and Tier 3 (ducking) splice into the marked points.
+// deck BPM). Tier 2 (analog/mod) and Tier 3 (ducking) splice into the marked points.
 //
 // Params: time · feedback · hp · lp · mix(base) + metadata sync/div/timeMode/stereo/link/freeze.
 
@@ -52,8 +52,8 @@ export class DelayFx extends BaseFxDevice {
   private readonly lpR: BiquadFilterNode;
   private readonly fbL: GainNode;
   private readonly fbR: GainNode;
-  // Tier 2 — character: a waveshaper per side (analog drive + LoFi bitcrush) in the loop,
-  // and a shared LFO modulating the delay times (vibrato/chorus tails).
+  // Tier 2 — character: a waveshaper per side (analog drive) in the loop, and a shared
+  // LFO modulating the delay times (vibrato/chorus tails).
   private readonly shaperL: WaveShaperNode;
   private readonly shaperR: WaveShaperNode;
   private readonly lfo: OscillatorNode;
@@ -87,7 +87,6 @@ export class DelayFx extends BaseFxDevice {
   private _freeze = 0; // infinite hold (fb→1, input→0)
   private _fb = 0.38; // the user's feedback setting (Freeze temporarily overrides the live gain)
   private _analog = 0; // 0..1 tape/tube drive on the repeats
-  private _lofi = 0; // 0/1 old-digital-delay bitcrush + bandwidth loss
   private _spread = 0; // 0..1 — L/R delay-time offset (organic stereo width; Eternity "offset")
   // ★ COMMANDED-VALUE MIRRORS. Every continuous param here GLIDES — setTargetAtTime(…, 0.02) —
   // and setTargetAtTime is exponential: it asymptotically approaches its target and never exactly
@@ -162,7 +161,7 @@ export class DelayFx extends BaseFxDevice {
     this.input.connect(this.split);
     this.preL.connect(this.delayL);
     this.preR.connect(this.delayR);
-    // delay → HP → LP → color shaper (analog/lofi) → wet tap + feedback. The shaper sits
+    // delay → HP → LP → color shaper (analog drive) → wet tap + feedback. The shaper sits
     // in the loop so the character compounds on each repeat (tape/old-sampler behaviour).
     this.delayL.connect(this.hpL);
     this.hpL.connect(this.lpL);
@@ -229,8 +228,7 @@ export class DelayFx extends BaseFxDevice {
       { id: "link", def: 0, get: () => this._link, set: (v) => (this._link = v ? 1 : 0) },
       { id: "freeze", def: 0, get: () => this._freeze, set: (v) => this.setFreeze(v ? 1 : 0) },
       // Tier 2 — character
-      { id: "analog", def: 0, get: () => this._analog, set: (v) => this.setColor(clamp(v, 0, 1), this._lofi) },
-      { id: "lofi", def: 0, get: () => this._lofi, set: (v) => this.setColor(this._analog, v ? 1 : 0) },
+      { id: "analog", def: 0, get: () => this._analog, set: (v) => this.setColor(clamp(v, 0, 1)) },
       { id: "modDepth", def: 0, get: () => this._modDepth, set: (v) => this.setMod(clamp(v, 0, 0.012), undefined) },
       { id: "modRate", def: 0.5, get: () => this._modRate, set: (v) => this.setMod(undefined, clamp(v, 0.02, 8)) },
       // Tier 3 — ducking (repeats duck under the dry input)
@@ -343,11 +341,10 @@ export class DelayFx extends BaseFxDevice {
     this.preR.gain.setTargetAtTime(pre, now, 0.02);
   }
 
-  // --- character: analog drive + LoFi bitcrush (one shared waveshaper curve) ---
-  private setColor(analog: number, lofi: number) {
+  // --- character: analog drive (a shared waveshaper curve) ---
+  private setColor(analog: number) {
     this._analog = analog;
-    this._lofi = lofi;
-    const curve = analog <= 0 && !lofi ? null : makeColorCurve(analog, lofi);
+    const curve = analog <= 0 ? null : makeColorCurve(analog);
     this.shaperL.curve = curve; // null = transparent pass-through (no extra CPU)
     this.shaperR.curve = curve;
   }
@@ -462,10 +459,9 @@ export class DelayFx extends BaseFxDevice {
   }
 }
 
-// Waveshaper transfer curve combining analog DRIVE (tanh soft-clip, level-matched so unity
-// stays ~unity) and LoFi BITCRUSH (amplitude quantization → the gritty old-digital-delay
-// character). Both off → caller passes null instead (transparent). 2048 points is plenty.
-function makeColorCurve(analog: number, lofi: number): Float32Array<ArrayBuffer> {
+// Waveshaper transfer curve for analog DRIVE — tanh soft-clip, level-matched so unity stays
+// ~unity. Caller passes null instead when drive is off (transparent). 2048 points is plenty.
+function makeColorCurve(analog: number): Float32Array<ArrayBuffer> {
   const n = 2048;
   const curve = new Float32Array(n);
   // UNITY small-signal gain (slope at x=0 is exactly 1) so the drive is NON-EXPANSIVE. This shaper
@@ -475,12 +471,9 @@ function makeColorCurve(analog: number, lofi: number): Float32Array<ArrayBuffer>
   // presets rang at effective feedback 1.0). tanh(kx)/k passes quiet tails at unity (they decay at
   // fb) and only saturates loud transients — the tape/tube warmth without the runaway.
   const k = 1 + analog * 2.5; // gentler drive; the character still compounds over repeats
-  const levels = 24; // bitcrush quantization steps (≈ a few bits) when LoFi is on
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1; // −1..1
-    let y = analog > 0 ? Math.tanh(k * x) / k : x;
-    if (lofi) y = Math.round(y * levels) / levels;
-    curve[i] = y;
+    curve[i] = Math.tanh(k * x) / k;
   }
   return curve;
 }

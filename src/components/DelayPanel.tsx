@@ -13,7 +13,7 @@ import { clamp } from "../util/math";
 // the band's body.
 //
 // What's left is the character — grouped by what it DOES, because a flat grid of nine cells makes
-// you read every label to find one: MOTION (depth/rate/width) · COLOUR (drive/lofi) · DYNAMICS
+// you read every label to find one: MOTION (depth/rate/width) · COLOUR (drive) · DYNAMICS
 // (duck) · TIME BEHAVIOUR (sync/repitch) · and FREEZE, which is a performance move, not a setting.
 //
 // Mutate the deck's device directly, `emit` the matching FX intent so a session converges, then
@@ -182,6 +182,7 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         drive={get("analog")}
         duck={get("duck")}
         width={get("spread")}
+        timeModeLabel={TIME_MODES[timeMode] ?? "RPT"}
         snapBeats={synced ? DIVISION_BEATS : undefined}
         snapLabels={synced ? DIVISION_LABELS : undefined}
         modSnapBeats={synced ? LFO_BEATS : undefined}
@@ -200,8 +201,8 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
       {/* ★ ORDERED BY WHEN YOU REACH FOR IT, NOT BY TOPIC. On a phone this rack is ~180px and the
           row has to slide; whatever sits at the far right is, in practice, unreachable — FREEZE
           was literally clipped off the edge of an iPhone. So the two you touch MID-MIX lead:
-          FREEZE (an infinite hold you slam) and SYNC. The set-and-forget ones (repitch / stereo /
-          lofi) live to their right, where scrolling to them costs nothing. */}
+          FREEZE (an infinite hold you slam) and SYNC. The set-and-forget ones (repitch / stereo)
+          live to their right, where scrolling to them costs nothing. */}
       <div className="fx-foot">
         {/* FREEZE is a performance move, not a setting. It gets the weight of one — and the first
             slot, because a control you can't reach in a hurry isn't a performance control. */}
@@ -223,9 +224,6 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         <button className="fx-chip cyc" onClick={() => cycle("stereo", STEREO_MODES.length)} title={`Stereo — tap to cycle: ${STEREO_MODES.join(" / ")} (Ping-Pong bounces L↔R)`}>
           {STEREO_MODES[stereo] ?? "MONO"}
           <Pips n={STEREO_MODES.length} at={stereo} />
-        </button>
-        <button className={`fx-chip ${get("lofi") >= 0.5 ? "on" : ""}`} onClick={() => toggle("lofi")} title="LoFi — old-digital-delay bitcrush + bandwidth loss">
-          LOFI
         </button>
       </div>
     </div>

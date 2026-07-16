@@ -182,7 +182,7 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         drive={get("analog")}
         duck={get("duck")}
         width={get("spread")}
-        timeModeLabel={TIME_MODES[timeMode] ?? "RPT"}
+        timeMode={timeMode}
         snapBeats={synced ? DIVISION_BEATS : undefined}
         snapLabels={synced ? DIVISION_LABELS : undefined}
         modSnapBeats={synced ? LFO_BEATS : undefined}

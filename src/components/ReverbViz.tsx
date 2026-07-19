@@ -29,6 +29,7 @@ interface ReverbVizProps {
   duck: number; // 0..1 sidechain → the bloom breathes
   character: number; // 0..1 modulation depth
   modRate: number; // Hz
+  style: number; // 0=HALL 1=ROOM 2=PLATE 3=AMBIENT — REVERB_STYLES index, changes the curve's texture
   frozen: boolean;
   accent: string;
   onParam: (param: string, value: number) => void; // direct-control callback (drag/wheel)
@@ -108,6 +109,20 @@ interface Grip {
 }
 const pct = (v: number) => `${Math.round(v * 100)}`;
 const ms = (v: number) => `${Math.round(v * 1000)}ms`;
+
+// The algorithm voicing (REVERB_STYLES: HALL/ROOM/PLATE/AMBIENT) had no visual signature at all
+// before this — only a text chip in the footer. The main curve's own texture now carries it:
+// HALL is the plain smooth curve (the baseline everything else was designed against); ROOM is
+// faceted (few straight segments, not a smooth arc — a room has hard walls, not a dome); PLATE is
+// dashed (a rigid, segmented, metallic read); AMBIENT is sparse-dotted and noticeably more
+// transparent (airy, barely-there).
+const STYLE_LOOK: { dash: number[]; segments: number; fillMul: number }[] = [
+  { dash: [], segments: 64, fillMul: 1 }, // HALL
+  { dash: [], segments: 7, fillMul: 0.85 }, // ROOM
+  { dash: [7, 4], segments: 64, fillMul: 1.05 }, // PLATE
+  { dash: [1, 5], segments: 64, fillMul: 0.55 }, // AMBIENT
+];
+
 const GRIPS: Grip[] = [
   { id: "predelay", param: "predelay", label: "PREDLY", angle: gripAngle(0), rIn: GRIP_R_IN, rOut: GRIP_R_OUT, min: 0, max: 0.2, def: 0.012, fmt: ms },
   { id: "width", param: "width", label: "WIDTH", angle: gripAngle(1), rIn: GRIP_R_IN, rOut: GRIP_R_OUT, min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
@@ -131,7 +146,7 @@ interface Placed extends Grip {
 
 type Drag = { kind: "grip"; grip: Grip; offset: number } | { kind: "ribbon"; which: Exclude<RibbonHot, null>; lastX: number };
 
-export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
+export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, style, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -231,7 +246,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // expanded view leave leftover space rather than a distorted shape. The room field below
       // gets that leftover space instead (see aXraw), so it reads as deliberate atmosphere, not a
       // control surface that gave up trying to fill its own container.
-      const aX = Math.min(aXraw, aY * 2.2);
+      const aX = Math.min(aXraw, aY * 1.8);
       return { w, h, cx, cy, aX, aY, aXraw, ribbonY, ribbonH };
     };
 
@@ -475,21 +490,26 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // below 1 the dome visibly pinches in toward the centreline, above 1 it visibly spreads
       // wider than the room boundary — one shape breathing, not a second one appearing beside it.
       const widthScale = 1 + (clamp(p.width, 0, 1.5) - 1) * 0.6;
+      const look = STYLE_LOOK[style] ?? STYLE_LOOK[0];
       ctx.beginPath();
-      for (let i = 0; i <= 64; i++) {
-        const ang = (i / 64) * Math.PI;
+      for (let i = 0; i <= look.segments; i++) {
+        const ang = (i / look.segments) * Math.PI;
         const { x, y } = toXY(ang, reachFrac, c);
         const xs = cx + (x - cx) * widthScale;
         i === 0 ? ctx.moveTo(xs, y) : ctx.lineTo(xs, y);
       }
       ctx.closePath();
+      ctx.globalAlpha = look.fillMul;
       ctx.fillStyle = brightFill;
       ctx.fill();
+      ctx.globalAlpha = 1;
       ctx.strokeStyle = brightStroke;
       ctx.lineWidth = 1.5;
+      ctx.setLineDash(look.dash);
       ctx.shadowColor = accent;
       ctx.shadowBlur = 5 * (0.3 + 0.7 * clamp01(p.brightness));
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.shadowBlur = 0;
 
       // ★ CHARACTER/MOD RATE — its own dedicated shimmer ring, riding between the predelay gap
@@ -512,15 +532,18 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         return { ...g, x, y };
       });
 
+      // ★ Each guide line ends AT ITS OWN DOT, not at the track's fixed maximum (`g.rOut`). It used
+      // to always reach out to rOut regardless of the param's actual value — so anything short of
+      // its maximum left a trailing line segment past the dot pointing at nothing, which is
+      // exactly what read as "lines that don't belong to any control."
       for (const g of placed.current) {
         const isHot = hot === g.id;
         const inner = toXY(g.angle, 0.1, c);
-        const outer = toXY(g.angle, g.rOut, c);
         ctx.strokeStyle = withAlpha(accent, isHot ? 0.3 : 0.1);
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(inner.x, inner.y);
-        ctx.lineTo(outer.x, outer.y);
+        ctx.lineTo(g.x, g.y);
         ctx.stroke();
       }
       for (const g of placed.current) {
@@ -590,7 +613,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       window.cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, deck, slot]);
+  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, style, frozen, accent, deck, slot]);
 
   // --- direct control: hit-test grips + ribbon, map drag → param -------------------------------
   const localPt = (e: { clientX: number; clientY: number }) => {

@@ -71,7 +71,6 @@ export class NoiseFx extends BaseFxDevice {
   private _rise = true; // auto-build mode (vs manual gate)
   private _bars = 4; // auto-build length
   private _bpm = 120;
-  private _throw = false;
 
   // scratch for the viz's frequency-response read
   private _scMag: Float32Array<ArrayBuffer> | null = null;
@@ -164,7 +163,7 @@ export class NoiseFx extends BaseFxDevice {
   private _riseStart = 0;
   private _riseEnd = 0;
   private _isRising() {
-    return this._throw && this._rise && this.ctx.currentTime < this._riseEnd;
+    return this.throwing && this._rise && this.ctx.currentTime < this._riseEnd;
   }
   /** Auto-build progress 0..1 while a tempo-synced rise is in flight, else −1 (for the viz). */
   get riseProgress(): number {
@@ -178,9 +177,9 @@ export class NoiseFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER. Engages the device (un-bypass if dormant); RISE mode → tempo-synced
-   *  auto-build, else a manual gate at SWEEP. Release cuts it + re-bypasses if it was off. */
+   *  auto-build, else a manual gate at SWEEP. Release cuts it + re-bypasses if it was off. Mix is
+   *  guaranteed audible by the base class (see BaseFxDevice.throwMix). */
   protected applyThrowBoost(on: boolean) {
-    this._throw = on;
     const t = this.ctx.currentTime;
     const g = this.riseGain.gain;
     const f = this.sweep.frequency;
@@ -212,8 +211,8 @@ export class NoiseFx extends BaseFxDevice {
       g.setTargetAtTime(0, t, 0.03); // the drop — cut to silence
     }
   }
-  get throwing() {
-    return this._throw;
+  protected get throwMix() {
+    return 1;
   }
 
   // ---- live reads for the WYSIWYG -----------------------------------------
@@ -229,9 +228,6 @@ export class NoiseFx extends BaseFxDevice {
   // rule 1.
   get sweepHz() {
     return sweepHzOf(this._sweep);
-  }
-  get engaged() {
-    return this._throw;
   }
   /** Fill `out` with the combined sweep×tone magnitude response at `freqs` (for the viz curve). */
   getResponse(freqs: Float32Array<ArrayBuffer>, out: Float32Array<ArrayBuffer>) {

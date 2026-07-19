@@ -31,7 +31,6 @@ export class CrushFx extends BaseFxDevice {
   private _mode = 0;
   private _cut = 1;
   private _res = 0.2;
-  private _throw = false;
 
   constructor(ctx: AudioContext) {
     super(ctx, 1.0); // insert (full wet by default)
@@ -70,11 +69,11 @@ export class CrushFx extends BaseFxDevice {
 
   private setBits(e: number) {
     this._bits = clamp01(e);
-    if (!this._throw) this.node?.port.postMessage({ bits: extToBits(this._bits) });
+    if (!this.throwing) this.node?.port.postMessage({ bits: extToBits(this._bits) });
   }
   private setRate(e: number) {
     this._rate = clamp01(e);
-    if (!this._throw) this.node?.port.postMessage({ rate: extToRate(this._rate) });
+    if (!this.throwing) this.node?.port.postMessage({ rate: extToRate(this._rate) });
   }
   private setJitter(e: number) {
     this._jitter = clamp01(e);
@@ -94,13 +93,13 @@ export class CrushFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + smash to a heavy crush while held;
-   *  release restores the user's setting and re-bypasses if it was off. */
+   *  release restores the user's setting and re-bypasses if it was off. Mix is guaranteed
+   *  audible by the base class (see BaseFxDevice.throwMix). */
   protected applyThrowBoost(on: boolean) {
-    this._throw = on;
     this.node?.port.postMessage({ bits: extToBits(on ? 0.82 : this._bits), rate: extToRate(on ? 0.7 : this._rate) });
   }
-  get throwing() {
-    return this._throw;
+  protected get throwMix() {
+    return 1;
   }
 
   // Live reads for the WYSIWYG scope.

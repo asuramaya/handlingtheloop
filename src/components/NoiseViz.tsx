@@ -105,8 +105,8 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
 
       // cutoff marker — rides the sweep, brighter while engaged.
       const mxx = fx(dev.sweepHz, w);
-      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} ${dev.engaged ? 95 : 45}%, transparent)`;
-      ctx2d.lineWidth = dev.engaged ? 2.4 : 1.4;
+      ctx2d.strokeStyle = `color-mix(in srgb, ${accent} ${dev.throwing ? 95 : 45}%, transparent)`;
+      ctx2d.lineWidth = dev.throwing ? 2.4 : 1.4;
       ctx2d.beginPath();
       ctx2d.moveTo(mxx, 0);
       ctx2d.lineTo(mxx, h);
@@ -115,7 +115,7 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 70%, transparent)`;
       ctx2d.font = "10px ui-monospace, monospace";
       ctx2d.textBaseline = "top";
-      ctx2d.fillText(dev.engaged ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
+      ctx2d.fillText(dev.throwing ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
 
       raf = requestAnimationFrame(draw);
     };

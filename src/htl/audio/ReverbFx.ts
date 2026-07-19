@@ -179,15 +179,16 @@ export class ReverbFx extends BaseFxDevice {
   }
 
   // --- REVERB OUT: the pad throw ----------------------------------------------------------
-  // The wet-throw twin of the delay's. Press drenches the tank (mix → 0.85); release puts the
-  // user's mix back, so the tail BLOOMS out of the throw and decays instead of being chopped.
-  // The base keeps the device alive through that bloom before returning it to dormant.
-  private static readonly THROW_MIX = 0.85;
-  private _throw = false;
-  private _throwPrevMix: number | null = null;
-
-  protected get throwReleaseMs() {
-    return 2400; // let the tail bloom — see BaseFxDevice.throwReleaseMs
+  // The wet-throw twin of the delay's. Press drenches the tank (mix → 0.85, the base class's
+  // throwMix hook); release puts the user's mix back, so the tail BLOOMS out of the throw and
+  // decays instead of being chopped. The base keeps the device alive through that bloom before
+  // returning it to dormant. Reverb has no character param of its own worth boosting the way
+  // delay boosts feedback, so mix is the WHOLE throw — nothing left to override applyThrowBoost for.
+  protected get hasTail() {
+    return true; // let the tail bloom — see BaseFxDevice.hasTail
+  }
+  protected get throwMix() {
+    return 0.85;
   }
   // A manual bypass's ring-out (BaseFxDevice.muteWetInput) must stop NEW material reaching the
   // tank, or whatever's still playing keeps pumping fresh energy into the FDN and the "tail"
@@ -204,21 +205,6 @@ export class ReverbFx extends BaseFxDevice {
     } else {
       this.input.connect(this.drive);
     }
-  }
-  protected applyThrowBoost(on: boolean) {
-    if (on) {
-      if (!this._throw) this._throwPrevMix = this.mixAmount;
-      this._throw = true;
-      this.setMix(ReverbFx.THROW_MIX);
-    } else {
-      const prev = this._throwPrevMix;
-      this._throw = false;
-      this._throwPrevMix = null;
-      if (prev != null) this.setMix(prev);
-    }
-  }
-  get throwing() {
-    return this._throw;
   }
 
   private setWidth(v: number) {

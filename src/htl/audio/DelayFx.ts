@@ -279,12 +279,16 @@ export class DelayFx extends BaseFxDevice {
   // point — pair it with a brake or a fader pull into silence). The base then returns the device
   // to dormant once the tail has had time to die, not the instant the pad comes up.
   private static readonly THROW_FB = 0.85; // FB_MAX is 0.95 — long tail, still decaying
-  private static readonly THROW_MIX = 0.85; // mostly-wet throw
-  private _throw = false;
-  private _throwPrev: { fb: number; mix: number } | null = null;
+  private _throwPrevFb: number | null = null;
 
-  protected get throwReleaseMs() {
-    return 2400; // the repeats need to ring out — see BaseFxDevice.throwReleaseMs
+  protected get hasTail() {
+    return true; // the repeats need to ring out — see BaseFxDevice.hasTail
+  }
+  // A mostly-wet throw, same tasteful figure ReverbFx uses — a hair of dry stays audible even at
+  // full send. The base class owns the snapshot/restore (see BaseFxDevice.throwMix); FEEDBACK is
+  // the one thing left that's genuinely THIS device's own character to boost.
+  protected get throwMix() {
+    return 0.85;
   }
   // A manual bypass's ring-out (BaseFxDevice.muteWetInput) must stop NEW material reaching the
   // delay line, or whatever's still playing keeps re-triggering fresh echoes and the "tail" never
@@ -304,21 +308,13 @@ export class DelayFx extends BaseFxDevice {
   }
   protected applyThrowBoost(on: boolean) {
     if (on) {
-      if (!this._throw) this._throwPrev = { fb: this._fb, mix: this.mixAmount };
-      this._throw = true;
+      if (this._throwPrevFb == null) this._throwPrevFb = this._fb;
       this.setFeedback(DelayFx.THROW_FB);
-      this.setMix(DelayFx.THROW_MIX);
     } else {
-      const p = this._throwPrev;
-      this._throw = false;
-      this._throwPrev = null;
-      if (!p) return;
-      this.setFeedback(p.fb); // back to the user's setting → the captured repeats decay out
-      this.setMix(p.mix);
+      const fb = this._throwPrevFb;
+      this._throwPrevFb = null;
+      if (fb != null) this.setFeedback(fb); // back to the user's setting → the captured repeats decay out
     }
-  }
-  get throwing() {
-    return this._throw;
   }
 
   // --- feedback / freeze ---

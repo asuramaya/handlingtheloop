@@ -53,7 +53,6 @@ export class ModFx extends BaseFxDevice {
   private _wave = 0;
   private _src = 0;
   private _thru = false;
-  private _throw = false;
 
   constructor(ctx: AudioContext) {
     super(ctx, 0.5); // send-style, half wet (equal dry/wet = deepest notches)
@@ -127,7 +126,7 @@ export class ModFx extends BaseFxDevice {
       this.fbGain = fb;
       this.nodes.push(fbHp, fb);
       const scale = ctx.createGain();
-      scale.gain.value = this._depth * 1300 * (this._throw ? 1.6 : 1);
+      scale.gain.value = this._depth * 1300 * (this.throwing ? 1.6 : 1);
       this.modBus.connect(scale);
       for (const ap of aps) scale.connect(ap.frequency);
       this.scales.push({ g: scale, mag: 1300 });
@@ -145,7 +144,7 @@ export class ModFx extends BaseFxDevice {
         this.engineIn.connect(node, 0, 0);
         this.modBus.connect(node, 0, 1);
         node.connect(this.tone);
-        node.port.postMessage({ base: baseSec * sr, depth: this._depth * magSec * sr * (this._throw ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
+        node.port.postMessage({ base: baseSec * sr, depth: this._depth * magSec * sr * (this.throwing ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
         this.delayNode = node;
         this.nodes.push(node);
       } catch {
@@ -161,7 +160,7 @@ export class ModFx extends BaseFxDevice {
           this.nodes.push(fb);
         }
         const scale = ctx.createGain();
-        scale.gain.value = this._depth * magSec * (this._throw ? 1.6 : 1);
+        scale.gain.value = this._depth * magSec * (this.throwing ? 1.6 : 1);
         this.modBus.connect(scale);
         scale.connect(delay.delayTime);
         this.scales.push({ g: scale, mag: magSec });
@@ -174,11 +173,11 @@ export class ModFx extends BaseFxDevice {
     if (!this.delayNode) return;
     const flanger = this._mode === 1;
     const magSec = flanger ? 0.0022 : 0.006;
-    this.delayNode.port.postMessage({ depth: this._depth * magSec * this.ctx.sampleRate * (this._throw ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
+    this.delayNode.port.postMessage({ depth: this._depth * magSec * this.ctx.sampleRate * (this.throwing ? 1.6 : 1), fb: flanger ? this._fb * 0.85 : 0 });
   }
 
   private applyDepth() {
-    const boost = this._throw ? 1.6 : 1;
+    const boost = this.throwing ? 1.6 : 1;
     for (const s of this.scales) s.g.gain.setTargetAtTime(this._depth * s.mag * boost, this.ctx.currentTime, 0.02);
   }
   private applySource() {
@@ -249,15 +248,14 @@ export class ModFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + deepen the swirl (depth + feedback)
-   *  while held; release restores it and re-bypasses if it was off. */
+   *  while held; release restores it and re-bypasses if it was off. Deliberately does NOT
+   *  request a mix boost (see BaseFxDevice.throwMix) — the default 0.5 blend IS the comb-filter's
+   *  deepest-notch point; forcing full-wet during a throw would erase the dry reference the
+   *  notches are relative to, changing the timbre rather than just the loudness. */
   protected applyThrowBoost(on: boolean) {
-    this._throw = on;
     this.applyDepth();
     if (this.fbGain) this.fbGain.gain.setTargetAtTime(Math.min(0.95, this._fb * 0.8 + (on ? 0.2 : 0)), this.ctx.currentTime, 0.02);
     this.postDelay();
-  }
-  get throwing() {
-    return this._throw;
   }
 
   // Live reads for the viz.
@@ -284,7 +282,7 @@ export class ModFx extends BaseFxDevice {
    *  viz reads the real `m` off the mod bus and draws THESE sweeping — emphasising the
    *  modulation over the program audio. */
   modTargets(m: number): number[] {
-    const boost = this._throw ? 1.6 : 1;
+    const boost = this.throwing ? 1.6 : 1;
     const out: number[] = [];
     if (this._mode === 2) {
       const n = Math.max(1, this._stages - 1);

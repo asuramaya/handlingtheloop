@@ -36,6 +36,9 @@ export interface FxDevice {
   readonly releasing: boolean;
   /** Live wet-signal level (0..1). EQ has no separate wet path to fade — always 0. */
   readonly wetLevel: number;
+  /** True while a pad THROW (hold or latch) is engaged on this device. EQ has its own, unrelated
+   *  curve-throw (see Deck.eqThrowing) — it doesn't implement this. */
+  readonly throwing: boolean;
 
   /** Generic param bus — the single seam session-sync/automix/MIDI address. Unknown
    *  ids are ignored (forward-compatible across versions). */
@@ -330,7 +333,7 @@ export abstract class BaseFxDevice implements FxDevice {
    *  point, whatever's still playing keeps RE-EXCITING it (a delay keeps building fresh echoes,
    *  a reverb keeps getting pumped), and the "ring-out" never actually decays — it just sounds
    *  like the effect is still on. No-op by default; only devices with a real tail
-   *  (throwReleaseMs > 0) need to override it, at whatever node is their OWN wet-chain entry. */
+   *  (hasTail true) need to override it, at whatever node is their OWN wet-chain entry. */
   protected muteWetInput(_muted: boolean): void {}
 
   setBypass(on: boolean, hard = false) {
@@ -343,24 +346,19 @@ export abstract class BaseFxDevice implements FxDevice {
       // A REDUNDANT "turn off" while already reporting off (mid ring-out, or long since fully
       // pruned) must be a no-op. Without this, a duplicate call — the same intent arriving
       // twice, another listener applying state that's already applied — falls through to the
-      // code below, reads as a FRESH bypass request, and hard-cuts a ring-out already in
-      // flight: the tail dies almost immediately instead of over the full throwReleaseMs.
+      // code below, reads as a FRESH bypass request, and hard-cuts a ring-out already in flight:
+      // the tail dies almost immediately instead of riding out for real.
       if (on && this._bypassed && !hard) return;
       if (this._thrown) {
         this._thrown = false;
         this.applyThrowBoost(false);
       }
-      // Turning a device WITH A TAIL off: let it ring out over the same window a pad throw's
-      // release gets, instead of pruning mid-decay — Shift (hard) skips straight to the cut, and
-      // a device with nothing to ring (throwReleaseMs 0: sat/crush/gate/noise/comp/mod) always cuts now.
-      if (on && !hard && !this._bypassed && this.throwReleaseMs > 0) {
-        // Report OFF immediately — `bypassed` is what the user ASKED for, not whether the wet
-        // path has actually been pruned yet. applyWet() is deliberately NOT called here: the
-        // graph stays exactly as it was (still connected, still at `mix`) so the tail keeps
-        // sounding under its own steam while `releasing` tells a UI it's still ringing.
-        this._bypassed = true;
-        this.muteWetInput(true); // stop feeding it — only what's ALREADY ringing should decay
-        this.scheduleBypassRingOut();
+      // Turning a device WITH A TAIL off: let it ring out the SAME way a pad throw's own release
+      // does (see scheduleRelease/beginRingOut — one primitive, two callers) instead of pruning
+      // mid-decay. Shift (hard) skips straight to the cut; a device with nothing to ring
+      // (hasTail false: sat/crush/gate/noise/comp/mod) always cuts now.
+      if (on && !hard && !this._bypassed && this.hasTail) {
+        this.beginRingOut();
         return;
       }
       this._releaseGen++;
@@ -376,22 +374,35 @@ export abstract class BaseFxDevice implements FxDevice {
   get bypassed() {
     return this._bypassed;
   }
-  /** True while a bypassed-off device's tail is still ringing out (see throwReleaseMs). A UI
+  /** True while a bypassed-off device's tail is still ringing out (see beginRingOut). A UI
    *  can use this + `wetLevel` to fade with the real signal instead of snapping on `bypassed`'s
    *  instant flip. Always false once the ring-out lands or on a hard kill. */
   get releasing(): boolean {
     return this._releasePending;
   }
-  // Land a MANUAL soft-bypass once the tail has ACTUALLY quieted down, not on a blind fixed timer
-  // (throwReleaseMs is right-sized for a pad throw's release — see scheduleRelease below — but a
-  // long reverb decay or high delay feedback can still be genuinely audible past that, and a snap
-  // there reads as a chop no matter how the button's own glow is fading). Polls the real wetLevel:
-  // a short/typical tail prunes as soon as it's quiet, a long one keeps ringing up to the ceiling.
-  // Distinct from scheduleRelease() (a throw's release returns to whatever bypass state preceded
-  // the throw) — a manual bypass ALWAYS lands bypassed, since that's the one thing the user asked.
-  private scheduleBypassRingOut() {
+  /** True while a THROW (pad hold or latch) is engaged — the single flag every subclass's own
+   *  `throwing` getter used to reimplement by hand with a private twin of this exact bit. Backed
+   *  by the same `_thrown` the throw lifecycle below already owns; a subclass with real internal
+   *  throw-state (SaturatorFx's drive multiplier, ModFx's depth boost) still keeps that — it's the
+   *  MAGNITUDE, not a duplicate of whether a throw is live. */
+  get throwing(): boolean {
+    return this._thrown;
+  }
+  // ★ THE SHARED RING-OUT — one mechanic, two callers (a manual bypass-off, and a throw's own
+  // release when it lands back on bypass). Both want the exact same thing: report the user-facing
+  // state SETTLED right now (bypassed reads true immediately — that's the ask, not a promise about
+  // the audio), stop feeding the wet chain fresh input (muteWetInput — only what's ALREADY ringing
+  // should decay), then poll the REAL signal and only prune once it's genuinely quiet (or the
+  // safety ceiling forces it). A throw's release used to run a completely separate, bespoke path —
+  // a bare `setTimeout` for a FIXED duration that never called muteWetInput at all, so a still-
+  // playing track kept re-exciting the effect the entire window and the button lied about being
+  // off the whole time too. Same disease this session's bypass-button fixes already cured once;
+  // it just wasn't yet a SHARED primitive, so releasing a pad throw never inherited the cure.
+  private beginRingOut() {
     const gen = ++this._releaseGen;
     this._releasePending = true;
+    this._bypassed = true;
+    this.muteWetInput(true);
     const startedAt = this.ctx.currentTime;
     const poll = () => {
       if (gen !== this._releaseGen) return; // superseded — re-engaged, hard-killed, or re-scheduled
@@ -415,27 +426,44 @@ export abstract class BaseFxDevice implements FxDevice {
 
   // --- throw / latch lifecycle ------------------------------------------------
   // A pad THROW (momentary FX2) or LATCH (FX) engages the effect: un-bypass + a subclass param
-  // boost. Bypass is the SINGLE SOURCE OF TRUTH — engaging remembers the prior bypass; releasing
-  // RE-READS the live bypass (never a stale capture) before restoring it; and a manual bypass
-  // toggle mid-throw clears the whole thing (see setBypass). Latch vs momentary is purely WHEN the
-  // caller releases (sticky vs on key-up) — one primitive, two lifetimes.
+  // boost + (see throwMix) a guaranteed-audible send. Bypass is the SINGLE SOURCE OF TRUTH —
+  // engaging remembers the prior bypass; releasing RE-READS the live bypass (never a stale capture)
+  // before restoring it; and a manual bypass toggle mid-throw clears the whole thing (see
+  // setBypass). Latch vs momentary is purely WHEN the caller releases (sticky vs on key-up) — one
+  // primitive, two lifetimes.
   private _thrown = false;
   private _throwPrevBypass = false;
+  private _throwPrevMix: number | null = null;
   private _settingBypassInternally = false;
   private _releaseGen = 0;
   private _releasePending = false; // a ring-out is in flight: the device is still sounding, on its way back to dormant
 
-  /** Subclass hook: apply (on) / remove (off) the throw's param boost. `off` MUST restore the user's
-   *  settings and clear the device's own throw flag so `throwing` reads false. Idempotent. */
+  /** Subclass hook: apply (on) / remove (off) the throw's OWN character boost (feedback, drive,
+   *  depth…) — never mix; the base handles mix uniformly (see throwMix) so every device gets a
+   *  guaranteed-audible throw for free instead of each one having to remember to touch it. `off`
+   *  MUST restore the user's settings. Idempotent. */
   protected applyThrowBoost(_on: boolean): void {}
 
-  /** How long a released throw keeps a DORMANT device active before returning it to bypass, in ms.
-   *  This is the difference between the two families of effect: a time-based one (delay repeats,
-   *  a reverb bloom) has captured audio that must ring OUT — cutting its send on key-up truncates
-   *  the very tail the throw existed to create. An instant one (saturation, crush, gate, noise)
-   *  has nothing to ring and should cut cleanly. 0 = cut. Overridden by DelayFx / ReverbFx. */
-  protected get throwReleaseMs(): number {
-    return 0;
+  /** Does this device have a real tail to ring out (delay repeats, a reverb bloom)? If so, both a
+   *  manual bypass-off AND a released throw ride it out via beginRingOut instead of cutting
+   *  mid-decay. An instant device (saturation, crush, gate, noise, comp, mod) has nothing to ring
+   *  and always lands immediately. False by default; DelayFx/ReverbFx are the only two devices with
+   *  captured audio that outlives the gesture, so they're the only two that override it true. */
+  protected get hasTail(): boolean {
+    return false;
+  }
+  /** The mix level a throw forces WHILE held, restored to the dialled-in value the instant it
+   *  releases — a pad throw is a performance SLAM, and a DJ who dialled mix down earlier (previewing
+   *  dry, or just left it low) shouldn't get a silent or muffled throw with no clue why the pad lit
+   *  up but nothing changed. null (the default) means a throw never touches mix at all — the RIGHT
+   *  default for a device whose mix is load-bearing for its own sonic identity, not just its
+   *  loudness (ModFx's 0.5 default IS the comb-filter's deepest-notch point; forcing it to full-wet
+   *  would erase the dry reference the notches are relative to — a different timbre, not a louder
+   *  one). Every pure-insert device (DelayFx, ReverbFx, SaturatorFx, CrushFx, GateFx, NoiseFx,
+   *  CompFx) opts IN — delay/reverb to their own established 0.85 (a hair of dry stays audible even
+   *  at full send), the rest to a flat 1 (a slam should be unmistakable). */
+  protected get throwMix(): number | null {
+    return null;
   }
 
   /** Engage/release a throw. The CALLER's lifetime decides latch (sticky) vs momentary (held). When
@@ -452,35 +480,39 @@ export abstract class BaseFxDevice implements FxDevice {
         this._releaseGen++; // cancel the pending re-bypass — we're sounding again
         this._releasePending = false;
         if (this._bypassed) this.internalSetBypass(false);
+        if (this.throwMix != null) {
+          this._throwPrevMix = this.mixAmount;
+          this.setMix(this.throwMix);
+        }
       }
       this.applyThrowBoost(true);
     } else {
       if (this._thrown) {
         this._thrown = false;
         this.applyThrowBoost(false); // params back to the user's settings FIRST → the tail decays naturally
+        if (this._throwPrevMix != null) {
+          this.setMix(this._throwPrevMix);
+          this._throwPrevMix = null;
+        }
         this.scheduleRelease();
         return;
       }
       this.applyThrowBoost(false);
     }
   }
-  // Return a dormant device to bypass — after its ring-out, if it has one. Generation-guarded, so a
-  // re-throw or a manual bypass in the meantime supersedes it. Re-reads the LIVE bypass rather than
-  // trusting the capture, so a hand on the bypass always wins.
+  // Return a dormant device to bypass — after its ring-out, if it has one. Re-reads the LIVE bypass
+  // rather than trusting the capture, so a hand on the bypass always wins (setBypass already
+  // invalidated any pending release the moment it ran, via the same _releaseGen beginRingOut bumps).
   private scheduleRelease() {
-    const gen = ++this._releaseGen;
-    const land = () => {
-      if (gen !== this._releaseGen) return; // superseded
+    if (!this._throwPrevBypass || this._bypassed) {
+      // Nothing to land bypassed — either the device was already active before the throw (a
+      // persistent send you're also occasionally throwing — it just keeps running, no tail to
+      // manage), or a manual bypass already landed it during the throw itself.
       this._releasePending = false;
-      if (this._throwPrevBypass && !this._bypassed) this.internalSetBypass(true);
-    };
-    const ms = this.throwReleaseMs;
-    if (ms <= 0) {
-      land();
       return;
     }
-    this._releasePending = true;
-    setTimeout(land, ms);
+    if (this.hasTail) this.beginRingOut();
+    else this.internalSetBypass(true);
   }
   private internalSetBypass(on: boolean) {
     this._settingBypassInternally = true;

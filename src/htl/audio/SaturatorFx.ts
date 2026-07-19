@@ -317,13 +317,15 @@ export class SaturatorFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + slam all band drives up while held;
-   *  release restores the drives and re-bypasses if it was off. */
+   *  release restores the drives and re-bypasses if it was off. Mix is guaranteed audible by the
+   *  base class (see BaseFxDevice.throwMix) — a slam with the wet turned down would otherwise
+   *  light the pad up for nothing. */
   protected applyThrowBoost(on: boolean) {
     this._throwBoost = on ? 3 : 1;
     for (let i = 0; i < this.drives.length; i++) this.applyDrive(i);
   }
-  get throwing() {
-    return this._throwBoost > 1;
+  protected get throwMix() {
+    return 1;
   }
 
   /** Live read for the WYSIWYG display: the style curve + per-band drive/crossover state. */

@@ -208,6 +208,9 @@ export class Eq3 implements FxDevice {
   // EQ is fully-wet in-series (see the class comment) — no ring-out concept, nothing to fade.
   readonly releasing = false;
   readonly wetLevel = 0;
+  // The EQ's own pad-throw (a curve morph, not a param boost) lives on Deck (see eqThrow/
+  // eqThrowing) since it needs the deck's armed-preset state — Eq3 itself has no throw concept.
+  readonly throwing = false;
   /** Wet/dry blend: 1 = full EQ (default), 0 = flat/dry — dial back the EQ intensity or run it
    *  parallel. Only meaningful on the normal route (bypass is already all-dry). */
   setMix(m: number) {

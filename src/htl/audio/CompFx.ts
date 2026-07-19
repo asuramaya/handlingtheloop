@@ -161,26 +161,24 @@ export class CompFx extends BaseFxDevice {
     );
   }
 
-  /** The pad throw: slam the threshold down + hit it harder. Released → back to the user's setting. */
-  private _throw = false;
+  /** The pad throw: slam the threshold down + hit it harder. Released → back to the user's setting.
+   *  Mix is guaranteed audible by the base class (see BaseFxDevice.throwMix). */
   private _throwPrev: { thr: number; ratio: number } | null = null;
   protected applyThrowBoost(on: boolean) {
     if (on) {
-      if (!this._throw) this._throwPrev = { thr: this.wp.threshold, ratio: this.wp.ratio };
-      this._throw = true;
+      if (this._throwPrev == null) this._throwPrev = { thr: this.wp.threshold, ratio: this.wp.ratio };
       this.post("threshold", Math.max(-60, this.wp.threshold - 18));
       this.post("ratio", Math.min(20, Math.max(this.wp.ratio, 10)));
     } else {
       const p = this._throwPrev;
-      this._throw = false;
       this._throwPrev = null;
       if (!p) return;
       this.post("threshold", p.thr);
       this.post("ratio", p.ratio);
     }
   }
-  get throwing() {
-    return this._throw;
+  protected get throwMix() {
+    return 1;
   }
 
   dispose() {

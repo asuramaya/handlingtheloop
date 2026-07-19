@@ -2045,6 +2045,7 @@ export class Deck {
   // exactly what you were riding. Eq3.applyCurve ramps rather than steps, so a slam doesn't click.
   private eqSnapshot: Record<string, number> | null = null;
   private eqThrowWasBypassed = false;
+  private eqThrowPrevMix: number | null = null;
   private _armedEq: FxPreset | null = null;
 
   /** Arm the preset the EQ pad throws. Called on every EQ preset apply (mouse or hardware). */
@@ -2062,12 +2063,22 @@ export class Deck {
       this.eqSnapshot = this.eq.snapshotParams();
       this.eqThrowWasBypassed = this.eq.bypassed;
       if (this.eq.bypassed) this.eq.setBypass(false); // a thrown curve is audible even from bypass
+      // Same guarantee every other pad throw makes (BaseFxDevice.throwMix): a dialled-down wet/dry
+      // shouldn't leave a thrown curve silent or muffled with no clue why the pad lit up but the
+      // sound barely moved. Eq3 isn't a BaseFxDevice (it's fully-wet in-series, not a send), so this
+      // pad's own throw has to carry the same rule by hand.
+      this.eqThrowPrevMix = this.eq.mix;
+      this.eq.setMix(1);
       this.eq.applyCurve(p.params);
     } else {
       if (!this.clearEqThrow()) return;
       // Re-read the LIVE bypass rather than trusting the capture: if you bypassed by hand during
       // the throw, setEqBypass already cleared it and this branch never runs.
       if (this.eqThrowWasBypassed && !this.eq.bypassed) this.eq.setBypass(true);
+      if (this.eqThrowPrevMix != null) {
+        this.eq.setMix(this.eqThrowPrevMix);
+        this.eqThrowPrevMix = null;
+      }
     }
   }
   get eqThrowing(): boolean {

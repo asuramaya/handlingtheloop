@@ -84,7 +84,6 @@ export class GateFx extends BaseFxDevice {
   private _duty = 0.5;
   private _smooth = 0.15;
   private _shape = 0;
-  private _throw = false;
 
   constructor(ctx: AudioContext) {
     super(ctx, 1.0); // insert: full wet by default
@@ -171,12 +170,10 @@ export class GateFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
-   *  while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify. */
-  protected applyThrowBoost(on: boolean) {
-    this._throw = on;
-  }
-  get throwing() {
-    return this._throw;
+   *  while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify.
+   *  Mix is guaranteed audible by the base class (see BaseFxDevice.throwMix). */
+  protected get throwMix() {
+    return 1;
   }
 
   // ---- live reads for the WYSIWYG -----------------------------------------

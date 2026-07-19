@@ -84,8 +84,9 @@ interface Ctx {
   h: number;
   cx: number;
   cy: number; // the baseline, right under the ribbon — everything hangs FROM here now
-  aX: number; // horizontal semi-axis — fills the panel's width
+  aX: number; // the dome's OWN semi-axis — capped, a fixed-size instrument regardless of width
   aY: number; // vertical semi-axis — fills the space below the ribbon
+  aXraw: number; // the panel's actual available half-width, uncapped — for the room field only
   ribbonY: number;
   ribbonH: number;
 }
@@ -146,7 +147,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
   params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
   const onParamRef = useRef(onParam);
   onParamRef.current = onParam;
-  const ctxRef = useRef<Ctx>({ w: 1, h: 1, cx: 0, cy: 0, aX: 1, aY: 1, ribbonY: 0, ribbonH: 1 });
+  const ctxRef = useRef<Ctx>({ w: 1, h: 1, cx: 0, cy: 0, aX: 1, aY: 1, aXraw: 1, ribbonY: 0, ribbonH: 1 });
   const placed = useRef<Placed[]>([]);
   const hover = useRef<string | null>(null); // a grip id, or "hp"/"lp"/"band"
   const drag = useRef<Drag | null>(null);
@@ -225,8 +226,16 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // of a dome. The tighter of the two axes wins; whatever width is left over becomes the
       // room-field's wings instead of distorting the dome's own shape.
       const aY = Math.min(aYraw, aXraw);
-      const aX = aY;
-      return { w, h, cx, cy, aX, aY, ribbonY, ribbonH };
+      // ★ FIXED-SIZE INSTRUMENT — capped at a constant multiple of aY, so the dome stays the same
+      // comfortable proportions whether this canvas is a normal rack strip or a doubled-width
+      // expanded single-deck view. The height never grows in either case, so unbounded aX (the
+      // panel's real half-width) can go arbitrarily far past what looks like a dome and into
+      // "stretched oval" — capping it, instead of letting it track the panel, is what makes an
+      // expanded view leave leftover space rather than a distorted shape. The room field below
+      // gets that leftover space instead (see aXraw), so it reads as deliberate atmosphere, not a
+      // control surface that gave up trying to fill its own container.
+      const aX = Math.min(aXraw, aY * 2.2);
+      return { w, h, cx, cy, aX, aY, aXraw, ribbonY, ribbonH };
     };
 
     const draw = (now: number) => {
@@ -287,21 +296,49 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // === LIVING ROOM FIELD — fills the wide panel's empty side bands with the reverb's energy
       //     dispersing into the room. Drawn BEHIND the dome. A horizontal glow + reflection motes
       //     that fan OUTWARD from the arch's two horizons (spread by WIDTH, reach/lifetime by
-      //     DECAY, presence by MIX), breathing with DUCK and pulsing with the live wet signal. ===
+      //     DECAY, presence by MIX), breathing with DUCK and pulsing with the live wet signal. The
+      //     dome itself is now a FIXED size (see aX above) — this field is what makes the leftover
+      //     space on a very wide panel read as deliberate atmosphere instead of empty dead air. ===
       const energy = energyRef.current;
       const Rx = Rfrac * aX;
       const wing = w / 2 - Rx; // empty horizontal space beyond the arch's horizons
       if (wing > 40) {
-        const wingA = (0.05 + 0.06 * clamp01(p.mix)) * (0.55 + 0.45 * energy) * duckPulse;
+        // DISTANT ROOM ECHOES — flat ripples using the panel's FULL available half-width
+        // (aXraw, not the dome's own capped reach), so a doubled-width expanded view still reads
+        // as "the room continues out there." Deliberately FLAT (a small fixed height, not another
+        // dome) — this is ripples on the floor, not a second stretched arch.
+        if (c.aXraw > aX * 1.15) {
+          const echoAY = Math.min(aY * 0.22, 16);
+          for (let i = 0; i < 3; i++) {
+            const rr = 0.5 + i * 0.24;
+            const ea = (0.12 + 0.06 * clamp01(p.mix)) * (0.7 + 0.3 * energy) * duckPulse * (1 - i * 0.2);
+            ctx.beginPath();
+            for (let k = 0; k <= 48; k++) {
+              const ang = (k / 48) * Math.PI;
+              const x = cx + Math.cos(ang) * rr * c.aXraw;
+              const y = cy + Math.sin(ang) * rr * echoAY;
+              k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.strokeStyle = withAlpha(accent, ea);
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+
+        const wingA = (0.08 + 0.09 * clamp01(p.mix)) * (0.6 + 0.4 * energy) * duckPulse;
         const wg = ctx.createRadialGradient(cx, cy, Rx * 0.7, cx, cy, w * 0.62);
         wg.addColorStop(0, withAlpha(dr > 0 ? `rgb(${WARM})` : accent, wingA));
         wg.addColorStop(1, withAlpha(accent, 0));
         ctx.fillStyle = wg;
         ctx.fillRect(0, 0, w, h);
 
-        spawnAcc.current += dt * (1.5 + energy * 16 + clamp01(p.decay) * 5) * (0.4 + clamp01(p.mix));
+        // Density SCALES WITH the actual wing size — a doubled-width panel gets a denser field,
+        // not the same handful of motes spread twice as thin.
+        const wingBoost = clamp(wing / 130, 0.7, 2.4);
+        const moteCap = Math.round(70 * wingBoost);
+        spawnAcc.current += dt * (1.5 + energy * 16 + clamp01(p.decay) * 5) * (0.4 + clamp01(p.mix)) * wingBoost;
         const spread = 0.5 + clamp01(p.width / 1.5) * 1.4;
-        while (spawnAcc.current >= 1 && motes.current.length < 70) {
+        while (spawnAcc.current >= 1 && motes.current.length < moteCap) {
           spawnAcc.current -= 1;
           const dir = (now * 997 + motes.current.length) % 2 < 1 ? -1 : 1; // alternate-ish L/R
           const vj = (((now * 131 + motes.current.length * 53) % 100) / 100 - 0.5) * 0.5; // vert jitter

@@ -333,17 +333,23 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         const wingBoost = clamp(wing / 130, 0.7, 2.4);
         const moteCap = Math.round(70 * wingBoost);
         spawnAcc.current += dt * (1.5 + energy * 16 + clamp01(p.decay) * 5) * (0.4 + clamp01(p.mix)) * wingBoost;
-        const spread = 0.5 + clamp01(p.width / 1.5) * 1.4;
         while (spawnAcc.current >= 1 && motes.current.length < moteCap) {
           spawnAcc.current -= 1;
-          const dir = (now * 997 + motes.current.length) % 2 < 1 ? -1 : 1; // alternate-ish L/R
-          const vj = (((now * 131 + motes.current.length * 53) % 100) / 100 - 0.5) * 0.5; // vert jitter
-          const ang = (dir > 0 ? 0 : Math.PI) + vj; // the arch's horizons — mostly horizontal
+          // ★ RADIATE FROM THE CENTRE, any angle across the visible half — not the two horizons.
+          // Spawning at the boundary and drifting due-left/due-right was a leftover from the OLD
+          // full circle, where "left" and "right" were its two natural wing directions. A
+          // semicircle doesn't have that same two-point symmetry: reflections come FROM the
+          // source (same place the drive core and predelay disc sit) and travel outward like
+          // everything else on this panel, not sideways from the rim inward.
+          const angHash = ((now * 977 + motes.current.length * 733) % 1000) / 1000;
+          const ang = angHash * Math.PI;
           const speed = (38 + clamp01(p.decay) * 130) * (0.6 + energy * 0.8);
           const life = 0.5 + clamp01(p.decay) * 1.8;
-          const ox = cx + Math.cos(ang) * Rx;
-          const oy = cy + Math.sin(ang) * (Rfrac * aY);
-          motes.current.push({ x: ox, y: oy, vx: Math.cos(ang) * speed * spread, vy: Math.sin(ang) * speed * 0.5, life, max: life, warm: dr > 0.2 && (now % 100) / 100 < dr });
+          const startJit = ((now * 53 + motes.current.length * 17) % 100) / 500; // 0..0.2
+          const startR = r0px * (0.9 + startJit);
+          const ox = cx + Math.cos(ang) * startR;
+          const oy = cy + Math.sin(ang) * startR;
+          motes.current.push({ x: ox, y: oy, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, life, max: life, warm: dr > 0.2 && (now % 100) / 100 < dr });
         }
         const arr = motes.current;
         for (let i = arr.length - 1; i >= 0; i--) {

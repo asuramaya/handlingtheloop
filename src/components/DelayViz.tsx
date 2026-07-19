@@ -178,7 +178,7 @@ const RAIL_W = 3; // the always-visible track
 const PUCK_W = 11; // the level indicator riding the rail
 // The band's own bounds — shared with FreqRibbon's drag math, not baked into it, since the
 // reverb's tail window has different real bounds and shouldn't silently inherit the delay's.
-const RIBBON_RANGE: RibbonRange = { min: HP_MIN, max: LP_MAX, minRatio: BAND_MIN_RATIO };
+const RIBBON_RANGE: RibbonRange = { loMin: HP_MIN, loMax: LP_MAX, hiMin: HP_MIN, hiMax: LP_MAX, minRatio: BAND_MIN_RATIO };
 
 // THE FIRE'S INNER EDGE. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is
 // driven, and there is no fire. At drive 1 it has come all the way in to the axis — a full-scale

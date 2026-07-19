@@ -13,9 +13,18 @@ export interface RibbonRect {
 
 // The cuts may not cross (or meet) — a band that isn't a band is just a mute. Each caller owns
 // its own device's real bounds; this primitive only enforces "stay a band" within them.
+//
+// loMin/loMax and hiMin/hiMax are SEPARATE, not one shared range — the delay's cuts happen to
+// share one (loMin=hiMin=20, loMax=hiMax=18000), but the reverb's tail window doesn't: its DSP
+// hard-clamps lowCut to [20,2000] and highCut to [1000,20000] (ReverbFx.ts). A shared range would
+// let a grip drift somewhere past 2000 Hz that the DSP silently clamps back from underneath it —
+// the exact "the control lies about where the value actually is" bug this codebase keeps finding
+// and killing (htl-webaudio-footguns). Passing the device's REAL asymmetric bounds is the fix.
 export interface RibbonRange {
-  min: number;
-  max: number;
+  loMin: number;
+  loMax: number;
+  hiMin: number;
+  hiMax: number;
   minRatio: number;
 }
 
@@ -106,19 +115,24 @@ export function hitFreqRibbon(px: number, py: number, rect: RibbonRect, lo: numb
   return x < loX ? "hp" : "lp";
 }
 
-export const dragHp = (px: number, rect: RibbonRect, hi: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), range.min, hi / range.minRatio);
-export const dragLp = (px: number, rect: RibbonRect, lo: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), lo * range.minRatio, range.max);
+export const dragHp = (px: number, rect: RibbonRect, hi: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), range.loMin, Math.min(range.loMax, hi / range.minRatio));
+export const dragLp = (px: number, rect: RibbonRect, lo: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), Math.max(range.hiMin, lo * range.minRatio), range.hiMax);
 
 // The band's BODY drag — sweep both cuts by the same log-distance so the band keeps its width.
 // `dx` is the pointer's movement SINCE LAST CALL (not since the gesture started) — the caller
 // tracks its own lastX, same as the delay always has. At a rail, this SLIDES the band along it
 // rather than freezing: a hard stop reads as "broken", and the whole point of a body-drag is
 // that the band's width survives the sweep.
+//
+// The ratio is FIXED for the sweep (that's what "keeps its width" means), so choosing nLo alone
+// determines nHi = nLo·ratio — the only freedom is which nLo values keep BOTH ends inside their
+// own bounds: nLo ∈ [loMin, loMax] AND nLo·ratio ∈ [hiMin, hiMax] ⇒ nLo ∈ [max(loMin,hiMin/ratio),
+// min(loMax,hiMax/ratio)]. One clamp of that interval, no recompute-and-reclamp dance needed.
 export function dragBand(dx: number, rect: RibbonRect, lo: number, hi: number, range: RibbonRange): [number, number] {
   const dLog = (dx / rect.w) * SPAN;
   const ratio = hi / lo;
-  let nLo = clamp(lo * Math.exp(dLog), range.min, range.max / ratio);
-  const nHi = clamp(nLo * ratio, range.min * ratio, range.max);
-  nLo = nHi / ratio;
-  return [nLo, nHi];
+  const lo2 = Math.max(range.loMin, range.hiMin / ratio);
+  const hi2 = Math.min(range.loMax, range.hiMax / ratio);
+  const nLo = clamp(lo * Math.exp(dLog), lo2, hi2);
+  return [nLo, nLo * ratio];
 }

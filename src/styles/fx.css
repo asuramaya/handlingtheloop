@@ -1840,14 +1840,19 @@ button.room-tog:hover {
 }
 
 
-/* ── Saturator (Phase-1 panel; the SatViz WYSIWYG replaces the body in Phase 2) ───────── */
+/* ── Saturator ─────────────────────────────────────────────────────────────────────────── */
 /* Inherits .fx-panel (height = the shared --fx-body-h, overflow hidden). Do NOT set height
    here — .fx-stage is a flexing flex:1 with no definite height, so height:100% resolves to
-   the content and balloons. The style row + cells are fixed; the canvas (basis 0) absorbs
-   the surplus, exactly like the delay viz. */
+   the content and balloons. The shared cells + style row are fixed; the canvas (basis 0)
+   absorbs the surplus, exactly like the delay viz. The style row (.sat-styles — shared by
+   Comp/Gate/Crush/Noise/Mod too, NOT saturator-specific despite the name) moved to the
+   BOTTOM of the panel: it used to open the panel, sitting directly under FxStrip's own
+   device tabs, which read as one undifferentiated stack of pill buttons. */
 .sat-panel {
   gap: 5px;
 }
+/* ★ Reused verbatim by Comp/Gate/Crush/Noise/Mod's own mode-select rows — a change here is a
+   rack-wide change, not a saturator-only one. */
 .sat-styles {
   display: flex;
   gap: 4px;

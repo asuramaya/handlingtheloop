@@ -41,6 +41,18 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
+      {/* WYSIWYG: log-freq display — drag a crossover line to retune the split, drag inside a
+          band to set its drive; the transfer curve reads out bottom-right. */}
+      <SatViz deck={deck} slot={slot} accent={accent} set={live} />
+
+      <div className="sat-shared">
+        <ValueCell label="BIAS" value={get("bias")} min={0} max={1} onChange={(v) => setParam("bias", v)} format={(v) => `${Math.round(v * 100)}`} />
+        <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
+        <ValueCell label="OUT" value={get("out")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("out", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
+      </div>
+
+      {/* Style select — moved down here (was the panel's first row, sitting right under
+          FxStrip's own device tabs; read as one undifferentiated stack of pill buttons). */}
       <div className="sat-styles">
         {SAT_STYLES.map((s, i) => (
           <button key={s} className={style === i ? "active" : ""} onClick={() => setParam("style", i)}>
@@ -50,16 +62,6 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
         <button className={`sat-punish ${punish ? "active" : ""}`} onClick={() => setParam("punish", punish ? 0 : 1)} title="Push the curve into its hot region">
           PUNISH
         </button>
-      </div>
-
-      {/* WYSIWYG: log-freq display — drag a crossover line to retune the split, drag inside a
-          band to set its drive; the transfer curve reads out bottom-right. */}
-      <SatViz deck={deck} slot={slot} accent={accent} set={live} />
-
-      <div className="sat-shared">
-        <ValueCell label="BIAS" value={get("bias")} min={0} max={1} onChange={(v) => setParam("bias", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
-        <ValueCell label="OUT" value={get("out")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("out", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Deck, DelayFx } from "@htl/audio";
 import { dragBand, dragHp, dragLp, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
+import { dragRail, drawRail } from "./ValueRail";
 
 // The Delay's instrument — an echo-tap timeline you PLAY, not a picture of one.
 //
@@ -633,19 +634,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // stays the hit zone; only the paint got smaller, which is most of what was crowding the dry
       // hit in the first place.
       for (const [id, atLeft, v] of [["duck", true, dv], ["drive", false, heat]] as [string, boolean, number][]) {
-        const on = hot === id;
-        const lvl = botY - v * (botY - top);
         const railX = atLeft ? GUTTER_MARGIN : w - GUTTER_MARGIN - RAIL_W;
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = on ? 0.22 : 0.12;
-        ctx.fillRect(railX, top, RAIL_W, botY - top);
-        // the puck — the level IS the value, riding the rail. Visible at zero too, or the lane
-        // reads as a dead box you have to discover with the mouse.
-        const puckH = on ? 9 : 7;
-        const puckW = on ? PUCK_W + 2 : PUCK_W;
-        ctx.globalAlpha = on ? 1 : 0.88;
-        ctx.fillRect(railX + RAIL_W / 2 - puckW / 2, clamp(Math.round(lvl - puckH / 2), top, botY - puckH), puckW, puckH);
-        ctx.globalAlpha = 1;
+        drawRail(ctx, { x: railX, y: top, w: RAIL_W, h: botY - top }, v, accent, hot === id, RAIL_W, PUCK_W);
       }
 
       // THE MAGNET, shown only while you're dragging a tap's TIME. TIME snaps to note divisions, so
@@ -919,13 +909,10 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         return;
       }
       if (g.kind === "drive" || g.kind === "duck") {
-        // ★ ONE LAW, and it is the same one the taps use: BOTTOM 0 → TOP 100, monotonic, absolute.
-        // Both of these used to CENTRE their maximum — drive mirrored its roof around the axis, duck
-        // read |py − midY| — which is the identical bipolar bug the taps were cured of: the middle
-        // meant one thing, and both rails meant the same other thing, so nothing on the control said
-        // which way was "more". The gutter's fill level IS the value, so the drag can be absolute
-        // and the level lands under your finger.
-        setChar(g.kind, (botY - py) / Math.max(1, botY - top));
+        // ★ ONE LAW — ValueRail's, shared with the reverb's control row now: BOTTOM 0 → TOP 100,
+        // monotonic, absolute. Both of these used to CENTRE their maximum — drive mirrored its roof
+        // around the axis, duck read |py − midY| — the same bipolar bug the taps were cured of.
+        setChar(g.kind, dragRail(py, { x: 0, y: top, w: 1, h: botY - top }));
         return;
       }
       if (g.kind === "lfo") {

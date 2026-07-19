@@ -1,11 +1,11 @@
-import { useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { FX_PADS } from "./fxPads";
 import type { StemName } from "@htl/stems";
-import { nextSkip, skipLabel, skipTitle } from "@htl/state";
+import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
 import { useLongPress } from "./useLongPress";
 import { FxStrip, type FxStripCtl } from "./FxStrip";
@@ -63,9 +63,6 @@ const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
   { n: 4, label: "4", kbd: "K" },
   { n: 8, label: "8", kbd: "L" },
 ];
-
-// Tempo nudge step (percent) for SHIFT-clicking the ∓ pitch steppers.
-const TEMPO_NUDGE = 0.5;
 
 // The four mode buttons + their SHIFT-layer labels (peer mode in PAD_MODE_SHIFT). U·I·O·P.
 // SMP = the deck's LOCAL sample pads (slices of this track); its shift peer GLBL = the account's
@@ -224,18 +221,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
     refresh();
   };
-  // ∓ stepper: KEY ±1 semitone (clamped to the pitch range), or TEMPO ±0.5% under
-  // SHIFT (clamped to the tempo range).
-  const nudge = (dir: number) => {
-    if (shift) {
-      deck.setTempo(Math.max(-tempoRange, Math.min(tempoRange, deck.tempo + dir * TEMPO_NUDGE)));
-      emit({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
-    } else {
-      deck.setPitch(Math.max(-pitchRange, Math.min(pitchRange, deck.pitch + dir)));
-      emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-    }
-    refresh();
-  };
+  // The FX bank scrolls now instead of crushing (cues-loops.css) — but a pad thrown from
+  // OFF-SCREEN (keyboard 1-8, MIDI, a co-DJ's board mirror) gave no clue it fired. Scroll
+  // whichever pad is actually engaged into view, same idea as FxStrip's tab auto-scroll —
+  // source-agnostic since it reacts to the resulting STATE, not the trigger. A no-op via
+  // the browser's own "nearest" logic when it's already visible.
+  const fxBankRef = useRef<HTMLDivElement>(null);
+  const activeFxIdx = FX_PADS.findIndex((pad) => pad.active?.(deck));
+  useEffect(() => {
+    if (deck.padMode !== "fx" && deck.padMode !== "fx2") return;
+    if (activeFxIdx < 0) return;
+    const el = fxBankRef.current?.children[activeFxIdx] as HTMLElement | undefined;
+    el?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [activeFxIdx, deck.padMode]);
   const act = (fn: () => void) => () => {
     fn();
     refresh();
@@ -583,7 +581,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             every backing effect is a permanent dormant resident of the rack. Tap = throw (hold-FX
             glow while held); right-click = reveal that effect's panel below to dial it in. */}
         {deck.padMode === "fx" && (
-        <div className="hotcues fx-bank">
+        <div className="hotcues fx-bank" ref={fxBankRef}>
           {FX_PADS.map((pad, i) => (
             <button
               key={pad.label}
@@ -604,7 +602,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             effect, release to drop it — a hands-on stab vs FX's set-and-forget latch. Lit = live
             while held. Right-click reveals the panel. */}
         {deck.padMode === "fx2" && (
-        <div className="hotcues fx-bank fx2-bank">
+        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
           {FX_PADS.map((pad, i) => (
             <button
               key={pad.label}
@@ -679,18 +677,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           </>
         )}
 
-        {/* − · TEMPO-range · PITCH-range · + rack: the ∓ tempo/key steppers flank the
-            two range buttons (SYNC and KEY moved down to the TEMPO/KEY row). */}
-        <div className="transport">
-          <button className="pitch-step" title={shift ? "Nudge tempo down 0.5%" : "Key down a semitone"} onClick={() => nudge(-1)}>−</button>
-          <button className="hw-btn range" title="TEMPO knob range (±%)" onClick={act(onCycleTempoRange)}>
-            ±{tempoRange}%<span className="kbd">D</span>
-          </button>
-          <button className="hw-btn range" title="PITCH (KEY) knob range (± semitones)" onClick={act(onCyclePitchRange)}>
-            ±{pitchRange}st<span className="kbd">F</span>
-          </button>
-          <button className="pitch-step" title={shift ? "Nudge tempo up 0.5%" : "Key up a semitone"} onClick={() => nudge(1)}>+</button>
-        </div>
+        {/* The − / + nudge steppers and the ±range pill buttons that used to live here are both
+            gone now — TEMPO/KEY are adjusted by drag/scroll/tap on the cells themselves below,
+            and Minus/Equal still nudge a semitone/0.5% from the keyboard (pitchDown/pitchUp,
+            unchanged — only the on-screen buttons went away, not the bindings). */}
 
         <div className="bank-load">
           {cueFader ? (
@@ -765,23 +755,30 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           </button>
         </div>
 
-        {/* TEMPO + KEY knobs, now bracketed by SYNC (left) and KEY-match (right). */}
+        {/* TEMPO + KEY knobs, bracketed by KEY-match (left) and SYNC (right) — swapped from
+            SYNC-left/KEY-right so the on-screen order reads A···S left-to-right, matching
+            where those two keys actually sit on the keyboard (A left of S). */}
         <div className="pitch-row">
           <button
-            className={`hw-btn sync ${deck.syncRole !== "off" ? "on" : ""} ${deck.syncRole === "master" ? "master" : ""}`}
+            className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}
             title={
-              deck.syncRole === "master"
-                ? "MASTER — the other deck follows this one (tap to follow it instead)"
-                : deck.syncRole === "slave"
-                  ? "Synced — following the other deck (tap to release)"
-                  : "Beat sync — lock tempo + phase to the other deck"
+              deck.keyRole === "master"
+                ? "KEY MASTER — the other deck matches this one's key (tap to follow it instead)"
+                : deck.keyRole === "slave"
+                  ? "Key-locked — harmonically matched to the other deck (tap to release)"
+                  : "Key match — harmonically shift to be compatible with the other deck"
             }
             onClick={act(() => {
-              onSync();
-              emitControls(id);
+              onKey();
+              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
             })}
           >
-            {deck.syncRole === "master" ? "MASTER" : "SYNC"}
+            {/* Very narrow phones (same 380px breakpoint the chin already uses to drop its
+                label text): the full word doesn't fit next to TEMPO/KEY/SYNC any more —
+                fall back to the bare initial rather than let it clip mid-word. Role state
+                (master/slave/on) still reads from colour, so the letter alone is enough. */}
+            <span className="btn-label-full">{deck.keyRole === "master" ? "KMST" : "KEY"}</span>
+            <span className="btn-label-short">K</span>
             <span className="kbd">A</span>
           </button>
           <ValueCell
@@ -793,7 +790,44 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             pivot={0}
             onChange={(v) => { deck.setTempo(v); refresh(); emit({ kind: "control", deck: id, param: "tempo", value: v }); }}
             format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`}
-          />
+            onTap={() => { onCycleTempoRange(); refresh(); }}
+            kbd="F"
+          >
+            {/* Which of the 6 tempo-range tiers is active — a tap cycles it, this shows where
+                you landed without needing digits (there's no room for "±50%" at mobile widths). */}
+            <div className="range-ticks">
+              {TEMPO_RANGES.map((r) => (
+                <span key={r} className={`range-tick ${r === tempoRange ? "active" : ""}`} />
+              ))}
+            </div>
+          </ValueCell>
+          {/* Key lock: sits BETWEEN the two values it relates (not inside either one) — it's
+              the relationship, not a property of TEMPO or KEY alone. A real bordered button
+              (not a bare floating icon) with its own Z kbd hint — a dedicated key, not a ⇧F
+              combo (that read as confusing: F already does something plain-pressed, and
+              overloading its shift for a persistent toggle wasn't obvious). Shape/colour IS
+              the state readout too: locked is quiet, unlocked swings the shackle open and
+              picks up the board's shift-tint/glow language. */}
+          <button
+            className={`keylock-btn ${deck.keylock ? "locked" : "unlocked"}`}
+            title={
+              deck.keylock
+                ? "Key lock ON — pitch holds steady as tempo changes. Tap to decouple (or Z)."
+                : "Key lock OFF — pitch rides with tempo, vinyl-style. Tap to relock (or Z)."
+            }
+            onClick={() => {
+              const on = !deck.keylock;
+              deck.setKeylock(on);
+              emit({ kind: "toggle", deck: id, param: "keylock", value: on });
+              refresh();
+            }}
+          >
+            <svg className="keylock-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <rect x="3" y="7" width="10" height="7" rx="1.5" />
+              <path className="keylock-shackle" d="M5.5 7 V5.5 a2.5 2.5 0 0 1 5 0 V7" />
+            </svg>
+            <span className="kbd">Z</span>
+          </button>
           <ValueCell
             label="KEY"
             value={deck.pitch}
@@ -811,22 +845,31 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 ? `${live > 0 ? "+" : ""}${live.toFixed(1)}`
                 : `${deck.pitch > 0 ? "+" : ""}${deck.pitch}`;
             }}
-          />
+            onTap={() => { onCyclePitchRange(); refresh(); }}
+            kbd="D"
+          >
+            <div className="range-ticks">
+              {PITCH_RANGES.map((r) => (
+                <span key={r} className={`range-tick ${r === pitchRange ? "active" : ""}`} />
+              ))}
+            </div>
+          </ValueCell>
           <button
-            className={`hw-btn key ${deck.keyRole !== "off" || deck.pitch !== 0 ? "on" : ""} ${deck.keyRole === "master" ? "master" : ""}`}
+            className={`hw-btn sync ${deck.syncRole !== "off" ? "on" : ""} ${deck.syncRole === "master" ? "master" : ""}`}
             title={
-              deck.keyRole === "master"
-                ? "KEY MASTER — the other deck matches this one's key (tap to follow it instead)"
-                : deck.keyRole === "slave"
-                  ? "Key-locked — harmonically matched to the other deck (tap to release)"
-                  : "Key match — harmonically shift to be compatible with the other deck"
+              deck.syncRole === "master"
+                ? "MASTER — the other deck follows this one (tap to follow it instead)"
+                : deck.syncRole === "slave"
+                  ? "Synced — following the other deck (tap to release)"
+                  : "Beat sync — lock tempo + phase to the other deck"
             }
             onClick={act(() => {
-              onKey();
-              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
+              onSync();
+              emitControls(id);
             })}
           >
-            {deck.keyRole === "master" ? "KMST" : "KEY"}
+            <span className="btn-label-full">{deck.syncRole === "master" ? "MASTER" : "SYNC"}</span>
+            <span className="btn-label-short">{deck.syncRole === "master" ? "M" : "S"}</span>
             <span className="kbd">S</span>
           </button>
         </div>

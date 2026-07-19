@@ -84,6 +84,12 @@ body.no-glow .lane.focused::after {
   gap: 6px;
   align-items: stretch;
 }
+/* .pitch-row has a 5th member (the key-lock button, SYNC · TEMPO · LOCK · KEY · KEY-match) —
+   an explicit template so the lock gets its own content-sized slot instead of stealing an
+   equal 1/5 share from the four real controls. */
+.pitch-row {
+  grid-template-columns: 1fr 1fr auto 1fr 1fr;
+}
 /* Let the cells/steppers shrink with their track on narrow widths (their 44px
    min-width would otherwise overflow the row off the right). */
 .pitch-row > *,

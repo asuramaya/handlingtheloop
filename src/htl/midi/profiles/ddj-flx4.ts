@@ -184,7 +184,6 @@ export const DDJ_FLX4: DeviceProfile = {
     // transmits the press on channel 0x95 instead of 0x94 (seen live after the lamp was driven).
     // Bind BOTH channel states so bypass fires no matter which state the firmware is parked in.
     { control: { kind: "action", action: "fxBypassCur" }, status: 0x95, data: 0x47, type: "note" },
-    { control: { kind: "action", action: "fxBypassCur" }, status: 0x95, data: 0x43, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x63, type: "note" },
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x4a, type: "note" },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x4b, type: "note" },
@@ -193,7 +192,11 @@ export const DDJ_FLX4: DeviceProfile = {
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x64, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x66, type: "note", shift: true },
     { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x6b, type: "note", shift: true },
-    { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x43, type: "note", shift: true },
+    // SHIFT + ON/OFF is the RELEASE FX trigger on real Pioneer gear (confirmed via the DDJ-400
+    // — "hold SHIFT and press the Beat FX ON/OFF button"), not a second bypass. Bound on both
+    // firmware lamp-channel states, matching the unshifted pair above.
+    { control: { kind: "action", action: "releaseBrake" }, status: 0x94, data: 0x43, type: "note", shift: true },
+    { control: { kind: "action", action: "releaseBrake" }, status: 0x95, data: 0x43, type: "note", shift: true },
     // 1·2·1&2 channel switch — pos 1 (note 0x94/0x10) → focus deck A, pos 2 (0x95/0x11) → deck B.
     // At 1&2 both notes fire; last wins for now (true "both" is deferred).
     { control: { kind: "focus", deck: "A" }, status: 0x94, data: 0x10, type: "note" },

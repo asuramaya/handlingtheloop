@@ -23,19 +23,24 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "play", label: "Play / pause", group: "Transport", defaultKey: "Space", shiftLabel: "Reset channel" },
   { id: "cue", label: "Cue", group: "Transport", defaultKey: "KeyC", shiftLabel: "Jump to start" },
 
-  { id: "sync", label: "Beat sync", group: "Mix", defaultKey: "KeyA", shiftLabel: "Reset pitch" },
-  { id: "keyMatch", label: "Key match", group: "Mix", defaultKey: "KeyS" },
-  { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyD", shiftLabel: "Match gain (dB)" },
-  { id: "pitchRange", label: "Cycle pitch range", group: "Mix", defaultKey: "KeyF" },
+  { id: "sync", label: "Beat sync", group: "Mix", defaultKey: "KeyS", shiftLabel: "Reset tempo" },
+  { id: "keyMatch", label: "Key match", group: "Mix", defaultKey: "KeyA", shiftLabel: "Reset pitch" },
+  // Z sits physically right under A/S — a dedicated key for key-lock rather than a ⇧F combo,
+  // which read as confusing (F already means something plain-pressed; overloading its shift
+  // for a persistent toggle wasn't obvious). Own key, own on-screen button (DeckControls).
+  { id: "keylock", label: "Key lock (couple/decouple tempo & pitch)", group: "Mix", defaultKey: "KeyZ" },
+  { id: "tempoRange", label: "Cycle tempo range", group: "Mix", defaultKey: "KeyF" },
+  { id: "pitchRange", label: "Cycle pitch range", group: "Mix", defaultKey: "KeyD" },
+  { id: "matchGain", label: "Match gain (dB)", group: "Mix", defaultKey: "KeyR" },
   { id: "grid", label: "Grid magnet (snap)", group: "Mix", defaultKey: "KeyG", shiftLabel: "Step skip size" },
   { id: "smartFader", label: "Smart Fader (auto-transition)", group: "Mix", defaultKey: "KeyT", shiftLabel: "Enable / disable crossfader" },
 
   { id: "pitchDown", label: "Key down a semitone", group: "Pitch", defaultKey: "Minus", shiftLabel: "Nudge tempo down" },
   { id: "pitchUp", label: "Key up a semitone", group: "Pitch", defaultKey: "Equal", shiftLabel: "Nudge tempo up" },
 
-  { id: "loopIn", label: "Loop In", group: "Loops", defaultKey: "KeyQ" },
-  { id: "loopOut", label: "Loop Out", group: "Loops", defaultKey: "KeyW" },
-  { id: "loopExit", label: "Loop Exit / Reloop", group: "Loops", defaultKey: "KeyE" },
+  { id: "loopIn", label: "Loop In", group: "Loops", defaultKey: "KeyQ", shiftLabel: "Adjust loop-in (drag / scroll / arrows)" },
+  { id: "loopOut", label: "Loop Out", group: "Loops", defaultKey: "KeyW", shiftLabel: "Adjust loop-out (drag / scroll / arrows)" },
+  { id: "loopExit", label: "Loop Exit / Reloop", group: "Loops", defaultKey: "KeyE", shiftLabel: "Clear loop" },
 
   // Pad-mode selectors: switch what the 8 pads (and the keyboard 1-8) do. U=cue, I=loop.
   // U·I·O·P read left-to-right across the on-screen mode row, which is ordered to mirror
@@ -66,11 +71,16 @@ export const KEY_ACTIONS: KeyAction[] = [
   { id: "jogFwd", label: "Jump forward (skip size)", group: "Jog", defaultKey: "ArrowUp", shiftLabel: "Move loop forward" },
   { id: "phraseBack", label: "Jump back a phrase", group: "Jog", defaultKey: "BracketLeft" },
   { id: "phraseFwd", label: "Jump forward a phrase", group: "Jog", defaultKey: "BracketRight" },
-  { id: "spinback", label: "Spinback (back-spin)", group: "Jog", defaultKey: "KeyX" },
-  { id: "slip", label: "Slip mode (toggle)", group: "Jog", defaultKey: "KeyZ" },
-  // CENSOR moved off the FX pad bank (the EQ took its pad) and onto its own key. No key-up on
-  // the keyboard, so it toggles: press to run backward, press again to slip-snap forward.
-  { id: "censor", label: "Censor (reverse — press again to return)", group: "Jog", defaultKey: "KeyR", shiftLabel: "Sustained reverse" },
+  // The Release-FX / toggle cluster, consolidated onto one contiguous home-row block (was
+  // scattered across X/Z/R): H·J are the two Release-FX one-shot triggers (motor-driven,
+  // independent of the physical jog — see JogEngine's spinback()/releaseBrake() doc comments),
+  // K·L are the two hold/toggle jog modifiers. R/X/Z are left free (not reassigned).
+  { id: "spinback", label: "Spinback (back-spin)", group: "Jog", defaultKey: "KeyH", shiftLabel: "Stronger / longer spin" },
+  { id: "releaseBrake", label: "Release Brake (Vinyl Break)", group: "Jog", defaultKey: "KeyJ" },
+  { id: "slip", label: "Slip mode (toggle)", group: "Jog", defaultKey: "KeyK" },
+  // No key-up on the keyboard, so CENSOR toggles: press to run backward, press again to
+  // slip-snap forward.
+  { id: "censor", label: "Censor (reverse — press again to return)", group: "Jog", defaultKey: "KeyL", shiftLabel: "Sustained reverse" },
 
   // The 8 pads (1-8): act as hot cues / beat loops / sampler per the deck's pad mode.
   ...Array.from({ length: 8 }, (_, i) => ({

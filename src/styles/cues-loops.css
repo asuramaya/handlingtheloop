@@ -183,15 +183,29 @@ body:not(.no-glow) .pad.fx2.latched {
   box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 42%, transparent),
     0 0 10px -1px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-/* FX bank: all 8 effects are permanent residents, so the row is always the full 8 — the pads
-   flex evenly to fill the width. (FX2 shares the layout via .fx-bank.) */
+/* FX bank: all 8 effects are permanent residents. Used to flex-evenly-shrink to fit the row,
+   which crushed labels like CRUSH/NOISE into mush on a narrow deck. Fix: a hard floor
+   (54px — fits the longest labels on one line) via flex-shrink:0, but flex-grow:1 so the
+   pads still fill and space out evenly on a wide deck exactly like before — only once the
+   row can no longer fit all 8 at the floor width does it overflow into a SCROLL instead of
+   compressing (same "slide instead of squish" idea as .fx-tabs/FxStrip, adapted for
+   uniform square pads that should grow to fill space rather than stay content-sized).
+   Hidden scrollbar: native touch drag still works, a mouse can wheel-scroll it (no JS
+   mapping here yet, unlike .fx-tabs — 8 fixed items, not worth it until proven needed).
+   (FX2 shares the layout via .fx-bank.) */
 .hotcues.fx-bank {
   display: flex;
   gap: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hotcues.fx-bank::-webkit-scrollbar {
+  display: none;
 }
 .fx-bank .pad.fx {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 0 54px;
 }
 /* Pad shortcut markers sit bottom-LEFT so they never collide with the bottom-right stem
    letter on a chopped sampler pad. */

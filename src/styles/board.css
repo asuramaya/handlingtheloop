@@ -974,6 +974,46 @@
   line-height: 1;
 }
 
+/* Keyboard-shortcuts popover — the ⓘ/? launcher's content. Wider than .ctx-menu (which is
+   sized for a narrow list of buttons, not a full reference table), anchored below the chin. */
+.help-panel {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  z-index: 61;
+  width: min(480px, calc(100vw - 24px));
+  max-height: min(640px, calc(100vh - 72px));
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+}
+.help-panel-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 700;
+  z-index: 1;
+}
+.help-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+.help-panel-close:hover {
+  color: var(--text);
+}
+
 /* Settings launcher: a text chin button on mobile, a compact gear SQUARE pinned to
    the top-left corner on desktop (CSS `order:-1` moves it ahead of Library/Search). */
 /* Settings is a compact gear SQUARE (icon only) on ALL platforms — mobile included. */
@@ -1473,8 +1513,7 @@
 }
 .hw-btn.sync,
 .hw-btn.key,
-.hw-btn.fx,
-.hw-btn.range {
+.hw-btn.fx {
   font-size: 12px;
   letter-spacing: 1px;
 }
@@ -1503,12 +1542,6 @@
   position: relative;
   z-index: 1;
 }
-/* Tempo-range cycle (Shift = dB gain-match). */
-.hw-btn.range {
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-
 /* FX button wrapper holds the pop-up effect menu (Shift-click). */
 .fx-wrap {
   position: relative;
@@ -1604,32 +1637,22 @@ body.no-glow .hw-btn.shift.on {
 .bank.shifted .loop-sizes .loop-btn:not(.on):hover {
   background: color-mix(in srgb, var(--shift) 16%, transparent);
 }
-/* The pitch ∓ steppers and the IN / OUT / EXIT loop buttons keep their label when
-   shifted (unlike CUE→START / PLAY→RESET), so they'd give no hint of their alt mode.
-   Mark them with the same yellow shift tint as the jog row — ∓ → tempo nudge, IN/OUT
-   → arm fine-adjust, EXIT → clear. A button already in its active state (armed /
-   adjusting / loop-on) keeps that colour, so the tint only flags the available ones. */
-.bank.shifted .pitch-step,
+/* The IN / OUT / EXIT loop buttons keep their label when shifted (unlike CUE→START /
+   PLAY→RESET), so they'd give no hint of their alt mode. Mark them with the same yellow
+   shift tint as the jog row — IN/OUT → arm fine-adjust, EXIT → clear. A button already in
+   its active state (armed / adjusting / loop-on) keeps that colour, so the tint only flags
+   the available ones. */
 .bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled) {
   border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
   color: var(--shift);
   box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
 }
-.bank.shifted .pitch-step:hover,
 .bank.shifted .loops .loop-btn:not(.adjust):not(.armed):not(.on):not(:disabled):hover {
   background: color-mix(in srgb, var(--shift) 16%, transparent);
 }
 .hw-btn.small {
   padding: 8px 12px;
   font-size: 12px;
-}
-.transport {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)); /* tracks may shrink → no overflow */
-  gap: 6px;
-}
-.transport > * {
-  min-width: 0; /* let the buttons shrink with their track on narrow widths */
 }
 .bank-load {
   display: flex;
@@ -1843,6 +1866,85 @@ body.no-glow .hw-btn.shift.on {
   line-height: 1.1;
   white-space: nowrap;
 }
+/* Key-lock toggle: its own small slot in .pitch-row's grid, sitting BETWEEN the TEMPO and
+   KEY cells (see the grid-template-columns override below) rather than overlaid on either
+   one — it relates the two, it isn't a property of one of them. A real bordered button
+   (same visual language as the SYNC/KEY hw-btns either side of it), not a bare icon, so
+   it reads as clickable before you've touched it — plus its own .kbd hint (⇧F). */
+.keylock-btn {
+  position: relative; /* anchors the .kbd badge */
+  align-self: center;
+  width: 30px;
+  height: 32px;
+  padding: 2px 2px 8px; /* bottom padding nudges the icon up, clear of the ⇧F badge */
+  border: 1px solid var(--btn-border, var(--line));
+  border-radius: 5px;
+  background: var(--panel-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.keylock-btn:hover {
+  border-color: var(--accent);
+}
+.keylock-icon rect {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+.keylock-shackle {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  transition: transform 0.15s ease;
+  transform-origin: 5.5px 7px;
+}
+/* Locked is the default 99% of the time — kept quiet (muted outline) so it doesn't compete
+   with TEMPO's own value. Unlocked is the rare/active state (manually decoupled, or a Smart
+   Fader / AutoMixer glide has it pinned off) — shackle swings open and it picks up the same
+   shift-tint + glow the rest of the board uses to flag "you're in an alt state right now". */
+.keylock-btn.locked {
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+}
+.keylock-btn.unlocked {
+  color: var(--shift, #fc6);
+  filter: drop-shadow(0 0 3px var(--shift, #fc6));
+}
+.keylock-btn.unlocked .keylock-shackle {
+  transform: rotate(-25deg);
+}
+/* Which tempo/pitch-range TIER is active (TEMPO_RANGES / PITCH_RANGES, 6 entries each) — an
+   overlay row of tiny dots riding the cell's bottom edge, absolutely positioned so it never
+   competes with the label/value text for width and survives the cell shrinking on mobile
+   (a "±50%" readout wouldn't fit there; 6 dots always do). */
+.range-ticks {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2.5px;
+  pointer-events: none;
+}
+/* Inactive dots are deliberately not-too-dim: the first version at 25% opacity / 3px read as
+   near-invisible flecks (operator: "not obvious enough") — this needs to look like a SCALE at
+   a glance, not just a single mystery dot. The active one is bigger AND brighter, not just a
+   colour swap, so it still reads at a glance even desaturated / colour-blind. */
+.range-tick {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.range-tick.active {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  box-shadow: 0 0 5px 1px var(--accent);
+}
 /* A cell whose readout is mid-glide (live sub-semitone pitch drift, e.g. KEY during Smart Fader) —
    pulse the value so the live feedback is obvious vs a static manual setting. */
 .vcell.gliding .vcell-value {
@@ -1910,10 +2012,6 @@ body.no-glow .hw-btn.shift.on {
     padding: 6px 1px;
     font-size: 10px;
     letter-spacing: 0;
-  }
-  .transport {
-    grid-template-columns: repeat(4, minmax(0, 1fr)); /* one row, quarter-width — like the pitch row */
-    gap: 3px;
   }
   .jog {
     gap: 2px;
@@ -2082,6 +2180,22 @@ body.no-glow .hw-btn.shift.on {
 @media (max-width: 380px) {
   .chin-label {
     display: none;
+  }
+}
+
+/* SYNC / KEY-match: full word normally, bare initial once the row genuinely can't fit it
+   (same 380px cutoff as the chin, above) — S/K letter-only rather than a mid-word clip.
+   Role state (master/slave/on) still reads from the button's own colour, so the missing
+   letters aren't load-bearing. */
+.btn-label-short {
+  display: none;
+}
+@media (max-width: 380px) {
+  .btn-label-full {
+    display: none;
+  }
+  .btn-label-short {
+    display: inline;
   }
 }
 

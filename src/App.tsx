@@ -18,6 +18,7 @@ import { NotificationsBell } from "./components/social/NotificationsBell";
 import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
 import { ReplayBar } from "./components/ReplayBar";
+import { KeyMap } from "./components/KeyHelp";
 import { useMidi, type DeckFeedback } from "@htl/midi";
 import { useGamepad } from "@htl/gamepad";
 import {
@@ -409,6 +410,9 @@ function AppBody() {
   const [profileOpen, setProfileOpen] = useState(initRightDock === "profile");
   const [socialOpen, setSocialOpen] = useState(initRightDock === "social");
   const [discoverOpen, setDiscoverOpen] = useState(initRightDock === "discover");
+  // Keyboard-help popover — a lightweight, ephemeral overlay (not one of the persisted
+  // right-docks above): pops near the chin, closes on click-away or Escape.
+  const [helpOpen, setHelpOpen] = useState(false);
   useEffect(() => {
     const v = settingsOpen ? "settings" : profileOpen ? "profile" : socialOpen ? "social" : discoverOpen ? "discover" : "";
     try {
@@ -699,10 +703,9 @@ function AppBody() {
   // FLX4 jog mode, latched from the controller's own CC stream: the hardware VINYL
   // button switches the top-plate CC (0x22 scratch / 0x23 bend), so the arriving tick
   // tells us the mode. Gates whether a touch grabs the platter (vinyl) or is inert
-  // (non-vinyl, where the top plate just bends). Seeded from settings.jogVinylDefault
-  // (the saved starting mode); flips the first time a scratch/bend-stream tick reveals
-  // the unit's real mode. Kept in sync by the settings effect below.
-  const jogVinyl = useRef<Record<DeckId, boolean>>({ A: settings.jogVinylDefault, B: settings.jogVinylDefault });
+  // (non-vinyl, where the top plate just bends). Assumes vinyl until the first tick
+  // reveals otherwise — most FLX4 use leaves VINYL on, and the very first CC corrects it.
+  const jogVinyl = useRef<Record<DeckId, boolean>>({ A: true, B: true });
   // Accumulated jog motion (seconds) while editing a loop edge under GRID LOCK — the
   // continuous wheel is integrated and spent one whole beat at a time (see the jogTurn
   // handler), since a per-tick adjustBy would just re-snap to the same beat and stick.
@@ -736,13 +739,34 @@ function AppBody() {
     const next = TEMPO_RANGES[(i + 1) % TEMPO_RANGES.length];
     setSettings((s) => ({ ...s, tempoRange: next }));
     emitRef.current({ kind: "tempoRange", value: next }); // share it (the range scales the tempo fader)
-  }, [settings.tempoRange]);
+    // A shrinking range can strand a deck's tempo outside the new ± limit — the knob ring
+    // would just clamp its display and go visually dead-ended while the deck kept playing
+    // the old, now out-of-range value. Snap it to the new limit instead of leaving that split.
+    (["A", "B"] as const).forEach((id) => {
+      const deck = engine.deck(id);
+      const clamped = Math.max(-next, Math.min(next, deck.tempo));
+      if (clamped !== deck.tempo) {
+        deck.setTempo(clamped);
+        emitRef.current({ kind: "control", deck: id, param: "tempo", value: clamped });
+      }
+    });
+    refresh();
+  }, [settings.tempoRange, engine, refresh]);
   // SHIFT-F: cycle the KEY knob's ± semitone range (local only for now).
   const cyclePitchRange = useCallback(() => {
     const i = PITCH_RANGES.indexOf(settings.pitchRange);
     const next = PITCH_RANGES[(i + 1) % PITCH_RANGES.length];
     setSettings((s) => ({ ...s, pitchRange: next }));
-  }, [settings.pitchRange]);
+    (["A", "B"] as const).forEach((id) => {
+      const deck = engine.deck(id);
+      const clamped = Math.max(-next, Math.min(next, deck.pitch));
+      if (clamped !== deck.pitch) {
+        deck.setPitch(clamped);
+        emitRef.current({ kind: "control", deck: id, param: "pitch", value: clamped });
+      }
+    });
+    refresh();
+  }, [settings.pitchRange, engine, refresh]);
 
   // "dB" gain-match: nudge this deck's TRIM so its trimmed loudness equals the
   // other deck's, clamped to the trim knob's range so a near-silent track can't
@@ -921,7 +945,11 @@ function AppBody() {
         }
       },
       keyMatch: (deck, id, s) => {
-        if (s) return; // KEY is a toggle — no shift action (channel reset is on Shift+Space)
+        if (s) {
+          deck.setPitch(0);
+          emitRef.current({ kind: "control", deck: id, param: "pitch", value: 0 });
+          return;
+        }
         engine.toggleKey(id);
         emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
         emitRef.current({ kind: "key", slave: engine.keySlave }); // mirror the button on peers
@@ -969,14 +997,21 @@ function AppBody() {
       // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down
       // engaged it; close the COLOR-knob remap window now instead of waiting for the 150ms tick).
       eqStemToggle: () => { setEqStemMode((v) => !v); midiSendRef.current?.([0x96, 0x00, 0x00]); },
-      tempoRange: (deck, id, s) => {
-        if (s) {
-          matchGain(id);
-          emitRef.current({ kind: "control", deck: id, param: "trim", value: deck.trim });
-        } else cycleTempoRange();
+      // Own key (Z), not ⇧F — see keybinds.ts. Same flag the on-screen lock button drives.
+      keylock: (deck, id) => {
+        const on = !deck.keylock;
+        deck.setKeylock(on);
+        emitRef.current({ kind: "toggle", deck: id, param: "keylock", value: on });
+      },
+      tempoRange: (_deck, _id, s) => {
+        if (!s) cycleTempoRange();
       },
       pitchRange: (_deck, _id, s) => {
         if (!s) cyclePitchRange();
+      },
+      matchGain: (deck, id) => {
+        matchGain(id);
+        emitRef.current({ kind: "control", deck: id, param: "trim", value: deck.trim });
       },
       grid: (deck, id, s) => {
         if (s) {
@@ -1045,8 +1080,17 @@ function AppBody() {
         deck.phraseJump(1);
         emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
       },
-      spinback: (deck) => {
-        deck.spinback(); // back-spin then catch to play (local audio effect)
+      spinback: (deck, _id, s) => {
+        // SHIFT = a stronger/longer spin (an explicit strength override — spinback() already
+        // took one, nothing new to build engine-side). 20 is clearly past the settings knob's
+        // normal 4..14 range (lerp(4,14,backSpinLength)), so it reads as a deliberately bigger
+        // throw, not just "the Long preset."
+        deck.spinback(s ? 20 : undefined); // back-spin then catch to play (local audio effect)
+      },
+      // Release-FX Vinyl Brake: decelerate to a stop now, always — independent of the Vinyl
+      // Speed toggle and of Play/Pause's own brakeStop (see Deck.releaseBrake's doc comment).
+      releaseBrake: (deck) => {
+        deck.releaseBrake();
       },
       slip: () => {
         // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
@@ -1194,9 +1238,6 @@ function AppBody() {
       d.setBackSpinLength(settings.backSpinLength);
       d.setSlip(settings.slip); // Slip is a scrub behaviour now, driven from Controls (not a per-deck button)
     }
-    // Re-seed the FLX4 jog-mode latch from the saved default (the CC stream re-latches
-    // it on the next turn; this just sets the starting mode before the first tick).
-    jogVinyl.current.A = jogVinyl.current.B = settings.jogVinylDefault;
     engine.setStretchConfig({
       ...stretchConfig(settings.stretchQuality),
       engine: settings.stretchEngine,
@@ -3267,7 +3308,27 @@ function AppBody() {
           onSeeAll={toggleDiscover}
         />
         <RoomBar room={room} onExpand={toggleSocial} />
+        <button
+          className={`chin-btn chin-info ${helpOpen ? "active" : ""}`}
+          onClick={() => setHelpOpen((v) => !v)}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts"
+        >
+          <span className="chin-info-i" aria-hidden="true">?</span>
+        </button>
       </nav>
+      {helpOpen && (
+        <>
+          <div className="ctx-backdrop" onClick={() => setHelpOpen(false)} />
+          <div className="help-panel">
+            <div className="help-panel-head">
+              <span>Keyboard shortcuts</span>
+              <button className="help-panel-close" onClick={() => setHelpOpen(false)} aria-label="Close">✕</button>
+            </div>
+            <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => setSettings((s) => ({ ...s, keyBindings }))} />
+          </div>
+        </>
+      )}
 
       {/* Workspace: on desktop a flex ROW so the Library/Search docks SHARE the
           width with the board (push it, don't overlay). On mobile a column with the

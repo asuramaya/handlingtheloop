@@ -27,9 +27,9 @@ describe("mergeBindings", () => {
 
   test("a couple of real defaults resolve to their documented codes", () => {
     const merged = mergeBindings(undefined);
-    // From the source: play=Space, sync=KeyA, jogBackBeat=ArrowLeft, hotcue1=Digit1.
+    // From the source: play=Space, sync=KeyS, jogBackBeat=ArrowLeft, hotcue1=Digit1.
     expect(merged.play.primary).toBe("Space");
-    expect(merged.sync.primary).toBe("KeyA");
+    expect(merged.sync.primary).toBe("KeyS");
     expect(merged.jogBackBeat.primary).toBe("ArrowLeft");
     expect(merged.hotcue1.primary).toBe("Digit1");
   });
@@ -72,7 +72,8 @@ describe("bindingIndex", () => {
   test("primary codes resolve to their action id", () => {
     const idx = bindingIndex(DEFAULT_BINDINGS);
     expect(idx.get("Space")).toBe("play");
-    expect(idx.get("KeyA")).toBe("sync");
+    expect(idx.get("KeyA")).toBe("keyMatch");
+    expect(idx.get("KeyS")).toBe("sync");
     expect(idx.get("ArrowLeft")).toBe("jogBackBeat");
   });
 
@@ -97,8 +98,7 @@ describe("bindingIndex", () => {
   // NOTE: this is a real footgun — a user (or a shipped default) that double-binds a
   //       code silently loses the earlier action. See keybinds.ts:95-103.
   test("collision: a later action's primary overwrites an earlier action's code (last-write-wins)", () => {
-    // Use F9 — a code no other default claims — so this isolates the sync↔keyMatch
-    // collision (KeyZ is taken by the `slip` default, which would itself win).
+    // Use F9 — a code no other default claims — so this isolates the sync↔keyMatch collision.
     const b = mergeBindings({
       sync: { primary: "F9", secondary: "" }, // sync is earlier in KEY_ACTIONS
       keyMatch: { primary: "F9", secondary: "" }, // keyMatch immediately after
@@ -145,9 +145,9 @@ describe("bindingConflicts", () => {
   });
 
   test("catches the version-drift case: a saved binding colliding with a shipped default", () => {
-    // slip's DEFAULT primary is KeyZ; an older saved map bound spinback to KeyZ too.
-    const b = mergeBindings({ spinback: { primary: "KeyZ", secondary: "" } });
-    expect(bindingConflicts(b).get("KeyZ")).toEqual(["spinback", "slip"]);
+    // slip's DEFAULT primary is KeyK; an older saved map bound spinback to KeyK too.
+    const b = mergeBindings({ spinback: { primary: "KeyK", secondary: "" } });
+    expect(bindingConflicts(b).get("KeyK")).toEqual(["spinback", "slip"]);
   });
 
   test("an action reusing the SAME code for its own primary + secondary is NOT a conflict", () => {

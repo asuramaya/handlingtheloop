@@ -372,14 +372,16 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         motes.current.length = 0; // no wings at this size — drop the field
       }
 
-      // ★ The curve's REACH is DECAY alone now (how far the tail falls) — NOT a function of
-      // lowCut/highCut (the ribbon is the only place the tone window shows), and no longer a
-      // function of brightness/width/character either. All four USED to reshape this same one
-      // line at once, which is exactly why it was hard to tell which knob you'd actually moved:
-      // BRIGHTNESS is a colour gradient across the curve now, WIDTH splits it into two offset
-      // traces, CHARACTER/MOD RATE get their own dedicated shimmer ring — three separate visual
-      // channels below, instead of three effects all fighting for the same shape.
-      const reachFrac = clamp01(r0inner + reachBase * (1 - r0inner)) * duckPulse;
+      // ★ The curve's REACH is DECAY alone — genuinely alone this time. It used to be
+      // `r0inner + reachBase*(1-r0inner)`, which reused PREDELAY's own term (`r0inner`) as its
+      // baseline: raising predelay quietly grew the curve's reach too AND shrank decay's effective
+      // range (the `1-r0inner` multiplier), which is exactly "predelay and decay fight for the
+      // same motion." Mirrors `fogRfrac` (the bloom's own, already-correctly-decoupled reach)
+      // instead — SIZE-scaled, decay-driven, nothing else. The `domeFloor` only exists to keep the
+      // curve from ever collapsing INSIDE the predelay disc at extreme predelay + low decay; it
+      // is not a second predelay dependency, just a safety margin.
+      const domeFloor = r0frac * 1.15;
+      const reachFrac = Math.max(fogRfrac, domeFloor);
 
       // === circular FILLS (bloom / predelay disc / drive core) — an anisotropic scale draws them
       //     as true ellipses without hand-computing each point; none of the three are STROKED, so
@@ -450,44 +452,39 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       }
 
       // ★ BRIGHTNESS — a colour gradient across the curve, LEFT (low) to RIGHT (high): full accent
-      // at low, dimming toward the high end as brightness drops. This is a TONE quality, not a
-      // spatial one, so it's colour now, not a change in the curve's reach/shape.
-      const brightGrad = ctx.createLinearGradient(cx - aX, 0, cx + aX, 0);
-      const dimA = 0.22 + 0.78 * clamp01(p.brightness);
-      brightGrad.addColorStop(0, withAlpha(accent, 0.85));
-      brightGrad.addColorStop(1, withAlpha(accent, 0.85 * dimA));
+      // at low, dimming toward the high end as brightness drops — a TONE quality, not a spatial
+      // one. Made AGGRESSIVE on purpose: the floor is near-invisible (not just "a bit dimmer"),
+      // the fill carries the same gradient (not just the outline), and the glow itself shrinks
+      // with brightness — three reinforcing cues instead of one subtle alpha tweak.
+      const dimA = 0.05 + 0.95 * clamp01(p.brightness);
+      const brightStroke = ctx.createLinearGradient(cx - aX, 0, cx + aX, 0);
+      brightStroke.addColorStop(0, withAlpha(accent, 0.9));
+      brightStroke.addColorStop(1, withAlpha(accent, 0.9 * dimA));
+      const brightFill = ctx.createLinearGradient(cx - aX, 0, cx + aX, 0);
+      brightFill.addColorStop(0, withAlpha(accent, 0.14 * mixA));
+      brightFill.addColorStop(1, withAlpha(accent, 0.14 * mixA * dimA));
 
-      // ★ WIDTH — the curve splits into two offset traces (an L and an R), same idea as the
-      // delay's own WIDTH: at width 0 they coincide into one clean line; wider pulls them apart
-      // into two visibly overlapping traces, reading as stereo spread rather than a subtle
-      // per-frequency wobble nobody could actually see.
-      const drawDome = (xShift: number, alpha: number) => {
-        ctx.beginPath();
-        for (let i = 0; i <= 64; i++) {
-          const ang = (i / 64) * Math.PI;
-          const { x, y } = toXY(ang, reachFrac, c);
-          const xs = x + xShift;
-          i === 0 ? ctx.moveTo(xs, y) : ctx.lineTo(xs, y);
-        }
-        ctx.closePath();
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = withAlpha(accent, 0.1 * mixA);
-        ctx.fill();
-        ctx.strokeStyle = brightGrad;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = accent;
-        ctx.shadowBlur = 5;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.globalAlpha = 1;
-      };
-      const widthPx = clamp01(p.width / 1.5) * 17;
-      if (widthPx < 0.6) {
-        drawDome(0, 1);
-      } else {
-        drawDome(-widthPx, 0.75);
-        drawDome(widthPx, 0.75);
+      // ★ WIDTH — narrows/widens the WHOLE curve FROM THE CENTRE (a horizontal scale about cx),
+      // not two duplicated copies of it. width=1 is unity (matches the boundary ring exactly);
+      // below 1 the dome visibly pinches in toward the centreline, above 1 it visibly spreads
+      // wider than the room boundary — one shape breathing, not a second one appearing beside it.
+      const widthScale = 1 + (clamp(p.width, 0, 1.5) - 1) * 0.6;
+      ctx.beginPath();
+      for (let i = 0; i <= 64; i++) {
+        const ang = (i / 64) * Math.PI;
+        const { x, y } = toXY(ang, reachFrac, c);
+        const xs = cx + (x - cx) * widthScale;
+        i === 0 ? ctx.moveTo(xs, y) : ctx.lineTo(xs, y);
       }
+      ctx.closePath();
+      ctx.fillStyle = brightFill;
+      ctx.fill();
+      ctx.strokeStyle = brightStroke;
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 5 * (0.3 + 0.7 * clamp01(p.brightness));
+      ctx.stroke();
+      ctx.shadowBlur = 0;
 
       // ★ CHARACTER/MOD RATE — its own dedicated shimmer ring, riding between the predelay gap
       // and the room boundary, oscillating at MOD RATE with an amplitude set by CHARACTER. Kept

@@ -1,21 +1,20 @@
 import { useEffect, useRef } from "react";
-import type { Deck, ReverbFx } from "@htl/audio";
+import { dragBand, dragHp, dragLp, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
+import { dragRail, drawRail, hitRail, type RailRect } from "./ValueRail";
 
-// Reverb tail view — a full RADIAL display with a Pro-R-style decay-rate curve as its rim,
-// AND a direct-control surface. Read the dome from the centre out:
-//   • CENTRE = the source (a warm DRIVE glow); a dark inner disc = the PREDELAY gap.
-//   • RADIUS outward = time → the diffuse fog dissipates as the tail decays.
-//   • ANGLE around the circle = FREQUENCY (top = low, clockwise to high); the rim CURVE's
-//     reach at each angle = how long that band rings. Animates only when something moves.
-//
-// DIRECT CONTROL — two grip kinds, both absolute (the grip tracks your finger along a radius,
-// with a grab-offset so there's no jump), big hit targets, on fixed evenly-spaced spokes so
-// nothing piles up:
-//   • FEATURE grips sit ON the thing they control, so dragging moves that feature: DRIVE = the
-//     core, PREDLY = the inner disc edge, DECAY = the bloom edge, SIZE = the boundary ring.
-//   • VALUE grips ride a clean radial track: BRIGHT, WIDTH, and the LO/HI band CUTS (log Hz).
-// shift-wheel on DECAY → CHAR, on WIDTH → RATE. wheel nudges a grip; dbl-click / right-click
-// resets it. MIX·DUCK stay as cells beside the dome.
+// Reverb's control surface — same structural idiom as the delay now, not a circle: a READOUT
+// strip, a tone RIBBON right under it (the SAME primitive the delay's tap timeline uses), then a
+// row of value RAILS (the SAME primitive the delay's DRIVE/DUCK gutters use). Two shared pieces,
+// not two hand-derived copies, and nothing radial anywhere — a control surface built from the
+// same effect-lets as the rest of the rack reads as PART of the rack, not a different instrument
+// wearing its skin.
+//   • READOUT (top)  → LEFT: DECAY · SIZE, always on. CENTER: whatever you're touching, blank
+//     otherwise. RIGHT: the ribbon's Hz range, or ❄ FROZEN.
+//   • RIBBON (top, under the readout) → the tail's tone window, log-Hz, drag an edge to move one
+//     cut, drag the body to sweep both.
+//   • RAIL ROW (fills the rest) → PREDLY · WIDTH · SIZE · DECAY · DUCK · DRIVE · BRIGHT, one
+//     column each: a thin always-visible track + a puck riding it, BOTTOM 0 → TOP 100, absolute.
+//     shift-wheel on DECAY → CHAR, on WIDTH → RATE. wheel nudges; dbl-click / right-click resets.
 
 interface ReverbVizProps {
   size: number; // 0..1 footprint
@@ -25,158 +24,80 @@ interface ReverbVizProps {
   width: number; // 0..1.5 stereo spread
   lowCut: number; // Hz — tail low-cut
   highCut: number; // Hz — tail high-cut
-  mix: number; // 0..1 wet → fog presence
-  drive: number; // 0..1 input saturation → warm core
-  duck: number; // 0..1 sidechain → the bloom breathes
+  mix: number; // 0..1 wet presence (unused here — lives in the universal wet/dry fader)
+  drive: number; // 0..1 input saturation
+  duck: number; // 0..1 sidechain depth
   character: number; // 0..1 modulation depth
   modRate: number; // Hz
   frozen: boolean;
   accent: string;
   onParam: (param: string, value: number) => void; // direct-control callback (drag/wheel)
-  deck?: Deck; // for the live wet-signal tap (the room field reacts to the music)
-  slot?: number;
-}
-
-// A reflection mote dispersing into the wings (the living room field — see the draw loop).
-interface Mote {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  max: number;
-  warm: boolean; // DRIVE-warmed colour
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
-const f2n = (hz: number) => clamp01(Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000)); // 20‥20k → 0..1 log
-const TWO_PI = Math.PI * 2;
-const WARM = "255,150,70"; // DRIVE glow colour
 
-const GRAB_PX = 26; // pointer-to-grip hit radius (generous — the grips ARE the controls)
-const NODE_R = 6.5; // grip dot radius
-const T = -Math.PI / 2; // 12 o'clock
-const N_GRIPS = 9; // DUCK joined the ring — was 8, evenly spaced at 45°; now 40°
-const STEP = TWO_PI / N_GRIPS;
+const READOUT_H = 13; // the one readout strip, across the top — same contract as the delay's
+const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
+const RIBBON_GRIP_PX = 10; // how close counts as "on" a ribbon edge (delay's GRIP_PX)
+const LABEL_H = 11; // reserved strip under the rails for each one's permanent short label
+const RAIL_W = 3;
+const PUCK_W = 11;
 
-// The live dome geometry the grips measure against (set each draw, read by the handlers).
-interface Ctx {
-  base: number; // unscaled dome radius = min(w,h)*0.46
-  R: number; // SIZE boundary radius
-  r0: number; // PREDELAY inner-disc radius
-  coreR: number; // DRIVE core radius
-  fogR: number; // DECAY bloom radius
-  duckPulse: number;
-}
+// ReverbFx's own real DSP bounds (ReverbFx.ts) — asymmetric, not one shared range like the
+// delay's cuts. Passing anything looser would let this ribbon's grip drift somewhere the DSP
+// silently clamps back from underneath it.
+const RIBBON_RANGE: RibbonRange = { loMin: 20, loMax: 2000, hiMin: 1000, hiMax: 20000, minRatio: 1.1 };
 
-// A grip rides a fixed spoke (angle). A VALUE grip maps its param linearly (or log, for Hz)
-// along a track between two fractions of `base`. A FEATURE grip instead sits on a live dome
-// feature (`rad`) and inverts that feature's radius back to its param (`toParam`) — so the
-// grip IS the feature and dragging moves it. `sec` is a shift-wheel secondary.
 interface Grip {
   id: string;
   param: string;
   label: string;
-  angle: number;
   min: number;
   max: number;
   def: number;
   fmt: (v: number) => string;
-  rIn?: number; // VALUE track (fraction of base)
-  rOut?: number;
-  log?: boolean;
-  feat?: { rad: (c: Ctx) => number; toParam: (r: number, c: Ctx) => number }; // FEATURE anchor
-  sec?: { param: string; min: number; max: number };
+  sec?: { param: string; min: number; max: number }; // shift-wheel secondary
 }
 const pct = (v: number) => `${Math.round(v * 100)}`;
-const hz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
 const ms = (v: number) => `${Math.round(v * 1000)}ms`;
 const GRIPS: Grip[] = [
-  // EVERY grip is the SAME radial control: a dot on a fixed spoke, dragged in/out along a
-  // track (0.42 → 1.0 of the dome radius) — identical travel + feel for all of them. The
-  // inner end is 0.42 (not 0) so a min-value grip (DRIVE 0, PREDLY ~0) lands on a clean ring
-  // OUTSIDE the orange core instead of buried in it; the outer end reaches the boundary. The
-  // dome's core / disc / bloom / boundary still grow live from the params as the readout.
-  { id: "decay", param: "decay", label: "DECAY", angle: T, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
-  { id: "size", param: "size", label: "SIZE", angle: T + STEP, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "highCut", param: "highCut", label: "HI CUT", angle: T + STEP * 2, rIn: 0.42, rOut: 1.0, min: 1000, max: 20000, def: 18000, log: true, fmt: hz },
-  { id: "width", param: "width", label: "WIDTH", angle: T + STEP * 3, rIn: 0.42, rOut: 1.0, min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
-  { id: "drive", param: "drive", label: "DRIVE", angle: T + STEP * 4, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
-  // ★ DUCK joins the ring — it never had a feature of its own to sit ON (its effect is a
-  // multiplier applied to features drive/decay already own — the core glow, the fog bloom),
-  // so it rides a plain VALUE track like BRIGHT/WIDTH. Sits next to DRIVE: one is the
-  // character going IN, the other is the character's live REACTION coming back out.
-  { id: "duck", param: "duck", label: "DUCK", angle: T + STEP * 5, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0, fmt: pct },
-  { id: "bright", param: "brightness", label: "BRIGHT", angle: T + STEP * 6, rIn: 0.42, rOut: 1.0, min: 0, max: 1, def: 0.6, fmt: pct },
-  { id: "lowCut", param: "lowCut", label: "LO CUT", angle: T + STEP * 7, rIn: 0.42, rOut: 1.0, min: 20, max: 2000, def: 20, log: true, fmt: hz },
-  { id: "predelay", param: "predelay", label: "PREDLY", angle: T + STEP * 8, rIn: 0.42, rOut: 1.0, min: 0, max: 0.2, def: 0.012, fmt: ms },
+  { id: "predelay", param: "predelay", label: "PREDLY", min: 0, max: 0.2, def: 0.012, fmt: ms },
+  { id: "width", param: "width", label: "WIDTH", min: 0, max: 1.5, def: 1, fmt: pct, sec: { param: "modRate", min: 0.02, max: 6 } },
+  { id: "size", param: "size", label: "SIZE", min: 0, max: 1, def: 0.6, fmt: pct },
+  { id: "decay", param: "decay", label: "DECAY", min: 0, max: 1, def: 0.5, fmt: pct, sec: { param: "character", min: 0, max: 1 } },
+  { id: "duck", param: "duck", label: "DUCK", min: 0, max: 1, def: 0, fmt: pct },
+  { id: "drive", param: "drive", label: "DRIVE", min: 0, max: 1, def: 0, fmt: pct },
+  { id: "bright", param: "brightness", label: "BRIGHT", min: 0, max: 1, def: 0.6, fmt: pct },
 ];
-// VALUE grip: norm (0..1 along track) ⇄ param value.
-const gripNorm = (g: Grip, v: number) => (g.log ? clamp01(Math.log(clamp(v, g.min, g.max) / g.min) / Math.log(g.max / g.min)) : clamp01((v - g.min) / (g.max - g.min)));
-const gripVal = (g: Grip, n: number) => (g.log ? g.min * Math.pow(g.max / g.min, clamp01(n)) : g.min + clamp01(n) * (g.max - g.min));
-// Where a grip sits (radius in px) for the current params, and the param a dragged radius maps to.
-const gripRadius = (g: Grip, v: number, c: Ctx) => (g.feat ? g.feat.rad(c) : c.base * ((g.rIn ?? 0.3) + gripNorm(g, v) * ((g.rOut ?? 0.98) - (g.rIn ?? 0.3))));
-const gripParamAt = (g: Grip, r: number, c: Ctx) => (g.feat ? g.feat.toParam(r, c) : gripVal(g, (r / c.base - (g.rIn ?? 0.3)) / ((g.rOut ?? 0.98) - (g.rIn ?? 0.3))));
+const gripNorm = (g: Grip, v: number) => clamp01((v - g.min) / (g.max - g.min));
+const gripVal = (g: Grip, n: number) => g.min + clamp01(n) * (g.max - g.min);
 
-interface Placed extends Grip {
-  x: number;
-  y: number;
-  radius: number;
+interface Ctx {
+  w: number;
+  h: number;
+  ribbonY: number;
+  ribbonH: number;
+  railTop: number;
+  railBot: number;
+  colW: number;
 }
 
-export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
+type Drag = { kind: "grip"; grip: Grip } | { kind: "ribbon"; which: Exclude<RibbonHot, null>; lastX: number };
+
+export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, onParam }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Living room field: the wet-signal energy tap + the reflection motes drifting into the wings.
-  const anRef = useRef<AnalyserNode | null>(null);
-  const anBufRef = useRef<Float32Array<ArrayBuffer> | null>(null);
-  const energyRef = useRef(0); // smoothed wet RMS (0..1) — drives spawn rate + glow
-  const motes = useRef<Mote[]>([]);
-  const spawnAcc = useRef(0);
-  const lastNowRef = useRef(0);
-
-  // Live state the pointer/wheel handlers read (kept off the effect's closure).
   const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate });
   params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
   const onParamRef = useRef(onParam);
   onParamRef.current = onParam;
-  const center = useRef({ cx: 0, cy: 0 });
-  const ctxRef = useRef<Ctx>({ base: 1, R: 1, r0: 0, coreR: 1, fogR: 1, duckPulse: 1 });
-  const placed = useRef<Placed[]>([]);
-  const hover = useRef<string | null>(null);
-  const drag = useRef<{ grip: Grip; offset: number } | null>(null); // offset = gripRadius − grabRadius (no jump)
+  const ctxRef = useRef<Ctx>({ w: 1, h: 1, ribbonY: 0, ribbonH: 1, railTop: 0, railBot: 1, colW: 1 });
+  const hover = useRef<string | null>(null); // a grip id, or "hp"/"lp"/"band"
+  const drag = useRef<Drag | null>(null);
   const lastTap = useRef(0);
-  const drawRef = useRef<(now: number) => void>(() => {});
-  const nowRef = useRef(0);
-
-  // Tap the device's wet output so the room field reacts to what's actually being fed in.
-  useEffect(() => {
-    if (!deck || slot == null) return;
-    const dev = deck.fxDeviceAt(slot);
-    if (!dev) return;
-    const actx = dev.output.context;
-    const an = actx.createAnalyser();
-    an.fftSize = 512;
-    an.smoothingTimeConstant = 0.6;
-    try {
-      dev.output.connect(an);
-    } catch {
-      /* ignore */
-    }
-    anRef.current = an;
-    anBufRef.current = new Float32Array(an.fftSize);
-    return () => {
-      try {
-        dev.output.disconnect(an);
-      } catch {
-        /* ignore */
-      }
-      anRef.current = null;
-    };
-  }, [deck, slot]);
+  const drawRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -201,305 +122,133 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       }
       return { w, h, dpr };
     };
-    const start = window.performance.now();
-    const angOf = (fNorm: number) => -Math.PI / 2 + fNorm * TWO_PI; // top = low, clockwise
 
-    const draw = (now: number) => {
-      nowRef.current = now;
-      const dt = lastNowRef.current ? Math.min(0.05, (now - lastNowRef.current) / 1000) : 0.016;
-      lastNowRef.current = now;
+    // Geometry, shared by the renderer and the hit-tests. Top to bottom: the READOUT strip, the
+    // tone RIBBON, then the rail row (which reserves its own floor for the per-rail labels).
+    const geom = (w: number, h: number): Ctx => {
+      const narrow = w < NARROW_PX;
+      const ribbonH = narrow ? Math.max(26, Math.round(h * 0.22)) : Math.max(20, Math.round(h * 0.2));
+      const ribbonY = READOUT_H;
+      const railTop = ribbonY + ribbonH + 3;
+      const railBot = h - LABEL_H - 2;
+      const colW = w / GRIPS.length;
+      return { w, h, ribbonY, ribbonH, railTop, railBot, colW };
+    };
+
+    const draw = () => {
       const { w, h, dpr } = sizeCanvas();
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      // live wet energy (smoothed RMS) — the room field swells with the music.
-      const an = anRef.current;
-      const buf = anBufRef.current;
-      let e = 0;
-      if (an && buf) {
-        an.getFloatTimeDomainData(buf);
-        let s = 0;
-        for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
-        e = clamp01(Math.sqrt(s / buf.length) * 3.2);
-      }
-      energyRef.current += (e - energyRef.current) * 0.25;
+      const c = geom(w, h);
+      ctxRef.current = c;
+      const p = params.current;
 
-      const cx = w / 2;
-      const cy = h / 2;
-      const base = Math.min(w, h) * 0.46;
-      center.current = { cx, cy };
-      const sizeScale = 0.6 + clamp01(size) * 0.4;
-      const R = base * sizeScale;
-      const r0frac = 0.1 + clamp01(predelay / 0.2) * 0.22; // predelay gap (fraction of R)
-      const r0 = R * r0frac;
-      const span = R - r0;
-      const elapsed = (now - start) / 1000;
-      const phase = TWO_PI * modRate * elapsed;
-      const reachBase = frozen ? 1 : 0.18 + clamp01(decay) * 0.82;
-      const mixA = 0.32 + clamp01(mix) * 0.68;
-      const dr = clamp01(drive);
-      // ★ THE REAL SIDECHAIN, not a canned oscillation. This used to be a synthetic
-      // Math.sin(elapsed·2.4) — a fake breathing rate that had nothing to do with the actual
-      // audio — capped at a 30% dip regardless of the duck knob. ReverbFx.duckGain reads the
-      // true live envelope (same fix as the delay: an AnalyserNode tap, since AudioParam.value
-      // can't see modulation delivered via .connect() — see htl-webaudio-footguns). The dome now
-      // breathes with whatever's actually hitting the input, down to fully ducked at duck=1.
-      const dev = deck?.fxDeviceAt(slot ?? -1) as ReverbFx | undefined;
-      const duckPulse = dev ? clamp01(dev.duckGain) : 1;
-      const loN = f2n(lowCut);
-      const hiN = f2n(highCut);
-      const coreR = Math.max(3, R * 0.14) * (1 + dr * 1.1) * duckPulse;
-      const fogR = R * reachBase * duckPulse;
-      ctxRef.current = { base, R, r0, coreR, fogR, duckPulse };
+      const held = drag.current ? (drag.current.kind === "grip" ? drag.current.grip.id : drag.current.which) : null;
+      const hot = held ?? hover.current;
+      const hotGrip = hot ? GRIPS.find((g) => g.id === hot) ?? null : null;
+      const hotRibbon: RibbonHot = hot === "hp" || hot === "lp" || hot === "band" ? hot : null;
 
-      // === LIVING ROOM FIELD — fills the wide panel's empty side bands with the reverb's
-      //     energy dispersing into the room. Drawn BEHIND the dome (the central dome paints
-      //     over the inner region, leaving this visible in the wings). A horizontal glow +
-      //     reflection motes that fan OUTWARD (spread by WIDTH, reach/lifetime by DECAY,
-      //     presence by MIX), breathing with DUCK and PULSING with the live wet signal. ===
-      const energy = energyRef.current;
-      const wing = w / 2 - R; // empty horizontal space beyond the dome boundary
-      if (wing > 40) {
-        // horizontal room glow — radial to the panel width; since the panel is wider than
-        // tall it reads mostly in the L/R wings, barely top/bottom.
-        const wingA = (0.05 + 0.06 * clamp01(mix)) * (0.55 + 0.45 * energy) * duckPulse;
-        const wg = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, w * 0.62);
-        wg.addColorStop(0, withAlpha(dr > 0 ? `rgb(${WARM})` : accent, wingA));
-        wg.addColorStop(1, withAlpha(accent, 0));
-        ctx.fillStyle = wg;
-        ctx.fillRect(0, 0, w, h);
+      // === THE FILTER RIBBON — shared with the delay's tap timeline (FreqRibbon.ts). ===
+      drawFreqRibbon(ctx, { x: 0, y: c.ribbonY, w, h: c.ribbonH - 4 }, p.lowCut, p.highCut, accent, hotRibbon);
 
-        // spawn reflection motes from the room boundary, fanning into the wings.
-        spawnAcc.current += dt * (1.5 + energy * 16 + clamp01(decay) * 5) * (0.4 + clamp01(mix));
-        const spread = 0.5 + clamp01(width / 1.5) * 1.4; // WIDTH → how far they reach sideways
-        while (spawnAcc.current >= 1 && motes.current.length < 70) {
-          spawnAcc.current -= 1;
-          const dir = (now * 997 + motes.current.length) % 2 < 1 ? -1 : 1; // alternate-ish L/R
-          const vj = (((now * 131 + motes.current.length * 53) % 100) / 100 - 0.5) * 0.5; // vert jitter
-          const ang = (dir > 0 ? 0 : Math.PI) + vj; // mostly horizontal
-          const speed = (38 + clamp01(decay) * 130) * (0.6 + energy * 0.8);
-          const life = 0.5 + clamp01(decay) * 1.8;
-          motes.current.push({ x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, vx: Math.cos(ang) * speed * spread, vy: Math.sin(ang) * speed * 0.5, life, max: life, warm: dr > 0.2 && (now % 100) / 100 < dr });
-        }
-        // advance + draw motes (outward drift with air drag, fading over their life)
-        const arr = motes.current;
-        for (let i = arr.length - 1; i >= 0; i--) {
-          const m = arr[i];
-          m.life -= dt;
-          if (m.life <= 0) {
-            arr.splice(i, 1);
-            continue;
-          }
-          m.x += m.vx * dt;
-          m.y += m.vy * dt;
-          m.vx *= 0.985;
-          m.vy *= 0.985;
-          const u = m.life / m.max;
-          const a = u * u * (0.32 + clamp01(mix) * 0.68) * (0.5 + 0.5 * energy) * duckPulse;
-          const rr = 1.2 + (1 - u) * 2.2;
-          ctx.beginPath();
-          ctx.arc(m.x, m.y, rr, 0, TWO_PI);
-          ctx.fillStyle = withAlpha(m.warm ? `rgb(${WARM})` : accent, a);
-          ctx.shadowColor = m.warm ? `rgb(${WARM})` : accent;
-          ctx.shadowBlur = 6;
-          ctx.fill();
-        }
-        ctx.shadowBlur = 0;
-      } else if (motes.current.length) {
-        motes.current.length = 0; // narrow panel — no wings, drop the field
-      }
-
-      const reachAt = (fNorm: number) => {
-        const tilt = 1 - (1 - clamp01(brightness)) * fNorm * 0.85;
-        const band = smooth((fNorm - loN) / 0.06) * smooth((hiN - fNorm) / 0.06);
-        const skew = 1 + (width - 1) * 0.16 * Math.sin(fNorm * Math.PI);
-        const wob = character > 0 ? character * 0.05 * Math.sin(fNorm * 8 - phase) : 0;
-        return clamp01(r0frac + reachBase * tilt * band * skew * (1 - r0frac) + wob) * duckPulse;
-      };
-
-      // === diffuse BLOOM — radial fog, warmed by DRIVE, scaled by MIX + DUCK breathe ===
-      const grad = ctx.createRadialGradient(cx, cy, r0 * 0.6, cx, cy, Math.max(r0 + 1, fogR));
-      grad.addColorStop(0, dr > 0 ? `rgba(${WARM},${(0.34 + dr * 0.3) * mixA})` : withAlpha(accent, 0.4 * mixA));
-      grad.addColorStop(0.5, withAlpha(accent, 0.14 * mixA));
-      grad.addColorStop(1, withAlpha(accent, 0));
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(r0 + 1, fogR), 0, TWO_PI);
-      ctx.fill();
-
-      // drifting energy rings (outward = time), breathing with DUCK.
-      const RINGS = 4;
-      for (let i = 0; i < RINGS; i++) {
-        const u = (elapsed * 0.16 + i / RINGS) % 1;
-        const rr = r0 + u * (fogR - r0);
-        const a = (frozen ? 0.2 : 0.24 * (1 - u)) * (0.5 + 0.5 * clamp01(decay)) * mixA;
-        ctx.strokeStyle = withAlpha(accent, a);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(cx, cy, Math.max(1, rr), 0, TWO_PI);
-        ctx.stroke();
-      }
-
-      // === decay-rate CURVE (Pro-R, polar) — radius per angle = that band's decay ===
-      ctx.beginPath();
-      for (let i = 0; i <= 120; i++) {
-        const fNorm = i / 120;
-        const r = r0 + reachAt(fNorm) * span;
-        const a = angOf(fNorm);
-        const x = cx + Math.cos(a) * r;
-        const y = cy + Math.sin(a) * r;
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.fillStyle = withAlpha(accent, 0.1 * mixA);
-      ctx.fill();
-      ctx.strokeStyle = withAlpha(accent, 0.85);
-      ctx.lineWidth = 1.5;
-      ctx.shadowColor = accent;
-      ctx.shadowBlur = 5;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // SIZE → faint room boundary.
-      ctx.strokeStyle = withAlpha(accent, 0.1 + clamp01(size) * 0.12);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R, 0, TWO_PI);
-      ctx.stroke();
-
-      // predelay inner disc (dark gap before the onset).
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.beginPath();
-      ctx.arc(cx, cy, r0, 0, TWO_PI);
-      ctx.fill();
-
-      // === DRIVE → a warm, swelling core glow at the source ===
-      ctx.save();
-      if (dr > 0) {
-        ctx.shadowColor = `rgba(${WARM},0.95)`;
-        ctx.shadowBlur = 8 + dr * 26;
-        ctx.fillStyle = `rgba(${WARM},${0.55 + dr * 0.4})`;
-      } else {
-        ctx.fillStyle = withAlpha(accent, 0.85);
-      }
-      ctx.beginPath();
-      ctx.arc(cx, cy, coreR, 0, TWO_PI);
-      ctx.fill();
-      ctx.restore();
-
-      // === place + draw the GRIPS ===
-      const c = ctxRef.current;
-      placed.current = GRIPS.map((g) => {
-        const radius = gripRadius(g, (params.current as Record<string, number>)[g.param], c);
-        return { ...g, radius, x: cx + Math.cos(g.angle) * radius, y: cy + Math.sin(g.angle) * radius };
+      // === THE RAIL ROW — shared with the delay's DRIVE/DUCK gutters (ValueRail.ts). Each rail's
+      //     permanent short label sits in the reserved floor strip below it — naming was hover-only
+      //     on the old dome, which is exactly why the dots read as unlabeled at a glance. ===
+      GRIPS.forEach((g, i) => {
+        const isHot = hot === g.id;
+        const colX = i * c.colW;
+        const rect: RailRect = { x: colX, y: c.railTop, w: c.colW, h: c.railBot - c.railTop };
+        drawRail(ctx, rect, gripNorm(g, (p as Record<string, number>)[g.param]), accent, isHot, RAIL_W, PUCK_W);
+        ctx.font = isHot ? "700 9px system-ui, sans-serif" : "600 8px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = isHot ? "#fff" : withAlpha(accent, 0.65);
+        ctx.fillText(g.label, colX + c.colW / 2, c.railBot + 1);
       });
 
-      // faint radial guides (so the in/out drag axis is discoverable), then the dots.
-      for (const g of placed.current) {
-        const hot = drag.current?.grip.id === g.id || hover.current === g.id;
-        const ix = cx + Math.cos(g.angle) * base * 0.08;
-        const iy = cy + Math.sin(g.angle) * base * 0.08;
-        const ox = cx + Math.cos(g.angle) * base * (g.feat ? 1.05 : g.rOut ?? 0.98);
-        const oy = cy + Math.sin(g.angle) * base * (g.feat ? 1.05 : g.rOut ?? 0.98);
-        ctx.strokeStyle = withAlpha(accent, hot ? 0.3 : 0.1);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(ix, iy);
-        ctx.lineTo(ox, oy);
-        ctx.stroke();
-      }
-      for (const g of placed.current) {
-        const hot = drag.current?.grip.id === g.id || hover.current === g.id;
-        ctx.beginPath();
-        ctx.arc(g.x, g.y, hot ? NODE_R + 2.5 : NODE_R, 0, TWO_PI);
-        ctx.fillStyle = hot ? "#fff" : withAlpha(accent, 0.95);
-        ctx.shadowColor = accent;
-        ctx.shadowBlur = hot ? 12 : 5;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = withAlpha(accent, hot ? 1 : 0.55);
-        ctx.stroke();
-      }
-
-      // active/hover grip readout — its label + value, top-left.
-      const act = drag.current ? drag.current.grip : hover.current ? GRIPS.find((g) => g.id === hover.current) ?? null : null;
-      if (act) {
-        const v = (params.current as Record<string, number>)[act.param];
-        ctx.fillStyle = accent;
-        ctx.font = "700 10px system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillText(`${act.label} ${act.fmt(v)}`, 7, 12);
-      } else {
-        ctx.fillStyle = "rgba(255,255,255,0.28)";
-        ctx.font = "8px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("LOW", cx, 9);
-        ctx.textAlign = "left";
-      }
+      // === THE READOUT — same 3-zone contract as the delay: LEFT = what the reverb IS, MIDDLE =
+      //     what you're TOUCHING (blank when you aren't), RIGHT = its tone (or FROZEN). ===
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(0, 0, w, READOUT_H - 1);
+      const ry = (READOUT_H - 1) / 2;
+      ctx.font = "800 9px ui-monospace, monospace";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = accent;
+      ctx.textAlign = "left";
+      ctx.globalAlpha = 0.9;
+      ctx.fillText(`${Math.round(clamp01(p.decay) * 100)}%  ·  ${Math.round(clamp01(p.size) * 100)}%`, 5, ry);
+      ctx.textAlign = "right";
       if (frozen) {
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(elapsed * 3));
-        ctx.fillText("❄ FROZEN", w - 56, 11);
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(window.performance.now() / 333));
+        ctx.fillText("❄ FROZEN", w - 5, ry);
+      } else {
+        ctx.globalAlpha = 0.55;
+        ctx.fillText(`${fmtHz(p.lowCut)} – ${fmtHz(p.highCut)}`, w - 5, ry);
       }
+      ctx.globalAlpha = 1;
+      const ctxLabel = hotGrip ? `${hotGrip.label} ${hotGrip.fmt((p as Record<string, number>)[hotGrip.param])}` : hotRibbon ? `${fmtHz(p.lowCut)} Hz – ${fmtHz(p.highCut)} Hz` : "";
+      if (ctxLabel) {
+        ctx.textAlign = "center";
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = drag.current ? "#fff" : accent;
+        ctx.fillText(ctxLabel, w / 2, ry);
+      }
+      ctx.globalAlpha = 1;
     };
     drawRef.current = draw;
 
-    const animated = true; // always alive — the room field drifts at rest + reacts to the wet signal
+    // FROZEN's pulse is the only thing that ever needs to redraw without a param changing —
+    // everything else here is state, painted on demand (a drag, a hover change).
     let raf = 0;
-    if (animated) {
-      const loop = (now: number) => {
-        draw(now);
-        raf = window.requestAnimationFrame(loop);
-      };
-      raf = window.requestAnimationFrame(loop);
-    } else {
-      draw(start);
-    }
-    const ro = new ResizeObserver(() => draw(nowRef.current || start));
+    const loop = () => {
+      draw();
+      raf = frozen ? window.requestAnimationFrame(loop) : 0;
+    };
+    raf = window.requestAnimationFrame(loop);
+    const ro = new ResizeObserver(draw);
     ro.observe(wrap);
     return () => {
       window.cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent, deck, slot]);
+  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, frozen, accent]);
 
-  // --- direct control: hit-test grips, map drag → param (absolute along the spoke radius) ---
+  // --- direct control: hit-test the ribbon + rail columns, map drag → param --------------------
   const localPt = (e: { clientX: number; clientY: number }) => {
     const r = canvasRef.current?.getBoundingClientRect();
     return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
   };
-  const radOf = (x: number, y: number) => Math.hypot(x - center.current.cx, y - center.current.cy);
-  const nearest = (x: number, y: number): Placed | null => {
-    let best: Placed | null = null;
-    let bestD = GRAB_PX;
-    for (const g of placed.current) {
-      const d = Math.hypot(x - g.x, y - g.y);
-      if (d <= bestD) {
-        bestD = d;
-        best = g;
-      }
-    }
-    return best;
+  const inRibbon = (y: number) => {
+    const c = ctxRef.current;
+    return y >= c.ribbonY && y <= c.ribbonY + c.ribbonH;
   };
-  const redraw = () => drawRef.current(nowRef.current || window.performance.now());
+  const gripAt = (x: number, y: number): Grip | null => {
+    const c = ctxRef.current;
+    if (y < c.railTop || y > c.railBot) return null;
+    const i = clamp(Math.floor(x / c.colW), 0, GRIPS.length - 1);
+    const rect: RailRect = { x: i * c.colW, y: c.railTop, w: c.colW, h: c.railBot - c.railTop };
+    return hitRail(x, y, rect) ? GRIPS[i] : null;
+  };
+  const redraw = () => drawRef.current();
 
   // Native, non-passive wheel — nudge the hovered grip (shift = its secondary), like ValueCell.
+  // Ribbon edges don't get wheel-nudge, matching the delay's own ribbon (no wheel there either).
   useEffect(() => {
     const node = canvasRef.current;
     if (!node) return;
     const onWheel = (e: WheelEvent) => {
       const pt = localPt(e);
-      const g = nearest(pt.x, pt.y) ?? (hover.current ? placed.current.find((p) => p.id === hover.current) ?? null : null);
+      if (inRibbon(pt.y)) return;
+      const g = gripAt(pt.x, pt.y) ?? (hover.current ? GRIPS.find((p) => p.id === hover.current) ?? null : null);
       if (!g) return;
       e.preventDefault();
       const dir = e.deltaY < 0 ? 1 : -1;
       const tgt = e.shiftKey && g.sec ? g.sec : { param: g.param, min: g.min, max: g.max };
       const cur = (params.current as Record<string, number>)[tgt.param];
-      onParamRef.current(tgt.param, clamp(cur + dir * (tgt.max - tgt.min) / 40, tgt.min, tgt.max));
+      onParamRef.current(tgt.param, clamp(cur + (dir * (tgt.max - tgt.min)) / 40, tgt.min, tgt.max));
     };
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
@@ -513,10 +262,22 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       onPointerDown={(e) => {
         if (e.button !== 0) return; // right-button resets via onContextMenu
         const pt = localPt(e);
-        const g = nearest(pt.x, pt.y);
+        if (inRibbon(pt.y)) {
+          const c = ctxRef.current;
+          const grip = c.w < NARROW_PX ? RIBBON_GRIP_PX * 1.6 : RIBBON_GRIP_PX;
+          const kind = hitFreqRibbon(pt.x, pt.y, { x: 0, y: c.ribbonY, w: c.w, h: c.ribbonH }, params.current.lowCut, params.current.highCut, grip);
+          if (kind) {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { kind: "ribbon", which: kind, lastX: pt.x };
+            hover.current = kind;
+            redraw();
+          }
+          return;
+        }
+        const g = gripAt(pt.x, pt.y);
         if (!g) return;
         e.currentTarget.setPointerCapture(e.pointerId);
-        // Double-tap a grip resets it to its default.
+        // Double-tap a rail resets it to its default.
         if (e.timeStamp - lastTap.current < 320 && hover.current === g.id) {
           onParam(g.param, g.def);
           lastTap.current = 0;
@@ -525,9 +286,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
           return;
         }
         lastTap.current = e.timeStamp;
-        // Grab-offset: keep (gripRadius − grabRadius) so the grip doesn't jump to the finger;
-        // it then tracks the finger's radius absolutely.
-        drag.current = { grip: g, offset: g.radius - radOf(pt.x, pt.y) };
+        drag.current = { kind: "grip", grip: g };
         hover.current = g.id;
         redraw();
       }}
@@ -535,11 +294,37 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         const pt = localPt(e);
         const d = drag.current;
         if (d) {
-          const r = radOf(pt.x, pt.y) + d.offset;
-          onParam(d.grip.param, gripParamAt(d.grip, r, ctxRef.current));
+          const c = ctxRef.current;
+          if (d.kind === "ribbon") {
+            const rect = { x: 0, y: c.ribbonY, w: c.w, h: c.ribbonH };
+            const lo = params.current.lowCut;
+            const hi = params.current.highCut;
+            if (d.which === "hp") onParamRef.current("lowCut", dragHp(pt.x, rect, hi, RIBBON_RANGE));
+            else if (d.which === "lp") onParamRef.current("highCut", dragLp(pt.x, rect, lo, RIBBON_RANGE));
+            else {
+              const [nLo, nHi] = dragBand(pt.x - d.lastX, rect, lo, hi, RIBBON_RANGE);
+              d.lastX = pt.x;
+              onParamRef.current("lowCut", nLo);
+              onParamRef.current("highCut", nHi);
+            }
+          } else {
+            const i = GRIPS.indexOf(d.grip);
+            const rect: RailRect = { x: i * c.colW, y: c.railTop, w: c.colW, h: c.railBot - c.railTop };
+            onParamRef.current(d.grip.param, gripVal(d.grip, dragRail(pt.y, rect)));
+          }
           return;
         }
-        const g = nearest(pt.x, pt.y);
+        if (inRibbon(pt.y)) {
+          const c = ctxRef.current;
+          const grip = c.w < NARROW_PX ? RIBBON_GRIP_PX * 1.6 : RIBBON_GRIP_PX;
+          const kind = hitFreqRibbon(pt.x, pt.y, { x: 0, y: c.ribbonY, w: c.w, h: c.ribbonH }, params.current.lowCut, params.current.highCut, grip);
+          if (kind !== hover.current) {
+            hover.current = kind;
+            redraw();
+          }
+          return;
+        }
+        const g = gripAt(pt.x, pt.y);
         const id = g?.id ?? null;
         if (id !== hover.current) {
           hover.current = id;
@@ -555,7 +340,14 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       }}
       onContextMenu={(e) => {
         const pt = localPt(e);
-        const g = nearest(pt.x, pt.y);
+        if (inRibbon(pt.y)) {
+          e.preventDefault();
+          onParam("lowCut", 20);
+          onParam("highCut", 18000);
+          redraw();
+          return;
+        }
+        const g = gripAt(pt.x, pt.y);
         if (g) {
           e.preventDefault();
           onParam(g.param, g.def);

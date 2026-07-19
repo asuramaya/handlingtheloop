@@ -4,12 +4,11 @@ import { REVERB_STYLES } from "@htl/audio";
 import { ReverbViz } from "./ReverbViz";
 import { useFrameSync } from "./useFrameSync";
 
-// The Reverb device surface (v3 layout): the round decay-rate dome IS the control surface —
-// every spatial param is a drag-handle ON it (the EQ-curve pattern, see ReverbViz), DUCK
-// included now (a 9th grip — it never had a feature of its own to anchor to, so it rides a
-// VALUE track like BRIGHT/WIDTH). Only MIX (wet presence) keeps a numeric cell; a foot strip
-// holds the non-fader switches (FREEZE + MODE). Same contract as the Delay/EQ panels: mutate
-// the deck's effect, `emit` the matching fxParam intent so a session converges, then `refresh`.
+// The Reverb device surface (v4 layout): readout → tone ribbon → a row of value rails, the same
+// two shared primitives (FreqRibbon.ts, ValueRail.ts) the delay's own panel is built from — see
+// ReverbViz. MIX (wet presence) lives in the universal wet/dry fader; a foot strip holds the
+// non-fader switches (FREEZE + MODE). Same contract as the Delay/EQ panels: mutate the deck's
+// effect, `emit` the matching fxParam intent so a session converges, then `refresh`.
 
 
 interface ReverbPanelProps {
@@ -52,7 +51,7 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
   return (
     <div className="fx-panel fx-reverb" style={{ ["--accent" as string]: accent }}>
       <div className="rv-body">
-        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={live} deck={deck} slot={slot} />
+        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} frozen={frozen} accent={accent} onParam={live} />
       </div>
       <div className="fx-foot">
         <button className="fx-chip fx-chip-mode" onClick={cycleStyle} title="Algorithm voicing — Hall / Room / Plate / Ambient">

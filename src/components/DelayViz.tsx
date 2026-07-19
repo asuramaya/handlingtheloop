@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck, DelayFx } from "@htl/audio";
+import { dragBand, dragHp, dragLp, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
 
 // The Delay's instrument — an echo-tap timeline you PLAY, not a picture of one.
 //
@@ -175,11 +176,9 @@ const GUTTER_WIDE = 22; // a thumb is not a mouse — this is now purely a HIT-Z
 const GUTTER_MARGIN = 2; // the rail's distance from the true canvas edge
 const RAIL_W = 3; // the always-visible track
 const PUCK_W = 11; // the level indicator riding the rail
-const fmtF = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `${Math.round(f)}`);
-
-// log-frequency ↔ x, 20 Hz‥20 kHz across the width
-const fToX = (f: number, w: number) => (Math.log(clamp(f, 20, 20000) / 20) / Math.log(1000)) * w;
-const xToF = (x: number, w: number) => 20 * Math.exp((clamp(x, 0, w) / w) * Math.log(1000));
+// The band's own bounds — shared with FreqRibbon's drag math, not baked into it, since the
+// reverb's tail window has different real bounds and shouldn't silently inherit the delay's.
+const RIBBON_RANGE: RibbonRange = { min: HP_MIN, max: LP_MAX, minRatio: BAND_MIN_RATIO };
 
 // THE FIRE'S INNER EDGE. At drive 0 it rests exactly on the tip of a full-scale tap — nothing is
 // driven, and there is no fire. At drive 1 it has come all the way in to the axis — a full-scale
@@ -357,66 +356,10 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const held = g ? (g.kind === "tap" ? (g.lower ? "width" : "tap") : g.kind) : "";
       const hot = held || hover.current.replace(/^tap\d+$/, "tap").replace(/^lower\d+$/, "width");
 
-      // === THE FILTER RIBBON — the echoes' tone window, and a control. Edges are grips; the body
-      // sweeps the band. It sits UNDER the readout strip, so everything it draws is offset. ===
-      ctx.save();
-      ctx.translate(0, ribY);
-      const lo = fToX(s.hp, w);
-      const hi = fToX(s.lp, w);
+      // === THE FILTER RIBBON — the echoes' tone window, and a control. Shared with the reverb's
+      // dome (FreqRibbon.ts) — one control, not two hand-derived copies. ===
       const rH = ribbonH - 4;
-      const bandHot = hot === "band";
-      ctx.fillStyle = "rgba(255,255,255,0.03)";
-      ctx.fillRect(0, 0, w, rH);
-
-      // A SPECTRUM RULER — decade ticks only, NO text. The strip is ~20px tall and the band's Hz
-      // now live in the readout, so captions here would just be a second place numbers can hide.
-      ctx.strokeStyle = "rgba(255,255,255,0.09)";
-      ctx.lineWidth = 1;
-      for (const f of [100, 1000, 10000]) {
-        const x = Math.round(fToX(f, w)) + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, rH);
-        ctx.stroke();
-      }
-
-      // ★ THE BAND IS DRAWN AS THE FILTER IT IS — a plateau with SLOPED SHOULDERS, not a rectangle.
-      // A rectangle reads as a progress bar (a quantity), and the eye asks "how full is it?". A
-      // shape with skirts reads as a response curve (a shape), and the eye asks "what gets through?"
-      // — which is the actual question. The shoulders lean the way the real filters roll off.
-      const skirt = Math.min(26, Math.max(6, (hi - lo) * 0.18));
-      ctx.beginPath();
-      ctx.moveTo(Math.max(0, lo - skirt), rH);
-      ctx.lineTo(lo, 2);
-      ctx.lineTo(hi, 2);
-      ctx.lineTo(Math.min(w, hi + skirt), rH);
-      ctx.closePath();
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = bandHot ? 0.3 : 0.2;
-      ctx.fill();
-      ctx.globalAlpha = bandHot ? 0.95 : 0.6;
-      ctx.strokeStyle = accent;
-      ctx.lineWidth = bandHot ? 2 : 1.25;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-
-      // The grips are HANDLES, with a grab-notch — not hairlines. You should be able to see what to
-      // take hold of without discovering it with the mouse.
-      for (const [x, id] of [
-        [lo, "hp"],
-        [hi, "lp"],
-      ] as [number, string][]) {
-        const on = hot === id;
-        const gx = round(x);
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = on ? 1 : 0.85;
-        ctx.fillRect(gx - 1, 0, 3, rH);
-        ctx.globalAlpha = on ? 0.9 : 0.55;
-        ctx.fillStyle = "#000";
-        for (let k = -1; k <= 1; k++) ctx.fillRect(gx, rH / 2 + k * 3, 1, 1);
-        ctx.globalAlpha = 1;
-      }
-      ctx.restore();
+      drawFreqRibbon(ctx, { x: 0, y: ribY, w, h: rH }, s.hp, s.lp, accent, (hot === "hp" || hot === "lp" || hot === "band" ? hot : null) as RibbonHot);
 
       // beat grid + centre line (in the timeline only)
       if (beat > 0) {
@@ -809,7 +752,7 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       ctx.fillText(`${timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, ry);
       ctx.textAlign = "right";
       ctx.globalAlpha = 0.55;
-      ctx.fillText(`${fmtF(s.hp)} – ${fmtF(s.lp)}`, w - 5, ry);
+      ctx.fillText(`${fmtHz(s.hp)} – ${fmtHz(s.lp)}`, w - 5, ry);
       // the middle — the contextual "this is the thing in my hand"
       const pct = (v: number) => `${Math.round(clamp01(v) * 100)}%`;
       const ctxLabel =
@@ -817,7 +760,7 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         : hot === "drive" ? `DRIVE ${pct(s.drive)}`
         : hot === "duck" ? `DUCK ${pct(s.duck)}`
         : hot === "lfo" ? `WOBBLE ${pct(modN)} · ${(beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`}`
-        : hot === "hp" || hot === "lp" || hot === "band" ? `${fmtF(s.hp)} Hz – ${fmtF(s.lp)} Hz`
+        : hot === "hp" || hot === "lp" || hot === "band" ? `${fmtHz(s.hp)} Hz – ${fmtHz(s.lp)} Hz`
         // A tap's IDENTITY (which echo, n) is fixed for the whole gesture — grabbing echo 3 never
         // stops being echo 3 mid-drag. What actually moves is TIME (x) and FEEDBACK (y), together,
         // every frame. Naming the tap told you what you'd grabbed, not what pulling on it does —
@@ -866,15 +809,9 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const { ribbonH, ribY, top, botY, midY } = geom(h, w);
       if (py < ribY) return null; // the readout strip is a label, not a control
       if (py <= ribY + ribbonH) {
-        const lo = fToX(s.hp, w);
-        const hi = fToX(s.lp, w);
         const grip = w < NARROW_PX ? GRIP_PX * 1.6 : GRIP_PX; // a thumb is not a mouse
-        if (Math.abs(px - lo) <= grip) return { kind: "hp" };
-        if (Math.abs(px - hi) <= grip) return { kind: "lp" };
-        if (px > lo && px < hi) return { kind: "band" };
-        // NO DEAD ZONE. Outside the band, the nearer cut jumps to where you pressed — the whole
-        // ribbon is live. A strip that ignores you over most of its width reads as broken.
-        return { kind: px < lo ? "hp" : "lp" };
+        const kind = hitFreqRibbon(px, py, { x: 0, y: ribY, w, h: ribbonH }, s.hp, s.lp, grip);
+        if (kind) return { kind };
       }
       if (py < top || py > botY) return null;
 
@@ -970,22 +907,14 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const s = p.current;
       const { top, botY, midY, maxBar } = geom(h, w);
       if (g.kind === "hp" || g.kind === "lp") {
-        const f = xToF(px, w);
-        // The cuts may not cross: a band that isn't a band is just a mute.
-        if (g.kind === "hp") setFilters(clamp(f, HP_MIN, s.lp / BAND_MIN_RATIO), s.lp);
-        else setFilters(s.hp, clamp(f, s.hp * BAND_MIN_RATIO, LP_MAX));
+        const rect = { x: 0, y: 0, w, h: 1 };
+        if (g.kind === "hp") setFilters(dragHp(px, rect, s.lp, RIBBON_RANGE), s.lp);
+        else setFilters(s.hp, dragLp(px, rect, s.hp, RIBBON_RANGE));
         return;
       }
       if (g.kind === "band") {
-        // Sweep BOTH by the same log-distance — the band keeps its width. (This is the old LINK.)
-        // At a rail, SLIDE the band along it rather than freezing: a hard stop reads as "broken",
-        // and the whole point of the body-drag is that the band's width survives the sweep.
-        const dLog = ((px - g.lastX) / w) * Math.log(1000);
+        const [nHp, nLp] = dragBand(px - g.lastX, { x: 0, y: 0, w, h: 1 }, s.hp, s.lp, RIBBON_RANGE);
         g.lastX = px;
-        const ratio = s.lp / s.hp;
-        let nHp = clamp(s.hp * Math.exp(dLog), HP_MIN, LP_MAX / ratio);
-        const nLp = clamp(nHp * ratio, HP_MIN * ratio, LP_MAX);
-        nHp = nLp / ratio;
         setFilters(nHp, nLp);
         return;
       }

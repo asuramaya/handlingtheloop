@@ -49,8 +49,6 @@ interface Mote {
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
-const f2n = (hz: number) => clamp01(Math.log(clamp(hz, 20, 20000) / 20) / Math.log(1000)); // 20‥20k → 0..1 log
 const TWO_PI = Math.PI * 2;
 const WARM = "255,150,70"; // DRIVE glow colour
 
@@ -220,8 +218,14 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const cy = ribbonY + ribbonH + 3; // the dome's own baseline sits right under the ribbon
       const domeBot = h - LABEL_PAD - 2; // headroom for the nadir grip's label
       const marginX = narrow ? 10 : 18;
-      const aX = Math.max(20, w / 2 - marginX);
-      const aY = Math.max(20, domeBot - cy);
+      const aYraw = Math.max(20, domeBot - cy);
+      const aXraw = Math.max(20, w / 2 - marginX);
+      // A TRUE semicircle — never an ellipse. Letting aX run out to the panel's full half-width
+      // (however much wider than it is tall) is what read as "stretchy": a squashed oval instead
+      // of a dome. The tighter of the two axes wins; whatever width is left over becomes the
+      // room-field's wings instead of distorting the dome's own shape.
+      const aY = Math.min(aYraw, aXraw);
+      const aX = aY;
       return { w, h, cx, cy, aX, aY, ribbonY, ribbonH };
     };
 
@@ -265,8 +269,6 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // .value can't see modulation delivered via .connect()). ReverbFx.duckGain is tapped live.
       const dev = deck?.fxDeviceAt(slot ?? -1) as ReverbFx | undefined;
       const duckPulse = dev ? clamp01(dev.duckGain) : 1;
-      const loN = f2n(p.lowCut);
-      const hiN = f2n(p.highCut);
       const coreRpx = Math.max(3, Rfrac * aY * 0.14) * (1 + dr * 1.1) * duckPulse;
       const fogRfrac = Rfrac * reachBase * duckPulse;
       const fogRpx = fogRfrac * aY;
@@ -337,12 +339,15 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         motes.current.length = 0; // no wings at this size — drop the field
       }
 
+      // ★ NOT a function of lowCut/highCut — the ribbon is the ONLY place the tone window shows.
+      // This used to also pinch the curve's shape at the band edges (a `band` term keyed off the
+      // same cuts), which quietly duplicated the ribbon's own job inside the dome — one control
+      // shouldn't paint itself twice in two different places on the same panel.
       const reachAt = (fNorm: number) => {
         const tilt = 1 - (1 - clamp01(p.brightness)) * fNorm * 0.85;
-        const band = smooth((fNorm - loN) / 0.06) * smooth((hiN - fNorm) / 0.06);
         const skew = 1 + (p.width - 1) * 0.16 * Math.sin(fNorm * Math.PI);
         const wob = p.character > 0 ? p.character * 0.05 * Math.sin(fNorm * 8 - phase) : 0;
-        return clamp01(r0inner + reachBase * tilt * band * skew * (1 - r0inner) + wob) * duckPulse;
+        return clamp01(r0inner + reachBase * tilt * skew * (1 - r0inner) + wob) * duckPulse;
       };
 
       // === circular FILLS (bloom / predelay disc / drive core) — an anisotropic scale draws them

@@ -818,7 +818,11 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         : hot === "duck" ? `DUCK ${pct(s.duck)}`
         : hot === "lfo" ? `WOBBLE ${pct(modN)} · ${(beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`}`
         : hot === "hp" || hot === "lp" || hot === "band" ? `${fmtF(s.hp)} Hz – ${fmtF(s.lp)} Hz`
-        : hot === "tap" ? `ECHO ${(heldTap >= 0 ? heldTap : Number(hover.current.slice(3))) + 1}`
+        // A tap's IDENTITY (which echo, n) is fixed for the whole gesture — grabbing echo 3 never
+        // stops being echo 3 mid-drag. What actually moves is TIME (x) and FEEDBACK (y), together,
+        // every frame. Naming the tap told you what you'd grabbed, not what pulling on it does —
+        // and it never changed while the thing it's a proxy for kept changing under your hand.
+        : hot === "tap" ? `TIME ${timeLabel} · FB ${Math.round(clamp01(s.feedback) * 100)}%`
         : "";
       if (ctxLabel) {
         ctx.textAlign = "center";

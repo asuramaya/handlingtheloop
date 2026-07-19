@@ -169,12 +169,10 @@ export class GateFx extends BaseFxDevice {
     if (this.rate.setBpm(bpm)) this.applyFreq();
   }
 
-  /** Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
-   *  while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify.
-   *  Mix is guaranteed audible by the base class (see BaseFxDevice.throwMix). */
-  protected get throwMix() {
-    return 1;
-  }
+  // Pad-throw TRIGGER: simply ENGAGE the gate (un-bypass if dormant) at the dialed RATE/DEPTH
+  // while held; release re-bypasses if it was off. A true trigger — no rate/depth intensify, and
+  // no throwMix override needed either: the base class's own default already floors mix at this
+  // device's full-wet (1.0) construction default (see BaseFxDevice.throwMix).
 
   // ---- live reads for the WYSIWYG -----------------------------------------
   get shapeIndex() {

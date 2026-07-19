@@ -324,9 +324,6 @@ export class SaturatorFx extends BaseFxDevice {
     this._throwBoost = on ? 3 : 1;
     for (let i = 0; i < this.drives.length; i++) this.applyDrive(i);
   }
-  protected get throwMix() {
-    return 1;
-  }
 
   /** Live read for the WYSIWYG display: the style curve + per-band drive/crossover state. */
   get styleIndex() {

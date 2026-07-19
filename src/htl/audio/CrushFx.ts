@@ -98,9 +98,6 @@ export class CrushFx extends BaseFxDevice {
   protected applyThrowBoost(on: boolean) {
     this.node?.port.postMessage({ bits: extToBits(on ? 0.82 : this._bits), rate: extToRate(on ? 0.7 : this._rate) });
   }
-  protected get throwMix() {
-    return 1;
-  }
 
   // Live reads for the WYSIWYG scope.
   get bitsValue() {

@@ -178,7 +178,9 @@ export class NoiseFx extends BaseFxDevice {
 
   /** Pad-throw TRIGGER. Engages the device (un-bypass if dormant); RISE mode → tempo-synced
    *  auto-build, else a manual gate at SWEEP. Release cuts it + re-bypasses if it was off. Mix is
-   *  guaranteed audible by the base class (see BaseFxDevice.throwMix). */
+   *  floored at this device's own 0.5 default by the base class (see BaseFxDevice.throwMix) if
+   *  it's been dialled lower — not forced to full-wet, just guaranteed at least its own resting
+   *  presence. */
   protected applyThrowBoost(on: boolean) {
     const t = this.ctx.currentTime;
     const g = this.riseGain.gain;
@@ -210,9 +212,6 @@ export class NoiseFx extends BaseFxDevice {
       this._riseEnd = 0;
       g.setTargetAtTime(0, t, 0.03); // the drop — cut to silence
     }
-  }
-  protected get throwMix() {
-    return 1;
   }
 
   // ---- live reads for the WYSIWYG -----------------------------------------

@@ -177,9 +177,6 @@ export class CompFx extends BaseFxDevice {
       this.post("ratio", p.ratio);
     }
   }
-  protected get throwMix() {
-    return 1;
-  }
 
   dispose() {
     try {

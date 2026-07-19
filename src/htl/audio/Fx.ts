@@ -189,6 +189,32 @@ export interface FxParam {
   set(v: number): void;
 }
 
+// ★ A THROW GUARANTEES A FLOOR, NOT A FIXED VALUE — and the floor is never an invented number, it's
+// the thing's OWN considered resting point. Any object with a gettable/settable mix can use this:
+// engage() bumps the value up to `floor` ONLY if it's currently below it (never lowers a mix the
+// user deliberately set HIGHER — an earlier version of this forced an exact value unconditionally,
+// which would have yanked a hand-raised mix back DOWN for the duration of the hold), remembering
+// what was there; release() restores exactly that, or does nothing if engage() never touched it.
+// Shared by BaseFxDevice's own throw lifecycle AND the EQ's separate curve-throw (Deck.eqThrow),
+// which can't inherit BaseFxDevice (fully-wet in-series, not a send) but wants the identical rule.
+export class MixFloorGuard {
+  private prev: number | null = null;
+  engage(get: () => number, set: (v: number) => void, floor: number | null) {
+    if (floor == null) return;
+    const cur = get();
+    if (cur < floor) {
+      this.prev = cur;
+      set(floor);
+    }
+  }
+  release(set: (v: number) => void) {
+    if (this.prev != null) {
+      set(this.prev);
+      this.prev = null;
+    }
+  }
+}
+
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 // Manual bypass's ring-out ceiling: a SAFETY CAP, not the timer that decides when a tail is done
 // (see scheduleBypassRingOut) — high feedback or a long reverb decay can legitimately still be
@@ -433,7 +459,7 @@ export abstract class BaseFxDevice implements FxDevice {
   // primitive, two lifetimes.
   private _thrown = false;
   private _throwPrevBypass = false;
-  private _throwPrevMix: number | null = null;
+  private readonly _mixGuard = new MixFloorGuard();
   private _settingBypassInternally = false;
   private _releaseGen = 0;
   private _releasePending = false; // a ring-out is in flight: the device is still sounding, on its way back to dormant
@@ -452,18 +478,20 @@ export abstract class BaseFxDevice implements FxDevice {
   protected get hasTail(): boolean {
     return false;
   }
-  /** The mix level a throw forces WHILE held, restored to the dialled-in value the instant it
-   *  releases — a pad throw is a performance SLAM, and a DJ who dialled mix down earlier (previewing
-   *  dry, or just left it low) shouldn't get a silent or muffled throw with no clue why the pad lit
-   *  up but nothing changed. null (the default) means a throw never touches mix at all — the RIGHT
-   *  default for a device whose mix is load-bearing for its own sonic identity, not just its
-   *  loudness (ModFx's 0.5 default IS the comb-filter's deepest-notch point; forcing it to full-wet
-   *  would erase the dry reference the notches are relative to — a different timbre, not a louder
-   *  one). Every pure-insert device (DelayFx, ReverbFx, SaturatorFx, CrushFx, GateFx, NoiseFx,
-   *  CompFx) opts IN — delay/reverb to their own established 0.85 (a hair of dry stays audible even
-   *  at full send), the rest to a flat 1 (a slam should be unmistakable). */
+  /** The FLOOR a throw guarantees mix is at LEAST while held (see MixFloorGuard — never lowers a
+   *  mix the user set higher, restores exactly what was there the instant it releases). A DJ who
+   *  dialled mix down earlier (previewing dry, or just left it low) shouldn't get a silent or
+   *  muffled throw with no clue why the pad lit up but nothing changed. Defaults to
+   *  `paramDefault("mix")` — the device's OWN considered resting value, never an invented number:
+   *  a device whose default is already full-wet (SaturatorFx, CrushFx, GateFx, CompFx) gets full-wet
+   *  for free; a device whose default IS a considered blend rather than a compromise (ModFx's 0.5 —
+   *  the comb-filter's deepest-notch point) gets exactly THAT floor and nothing more, so a throw can
+   *  never collapse its own identity — no special-casing required, it falls out of the same rule.
+   *  DelayFx/ReverbFx are the only two that override this UPWARD, on purpose: their whole pad is a
+   *  deliberate slam BEYOND the normal dial (0.85, well past their quiet ~0.3 resting default), not
+   *  a restoration of it. null opts a device out of the floor entirely (none currently do). */
   protected get throwMix(): number | null {
-    return null;
+    return this.paramDefault("mix");
   }
 
   /** Engage/release a throw. The CALLER's lifetime decides latch (sticky) vs momentary (held). When
@@ -480,20 +508,14 @@ export abstract class BaseFxDevice implements FxDevice {
         this._releaseGen++; // cancel the pending re-bypass — we're sounding again
         this._releasePending = false;
         if (this._bypassed) this.internalSetBypass(false);
-        if (this.throwMix != null) {
-          this._throwPrevMix = this.mixAmount;
-          this.setMix(this.throwMix);
-        }
+        this._mixGuard.engage(() => this.mixAmount, (v) => this.setMix(v), this.throwMix);
       }
       this.applyThrowBoost(true);
     } else {
       if (this._thrown) {
         this._thrown = false;
         this.applyThrowBoost(false); // params back to the user's settings FIRST → the tail decays naturally
-        if (this._throwPrevMix != null) {
-          this.setMix(this._throwPrevMix);
-          this._throwPrevMix = null;
-        }
+        this._mixGuard.release((v) => this.setMix(v));
         this.scheduleRelease();
         return;
       }

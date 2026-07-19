@@ -248,10 +248,12 @@ export class ModFx extends BaseFxDevice {
   }
 
   /** Pad-throw TRIGGER: engage (un-bypass if dormant) + deepen the swirl (depth + feedback)
-   *  while held; release restores it and re-bypasses if it was off. Deliberately does NOT
-   *  request a mix boost (see BaseFxDevice.throwMix) — the default 0.5 blend IS the comb-filter's
-   *  deepest-notch point; forcing full-wet during a throw would erase the dry reference the
-   *  notches are relative to, changing the timbre rather than just the loudness. */
+   *  while held; release restores it and re-bypasses if it was off. No throwMix override needed —
+   *  this is the case the base class's default (paramDefault("mix"), not an invented flat number)
+   *  was built for: MOD's own 0.5 construction default IS the comb-filter's deepest-notch point, so
+   *  the inherited floor guarantees mix is never dialled BELOW that (a throw can't go silent) while
+   *  never forcing it ABOVE either (a throw can't erase the notches by accident) — the correct
+   *  behaviour falls out with no special-casing at all. */
   protected applyThrowBoost(on: boolean) {
     this.applyDepth();
     if (this.fbGain) this.fbGain.gain.setTargetAtTime(Math.min(0.95, this._fb * 0.8 + (on ? 0.2 : 0)), this.ctx.currentTime, 0.02);

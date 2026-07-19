@@ -87,7 +87,6 @@ interface Ctx {
   cy: number; // the baseline, right under the ribbon — everything hangs FROM here now
   aX: number; // the dome's OWN semi-axis — capped, a fixed-size instrument regardless of width
   aY: number; // vertical semi-axis — fills the space below the ribbon
-  aXraw: number; // the panel's actual available half-width, uncapped — for the room field only
   ribbonY: number;
   ribbonH: number;
 }
@@ -162,7 +161,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
   params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
   const onParamRef = useRef(onParam);
   onParamRef.current = onParam;
-  const ctxRef = useRef<Ctx>({ w: 1, h: 1, cx: 0, cy: 0, aX: 1, aY: 1, aXraw: 1, ribbonY: 0, ribbonH: 1 });
+  const ctxRef = useRef<Ctx>({ w: 1, h: 1, cx: 0, cy: 0, aX: 1, aY: 1, ribbonY: 0, ribbonH: 1 });
   const placed = useRef<Placed[]>([]);
   const hover = useRef<string | null>(null); // a grip id, or "hp"/"lp"/"band"
   const drag = useRef<Drag | null>(null);
@@ -244,10 +243,10 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // panel's real half-width) can go arbitrarily far past what looks like a dome and into
       // "stretched oval" — capping it, instead of letting it track the panel, is what makes an
       // expanded view leave leftover space rather than a distorted shape. The room field below
-      // gets that leftover space instead (see aXraw), so it reads as deliberate atmosphere, not a
-      // control surface that gave up trying to fill its own container.
+      // (glow + motes) gets that leftover space instead, so it reads as deliberate atmosphere, not
+      // a control surface that gave up trying to fill its own container.
       const aX = Math.min(aXraw, aY * 1.8);
-      return { w, h, cx, cy, aX, aY, aXraw, ribbonY, ribbonH };
+      return { w, h, cx, cy, aX, aY, ribbonY, ribbonH };
     };
 
     const draw = (now: number) => {
@@ -314,28 +313,12 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const Rx = Rfrac * aX;
       const wing = w / 2 - Rx; // empty horizontal space beyond the arch's horizons
       if (wing > 40) {
-        // DISTANT ROOM ECHOES — flat ripples using the panel's FULL available half-width
-        // (aXraw, not the dome's own capped reach), so a doubled-width expanded view still reads
-        // as "the room continues out there." Deliberately FLAT (a small fixed height, not another
-        // dome) — this is ripples on the floor, not a second stretched arch.
-        if (c.aXraw > aX * 1.15) {
-          const echoAY = Math.min(aY * 0.22, 16);
-          for (let i = 0; i < 3; i++) {
-            const rr = 0.5 + i * 0.24;
-            const ea = (0.12 + 0.06 * clamp01(p.mix)) * (0.7 + 0.3 * energy) * duckPulse * (1 - i * 0.2);
-            ctx.beginPath();
-            for (let k = 0; k <= 48; k++) {
-              const ang = (k / 48) * Math.PI;
-              const x = cx + Math.cos(ang) * rr * c.aXraw;
-              const y = cy + Math.sin(ang) * rr * echoAY;
-              k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-            }
-            ctx.strokeStyle = withAlpha(accent, ea);
-            ctx.lineWidth = 1;
-            ctx.stroke();
-          }
-        }
-
+        // ★ The "distant room echo" ripples that used to live here (flat concentric arcs spanning
+        // the panel's full width) were meant to make a very wide expanded view read as deliberate
+        // atmosphere. In practice they read as stray hairlines — thin curved lines that don't
+        // belong to any control, especially near the horizons where several of them converge
+        // toward the same point. Removed rather than re-tuned again: the glow + motes below
+        // already carry the "the room continues out there" job without a rendering artifact.
         const wingA = (0.08 + 0.09 * clamp01(p.mix)) * (0.6 + 0.4 * energy) * duckPulse;
         const wg = ctx.createRadialGradient(cx, cy, Rx * 0.7, cx, cy, w * 0.62);
         wg.addColorStop(0, withAlpha(dr > 0 ? `rgb(${WARM})` : accent, wingA));

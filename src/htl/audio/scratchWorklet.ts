@@ -14,14 +14,25 @@
 //   • A velocity-dependent lowpass anti-aliases the speed-up case (reading faster
 //     than 1× is decimation, which would otherwise fold highs back as metallic
 //     grunge); below 1× it opens fully and keeps all the highs.
+//   • Reads PCM live out of a registry shared with the stretch (playback) worklet —
+//     see the module-scope note below — instead of holding its own copy, so a scratch
+//     is never more than a live view onto whatever stretch already has resident.
 //
 // Loaded via a Blob URL so it's bundler-agnostic (see AudioEngine).
 export const SCRATCH_WORKLET_SRC = `
+// Both this module and stretchWorklet.ts load into the SAME AudioWorkletGlobalScope
+// (one global scope per BaseAudioContext — separate addModule() calls on the same
+// context share it), so a module-scope registry keyed by deck id lets this processor
+// read the stretch worklet's already-resident PCM directly, with zero extra copies and
+// no message round-trip. Idempotent regardless of which module's addModule() lands
+// first. Replaces the old per-worklet PCM transfer + the mobile windowed-PCM-extraction
+// machinery entirely (see stretchWorklet.ts's loadPcm handler, the writer side).
+if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 class Scratch extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this.ch = [];        // Float32Array per channel (the whole track)
-    this.len = 0;        // length in samples
+    this.deckId = (options && options.processorOptions && options.processorOptions.deckId) || 'A';
+    this.pcm = null;     // this deck's { gL, gR, length, pcmScale } — refreshed once per block
     this.pos = 0;        // fractional read pointer (samples)
     this.target = 0;     // latest platter position from the UI (samples)
     this.step = 0;       // per-sample velocity for the current segment (samples)
@@ -55,13 +66,12 @@ class Scratch extends AudioWorkletProcessor {
     // exponentially toward a target at AUDIO rate instead of being re-posted as positions
     // ~60x/s. That kills the stair-step on the pitch glide (Mixxx drives its scratch at a
     // 1 kHz timer; here it's per output sample). Reports position back for the visual playhead.
-    this.ramping = false; this.rampTarget = 0; this.kRamp = 0; this.rampSince = 0;
+    this.ramping = false; this.rampTarget = 0; this.rampTau = 0.1; this.rampSince = 0;
+    this.rampLoopStart = -1; this.rampLoopEnd = -1; // -1,-1 = no active loop (ramp runs to the track edge)
+    this.rampServo = true; this.rampA = 0; this.rampZ = 0; // servoStep / brakeFriction state
     this.port.onmessage = (e) => {
       const d = e.data;
-      if (d.type === 'load') {
-        this.ch = d.channels;
-        this.len = d.length;
-      } else if (d.type === 'start') {
+      if (d.type === 'start') {
         this.pos = this.target = d.pos;
         this.step = this.curStep = 0;
         this.granular = false; this.curRaw = 0; // a fresh grab always starts continuous
@@ -106,27 +116,42 @@ class Scratch extends AudioWorkletProcessor {
         this.pos = d.pos;
         this.curStep = d.vel;
         this.rampTarget = d.target;
-        this.kRamp = 1 - Math.exp(-1 / (Math.max(0.001, d.tau) * sampleRate));
+        this.rampTau = Math.max(0.001, d.tau);
+        this.rampServo = d.servo; // true = motor servo (spinback/soft-start), false = friction brake
+        this.rampA = 0; this.rampZ = 0; // fresh state per ramp — see servoStep/brakeFriction in JogEngine.ts
         this.ramping = true; this.granular = false; this.rampSince = 0;
         this.active = true; this.gainTarget = 1;
+        // loopStart/loopEnd (worklet-local samples), or -1,-1 when the deck has no active
+        // loop — a spinback/soft-start ramp that's headed back to play stays inside a live
+        // loop instead of throwing the platter out past its edge.
+        this.rampLoopStart = d.loopStart; this.rampLoopEnd = d.loopEnd;
       } else if (d.type === 'stop') {
         this.gainTarget = 0; // fade out; go fully idle once silent
         this.ramping = false; // a transport takeover cancels an in-flight ramp
       }
     };
   }
-  cubic(buf, pos) {
+  // One sample of one output channel (0=L, 1=R) from the shared PCM registry — an
+  // UNWEIGHTED sum across every loaded group (mirrors stretchWorklet.ts's own
+  // extractRegion mask=-1 reconstruction: "the mix", not a live per-stem-gain blend —
+  // scratch has never reflected live stem-gain changes, on desktop or mobile, so this
+  // preserves exactly what was already heard). Clamps to the track edges (repeats the
+  // edge sample) rather than zero-padding — granular grains can read past either end.
+  // Silence (not a crash) when nothing's registered yet for this deck.
+  readCh(ch, idx) {
+    const pcm = this.pcm;
+    if (!pcm || pcm.length === 0) return 0;
+    const n = pcm.length;
+    if (idx < 0) idx = 0; else if (idx > n - 1) idx = n - 1;
+    const groups = ch === 0 ? pcm.gL : pcm.gR;
+    let s = 0;
+    for (let g = 0; g < groups.length; g++) s += groups[g][idx];
+    return s * pcm.pcmScale;
+  }
+  cubic(ch, pos) {
     const i = Math.floor(pos);
     const x = pos - i;
-    const n = this.len;
-    // Fully clamp ALL four taps to [0, n-1] — granular grains can read past the
-    // buffer end (anchor + phase > len), and an unclamped i-1 tap reads undefined → NaN.
-    let i0 = i - 1, i1 = i, i2 = i + 1, i3 = i + 2;
-    if (i0 < 0) i0 = 0; else if (i0 > n - 1) i0 = n - 1;
-    if (i1 < 0) i1 = 0; else if (i1 > n - 1) i1 = n - 1;
-    if (i2 < 0) i2 = 0; else if (i2 > n - 1) i2 = n - 1;
-    if (i3 < 0) i3 = 0; else if (i3 > n - 1) i3 = n - 1;
-    const s1 = buf[i0], s2 = buf[i1], s3 = buf[i2], s4 = buf[i3];
+    const s1 = this.readCh(ch, i - 1), s2 = this.readCh(ch, i), s3 = this.readCh(ch, i + 1), s4 = this.readCh(ch, i + 2);
     const c1 = x * (-0.5 + x * (1 - 0.5 * x));
     const c2 = 1 + x * x * (1.5 * x - 2.5);
     const c3 = x * (0.5 + x * (2 - 1.5 * x));
@@ -138,26 +163,28 @@ class Scratch extends AudioWorkletProcessor {
   // samples; averaging them (instead of point-sampling one) is inherently
   // anti-aliased AND tames the energy dump — a fast drag ROLLS instead of
   // collapsing into a harsh aliased swirl.
-  boxAvg(buf, a, b) {
-    const n = this.len;
+  boxAvg(ch, a, b) {
+    const pcm = this.pcm;
+    if (!pcm || pcm.length === 0) return 0;
+    const n = pcm.length;
     let i0 = Math.floor(a < b ? a : b);
     let i1 = Math.floor(a < b ? b : a);
     if (i0 < 0) i0 = 0;
     if (i1 > n - 1) i1 = n - 1;
     if (i1 < i0) i1 = i0;
     let sum = 0;
-    for (let i = i0; i <= i1; i++) sum += buf[i];
+    for (let i = i0; i <= i1; i++) sum += this.readCh(ch, i);
     return sum / (i1 - i0 + 1);
   }
   // Crisp point-sampling for slow/micro scrubbing (≤1 sample/step), area-averaging
   // for fast sweeps, smoothly crossfaded across 1…3× so there's no seam as the
   // platter accelerates. Preserves the sharp micro-scrub feel exactly.
-  readScrub(buf, p0, p1, sp) {
-    if (sp <= 1) return this.cubic(buf, p1);
-    const avg = this.boxAvg(buf, p0, p1);
+  readScrub(ch, p0, p1, sp) {
+    if (sp <= 1) return this.cubic(ch, p1);
+    const avg = this.boxAvg(ch, p0, p1);
     if (sp >= 3) return avg;
     const t = (sp - 1) * 0.5; // 0 at 1×, 1 at 3×
-    return this.cubic(buf, p1) * (1 - t) + avg * t;
+    return this.cubic(ch, p1) * (1 - t) + avg * t;
   }
   process(_inputs, outputs) {
     const output = outputs[0];
@@ -168,7 +195,8 @@ class Scratch extends AudioWorkletProcessor {
       for (let c = 0; c < nCh; c++) output[c].fill(0);
       return true;
     }
-    const last = this.len - 1;
+    this.pcm = globalThis.__htlPcm.get(this.deckId); // refresh once per block — see module-scope note above
+    const last = (this.pcm ? this.pcm.length : 0) - 1;
     // Anti-aliasing: reading faster than 1× is decimation, so source energy above
     // the new Nyquist (= Nyquist/speed) folds back as harsh metallic alias. Lowpass
     // with a cutoff that tracks 1/speed; below 1× the filter opens (no aliasing).
@@ -181,18 +209,50 @@ class Scratch extends AudioWorkletProcessor {
       this.since++;
       this.gain += (this.gainTarget - this.gain) * this.kGain;
       if (this.ramping) {
-        // Motor ramp: ease the read velocity toward the target every sample (exp approach),
-        // walk the pointer, and read the PCM continuously — the pitch glides at audio rate.
-        this.curStep += (this.rampTarget - this.curStep) * this.kRamp;
+        // Motor ramp: ease the read velocity toward the target every sample. Two DIFFERENT
+        // physical processes, not one curve (kept in sync by hand with servoStep/brakeFriction
+        // in JogEngine.ts; a worklet can't import a TS module — see the design notes there).
+        if (this.rampServo) {
+          // Catch-up-to-play: a torque-driven 2nd-order servo step response, anchored to the
+          // real Technics SL-1200 spec (0.7s standstill-to-speed) — omegaN*tau ~= 6.64 at
+          // zeta=1.05 reproduces that, verified by simulation across this exact dt range.
+          const omegaN = 6.64 / this.rampTau;
+          const accel = omegaN * omegaN * (this.rampTarget - this.curStep) - 2 * 1.05 * omegaN * this.rampA;
+          this.rampA += accel * (1 / sampleRate);
+          this.curStep += this.rampA * (1 / sampleRate);
+        } else {
+          // Brake: a simplified LuGre friction/stiction model. Fs/Fc=1.15 is real felt
+          // tribology data (AlphaTheta's own jog-tension pads are felt, EP3989600A1).
+          const v = this.curStep;
+          if (v !== 0) {
+            const fc = 0.3 * this.rampTau;
+            const fs = 1.15 * fc;
+            const g = fc + (fs - fc) * Math.exp(-((v / 0.15) ** 2));
+            const zdot = v - (Math.abs(v) * this.rampZ) / g;
+            this.rampZ += zdot * (1 / sampleRate);
+            const sigma0 = 8 / (0.3 * this.rampTau);
+            const sigma2 = 1 / this.rampTau;
+            const F = sigma0 * this.rampZ + sigma2 * v;
+            const next = v - F * (1 / sampleRate);
+            if (next > 0 !== v > 0) { this.curStep = 0; this.rampZ = 0; } else { this.curStep = next; }
+          }
+        }
         let done = (this.curStep - this.rampTarget) * (this.curStep - this.rampTarget) < 0.0004; // within 0.02
         const p0 = this.pos;
         this.pos += this.curStep;
-        if (this.pos < 0) { this.pos = 0; done = true; }
-        else if (this.pos > last) { this.pos = last; done = true; }
+        let seam = false; // a loop wrap just cut the pointer — don't span-read across it
+        if (this.rampLoopEnd > this.rampLoopStart) {
+          const ls = this.rampLoopStart, le = this.rampLoopEnd, ln = le - ls;
+          if (this.pos >= le) { this.pos = ls + (this.pos - le) % ln; seam = true; }
+          else if (this.pos < ls) { this.pos = le - (ls - this.pos) % ln; seam = true; }
+        } else {
+          if (this.pos < 0) { this.pos = 0; done = true; }
+          else if (this.pos > last) { this.pos = last; done = true; }
+        }
         const sp = this.curStep < 0 ? -this.curStep : this.curStep;
+        const rp0 = seam ? this.pos : p0;
         for (let c = 0; c < nCh; c++) {
-          const buf = this.ch[c] || this.ch[this.ch.length - 1];
-          const s = buf ? this.readScrub(buf, p0, this.pos, sp) : 0;
+          const s = this.readScrub(c, rp0, this.pos, sp);
           const st = this.lp[c] || (this.lp[c] = [0, 0]);
           st[0] += a * (s - st[0]);
           st[1] += a * (st[0] - st[1]);
@@ -214,8 +274,7 @@ class Scratch extends AudioWorkletProcessor {
         let pb = pa + gh; if (pb >= glen) pb -= glen;
         const wA = gwin[pa], wB = gwin[pb];
         for (let c = 0; c < nCh; c++) {
-          const buf = this.ch[c] || this.ch[this.ch.length - 1];
-          output[c][i] = buf ? (wA * this.cubic(buf, this.startA + pa) + wB * this.cubic(buf, this.startB + pb)) * this.gain : 0;
+          output[c][i] = (wA * this.cubic(c, this.startA + pa) + wB * this.cubic(c, this.startB + pb)) * this.gain;
         }
         this.phaseA = pa + 1;
         continue;
@@ -237,8 +296,7 @@ class Scratch extends AudioWorkletProcessor {
       else if (this.pos > last) { this.pos = last; if (this.curStep > 0) this.curStep = 0; }
       const sp = this.curStep < 0 ? -this.curStep : this.curStep;
       for (let c = 0; c < nCh; c++) {
-        const buf = this.ch[c] || this.ch[this.ch.length - 1];
-        const s = buf ? this.readScrub(buf, p0, this.pos, sp) : 0;
+        const s = this.readScrub(c, p0, this.pos, sp);
         const st = this.lp[c] || (this.lp[c] = [0, 0]);
         st[0] += a * (s - st[0]);       // two cascaded one-poles clean the residual sidelobes
         st[1] += a * (st[0] - st[1]);

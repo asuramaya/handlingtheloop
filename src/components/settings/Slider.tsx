@@ -8,6 +8,7 @@ export function Slider({
   min = 0,
   max = 1,
   step = 0.05,
+  title,
 }: {
   label: string;
   hint: string;
@@ -16,9 +17,10 @@ export function Slider({
   min?: number;
   max?: number;
   step?: number;
+  title?: string; // hover tooltip — which gesture/button this actually drives
 }) {
   return (
-    <div className="settings-row slider-row">
+    <div className="settings-row slider-row" title={title}>
       <span className="settings-label">
         {label} <span className="slider-hint">{hint}</span>
       </span>

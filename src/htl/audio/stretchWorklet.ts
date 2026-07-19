@@ -34,6 +34,11 @@ const RMASK = RING - 1;     // RING is a power of two
 // actually produced — rescales back to float by INV16. all-on still sums to the mix
 // (within int16 quantization, ~ -90 dB, inaudible; the source is lossy anyway).
 const INV16 = 1 / 32767;
+// Shared with scratchWorklet.ts — both modules load into the SAME AudioWorkletGlobalScope
+// (one global scope per BaseAudioContext), so publishing this worklet's resident PCM here
+// lets scratch read it directly with zero extra copies and no message round-trip. See
+// scratchWorklet.ts's header comment for the reader side.
+if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 
 class Stretch extends AudioWorkletProcessor {
   // NOTE: speed/pitch are driven by PORT MESSAGES, not AudioParams. iOS Safari has
@@ -42,8 +47,9 @@ class Stretch extends AudioWorkletProcessor {
   // processor is killed on its first block → permanent silence (while desktop is
   // fine). Routing them over the port (smoothed here for de-zipper) sidesteps that
   // entirely; there are no parameterDescriptors and process() takes no params arg.
-  constructor() {
+  constructor(options) {
     super();
+    this.deckId = (options && options.processorOptions && options.processorOptions.deckId) || 'A';
     this.loaded = false;
     this.playing = false;
     this.ended = false;
@@ -197,6 +203,8 @@ class Stretch extends AudioWorkletProcessor {
       // before the next start/seek re-seats the read head. (start/seek reset these anyway, but
       // a swap that isn't immediately followed by one would otherwise drain stale audio.)
       this.wHead = 0; this.rHead = 0; this.olaL.fill(0); this.olaR.fill(0); this.seekPending = -1;
+      // Publish for the scratch worklet — same arrays, no copy (see the module-scope note above).
+      globalThis.__htlPcm.set(this.deckId, { gL: this.gL, gR: this.gR, length: this.length, pcmScale: this.pcmScale });
     } else if (d.type === 'start') {
       this.reset(d.offset || 0); this.playing = true; this.ended = false; this.gainTarget = 1;
     } else if (d.type === 'seek') {
@@ -211,6 +219,7 @@ class Stretch extends AudioWorkletProcessor {
       if (d.index >= 0 && d.index < 4) this.gain_[d.index] = d.value;
     } else if (d.type === 'clear') {
       this.loaded = false; this.playing = false; this.gL = []; this.gR = []; this.nG = 0;
+      globalThis.__htlPcm.delete(this.deckId); // no stale PCM left for scratch to read after unload
     } else if (d.type === 'extractRegion') {
       // Copy a [start,end]-second slice of the resident PCM back to the main thread as float32.
       // The local sampler needs an AudioBuffer to grab a loop, but on mobile the deck's raw mix +

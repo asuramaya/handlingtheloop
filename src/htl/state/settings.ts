@@ -34,7 +34,6 @@ export interface Settings {
   jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
   jogSensitivity: number; // MIDI jog scratch/search scale (0.25..4, 1 = 33⅓ rpm vinyl default)
   jogBendStrength: number; // MIDI jog pitch-bend push scale (0.25..2, 1 = default)
-  jogVinylDefault: boolean; // FLX4 jog starting mode before the unit's CC reveals it: true = scratch (vinyl), false = bend (CDJ)
   vinylSpeed: boolean; // Vinyl Speed Adjust: motor brake/soft-start ramps on play/pause + touch (off = instant)
   vinylBrakeTime: number; // 0..1 — pause-brake + platter-touch decel time (rekordbox Touch/Brake)
   vinylStartTime: number; // 0..1 — play soft-start spin-up time (rekordbox Release/Start)
@@ -173,7 +172,6 @@ export const DEFAULT_SETTINGS: Settings = {
   jogDrag: 0.4,
   jogSensitivity: 1,
   jogBendStrength: 1,
-  jogVinylDefault: true,
   vinylSpeed: false,
   vinylBrakeTime: 0.22,
   vinylStartTime: 0.18,

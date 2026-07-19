@@ -42,7 +42,6 @@ const STEM_BASE_BUCKET = 256;
 // tracks. Desktop keeps them for normal tracks (crisp deep-zoom + safe stretch-node reattach)
 // but releases them past this length to roughly double its headroom. (Mobile always releases.)
 const DESKTOP_FREE_STEMS_SECONDS = 480; // 8 min
-const SCRATCH_WINDOW_SEC = 20; // ±seconds of PCM pulled from the worklet for scratch when the mix buffer is freed (mobile + stems)
 interface StemBaseLevel {
   min: Float32Array;
   max: Float32Array;
@@ -485,12 +484,11 @@ export class Deck {
       spawnSource: (at) => this.spawnSource(at),
       stopSource: () => this.stopSource(),
       clearBend: () => this.clearBend(),
-      scratchBuffer: () => this.buffer,
-      scratchWindow: (centerSec) => this.scratchWindow(centerSec),
       connectScratch: (node) => { node.connect(this.rack.input); },
       slipArm: () => this.slipArm(),
       slipArmForce: () => this.slipArmForce(),
       slipReleasePos: () => this.slipReleasePos(),
+      loopBounds: () => (this.loop?.active ? { start: this.loop.start, end: this.loop.end } : null),
     });
   }
 
@@ -788,12 +786,8 @@ export class Deck {
     this._pitchSemis = 0;
     this.updatePitch();
     this._loudness = null; // recompute lazily for the new track
-    this.loadEnginePcm(); // hand the mix PCM to the stretch engine
+    this.loadEnginePcm(); // hand the mix PCM to the stretch engine — scratch reads it live from there
     for (const name of STEM_NAMES) this.rampStem(name); // reset engine stem gains to all-on
-    // New track → the scratch worklet's old PCM is stale (jog.reset() above cleared the
-    // loaded flag). Desktop re-sends now; mobile defers the (full float32) copy until the
-    // first scratch, to keep it out of the 2-deck iOS peak.
-    if (!isMobileDevice()) this.jog.sendBuffer();
   }
 
   /** Release the decoded float32 mix buffer (~92 MB) — called on MOBILE once this deck's stems
@@ -1072,18 +1066,6 @@ export class Deck {
       timer = setTimeout(() => finish(null), 2000); // safety: never hang if the node swaps out
       node.port.postMessage({ type: "extractRegion", id, start, end, mask });
     });
-  }
-  /** For JogEngine: a bounded PCM window (±SCRATCH_WINDOW_SEC) around `centerSec`, pulled back out
-   *  of the worklet for the scratch resampler. On mobile the raw mix buffer is freed once stems pack
-   *  in (releaseMixBuffer), so there's no full buffer to hand the resampler — but a scratch gesture
-   *  rarely travels more than a few seconds, so a window covers it (JogEngine re-pulls if the finger
-   *  drifts out). null on desktop / plain-mix (JogEngine uses the full deck.buffer there) or when
-   *  there's no own-local PCM. */
-  scratchWindow(centerSec: number): Promise<{ buffer: AudioBuffer; offsetSec: number } | null> {
-    if (this.buffer || !this.ownStems) return Promise.resolve(null);
-    const w0 = Math.max(0, centerSec - SCRATCH_WINDOW_SEC);
-    const w1 = Math.min(this._duration, centerSec + SCRATCH_WINDOW_SEC);
-    return this.extractRegion(w0, w1).then((buffer) => (buffer ? { buffer, offsetSec: w0 } : null));
   }
   /** The knob level for a stem (0..1.5; 1 = unity). */
   stemLevel(name: StemName): number {

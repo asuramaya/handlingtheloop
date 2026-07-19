@@ -256,8 +256,11 @@ export class AudioEngine {
     try {
       if (await this.addModuleOnce("scratch", SCRATCH_WORKLET_SRC)) {
         try {
-          if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
-          if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2] }));
+          // deckId (shared with the stretch node below) keys the PCM registry both
+          // worklets read/write in their common AudioWorkletGlobalScope — see
+          // scratchWorklet.ts's header comment.
+          if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
+          if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
         } catch (e) {
           console.warn("[htl] scratch node attach failed (will retry):", e);
         }
@@ -265,11 +268,11 @@ export class AudioEngine {
       if (await this.addModuleOnce("stretch", STRETCH_WORKLET_SRC)) {
         try {
           if (!this.deckA.stretchAttached) {
-            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
             this.deckA.configureStretch(this.stretchCfg);
           }
           if (!this.deckB.stretchAttached) {
-            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2] }));
+            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
             this.deckB.configureStretch(this.stretchCfg);
           }
         } catch (e) {

@@ -1,5 +1,4 @@
 import { lerp } from "../../util/math";
-import { isMobileDevice } from "../stems/models";
 
 // The transport surface the jog physics drives. Deck implements this with bound
 // callbacks so the engine never touches the clock/stretch internals directly (mirrors
@@ -20,14 +19,125 @@ export interface JogHost {
   spawnSource(at: number): void; // (re)start the stretch-engine voice at `at`
   stopSource(): void; // hand the audio to the scratch resampler
   clearBend(): void; // a grab/ramp takes over the clock — drop any decaying bend
-  scratchBuffer(): AudioBuffer | null; // decoded PCM for the resampler (lazy on mobile)
-  // Mobile+stems only: the raw buffer above is freed, so pull a bounded PCM window around `centerSec`
-  // out of the worklet for the resampler. Resolves null on desktop / plain-mix (use scratchBuffer).
-  scratchWindow(centerSec: number): Promise<{ buffer: AudioBuffer; offsetSec: number } | null>;
   connectScratch(node: AudioWorkletNode): void; // node.connect(deck channel input)
   slipArm(): void; // SLIP: anchor the shadow playhead at grab (no-op unless slip on + playing)
   slipArmForce(): void; // CENSOR: anchor the shadow regardless of the slip toggle (still playing-only)
   slipReleasePos(): number | null; // SLIP: where the track would be now, or null (no anchor)
+  loopBounds(): { start: number; end: number } | null; // the active loop's ring, or null (no loop / inactive)
+}
+
+// Brake and catch-up-to-play are TWO DIFFERENT PHYSICAL PROCESSES, not one curve — brake is
+// a hand (or pad) FRICTION-stopping a spinning platter; catch-up (soft-start, spinback
+// recovery, a natural jog release back to play) is a MOTOR SERVO driving the platter to a
+// target speed against comparatively small friction. Modelling both as one fixed-tau
+// exponential — or one hand-tuned "shrinking tau" curve, as an earlier pass here did — has
+// no principled reason to feel right, because it isn't matched to either mechanism. Both
+// models below are instead anchored to real, citable numbers rather than reverse-engineered
+// from any one product's undisclosed curve (Pioneer's own brake, per patent US6751167B2, is
+// itself just a hand-tuned lookup table — no reason to treat it as ground truth). Verified
+// numerically (stability + settling-time sweeps) before landing here — see the design notes
+// in htl-jog-rearchitecture-plan.md.
+
+// --- Catch-up-to-play: a torque-driven 2nd-order servo step response (T = I·α, not friction) ---
+// Anchored to a real, published spec: the Technics SL-1200 direct-drive turntable reaches
+// 33⅓ rpm from a standstill in 0.7s — the reference vinyl motor DJ culture (and rekordbox's
+// own "vinyl mode") implicitly benchmarks against. `tau` keeps its existing meaning (the
+// user-facing knob's seconds), now read as "desired 2%-settling time"; SERVO_OMEGA_TAU is the
+// omegaN·tau product (at SERVO_ZETA damping) that reproduces the real 0.7s spec — verified by
+// simulation, not just derived, including at the actual 16-50ms frame-rate range this runs at.
+// Slightly overdamped (zeta>1) for headroom against any audible wobble on spin-up.
+const SERVO_OMEGA_TAU = 6.64;
+const SERVO_ZETA = 1.05;
+export interface ServoState {
+  v: number; // velocity
+  a: number; // acceleration (the 2nd-order state a fixed-tau exponential doesn't have)
+}
+// Explicit (semi-implicit) Euler integration of a 2nd-order system is only stable while
+// omegaN·dt stays small — verified numerically: clean up to ~0.7, diverging to infinity by
+// ~0.9. A SHORT tau (the natural-release taus run as low as 0.025s) combined with a real rAF
+// hiccup (dt clamped up to 0.05s) can push omegaN·dt well past that on its own, so this
+// sub-steps down to a safe size instead of trusting the caller's dt — caught by this file's
+// own test suite blowing up before it ever reached production.
+const SERVO_STABLE_OMEGA_DT = 0.5;
+export function servoStep(state: ServoState, target: number, dt: number, tau: number): ServoState {
+  if (tau <= 0) return { v: target, a: 0 };
+  const omegaN = SERVO_OMEGA_TAU / tau;
+  const steps = Math.max(1, Math.ceil((omegaN * dt) / SERVO_STABLE_OMEGA_DT));
+  const subDt = dt / steps;
+  let v = state.v;
+  let a = state.a;
+  for (let i = 0; i < steps; i++) {
+    const accel = omegaN * omegaN * (target - v) - 2 * SERVO_ZETA * omegaN * a;
+    a += accel * subDt;
+    v += a * subDt;
+  }
+  return { v, a };
+}
+
+// --- Brake: a simplified LuGre friction/stiction model (Canudas de Wit et al. 1995) ---
+// Models a hand (or the physical jog-tension pad) gripping the platter to a stop — real
+// friction, real stiction, unlike a fixed-tau exponential's "viscous only" glide that never
+// quite finishes (the exact flaw Mixxx's own maintainers flag in their alpha-beta-driven
+// ramp, unfixed since 2019: mixxxdj/mixxx#9573, #10700). BRAKE_FS_FC_RATIO is the
+// static/kinetic friction ratio for FELT — not a guess: AlphaTheta's own patent (EP3989600A1)
+// discloses the physical jog-tension pads ARE felt, and measured felt-on-metal (0.323/0.281)
+// and felt-on-wood (0.452/0.392) tribology data both give ~1.15. BRAKE_FC_COEFF/BRAKE_SIGMA0
+// set the friction magnitude relative to tau; tuned by simulation (stability holds across the
+// full dt/tau/velocity range this actually runs at) rather than hand-derived — the first
+// attempt at this got the timescale wrong by hand, this one was checked numerically first.
+const BRAKE_FS_FC_RATIO = 1.15;
+const BRAKE_VS = 0.15; // ×realtime — Stribeck velocity scale where the grab engages
+const BRAKE_FC_COEFF = 0.3;
+const BRAKE_SIGMA0_COEFF = 8;
+export interface BrakeState {
+  v: number; // velocity (target is always 0 — braking is always to a stop)
+  z: number; // bristle deflection
+}
+export function brakeFriction(state: BrakeState, dt: number, tau: number): BrakeState {
+  if (tau <= 0) return { v: 0, z: 0 };
+  const v = state.v;
+  if (v === 0) return state;
+  const fc = BRAKE_FC_COEFF * tau;
+  const fs = BRAKE_FS_FC_RATIO * fc;
+  const g = fc + (fs - fc) * Math.exp(-((v / BRAKE_VS) ** 2));
+  const zdot = v - (Math.abs(v) * state.z) / g;
+  const z = state.z + zdot * dt;
+  const sigma0 = BRAKE_SIGMA0_COEFF / (BRAKE_FC_COEFF * tau);
+  const sigma2 = 1 / tau; // matches the old plain-exponential far-field rate
+  const F = sigma0 * z + sigma2 * v;
+  const next = v - F * dt;
+  if (next > 0 !== v > 0) return { v: 0, z: 0 }; // overshoot → a decisive, exact stop
+  return { v: next, z };
+}
+
+// --- Release classification (Phase B: extracted for its own sake, prep for Phase C) ---
+// What happens when the finger lifts is a real, bug-prone decision — three distinct outcomes
+// depending on how the platter was moving — but it lived inline inside scrubEnd(), entangled
+// with the host/worklet side effects, so it was only ever testable through the full class with
+// a fake host. Pulled out the same way src/htl/room/sessionFollow.ts pulls the session-sync
+// follower's decisions out of useSessionSync: a pure function, an input struct, a discriminated
+// union of actions — the caller (scrubEnd) performs the side effect the action names.
+export type ReleaseAction =
+  | { kind: "slip"; pos: number } // SLIP was armed — snap straight to the shadow, no coast at all
+  | { kind: "spinback"; vel: number; tau: number } // a hard backward flick while playing — the dramatic back-spin-and-catch curve
+  | { kind: "coast"; vel: number }; // a normal release — hand the platter its fling velocity
+
+export interface ReleaseInput {
+  handVel: number; // the finger's last smoothed velocity at release
+  jogReturnToPlay: boolean; // was the deck playing when grabbed
+  slipPos: number | null; // SLIP shadow position, or null (not armed)
+  backSpinTau: number; // the tuned back-spin-and-catch time
+  maxCoast: number; // release-speed cap (× realtime)
+  spinbackFlick: number; // backward-flick speed past which a release counts as a spinback gesture
+}
+
+export function decideRelease(p: ReleaseInput): ReleaseAction {
+  if (p.slipPos != null) return { kind: "slip", pos: p.slipPos };
+  const vel = Math.max(-p.maxCoast, Math.min(p.maxCoast, p.handVel));
+  // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the native
+  // gesture is a hard BACKWARD flick of the jog while playing.
+  if (p.jogReturnToPlay && vel < -p.spinbackFlick) return { kind: "spinback", vel, tau: p.backSpinTau };
+  return { kind: "coast", vel };
 }
 
 // rekordbox-style jog / platter physics: the scratch resampler driver + the weighted-
@@ -60,17 +170,17 @@ export class JogEngine {
   private _backSpin = 0.5; // 0..1 → spinback length + strength
   private _ramping: "start" | "brake" | "spinback" | null = null; // a motor ramp is in flight
   private _coastTau = 0; // >0 overrides the jog-physics coast tau (= a motor ramp time)
+  private _servoA = 0; // servoStep's acceleration state (JS-side coast, catch-up-to-play only)
+  private _brakeZ = 0; // brakeFriction's bristle-deflection state (JS-side coast, decay-to-stop only)
 
-  // The continuous scrub resampler (attached by AudioEngine), owned here.
+  // The continuous scrub resampler (attached by AudioEngine), owned here. It reads PCM
+  // live out of a registry shared with the stretch worklet (both processors load into the
+  // same AudioWorkletGlobalScope — see scratchWorklet.ts's header comment), so there is no
+  // PCM transfer to it at all from here: whatever stretch has resident, scratch can read,
+  // desktop or mobile, full track or stems — the old windowed-PCM-extraction path (a
+  // separate copy pulled from the worklet via extractRegion when the deck's own buffer was
+  // freed) no longer exists.
   private scratchNode: AudioWorkletNode | null = null;
-  private scratchLoaded = false; // the worklet holds this track's PCM (mobile loads it lazily)
-  // When only a WINDOW of PCM is loaded (mobile+stems — the mix buffer is freed), the resampler
-  // indexes 0..windowLen while the deck thinks in absolute samples. `scratchBase` = the window's
-  // start sample; every position sent to / read from the worklet is shifted by it. 0 = full track.
-  private scratchBase = 0;
-  private scratchWinLen = 0; // samples the worklet currently holds (full length on desktop)
-  private scratchFull = false; // true = the whole track is loaded (desktop) → always covered
-  private scratchLoadGen = 0; // supersede an in-flight async window pull if another starts
 
   constructor(private readonly ctx: AudioContext, private readonly host: JogHost) {}
 
@@ -82,7 +192,6 @@ export class JogEngine {
     this.host.connectScratch(node);
     this.scratchNode = node;
     node.port.onmessage = (e) => this.onScratchMessage(e.data); // worklet-ramp position + done
-    if (this.host.scratchBuffer() && !isMobileDevice()) this.sendBuffer();
   }
   // A worklet-owned motor ramp (brake / spinback / soft-start) reports its read position back
   // for the visual playhead, then a 'rampDone' when it settles — at which point we either
@@ -90,10 +199,10 @@ export class JogEngine {
   private onScratchMessage(d: { type: string; pos: number }) {
     if (this.jogPhase !== "motor") return; // stale message from a cancelled ramp
     if (d.type === "rampPos") {
-      this.jogPos = (d.pos + this.scratchBase) / this.ctx.sampleRate; // worklet-local → absolute
+      this.jogPos = d.pos / this.ctx.sampleRate;
       this.host.setStartOffset(this.jogPos);
     } else if (d.type === "rampDone") {
-      this.jogPos = (d.pos + this.scratchBase) / this.ctx.sampleRate;
+      this.jogPos = d.pos / this.ctx.sampleRate;
       this.clampJog();
       const resume = this.jogReturnToPlay;
       this.jogPhase = "off";
@@ -112,60 +221,13 @@ export class JogEngine {
     return this.scratchNode != null;
   }
 
-  // Hand the whole decoded track to the resampler (its own copies, so the AudioBuffer's
-  // backing store isn't detached by the transfer). A FULL float32 duplicate per deck —
-  // desktop preloads it eagerly, mobile lazily on first scratch (the two-deck iOS peak).
-  sendBuffer() {
-    const b = this.host.scratchBuffer();
-    if (b) this.loadScratchPcm(b, 0, true);
-  }
-  // Copy a buffer's channels to the resampler (its own copies, so the source AudioBuffer isn't
-  // detached). `baseSamples` = the absolute sample the buffer starts at; `full` = it's the whole track.
-  private loadScratchPcm(b: AudioBuffer, baseSamples: number, full: boolean) {
-    if (!this.scratchNode) return;
-    const channels: Float32Array[] = [];
-    const transfer: ArrayBuffer[] = [];
-    for (let c = 0; c < b.numberOfChannels; c++) {
-      const copy = b.getChannelData(c).slice();
-      channels.push(copy);
-      transfer.push(copy.buffer);
-    }
-    this.scratchNode.port.postMessage({ type: "load", channels, length: b.length }, transfer);
-    this.scratchBase = baseSamples;
-    this.scratchWinLen = b.length;
-    this.scratchFull = full;
-    this.scratchLoaded = true;
-  }
-  // Is the loaded PCM usable at `posSamples`? A full track always is (the worklet clamps at its ends);
-  // a partial window needs `pos` a comfortable 1 s inside its edges, else we re-pull centred anew.
-  private scratchCovers(posSamples: number) {
-    if (!this.scratchLoaded) return false;
-    if (this.scratchFull) return true;
-    const m = this.ctx.sampleRate; // 1 s margin
-    return posSamples >= this.scratchBase + m && posSamples <= this.scratchBase + this.scratchWinLen - m;
-  }
-  private postScratchStart() {
-    this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate - this.scratchBase });
-  }
   private scratchStart() {
-    const center = this.jogPos * this.ctx.sampleRate;
-    if (this.scratchCovers(center)) { this.postScratchStart(); return; } // already have covering PCM
-    const full = this.host.scratchBuffer();
-    if (full) { this.sendBuffer(); this.postScratchStart(); return; } // desktop / plain-mix: full buffer
-    // Mobile + stems: the mix buffer is freed, so pull a window around the playhead out of the
-    // worklet (async). The grab's platter physics run meanwhile; audio engages when it arrives.
-    const gen = ++this.scratchLoadGen;
-    void this.host.scratchWindow(this.jogPos).then((win) => {
-      if (gen !== this.scratchLoadGen || !win) return; // superseded, or nothing to pull
-      this.loadScratchPcm(win.buffer, Math.round(win.offsetSec * this.ctx.sampleRate), false);
-      if (this.jogPhase !== "off") this.postScratchStart(); // still scratching → engage now
-    });
+    this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
   }
   private scratchMove() {
     // Position only — the worklet reconstructs smooth motion from the position stream itself
-    // (feeding it our noisy per-frame velocity garbled it). Skip until the PCM has loaded.
-    if (!this.scratchLoaded) return;
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate - this.scratchBase });
+    // (feeding it our noisy per-frame velocity garbled it).
+    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate });
   }
   private scratchStop() {
     this.scratchNode?.port.postMessage({ type: "stop" });
@@ -274,6 +336,10 @@ export class JogEngine {
     const dur = this.host.duration();
     if (p < 0) p = 0;
     else if (p > dur) p = dur;
+    // A live loop is a closed ring while the platter will return to play: scrubbing
+    // past OUT wraps to IN (and vice versa) instead of escaping into the rest of the
+    // track — the industry-standard feel of spinning a loop edit on vinyl.
+    if (this.jogReturnToPlay) p = this.wrapLoop(p);
     this.handPos = this.jogPos = p;
     this.host.setStartOffset(p);
     this.scratchMove(); // per-input-sample worklet push
@@ -281,39 +347,38 @@ export class JogEngine {
 
   scrubEnd() {
     if (this.jogPhase !== "grab") return;
-    // SLIP: if armed, the track kept advancing underneath — snap straight to that shadow
-    // playhead and resume (no coast, no spinback), so the scratch was a non-destructive
-    // overlay and the music lands back on-beat.
-    const slipPos = this.host.slipReleasePos();
-    if (slipPos != null) {
+    const action = decideRelease({
+      handVel: this.handVel,
+      jogReturnToPlay: this.jogReturnToPlay,
+      slipPos: this.host.slipReleasePos(),
+      backSpinTau: this.backSpinTau(),
+      maxCoast: JogEngine.MAX_COAST,
+      spinbackFlick: JogEngine.SPINBACK_FLICK,
+    });
+    if (action.kind === "slip") {
+      // The track kept advancing underneath — snap straight to that shadow playhead and
+      // resume (no coast, no spinback), so the scratch was a non-destructive overlay and
+      // the music lands back on-beat.
       this.jogPhase = "off";
       this._ramping = null;
       this._coastTau = 0;
       this.jogVel = 0;
       this.scratchStop();
-      this.host.setStartOffset(slipPos);
-      this.host.spawnSource(slipPos);
+      this.host.setStartOffset(action.pos);
+      this.host.spawnSource(action.pos);
       this.host.setPlaying(true);
       return;
     }
-    // Motion was applied per input sample in scrubMove(); just hand the platter its
-    // release spin — the finger's last smoothed velocity, capped so a violent flick
-    // can't launch it across the whole track.
-    const max = JogEngine.MAX_COAST;
-    this.jogVel = Math.max(-max, Math.min(max, this.handVel));
-    // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the
-    // native gesture is a hard BACKWARD flick of the jog. When the release is a strong
-    // back-fling during playback, give it the dramatic, tunable back-spin-and-catch curve
-    // (backSpinTau) instead of the quick jog-physics coast. Always available (it's a
-    // gesture, not the motor brake). Otherwise reset _coastTau so a normal release uses
-    // the jog weight/drag.
-    if (this.jogReturnToPlay && this.jogVel < -JogEngine.SPINBACK_FLICK) {
-      this._coastTau = this.backSpinTau();
+    this.jogVel = action.vel;
+    if (action.kind === "spinback") {
+      this._coastTau = action.tau;
       this._ramping = "spinback";
     } else {
       this._coastTau = 0;
       this._ramping = null;
     }
+    this._servoA = 0;
+    this._brakeZ = 0;
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
     this.startJogLoop();
@@ -330,8 +395,9 @@ export class JogEngine {
     if (!this.host.loaded()) return;
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.host.clearBend();
-    this.jogPos = this.host.playing() ? this.host.position() : this.host.startOffset();
-    if (this.host.playing()) {
+    const wasPlaying = this.host.playing();
+    this.jogPos = wasPlaying ? this.host.position() : this.host.startOffset();
+    if (wasPlaying) {
       this.host.setStartOffset(this.jogPos);
       this.host.stopSource(); // hand the audio to the scratch resampler
       this.host.setPlaying(false);
@@ -349,12 +415,27 @@ export class JogEngine {
     }
     this.jogPhase = "motor";
     this.scratchStart(); // loads PCM (lazy on mobile) + raises the resampler gain
+    // A ramp that TOUCHES a live loop stays confined to its ring — either headed back to
+    // play (spinback catch / soft-start), or interrupting playback that was already inside
+    // the loop (brake: it always fires from a playing deck, per brakeStop/brakeNow's own
+    // guard — resumePlay=false there doesn't mean "wasn't playing"). Only a ramp starting
+    // from an already-paused, freely-cued deck is left unconfined — needle-dropping around
+    // the whole track, not the loop. (Found via the operator's report that brake/spinback
+    // near a loop boundary felt structurally off — brake alone had been excluded from this
+    // confinement, so pausing near the end of a loop could park the platter outside it.)
+    const loop = wasPlaying || resumePlay ? this.host.loopBounds() : null;
     this.scratchNode?.port.postMessage({
       type: "ramp",
       vel: initialVel,
       target: resumePlay ? this.host.rate() : 0,
       tau,
-      pos: this.jogPos * this.ctx.sampleRate - this.scratchBase,
+      // A ramp headed back to play is a motor SERVO driving to target speed (servoStep); one
+      // headed to a stop is a hand/pad FRICTION braking it (brakeFriction) — two different
+      // physical processes, never the same curve. See the models above JogHost.
+      servo: resumePlay,
+      pos: this.jogPos * this.ctx.sampleRate,
+      loopStart: loop ? loop.start * this.ctx.sampleRate : -1,
+      loopEnd: loop ? loop.end * this.ctx.sampleRate : -1,
     });
   }
 
@@ -455,7 +536,10 @@ export class JogEngine {
           this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
         } else if (phase === "reverse") {
           // Drive the platter backward at the set tempo; voice it on the resampler.
-          this.jogPos -= this.host.rate() * dt;
+          // Reverse only ever runs on a playing deck (reverseStart requires it), so an
+          // active loop always confines it — wrapping past IN to OUT and continuing,
+          // instead of running out to the start of the whole track.
+          this.jogPos = this.wrapLoop(this.jogPos - this.host.rate() * dt);
           this.clampJog();
           this.host.setStartOffset(this.jogPos);
           this.scratchMove();
@@ -488,18 +572,14 @@ export class JogEngine {
     this.scratchStop();
   }
 
-  // Full reset on track load: cancel the jog, zero the platter, and stale the worklet PCM
-  // (desktop re-sends via sendBuffer() after the new buffer is set; mobile lazy-loads).
+  // Full reset on track load: cancel the jog, zero the platter. Scratch's PCM comes live
+  // from the shared registry now (see the scratchNode field comment above), so there's
+  // nothing to stale/re-send here — stretch's own loadPcm publishes the new track for it.
   reset() {
     this.cancelJog();
     this.jogPos = 0;
     this.handPos = 0;
     this.jogReturnToPlay = false;
-    this.scratchLoaded = false;
-    this.scratchBase = 0; // a new track invalidates any loaded window
-    this.scratchWinLen = 0;
-    this.scratchFull = false;
-    this.scratchLoadGen++; // drop any in-flight window pull for the old track
   }
 
   // GRAB tick (frame rate): the platter IS the finger while gripped — each pointer sample
@@ -527,12 +607,14 @@ export class JogEngine {
   // time comes from the Vinyl Speed knob instead of the jog weight/drag.
   private stepCoast(dt: number) {
     if (this.jogReturnToPlay) {
-      // Catch back up to play speed (jog release, soft-start, or a spinback's recovery):
-      // glide the rate toward 1× locally, then hand back to normal playback.
+      // Catch back up to play speed (jog release, soft-start, or a spinback's recovery): a
+      // motor servo, not friction — servoStep, not brakeFriction.
       const rate = this.host.rate();
       const tau = this._coastTau > 0 ? this._coastTau : lerp(0.025, 0.12, this._jogWeight);
-      this.jogVel += (rate - this.jogVel) * (1 - Math.exp(-dt / tau));
-      this.jogPos += this.jogVel * dt;
+      const next = servoStep({ v: this.jogVel, a: this._servoA }, rate, dt, tau);
+      this.jogVel = next.v;
+      this._servoA = next.a;
+      this.jogPos = this.wrapLoop(this.jogPos + this.jogVel * dt);
       this.clampJog();
       if (Math.abs(this.jogVel - rate) < 0.03) {
         // Hand the platter back to normal playback, continuing seamlessly: fade the
@@ -540,6 +622,7 @@ export class JogEngine {
         this.jogPhase = "off";
         this._ramping = null;
         this._coastTau = 0;
+        this._servoA = 0;
         this.scratchStop();
         this.host.setStartOffset(this.jogPos);
         this.host.spawnSource(this.jogPos);
@@ -547,15 +630,18 @@ export class JogEngine {
       }
     } else {
       // Friction glide / brake: drag sets the strength, or _coastTau the motor brake time.
-      // Kept short (sub-second) so a flick eases off instead of spinning away.
+      // A hand (or the jog pad) gripping the platter to a stop — brakeFriction, not a servo.
       const tau = this._coastTau > 0 ? this._coastTau : lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
-      this.jogVel *= Math.exp(-dt / tau);
+      const next = brakeFriction({ v: this.jogVel, z: this._brakeZ }, dt, tau);
+      this.jogVel = next.v;
+      this._brakeZ = next.z;
       this.jogPos += this.jogVel * dt;
       this.clampJog();
       if (Math.abs(this.jogVel) < 0.02) {
         this.jogPhase = "off";
         this._ramping = null;
         this._coastTau = 0;
+        this._brakeZ = 0;
         this.jogVel = 0;
         this.host.setStartOffset(this.jogPos); // settle, paused, where it stopped
         this.scratchStop();
@@ -572,5 +658,20 @@ export class JogEngine {
       this.jogPos = dur;
       if (this.jogVel > 0) this.jogVel = 0;
     }
+  }
+
+  // Fold `p` into the active loop's ring — past OUT wraps to IN, past IN wraps to OUT —
+  // so jog motion (scrub, coast, sustained reverse) that's headed back to play can never
+  // escape a live loop, same as spinning a physical loop edit on vinyl. A no-op with no
+  // active loop (or a degenerate one). Callers gate this on "will return to play" so it
+  // mirrors position()'s own "the loop only wraps while playing" contract.
+  private wrapLoop(p: number): number {
+    const l = this.host.loopBounds();
+    if (!l) return p;
+    const len = l.end - l.start;
+    if (!(len > 0)) return p;
+    if (p >= l.end) return l.start + ((p - l.end) % len);
+    if (p < l.start) return l.end - ((l.start - p) % len);
+    return p;
   }
 }

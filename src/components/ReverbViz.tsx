@@ -205,9 +205,6 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       return { w, h, dpr };
     };
     const start = window.performance.now();
-    // low = LEFT, through the NADIR, to high = RIGHT — a spectrum reads left to right everywhere
-    // else in this app; the dome does too.
-    const angOf = (fNorm: number) => Math.PI - fNorm * Math.PI;
 
     // Geometry, shared by the renderer and the hit-tests. Top to bottom: the READOUT strip, the
     // tone RIBBON, then the dome — hanging DOWN from the ribbon's own baseline.
@@ -268,7 +265,6 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       const Rfrac = sizeScale; // the room boundary, as a fraction of (aX,aY)
       const r0inner = 0.1 + clamp01(p.predelay / 0.2) * 0.22; // predelay gap, as a fraction OF Rfrac
       const r0frac = Rfrac * r0inner;
-      const spanFrac = Rfrac - r0frac;
       const elapsed = (now - start) / 1000;
       const phase = TWO_PI * p.modRate * elapsed;
       const reachBase = frozen ? 1 : 0.18 + clamp01(p.decay) * 0.82;
@@ -376,16 +372,14 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         motes.current.length = 0; // no wings at this size — drop the field
       }
 
-      // ★ NOT a function of lowCut/highCut — the ribbon is the ONLY place the tone window shows.
-      // This used to also pinch the curve's shape at the band edges (a `band` term keyed off the
-      // same cuts), which quietly duplicated the ribbon's own job inside the dome — one control
-      // shouldn't paint itself twice in two different places on the same panel.
-      const reachAt = (fNorm: number) => {
-        const tilt = 1 - (1 - clamp01(p.brightness)) * fNorm * 0.85;
-        const skew = 1 + (p.width - 1) * 0.16 * Math.sin(fNorm * Math.PI);
-        const wob = p.character > 0 ? p.character * 0.05 * Math.sin(fNorm * 8 - phase) : 0;
-        return clamp01(r0inner + reachBase * tilt * skew * (1 - r0inner) + wob) * duckPulse;
-      };
+      // ★ The curve's REACH is DECAY alone now (how far the tail falls) — NOT a function of
+      // lowCut/highCut (the ribbon is the only place the tone window shows), and no longer a
+      // function of brightness/width/character either. All four USED to reshape this same one
+      // line at once, which is exactly why it was hard to tell which knob you'd actually moved:
+      // BRIGHTNESS is a colour gradient across the curve now, WIDTH splits it into two offset
+      // traces, CHARACTER/MOD RATE get their own dedicated shimmer ring — three separate visual
+      // channels below, instead of three effects all fighting for the same shape.
+      const reachFrac = clamp01(r0inner + reachBase * (1 - r0inner)) * duckPulse;
 
       // === circular FILLS (bloom / predelay disc / drive core) — an anisotropic scale draws them
       //     as true ellipses without hand-computing each point; none of the three are STROKED, so
@@ -455,22 +449,57 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         ctx.stroke();
       }
 
-      ctx.beginPath();
-      for (let i = 0; i <= 120; i++) {
-        const fNorm = i / 120;
-        const rFrac = r0frac + reachAt(fNorm) * spanFrac;
-        const { x, y } = toXY(angOf(fNorm), rFrac, c);
-        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      // ★ BRIGHTNESS — a colour gradient across the curve, LEFT (low) to RIGHT (high): full accent
+      // at low, dimming toward the high end as brightness drops. This is a TONE quality, not a
+      // spatial one, so it's colour now, not a change in the curve's reach/shape.
+      const brightGrad = ctx.createLinearGradient(cx - aX, 0, cx + aX, 0);
+      const dimA = 0.22 + 0.78 * clamp01(p.brightness);
+      brightGrad.addColorStop(0, withAlpha(accent, 0.85));
+      brightGrad.addColorStop(1, withAlpha(accent, 0.85 * dimA));
+
+      // ★ WIDTH — the curve splits into two offset traces (an L and an R), same idea as the
+      // delay's own WIDTH: at width 0 they coincide into one clean line; wider pulls them apart
+      // into two visibly overlapping traces, reading as stereo spread rather than a subtle
+      // per-frequency wobble nobody could actually see.
+      const drawDome = (xShift: number, alpha: number) => {
+        ctx.beginPath();
+        for (let i = 0; i <= 64; i++) {
+          const ang = (i / 64) * Math.PI;
+          const { x, y } = toXY(ang, reachFrac, c);
+          const xs = x + xShift;
+          i === 0 ? ctx.moveTo(xs, y) : ctx.lineTo(xs, y);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = withAlpha(accent, 0.1 * mixA);
+        ctx.fill();
+        ctx.strokeStyle = brightGrad;
+        ctx.lineWidth = 1.5;
+        ctx.shadowColor = accent;
+        ctx.shadowBlur = 5;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      };
+      const widthPx = clamp01(p.width / 1.5) * 17;
+      if (widthPx < 0.6) {
+        drawDome(0, 1);
+      } else {
+        drawDome(-widthPx, 0.75);
+        drawDome(widthPx, 0.75);
       }
-      ctx.closePath();
-      ctx.fillStyle = withAlpha(accent, 0.1 * mixA);
-      ctx.fill();
-      ctx.strokeStyle = withAlpha(accent, 0.85);
-      ctx.lineWidth = 1.5;
-      ctx.shadowColor = accent;
-      ctx.shadowBlur = 5;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+
+      // ★ CHARACTER/MOD RATE — its own dedicated shimmer ring, riding between the predelay gap
+      // and the room boundary, oscillating at MOD RATE with an amplitude set by CHARACTER. Kept
+      // OFF the main curve entirely so it reads as its own distinct animation, not one more thing
+      // fighting DECAY/BRIGHTNESS/WIDTH for the same line.
+      if (p.character > 0) {
+        const shimmerMid = (r0frac + Rfrac) / 2;
+        halfArcPath(Math.max(0.001, shimmerMid + p.character * 0.07 * Math.sin(phase)));
+        ctx.strokeStyle = withAlpha(accent, 0.35 * clamp01(p.character));
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
 
       // === place + draw the GRIPS, each with a PERMANENT short label — the whole point of
       //     freeing up the arc's width was to make these self-explanatory without a hover. ===

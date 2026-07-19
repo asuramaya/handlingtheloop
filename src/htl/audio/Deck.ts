@@ -1081,11 +1081,10 @@ export class Deck {
     // Mix-only engine (mobile): there are no stem groups to address — and stem index
     // 0 aliases the mix group, so posting would scale the whole mix. Leave it alone.
     if (!this.engineStems) return;
-    this.stretchNode?.port.postMessage({
-      type: "stemGain",
-      index: STEM_NAMES.indexOf(name),
-      value: this.effectiveStemGain(name),
-    });
+    const index = STEM_NAMES.indexOf(name);
+    const value = this.effectiveStemGain(name);
+    this.stretchNode?.port.postMessage({ type: "stemGain", index, value });
+    this.jog.postStemGain(index, value); // scratch reads the same live mix, not always-unity
   }
   /** Set a stem's level (the mixer knob). Independent of the mute button. */
   setStemGain(name: StemName, level: number) {

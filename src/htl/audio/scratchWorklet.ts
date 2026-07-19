@@ -62,6 +62,13 @@ class Scratch extends AudioWorkletProcessor {
     for (let i = 0; i < this.glen; i++) this.gwin[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / this.glen);
     this.phaseA = 0; this.startA = 0; this.startB = 0; // two staggered grain heads
     this.stepRaw = 0; this.curRaw = 0; // uncapped finger-tracking velocity
+    // Per-stem-group live gain (mute/level knob), same 'stemGain' message + index convention
+    // as stretchWorklet's own this.gain_ — kept independently rather than read off the shared
+    // PCM registry entry, since the registry only carries the PCM itself, not live mixer state.
+    // Defaults to unity (not stretchWorklet's post-load 0-for-unused-slots reset, which scratch
+    // has no equivalent load event to hook) — readCh only ever sums up to groups.length anyway,
+    // so an untouched slot beyond the real group count is simply never read.
+    this.gain_ = new Float32Array([1, 1, 1, 1]);
     // Worklet-OWNED motor ramp (brake / spinback / soft-start): the read velocity glides
     // exponentially toward a target at AUDIO rate instead of being re-posted as positions
     // ~60x/s. That kills the stair-step on the pitch glide (Mixxx drives its scratch at a
@@ -72,6 +79,13 @@ class Scratch extends AudioWorkletProcessor {
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'start') {
+        // A grab mid-motor-curve (brake/spinback/soft-start) must cancel the ramp, or the
+        // audio-rate physics kept running underneath the new grab until IT converged on its
+        // own — process()'s ramping branch (it early-continues per sample) runs before any
+        // of the code below ever gets to read the fresh pos/step this message just set. The
+        // JS side (JogEngine.scrubBegin/onScratchMessage) already re-grabs unconditionally; this was
+        // the one place the worklet didn't follow.
+        this.ramping = false;
         this.pos = this.target = d.pos;
         this.step = this.curStep = 0;
         this.granular = false; this.curRaw = 0; // a fresh grab always starts continuous
@@ -128,16 +142,18 @@ class Scratch extends AudioWorkletProcessor {
       } else if (d.type === 'stop') {
         this.gainTarget = 0; // fade out; go fully idle once silent
         this.ramping = false; // a transport takeover cancels an in-flight ramp
+      } else if (d.type === 'stemGain') {
+        if (d.index >= 0 && d.index < 4) this.gain_[d.index] = d.value;
       }
     };
   }
-  // One sample of one output channel (0=L, 1=R) from the shared PCM registry — an
-  // UNWEIGHTED sum across every loaded group (mirrors stretchWorklet.ts's own
-  // extractRegion mask=-1 reconstruction: "the mix", not a live per-stem-gain blend —
-  // scratch has never reflected live stem-gain changes, on desktop or mobile, so this
-  // preserves exactly what was already heard). Clamps to the track edges (repeats the
-  // edge sample) rather than zero-padding — granular grains can read past either end.
-  // Silence (not a crash) when nothing's registered yet for this deck.
+  // One sample of one output channel (0=L, 1=R) from the shared PCM registry, weighted by
+  // this.gain_ per group — the same live per-stem mute/level state stretchWorklet's own
+  // playback already reflects (Deck.rampStem posts the identical 'stemGain' message to both
+  // nodes now). Used to be an unweighted sum regardless of mute state; that was never a
+  // deliberate choice, just nothing had wired the mixer's live gain into scratch's read path.
+  // Clamps to the track edges (repeats the edge sample) rather than zero-padding — granular
+  // grains can read past either end. Silence (not a crash) when nothing's registered yet.
   readCh(ch, idx) {
     const pcm = this.pcm;
     if (!pcm || pcm.length === 0) return 0;
@@ -145,7 +161,7 @@ class Scratch extends AudioWorkletProcessor {
     if (idx < 0) idx = 0; else if (idx > n - 1) idx = n - 1;
     const groups = ch === 0 ? pcm.gL : pcm.gR;
     let s = 0;
-    for (let g = 0; g < groups.length; g++) s += groups[g][idx];
+    for (let g = 0; g < groups.length; g++) { const ga = this.gain_[g]; if (ga) s += ga * groups[g][idx]; }
     return s * pcm.pcmScale;
   }
   cubic(ch, pos) {

@@ -220,6 +220,12 @@ export class JogEngine {
   get attached() {
     return this.scratchNode != null;
   }
+  /** Forward a stem's live gain (mute/level) to the scratch worklet, same message shape Deck
+   *  already posts to the stretch/playback worklet — so a scratch reflects the current mix
+   *  instead of always summing every group at unity regardless of what's muted. */
+  postStemGain(index: number, value: number) {
+    this.scratchNode?.port.postMessage({ type: "stemGain", index, value });
+  }
 
   private scratchStart() {
     this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });

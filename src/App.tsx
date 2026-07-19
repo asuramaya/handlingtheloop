@@ -3383,6 +3383,12 @@ function AppBody() {
               onJog={(delta) => emitJog(id, delta)}
               onJogEnd={() => onJogEnd(id)}
               onSeek={(pos) => emitSeekTo(id, pos)}
+              // DeckLane already called censorBegin/End by the time this fires, so
+              // deck.reversing reflects the NEW state — mirrors the keyboard censor
+              // handler's own board-event shape. releaseBrake has no session-sync from
+              // the keyboard either (spinback doesn't get one currently), so the touch
+              // gesture matches that as-is rather than inventing new sync for just one path.
+              onCensorToggle={() => emitRef.current({ kind: "board", deck: id, id: "censor", phase: engine.deck(id).reversing ? "down" : "up" })}
               onReprocessLyrics={(eng) => reprocessLyrics(id, eng)}
             />
           ))}

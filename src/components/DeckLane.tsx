@@ -63,6 +63,10 @@ interface DeckLaneProps {
   onJog?: (deltaSeconds: number) => void;
   onJogEnd?: () => void;
   onSeek?: (position: number) => void;
+  // Release Brake / Censor — same session-broadcast shape as the keyboard/MIDI triggers, just
+  // fired from the waveform's own long-press / two-finger-tap gestures (see WaveformViewport).
+  onReleaseBrake?: () => void;
+  onCensorToggle?: () => void;
   // Watch-only: this deck isn't ours to drive (a follower, or a stepped-up DJ's OFF deck).
   // Blocks scrub / needle-drop / bend (control) but NOT zoom or expand — those stay live so a
   // listener can still inspect the waveform.
@@ -125,7 +129,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -351,6 +355,19 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
             refresh();
             onSeek?.(deck.position());
           }
+        }}
+        onReleaseBrake={() => {
+          if (locked || deck.adjusting) return; // watch-only / boundary-adjust: no jog gestures
+          deck.releaseBrake();
+          refresh();
+          onReleaseBrake?.();
+        }}
+        onCensorToggle={() => {
+          if (locked || deck.adjusting) return;
+          if (deck.reversing) deck.censorEnd();
+          else deck.censorBegin();
+          refresh();
+          onCensorToggle?.();
         }}
       />
       {/* The lyric state goes to the CAPTION bar, where a user looking for lyrics is actually

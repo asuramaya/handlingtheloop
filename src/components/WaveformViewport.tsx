@@ -36,6 +36,11 @@ interface WaveformViewportProps {
   onScrubEnd: () => void;
   onNeedleDrop: (deltaSeconds: number) => void;
   onBend: (deltaSeconds: number) => void; // Shift+wheel → momentary pitch-bend (not a seek)
+  // Release Brake and Censor have a keyboard/MIDI trigger each but, until now, no touch/mouse
+  // equivalent at all (spinback at least has the flick-release gesture via decideRelease) —
+  // a touch-only DJ with no keyboard or controller genuinely couldn't fire either one.
+  onReleaseBrake: () => void; // long-press (no drag) — a deliberate hold, distinct from a tap-seek
+  onCensorToggle: () => void; // two-finger tap (no pinch) — tap again (or the keyboard L key) to return
 }
 
 const CUE_COLORS = ["#ff5d73", "#ffb13c", "#ffe24a", "#6ee7a8", "#36c2ff", "#7b9cff", "#c77bff", "#ff7bd0"];
@@ -372,6 +377,7 @@ interface WaveMeta {
 
 export function WaveformViewport(props: WaveformViewportProps) {
   const { deck, onZoom, onScrubStart, onScrub, onScrubEnd, onNeedleDrop, onBend } = props;
+  const LONG_PRESS_MS = 450;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // `started` flips true only once the finger has moved past MOVE_PX — until then
   // it's a potential tap (instant seek), not a scrub.
@@ -379,6 +385,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const tap = useRef<{ startX: number; relX: number; w: number } | null>(null);
   const pinch = useRef<Map<number, number>>(new Map());
   const pinchDist = useRef(0);
+  // Long-press (single finger, no drag) → Release Brake. Cleared on release/cancel/drag-start
+  // so a stale timer never fires after the gesture's already resolved into something else.
+  const longPress = useRef<number | undefined>(undefined);
+  const clearLongPress = () => { if (longPress.current) clearTimeout(longPress.current); longPress.current = undefined; };
+  // Two-finger tap (both down, neither pinched) → Censor toggle. Non-null from the moment a
+  // 2nd finger lands until both lift; `moved` flips true the instant the pinch distance shifts
+  // beyond MOVE_PX, which is how a real pinch-zoom is told apart from a tap.
+  const twoFinger = useRef<{ moved: boolean } | null>(null);
   const bgRef = useRef("#08080d"); // cached lane bg (--surface)
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 }); // cached device-px size (no per-frame reflow)
   const dirty = useRef(true); // request one composite (set on any React render / resize)
@@ -453,6 +467,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => clearLongPress, []); // don't fire a stale hold-to-brake after unmount (deck switch mid-press)
   // Re-read the themed background + invalidate the layer on theme / zoom changes.
   useEffect(() => {
     measure();
@@ -1112,12 +1127,26 @@ export function WaveformViewport(props: WaveformViewportProps) {
             const rect = e.currentTarget.getBoundingClientRect();
             drag.current = { x: e.clientX, started: false };
             tap.current = { startX: e.clientX, relX: e.clientX - rect.left, w: rect.width };
+            clearLongPress();
+            longPress.current = window.setTimeout(() => {
+              longPress.current = undefined;
+              // Still down, never turned into a real drag → a deliberate hold, not a tap-seek.
+              if (drag.current && !drag.current.started) {
+                drag.current = null;
+                tap.current = null; // consumed — the eventual pointerup must not ALSO seek
+                view.current.onReleaseBrake();
+              }
+            }, LONG_PRESS_MS);
           } else if (pinch.current.size === 2) {
             releaseScrub();
             tap.current = null;
+            clearLongPress(); // a 2nd finger landing means this was never a single-finger hold
+            twoFinger.current = { moved: false };
             const xs = [...pinch.current.values()];
             pinchDist.current = Math.abs(xs[0] - xs[1]);
             drag.current = null;
+          } else {
+            twoFinger.current = null; // a 3rd finger down: no longer a clean two-finger gesture
           }
         }}
         onPointerMove={(e) => {
@@ -1125,7 +1154,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
           if (pinch.current.size === 2) {
             const xs = [...pinch.current.values()];
             const d = Math.abs(xs[0] - xs[1]);
-            if (pinchDist.current > 0) applyZoom(clampWin((localWin.current ?? props.windowSec) * (pinchDist.current / d)));
+            if (pinchDist.current > 0) {
+              if (twoFinger.current && Math.abs(d - pinchDist.current) > MOVE_PX) twoFinger.current.moved = true;
+              applyZoom(clampWin((localWin.current ?? props.windowSec) * (pinchDist.current / d)));
+            }
             pinchDist.current = d;
             return;
           }
@@ -1135,6 +1167,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
             if (tap.current && Math.abs(e.clientX - tap.current.startX) <= MOVE_PX) return;
             dr.started = true;
             tap.current = null;
+            clearLongPress(); // a real scratch starting cancels the pending hold-to-brake
             dr.x = e.clientX;
             onScrubStart();
           }
@@ -1161,13 +1194,18 @@ export function WaveformViewport(props: WaveformViewportProps) {
           pinch.current.delete(e.pointerId);
           if (pinch.current.size < 2) pinchDist.current = 0;
           if (pinch.current.size === 0) {
+            clearLongPress();
             const t = tap.current;
             const dr = drag.current;
+            const tf = twoFinger.current;
             tap.current = null;
             drag.current = null;
+            twoFinger.current = null;
             if (dr?.started) {
               dr.started = false;
               onScrubEnd();
+            } else if (tf) {
+              if (!tf.moved) view.current.onCensorToggle();
             } else if (t) {
               onNeedleDrop((t.relX / t.w - 0.5) * trackWindowNow());
             }
@@ -1176,6 +1214,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
         }}
         onPointerCancel={() => {
           releaseScrub();
+          clearLongPress();
+          twoFinger.current = null;
           drag.current = null;
           tap.current = null;
           pinch.current.clear();

@@ -53,7 +53,7 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
   return (
     <div className="fx-panel fx-reverb" style={{ ["--accent" as string]: accent }}>
       <div className="rv-body">
-        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} style={styleIdx} frozen={frozen} accent={accent} onParam={live} deck={deck} slot={slot} />
+        <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} lowCutRes={get("lowCutRes")} highCutRes={get("highCutRes")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} style={styleIdx} frozen={frozen} accent={accent} onParam={live} deck={deck} slot={slot} />
       </div>
       <div className="fx-foot">
         <button className="fx-chip fx-chip-mode" onClick={cycleStyle} title="Algorithm voicing — Hall / Room / Plate / Ambient">

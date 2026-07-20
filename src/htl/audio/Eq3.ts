@@ -41,10 +41,9 @@ export const EQ_Q_MAX = 12;
 //
 // The knob keeps its 0.3‥12 face (profiles, presets and the drag mapping all speak it), and we map
 // it onto the resonance the filter actually wants: EQ_Q_MIN is now genuinely FLAT (−3.01 dB is
-// Butterworth: 10^(−3.01/20) = 0.7071), climbing to a strong peak at the top of the travel.
-const RES_FLAT_DB = -3.01;
-const RES_SPAN_DB = 15; // knob top → +12 dB of resonance (linear Q ≈ 4)
-const resDb = (q: number) => RES_FLAT_DB + ((clampQ(q) - EQ_Q_MIN) / (EQ_Q_MAX - EQ_Q_MIN)) * RES_SPAN_DB;
+// Butterworth: 10^(−3.01/20) = 0.7071), climbing to a strong peak at the top of the travel. The
+// mapping itself (qToResDb) is now shared with Delay/Reverb's own resonant HP/LP — see fxDsp.ts.
+const resDb = (q: number) => qToResDb(q, EQ_Q_MIN, EQ_Q_MAX, FLAT_RES_DB, RES_SPAN_DB);
 
 // Per-band SHAPE — each of LOW/MID/HIGH can switch filter character, so the three bands
 // carry a consistent control. Web-Audio honours Q only for the "peaking" (bell) type;
@@ -57,6 +56,7 @@ export const EQ_SHAPE_DEFAULT = { low: 1, mid: 0, high: 2 } as const; // lo-shel
 export type EqRoute = "normal" | "solo" | "bypass";
 
 import type { FxDevice } from "./Fx";
+import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
 
 export class Eq3 implements FxDevice {
   readonly kind = "eq" as const;

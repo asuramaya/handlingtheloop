@@ -3,6 +3,15 @@
 // EDGE to move one cut, drag the BODY to sweep both together (the band keeps its width). Built
 // for the delay's tap timeline, now shared with the reverb's dome — one control, drawn and hit
 // the same way everywhere it appears, instead of two hand-derived copies drifting apart.
+//
+// RESONANCE: each grip also carries a vertical axis (drag the grip up/down while dragging it
+// left/right, same two-axis gesture as the EQ's own cut nodes) — drawn as a resonant PEAK right
+// at that corner, rising out of the plateau's own outline, because that is what a resonant
+// filter's magnitude response actually looks like there. The ribbon only ever deals in 0..1
+// FRACTIONS for this (hpResFrac/lpResFrac) — converting a fraction to an actual Q value, and
+// deciding what range is even SAFE (Delay's HP/LP sit inside a feedback loop; Reverb's don't),
+// is entirely the caller's business. See fxDsp.ts's qToFrac/fracToQ (the same engine EQ's own
+// resonance rail uses) for that conversion.
 
 export interface RibbonRect {
   x: number;
@@ -41,8 +50,10 @@ export const fmtHz = (f: number) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : `
 export type RibbonHot = "hp" | "lp" | "band" | null;
 
 // Paints the ruler + band + grips into `rect`. Caller has already cleared/positioned the canvas;
-// this only translates to rect.x/rect.y and draws within rect.w × rect.h.
-export function drawFreqRibbon(ctx: CanvasRenderingContext2D, rect: RibbonRect, lo: number, hi: number, accent: string, hot: RibbonHot) {
+// this only translates to rect.x/rect.y and draws within rect.w × rect.h. hpResFrac/lpResFrac
+// (0..1, 0 = flat) are each grip's OWN resonance — drawn as a peak rising out of the plateau
+// right at that corner.
+export function drawFreqRibbon(ctx: CanvasRenderingContext2D, rect: RibbonRect, lo: number, hi: number, accent: string, hot: RibbonHot, hpResFrac = 0, lpResFrac = 0) {
   const { w, h } = rect;
   ctx.save();
   ctx.translate(rect.x, rect.y);
@@ -65,13 +76,32 @@ export function drawFreqRibbon(ctx: CanvasRenderingContext2D, rect: RibbonRect, 
 
   // The band is drawn as the filter it is — a plateau with sloped shoulders, not a rectangle. A
   // rectangle reads as a progress bar (how full?); a shape with skirts reads as a response curve
-  // (what gets through?) — which is the actual question.
+  // (what gets through?) — which is the actual question. RESONANCE extends that same idea: a
+  // real resonant HP/LP doesn't just roll off at the corner, it PEAKS there first — so a grip
+  // with resonance dialled in gets an actual peak in the outline, at that corner, instead of a
+  // separate rail/meter bolted on elsewhere.
   const skirt = Math.min(26, Math.max(6, (hiX - loX) * 0.18));
   const bandHot = hot === "band";
+  const peakMax = h * 0.6; // leaves headroom so a peak never touches the ribbon's own top edge
+  const bumpHalfW = Math.max(1, Math.min(6, (hiX - loX) / 4)); // never let the two peaks collide
+  const hpPeak = clamp(hpResFrac, 0, 1) * peakMax;
+  const lpPeak = clamp(lpResFrac, 0, 1) * peakMax;
   ctx.beginPath();
   ctx.moveTo(Math.max(0, loX - skirt), h);
-  ctx.lineTo(loX, 2);
-  ctx.lineTo(hiX, 2);
+  if (hpPeak > 1) {
+    ctx.lineTo(Math.max(0, loX - bumpHalfW), 2);
+    ctx.lineTo(loX, 2 - hpPeak);
+    ctx.lineTo(Math.min(loX + bumpHalfW, hiX), 2);
+  } else {
+    ctx.lineTo(loX, 2);
+  }
+  if (lpPeak > 1) {
+    ctx.lineTo(Math.max(hiX - bumpHalfW, loX), 2);
+    ctx.lineTo(hiX, 2 - lpPeak);
+    ctx.lineTo(Math.min(w, hiX + bumpHalfW), 2);
+  } else {
+    ctx.lineTo(hiX, 2);
+  }
   ctx.lineTo(Math.min(w, hiX + skirt), h);
   ctx.closePath();
   ctx.fillStyle = accent;
@@ -117,6 +147,15 @@ export function hitFreqRibbon(px: number, py: number, rect: RibbonRect, lo: numb
 
 export const dragHp = (px: number, rect: RibbonRect, hi: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), range.loMin, Math.min(range.loMax, hi / range.minRatio));
 export const dragLp = (px: number, rect: RibbonRect, lo: number, range: RibbonRange) => clamp(xToF(px - rect.x, rect.w), Math.max(range.hiMin, lo * range.minRatio), range.hiMax);
+
+// RESONANCE drag — the grip's OWN vertical axis, live alongside its horizontal (freq) one: grab
+// a grip and drag up for more resonance, down for less, exactly like the EQ's own 2D cut-node
+// gesture. `dy` is the pointer's vertical movement SINCE LAST CALL (screen Y — up is negative),
+// same "delta since last call" convention dragBand already uses below. A fixed pixel sensitivity
+// rather than mapping the ribbon's own (short) height 1:1 to the fraction — the ribbon is a thin
+// strip, and a control that only had its own ~20px to sweep 0..1 in would be unusably twitchy.
+const RES_DRAG_PX = 140; // px of vertical drag to sweep the full 0..1 fraction
+export const dragRes = (dy: number, currentFrac: number) => clamp(currentFrac - dy / RES_DRAG_PX, 0, 1);
 
 // The band's BODY drag — sweep both cuts by the same log-distance so the band keeps its width.
 // `dx` is the pointer's movement SINCE LAST CALL (not since the gesture started) — the caller

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck, ReverbFx } from "@htl/audio";
-import { dragBand, dragHp, dragLp, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
+import { dragBand, dragHp, dragLp, dragRes, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
 
 // Reverb tail view, v5 — an INVERTED half-ellipse dome: the source sits right where the ribbon
 // ends (the top), and the tail hangs DOWN from it, falling away into the room below — instead of
@@ -24,6 +24,8 @@ interface ReverbVizProps {
   width: number; // 0..1.5 stereo spread
   lowCut: number; // Hz — tail low-cut
   highCut: number; // Hz — tail high-cut
+  lowCutRes: number; // 0..1 — resonance dialled into the low-cut corner (pre-tank, no loop risk)
+  highCutRes: number; // …and the high-cut corner
   mix: number; // 0..1 wet → fog presence
   drive: number; // 0..1 input saturation → warm core
   duck: number; // 0..1 sidechain → the bloom breathes
@@ -143,9 +145,9 @@ interface Placed extends Grip {
   y: number;
 }
 
-type Drag = { kind: "grip"; grip: Grip; offset: number } | { kind: "ribbon"; which: Exclude<RibbonHot, null>; lastX: number };
+type Drag = { kind: "grip"; grip: Grip; offset: number } | { kind: "ribbon"; which: Exclude<RibbonHot, null>; lastX: number; lastY: number };
 
-export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, style, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
+export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, highCut, lowCutRes, highCutRes, mix, drive, duck, character, modRate, style, frozen, accent, onParam, deck, slot }: ReverbVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -157,8 +159,8 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
   const spawnAcc = useRef(0);
   const lastNowRef = useRef(0);
 
-  const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate });
-  params.current = { size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate };
+  const params = useRef({ size, decay, brightness, predelay, width, lowCut, highCut, lowCutRes, highCutRes, mix, drive, duck, character, modRate });
+  params.current = { size, decay, brightness, predelay, width, lowCut, highCut, lowCutRes, highCutRes, mix, drive, duck, character, modRate };
   const onParamRef = useRef(onParam);
   onParamRef.current = onParam;
   const ctxRef = useRef<Ctx>({ w: 1, h: 1, cx: 0, cy: 0, aX: 1, aY: 1, ribbonY: 0, ribbonH: 1 });
@@ -301,7 +303,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       // === THE FILTER RIBBON — shared with the delay's tap timeline (FreqRibbon.ts). Sits at the
       //     very top, right under the readout — the dome's own baseline picks up immediately
       //     after it, so the source and the ribbon read as the same edge. ===
-      drawFreqRibbon(ctx, { x: 0, y: c.ribbonY, w, h: c.ribbonH - 4 }, p.lowCut, p.highCut, accent, hotRibbon);
+      drawFreqRibbon(ctx, { x: 0, y: c.ribbonY, w, h: c.ribbonH - 4 }, p.lowCut, p.highCut, accent, hotRibbon, p.lowCutRes, p.highCutRes);
 
       // === LIVING ROOM FIELD — fills the wide panel's empty side bands with the reverb's energy
       //     dispersing into the room. Drawn BEHIND the dome. A horizontal glow + reflection motes
@@ -573,7 +575,12 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         ctx.fillText(`${fmtHz(p.lowCut)} – ${fmtHz(p.highCut)}`, w - 5, ry);
       }
       ctx.globalAlpha = 1;
-      const ctxLabel = hotGrip ? `${hotGrip.label} ${hotGrip.fmt((p as Record<string, number>)[hotGrip.param])}` : hotRibbon ? `${fmtHz(p.lowCut)} Hz – ${fmtHz(p.highCut)} Hz` : "";
+      const ctxLabel = hotGrip
+        ? `${hotGrip.label} ${hotGrip.fmt((p as Record<string, number>)[hotGrip.param])}`
+        : hotRibbon === "hp" ? `LOW-CUT ${fmtHz(p.lowCut)} · RES ${Math.round(p.lowCutRes * 100)}%`
+        : hotRibbon === "lp" ? `HI-CUT ${fmtHz(p.highCut)} · RES ${Math.round(p.highCutRes * 100)}%`
+        : hotRibbon === "band" ? `${fmtHz(p.lowCut)} Hz – ${fmtHz(p.highCut)} Hz`
+        : "";
       if (ctxLabel) {
         ctx.textAlign = "center";
         ctx.globalAlpha = 1;
@@ -596,7 +603,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
       window.cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [size, decay, brightness, predelay, width, lowCut, highCut, mix, drive, duck, character, modRate, style, frozen, accent, deck, slot]);
+  }, [size, decay, brightness, predelay, width, lowCut, highCut, lowCutRes, highCutRes, mix, drive, duck, character, modRate, style, frozen, accent, deck, slot]);
 
   // --- direct control: hit-test grips + ribbon, map drag → param -------------------------------
   const localPt = (e: { clientX: number; clientY: number }) => {
@@ -663,7 +670,7 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
           const kind = hitFreqRibbon(pt.x, pt.y, { x: 0, y: c.ribbonY, w: c.w, h: c.ribbonH }, params.current.lowCut, params.current.highCut, grip);
           if (kind) {
             e.currentTarget.setPointerCapture(e.pointerId);
-            drag.current = { kind: "ribbon", which: kind, lastX: pt.x };
+            drag.current = { kind: "ribbon", which: kind, lastX: pt.x, lastY: pt.y };
             hover.current = kind;
             redraw();
           }
@@ -696,9 +703,18 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
             const rect = { x: 0, y: c.ribbonY, w: c.w, h: c.ribbonH };
             const lo = params.current.lowCut;
             const hi = params.current.highCut;
-            if (d.which === "hp") onParamRef.current("lowCut", dragHp(pt.x, rect, hi, RIBBON_RANGE));
-            else if (d.which === "lp") onParamRef.current("highCut", dragLp(pt.x, rect, lo, RIBBON_RANGE));
-            else {
+            const dy = pt.y - d.lastY;
+            d.lastY = pt.y;
+            // Two axes, one grip, same gesture the EQ's own cut nodes use: X moves the corner
+            // frequency, Y dials that corner's resonance — pre-tank here, so no safety cap needed
+            // (unlike the delay's own hp/lp, which sit inside a feedback loop).
+            if (d.which === "hp") {
+              onParamRef.current("lowCut", dragHp(pt.x, rect, hi, RIBBON_RANGE));
+              onParamRef.current("lowCutRes", dragRes(dy, params.current.lowCutRes));
+            } else if (d.which === "lp") {
+              onParamRef.current("highCut", dragLp(pt.x, rect, lo, RIBBON_RANGE));
+              onParamRef.current("highCutRes", dragRes(dy, params.current.highCutRes));
+            } else {
               const [nLo, nHi] = dragBand(pt.x - d.lastX, rect, lo, hi, RIBBON_RANGE);
               d.lastX = pt.x;
               onParamRef.current("lowCut", nLo);
@@ -740,6 +756,8 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
           e.preventDefault();
           onParam("lowCut", 20);
           onParam("highCut", 18000);
+          onParam("lowCutRes", 0);
+          onParam("highCutRes", 0);
           redraw();
           return;
         }

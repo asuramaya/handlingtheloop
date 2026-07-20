@@ -11,6 +11,35 @@ export { clamp, clamp01 };
 // Replaces the copy-pasted `min * Math.pow(max/min, ext)` one-liners across the devices.
 export const logMap = (min: number, max: number) => (ext: number) => min * Math.pow(max / min, clamp01(ext));
 
+// The Q ENGINE — extracted from Eq3.ts's own resDb/EqCurve.tsx's own qNorm, which solved this
+// once for EQ's HP/LP cuts; shared now so any device's resonant cut filter (Delay/Reverb's own
+// HP/LP) gets the SAME correctly-flat-at-the-bottom mapping instead of re-deriving it.
+//
+// ★ Web Audio reads Q in DECIBELS for LOWPASS/HIGHPASS specifically (alpha = sin(w0)/(2·10^(Q/20)))
+// — every OTHER filter type (peaking/notch/bandpass/allpass) reads Q LINEARLY. One `.Q` property,
+// two meanings depending on `.type`. A resonance knob wants to feel linear-ish (0=flat, climbing to
+// a strong peak) regardless of which meaning the filter underneath actually uses, so qToResDb maps
+// a knob's qMin..qMax FACE onto the dB value a LOWPASS/HIGHPASS filter actually wants: `flatDb`
+// (genuinely flat — −3.01dB is Butterworth) climbing to `flatDb+spanDb` at the top of the knob's
+// travel. qToFrac/fracToQ are the SEPARATE concern of putting that same qMin..qMax knob on screen
+// (a log-mapped vertical drag axis) — they don't have to share qToResDb's curve shape, only the
+// same underlying qMin..qMax range.
+export function qToResDb(q: number, qMin: number, qMax: number, flatDb: number, spanDb: number): number {
+  return flatDb + ((clamp(q, qMin, qMax) - qMin) / (qMax - qMin)) * spanDb;
+}
+// The Butterworth-flat Q-in-dB every LOWPASS/HIGHPASS in this rack that wants to be genuinely flat
+// uses (10^(−3.01/20) = 0.7071) — was re-derived as the same literal `-3.01` in four separate
+// files; one shared constant now. RES_SPAN_DB is the same "knob top → +12dB of resonance" travel
+// EQ's own HP/LP already use, reused as the default for any NEW resonant cut (Delay/Reverb).
+export const FLAT_RES_DB = -3.01;
+export const RES_SPAN_DB = 15;
+export function qToFrac(q: number, qMin: number, qMax: number): number {
+  return Math.log(clamp(q, qMin, qMax) / qMin) / Math.log(qMax / qMin);
+}
+export function fracToQ(frac: number, qMin: number, qMax: number): number {
+  return qMin * Math.pow(qMax / qMin, clamp01(frac));
+}
+
 // Disconnect a node that might already be disconnected (or never connected) — AudioNode.disconnect()
 // throws InvalidAccessError otherwise. Any device that tears down and rebuilds part of its own graph
 // on a mode change (ModFx's engine swap, SaturatorFx's per-band native/worklet swap) needs this.

@@ -17,6 +17,7 @@
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp, clamp01 } from "../../util/math";
 import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
+import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
 
 // Mode labels (the worklet owns the per-style voicing table; this is just the UI labels +
 // the index that rides the `style` param).
@@ -24,7 +25,10 @@ export const REVERB_STYLES = ["HALL", "ROOM", "PLATE", "AMBIENT"] as const;
 
 // Web Audio reads Q in DECIBELS for lowpass/highpass, so "0.7" is 0.7 dB of RESONANCE, not a
 // Butterworth Q — it put a +1.7 dB bump right at lowCut/highCut on the wet path. −3.01 dB is flat.
-const FLAT_Q_DB = -3.01;
+// hpRes/lpRes (0..1, new) ride the SAME qToResDb engine EQ's own HP/LP resonance uses, since
+// inHP/inLP sit BEFORE the tank (drive → preDelay → inHP → inLP → [FDN]) — a resonant peak here
+// colours the tone going IN once per pass, it does not compound inside a feedback loop the way
+// it would on the delay (see DelayFx.ts's own hpRes/lpRes for why THAT one needs a dynamic cap).
 
 export class ReverbFx extends BaseFxDevice {
   readonly kind: FxKind = "reverb";
@@ -56,7 +60,7 @@ export class ReverbFx extends BaseFxDevice {
   private _width = 1;
   // The commanded values of the params that GLIDE (see the params block). Their AudioParams chase
   // these; the getters must not.
-  private readonly _cmd = { predelay: 0.012, lowCut: 20, highCut: 18000, postLow: 0, postHigh: 0 };
+  private readonly _cmd = { predelay: 0.012, lowCut: 20, highCut: 18000, postLow: 0, postHigh: 0, hpRes: 0, lpRes: 0 };
   private _drive = 0;
   private _duckWired = false;
   private _duckGen = 0;
@@ -74,11 +78,11 @@ export class ReverbFx extends BaseFxDevice {
     this.inHP = ctx.createBiquadFilter();
     this.inHP.type = "highpass";
     this.inHP.frequency.value = 20;
-    this.inHP.Q.value = FLAT_Q_DB;
+    this.inHP.Q.value = FLAT_RES_DB;
     this.inLP = ctx.createBiquadFilter();
     this.inLP.type = "lowpass";
     this.inLP.frequency.value = 18000;
-    this.inLP.Q.value = FLAT_Q_DB;
+    this.inLP.Q.value = FLAT_RES_DB;
 
     this.input.connect(this.drive);
     this.drive.connect(this.preDelay);
@@ -162,6 +166,11 @@ export class ReverbFx extends BaseFxDevice {
       { id: "width", def: 1, get: () => this._width, set: (v) => this.setWidth(clamp(v, 0, 1.5)) },
       { id: "lowCut", def: 20, get: () => cmd.lowCut, set: (v) => { cmd.lowCut = clamp(v, 20, 2000); this.inHP.frequency.setTargetAtTime(cmd.lowCut, ctx.currentTime, 0.02); } },
       { id: "highCut", def: 18000, get: () => cmd.highCut, set: (v) => { cmd.highCut = clamp(v, 1000, 20000); this.inLP.frequency.setTargetAtTime(cmd.highCut, ctx.currentTime, 0.02); } },
+      // lowCutRes/highCutRes (0..1) — the ribbon's new resonance axis, named to match lowCut/
+      // highCut above (not Delay's hp/lp convention). Pre-tank (see the header note), so no
+      // loop-gain risk: straight through qToResDb, same as EQ's own HP/LP.
+      { id: "lowCutRes", def: 0, get: () => cmd.hpRes, set: (v) => { cmd.hpRes = clamp01(v); this.inHP.Q.setTargetAtTime(qToResDb(cmd.hpRes, 0, 1, FLAT_RES_DB, RES_SPAN_DB), ctx.currentTime, 0.02); } },
+      { id: "highCutRes", def: 0, get: () => cmd.lpRes, set: (v) => { cmd.lpRes = clamp01(v); this.inLP.Q.setTargetAtTime(qToResDb(cmd.lpRes, 0, 1, FLAT_RES_DB, RES_SPAN_DB), ctx.currentTime, 0.02); } },
       { id: "drive", def: 0, get: () => this._drive, set: (v) => this.setDrive(clamp01(v)) },
       { id: "character", def: 0, get: () => this.wp.character, set: (v) => this.postWp("character", clamp01(v)) },
       { id: "modRate", def: 0.35, get: () => this.wp.modRate, set: (v) => this.postWp("modRate", clamp(v, 0.02, 6)) },

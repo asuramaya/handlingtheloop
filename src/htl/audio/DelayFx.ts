@@ -20,6 +20,7 @@
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp } from "../../util/math";
 import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
+import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
 
 export const DELAY_MAX_SECONDS = 2.0; // a whole bar at ≥120 BPM
 
@@ -105,6 +106,15 @@ export class DelayFx extends BaseFxDevice {
   private _lpHz = 6500;
   private _modDepth = 0;
   private _modRate = 0.5;
+  // Resonance (0..1 knob face each) — see applyRes() for why these can't just be qToResDb'd
+  // straight onto the filters like EQ's or Reverb's own HP/LP: these two sit INSIDE the feedback
+  // loop. _hpResApplied/_lpResApplied are what's ACTUALLY on the filters right now (post-safety-
+  // cap) — the UI reads THESE, not the raw knob, so the ribbon's peak is honest about what the
+  // control is really doing instead of a promise the DSP silently declined to keep.
+  private _hpRes = 0;
+  private _lpRes = 0;
+  private _hpResApplied = 0;
+  private _lpResApplied = 0;
 
   constructor(ctx: AudioContext) {
     super(ctx, 0.28); // ~quarter wet by default
@@ -126,12 +136,17 @@ export class DelayFx extends BaseFxDevice {
     // 0.82; set 0.90 measured 1.054 and BUILT), FB_MAX = 0.95 was already unstable, and Freeze
     // (fb = 1.0) self-oscillated to +42 dB instead of holding. −3.01 dB IS Butterworth: 10^(−3.01/20)
     // = 0.7071. Same class of bug as the analog drive (a >1 gain hidden inside a feedback path).
-    const FLAT_Q_DB = -3.01;
+    //
+    // This is exactly why hpRes/lpRes (added later — see applyRes()) can't just be a resonance
+    // knob like EQ's or Reverb's: ANY positive peak here is a loop-gain multiplier, and the loop
+    // gain has to stay under 1 or repeats grow instead of decay. applyRes() derives a SAFE ceiling
+    // from the LIVE feedback amount each time either changes, so more feedback automatically
+    // leaves less room for resonance — not a UI restriction, the actual physics of the loop.
     const mkFilter = (type: BiquadFilterType, freq: number) => {
       const f = ctx.createBiquadFilter();
       f.type = type;
       f.frequency.value = freq;
-      f.Q.value = FLAT_Q_DB;
+      f.Q.value = FLAT_RES_DB;
       return f;
     };
     this.hpL = mkFilter("highpass", 120);
@@ -220,6 +235,10 @@ export class DelayFx extends BaseFxDevice {
       { id: "feedback", def: 0.38, get: () => this._fb, set: (v) => this.setFeedback(clamp(v, 0, FB_MAX)) },
       { id: "hp", def: 120, get: () => this._hpHz, set: (v) => this.setFilterFreq("hp", clamp(v, 20, 18000)) },
       { id: "lp", def: 6500, get: () => this._lpHz, set: (v) => this.setFilterFreq("lp", clamp(v, 200, 18000)) },
+      // Resonance (0..1 knob face) — see applyRes() for the dynamic safety cap; the ribbon reads
+      // hpResApplied/lpResApplied (below), not this raw knob value, for what's actually engaged.
+      { id: "hpRes", def: 0, get: () => this._hpRes, set: (v) => this.setHpRes(v) },
+      { id: "lpRes", def: 0, get: () => this._lpRes, set: (v) => this.setLpRes(v) },
       // metadata (persist + sync; the panel turns them into behaviour)
       { id: "sync", def: 1, get: () => this._sync, set: (v) => (this._sync = v ? 1 : 0) },
       { id: "div", def: 2, get: () => this._div, set: (v) => (this._div = Math.round(v)) },
@@ -325,6 +344,7 @@ export class DelayFx extends BaseFxDevice {
       this.fbL.gain.setTargetAtTime(v, now, 0.01);
       this.fbR.gain.setTargetAtTime(v, now, 0.01);
     }
+    this.applyRes();
   }
   private setFreeze(on: number) {
     this._freeze = on;
@@ -335,6 +355,56 @@ export class DelayFx extends BaseFxDevice {
     this.fbR.gain.setTargetAtTime(fb, now, 0.02);
     this.preL.gain.setTargetAtTime(pre, now, 0.02);
     this.preR.gain.setTargetAtTime(pre, now, 0.02);
+    this.applyRes();
+  }
+
+  // --- resonance, SAFELY (hpL/hpR/lpL/lpR sit inside the feedback loop) ---
+  // A resonant peak here is a loop-gain multiplier at that frequency: loop gain ≈
+  // effFb · 10^(peakDb/20), and it MUST stay under 1 or repeats grow instead of decay (this is
+  // exactly the bug a previous fix already killed once by flattening Q outright — see the
+  // constructor's own note). Rather than reintroduce that risk, the SAFE ceiling on the total
+  // (HP+LP, since a narrow band puts both peaks at nearly the same frequency where they'd stack)
+  // is derived from whatever feedback is ACTUALLY live right now, continuously — not a fixed
+  // knob range. MARGIN_DB=3 keeps loop gain comfortably under 1 even at Freeze's own fb=1.0
+  // exactly (0dB theoretical ceiling → −3dB budget, split two ways), so Freeze's "infinite,
+  // never decays" promise survives resonance being dialled in rather than silently developing a
+  // slow fade nobody asked for. Below FB_MAX the margin is genuinely conservative — plenty of
+  // real resonance is audible at everyday feedback settings; it only pinches back to flat as
+  // feedback climbs toward the top of its own travel.
+  private static readonly RES_MARGIN_DB = 3;
+  private applyRes() {
+    const effFb = this._freeze ? FREEZE_FB : this._fb;
+    const totalCapDb = -20 * Math.log10(Math.max(effFb, 1e-6)) - DelayFx.RES_MARGIN_DB;
+    const perFilterCapDb = Math.max(totalCapDb / 2, FLAT_RES_DB); // never MORE attenuated than flat
+    const desiredHpDb = qToResDb(this._hpRes, 0, 1, FLAT_RES_DB, RES_SPAN_DB);
+    const desiredLpDb = qToResDb(this._lpRes, 0, 1, FLAT_RES_DB, RES_SPAN_DB);
+    const appliedHpDb = Math.min(desiredHpDb, perFilterCapDb);
+    const appliedLpDb = Math.min(desiredLpDb, perFilterCapDb);
+    const now = this.ctx.currentTime;
+    this.hpL.Q.setTargetAtTime(appliedHpDb, now, 0.02);
+    this.hpR.Q.setTargetAtTime(appliedHpDb, now, 0.02);
+    this.lpL.Q.setTargetAtTime(appliedLpDb, now, 0.02);
+    this.lpR.Q.setTargetAtTime(appliedLpDb, now, 0.02);
+    // The UI reads THESE, not the raw _hpRes/_lpRes knob — a control that shows what it promised
+    // instead of what it delivered is the exact bug this codebase keeps finding and killing.
+    this._hpResApplied = clamp((appliedHpDb - FLAT_RES_DB) / RES_SPAN_DB, 0, 1);
+    this._lpResApplied = clamp((appliedLpDb - FLAT_RES_DB) / RES_SPAN_DB, 0, 1);
+  }
+  private setHpRes(ext: number) {
+    this._hpRes = clamp(ext, 0, 1);
+    this.applyRes();
+  }
+  private setLpRes(ext: number) {
+    this._lpRes = clamp(ext, 0, 1);
+    this.applyRes();
+  }
+  /** Live reads for the ribbon: the ACTUALLY APPLIED resonance fraction (post-safety-cap), not
+   *  the raw knob — see applyRes(). */
+  get hpResApplied() {
+    return this._hpResApplied;
+  }
+  get lpResApplied() {
+    return this._lpResApplied;
   }
 
   // --- character: analog drive (a shared waveshaper curve) ---

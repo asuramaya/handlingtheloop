@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useEmit } from "../App/spine";
 import type { Deck } from "@htl/audio";
-import { EQ_MIN_DB, EQ_MAX_DB, EQ_OUT_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT } from "@htl/audio";
+import { EQ_MIN_DB, EQ_MAX_DB, EQ_OUT_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT, qToFrac } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { clamp } from "../util/math";
 import { fmtHz, fmtDb } from "../util/format";
@@ -83,7 +83,7 @@ const dbFromY = (y: number, h: number) => DB_TOP - (y / h) * (DB_TOP - DB_BOT);
 // you're near it. The handle sits at the bottom of its own rail, which is exactly what "flat"
 // means, and the rail says plainly which way there is to go. (It also hangs on the OUTPUT baseline
 // rather than a hardcoded h/2, so it stays on the curve when the trim moves it.)
-const qNorm = (q: number) => Math.log(q / EQ_Q_MIN) / Math.log(EQ_Q_MAX / EQ_Q_MIN);
+const qNorm = (q: number) => qToFrac(q, EQ_Q_MIN, EQ_Q_MAX);
 const yFromQ = (q: number, h: number, baseY: number) => baseY - clamp(qNorm(q), 0, 1) * (baseY - h * Q_TOP_PAD);
 const qFromY = (y: number, h: number, baseY: number) => {
   const n = clamp((baseY - y) / Math.max(1, baseY - h * Q_TOP_PAD), 0, 1);

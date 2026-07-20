@@ -145,6 +145,13 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
     if (Math.abs(lp - get("lp")) > 0.5) live("lp", lp);
     return [get("hp"), get("lp")]; // the device clamps — report what it actually took
   };
+  // The KNOB's own committed value — not what's actually applied (DelayFx caps that live from the
+  // feedback amount; the viz reads hpResApplied/lpResApplied straight off the device for drawing).
+  const onRes = (hpRes: number, lpRes: number): [number, number] => {
+    if (Math.abs(hpRes - get("hpRes")) > 0.002) live("hpRes", hpRes);
+    if (Math.abs(lpRes - get("lpRes")) > 0.002) live("lpRes", lpRes);
+    return [get("hpRes"), get("lpRes")];
+  };
   // The character rail. These three are the only params left with no geometry of their own, so they
   // ride a fader each at the foot of the viz instead of three cells in a DOM row below it.
   const CHAR_PARAM = { width: "spread", drive: "analog", duck: "duck" } as const;
@@ -177,6 +184,8 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         accent={accent}
         hp={get("hp")}
         lp={get("lp")}
+        hpRes={get("hpRes")}
+        lpRes={get("lpRes")}
         modDepth={get("modDepth")}
         modRate={get("modRate")}
         drive={get("analog")}
@@ -190,6 +199,7 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
         onTime={onTime}
         onFeedback={onFeedback}
         onFilters={onFilters}
+        onRes={onRes}
         onMod={onMod}
         onChar={onChar}
       />

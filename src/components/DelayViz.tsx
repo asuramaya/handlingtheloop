@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Deck, DelayFx } from "@htl/audio";
-import { dragBand, dragHp, dragLp, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
+import { dragBand, dragHp, dragLp, dragRes, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
 import { dragRail, drawRail } from "./ValueRail";
 
 // The Delay's instrument — an echo-tap timeline you PLAY, not a picture of one.
@@ -116,6 +116,8 @@ interface DelayVizProps {
   accent: string;
   hp: number; // feedback band-pass low-cut (Hz)
   lp: number; // feedback band-pass high-cut (Hz)
+  hpRes: number; // 0..1 knob face — resonance dialled in on the HP cut (may be silently capped, see below)
+  lpRes: number; // …and the LP cut
   modDepth: number; // LFO → delay-time depth (0..0.012 s)
   modRate: number; // LFO rate (Hz)
   drive: number; // analog saturation (0..1) — the roof
@@ -140,6 +142,12 @@ interface DelayVizProps {
   onTime: (seconds: number) => number; // → the seconds it LOCKED to (snapped to the note grid)
   onFeedback: (v: number) => number;
   onFilters: (hp: number, lp: number) => [number, number];
+  onRes: (hpRes: number, lpRes: number) => [number, number]; // → the knob's own committed value —
+  // NOT what's actually applied. hpL/hpR/lpL/lpR sit inside the feedback loop, so DelayFx silently
+  // caps the APPLIED resonance from the live feedback amount (see DelayFx.applyRes) — the ribbon
+  // draws dev.hpResApplied/lpResApplied (read straight off the device, the SAME "audio-reactive,
+  // not state-driven" pattern duckGain already uses below), not this raw knob, so the peak is
+  // honest about what's really engaged instead of a promise the DSP silently declined.
   onMod: (depth: number, rate: number) => [number, number]; // the wobble — one gesture, two axes
   onChar: (id: CharId, v: number) => number; // width (the shear) · drive (the roof) · duck (the head)
 }
@@ -192,14 +200,14 @@ const ceilOf = (drive: number, midY: number, maxBar: number) => midY - maxBar * 
 
 type Grab =
   | { kind: "tap"; n: number; lower: boolean; ghostX: number; startY: number; startFb: number }
-  | { kind: "hp" }
-  | { kind: "lp" }
+  | { kind: "hp"; lastY: number }
+  | { kind: "lp"; lastY: number }
   | { kind: "band"; lastX: number }
   | { kind: "lfo"; startX: number; startRate: number }
   | { kind: "drive" }
   | { kind: "duck" };
 
-export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar }: DelayVizProps) {
+export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, hpRes, lpRes, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onRes, onMod, onChar }: DelayVizProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const grab = useRef<Grab | null>(null);
@@ -208,8 +216,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
 
   // The draw loop reads props through a ref so the pointer handlers (attached once) and the
   // renderer always agree on the same values.
-  const p = useRef({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar });
-  p.current = { deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onMod, onChar };
+  const p = useRef({ deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, hpRes, lpRes, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onRes, onMod, onChar });
+  p.current = { deck, slot, time, feedback, mix, pingpong, frozen, bpm, accent, hp, lp, hpRes, lpRes, modDepth, modRate, drive, duck, width, timeMode, snapBeats, snapLabels, modSnapBeats, modSnapLabels, onTime, onFeedback, onFilters, onRes, onMod, onChar };
 
   // Geometry, shared by the renderer and the hit-tests — one source of truth, or the thing you
   // grab won't be the thing you see. Top to bottom: the READOUT strip, the tone RIBBON, then the
@@ -342,6 +350,11 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // sound. Falls back to 1 (not ducking) if the device isn't resolved yet.
       const dev = s.deck.fxDeviceAt(s.slot) as DelayFx | undefined;
       const duckGain = dev ? clamp01(dev.duckGain) : 1;
+      // The ACTUALLY APPLIED resonance (post-safety-cap) — not the raw hpRes/lpRes knob. See the
+      // props' own comment: hpL/lpL sit inside the feedback loop, so what's really on the filters
+      // right now can be less than what was asked for, and the peak below must show THAT.
+      const hpResApplied = dev ? clamp01(dev.hpResApplied) : 0;
+      const lpResApplied = dev ? clamp01(dev.lpResApplied) : 0;
       const duckPulse = clamp01(1 - duckGain); // 0 = quiet, rises toward duck's ceiling on a hit
       const xOf = (sec: number) => secToX(sec, w, windowSec);
       const xOfInv = (x: number) => xToSec(x, w, windowSec);
@@ -360,7 +373,7 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       // === THE FILTER RIBBON — the echoes' tone window, and a control. Shared with the reverb's
       // dome (FreqRibbon.ts) — one control, not two hand-derived copies. ===
       const rH = ribbonH - 4;
-      drawFreqRibbon(ctx, { x: 0, y: ribY, w, h: rH }, s.hp, s.lp, accent, (hot === "hp" || hot === "lp" || hot === "band" ? hot : null) as RibbonHot);
+      drawFreqRibbon(ctx, { x: 0, y: ribY, w, h: rH }, s.hp, s.lp, accent, (hot === "hp" || hot === "lp" || hot === "band" ? hot : null) as RibbonHot, hpResApplied, lpResApplied);
 
       // beat grid + centre line (in the timeline only)
       if (beat > 0) {
@@ -750,7 +763,9 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         : hot === "drive" ? `DRIVE ${pct(s.drive)}`
         : hot === "duck" ? `DUCK ${pct(s.duck)}`
         : hot === "lfo" ? `WOBBLE ${pct(modN)} · ${(beat > 0 && nameOf(1 / Math.max(1e-4, s.modRate) / beat, s.modSnapBeats, s.modSnapLabels)) || `${s.modRate.toFixed(2)} Hz`}`
-        : hot === "hp" || hot === "lp" || hot === "band" ? `${fmtHz(s.hp)} Hz – ${fmtHz(s.lp)} Hz`
+        : hot === "hp" ? `HP ${fmtHz(s.hp)} · RES ${pct(hpResApplied)}`
+        : hot === "lp" ? `LP ${fmtHz(s.lp)} · RES ${pct(lpResApplied)}`
+        : hot === "band" ? `${fmtHz(s.hp)} Hz – ${fmtHz(s.lp)} Hz`
         // A tap's IDENTITY (which echo, n) is fixed for the whole gesture — grabbing echo 3 never
         // stops being echo 3 mid-drag. What actually moves is TIME (x) and FEEDBACK (y), together,
         // every frame. Naming the tap told you what you'd grabbed, not what pulling on it does —
@@ -871,6 +886,11 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       p.current.hp = chp;
       p.current.lp = clp;
     };
+    const setRes = (hpRes: number, lpRes: number) => {
+      const [chr, clr] = p.current.onRes(hpRes, lpRes);
+      p.current.hpRes = chr;
+      p.current.lpRes = clr;
+    };
     const setTime = (sec: number) => {
       p.current.time = p.current.onTime(sec); // the LOCKED seconds, not the requested ones
     };
@@ -898,8 +918,19 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       const { top, botY, midY, maxBar } = geom(h, w);
       if (g.kind === "hp" || g.kind === "lp") {
         const rect = { x: 0, y: 0, w, h: 1 };
-        if (g.kind === "hp") setFilters(dragHp(px, rect, s.lp, RIBBON_RANGE), s.lp);
-        else setFilters(s.hp, dragLp(px, rect, s.hp, RIBBON_RANGE));
+        // Two axes, one grip, same gesture the EQ's own cut nodes use: X moves the corner
+        // frequency (as always), Y — delta since last call, like the band's own dx below —
+        // dials that corner's resonance. What's actually AUDIBLE may be less (DelayFx caps it
+        // live from the feedback amount), but the knob itself always reports the full ask.
+        const dy = py - g.lastY;
+        g.lastY = py;
+        if (g.kind === "hp") {
+          setFilters(dragHp(px, rect, s.lp, RIBBON_RANGE), s.lp);
+          setRes(dragRes(dy, s.hpRes), s.lpRes);
+        } else {
+          setFilters(s.hp, dragLp(px, rect, s.hp, RIBBON_RANGE));
+          setRes(s.hpRes, dragRes(dy, s.lpRes));
+        }
         return;
       }
       if (g.kind === "band") {
@@ -985,7 +1016,7 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       else if (hit.kind === "duck") grab.current = { kind: "duck" };
       else if (hit.kind === "band") grab.current = { kind: "band", lastX: px };
       else if (hit.kind === "lfo") grab.current = { kind: "lfo", startX: px, startRate: p.current.modRate };
-      else grab.current = hit.kind === "hp" ? { kind: "hp" } : { kind: "lp" };
+      else grab.current = hit.kind === "hp" ? { kind: "hp", lastY: py } : { kind: "lp", lastY: py };
       apply(px, py);
       kick();
     };
@@ -1032,7 +1063,10 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       else if (hit.kind === "drive") setChar("drive", 0);
       else if (hit.kind === "duck") setChar("duck", 0);
       else if (hit.kind === "tap") hit.lower ? setChar("width", 0) : setFeedback(0.38);
-      else setFilters(120, 6500); // the band, wide open again
+      else {
+        setFilters(120, 6500); // the band, wide open again
+        setRes(0, 0); // …and flat — a reset that leaves resonance dialled in isn't a reset
+      }
       kick();
     };
     const onLeave = () => {

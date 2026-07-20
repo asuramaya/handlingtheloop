@@ -1,14 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useMemo } from "react";
 import type { Deck, CompFx } from "@htl/audio";
 import { useEmit, useRefresh } from "../App/spine";
 import { COMP_MODES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
+import { MeterBar } from "./MeterBar";
 
 // COMP surface — MODE row (GLUE / FET / OPTO / LIMIT), the gain-reduction METER, and the cells.
 // The meter is not decoration: a compressor you can't see is a compressor you can't set. Every
 // decision you make here — threshold, ratio, how fast it lets go — is a decision about a number
-// you can only read off the needle. It runs on its own rAF rather than React state, so a meter
-// moving at 60 Hz never re-renders the panel (the WaveformViewport lesson).
+// you can only read off the needle. MeterBar runs it on its own rAF rather than React state, so
+// a meter moving at 60 Hz never re-renders the panel (the WaveformViewport lesson).
 
 interface CompPanelProps {
   deck: Deck;
@@ -23,24 +24,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
-  const barRef = useRef<HTMLDivElement>(null);
-  const readRef = useRef<HTMLSpanElement>(null);
-
-  // The needle. Imperative + rAF: the meter is the one thing in this panel that moves constantly,
-  // and pushing it through React state would re-render the whole rack 60 times a second.
-  useEffect(() => {
-    if (!dev) return;
-    let raf = 0;
-    const tick = () => {
-      const gr = dev.gainReduction;
-      const pct = Math.min(1, gr / GR_FLOOR) * 100;
-      if (barRef.current) barRef.current.style.width = `${pct}%`;
-      if (readRef.current) readRef.current.textContent = gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`;
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [dev]);
+  const getGr = useMemo(() => () => dev?.gainReduction ?? 0, [dev]);
 
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);
@@ -70,15 +54,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
       </div>
 
       {/* Gain reduction — how hard it's actually working, right now. */}
-      <div className="comp-meter" title="Gain reduction (dB)">
-        <div className="comp-meter-track">
-          <div ref={barRef} className="comp-meter-bar" />
-        </div>
-        <span ref={readRef} className="comp-meter-read">
-          0.0
-        </span>
-        <span className="comp-meter-unit">dB GR</span>
-      </div>
+      <MeterBar getValue={getGr} toPercent={(gr) => (Math.min(1, gr / GR_FLOOR) * 100)} format={(gr) => (gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`)} unit="dB GR" label="Gain reduction (dB)" rtl />
 
       <div className="sat-shared">
         <ValueCell label={isLimit ? "CEIL" : "THRESH"} value={isLimit ? get("ceiling") : get("threshold")} min={isLimit ? -12 : -60} max={0} step={0.5} reset={isLimit ? -0.3 : -18} format={(v) => v.toFixed(1)} onChange={(v) => setParam(isLimit ? "ceiling" : "threshold", v)} />

@@ -10,6 +10,7 @@ import { REVERB_WORKLET_SRC } from "./reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 import { COMP_WORKLET_SRC } from "./compWorklet";
+import { TAPE_WORKLET_SRC } from "./tapeWorklet";
 import { makeMasterLimiter, type CompFx } from "./CompFx";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
@@ -283,6 +284,7 @@ export class AudioEngine {
       await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
       await this.addModuleOnce("moddelay", MOD_DELAY_WORKLET_SRC); // ModFx chorus/flanger
       await this.addModuleOnce("comp", COMP_WORKLET_SRC); // CompFx (deck dynamics + the master brickwall)
+      await this.addModuleOnce("tape", TAPE_WORKLET_SRC); // SaturatorFx's TAPE style (hysteresis); other styles stay native
       if (!this.ringNode && (await this.addModuleOnce("ringrec", RING_REC_WORKLET_SRC))) {
         try {
           const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);

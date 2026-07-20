@@ -11,6 +11,17 @@ export { clamp, clamp01 };
 // Replaces the copy-pasted `min * Math.pow(max/min, ext)` one-liners across the devices.
 export const logMap = (min: number, max: number) => (ext: number) => min * Math.pow(max / min, clamp01(ext));
 
+// Disconnect a node that might already be disconnected (or never connected) — AudioNode.disconnect()
+// throws InvalidAccessError otherwise. Any device that tears down and rebuilds part of its own graph
+// on a mode change (ModFx's engine swap, SaturatorFx's per-band native/worklet swap) needs this.
+export function safeDisconnect(n: AudioNode) {
+  try {
+    n.disconnect();
+  } catch {
+    /* already gone */
+  }
+}
+
 // One tempo-sync division = how many beats span ONE cycle of the effect (1/4 = 1 beat, 1 bar =
 // 4 beats, an 1/8 = ½ a beat). Devices pick a slice of this scale suited to their rate range.
 export interface Division {

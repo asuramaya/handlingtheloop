@@ -1,14 +1,22 @@
-import { useEffect, useRef } from "react";
-import type { Deck, SaturatorFx } from "@htl/audio";
+import { useEffect, useRef, useState } from "react";
+import type { Deck } from "@htl/audio";
+import { SaturatorFx, SAT_STYLES } from "@htl/audio";
 import { drawCurvePanel, fitCanvas } from "./curveInset";
+import { MeterBar } from "./MeterBar";
+import { fmtHz, fmtDb } from "../util/format";
 
 // The Saturn-glass WYSIWYG for the multiband saturator. A log-frequency display:
 //   • live spectrum of the device output (the "see the distortion" backdrop),
 //   • draggable CROSSOVER dividers (drag horizontally → retune the band split),
-//   • per-band DRIVE as a fill whose top edge drags vertically,
-//   • a transfer-curve readout in the corner (the literal WaveShaper curve = WYSIWYG-exact).
-// Direct-control throughout (the EqCurve/ReverbViz pattern): the graph IS the knobs. Reads
-// the device's live state each frame; writes through `set` (which mutates + emits + refreshes).
+//   • per-band DRIVE as a fill whose top edge drags vertically — pressing inside a band also
+//     SELECTS it (mirrors the EQ's "touching a node selects its band"): the parent renders that
+//     band's own STYLE/PUNISH/BIAS subrow below, since each band now carries its own character,
+//   • a transfer-curve readout in the corner (the literal WaveShaper curve — WYSIWYG-exact; a
+//     band on the TAPE worklet has no such curve, since a stateful process has no single-valued
+//     input→output function, so that panel shows a label instead),
+//   • an output-level meter, reading the SAME analyser already tapped for the spectrum.
+// Direct-control throughout (the EqCurve/ReverbViz pattern): the graph IS the knobs. Reads the
+// device's live state each frame; writes through `set` (which mutates + emits + refreshes).
 
 const F_MIN = 20;
 const F_MAX = 20000;
@@ -17,17 +25,27 @@ const fx = (hz: number, w: number) => (Math.log(Math.max(F_MIN, Math.min(F_MAX, 
 const xf = (x: number, w: number) => F_MIN * Math.exp((x / w) * LOG_SPAN);
 const hz2ext = (hz: number) => Math.log(Math.max(F_MIN, Math.min(F_MAX, hz)) / F_MIN) / LOG_SPAN;
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const driveDb = (ext: number) => ((clamp01(ext) * 30 - 10)); // mirrors SaturatorFx's own driveGain mapping, in dB
 
 interface SatVizProps {
   deck: Deck;
   slot: number;
   accent: string;
   set: (param: string, value: number) => void; // mutate + emit + refresh (from SatPanel)
+  sel: number; // the band whose subrow the parent is showing
+  onSelect: (i: number) => void;
 }
 
-export function SatViz({ deck, slot, accent, set }: SatVizProps) {
+export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const curveRef = useRef<HTMLCanvasElement>(null);
+  const readoutRef = useRef<HTMLDivElement>(null);
+  const meterPeak = useRef(0); // 0..1 linear peak, read by MeterBar's own rAF
+  // Whether `sel`'s band is currently on the TAPE worklet — React state (not a ref) because the
+  // curve-panel label needs a re-render, but only bumped on an actual CHANGE (see the draw loop
+  // below), not every animation frame.
+  const [isWorklet, setIsWorklet] = useState(false);
+  const isWorkletRef = useRef(false);
   const drag = useRef<{ kind: "xover" | "drive"; idx: number; grab: number } | null>(null);
 
   useEffect(() => {
@@ -42,6 +60,7 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
     analyser.smoothingTimeConstant = 0.7;
     dev.output.connect(analyser); // tap only (not forwarded) → no path change
     const bins = new Uint8Array(analyser.frequencyBinCount);
+    const timeBuf = new Float32Array(analyser.fftSize);
     const BANDS = (dev.constructor as typeof SaturatorFx).BANDS;
 
     let raf = 0;
@@ -61,7 +80,10 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
       for (let j = 0; j < BANDS - 1; j++) xo.push(fx(dev.xoverHzOf(j), w));
       const edges = [0, ...xo, w];
 
-      // per-band drive fill (top edge = drive level). Hotter drive → warmer fill.
+      // per-band drive fill (top edge = drive level). Hotter drive → warmer fill. The SELECTED
+      // band gets a bright border (mirrors the EQ node's `.selected` ring); each band's own
+      // style name is labelled so the whole device's character is readable at a glance without
+      // having to select every band in turn.
       for (let i = 0; i < BANDS; i++) {
         const x0 = edges[i];
         const x1 = edges[i + 1];
@@ -70,13 +92,25 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
         const warm = 0.12 + d * 0.5;
         ctx2d.fillStyle = `color-mix(in srgb, ${accent} ${Math.round(warm * 100)}%, transparent)`;
         ctx2d.fillRect(x0, top, x1 - x0, h - top);
-        // the draggable top edge
         ctx2d.strokeStyle = accent;
         ctx2d.lineWidth = 2;
         ctx2d.beginPath();
         ctx2d.moveTo(x0 + 1, top);
         ctx2d.lineTo(x1 - 1, top);
         ctx2d.stroke();
+
+        if (i === sel) {
+          ctx2d.strokeStyle = "rgba(255,255,255,0.55)";
+          ctx2d.lineWidth = 1.5;
+          ctx2d.setLineDash([3, 3]);
+          ctx2d.strokeRect(x0 + 1.5, 1.5, x1 - x0 - 3, h - 3);
+          ctx2d.setLineDash([]);
+        }
+        const punished = dev.punishOf(i);
+        ctx2d.font = punished ? "800 10px system-ui, sans-serif" : "700 10px system-ui, sans-serif";
+        ctx2d.fillStyle = punished ? accent : "rgba(255,255,255,0.55)";
+        ctx2d.textAlign = "center";
+        ctx2d.fillText(SAT_STYLES[dev.styleOf(i)] ?? "?", (x0 + x1) / 2, 13);
       }
 
       // live spectrum line (output) over the top
@@ -109,19 +143,30 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
         ctx2d.stroke();
       }
 
-      // The EFFECTIVE transfer readout, in its own panel to the right: drive (hottest band)
-      // pushes the input toward the saturated edges, bias shifts it (asymmetry) — so it reacts
-      // to drive/bias/style/punish, not just the raw style curve.
+      // Output peak, from the SAME analyser tap (no second node needed).
+      analyser.getFloatTimeDomainData(timeBuf);
+      let peak = 0;
+      for (let i = 0; i < timeBuf.length; i++) peak = Math.max(peak, Math.abs(timeBuf[i]));
+      meterPeak.current = peak;
+
+      // The EFFECTIVE transfer readout for the SELECTED band, in its own panel to the right:
+      // drive (that band's own) pushes the input toward the saturated/folded edges, bias shifts
+      // it (asymmetry) — so it reacts to that band's drive/bias/style/punish, not just the raw
+      // style curve. Null (the TAPE worklet has no single-valued curve) clears the panel — the
+      // parent overlays a label in that case.
+      const curve = dev.curveFor(sel);
+      const nowWorklet = curve == null;
+      if (nowWorklet !== isWorkletRef.current) {
+        isWorkletRef.current = nowWorklet;
+        setIsWorklet(nowWorklet);
+      }
       const cc = curveRef.current;
-      if (cc) {
+      if (cc && curve) {
         const f = fitCanvas(cc);
         if (f.ctx) {
-          const curve = dev.curveFor();
           const L = curve.length;
-          let dmax = 0;
-          for (let i = 0; i < BANDS; i++) dmax = Math.max(dmax, dev.driveOf(i));
-          const g = Math.pow(10, dmax);
-          const bias = dev.getParam("bias") * 0.4;
+          const g = Math.pow(10, dev.driveOf(sel));
+          const bias = dev.biasOf(sel) * 0.4;
           drawCurvePanel(
             f.ctx,
             f.w,
@@ -134,6 +179,9 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
             { bipolar: true },
           );
         }
+      } else if (cc) {
+        const f = fitCanvas(cc);
+        if (f.ctx) f.ctx.clearRect(0, 0, f.w, f.h);
       }
 
       raf = requestAnimationFrame(draw);
@@ -147,9 +195,10 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
         /* already gone */
       }
     };
-  }, [deck, slot, accent]);
+  }, [deck, slot, accent, sel]);
 
-  // Hit-test on press: near a crossover line → drag it; inside a band → drag its drive.
+  // Hit-test on press: near a crossover line → drag it; inside a band → drag its drive AND
+  // select that band (the parent shows its style/punish/bias subrow below).
   const onDown = (e: React.PointerEvent) => {
     const canvas = canvasRef.current;
     const dev = deck.fxDeviceAt(slot) as SaturatorFx | undefined;
@@ -175,22 +224,37 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
     while (band < xo.length && x > xo[band]) band++;
     drag.current = { kind: "drive", idx: band, grab: 0 };
     canvas.setPointerCapture(e.pointerId);
+    onSelect(band);
     set(`drive${band}`, clamp01(1 - y / h));
   };
   const onMove = (e: React.PointerEvent) => {
     const d = drag.current;
     const canvas = canvasRef.current;
-    if (!d || !canvas) return;
+    if (!canvas) return;
     const r = canvas.getBoundingClientRect();
+    if (!d) return;
+    const ro = readoutRef.current;
     if (d.kind === "xover") {
       const hz = xf(e.clientX - r.left, r.width);
       set(`xover${d.idx}`, clamp01(hz2ext(hz)));
+      if (ro) {
+        ro.style.opacity = "1";
+        ro.style.left = `${clamp01((e.clientX - r.left) / r.width) * r.width}px`;
+        ro.textContent = `${fmtHz(hz)} Hz`;
+      }
     } else {
-      set(`drive${d.idx}`, clamp01(1 - (e.clientY - r.top) / r.height));
+      const v = clamp01(1 - (e.clientY - r.top) / r.height);
+      set(`drive${d.idx}`, v);
+      if (ro) {
+        ro.style.opacity = "1";
+        ro.style.left = `${clamp01((e.clientX - r.left) / r.width) * r.width}px`;
+        ro.textContent = `${fmtDb(driveDb(v))} dB`;
+      }
     }
   };
   const onUp = (e: React.PointerEvent) => {
     drag.current = null;
+    if (readoutRef.current) readoutRef.current.style.opacity = "0";
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -199,13 +263,18 @@ export function SatViz({ deck, slot, accent, set }: SatVizProps) {
   };
 
   return (
-    <div className="fx-viz-row">
-      <div className="sat-viz">
-        <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+    <>
+      <div className="fx-viz-row">
+        <div className="sat-viz">
+          <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+          <div ref={readoutRef} className="eq-readout" style={{ opacity: 0 }} />
+        </div>
+        <div className="fx-curve">
+          <canvas ref={curveRef} className="fx-curve-canvas" />
+          {isWorklet && <span className="sat-curve-worklet">◆ HYSTERESIS</span>}
+        </div>
       </div>
-      <div className="fx-curve">
-        <canvas ref={curveRef} className="fx-curve-canvas" />
-      </div>
-    </div>
+      <MeterBar getValue={() => meterPeak.current} toPercent={(p) => Math.max(0, (20 * Math.log10(p || 1e-6) + 40) * 2.5)} format={(p) => (p < 1e-3 ? "-inf" : (20 * Math.log10(p)).toFixed(1))} unit="dBFS" label="Output level" className="sat-meter" />
+    </>
   );
 }

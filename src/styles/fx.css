@@ -1898,6 +1898,10 @@ button.room-tog:hover {
 .sat-shared .vcell {
   flex: 1;
 }
+/* Output-level meter, under the viz row — reuses the generic MeterBar primitive. */
+.sat-meter {
+  flex: 0 0 auto;
+}
 
 /* FX viz row: the main display (flex) + a fixed curve-preview panel to its RIGHT. The ROW is
    the panel's surplus-absorber (basis 0, fits --fx-body-h); both children stretch to its height. */
@@ -1934,6 +1938,21 @@ button.room-tog:hover {
   height: 100%;
   display: block;
 }
+/* The TAPE worklet has no single-valued transfer curve (it's a stateful process) — this label
+   replaces the curve panel's canvas when the selected band is running on it. */
+.sat-curve-worklet {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
 .sat-canvas {
   position: absolute;
   inset: 0;
@@ -1944,17 +1963,19 @@ button.room-tog:hover {
   cursor: crosshair;
 }
 
-/* COMP — the gain-reduction meter. It reads RIGHT-to-LEFT, like every hardware GR meter ever
-   made: the bar grows leftward as the compressor clamps down, so "nothing happening" is an empty
-   meter and you read the depth of the grab as a distance. The bar is driven imperatively from a
-   rAF in CompPanel (never React state) — it moves at 60 Hz and must never re-render the rack. */
-.comp-panel .comp-meter {
+/* Generic METER BAR — a live number as a horizontal fill + readout, driven imperatively from a
+   rAF (never React state — a meter moving at 60 Hz must never re-render the panel it lives in).
+   Originally COMP-specific (gain reduction); now shared by anything that needs "a live number,
+   as a bar" — Saturator's own output level, the master limiter's GR. `.rtl` reproduces COMP's
+   own convention: a GR meter reads RIGHT-to-LEFT, growing leftward as it clamps down, so
+   "nothing happening" is an empty meter and you read the depth of the grab as a distance. */
+.meter-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
 }
-.comp-meter-track {
+.meter-bar-track {
   flex: 1;
   height: 10px;
   border: 1px solid var(--line);
@@ -1962,15 +1983,18 @@ button.room-tog:hover {
   background: var(--panel);
   overflow: hidden;
   display: flex;
-  justify-content: flex-end; /* the bar grows from the right — GR pulls the level DOWN */
+  justify-content: flex-start;
 }
-.comp-meter-bar {
+.meter-bar-track.rtl {
+  justify-content: flex-end; /* GR pulls the level DOWN — the bar grows from the right */
+}
+.meter-bar-fill {
   width: 0;
   height: 100%;
   background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 35%, transparent), var(--accent) 70%, #ff6a3d);
   transition: none; /* rAF drives it; a CSS transition would smear the ballistics we're trying to show */
 }
-.comp-meter-read {
+.meter-bar-read {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   font-weight: 800;
@@ -1978,7 +2002,7 @@ button.room-tog:hover {
   min-width: 40px;
   text-align: right;
 }
-.comp-meter-unit {
+.meter-bar-unit {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.5px;

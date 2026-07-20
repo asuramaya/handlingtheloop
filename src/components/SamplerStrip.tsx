@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 import { SmartChip } from "./SmartChip";
+import { MeterBar } from "./MeterBar";
 
 // Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
 // exists. Each captures into the next free global pad (owned-audio tier).
@@ -34,6 +35,9 @@ export function SamplerStrip({
 }) {
   const s = sampler;
   const engine = useEngine();
+  // Master limiter GR — the brickwall was invisible (measured, never rendered, per open thread
+  // 32156af1). Reuses the same MeterBar primitive Saturator's own output meter uses.
+  const getMasterGr = useMemo(() => () => engine.masterGr, [engine]);
 
   // Mic (talkover) + capture-record controls. Captures land in the next free GLOBAL pad.
   const [micOn, setMicOn] = useState(false);
@@ -213,6 +217,9 @@ export function SamplerStrip({
               onMaster={smart.onMaster}
             />
           )}
+          {/* Master brickwall GR — measured since ef5c7ed1, never rendered until now (32156af1):
+              a limiter you can't see is a limiter you can't tell is working. */}
+          <MeterBar getValue={getMasterGr} toPercent={(gr) => Math.min(1, gr / 12) * 100} format={(gr) => (gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`)} unit="dB" label="Master limiter gain reduction" rtl className="smp-master-gr" />
         </div>
 
         {/* OUTPUT — capture + headphone monitor. Grows/reflows as the cue device appears. */}

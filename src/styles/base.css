@@ -570,6 +570,12 @@ body {
   width: auto;
 }
 .smp-io-mid > .vcell { flex: 0 0 104px; } /* SMART: a stable, slightly-wider master cell */
+/* Master GR meter — its own line under SMART (the zone already wraps), never fighting SmartChip
+   for width on a narrow strip. */
+.smp-master-gr {
+  flex: 0 0 100%;
+  min-width: 104px;
+}
 .smp-io button {
   font: 700 10px ui-monospace, SFMono-Regular, monospace;
   letter-spacing: 0.03em;

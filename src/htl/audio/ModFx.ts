@@ -9,7 +9,7 @@
 //          └─→ rect→lp→envGain ─┐                         ┌ lfo→lfoGain
 //                                modBus → modScale(s) → (delayTime | allpass freqs)
 import { BaseFxDevice, type FxKind } from "./Fx";
-import { logMap, SyncRate, MOD_DIVS } from "./fxDsp";
+import { logMap, SyncRate, MOD_DIVS, safeDisconnect } from "./fxDsp";
 
 export const MOD_MODES = ["CHORUS", "FLANGER", "PHASER"] as const;
 export const MOD_WAVES = ["SINE", "TRI", "SQUARE"] as const;
@@ -330,13 +330,5 @@ export class ModFx extends BaseFxDevice {
       /* already stopped */
     }
     super.dispose();
-  }
-}
-
-function safeDisconnect(n: AudioNode) {
-  try {
-    n.disconnect();
-  } catch {
-    /* ignore */
   }
 }

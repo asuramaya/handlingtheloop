@@ -39,6 +39,7 @@ class Scratch extends AudioWorkletProcessor {
     this.curStep = 0;    // lightly smoothed step → clean pitch across segments
     this.since = 0;      // output samples since the last 'move' (measures cadence)
     this.interval = 0;   // samples between the last two 'move's (segment length)
+    this.avgInterval = 0; // lightly EMA'd real-time interval (see the 'move' handler below)
     this.active = false;
     this.gain = 0;       // declick envelope
     this.gainTarget = 0;
@@ -91,6 +92,7 @@ class Scratch extends AudioWorkletProcessor {
         this.granular = false; this.curRaw = 0; // a fresh grab always starts continuous
         this.since = 0;
         this.interval = this.nominal;
+        this.avgInterval = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -100,7 +102,21 @@ class Scratch extends AudioWorkletProcessor {
         // new platter position over ~one update interval. Using the real elapsed
         // interval (not a guess) keeps the motion smooth and drift-free; computing
         // it from the POSITION delta (not the sent velocity) removes the jitter.
-        this.interval = this.since > 0 ? this.since : this.nominal;
+        //
+        // The interval itself prefers the caller's measured wall-clock gap (d.dtMs, from
+        // performance.now() on the main thread) over this.since: since only advances
+        // during process(), so several ticks delivered inside the SAME ~2.9ms render quantum
+        // (bursty hardware jog MIDI) read an identical since and fall back to nominal —
+        // a fixed ~16.7ms guess that measured ~4x too slow against a real DDJ-FLX4 capture's
+        // actual average tick rate. Lightly EMA'd (k=0.5) so one freak sub-ms pair doesn't
+        // spike the instantaneous speed or crash the pitch-smoothing tau below — still tracks
+        // the true recent cadence far closer than nominal ever could.
+        {
+          const dtSamples = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
+          const raw = dtSamples > 0 ? dtSamples : (this.since > 0 ? this.since : this.nominal);
+          this.avgInterval = this.avgInterval > 0 ? this.avgInterval + (raw - this.avgInterval) * 0.5 : raw;
+          this.interval = Math.max(1, this.avgInterval);
+        }
         this.since = 0;
         this.target = d.pos;
         this.stepRaw = (this.target - this.pos) / this.interval; // uncapped (granular tracks the finger)

@@ -155,6 +155,7 @@ export class JogEngine {
   private handVel = 0; // smoothed finger velocity, drives pitch + release fling
   private jogInputAt = 0; // ctx time of the last pointer sample (for per-input motion)
   private jogLast = 0; // ctx time of the last tick
+  private lastMoveAt = 0; // performance.now() ms of the last scratchMove post — see scratchMove()
   private jogRaf = 0; // requestAnimationFrame handle (0 = loop idle)
   private jogReturnToPlay = false; // release should spin back up to play, not rest
   private _jogWeight = 0.4; // 0 = featherweight/snappy … 1 = heavy flywheel
@@ -228,12 +229,23 @@ export class JogEngine {
   }
 
   private scratchStart() {
+    this.lastMoveAt = 0; // a fresh grab must not inherit a stale gap from a previous one
     this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
   }
   private scratchMove() {
-    // Position only — the worklet reconstructs smooth motion from the position stream itself
-    // (feeding it our noisy per-frame velocity garbled it).
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate });
+    // Position, plus the REAL wall-clock gap since the last post (performance.now(), sub-ms —
+    // not the worklet's own render-quantum-quantized sample counter). A hardware jog's MIDI
+    // delivery is bursty: measured on a real DDJ-FLX4 capture, a third of consecutive jog ticks
+    // land within the same ~2.9ms render quantum, so the worklet's internal timer can't tell
+    // them apart and was falling back to a fixed ~16.7ms (60Hz-frame) guess — ~4x too slow vs
+    // the tick stream's real average rate, which reads as the jog understating fast motion.
+    // dtMs lets the worklet use the true gap instead. (Position is otherwise authoritative
+    // either way — this only sharpens the DERIVED velocity used for anti-alias/pitch-smoothing
+    // and the continuous/granular mode switch, not the platter's actual reported location.)
+    const now = performance.now();
+    const dtMs = this.lastMoveAt > 0 ? now - this.lastMoveAt : 0;
+    this.lastMoveAt = now;
+    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate, dtMs });
   }
   private scratchStop() {
     this.scratchNode?.port.postMessage({ type: "stop" });

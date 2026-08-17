@@ -71,6 +71,15 @@ function buildDevice(ctx: Ctx, kind: FxKind): FxDevice {
 }
 
 // One test stimulus. Returns a started-able source node feeding the device input.
+// A seedable RNG for stimuli that must be REPRODUCIBLE render to render (the MOD audit's level
+// checks read PEAKS off a noise bed — with Math.random they drift ±1 dB and a bound flickers).
+let stimulusRng: (() => number) | null = null;
+export function seedStimulus(seed: number | null) {
+  if (seed == null) { stimulusRng = null; return; }
+  let a = seed >>> 0;
+  stimulusRng = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const rnd = () => (stimulusRng ? stimulusRng() : Math.random());
 function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000, toneAmp = 1): AudioScheduledSourceNode {
   if (signal === "tone") {
     // Steady-state sine (±1) — for gate/mod/eq where the response, not a transient, matters.
@@ -107,7 +116,7 @@ function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000, toneAmp
       // Paul Kellet's economy pink filter (the same one NoiseFx uses).
       let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
       for (let i = 0; i < d.length; i++) {
-        const w = Math.random() * 2 - 1;
+        const w = rnd() * 2 - 1;
         b0 = 0.99886 * b0 + w * 0.0555179;
         b1 = 0.99332 * b1 + w * 0.0750759;
         b2 = 0.969 * b2 + w * 0.153852;
@@ -118,7 +127,7 @@ function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000, toneAmp
         b6 = w * 0.115926;
       }
     } else if (signal === "noise") {
-      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.7;
+      for (let i = 0; i < d.length; i++) d[i] = (rnd() * 2 - 1) * 0.7;
     } else {
       // burst — 120 ms of 1 kHz at 0.7 (a "note")
       for (let i = 0; i < d.length; i++) d[i] = Math.sin((2 * Math.PI * 1000 * i) / sr) * 0.7;
@@ -435,6 +444,11 @@ export interface Coverage {
   }
   if (spec.params) Object.assign(applied, spec.params);
   for (const k in applied) dev.setParam(k, applied[k]);
+  // ★ A device that DEBOUNCES a rebuild on a wall-clock timer (ModFx's STAGES) would otherwise be
+  // rendered BEFORE that rebuild lands — an offline render outruns a 120 ms timer — so a
+  // `--params '{"stages":12}'` render measured whatever density the constructor built. This is
+  // exactly the "harness asserts nothing about its own input" trap: force it before rendering.
+  (dev as unknown as { flushRebuild?: () => void }).flushRebuild?.();
   // Snapshot the device state after applying — but let what we COMMANDED win over the read-back.
   // Ramped params (the delay's `time` rides a setTargetAtTime) still read their OLD value the
   // instant after they're set, and the echo ladder spaces its windows by `time`: trust the
@@ -501,4 +515,870 @@ export interface Coverage {
     report.responseDb = Array.from(out, (v) => Math.round(v * 100) / 100);
   }
   return report;
+};
+
+// A CHURN test — the bug class the render harness above CAN'T catch, because it only ever builds
+// a device ONE time. "Cranking up the voices crashes" (MOD, 2026-08) was traced to rapid STAGES
+// drags on CHORUS/FLANGER firing buildEngine() on every integer step crossed — each rebuild
+// creates up to 12 AudioWorkletNodes, a cross-thread, async-message-passing operation, so a fast
+// drag fired that a dozen times in under a second. The fix (setStages debounces the rebuild) is
+// live regardless of what follows here.
+//
+// ★ HONEST LIMITATION: this DOES NOT reproduce the crash in headless Chromium, tried BOTH on an
+// idle OfflineAudioContext and on a live, continuously-rendering AudioContext with real audio
+// actually flowing through the device — same churn pattern, same node counts, both survived
+// clean with or without the fix applied. headless Chromium's audio backend (chrome-headless-shell)
+// is a stub/null sink, not the real hardware audio pipeline — whatever resource limit or thread
+// race the user's real browser hit on real audio hardware, this harness's environment doesn't
+// share it. So this is NOT a verified regression test for the reported crash — it's a baseline
+// sanity check (no synchronous exception, context doesn't end up "closed"/non-"running") that
+// will always have passed even on the buggy code, kept here as scaffolding for whoever next
+// touches MOD's rapid-rebuild paths, not as proof this specific bug is caught.
+export interface ChurnResult {
+  ok: boolean;
+  steps: number;
+  finalState: string;
+  error?: string;
+}
+(globalThis as unknown as { fxlabChurn: () => Promise<ChurnResult> }).fxlabChurn = async () => {
+  const ctx = new AudioContext();
+  for (const src of [REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, MOD_DELAY_WORKLET_SRC, COMP_WORKLET_SRC]) {
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+  }
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const dev = new ModFx(ctx);
+  const noise = ctx.createBufferSource();
+  const buf = ctx.createBuffer(2, ctx.sampleRate * 2, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.3;
+  }
+  noise.buffer = buf;
+  noise.loop = true;
+  const trim = ctx.createGain();
+  trim.gain.value = 0.15; // headless has no real output, but keep it sane regardless
+  noise.connect(dev.input);
+  dev.output.connect(trim).connect(ctx.destination);
+  noise.start();
+  let steps = 0;
+  try {
+    // 2‥12‥2 at ~80fps pointermove pace, once per mode (CHORUS/FLANGER build worklets per voice,
+    // BARBER builds oscillator pairs, PHASER's own rebuild was always cheap — covering all four
+    // is what makes this a real regression test, not just a re-check of the one mode that crashed).
+    for (const mode of [0, 1, 2, 3]) {
+      dev.setParam("mode", mode);
+      for (const v of [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+        dev.setParam("stages", v);
+        steps++;
+        await sleep(12);
+      }
+      await sleep(250); // let the debounced rebuild actually land before moving to the next mode
+    }
+    // BARBER's own separate risk: DEPTH + a maxed envelope-driven SOURCE tap can push a voice's
+    // delayTime past its DelayNode's ceiling — probe that combination too, since it's a different
+    // failure mode (an AudioParam ceiling, not a node-creation storm) that STAGES churn won't hit.
+    dev.setParam("mode", 3);
+    dev.setParam("depth", 1);
+    dev.setParam("src", 2);
+    dev.setParam("feedback", 1);
+    await sleep(500);
+    const finalState = ctx.state;
+    dev.dispose();
+    noise.stop();
+    await ctx.close();
+    return { ok: finalState === "running", steps, finalState };
+  } catch (e) {
+    return { ok: false, steps, finalState: ctx.state, error: (e as Error)?.message || String(e) };
+  }
+};
+
+// ---- MOD audit ------------------------------------------------------------
+// One render per finding of the 2026-08 MOD review, each reduced to a NUMBER with a pass line, so
+// "fixed" is a before/after table rather than a claim. Every render here is a 5-channel offline
+// context: ch0/1 = device output, ch2/3 = the DRY stimulus itself (the exact same source node),
+// ch4 = dev.modSignal. The WET is recovered as out − dryGain·dry (dryGain read from the device when
+// it exposes one, else 1 — send-style), so the wet path can be inspected on its own even though
+// the device only ever emits the sum. Every render is also scanned for non-finite samples.
+export interface ModAuditCheck {
+  name: string;
+  value: number;
+  unit: string;
+  pass: boolean;
+  detail: string;
+}
+export interface ModAuditResult {
+  ok: boolean;
+  checks: ModAuditCheck[];
+}
+
+interface ModRender {
+  sr: number;
+  out: Float32Array; // ch0
+  dry: Float32Array; // ch2
+  mod: Float32Array; // ch4
+  phase: Float32Array; // ch5 (dev.phaseSignal)
+  wet: Float32Array; // out − dryGain·dry
+  finite: boolean;
+}
+
+let lastRenderMs = 0; // wall time of the most recent renderModAudit render (a CPU-cost proxy)
+async function renderModAudit(
+  params: Record<string, number>,
+  opts: { signal: "noise" | "pink" | "tone"; seconds: number; toneHz?: number; toneAmp?: number; midT?: number; mid?: (dev: ModFx) => void; sampleRate?: number; throwOn?: boolean; after?: (dev: ModFx) => Promise<void> | void; mids?: { t: number; fn: (dev: ModFx) => void }[] },
+): Promise<ModRender> {
+  const sr = opts.sampleRate ?? 48000;
+  const len = Math.round(opts.seconds * sr);
+  const ctx = new OfflineAudioContext(6, len, sr);
+  const url = URL.createObjectURL(new Blob([MOD_DELAY_WORKLET_SRC], { type: "text/javascript" }));
+  await ctx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  const dev = new ModFx(ctx as unknown as AudioContext);
+  dev.reset();
+  for (const k in params) dev.setParam(k, params[k]);
+  // The STAGES rebuild is debounced on a wall-clock timer; an offline render outruns it. Force it.
+  (dev as unknown as { flushRebuild?: () => void }).flushRebuild?.();
+  if (opts.throwOn) (dev as unknown as { setThrow?: (on: boolean) => void }).setThrow?.(true);
+  const merger = ctx.createChannelMerger(6);
+  const outSplit = ctx.createChannelSplitter(2);
+  dev.output.connect(outSplit);
+  outSplit.connect(merger, 0, 0);
+  outSplit.connect(merger, 1, 1);
+  seedStimulus(20260816); // reproducible beds for the audit (see seedStimulus)
+  const source = makeSignal(ctx as unknown as Ctx, opts.signal, sr, opts.toneHz ?? 1000, opts.toneAmp ?? 1);
+  seedStimulus(null);
+  // makeSignal's "noise" is a 120 ms BURST (a note); the audit wants a sustained bed, so loop it.
+  if (source instanceof AudioBufferSourceNode) source.loop = true;
+  source.connect(dev.input);
+  const drySplit = ctx.createChannelSplitter(2);
+  source.connect(drySplit);
+  drySplit.connect(merger, 0, 2);
+  drySplit.connect(merger, 1, 3);
+  try {
+    dev.modSignal.connect(merger, 0, 4);
+    (dev as unknown as { phaseSignal?: AudioNode }).phaseSignal?.connect(merger, 0, 5);
+  } catch {
+    /* no tap */
+  }
+  merger.connect(ctx.destination);
+  source.start(0);
+  const mids = [...(opts.mids ?? [])];
+  if (opts.mid && opts.midT != null) mids.push({ t: opts.midT, fn: opts.mid });
+  for (const m of mids) {
+    const q = (Math.round((m.t * sr) / 128) * 128) / sr;
+    void ctx.suspend(q).then(async () => {
+      m.fn(dev);
+      (dev as unknown as { flushRebuild?: () => void }).flushRebuild?.();
+      // let the worklet thread drain its port queue before the render restarts (see the
+      // suspend/resume quirk note above minStepOverRenders)
+      await new Promise((r) => setTimeout(r, 40));
+      void ctx.resume();
+    });
+  }
+  // ★ Wait for the worklet voices to actually EXIST before rendering. Offline contexts share one
+  // worklet thread in Chromium and processor construction is async — ~1 in 6 renders the voices
+  // came up AFTER a 1 s render had finished (probe: right params, phi=0, depthS=0: process() never
+  // ran) and the "wet" was just the retiring engines' tail. A real-time context brings them up in
+  // milliseconds; offline, we have to ask. (_probeVoices resolves on reply or a 500 ms timeout.)
+  await (dev as unknown as { _probeVoices?: () => Promise<unknown> })._probeVoices?.();
+  const t0 = performance.now();
+  const buf = await ctx.startRendering();
+  lastRenderMs = performance.now() - t0;
+  if (opts.after) await opts.after(dev);
+  const out = buf.getChannelData(0);
+  const dry = buf.getChannelData(2);
+  const mod = buf.getChannelData(4);
+  const phase = buf.getChannelData(5);
+  const dryGain = (dev as unknown as { dryLevel?: number }).dryLevel ?? 1;
+  // the device's dry leg may carry a fixed offset (FLANGER THRU): the reference must be shifted
+  // by the same amount (fractional, linear interp) before subtracting, or the "wet" is polluted
+  const offS = ((dev as unknown as { dryOffsetSec?: number }).dryOffsetSec ?? 0) * sr;
+  const dryRef = new Float32Array(out.length);
+  for (let i = 0; i < out.length; i++) {
+    const p = i - offS;
+    const j = Math.floor(p);
+    const f = p - j;
+    dryRef[i] = j >= 0 && j + 1 < dry.length ? dry[j] * (1 - f) + dry[j + 1] * f : 0;
+  }
+  const wet = new Float32Array(out.length);
+  let finite = true;
+  for (let i = 0; i < out.length; i++) {
+    wet[i] = out[i] - dryGain * dryRef[i];
+    if (!Number.isFinite(out[i]) || !Number.isFinite(mod[i])) finite = false;
+  }
+  return { sr, out, dry: dryRef, mod, phase, wet, finite };
+}
+
+// A plain radix-2 FFT magnitude (power) spectrum, averaged over Hann-windowed frames.
+function powerSpectrum(x: Float32Array, n = 4096, from = 0, to = x.length): Float64Array {
+  const re = new Float64Array(n);
+  const im = new Float64Array(n);
+  const acc = new Float64Array(n / 2);
+  const win = new Float64Array(n);
+  for (let i = 0; i < n; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
+  let frames = 0;
+  for (let start = from; start + n <= to; start += n / 2) {
+    for (let i = 0; i < n; i++) {
+      re[i] = x[start + i] * win[i];
+      im[i] = 0;
+    }
+    // in-place iterative FFT
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (let size = 2; size <= n; size <<= 1) {
+      const ang = (-2 * Math.PI) / size;
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let s = 0; s < n; s += size) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < size / 2; k++) {
+          const a = s + k, b = s + k + size / 2;
+          const tr = re[b] * cr - im[b] * ci;
+          const ti = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - tr; im[b] = im[a] - ti;
+          re[a] += tr; im[a] += ti;
+          const ncr = cr * wr - ci * wi;
+          ci = cr * wi + ci * wr;
+          cr = ncr;
+        }
+      }
+    }
+    for (let i = 0; i < n / 2; i++) acc[i] += re[i] * re[i] + im[i] * im[i];
+    frames++;
+  }
+  if (frames) for (let i = 0; i < n / 2; i++) acc[i] /= frames;
+  return acc;
+}
+function bandPower(ps: Float64Array, sr: number, n: number, lo: number, hi: number): number {
+  const b0 = Math.max(0, Math.floor((lo / sr) * n));
+  const b1 = Math.min(ps.length - 1, Math.ceil((hi / sr) * n));
+  let s = 0;
+  for (let i = b0; i <= b1; i++) s += ps[i];
+  return s;
+}
+function rmsOf(x: Float32Array, from: number, to: number): number {
+  let s = 0;
+  const a = Math.max(0, from), b = Math.min(x.length, to);
+  for (let i = a; i < b; i++) s += x[i] * x[i];
+  return Math.sqrt(s / Math.max(1, b - a));
+}
+function peakOf(x: Float32Array, from = 0, to = x.length): number {
+  let p = 0;
+  for (let i = Math.max(0, from); i < Math.min(x.length, to); i++) {
+    const a = Math.abs(x[i]);
+    if (a > p) p = a;
+  }
+  return p;
+}
+// Click score: the biggest sample-to-sample step over the median step of the same material.
+function maxStepRatio(x: Float32Array, from: number, to: number): number {
+  const a = Math.max(1, from), b = Math.min(x.length, to);
+  const steps: number[] = [];
+  let mx = 0;
+  for (let i = a; i < b; i++) {
+    const d = Math.abs(x[i] - x[i - 1]);
+    if (d > mx) mx = d;
+    if ((i & 63) === 0) steps.push(d);
+  }
+  steps.sort((p, q) => p - q);
+  const med = steps[Math.floor(steps.length / 2)] || 1e-9;
+  return mx / med;
+}
+
+// ★ Chromium quirk: OfflineAudioContext.suspend()/resume() with AudioWorkletNodes in the graph
+// intermittently (~50%) makes the worklets' first quantum after resume STALE — the wet phase-
+// jumps against the dry and reads as a ×12 step at exactly the suspend instant, even when the
+// mid-render callback does nothing at all (verified: fxlabModGestureRepeat with param "__none";
+// the worklet-free PHASER never shows it; a live context never suspends). The quirk only ever
+// ADDS a spike, while a genuine device click is deterministic — so every suspend-based step
+// metric here is the MINIMUM over `n` identical renders (5 for the worklet modes — the quirk
+// hits ~30‥50% of renders there, so three in a row is not rare enough).
+async function minStepOverRenders(
+  n: number,
+  params: Record<string, number>,
+  opts: Parameters<typeof renderModAudit>[1],
+  window: [number, number],
+  of: "out" | "wet" = "out",
+): Promise<{ step: number; r: ModRender }> {
+  let best: { step: number; r: ModRender } | null = null;
+  for (let i = 0; i < n; i++) {
+    const r = await renderModAudit(params, opts);
+    const step = maxStepRatio(r[of], Math.round(window[0] * r.sr), Math.round(window[1] * r.sr));
+    if (!best || step < best.step) best = { step, r };
+  }
+  return best!;
+}
+
+(globalThis as unknown as { fxlabModAudit: () => Promise<ModAuditResult> }).fxlabModAudit = async () => {
+  const checks: ModAuditCheck[] = [];
+  const N = 4096;
+  const add = (name: string, value: number, unit: string, pass: boolean, detail: string) => checks.push({ name, value: Math.round(value * 100) / 100, unit, pass, detail });
+  const finiteAll: boolean[] = [];
+
+  // 1. CHORUS/FLANGER voice smear — the wet's MID-BAND (300‥3000 Hz) level relative to the dry's,
+  //    at 2 vs 12 voices. Same-phase evenly-spread taps form a static FIR comb whose passbands
+  //    narrow as the count rises, so the wet's mids collapse; phase-spread voices don't.
+  for (const mode of [0, 1]) {
+    const name = mode === 0 ? "CHORUS" : "FLANGER";
+    const mid: number[] = [];
+    for (const stages of [2, 12]) {
+      const r = await renderModAudit({ mode, stages, depth: 0.5, feedback: 0, mix: 0.5 }, { signal: "noise", seconds: 4 });
+      finiteAll.push(r.finite);
+      const pw = powerSpectrum(r.wet, N, r.sr, r.wet.length);
+      const pd = powerSpectrum(r.dry, N, r.sr, r.dry.length);
+      mid.push(10 * Math.log10(bandPower(pw, r.sr, N, 300, 3000) / bandPower(pd, r.sr, N, 300, 3000)));
+    }
+    add(`${name.toLowerCase()}-mid-wet@2`, mid[0], "dB re dry", true, `wet mids at 2 voices (mix 0.5)`);
+    add(`${name.toLowerCase()}-mid-wet@12`, mid[1], "dB re dry", mid[1] >= mid[0] - 4, `wet mids at 12 voices — must not collapse vs 2 (≥ −4 dB of it)`);
+  }
+
+  // 2. BARBER crackle — a 1 kHz tone through a barberpole should come out as slightly pitch-shifted
+  //    tones near 1 kHz and nothing else; wet energy above 6 kHz is splice/ringing artefact.
+  //    Measured on the WET alone. Three configurations: default WAVE (EASE) with feedback, LINEAR
+  //    ramp with feedback, and no feedback at all as the floor.
+  for (const [label, p] of [
+    ["ease-fb0.5", { mode: 3, wave: 0, feedback: 0.5 }],
+    ["linear-fb0.5", { mode: 3, wave: 1, feedback: 0.5 }],
+    ["linear-fb0", { mode: 3, wave: 1, feedback: 0 }],
+  ] as [string, Record<string, number>][]) {
+    const r = await renderModAudit({ ...p, depth: 0.5, rate: 0.6, stages: 6, mix: 0.5 }, { signal: "tone", seconds: 8, toneHz: 1000, toneAmp: 0.5 });
+    finiteAll.push(r.finite);
+    const from = Math.round(2.5 * r.sr); // skip the start-up bump (checked separately below)
+    const pw = powerSpectrum(r.wet, N, from, r.wet.length);
+    const hf = 10 * Math.log10(bandPower(pw, r.sr, N, 6000, 20000) / bandPower(pw, r.sr, N, 20, 20000));
+    add(`barber-hf-artefact-${label}`, hf, "dB", hf < -45, `wet energy >6 kHz for a 1 kHz tone (splice/ringing) — want < −45 dB`);
+    const step = maxStepRatio(r.wet, from, r.wet.length);
+    add(`barber-maxstep-${label}`, step, "× median", step < 8, `largest wet sample step / median step — want < 8`);
+  }
+
+  // 3. BARBER start-up bump — staggered oscillator start() left not-yet-started lines sitting at
+  //    envelope=1, so a pair summed to 2 until the last line began. Wet RMS in the first second vs
+  //    settled, at a slow rate (period ≈ 2.4 s).
+  {
+    const r = await renderModAudit({ mode: 3, wave: 0, feedback: 0, depth: 0.5, rate: 0.4, stages: 6, mix: 0.5 }, { signal: "noise", seconds: 8 });
+    finiteAll.push(r.finite);
+    const early = rmsOf(r.wet, Math.round(0.1 * r.sr), Math.round(1.1 * r.sr));
+    const late = rmsOf(r.wet, Math.round(5 * r.sr), Math.round(8 * r.sr));
+    const bump = 20 * Math.log10(early / Math.max(1e-9, late));
+    add("barber-start-bump", bump, "dB", Math.abs(bump) < 2, `wet RMS first second vs settled — want |Δ| < 2 dB`);
+  }
+
+  // 4. Level — peak of the OUTPUT over the peak of the DRY stimulus, per mode, at the device's own
+  //    default mix (0.5) and full mix (1.0). Send-style dry+wet reaches +6 dB at comb peaks; that's
+  //    the "pops on the peaks" against a hot program. Want ≤ +1 dB. PINK, not white: makeSignal's
+  //    white noise is UNIFORMLY distributed (crest ~1.7), and any dispersive process — an allpass
+  //    cascade, a 6-voice sum — turns it Gaussian (crest ~4), so its peaks rise ~2× while its RMS
+  //    doesn't move; that reads as +2 dB of "level" that music (already Gaussian-ish) never shows.
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    for (const mix of [0.5, 1]) {
+      const r = await renderModAudit({ mode, mix, depth: 0.5, feedback: 0.3, stages: 6 }, { signal: "pink", seconds: 4 });
+      finiteAll.push(r.finite);
+      const g = 20 * Math.log10(peakOf(r.out) / Math.max(1e-9, peakOf(r.dry)));
+      // default mix (the deepest-notch point a DJ lives at) must sit under the dry; full wet with
+      // regen may peak a touch over it — the check exists to catch the +5‥+9 dB class, and a
+      // random pink bed carries ~±1 dB of peak variance render to render.
+      const lim = mix === 1 ? 2 : 1;
+      add(`level-${name}-mix${mix}`, g, "dB over dry peak", g <= lim, `output peak over the dry stimulus's peak — want ≤ +${lim} dB`);
+    }
+  }
+  // 4b. worst case: 12 voices, full depth, full mix, F.BACK 1
+  for (const mode of [0, 1, 2]) {
+    const name = ["chorus", "flanger", "phaser"][mode];
+    const r = await renderModAudit({ mode, mix: 1, depth: 1, feedback: 1, stages: 12 }, { signal: "pink", seconds: 6 });
+    finiteAll.push(r.finite);
+    const g = 20 * Math.log10(peakOf(r.out) / Math.max(1e-9, peakOf(r.dry)));
+    add(`level-${name}-worst`, g, "dB over dry peak", g <= 4, `12 voices/stages, depth 1, F.BACK 1, mix 1 — want ≤ +4 dB`);
+  }
+
+  // 5. The viz tap survives a rebuild — connect dev.modSignal, rebuild STAGES mid-render, and the
+  //    tapped signal must still be alive afterwards (a severed tap reads 0 → the viz freezes).
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    const r = await renderModAudit({ mode, stages: 6, mix: 0.5, rate: 0.6 }, { signal: "noise", seconds: 4, midT: 1.5, mid: (d) => d.setParam("stages", 9) });
+    finiteAll.push(r.finite);
+    const before = rmsOf(r.mod, Math.round(0.5 * r.sr), Math.round(1.4 * r.sr));
+    const after = rmsOf(r.mod, Math.round(2.0 * r.sr), Math.round(4.0 * r.sr));
+    add(`viz-tap-${name}-after-rebuild`, after, "rms", after > 0.05 && before > 0.05, `modSignal RMS after a STAGES rebuild (before: ${before.toFixed(3)}) — want > 0.05`);
+    if (mode < 2) {
+      // phaseSignal: a 0→1 ramp at the LFO rate — every sample in range, wraps ≈ rate·seconds
+      // (counted from 2 s, after the rebuild, so the tap is proven re-linked to the NEW voice 0)
+      let inRange = 0, wraps = 0, n = 0;
+      for (let i = Math.round(2 * r.sr); i < r.phase.length; i++) {
+        n++;
+        if (r.phase[i] >= 0 && r.phase[i] <= 1) inRange++;
+        if (i > 0 && r.phase[i - 1] - r.phase[i] > 0.5) wraps++;
+      }
+      const hz = 0.05 * Math.pow(200, 0.6);
+      const expect = hz * 2;
+      add(`phase-tap-${name}`, wraps, "wraps/2 s", inRange === n && Math.abs(wraps - expect) <= 1, `phaseSignal after the rebuild: in [0,1] ${((inRange / Math.max(1, n)) * 100).toFixed(0)}%, wraps ${wraps} vs ${expect.toFixed(1)} expected at ${hz.toFixed(2)} Hz`);
+    }
+  }
+
+  // 6. Rebuild click — PHASER on a steady tone, STAGES 6→9 mid-render: the biggest output step
+  //    around the swap vs the material's median step. An instant graph teardown is a hard splice.
+  {
+    const { step, r } = await minStepOverRenders(2, { mode: 2, stages: 6, mix: 0.5, feedback: 0.3 }, { signal: "tone", seconds: 4, toneHz: 1000, toneAmp: 0.5, midT: 2, mid: (d) => d.setParam("stages", 9) }, [1.9, 2.4]);
+    finiteAll.push(r.finite);
+    add("rebuild-click-phaser", step, "× median", step < 6, `largest output step within ±0.2 s of a STAGES rebuild — want < 6`);
+  }
+
+  // ---- round 2: gestures, extremes, robustness --------------------------------------------
+  // 7. Gesture continuity — a knob DRAG mid-render on a steady tone: DEPTH 0.2→0.9 (the XY pad
+  //    drags this continuously), RATE 0.3→0.8, F.BACK 0.2→0.9. Any un-smoothed parameter is a
+  //    splice; the biggest output step within ±0.2 s of the change vs the material's median.
+  const gestures: [string, string, number, number][] = [
+    ["depth", "depth", 0.2, 0.9],
+    ["rate", "rate", 0.3, 0.8],
+    ["feedback", "feedback", 0.2, 0.9],
+  ];
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    for (const [label, param, a, b] of gestures) {
+      // worklet modes: LIVE (see renderModLive — offline suspend is invalid there); others: offline
+      const { step, r } = mode < 2
+        ? await liveGestureStep({ mode, stages: 6, mix: 0.5, [param]: a }, { signal: "tone", seconds: 3, gestures: [{ t: 1.5, fn: (d) => d.setParam(param, b) }] })
+        : await minStepOverRenders(1, { mode, stages: 6, mix: 0.5, [param]: a }, { signal: "tone", seconds: 4, toneHz: 1000, toneAmp: 0.5, midT: 2, mid: (d) => d.setParam(param, b) }, [1.9, 2.4]);
+      finiteAll.push(r.finite);
+      add(`gesture-${name}-${label}`, step, "× median", step < 6, `${label.toUpperCase()} ${a}→${b} mid-render${mode < 2 ? " (live ctx)" : ""} — biggest step vs median, want < 6`);
+    }
+  }
+  // 8. Mode switch continuity + the worklet-instantiation GAP: switching INTO chorus/flanger
+  //    creates worklet nodes whose processors come up asynchronously on the render thread —
+  //    while the old engine is already fading. Wet RMS in the 150 ms right after the switch vs
+  //    settled; a dropout reads as a deep dip.
+  for (const [from, to] of [[2, 0], [0, 3], [3, 1], [1, 2]] as [number, number][]) {
+    const nm = (m: number) => ["chorus", "flanger", "phaser", "barber"][m];
+    const { step, r } = await liveGestureStep({ mode: from, stages: 6, mix: 0.5 }, { signal: "pink", seconds: 4, gestures: [{ t: 2, fn: (d) => d.setParam("mode", to) }] });
+    finiteAll.push(r.finite);
+    add(`modeswitch-${nm(from)}→${nm(to)}-click`, step, "× median", step < 6, `mode switch mid-render (live ctx) — biggest step vs median, want < 6`);
+    const g0 = r.gestureT[0];
+    const just = rmsOf(r.wet, Math.round((g0 + 0.05) * r.sr), Math.round((g0 + 0.2) * r.sr));
+    const settled = rmsOf(r.wet, Math.round((g0 + 1.0) * r.sr), Math.round((g0 + 1.9) * r.sr));
+    const dip = 20 * Math.log10(just / Math.max(1e-9, settled));
+    add(`modeswitch-${nm(from)}→${nm(to)}-gap`, dip, "dB", dip > -6, `wet level 50‥200 ms after the switch vs settled (live ctx, real worklet instantiation) — want > −6 dB`);
+  }
+  // 9. Bypass on/off mid-render (the FLX ON/OFF) — must be a ramp, not a splice.
+  {
+    const r = await renderModAudit({ mode: 2, stages: 6, mix: 0.5 }, { signal: "tone", seconds: 4, toneHz: 1000, toneAmp: 0.5, midT: 2, mid: (d) => d.setBypass(true) });
+    finiteAll.push(r.finite);
+    const step = maxStepRatio(r.out, Math.round(1.9 * r.sr), Math.round(2.4 * r.sr));
+    add("bypass-click-phaser", step, "× median", step < 6, `setBypass(true) mid-render — biggest step vs median, want < 6`);
+    const late = rmsOf(r.wet, Math.round(3 * r.sr), Math.round(4 * r.sr));
+    add("bypass-wet-gone", late, "rms", late < 1e-3, `wet RMS 1 s after bypass — want ~0 (and dry back to unity)`);
+  }
+  // 10. Long-run feedback stability at the WORST regen the UI can reach — F.BACK 1 + a held pad
+  //     THROW (fb bump), 20 s of pink: the last 3 s must not be louder than seconds 3‥6.
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    const r = await renderModAudit({ mode, stages: 12, mix: 0.5, feedback: 1, depth: 1 }, { signal: "pink", seconds: 20, throwOn: true });
+    finiteAll.push(r.finite);
+    const early = rmsOf(r.wet, Math.round(3 * r.sr), Math.round(6 * r.sr));
+    const late = rmsOf(r.wet, Math.round(17 * r.sr), Math.round(20 * r.sr));
+    const growth = 20 * Math.log10(late / Math.max(1e-9, early));
+    add(`stability-${name}-throw`, growth, "dB", growth < 1.5, `wet RMS 17‥20 s vs 3‥6 s at F.BACK 1 + throw — want < +1.5 dB (no build-up)`);
+  }
+  // 11. FLANGER THRU + full depth: the sweep asks for delays BELOW zero (base 0.4 ms, swing
+  //     ±2.2 ms) and the worklet clamps at 1 sample — a hard corner in the delay trajectory,
+  //     audible as HF splatter on a tone. Same probe as BARBER's artefact check.
+  {
+    const r = await renderModAudit({ mode: 1, thru: 1, depth: 1, feedback: 0, stages: 2, mix: 0.5 }, { signal: "tone", seconds: 6, toneHz: 1000, toneAmp: 0.5 });
+    finiteAll.push(r.finite);
+    const from = Math.round(1 * r.sr);
+    const pw = powerSpectrum(r.wet, N, from, r.wet.length);
+    const hf = 10 * Math.log10(bandPower(pw, r.sr, N, 6000, 20000) / bandPower(pw, r.sr, N, 20, 20000));
+    add("flanger-thru-depth1-hf", hf, "dB", hf < -45, `wet >6 kHz for a 1 kHz tone at THRU + full depth — want < −45 dB (no clamp corner)`);
+  }
+  // 12. 96 kHz: the worklet ring is a fixed 4096 samples — 42 ms at 96 k — while CHORUS at full
+  //     depth + throw + BOTH source can ask for ~70 ms; a clamp at the ring's end is a splice.
+  {
+    const r = await renderModAudit({ mode: 0, depth: 1, feedback: 0, stages: 6, mix: 0.5, src: 2 }, { signal: "tone", seconds: 6, toneHz: 1000, toneAmp: 0.9, sampleRate: 96000, throwOn: true });
+    finiteAll.push(r.finite);
+    const from = Math.round(1 * r.sr);
+    const pw = powerSpectrum(r.wet, N, from, r.wet.length);
+    const hf = 10 * Math.log10(bandPower(pw, r.sr, N, 6000, 40000) / bandPower(pw, r.sr, N, 20, 40000));
+    add("chorus-96k-both-throw-hf", hf, "dB", hf < -45, `wet >6 kHz for a 1 kHz tone @96 kHz, BOTH+throw+depth 1 — want < −45 dB (ring not clamping)`);
+  }
+  // 13. Retired engines are actually reaped — after a mid-render rebuild and the render's end,
+  //     the device must hold zero retired engines (each holds up to 12 worklet processors).
+  {
+    let retired = -1;
+    await renderModAudit({ mode: 0, stages: 6, mix: 0.5 }, {
+      signal: "pink", seconds: 3, midT: 1, mid: (d) => d.setParam("stages", 10),
+      after: async (d) => {
+        await new Promise((r) => setTimeout(r, 400));
+        retired = (d as unknown as { retiredEngines?: number }).retiredEngines ?? -1;
+      },
+    });
+    add("retired-engines-reaped", retired, "count", retired === 0, `retired engines still held 400 ms after the render — want 0`);
+  }
+  // ---- round 3 --------------------------------------------------------------------------------
+  // 15. FLANGER THRU is through-ZERO: with the dry offset in place the wet's relative delay crosses
+  //     0, so at the crossing the wet ALIGNS with the dry — zero-lag normalized correlation of the
+  //     wet against the dry (10 ms windows, white noise, 2 taps: a mirrored pair crosses together)
+  //     must peak near 1. Without THRU the relative delay never gets below ~2.4 ms → ~0.
+  {
+    const corrMax = (r: ModRender) => {
+      const w = Math.round(0.01 * r.sr);
+      let best = 0;
+      for (let s0 = Math.round(1 * r.sr); s0 + w < r.wet.length; s0 += w >> 1) {
+        let sxy = 0, sxx = 0, syy = 0;
+        for (let i = s0; i < s0 + w; i++) { sxy += r.wet[i] * r.dry[i]; sxx += r.wet[i] * r.wet[i]; syy += r.dry[i] * r.dry[i]; }
+        const c = sxy / Math.sqrt(sxx * syy + 1e-18);
+        if (c > best) best = c;
+      }
+      return best;
+    };
+    const rt = await renderModAudit({ mode: 1, thru: 1, stages: 2, depth: 1, feedback: 0, mix: 1 }, { signal: "noise", seconds: 4 });
+    const rn = await renderModAudit({ mode: 1, thru: 0, stages: 2, depth: 1, feedback: 0, mix: 1 }, { signal: "noise", seconds: 4 });
+    finiteAll.push(rt.finite, rn.finite);
+    const ct = corrMax(rt), cn = corrMax(rn);
+    add("flanger-thru-crossing", ct, "max corr", ct > 0.85, `THRU: peak zero-lag wet/dry correlation — a real through-zero crossing reads ~1 (non-THRU reads ${cn.toFixed(2)})`);
+    add("flanger-nothru-no-crossing", cn, "max corr", cn < 0.4, `no THRU: the wet must never align with the dry — want < 0.4`);
+  }
+  // 15b. THRU toggle mid-render: the dry offset RAMPS in over ~60 ms (a brief pitch dip), never steps.
+  {
+    const { step, r } = await liveGestureStep({ mode: 1, stages: 6, mix: 0.5, thru: 0 }, { signal: "tone", seconds: 3, gestures: [{ t: 1.5, fn: (d) => d.setParam("thru", 1) }] });
+    finiteAll.push(r.finite);
+    add("flanger-thru-toggle-click", step, "× median", step < 6, `THRU off→on mid-render (live ctx) — biggest step vs median, want < 6`);
+  }
+  // 16. Pad THROW on/off mid-render, every mode (live ctx) — engage at 1.5 s, release at 2.5 s.
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    const st = (on: boolean) => (d: ModFx) => (d as unknown as { setThrow: (on: boolean) => void }).setThrow(on);
+    const { r } = await liveGestureStep({ mode, stages: 6, mix: 0.5 }, { signal: "tone", seconds: 3.5, gestures: [{ t: 1.5, fn: st(true) }, { t: 2.5, fn: st(false) }] });
+    finiteAll.push(r.finite);
+    const s1 = maxStepRatio(r.out, Math.round((r.gestureT[0] - 0.1) * r.sr), Math.round((r.gestureT[0] + 0.4) * r.sr));
+    const s2 = maxStepRatio(r.out, Math.round((r.gestureT[1] - 0.1) * r.sr), Math.round((r.gestureT[1] + 0.4) * r.sr));
+    add(`throw-${name}-onoff`, Math.max(s1, s2), "× median", Math.max(s1, s2) < 6, `throw engage (×${s1.toFixed(1)}) / release (×${s2.toFixed(1)}) live — biggest step vs median, want < 6`);
+  }
+  // 17. ENV/BOTH on a HOT program (tone at 0.9): the follower is scaled ×4, so depth swings can
+  //     be several times the LFO's — must stay finite and inside the level bound.
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    const r = await renderModAudit({ mode, stages: 6, mix: 0.5, depth: 1, src: 2, feedback: 0.5 }, { signal: "pink", seconds: 6 });
+    finiteAll.push(r.finite);
+    const g = 20 * Math.log10(peakOf(r.out) / Math.max(1e-9, peakOf(r.dry)));
+    add(`env-hot-${name}`, g, "dB over dry peak", g <= 3 && r.finite, `BOTH source, depth 1, F.BACK .5 on a hot pink bed — want ≤ +3 dB and finite`);
+  }
+  // 18. Boot cost — a device constructed + reset() + a full default param set must build ONE
+  //     engine, not three (reset re-sets mode/thru/wave/stages; unchanged values are no-ops).
+  {
+    let builds = -1;
+    await renderModAudit({ mode: 0, stages: 6, mix: 0.5, thru: 0, wave: 0 }, { signal: "pink", seconds: 1, after: (d) => { builds = (d as unknown as { _buildCount: number })._buildCount; } });
+    add("boot-build-count", builds, "engines", builds === 1, `engines built through construct + reset() + defaults — want 1`);
+  }
+
+  // 14. CPU cost proxy — wall time to render 4 s of audio at STAGES 12, per mode (headless, so
+  //     absolute numbers vary by machine; informational unless something is wildly off).
+  for (const mode of [0, 1, 2, 3]) {
+    const name = ["chorus", "flanger", "phaser", "barber"][mode];
+    await renderModAudit({ mode, stages: 12, mix: 0.5, depth: 1 }, { signal: "pink", seconds: 4 });
+    const rt = lastRenderMs / 4000;
+    add(`cpu-${name}@12`, rt, "× realtime", rt < 0.5, `render-time / audio-time at STAGES 12 (offline, headless) — want < 0.5`);
+  }
+
+  add("all-samples-finite", finiteAll.every(Boolean) ? 1 : 0, "bool", finiteAll.every(Boolean), `no NaN/Inf in any audit render (${finiteAll.length} renders)`);
+  return { ok: checks.every((c) => c.pass), checks };
+};
+
+// One ad-hoc MOD render → the audit's own metrics, for iterating on a single finding without
+// re-running the whole table. `--mod-probe '{"mode":3,...}' [--signal tone|noise] [--seconds N]`.
+(globalThis as unknown as { fxlabModProbe: (params: Record<string, number>, signal: "noise" | "pink" | "tone", seconds: number) => Promise<Record<string, number>> }).fxlabModProbe = async (params, signal, seconds) => {
+  const r = await renderModAudit(params, { signal, seconds, toneHz: 1000, toneAmp: 0.5 });
+  const N = 4096;
+  const from = Math.round(Math.min(2.5, seconds / 3) * r.sr);
+  const pw = powerSpectrum(r.wet, N, from, r.wet.length);
+  const pd = powerSpectrum(r.dry, N, from, r.dry.length);
+  const tot = bandPower(pw, r.sr, N, 20, 20000);
+  return {
+    finite: r.finite ? 1 : 0,
+    outPeakOverDryDb: 20 * Math.log10(peakOf(r.out) / Math.max(1e-9, peakOf(r.dry))),
+    wetPeakOverDryDb: 20 * Math.log10(peakOf(r.wet, from) / Math.max(1e-9, peakOf(r.dry))),
+    wetRmsOverDryDb: 20 * Math.log10(rmsOf(r.wet, from, r.wet.length) / Math.max(1e-9, rmsOf(r.dry, from, r.dry.length))),
+    wetRmsDb: 20 * Math.log10(rmsOf(r.wet, from, r.wet.length) + 1e-9),
+    wetMidsReDryDb: 10 * Math.log10(bandPower(pw, r.sr, N, 300, 3000) / bandPower(pd, r.sr, N, 300, 3000)),
+    wetHf6kDb: 10 * Math.log10(bandPower(pw, r.sr, N, 6000, 20000) / tot),
+    wetHf3kDb: 10 * Math.log10(bandPower(pw, r.sr, N, 3000, 20000) / tot),
+    wetLf500Db: 10 * Math.log10(bandPower(pw, r.sr, N, 20, 500) / tot),
+    maxStepRatio: maxStepRatio(r.wet, from, r.wet.length),
+  };
+};
+// Where in the ramp cycle do the wet's spikes land? Histogram of |saw| (ch4 = line A's ramp) at
+// every wet step > 8× median — a wrap-splice piles up at |saw|≈1, a mid-sweep fault is uniform.
+(globalThis as unknown as { fxlabModSpikes: (params: Record<string, number>) => Promise<{ hist: number[]; n: number; sawAtTop: number[] }> }).fxlabModSpikes = async (params) => {
+  const r = await renderModAudit(params, { signal: "tone", seconds: 8, toneHz: 1000, toneAmp: 0.5 });
+  const from = Math.round(2.5 * r.sr);
+  const steps: number[] = [];
+  for (let i = from + 1; i < r.wet.length; i += 64) steps.push(Math.abs(r.wet[i] - r.wet[i - 1]));
+  steps.sort((a, b) => a - b);
+  const med = steps[Math.floor(steps.length / 2)] || 1e-9;
+  const hist = new Array(10).fill(0);
+  const top: { d: number; s: number }[] = [];
+  for (let i = from + 1; i < r.wet.length; i++) {
+    const d = Math.abs(r.wet[i] - r.wet[i - 1]);
+    if (d > 8 * med) {
+      const s = Math.abs(r.mod[i]);
+      hist[Math.min(9, Math.floor(s * 10))]++;
+      top.push({ d, s: r.mod[i] });
+    }
+  }
+  top.sort((a, b) => b.d - a.d);
+  // a window around the biggest spike: wet + saw, every 4th sample, ±120 samples
+  let at = from + 1;
+  let best = 0;
+  for (let i = from + 1; i < r.wet.length; i++) {
+    const d = Math.abs(r.wet[i] - r.wet[i - 1]);
+    if (d > best) { best = d; at = i; }
+  }
+  const win: number[] = [];
+  for (let i = at - 120; i <= at + 120; i += 4) win.push(Math.round(r.wet[i] * 1000) / 1000, Math.round(r.mod[i] * 1000) / 1000);
+  return { hist, n: top.length, sawAtTop: top.slice(0, 12).map((t) => Math.round(t.s * 1000) / 1000), win, atSec: at / r.sr };
+};
+(globalThis as unknown as { fxlabModGrowth: (params: Record<string, number>, throwOn: boolean, seconds: number) => Promise<Record<string, number>> }).fxlabModGrowth = async (params, throwOn, seconds) => {
+  const r = await renderModAudit(params, { signal: "pink", seconds, throwOn });
+  const early = rmsOf(r.wet, Math.round(3 * r.sr), Math.round(6 * r.sr));
+  const late = rmsOf(r.wet, Math.round((seconds - 3) * r.sr), Math.round(seconds * r.sr));
+  return { growthDb: 20 * Math.log10(late / Math.max(1e-9, early)), earlyDb: 20 * Math.log10(early + 1e-9), lateDb: 20 * Math.log10(late + 1e-9), finite: r.finite ? 1 : 0 };
+};
+(globalThis as unknown as { fxlabModGesture: (params: Record<string, number>, param: string, to: number, midT?: number) => Promise<Record<string, number>> }).fxlabModGesture = async (params, param, to, midT = 2) => {
+  const r = await renderModAudit(params, { signal: "tone", seconds: 4, toneHz: 1000, toneAmp: 0.5, midT, mid: (d) => d.setParam(param, to) });
+  const step = maxStepRatio(r.out, Math.round(1.9 * r.sr), Math.round(2.4 * r.sr));
+  const stepWet = maxStepRatio(r.wet, Math.round(1.9 * r.sr), Math.round(2.4 * r.sr));
+  const stepLater = maxStepRatio(r.out, Math.round(2.6 * r.sr), Math.round(3.9 * r.sr));
+  return { step, stepWet, stepLater, finite: r.finite ? 1 : 0 };
+};
+// Repeat one gesture render N times back-to-back (the audit's own conditions: many contexts in
+// one page) and, for the worst one, dump the wet + out around the biggest step + the ctx times of
+// every reaper teardown ModFx performed during it.
+(globalThis as unknown as { fxlabModGestureRepeat: (params: Record<string, number>, param: string, to: number, n: number) => Promise<unknown> }).fxlabModGestureRepeat = async (params, param, to, n) => {
+  const steps: number[] = [];
+  let worst: { step: number; at: number; win: number[]; teardowns: number[]; retiredAtSwitch: number } | null = null;
+  for (let i = 0; i < n; i++) {
+    const teardowns: number[] = [];
+    let retiredAtSwitch = -1;
+    const r = await renderModAudit(params, {
+      signal: "tone", seconds: 4, toneHz: 1000, toneAmp: 0.5, midT: 2,
+      mid: (d) => {
+        retiredAtSwitch = (d as unknown as { retiredEngines: number }).retiredEngines;
+        if (param !== "__none") d.setParam(param, to);
+      },
+      after: (d) => { teardowns.push(...((d as unknown as { _teardownLog?: number[] })._teardownLog ?? [])); },
+    });
+    const from = Math.round(1.9 * r.sr), to2 = Math.round(2.4 * r.sr);
+    let best = 0, at = from;
+    for (let k = from + 1; k < to2; k++) { const dlt = Math.abs(r.out[k] - r.out[k - 1]); if (dlt > best) { best = dlt; at = k; } }
+    const step = maxStepRatio(r.out, from, to2);
+    steps.push(Math.round(step * 100) / 100);
+    if (!worst || step > worst.step) {
+      const win: number[] = [];
+      for (let k = at - 64; k <= at + 64; k += 4) win.push(Math.round(r.out[k] * 1000) / 1000, Math.round(r.wet[k] * 1000) / 1000);
+      const before = rmsOf(r.out, Math.round(1.5 * r.sr), Math.round(1.95 * r.sr));
+      const after1 = rmsOf(r.out, Math.round(2.05 * r.sr), Math.round(2.3 * r.sr));
+      const after2 = rmsOf(r.out, Math.round(3.0 * r.sr), Math.round(3.9 * r.sr));
+      const dryB = rmsOf(r.dry, Math.round(1.5 * r.sr), Math.round(1.95 * r.sr));
+      const dryA = rmsOf(r.dry, Math.round(2.05 * r.sr), Math.round(2.3 * r.sr));
+      worst = { step, at: at / r.sr, win, teardowns, retiredAtSwitch, before, after1, after2, dryB, dryA } as never;
+    }
+  }
+  return { steps, worst };
+};
+(globalThis as unknown as { fxlabModThru: (liveFirst?: boolean, warm?: number) => Promise<Record<string, number>> }).fxlabModThru = async (liveFirst = false, warm = 0) => {
+  if (liveFirst) await liveGestureStep({ mode: 1, stages: 6, mix: 0.5 }, { signal: "tone", seconds: 1, gestures: [] });
+  for (let i = 0; i < warm; i++) await renderModAudit({ mode: i % 4, stages: 6, mix: 0.5 }, { signal: "pink", seconds: 1 });
+  const corrMax = (r: ModRender) => {
+    const w = Math.round(0.01 * r.sr);
+    let best = 0;
+    for (let s0 = Math.round(1 * r.sr); s0 + w < r.wet.length; s0 += w >> 1) {
+      let sxy = 0, sxx = 0, syy = 0;
+      for (let i = s0; i < s0 + w; i++) { sxy += r.wet[i] * r.dry[i]; sxx += r.wet[i] * r.wet[i]; syy += r.dry[i] * r.dry[i]; }
+      const c = sxy / Math.sqrt(sxx * syy + 1e-18);
+      if (c > best) best = c;
+    }
+    return best;
+  };
+  let dt = -1, off = -1, mode = -1, thru = -1, builds = -1;
+  const reps: string[] = [];
+  const corrByTime = (r: ModRender) => {
+    const w = Math.round(0.01 * r.sr);
+    const buckets: number[] = [];
+    for (let b = 0; b < 16; b++) {
+      let best = 0;
+      for (let s0 = Math.round(b * 0.25 * r.sr); s0 + w < Math.round((b + 1) * 0.25 * r.sr); s0 += w >> 1) {
+        let sxy = 0, sxx = 0, syy = 0;
+        for (let i = s0; i < s0 + w; i++) { sxy += r.wet[i] * r.dry[i]; sxx += r.wet[i] * r.wet[i]; syy += r.dry[i] * r.dry[i]; }
+        best = Math.max(best, sxy / Math.sqrt(sxx * syy + 1e-18));
+      }
+      buckets.push(Math.round(best * 100) / 100);
+    }
+    return buckets;
+  };
+  for (let i = 0; i < 8; i++) {
+    let info = "";
+    const rr = await renderModAudit({ mode: 1, thru: 1, stages: 2, depth: 1, feedback: 0, mix: 1 }, { signal: "noise", seconds: 4, after: async (d) => {
+      const x = d as unknown as { dryDelay: DelayNode; _probeVoices: () => Promise<Record<string, number>[]>; retiredEngines: number };
+      const v = await x._probeVoices();
+      info = `dryDelay=${x.dryDelay.delayTime.value.toFixed(5)} retired=${x.retiredEngines} voices=${JSON.stringify(v.map((q) => ({ b: Math.round(q.base), d: Math.round(q.depth), dS: Math.round(q.depthS), hz: q.lfoHz, ph: q.phase, on: q.lfoOn, phi: Math.round((q.phi ?? 0) * 100) / 100, t: q.timeout })))}`;
+    } });
+    reps.push(`${corrMax(rr).toFixed(2)} [${corrByTime(rr).slice(0, 9).join(" ")}] ${info}`);
+  }
+  (globalThis as unknown as { __thruReps: string[] }).__thruReps = reps;
+  const rt = await renderModAudit({ mode: 1, thru: 1, stages: 2, depth: 1, feedback: 0, mix: 1 }, { signal: "noise", seconds: 4, after: (d) => {
+    const x = d as unknown as { dryDelay: DelayNode; dryOffsetSec: number; _buildCount: number };
+    dt = x.dryDelay.delayTime.value; off = x.dryOffsetSec; mode = d.getParam("mode"); thru = d.getParam("thru"); builds = x._buildCount;
+  } });
+  const rn = await renderModAudit({ mode: 1, thru: 0, stages: 2, depth: 1, feedback: 0, mix: 1 }, { signal: "noise", seconds: 4 });
+  return { thru: corrMax(rt), nothru: corrMax(rn), dryDelayValue: dt, dryOffsetSec: off, mode, thruParam: thru, builds, reps: reps as unknown as number };
+};
+// Bare Chromium test: a 1 kHz tone through ONE moddelay worklet (static 1-sample delay, no
+// device) in an OfflineAudioContext, suspend+resume at 2 s doing nothing — how big is the step?
+(globalThis as unknown as { fxlabSuspendQuirk: (n: number, withWorklet: boolean, settleMs: number) => Promise<number[]> }).fxlabSuspendQuirk = async (n, withWorklet, settleMs) => {
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const sr = 48000;
+    const ctx = new OfflineAudioContext(1, 4 * sr, sr);
+    const url = URL.createObjectURL(new Blob([MOD_DELAY_WORKLET_SRC], { type: "text/javascript" }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const o = ctx.createOscillator();
+    o.frequency.value = 1000;
+    let last: AudioNode = o;
+    if (withWorklet) {
+      const w = new AudioWorkletNode(ctx, "moddelay", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+      w.port.postMessage({ base: 1, depth: 0, fb: 0, lfoOn: 0 });
+      o.connect(w, 0, 0);
+      last = w;
+    }
+    last.connect(ctx.destination);
+    o.start(0);
+    void ctx.suspend(2).then(async () => {
+      if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
+      void ctx.resume();
+    });
+    const buf = await ctx.startRendering();
+    const x = buf.getChannelData(0);
+    out.push(Math.round(maxStepRatio(x, Math.round(1.9 * sr), Math.round(2.4 * sr)) * 100) / 100);
+  }
+  return out;
+};
+
+// ---- LIVE (real-time AudioContext) gesture renders ------------------------------------------
+// ★ Chromium drops/duplicates an AudioWorklet quantum across OfflineAudioContext.suspend()/resume()
+// — a bare passthrough worklet + a do-nothing suspend at 2 s reads a ×12.2 step 100% of the time
+// (fxlabSuspendQuirk), never without the worklet. So mid-render GESTURES on the worklet modes
+// (CHORUS/FLANGER) can't be measured offline at all. This runs the device on a real-time
+// AudioContext (headless Chromium's null sink still clocks it), fires gestures on the wall clock
+// exactly as the app does, and records the device output + the dry reference with a tiny recorder
+// worklet — the same ModRender shape, so every metric above applies unchanged.
+const REC_WORKLET_SRC = `
+class FxlabRec extends AudioWorkletProcessor {
+  constructor() { super(); this.a = []; this.b = []; this.start = -1; this.on = true;
+    this.port.onmessage = (e) => { if (e.data.stop) { this.on = false;
+      const n = this.a.length * 128; const A = new Float32Array(n), B = new Float32Array(n);
+      for (let i = 0; i < this.a.length; i++) { A.set(this.a[i], i * 128); B.set(this.b[i], i * 128); }
+      this.port.postMessage({ a: A, b: B, start: this.start }, [A.buffer, B.buffer]); } }; }
+  process(inputs) { if (!this.on) return false; if (this.start < 0) this.start = currentFrame;
+    const x = inputs[0] && inputs[0][0], y = inputs[1] && inputs[1][0];
+    this.a.push(x ? Float32Array.from(x) : new Float32Array(128)); this.b.push(y ? Float32Array.from(y) : new Float32Array(128)); return true; }
+}
+registerProcessor('fxlabrec', FxlabRec);`;
+let liveCtx: AudioContext | null = null;
+async function liveContext(): Promise<AudioContext> {
+  if (liveCtx) return liveCtx;
+  const ctx = new AudioContext();
+  for (const src of [MOD_DELAY_WORKLET_SRC, REC_WORKLET_SRC]) {
+    const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+  }
+  await ctx.resume();
+  liveCtx = ctx;
+  return ctx;
+}
+async function renderModLive(
+  params: Record<string, number>,
+  opts: { signal: "tone" | "pink"; seconds: number; toneHz?: number; toneAmp?: number; gestures: { t: number; fn: (dev: ModFx) => void }[]; throwOn?: boolean },
+): Promise<ModRender & { gestureT: number[] }> {
+  const ctx = await liveContext();
+  const sr = ctx.sampleRate;
+  const dev = new ModFx(ctx);
+  dev.reset();
+  for (const k in params) dev.setParam(k, params[k]);
+  (dev as unknown as { flushRebuild?: () => void }).flushRebuild?.();
+  if (opts.throwOn) (dev as unknown as { setThrow?: (on: boolean) => void }).setThrow?.(true);
+  const rec = new AudioWorkletNode(ctx, "fxlabrec", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+  const source = makeSignal(ctx as unknown as Ctx, opts.signal, sr, opts.toneHz ?? 1000, opts.toneAmp ?? 0.5);
+  if (source instanceof AudioBufferSourceNode) source.loop = true;
+  source.connect(dev.input);
+  dev.output.connect(rec, 0, 0);
+  source.connect(rec, 0, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  rec.connect(sink).connect(ctx.destination);
+  const t0 = ctx.currentTime + 0.05;
+  source.start(t0);
+  const gestureT: number[] = [];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const timeline = [...opts.gestures].sort((a, b) => a.t - b.t);
+  let elapsed = 0;
+  for (const g of timeline) {
+    await sleep(Math.max(0, (g.t - elapsed) * 1000));
+    elapsed = g.t;
+    gestureT.push(ctx.currentTime - t0);
+    g.fn(dev);
+  }
+  await sleep(Math.max(0, (opts.seconds - elapsed) * 1000));
+  const rendered = await new Promise<{ a: Float32Array; b: Float32Array; start: number }>((resolve) => {
+    rec.port.onmessage = (e) => resolve(e.data);
+    rec.port.postMessage({ stop: true });
+  });
+  try {
+    source.stop();
+  } catch {
+    /* already */
+  }
+  source.disconnect();
+  dev.dispose();
+  rec.disconnect();
+  // trim to t0-relative frames
+  const startOff = Math.max(0, Math.round(t0 * sr) - rendered.start);
+  const out = rendered.a.subarray(startOff);
+  const dryRaw = rendered.b.subarray(startOff);
+  const dryGain = (dev as unknown as { dryLevel?: number }).dryLevel ?? 1;
+  const offS = ((dev as unknown as { dryOffsetSec?: number }).dryOffsetSec ?? 0) * sr;
+  const dry = new Float32Array(out.length);
+  for (let i = 0; i < out.length; i++) {
+    const p = i - offS;
+    const j = Math.floor(p);
+    const f = p - j;
+    dry[i] = j >= 0 && j + 1 < dryRaw.length ? dryRaw[j] * (1 - f) + dryRaw[j + 1] * f : 0;
+  }
+  const wet = new Float32Array(out.length);
+  let finite = true;
+  for (let i = 0; i < out.length; i++) {
+    wet[i] = out[i] - dryGain * dry[i];
+    if (!Number.isFinite(out[i])) finite = false;
+  }
+  return { sr, out, dry, mod: new Float32Array(0), phase: new Float32Array(0), wet, finite, gestureT };
+}
+async function liveGestureStep(params: Record<string, number>, opts: Parameters<typeof renderModLive>[1]): Promise<{ step: number; r: ModRender & { gestureT: number[] } }> {
+  const r = await renderModLive(params, opts);
+  let step = 0;
+  for (const t of r.gestureT) step = Math.max(step, maxStepRatio(r.out, Math.round((t - 0.1) * r.sr), Math.round((t + 0.4) * r.sr)));
+  return { step, r };
+}
+(globalThis as unknown as { fxlabModLiveGesture: (params: Record<string, number>, param: string, to: number, n: number) => Promise<number[]> }).fxlabModLiveGesture = async (params, param, to, n) => {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const { step } = await liveGestureStep(params, { signal: "tone", seconds: 3, gestures: [{ t: 1.5, fn: (d) => { if (param !== "__none") d.setParam(param, to); } }] });
+    out.push(Math.round(step * 100) / 100);
+  }
+  return out;
 };

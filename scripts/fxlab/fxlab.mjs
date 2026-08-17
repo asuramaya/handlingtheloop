@@ -10,6 +10,9 @@
 //   node scripts/fxlab/fxlab.mjs --kind delay --params '{"feedback":0.62,"time":0.5,"mix":0.3}'
 //   node scripts/fxlab/fxlab.mjs --kind reverb --preset "Big Hall" --signal impulse
 //   node scripts/fxlab/fxlab.mjs --sweep-feedback           # feedback 0.2..0.9 loop-gain table (delay)
+//   node scripts/fxlab/fxlab.mjs --churn                     # rapid real-time param-drag stress test (MOD)
+//   node scripts/fxlab/fxlab.mjs --mod-voice-sweep            # STAGES 2..12 peak/clip table (MOD chorus+flanger)
+//   node scripts/fxlab/fxlab.mjs --mod-audit                  # the 2026-08 MOD review, one number + pass line per finding
 //
 // Flags: --kind --preset --params(json) --signal(impulse|burst|noise|tone|silence)
 //        --seconds --bpm --json (raw JSON only) --sweep-feedback
@@ -40,6 +43,17 @@ function parseArgs(argv) {
       case "--bpm": a.bpm = Number(v); i++; break;
       case "--json": a.json = true; break;
       case "--sweep-feedback": a.sweepFeedback = true; break;
+      case "--churn": a.churn = true; break;
+      case "--mod-voice-sweep": a.modVoiceSweep = true; break;
+      case "--mod-audit": a.modAudit = true; break;
+      case "--mod-probe": a.modProbe = JSON.parse(v); i++; break;
+      case "--mod-spikes": a.modSpikes = JSON.parse(v); i++; break;
+      case "--mod-growth": a.modGrowth = JSON.parse(v); i++; break;
+      case "--mod-gesture": a.modGesture = JSON.parse(v); i++; break; // {"params":{...},"param":"rate","to":0.8}
+      case "--mod-gesture-repeat": a.modGestureRepeat = JSON.parse(v); i++; break;
+      case "--mod-thru": a.modThru = true; break;
+      case "--suspend-quirk": a.suspendQuirk = true; break;
+      case "--mod-live-gesture": a.modLiveGesture = JSON.parse(v); i++; break;
       case "--throw": a.throwPreset = v; i++; break;
       case "--throw-at": a.throwAt = Number(v); i++; break;
       case "--throw-off": a.throwOff = Number(v); i++; break;
@@ -243,6 +257,132 @@ async function main() {
         );
       }
       console.log("");
+      return;
+    }
+
+    if (args.churn) {
+      // Rapid real-time parameter drags — the class of bug a static render can never show, since
+      // it only ever builds a device once. See harness.ts's fxlabChurn for what it drives.
+      console.log("\n  FXLAB · churn (MOD) — real-time STAGES drag across all 4 modes + a BARBER depth/source/feedback probe\n");
+      const r = await page.evaluate(() => globalThis.fxlabChurn());
+      if (r.ok) console.log(`  ✓ survived ${r.steps} rapid param changes, context still running (${r.finalState})\n`);
+      else console.log(`  ✗ CRASHED after ${r.steps} param changes — context ended up "${r.finalState}"${r.error ? `: ${r.error}` : ""}\n`);
+      process.exitCode = r.ok ? 0 : 1;
+      return;
+    }
+
+    if (args.modLiveGesture) {
+      const g = args.modLiveGesture;
+      const r = await page.evaluate((g) => globalThis.fxlabModLiveGesture(g.params, g.param, g.to, g.n || 4), g);
+      console.log(`   live steps: ${r.join("  ")}`);
+      return;
+    }
+
+    if (args.suspendQuirk) {
+      for (const [w, settle] of [[false, 0], [true, 0], [true, 40]]) {
+        const r = await page.evaluate(({ w, settle }) => globalThis.fxlabSuspendQuirk(10, w, settle), { w, settle });
+        console.log(`   worklet=${w} settle=${settle}ms: steps ${r.join("  ")}`);
+      }
+      return;
+    }
+
+    if (args.modThru) {
+      const r = await page.evaluate(() => globalThis.fxlabModThru(false));
+      console.log(`   thru corr ${f(r.thru, 3)}   nothru corr ${f(r.nothru, 3)}`);
+      const r2 = await page.evaluate(() => globalThis.fxlabModThru(true, 40));
+      console.log(`   after a live render + 40 offline renders: thru corr ${f(r2.thru, 3)}   nothru corr ${f(r2.nothru, 3)}   dryDelay=${r2.dryDelayValue} off=${r2.dryOffsetSec} mode=${r2.mode} thru=${r2.thruParam} builds=${r2.builds}`);
+      console.log(`   reps (max corr [per 0.25 s bucket]):\n   ${r.reps.join("\n   ")}`);
+      console.log(`   (first run: dryDelay=${r.dryDelayValue} off=${r.dryOffsetSec} mode=${r.mode} thru=${r.thruParam} builds=${r.builds})`);
+      return;
+    }
+
+    if (args.modGestureRepeat) {
+      const g = args.modGestureRepeat;
+      const r = await page.evaluate((g) => globalThis.fxlabModGestureRepeat(g.params, g.param, g.to, g.n || 6), g);
+      console.log(`   steps: ${r.steps.join("  ")}`);
+      if (r.worst) {
+        console.log(`   worst ×${r.worst.step.toFixed(2)} at ${r.worst.at.toFixed(4)}s; retired engines at switch: ${r.worst.retiredAtSwitch}; teardowns at ctx t: ${r.worst.teardowns.map((t) => t.toFixed(3)).join(", ") || "(none logged)"}`);
+        const pairs = [];
+        for (let i = 0; i < r.worst.win.length; i += 2) pairs.push(`${r.worst.win[i]}/${r.worst.win[i + 1]}`);
+        console.log("   out/wet every 4 samples ±64: " + pairs.join("  "));
+        console.log(`   out rms before ${f(r.worst.before,3)} / after(50-300ms) ${f(r.worst.after1,3)} / after(1-1.9s) ${f(r.worst.after2,3)}   dry ref before ${f(r.worst.dryB,3)} after ${f(r.worst.dryA,3)}`);
+      }
+      return;
+    }
+
+    if (args.modGesture) {
+      const r = await page.evaluate((g) => globalThis.fxlabModGesture(g.params, g.param, g.to, g.midT), args.modGesture);
+      for (const k in r) console.log(`   ${k.padEnd(12)} ${f(r[k], 2)}`);
+      return;
+    }
+
+    if (args.modGrowth) {
+      const r = await page.evaluate(({ p, t, sec }) => globalThis.fxlabModGrowth(p, t, sec), { p: args.modGrowth, t: !!args.padThrow, sec: args.seconds });
+      for (const k in r) console.log(`   ${k.padEnd(12)} ${f(r[k], 2)}`);
+      return;
+    }
+
+    if (args.modSpikes) {
+      const r = await page.evaluate((p) => globalThis.fxlabModSpikes(p), args.modSpikes);
+      console.log(`   spikes: ${r.n}   |saw| histogram (0.0‥1.0 in tenths): ${r.hist.join(" ")}`);
+      console.log(`   saw value at the 12 biggest: ${r.sawAtTop.join(", ")}`);
+      console.log(`   biggest spike at ${r.atSec.toFixed(4)}s — (wet, saw) every 4 samples, ±120:`);
+      const pairs = [];
+      for (let i = 0; i < r.win.length; i += 2) pairs.push(`${r.win[i]}/${r.win[i + 1]}`);
+      console.log("   " + pairs.join("  "));
+      return;
+    }
+
+    if (args.modProbe) {
+      const r = await page.evaluate(({ p, sig, sec }) => globalThis.fxlabModProbe(p, sig, sec), { p: args.modProbe, sig: args.signal === "tone" || args.signal === "pink" ? args.signal : "noise", sec: args.seconds });
+      for (const k in r) console.log(`   ${k.padEnd(20)} ${f(r[k], 2)}`);
+      return;
+    }
+
+    if (args.modAudit) {
+      // The MOD review's findings as a before/after table — see harness.ts fxlabModAudit for what
+      // each number measures. Wet is recovered as out − dryGain·dry so the wet path is inspected
+      // on its own; every render is also scanned for non-finite samples.
+      console.log("\n  FXLAB · MOD audit — one measurement per review finding\n");
+      const r = await page.evaluate(() => globalThis.fxlabModAudit());
+      const w = Math.max(...r.checks.map((c) => c.name.length));
+      for (const c of r.checks) {
+        console.log(`   ${c.pass ? "✓" : "✗"} ${c.name.padEnd(w)}  ${String(c.value).padStart(8)} ${c.unit.padEnd(14)}  ${c.detail}`);
+      }
+      console.log(`\n  ${r.ok ? "ALL PASS" : `${r.checks.filter((c) => !c.pass).length} FAILING`}\n`);
+      process.exitCode = r.ok ? 0 : 1;
+      return;
+    }
+
+    if (args.modVoiceSweep) {
+      // A REAL regression test for the "DSP breaks at high voice count" bug: CHORUS/FLANGER's
+      // multi-voice sum used to connect every voice directly into the tone filter with NO
+      // normalization — fine at STAGES=2, but at STAGES=12 up to 12 correlated voices could sum
+      // to ~12× amplitude and hard-clip (BaseFxDevice's `wet` has no limiter downstream). Unlike
+      // --churn (which needs REAL wall-clock timing to reproduce and this harness's headless
+      // audio backend can't), THIS one a static render genuinely catches: peak amplitude is a
+      // property of the rendered PCM, not of live thread-scheduling pressure. Sweeps STAGES
+      // 2..12 at depth=1/feedback=1 (worst case) for both CHORUS and FLANGER, at each MIX the
+      // rack actually exposes: the device's own 0.5 default, and 1.0 (full wet, the ceiling).
+      console.log("\n  FXLAB · MOD voice-count sweep — peak amplitude vs. STAGES, worst-case depth/feedback\n");
+      for (const mode of [0, 1]) {
+        const modeName = mode === 0 ? "CHORUS" : "FLANGER";
+        for (const mix of [0.5, 1.0]) {
+          console.log(`  ${modeName} · mix=${mix}`);
+          console.log("   stages   peak    peakDb   clipped");
+          for (const stages of [2, 4, 6, 8, 10, 12]) {
+            const r = await renderOne(page, {
+              kind: "mod",
+              signal: "noise",
+              seconds: 3,
+              params: { mode, stages, depth: 1, feedback: 1, mix },
+            });
+            const flag = r.clipped ? "  ⚠ CLIPPED" : "";
+            console.log(`   ${String(stages).padStart(6)}   ${f(r.peak, 3).padStart(5)}   ${f(r.peakDb, 1).padStart(6)}   ${r.clipped ? "yes" : "no"}${flag}`);
+          }
+          console.log("");
+        }
+      }
       return;
     }
 

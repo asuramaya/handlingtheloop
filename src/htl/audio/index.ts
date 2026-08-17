@@ -9,7 +9,7 @@ export { DelayFx, DELAY_MAX_SECONDS } from "./DelayFx";
 export { ReverbFx, REVERB_STYLES } from "./ReverbFx";
 export { SaturatorFx, SAT_STYLES, type SatStyle } from "./SaturatorFx";
 export { CrushFx, CRUSH_MODES, type CrushMode } from "./CrushFx";
-export { ModFx, MOD_MODES, MOD_WAVES, MOD_SOURCES } from "./ModFx";
+export { ModFx, MOD_MODES, MOD_WAVES, MOD_SOURCES, BARBER_RAMPS, modLfoShape, barberRampShape } from "./ModFx";
 export { GateFx, GATE_SHAPES, type GateShape } from "./GateFx";
 export { NoiseFx, NOISE_TYPES, type NoiseType } from "./NoiseFx";
 export { CompFx, COMP_MODES, COMP_SC_SOURCES, makeMasterLimiter, type CompMode } from "./CompFx";

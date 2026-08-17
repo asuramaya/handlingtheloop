@@ -21,6 +21,7 @@ import { REVERB_WORKLET_SRC } from "../../src/htl/audio/reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "../../src/htl/audio/crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "../../src/htl/audio/modDelayWorklet";
 import { COMP_WORKLET_SRC } from "../../src/htl/audio/compWorklet";
+import { TAPE_WORKLET_SRC } from "../../src/htl/audio/tapeWorklet";
 import { factoryFxPresets } from "../../src/htl/audio/fxPresets";
 import type { FxDevice, FxKind } from "../../src/htl/audio/Fx";
 
@@ -406,12 +407,13 @@ export interface Coverage {
   const len = Math.round(seconds * sr);
   const ctx = new OfflineAudioContext(2, len, sr);
 
-  // Register the worklet modules used by reverb/crush/mod (best-effort; native devices skip these).
+  // Register the worklet modules used by reverb/crush/mod/comp/saturator-TAPE.
   const modules: [string, string][] = [
     ["reverbfdn", REVERB_WORKLET_SRC],
     ["crush", CRUSH_WORKLET_SRC],
     ["moddelay", MOD_DELAY_WORKLET_SRC],
     ["comp", COMP_WORKLET_SRC],
+    ["tape", TAPE_WORKLET_SRC],
   ];
   const moduleErrors: string[] = [];
   for (const [name, src] of modules) {
@@ -427,7 +429,11 @@ export interface Coverage {
   // in their constructors and degrade to a native path with a console.warn — which means a harness
   // that swallows the addModule failure will confidently report the FALLBACK's numbers as the real
   // DSP. That is worse than no measurement, so it's a hard error here.
-  const WORKLET_KINDS: Record<string, boolean> = { reverb: true, crush: true, mod: true, comp: true };
+  // ★ saturator BELONGS here: its TAPE style is a worklet, and 'tape' was missing from the module
+  // list entirely — so every TAPE measurement fxlab has ever printed was the NATIVE FALLBACK
+  // curve (SaturatorFx warns and degrades), reported as if it were the real DSP. Precisely the
+  // failure this guard exists to stop, walked past because the kind wasn't on the list.
+  const WORKLET_KINDS: Record<string, boolean> = { reverb: true, crush: true, mod: true, comp: true, saturator: true };
   if (WORKLET_KINDS[kind] && moduleErrors.length) {
     throw new Error(`fxlab: worklet module(s) failed to load — a ${kind} render would silently be its native fallback, not the real DSP. ${moduleErrors.join("; ")}`);
   }
@@ -1293,15 +1299,283 @@ let liveCtx: AudioContext | null = null;
 async function liveContext(): Promise<AudioContext> {
   if (liveCtx) return liveCtx;
   const ctx = new AudioContext();
-  for (const src of [MOD_DELAY_WORKLET_SRC, REC_WORKLET_SRC]) {
+  // EVERY worklet the rack owns, not just MOD's: the suspend quirk is a property of the offline
+  // context, so reverb / crush / comp / the saturator's TAPE style are all equally unmeasurable
+  // there and all need this same live path.
+  for (const src of [MOD_DELAY_WORKLET_SRC, REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, COMP_WORKLET_SRC, TAPE_WORKLET_SRC, REC_WORKLET_SRC]) {
     const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-    await ctx.audioWorklet.addModule(url);
+    await ctx.audioWorklet.addModule(url); // no try/catch on purpose: a missing module here means
+    // the device under test silently becomes its native fallback, which is worse than no number
     URL.revokeObjectURL(url);
   }
   await ctx.resume();
   liveCtx = ctx;
   return ctx;
 }
+
+// ---- GENERIC live gesture render (any device) ------------------------------------------------
+// The MOD-specific renderModLive below keeps its dry-reference arithmetic (thru-zero needs a
+// fractionally-delayed dry); this one is the plain version every other device wants: run the real
+// device on the wall clock, poke it exactly as a pointer would, and score the OUTPUT for a splice.
+//
+// ★ A DRAG IS NOT A SET. `ms` turns a gesture into a ~60 Hz stream of setParam calls from `from`
+// to `to` — which is what a finger on a knob actually emits, and it is a different experiment: a
+// device can be click-free on a single jump and still splice on every frame of a drag (that is
+// exactly how MOD's DEPTH bug read: x12‥16 the median step, one splice per frame).
+export interface LiveGesture {
+  t: number; // seconds from render start
+  param: string; // "__none" = fire nothing (the control: proves the RIG is quiet)
+  to: number;
+  from?: number; // set (with ms) to sweep instead of jump
+  ms?: number; // drag duration; omit for an instant set
+}
+interface LiveRender {
+  sr: number;
+  out: Float32Array;
+  finite: boolean;
+  windows: [number, number][]; // one measurement window per gesture, in SECONDS from start
+}
+async function renderLive(
+  kind: FxKind,
+  params: Record<string, number>,
+  opts: { signal: "tone" | "pink" | "noise"; seconds: number; toneHz?: number; toneAmp?: number; gestures: LiveGesture[]; startBypassed?: boolean },
+): Promise<LiveRender> {
+  const ctx = await liveContext();
+  const sr = ctx.sampleRate;
+  const dev = buildDevice(ctx as unknown as Ctx, kind);
+  dev.reset();
+  for (const k in params) dev.setParam(k, params[k]);
+  dev.setBypass(!!opts.startBypassed, true);
+  (dev as unknown as { flushRebuild?: () => void }).flushRebuild?.();
+  const rec = new AudioWorkletNode(ctx, "fxlabrec", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+  const source = makeSignal(ctx as unknown as Ctx, opts.signal, sr, opts.toneHz ?? 1000, opts.toneAmp ?? 0.5);
+  if (source instanceof AudioBufferSourceNode) source.loop = true;
+  source.connect(dev.input);
+  dev.output.connect(rec, 0, 0);
+  source.connect(rec, 0, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0;
+  rec.connect(sink).connect(ctx.destination);
+  const t0 = ctx.currentTime + 0.05;
+  source.start(t0);
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const windows: [number, number][] = [];
+  let elapsed = 0;
+  for (const g of [...opts.gestures].sort((a, b) => a.t - b.t)) {
+    await sleep(Math.max(0, (g.t - elapsed) * 1000));
+    const started = ctx.currentTime - t0;
+    if (g.param === "__none") {
+      // nothing — the control run
+    } else if (g.ms && g.from != null) {
+      const frames = Math.max(1, Math.round(g.ms / 16));
+      for (let i = 1; i <= frames; i++) {
+        dev.setParam(g.param, g.from + ((g.to - g.from) * i) / frames);
+        await sleep(16);
+      }
+    } else {
+      dev.setParam(g.param, g.to);
+    }
+    const ended = ctx.currentTime - t0;
+    elapsed = g.t + Math.max(0, ended - started);
+    windows.push([started - 0.05, ended + 0.35]); // the gesture, plus the tail a splice rings into
+  }
+  await sleep(Math.max(0, (opts.seconds - elapsed) * 1000));
+  const rendered = await new Promise<{ a: Float32Array; b: Float32Array; start: number }>((resolve) => {
+    rec.port.onmessage = (e) => resolve(e.data);
+    rec.port.postMessage({ stop: true });
+  });
+  try {
+    source.stop();
+  } catch {
+    /* already stopped */
+  }
+  source.disconnect();
+  dev.dispose?.();
+  rec.disconnect();
+  const startOff = Math.max(0, Math.round(t0 * sr) - rendered.start);
+  const out = rendered.a.subarray(startOff);
+  let finite = true;
+  for (let i = 0; i < out.length; i++) if (!Number.isFinite(out[i])) finite = false;
+  return { sr, out, finite, windows };
+}
+
+// One run → the worst step ratio around each gesture. A device that is genuinely click-free reads
+// ~1‥3 here (the median-step normaliser makes ~1 the floor for any material).
+(globalThis as unknown as { fxlabLiveGesture: (spec: LiveGestureSpec) => Promise<LiveGestureResult> }).fxlabLiveGesture = async (spec) => {
+  const runs: number[][] = [];
+  let finite = true;
+  let quiet = 0;
+  for (let i = 0; i < (spec.n || 3); i++) {
+    const r = await renderLive(spec.kind, spec.params || {}, {
+      signal: spec.signal || "tone",
+      seconds: spec.seconds || 3,
+      toneHz: spec.toneHz,
+      toneAmp: spec.toneAmp,
+      gestures: spec.gestures,
+      startBypassed: spec.startBypassed,
+    });
+    if (!r.finite) finite = false;
+    quiet = Math.max(quiet, peakOf(r.out));
+    runs.push(r.windows.map((w) => Math.round(maxStepRatio(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr)) * 100) / 100));
+  }
+  // WORST across runs, per gesture: unlike the offline path there is no quirk to filter out, so a
+  // spike here is the device's own — taking the minimum would be hiding it.
+  const worst = spec.gestures.map((_, i) => Math.max(...runs.map((r) => r[i] ?? 0)));
+  return { runs, worst, finite, peak: Math.round(quiet * 1000) / 1000 };
+};
+export interface LiveGestureSpec {
+  kind: FxKind;
+  params?: Record<string, number>;
+  gestures: LiveGesture[];
+  signal?: "tone" | "pink" | "noise";
+  seconds?: number;
+  toneHz?: number;
+  toneAmp?: number;
+  startBypassed?: boolean;
+  n?: number;
+}
+export interface LiveGestureResult {
+  runs: number[][];
+  worst: number[];
+  finite: boolean;
+  peak: number;
+}
+
+// ---- THE LIVE AUDIT ---------------------------------------------------------------------------
+// Every worklet-bearing device's splice-prone gestures, re-measured on the real-time path. The
+// offline verdicts these replace were not wrong so much as MEANINGLESS: the suspend quirk injects
+// a ×12 step into any worklet graph 100% of the time, so a device could only ever look guilty,
+// and "no click" was never something the offline path could have told us.
+//
+// Gestures are batched per device — 1.2 s apart in ONE render, each with its own window — because
+// this path costs WALL-CLOCK seconds, not CPU. State is cumulative and ordered on purpose (a
+// style switch out is measured right after the switch in: the teardown is the other half of the
+// experiment, and it's the half that holds a node the signal is still running through).
+const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>; gestures: (LiveGesture & { what: string })[] }[] = [
+  {
+    kind: "reverb",
+    label: "REVERB",
+    params: { mix: 0.5, size: 0.5, decay: 0.6 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "SIZE drag .2→.9", t: 2.2, param: "size", from: 0.2, to: 0.9, ms: 300 },
+      { what: "DECAY drag .2→.95", t: 3.6, param: "decay", from: 0.2, to: 0.95, ms: 300 },
+      { what: "STYLE Hall→Plate", t: 5.0, param: "style", to: 2 },
+      { what: "FREEZE on", t: 6.2, param: "freeze", to: 1 },
+      { what: "FREEZE off", t: 7.4, param: "freeze", to: 0 },
+    ],
+  },
+  {
+    kind: "crush",
+    label: "CRUSH",
+    params: { mix: 1, bits: 0.7, rate: 0.7 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "BITS drag .9→.1", t: 2.2, param: "bits", from: 0.9, to: 0.1, ms: 300 },
+      { what: "RATE drag .9→.15", t: 3.6, param: "rate", from: 0.9, to: 0.15, ms: 300 },
+      { what: "MODE switch", t: 5.0, param: "mode", to: 1 },
+      { what: "CUT sweep", t: 6.2, param: "cut", from: 1, to: 0.2, ms: 300 },
+    ],
+  },
+  {
+    kind: "comp",
+    label: "COMP",
+    params: { mix: 1, threshold: 0.4, ratio: 0.5 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "MODE GLUE→LIMIT", t: 2.2, param: "mode", to: 3 },
+      { what: "MODE LIMIT→GLUE", t: 3.4, param: "mode", to: 0 },
+      { what: "LOOKAHEAD change", t: 4.6, param: "lookahead", from: 0, to: 1, ms: 200 },
+      { what: "ATTACK drag", t: 5.8, param: "attack", from: 0.9, to: 0.05, ms: 300 },
+      { what: "RATIO drag", t: 7.0, param: "ratio", from: 0.1, to: 0.95, ms: 300 },
+    ],
+  },
+  {
+    kind: "saturator",
+    label: "SAT",
+    params: { mix: 1, drive0: 0.5, drive1: 0.5, drive2: 0.5 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "STYLE TUBE→TAPE (worklet in)", t: 2.2, param: "style0", to: 1 },
+      { what: "STYLE TAPE→CLIP (worklet out)", t: 3.4, param: "style0", to: 2 },
+      { what: "DRIVE drag", t: 4.6, param: "drive0", from: 0.1, to: 0.95, ms: 300 },
+      { what: "XOVER drag", t: 6.0, param: "xover0", from: 0.2, to: 0.8, ms: 300 },
+    ],
+  },
+  {
+    kind: "gate",
+    label: "GATE",
+    params: { mix: 1, depth: 0.85 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "RATE drag", t: 2.2, param: "rate", from: 0.1, to: 0.8, ms: 300 },
+      { what: "SHAPE switch", t: 3.4, param: "shape", to: 2 },
+      { what: "DEPTH drag", t: 4.6, param: "depth", from: 0.1, to: 1, ms: 300 },
+      { what: "SYNC toggle", t: 6.0, param: "sync", to: 0 },
+    ],
+  },
+  {
+    kind: "delay",
+    label: "DELAY",
+    params: { mix: 0.5, feedback: 0.4 },
+    gestures: [
+      { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
+      { what: "TIME drag (tape splice)", t: 2.2, param: "time", from: 0.2, to: 0.7, ms: 300 },
+      { what: "FEEDBACK drag", t: 3.6, param: "feedback", from: 0.1, to: 0.85, ms: 300 },
+    ],
+  },
+];
+// ★ THE VERDICT IS RELATIVE TO THE DEVICE SITTING STILL, NOT AN ABSOLUTE.
+// A raw step ratio measures the MATERIAL, and some devices legitimately produce steps as their
+// whole function: GATE chops the signal (its control run reads ×21 with nobody touching it), a
+// crusher quantises, a saturator squares off corners. Judging those against a fixed limit convicts
+// the effect of being the effect — the same "a green measurement is not a green feature" trap
+// fxlab already carries a warning about, running in its other direction.
+// So every device's gesture list OPENS with a `__none` control run, and a gesture passes if it is
+// no worse than max(4, control × 1.6). A device whose control is already high can only ever be
+// cleared of making things WORSE — and that is the honest limit of what this metric can say
+// about it, which is a thing the report has to admit rather than paper over.
+const LIVE_STEP_LIMIT = 4;
+const LIVE_CONTROL_SLACK = 1.6;
+(globalThis as unknown as { fxlabLiveAudit: (n?: number) => Promise<ModAuditResult> }).fxlabLiveAudit = async (n = 3) => {
+  const checks: ModAuditCheck[] = [];
+  for (const d of LIVE_AUDIT) {
+    const runs: number[][] = [];
+    let finite = true;
+    for (let i = 0; i < n; i++) {
+      const r = await renderLive(d.kind, d.params || {}, {
+        signal: "tone",
+        seconds: Math.max(...d.gestures.map((g) => g.t)) + 1.5,
+        toneAmp: 0.5,
+        gestures: d.gestures,
+      });
+      if (!r.finite) finite = false;
+      runs.push(r.windows.map((w) => maxStepRatio(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
+    }
+    // Gesture 0 is the control by construction (see LIVE_AUDIT) — the device's own step floor.
+    const control = Math.max(...runs.map((r) => r[0] ?? 0));
+    const limit = Math.max(LIVE_STEP_LIMIT, control * LIVE_CONTROL_SLACK);
+    d.gestures.forEach((g, i) => {
+      const worst = Math.max(...runs.map((r) => r[i] ?? 0));
+      const isControl = g.param === "__none";
+      checks.push({
+        name: `${d.label} ${g.what}`,
+        value: Math.round(worst * 100) / 100,
+        unit: "×median step",
+        // The control run can't fail — it IS the floor. What it can do is be loud enough that this
+        // device's verdicts are only ever "no worse than idle", which the detail says out loud.
+        pass: isControl || worst <= limit,
+        detail: isControl
+          ? control > LIVE_STEP_LIMIT
+            ? `device's OWN step floor — it chops/quantises by design, so its gestures are only judged against ${limit.toFixed(1)}, never absolutely`
+            : `idle floor; gestures judged against ${limit.toFixed(1)}`
+          : `${(worst / Math.max(1e-9, control)).toFixed(1)}× idle · worst of ${n} live runs: ${runs.map((r) => (r[i] ?? 0).toFixed(1)).join(" ")}`,
+      });
+    });
+    checks.push({ name: `${d.label} output finite`, value: finite ? 1 : 0, unit: "bool", pass: finite, detail: "no NaN/Inf reached the output" });
+  }
+  return { ok: checks.every((c) => c.pass), checks };
+};
 async function renderModLive(
   params: Record<string, number>,
   opts: { signal: "tone" | "pink"; seconds: number; toneHz?: number; toneAmp?: number; gestures: { t: number; fn: (dev: ModFx) => void }[]; throwOn?: boolean },

@@ -54,6 +54,9 @@ function parseArgs(argv) {
       case "--mod-thru": a.modThru = true; break;
       case "--suspend-quirk": a.suspendQuirk = true; break;
       case "--mod-live-gesture": a.modLiveGesture = JSON.parse(v); i++; break;
+      // {"kind":"reverb","params":{...},"gestures":[{"t":1.5,"param":"size","from":0.2,"to":0.9,"ms":300}],"n":3}
+      case "--live-gesture": a.liveGesture = JSON.parse(v); i++; break;
+      case "--live-audit": a.liveAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
       case "--throw-at": a.throwAt = Number(v); i++; break;
       case "--throw-off": a.throwOff = Number(v); i++; break;
@@ -275,6 +278,39 @@ async function main() {
       const g = args.modLiveGesture;
       const r = await page.evaluate((g) => globalThis.fxlabModLiveGesture(g.params, g.param, g.to, g.n || 4), g);
       console.log(`   live steps: ${r.join("  ")}`);
+      return;
+    }
+
+    if (args.liveGesture) {
+      const g = args.liveGesture;
+      const r = await page.evaluate((g) => globalThis.fxlabLiveGesture(g), g);
+      g.gestures.forEach((ges, i) => {
+        const label = ges.param === "__none" ? "control" : `${ges.param}${ges.ms ? ` drag→${ges.to}` : ` →${ges.to}`}`;
+        console.log(`   ${label.padEnd(28)} worst ×${f(r.worst[i], 2).padStart(6)}   runs ${r.runs.map((x) => f(x[i], 1)).join(" ")}`);
+      });
+      console.log(`   finite=${r.finite}  peak=${f(r.peak, 3)}`);
+      return;
+    }
+
+    if (args.liveAudit) {
+      // ★ Every step metric here is measured on a REAL-TIME AudioContext, which is why it takes
+      // wall-clock minutes. The offline path cannot answer this question for a worklet device at
+      // all: OfflineAudioContext.suspend() injects a ×12 step into ANY worklet graph (see
+      // --suspend-quirk), so those verdicts measured Chromium, not the DSP.
+      console.log("\n  FXLAB · live gesture audit — every worklet device's splice-prone gestures, on the wall clock\n");
+      const r = await page.evaluate(() => globalThis.fxlabLiveAudit(3));
+      let dev = "";
+      for (const c of r.checks) {
+        const d = c.name.split(" ")[0];
+        if (d !== dev) {
+          dev = d;
+          console.log("");
+        }
+        console.log(`   ${c.pass ? "✓" : "✗"} ${c.name.padEnd(40)} ${f(c.value, 2).padStart(7)} ${c.unit.padEnd(14)} ${c.detail}`);
+      }
+      const bad = r.checks.filter((c) => !c.pass);
+      console.log(`\n  ${r.checks.length - bad.length}/${r.checks.length} pass${bad.length ? ` — ${bad.length} to look at:\n   ${bad.map((c) => c.name).join("\n   ")}` : ""}\n`);
+      process.exitCode = r.ok ? 0 : 1;
       return;
     }
 

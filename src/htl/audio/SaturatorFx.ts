@@ -8,16 +8,20 @@
 //
 //   input ─┬─→ dry·(1−mix) ─────────────────────────────────────────────────────→ output
 //          └─→ [LR4 split + allpass phase-comp] → band i: drive+bias → shaper|worklet → dcBlock
-//                                                    → voicing[i] → gain[i] ─┐
-//                                                                   sum → tone → out → wet
+//                                                    → voicing[i] → makeup[i] → out[i] ─┐
+//                                                                                  sum → wet
 //
-// Each band carries its OWN style/bias/punish — "multiband" used to mean only DRIVE varied per
-// band while the character (which curve, biased how, how hot) was one shared setting for the
-// whole device; TUBE-lows-with-DIODE-highs on the SAME saturator is the actual Saturn-style
-// promise multiband saturation is supposed to deliver, so style/bias/punish moved from
-// device-wide to per-band. PUNISH itself stays a per-band toggle (a "hit the hot zone" gesture,
-// same precedent as FREEZE elsewhere in the rack); HEAT is the new device-wide continuous knob
-// that sets how hot punish actually pushes, once a band engages it.
+// Each band carries its OWN style/bias/punish/heat/out — "multiband" used to mean only DRIVE
+// varied per band while the character (which curve, biased how, how hot, how loud in the mix)
+// was one shared setting for the whole device; TUBE-lows-with-DIODE-highs on the SAME saturator,
+// each pushed and balanced independently, is the actual Saturn-style promise multiband
+// saturation is supposed to deliver. PUNISH is a per-band toggle (a "hit the hot zone" gesture,
+// same precedent as FREEZE elsewhere in the rack); HEAT is the per-band continuous knob that sets
+// how hot punish actually pushes, once that band engages it. OUT is a per-band trim AFTER the
+// (automatic, unrelated) makeup gain — a deliberate manual rebalance of each band's contribution
+// to the final mix, not a correction. There is no device-wide tone/output stage left: a single
+// post-sum shelf tilt was redundant with per-band VOICING (already a fixed tonal identity per
+// STYLE) and strictly less capable than balancing the three bands directly.
 //
 // Drive is a PRE-GAIN node (real-time, per band); curves regenerate only on style/punish/heat
 // change. Bias is a DC offset summed before the shaper (asymmetry → even harmonics), now scaled
@@ -213,7 +217,8 @@ export class SaturatorFx extends BaseFxDevice {
   private readonly shaperIns: GainNode[] = []; // drive + bias sum → feeds shaper OR worklet
   private readonly dcBlocks: BiquadFilterNode[] = [];
   private readonly voicings: BiquadFilterNode[] = []; // per-band now (style is per-band)
-  private readonly bandGains: GainNode[] = [];
+  private readonly bandGains: GainNode[] = []; // automatic makeup (curve/drive-derived, not a knob)
+  private readonly outGains: GainNode[] = []; // the user's per-band OUT trim, after makeup
   // Swappable per-band nonlinearity — exactly one of these is non-null per band at a time.
   private readonly shapers: (WaveShaperNode | null)[] = [];
   private readonly tapeNodes: (AudioWorkletNode | null)[] = [];
@@ -222,16 +227,13 @@ export class SaturatorFx extends BaseFxDevice {
   private apLow: [BiquadFilterNode, BiquadFilterNode] | null = null; // band0 phase-comp, tuned to the FAR crossover
   private apHigh: [BiquadFilterNode, BiquadFilterNode] | null = null; // last band phase-comp, tuned to the FIRST crossover
   private readonly biasSrc: ConstantSourceNode; // fixed DC=1; each band scales it independently
-  private readonly tone: BiquadFilterNode; // post-sum tilt (high-shelf), user TONE
-  private readonly outTrim: GainNode;
   private readonly bandSum: GainNode;
 
   private readonly _style: number[]; // per band
   private readonly _punish: boolean[]; // per band
   private readonly _bias: number[]; // per band, 0..1
-  private _heat = 0.5; // device-wide, 0..1 — how hot a punished band gets
-  private _toneExt = 0.5; // 0..1 (0.5 = flat)
-  private _outExt = 0.5; // 0..1 (0.5 = unity)
+  private readonly _heat: number[]; // per band, 0..1 — how hot a punished band gets
+  private readonly _out: number[]; // per band, 0..1 (0.5 = unity) — manual mix balance
   private readonly _drive: number[]; // 0..1 per band
   private readonly _xfreqExt: number[]; // 0..1 per crossover
   private _throwBoost = 1; // pad-throw multiplier into all band drives
@@ -242,6 +244,8 @@ export class SaturatorFx extends BaseFxDevice {
     this._style = new Array(B).fill(0);
     this._punish = new Array(B).fill(false);
     this._bias = new Array(B).fill(0);
+    this._heat = new Array(B).fill(0.5);
+    this._out = new Array(B).fill(0.5);
     this._drive = new Array(B).fill(0.4);
     this._xfreqExt = [hzToExt(250), hzToExt(2500)].slice(0, B - 1);
 
@@ -249,12 +253,6 @@ export class SaturatorFx extends BaseFxDevice {
     this.biasSrc = ctx.createConstantSource();
     this.biasSrc.offset.value = 1; // fixed unity DC; per-band GainNode scales it to that band's bias
     this.biasSrc.start();
-    this.tone = ctx.createBiquadFilter();
-    this.tone.type = "highshelf";
-    this.tone.frequency.value = 3000;
-    this.tone.gain.value = 0;
-    this.outTrim = ctx.createGain();
-    this.outTrim.gain.value = 1;
 
     this.buildCrossover();
     this.buildBandStatics();
@@ -262,7 +260,7 @@ export class SaturatorFx extends BaseFxDevice {
       this.buildBandEngine(i);
       this.applyVoicing(i);
     }
-    this.bandSum.connect(this.tone).connect(this.outTrim).connect(this.wet);
+    this.bandSum.connect(this.wet);
     this.applyDry();
     this.registerParams();
   }
@@ -324,7 +322,10 @@ export class SaturatorFx extends BaseFxDevice {
     }
   }
 
-  // The PERMANENT per-band nodes: drive (pre-gain), bias sum, DC blocker, voicing, output gain.
+  // The PERMANENT per-band nodes: drive (pre-gain), bias sum, DC blocker, voicing, automatic
+  // makeup gain, then the user's OUT trim — two separate GainNodes on purpose (makeup chases the
+  // curve/drive so perceived loudness stays put; OUT is the operator's own deliberate rebalance
+  // on top, and must never be clobbered by makeup recomputing itself).
   // Only the nonlinearity between shaperIn and dc (buildBandEngine) ever gets torn down/rebuilt.
   private buildBandStatics() {
     const ctx = this.ctx;
@@ -342,7 +343,9 @@ export class SaturatorFx extends BaseFxDevice {
       dc.Q.value = LR_Q;
       const voicing = ctx.createBiquadFilter();
       const g = ctx.createGain();
-      dc.connect(voicing).connect(g).connect(this.bandSum);
+      const outG = ctx.createGain();
+      outG.gain.value = 1; // 0.5 ext = unity
+      dc.connect(voicing).connect(g).connect(outG).connect(this.bandSum);
       this.tapNodes[i].connect(drive);
 
       this.drives.push(drive);
@@ -351,6 +354,7 @@ export class SaturatorFx extends BaseFxDevice {
       this.dcBlocks.push(dc);
       this.voicings.push(voicing);
       this.bandGains.push(g);
+      this.outGains.push(outG);
       this.shapers.push(null);
       this.tapeNodes.push(null);
     }
@@ -410,10 +414,10 @@ export class SaturatorFx extends BaseFxDevice {
   private curveForBand(i: number): Float32Array<ArrayBuffer> {
     return makeCurve(this._style[i], this.hotFor(i));
   }
-  // PUNISH pushes a band's steepness up into [HEAT_MIN, HEAT_MAX] at HEAT's current position;
-  // unpunished always stays at the fixed baseline regardless of HEAT.
+  // PUNISH pushes a band's steepness up into [HEAT_MIN, HEAT_MAX] at THAT BAND's own HEAT
+  // position; unpunished always stays at the fixed baseline regardless of HEAT.
   private hotFor(i: number): number {
-    return this._punish[i] ? HEAT_MIN + this._heat * (HEAT_MAX - HEAT_MIN) : HOT_BASE;
+    return this._punish[i] ? HEAT_MIN + this._heat[i] * (HEAT_MAX - HEAT_MIN) : HOT_BASE;
   }
 
   private applyVoicing(i: number) {
@@ -461,21 +465,17 @@ export class SaturatorFx extends BaseFxDevice {
     this._punish[i] = on;
     this.refreshBandNonlinearity(i);
   }
-  private setHeat(v: number) {
-    this._heat = clamp01(v);
-    for (let i = 0; i < SaturatorFx.BANDS; i++) this.refreshBandNonlinearity(i);
+  private setHeat(i: number, v: number) {
+    this._heat[i] = clamp01(v);
+    this.refreshBandNonlinearity(i);
   }
   private setBias(i: number, ext: number) {
     this._bias[i] = clamp01(ext);
     this.biasGains[i].gain.setTargetAtTime(this._bias[i] * 0.4, this.ctx.currentTime, 0.01);
   }
-  private setTone(ext: number) {
-    this._toneExt = clamp01(ext);
-    this.tone.gain.setTargetAtTime((this._toneExt - 0.5) * 2 * 12, this.ctx.currentTime, 0.01); // ±12 dB
-  }
-  private setOut(ext: number) {
-    this._outExt = clamp01(ext);
-    this.outTrim.gain.setTargetAtTime(Math.pow(10, ((this._outExt - 0.5) * 2 * 12) / 20), this.ctx.currentTime, 0.01);
+  private setOut(i: number, ext: number) {
+    this._out[i] = clamp01(ext);
+    this.outGains[i].gain.setTargetAtTime(Math.pow(10, ((this._out[i] - 0.5) * 2 * 12) / 20), this.ctx.currentTime, 0.01); // ±12 dB
   }
   private setDrive(i: number, ext: number) {
     this._drive[i] = clamp01(ext);
@@ -501,7 +501,7 @@ export class SaturatorFx extends BaseFxDevice {
     for (let i = 0; i < this.drives.length; i++) this.applyDrive(i);
   }
 
-  /** Live reads for the WYSIWYG display: per-band style/curve/drive/bias/punish + crossovers. */
+  /** Live reads for the WYSIWYG display: per-band style/curve/drive/bias/punish/heat/out + crossovers. */
   styleOf(i: number) {
     return this._style[i];
   }
@@ -511,8 +511,11 @@ export class SaturatorFx extends BaseFxDevice {
   biasOf(i: number) {
     return this._bias[i];
   }
-  get heat() {
-    return this._heat;
+  heatOf(i: number) {
+    return this._heat[i];
+  }
+  outOf(i: number) {
+    return this._out[i];
   }
   usesWorklet(i: number) {
     return !!this.tapeNodes[i];
@@ -536,15 +539,12 @@ export class SaturatorFx extends BaseFxDevice {
         { id: `style${i}`, def: 0, get: () => this._style[i], set: (v) => this.setStyle(i, v) },
         { id: `punish${i}`, def: 0, get: () => (this._punish[i] ? 1 : 0), set: (v) => this.setPunish(i, v >= 0.5) },
         { id: `bias${i}`, def: 0, get: () => this._bias[i], set: (v) => this.setBias(i, v) },
+        { id: `heat${i}`, def: 0.5, get: () => this._heat[i], set: (v) => this.setHeat(i, v) },
+        { id: `out${i}`, def: 0.5, get: () => this._out[i], set: (v) => this.setOut(i, v) },
         { id: `drive${i}`, def: 0.4, get: () => this._drive[i], set: (v) => this.setDrive(i, v) },
       );
     }
     for (let j = 0; j < B - 1; j++) this.params.push({ id: `xover${j}`, def: this._xfreqExt[j], get: () => this._xfreqExt[j], set: (v) => this.setXover(j, v) });
-    this.params.push(
-      { id: "heat", def: 0.5, get: () => this._heat, set: (v) => this.setHeat(v) },
-      { id: "tone", def: 0.5, get: () => this._toneExt, set: (v) => this.setTone(v) },
-      { id: "out", def: 0.5, get: () => this._outExt, set: (v) => this.setOut(v) },
-    );
   }
 
   dispose() {

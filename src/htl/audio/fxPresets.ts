@@ -34,15 +34,20 @@ export const FACTORY_PRESETS: Record<string, FxPreset[]> = {
   // (drive0=low <250 Hz, drive1=mid, drive2=high >2.5 kHz) so a style becomes several sounds:
   // saturate just the lows (weight, no fizz) or just the highs (air). `mix` sets how hard it hits
   // (auto gain-comp keeps it dirt-not-loudness); `bias` adds even harmonics; `punish` steepens.
+  // style/punish/bias/heat/out are all per-band (0/1/2 = low/mid/high) — these presets set the
+  // same value across all three, i.e. "one character for the whole device," which is what each
+  // was authored as before style/punish/bias went per-band. `heat` (added after these were
+  // written) and TONE (removed — a post-sum shelf redundant with per-band VOICING, see
+  // SaturatorFx.ts's header) are left unset, so they inherit whatever's already dialled in.
   saturator: [
-    { name: "Warm Bus", params: { style: 1, punish: 0, bias: 0.1, tone: 0.46, out: 0.5, drive0: 0.45, drive1: 0.4, drive2: 0.35, xover0: 0.366, xover1: 0.699, mix: 0.35 } },
-    { name: "Tube Warmth", params: { style: 0, punish: 0, bias: 0.35, tone: 0.55, out: 0.5, drive0: 0.5, drive1: 0.5, drive2: 0.45, xover0: 0.366, xover1: 0.699, mix: 0.5 } },
-    { name: "Tube Slam", params: { style: 0, punish: 1, bias: 0.4, tone: 0.55, out: 0.44, drive0: 0.75, drive1: 0.72, drive2: 0.6, xover0: 0.366, xover1: 0.699, mix: 0.72 } },
-    { name: "Low-End Weight", params: { style: 0, punish: 1, bias: 0.2, tone: 0.5, out: 0.5, drive0: 0.85, drive1: 0.28, drive2: 0.12, xover0: 0.26, xover1: 0.699, mix: 0.6 } },
-    { name: "Top Air", params: { style: 2, punish: 0, bias: 0, tone: 0.62, out: 0.48, drive0: 0.12, drive1: 0.22, drive2: 0.7, xover0: 0.366, xover1: 0.82, mix: 0.32 } },
-    { name: "Transistor Fuzz", params: { style: 2, punish: 1, bias: 0.15, tone: 0.6, out: 0.4, drive0: 0.68, drive1: 0.8, drive2: 0.68, xover0: 0.366, xover1: 0.699, mix: 0.82 } },
-    { name: "Metal Fold", params: { style: 3, punish: 1, bias: 0.3, tone: 0.5, out: 0.4, drive0: 0.58, drive1: 0.75, drive2: 0.64, xover0: 0.366, xover1: 0.699, mix: 0.6 } },
-    { name: "Diode Honk", params: { style: 4, punish: 1, bias: 0.55, tone: 0.55, out: 0.4, drive0: 0.62, drive1: 0.8, drive2: 0.58, xover0: 0.5, xover1: 0.6, mix: 0.7 } },
+    { name: "Warm Bus", params: { style0: 1, style1: 1, style2: 1, punish0: 0, punish1: 0, punish2: 0, bias0: 0.1, bias1: 0.1, bias2: 0.1, out0: 0.5, out1: 0.5, out2: 0.5, drive0: 0.45, drive1: 0.4, drive2: 0.35, xover0: 0.366, xover1: 0.699, mix: 0.35 } },
+    { name: "Tube Warmth", params: { style0: 0, style1: 0, style2: 0, punish0: 0, punish1: 0, punish2: 0, bias0: 0.35, bias1: 0.35, bias2: 0.35, out0: 0.5, out1: 0.5, out2: 0.5, drive0: 0.5, drive1: 0.5, drive2: 0.45, xover0: 0.366, xover1: 0.699, mix: 0.5 } },
+    { name: "Tube Slam", params: { style0: 0, style1: 0, style2: 0, punish0: 1, punish1: 1, punish2: 1, bias0: 0.4, bias1: 0.4, bias2: 0.4, out0: 0.44, out1: 0.44, out2: 0.44, drive0: 0.75, drive1: 0.72, drive2: 0.6, xover0: 0.366, xover1: 0.699, mix: 0.72 } },
+    { name: "Low-End Weight", params: { style0: 0, style1: 0, style2: 0, punish0: 1, punish1: 1, punish2: 1, bias0: 0.2, bias1: 0.2, bias2: 0.2, out0: 0.5, out1: 0.5, out2: 0.5, drive0: 0.85, drive1: 0.28, drive2: 0.12, xover0: 0.26, xover1: 0.699, mix: 0.6 } },
+    { name: "Top Air", params: { style0: 2, style1: 2, style2: 2, punish0: 0, punish1: 0, punish2: 0, bias0: 0, bias1: 0, bias2: 0, out0: 0.48, out1: 0.48, out2: 0.48, drive0: 0.12, drive1: 0.22, drive2: 0.7, xover0: 0.366, xover1: 0.82, mix: 0.32 } },
+    { name: "Transistor Fuzz", params: { style0: 2, style1: 2, style2: 2, punish0: 1, punish1: 1, punish2: 1, bias0: 0.15, bias1: 0.15, bias2: 0.15, out0: 0.4, out1: 0.4, out2: 0.4, drive0: 0.68, drive1: 0.8, drive2: 0.68, xover0: 0.366, xover1: 0.699, mix: 0.82 } },
+    { name: "Metal Fold", params: { style0: 3, style1: 3, style2: 3, punish0: 1, punish1: 1, punish2: 1, bias0: 0.3, bias1: 0.3, bias2: 0.3, out0: 0.4, out1: 0.4, out2: 0.4, drive0: 0.58, drive1: 0.75, drive2: 0.64, xover0: 0.366, xover1: 0.699, mix: 0.6 } },
+    { name: "Diode Honk", params: { style0: 4, style1: 4, style2: 4, punish0: 1, punish1: 1, punish2: 1, bias0: 0.55, bias1: 0.55, bias2: 0.55, out0: 0.4, out1: 0.4, out2: 0.4, drive0: 0.62, drive1: 0.8, drive2: 0.58, xover0: 0.5, xover1: 0.6, mix: 0.7 } },
   ],
   // DELAY (ECHO) — a dub/DJ delay. Beat-locked (`sync:1`), so `div` (0=1/16…8=1 bar) is the
   // musical identity and `time` is just the 120-BPM echo of it (recomputed live from the deck

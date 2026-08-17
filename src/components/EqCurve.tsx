@@ -3,6 +3,7 @@ import { useEmit } from "../App/spine";
 import type { Deck } from "@htl/audio";
 import { EQ_MIN_DB, EQ_MAX_DB, EQ_OUT_DB, EQ_HP, EQ_LP, EQ_Q_MIN, EQ_Q_MAX, EQ_SHAPE_TYPES, EQ_SHAPE_LABELS, EQ_SHAPE_DEFAULT, qToFrac } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
+import { drawReadout, READOUT_H } from "./Readout";
 import { clamp } from "../util/math";
 import { fmtHz, fmtDb } from "../util/format";
 
@@ -18,6 +19,14 @@ import { fmtHz, fmtDb } from "../util/format";
 //
 // Rendering is imperative (canvas + rAF, like the waveform) so dragging and the
 // animating spectrum never churn React.
+//
+// The top strip is the SHARED Readout (Delay/Reverb/Sat/Crush/Gate/Mod all wear it): LEFT = what
+// the device is (the selected band and its shape), MIDDLE = what you're touching, RIGHT = its
+// secondary info (output trim / bypass). It replaces the old floating cursor tooltip, which was
+// the same two numbers in a per-device pill that hovered over the spectrum — one law for FX status
+// text, in the same place on every panel, instead of one more thing to hunt for.
+// The graph is drawn BELOW it (the canvas is translated by READOUT_H and every y measured against
+// the remaining height), so pointer maths and the absolutely-positioned handles subtract it back.
 
 const F_MIN = 20;
 const F_MAX = 20000;
@@ -102,11 +111,13 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const emit = useEmit();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const readoutRef = useRef<HTMLDivElement>(null);
   const outRef = useRef<HTMLDivElement>(null); // the draggable output baseline (the graph's zero)
   const outPillRef = useRef<HTMLSpanElement>(null);
   const handleRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const size = useRef({ w: 0, h: 0, dpr: 1 });
+  // h = the element box; vh = the GRAPH's height (the readout strip owns the top READOUT_H px).
+  const size = useRef({ w: 0, h: 0, vh: 0, dpr: 1 });
+  // What the pointer is over, for the readout's middle zone when nothing is being dragged.
+  const hover = useRef<{ hz: number; db: number } | null>(null);
   const freqs = useRef<Float32Array>(new Float32Array(0));
   const magBuf = useRef<Float32Array>(new Float32Array(0));
   const specBuf = useRef<Uint8Array>(new Uint8Array(0));
@@ -149,7 +160,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = Math.max(1, Math.round(wrap.clientWidth));
       const h = Math.max(1, Math.round(wrap.clientHeight));
-      size.current = { w, h, dpr };
+      size.current = { w, h, vh: Math.max(1, h - READOUT_H), dpr };
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       canvas.style.width = `${w}px`;
@@ -213,7 +224,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       // While paused the spectrum is static, so also redraw when the EQ params change
       // (a MIDI knob / sync-copy moves the curve with no pointer event or playback).
       const sig =
-        deck.eqLow + deck.eqMid * 7 + deck.eqHigh * 13 + deck.eqLowFreq + deck.eqMidFreq * 3 + deck.eqHighFreq * 5 + deck.eqMidQ * 17 + deck.eqHpFreq + deck.eqLpFreq + (deck.eqBypassed ? 1e6 : 0);
+        deck.eqLow + deck.eqMid * 7 + deck.eqHigh * 13 + deck.eqLowFreq + deck.eqMidFreq * 3 + deck.eqHighFreq * 5 + deck.eqMidQ * 17 + deck.eqHpFreq + deck.eqLpFreq + deck.eqOut * 23 + (deck.eqBypassed ? 1e6 : 0);
       if (deck.playing || otherDeck.playing || dirty.current || sig !== eqSig.current) {
         draw();
         dirty.current = false;
@@ -249,12 +260,16 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     };
     const draw = () => {
       const canvas = canvasRef.current;
-      const { w, h, dpr } = size.current;
+      // ★ `h` below IS the graph height (vh) — everything in this function draws inside the
+      // translated frame, so the readout strip can never be drawn over.
+      const { w, h: boxH, vh: h, dpr } = size.current;
       if (!canvas || w === 0) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
+      ctx.clearRect(0, 0, w, boxH);
+      ctx.save();
+      ctx.translate(0, READOUT_H);
 
       // grid
       ctx.lineWidth = 1;
@@ -367,10 +382,37 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         ctx.globalAlpha = 1;
       }
 
+      ctx.restore();
+
+      // The readout. LEFT: the selected band and what it IS (its shape) — the row of numeric
+      // cells below belongs to that band, and this is what says so. MIDDLE: what you're touching
+      // (hot while dragging a node or the baseline; the cursor's freq/level, dim, while merely
+      // hovering). RIGHT: the trim, and BYPASS when the whole EQ is out of circuit.
+      const n = NODES[clamp(selRef.current, 0, NODES.length - 1)];
+      const shapeLabel = n.getShape ? EQ_SHAPE_LABELS[clamp(Math.round(n.getShape(deck)), 0, EQ_SHAPE_LABELS.length - 1)] : "CUT";
+      const g = drag.current;
+      let mid = "";
+      let midHot = true;
+      if (outDrag.current) {
+        mid = `OUT ${fmtDb(deck.eqOut)} dB`;
+      } else if (g) {
+        const d = NODES[g.i];
+        mid = `${d.label}  ·  ${fmtHz(d.getFreq(deck))} Hz  ·  ${d.vert === "gain" ? `${fmtDb(d.getGain(deck))} dB` : `Q ${d.getQ(deck).toFixed(1)}`}`;
+      } else if (hover.current) {
+        mid = `${fmtHz(hover.current.hz)} Hz  ·  ${fmtDb(hover.current.db)} dB`;
+        midHot = false;
+      }
+      drawReadout(ctx, w, accent, {
+        left: `${n.label}  ·  ${shapeLabel}`,
+        mid,
+        midHot,
+        right: `${deck.eqBypassed ? "BYPASS  ·  " : ""}OUT ${fmtDb(deck.eqOut)} dB`,
+      });
+
       // The output baseline rides with the trim (see y0 above) — it IS the graph's zero.
       const outEl = outRef.current;
       if (outEl) {
-        outEl.style.top = `${clamp(y0, 0, h)}px`;
+        outEl.style.top = `${READOUT_H + clamp(y0, 0, h)}px`;
         const pill = outPillRef.current;
         const o = deck.eqOut;
         if (pill) pill.textContent = `${o > 0 ? "+" : ""}${o.toFixed(1)}`;
@@ -389,7 +431,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         // offset by the trim), and a node that didn't would float off the curve it's meant to be
         // sitting on the moment you moved the baseline. The cut nodes (HP/LP) are on the Q axis,
         // not the dB axis, so the trim doesn't move them.
-        el.style.top = `${n.vert === "gain" ? yFromDb(n.getGain(deck) + deck.eqOut, h) : yFromQ(n.getQ(deck), h, yFromDb(deck.eqOut, h))}px`;
+        el.style.top = `${READOUT_H + (n.vert === "gain" ? yFromDb(n.getGain(deck) + deck.eqOut, h) : yFromQ(n.getQ(deck), h, yFromDb(deck.eqOut, h)))}px`;
       }
     };
     raf = requestAnimationFrame(tick);
@@ -405,18 +447,19 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     const wrap = wrapRef.current;
     if (!wrap) return;
     const rect = wrap.getBoundingClientRect();
-    const { w, h } = size.current;
+    const { w, vh: h } = size.current;
+    const y = clientY - rect.top - READOUT_H; // the graph starts below the readout strip
     const hz = clamp(freqFromX(clientX - rect.left, w), n.fMin, n.fMax);
     n.setFreq(deck, hz);
     emit({ kind: "control", deck: id, param: n.fParam, value: n.getFreq(deck) });
     if (n.vert === "gain" && n.gParam) {
       // The node is drawn relative to the output baseline, so read its drag back relative to it
       // too — otherwise, with the trim off zero, the dot jumps out from under the cursor.
-      const db = clamp(dbFromY(clientY - rect.top, h) - deck.eqOut, DB_BOT, EQ_MAX_DB);
+      const db = clamp(dbFromY(y, h) - deck.eqOut, DB_BOT, EQ_MAX_DB);
       n.setGain(deck, db);
       emit({ kind: "control", deck: id, param: n.gParam, value: n.getGain(deck) });
     } else if (n.vert === "q" && n.qParam) {
-      const q = clamp(qFromY(clientY - rect.top, h, yFromDb(deck.eqOut, h)), EQ_Q_MIN, EQ_Q_MAX);
+      const q = clamp(qFromY(y, h, yFromDb(deck.eqOut, h)), EQ_Q_MIN, EQ_Q_MAX);
       n.setQ(deck, q);
       emit({ kind: "control", deck: id, param: n.qParam, value: q });
     }
@@ -430,8 +473,8 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const applyOutDrag = (clientY: number) => {
     const wrap = wrapRef.current;
     if (!wrap) return;
-    const { h } = size.current;
-    const db = clamp(dbFromY(clientY - wrap.getBoundingClientRect().top, h), -EQ_OUT_DB, EQ_OUT_DB);
+    const { vh: h } = size.current;
+    const db = clamp(dbFromY(clientY - wrap.getBoundingClientRect().top - READOUT_H, h), -EQ_OUT_DB, EQ_OUT_DB);
     deck.setEqOut(db);
     emit({ kind: "control", deck: id, param: "eqOut", value: db });
     dirty.current = true;
@@ -450,20 +493,16 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       applyOutDrag(e.clientY);
       return;
     }
-    // cursor readout (when not dragging a node)
-    const ro = readoutRef.current;
+    // cursor readout (when not dragging a node) → the readout's MIDDLE zone
     const wrap = wrapRef.current;
-    if (ro && wrap && !drag.current) {
+    if (wrap && !drag.current) {
       const rect = wrap.getBoundingClientRect();
       const { w } = size.current;
       const x = e.clientX - rect.left;
       if (x >= 0 && x <= w) {
-        const hz = freqFromX(x, w);
         const idx = clamp(Math.round(x), 0, w - 1);
-        const db = magBuf.current[idx] ?? 0;
-        ro.style.opacity = "1";
-        ro.style.left = `${clamp(x, 30, w - 30)}px`;
-        ro.textContent = `${hz < 1000 ? Math.round(hz) + " Hz" : (hz / 1000).toFixed(1) + " kHz"} · ${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+        hover.current = { hz: freqFromX(x, w), db: magBuf.current[idx] ?? 0 };
+        dirty.current = true; // a paused deck redraws nothing on its own
       }
     }
     const g = drag.current;
@@ -488,7 +527,9 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
     bump((x) => x + 1);
   };
   const hideReadout = () => {
-    if (readoutRef.current && !drag.current) readoutRef.current.style.opacity = "0";
+    if (drag.current) return;
+    hover.current = null;
+    dirty.current = true;
   };
 
   const resetNode = (n: NodeDef) => {
@@ -521,7 +562,6 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         onPointerLeave={hideReadout}
       >
         <canvas ref={canvasRef} className="eq-curve-canvas" />
-        <div ref={readoutRef} className="eq-readout" style={{ opacity: 0 }} />
         {/* OUTPUT TRIM — the graph's zero line, grabbable. Drag it and the curve rides with it.
             Sits UNDER the node buttons in the DOM so a node always wins the pointer where they
             cross. Right-click / double-click parks it back at 0. */}

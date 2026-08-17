@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Deck, DelayFx } from "@htl/audio";
 import { dragBand, dragHp, dragLp, dragRes, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
 import { dragRail, drawRail } from "./ValueRail";
+import { drawReadout, READOUT_H } from "./Readout";
 
 // The Delay's instrument — an echo-tap timeline you PLAY, not a picture of one.
 //
@@ -167,7 +168,6 @@ const RATE_MAX = 8;
 // range lived in ~21px of travel: the wobble slammed to 100% the moment you touched it.
 const LFO_AMP_FRAC = 0.38;
 const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
-const READOUT_H = 13; // the one readout strip, across the top
 const GRIP_PX = 10; // how close counts as "on" a filter edge
 const TAP_GRIP = 16; // ...and on a tap. Wider: the taps are a thin bar and sit ~150px apart, so
 // there's nothing to hit by accident, and a stingy grip just makes the surface feel dead.
@@ -726,10 +726,10 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
       }
       ctx.shadowBlur = 0;
 
-      // === THE ONE READOUT — topmost, three fixed zones, always in the same place.
-      // LEFT: what the delay IS. MIDDLE: what you're TOUCHING (blank when you aren't). RIGHT: its
-      // tone. Nearest-rung naming is done from the value we just PAINTED, never from a prop that
-      // arrives a render late (mid-drag, that lags a whole division behind the tap under your hand).
+      // The readout — LEFT: what the delay IS. MIDDLE: what you're TOUCHING (blank when you
+      // aren't). RIGHT: its tone. Nearest-rung naming is done from the value we just PAINTED,
+      // never from a prop that arrives a render late (mid-drag, that lags a whole division
+      // behind the tap under your hand).
       const nameOf = (v: number, rungs?: number[], names?: string[]) => {
         if (!rungs?.length || !names?.length) return null;
         let bi = 0;
@@ -743,21 +743,8 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         });
         return names[bi] ?? null;
       };
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(0, 0, w, READOUT_H - 1);
-      const ry = (READOUT_H - 1) / 2;
-      ctx.font = "800 9px ui-monospace, monospace";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = accent;
-      ctx.textAlign = "left";
-      ctx.globalAlpha = 0.9;
-      const timeLabel = (beat > 0 && nameOf(t / beat, s.snapBeats, s.snapLabels)) || `${Math.round(t * 1000)}ms`;
-      ctx.fillText(`${timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`, 5, ry);
-      ctx.textAlign = "right";
-      ctx.globalAlpha = 0.55;
-      ctx.fillText(`${fmtHz(s.hp)} – ${fmtHz(s.lp)}`, w - 5, ry);
-      // the middle — the contextual "this is the thing in my hand"
       const pct = (v: number) => `${Math.round(clamp01(v) * 100)}%`;
+      const timeLabel = (beat > 0 && nameOf(t / beat, s.snapBeats, s.snapLabels)) || `${Math.round(t * 1000)}ms`;
       const ctxLabel =
         hot === "width" ? `WIDTH ${pct(s.width)}`
         : hot === "drive" ? `DRIVE ${pct(s.drive)}`
@@ -772,13 +759,12 @@ export function DelayViz({ deck, slot, time, feedback, mix, pingpong, frozen, bp
         // and it never changed while the thing it's a proxy for kept changing under your hand.
         : hot === "tap" ? `TIME ${timeLabel} · FB ${Math.round(clamp01(s.feedback) * 100)}%`
         : "";
-      if (ctxLabel) {
-        ctx.textAlign = "center";
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = held ? "#fff" : accent;
-        ctx.fillText(ctxLabel, w / 2, ry);
-      }
-      ctx.globalAlpha = 1;
+      drawReadout(ctx, w, accent, {
+        left: `${timeLabel}  ·  ${Math.round(clamp01(s.feedback) * 100)}%`,
+        right: `${fmtHz(s.hp)} – ${fmtHz(s.lp)}`,
+        mid: ctxLabel,
+        midHot: !!held,
+      });
     };
 
     // Redraw on demand (a drag) as well as on the LFO's own clock.

@@ -1,14 +1,17 @@
 import { useEffect, useRef } from "react";
 import { CRUSH_MODES, type Deck, type CrushFx } from "@htl/audio";
+import { drawReadout, READOUT_H } from "./Readout";
 
 // The Pixelator-style WYSIWYG for the bitcrusher. EVERY param has a visual cue:
 //   BITS   → horizontal quantization grid rows (fewer rows = coarser).
 //   RATE   → the pixel-bar column width (fatter = more downsampled).
 //   JITTER → the columns wobble in width (the resample instability).
 //   MIX    → a faint DRY "ghost" of the clean input behind + the wet bars' opacity.
-//   CUT/RES→ a little lowpass-response inset (cutoff position + resonance bump), top-right.
-//   MODE   → a label, bottom-left (and the inherent waveform shape: ZERO gaps, VINTAGE ramps…).
-// Doubles as an XY "pixelate pad": drag X = RATE, Y = BITS.
+//   CUT/RES→ a full-width DAC-reconstruction lowpass backdrop (cutoff position + resonance bump).
+//   MODE   → the readout strip's left zone (and the inherent waveform shape: ZERO gaps, VINTAGE
+//            ramps…) — the shared Readout primitive, same as every other FX panel's status row.
+// Doubles as an XY "pixelate pad": drag X = RATE, Y = BITS (below the readout strip, which is a
+// label, not a control).
 
 interface CrushVizProps {
   deck: Deck;
@@ -58,8 +61,11 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       }
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx2d.clearRect(0, 0, w, h);
-      const center = h / 2;
-      const amp = h * 0.46;
+      const vizH = Math.max(1, h - READOUT_H);
+      ctx2d.save();
+      ctx2d.translate(0, READOUT_H);
+      const center = vizH / 2;
+      const amp = vizH * 0.46;
       const bits = dev.bitsValue;
       const rate = dev.rateDiv;
       const mode = dev.modeIndex;
@@ -78,7 +84,7 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.lineWidth = 1;
       ctx2d.beginPath();
       for (let i = 1; i < rows; i++) {
-        const y = (i / rows) * h;
+        const y = (i / rows) * vizH;
         ctx2d.moveTo(0, y);
         ctx2d.lineTo(w, y);
       }
@@ -94,19 +100,19 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       };
       const NP = Math.max(2, Math.round(w));
       ctx2d.beginPath();
-      ctx2d.moveTo(0, h);
+      ctx2d.moveTo(0, vizH);
       for (let i = 0; i <= NP; i++) {
         const t = i / NP;
-        ctx2d.lineTo(t * w, h - clamp01(lp(t)) * h * 0.92);
+        ctx2d.lineTo(t * w, vizH - clamp01(lp(t)) * vizH * 0.92);
       }
-      ctx2d.lineTo(w, h);
+      ctx2d.lineTo(w, vizH);
       ctx2d.closePath();
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 7%, transparent)`;
       ctx2d.fill();
       ctx2d.beginPath();
       for (let i = 0; i <= NP; i++) {
         const t = i / NP;
-        const py = h - clamp01(lp(t)) * h * 0.92;
+        const py = vizH - clamp01(lp(t)) * vizH * 0.92;
         i === 0 ? ctx2d.moveTo(t * w, py) : ctx2d.lineTo(t * w, py);
       }
       ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 26%, transparent)`;
@@ -185,10 +191,19 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       ctx2d.lineTo(w, center);
       ctx2d.stroke();
 
-      // MODE → label, bottom-left.
-      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 75%, transparent)`;
-      ctx2d.font = "700 9px ui-monospace, SFMono-Regular, monospace";
-      ctx2d.fillText(CRUSH_MODES[mode] ?? "", 5, h - 5);
+      ctx2d.restore();
+
+      // The readout — LEFT: what the device IS (mode · mix). MIDDLE: what you're TOUCHING (the
+      // XY pad's live bits/rate while dragging, blank at rest). RIGHT: its tone (the CUT/RES
+      // lowpass drawn as the backdrop above). Same shared strip every other FX panel uses — MODE
+      // used to be its own hand-drawn bottom-left label; now it's just this primitive's left zone.
+      const pct = (v: number) => Math.round(clamp01(v) * 100);
+      drawReadout(ctx2d, w, accent, {
+        left: `${CRUSH_MODES[mode] ?? "?"}  ·  MIX ${pct(mix)}%`,
+        right: `CUT ${pct(cut)}%  ·  RES ${pct(res)}%`,
+        mid: dragging.current ? `BITS ${bits.toFixed(1)}  ·  RATE ${rate.toFixed(0)}×` : "",
+        midHot: dragging.current,
+      });
 
       raf = requestAnimationFrame(draw);
     };
@@ -208,14 +223,19 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     };
   }, [deck, slot, accent]);
 
-  // XY pixelate pad: X = RATE (downsample), Y = BITS (top = more crush).
+  // XY pixelate pad: X = RATE (downsample), Y = BITS (top = more crush). The readout strip at the
+  // top is a label, not a control — Y is measured from below it, same exclusion Delay/Reverb's
+  // hit-testing already gives their own readout row.
   const apply = (e: React.PointerEvent) => {
     const r = canvasRef.current?.getBoundingClientRect();
     if (!r) return;
+    const vizH = Math.max(1, r.height - READOUT_H);
     set("rate", clamp01((e.clientX - r.left) / r.width));
-    set("bits", clamp01((e.clientY - r.top) / r.height));
+    set("bits", clamp01((e.clientY - r.top - READOUT_H) / vizH));
   };
   const onDown = (e: React.PointerEvent) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    if (r && e.clientY - r.top < READOUT_H) return;
     dragging.current = true;
     canvasRef.current?.setPointerCapture(e.pointerId);
     apply(e);

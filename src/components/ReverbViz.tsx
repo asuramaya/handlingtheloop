@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Deck, ReverbFx } from "@htl/audio";
 import { dragBand, dragHp, dragLp, dragRes, drawFreqRibbon, fmtHz, hitFreqRibbon, type RibbonHot, type RibbonRange } from "./FreqRibbon";
+import { drawReadout, READOUT_H } from "./Readout";
 
 // Reverb tail view, v5 — an INVERTED half-ellipse dome: the source sits right where the ribbon
 // ends (the top), and the tail hangs DOWN from it, falling away into the room below — instead of
@@ -57,7 +58,6 @@ const WARM = "255,150,70"; // DRIVE glow colour
 
 const GRAB_PX = 26; // pointer-to-grip hit radius (generous — the grips ARE the controls)
 const NODE_R = 6.5; // grip dot radius
-const READOUT_H = 13; // the one readout strip, across the top — same contract as the delay's
 const NARROW_PX = 260; // below this the deck is a phone column, not a desktop panel
 const RIBBON_GRIP_PX = 10; // how close counts as "on" a ribbon edge (delay's GRIP_PX)
 const LABEL_PAD = 13; // reserved floor room for the deepest grip's label (the arc's nadir)
@@ -555,39 +555,21 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         ctx.fillText(g.label, g.x, g.y + NODE_R + 3);
       }
 
-      // === THE READOUT — same 3-zone contract as the delay: LEFT = what the reverb IS, MIDDLE =
-      //     what you're TOUCHING (blank when you aren't), RIGHT = its tone (or FROZEN). ===
-      ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(0, 0, w, READOUT_H - 1);
-      const ry = (READOUT_H - 1) / 2;
-      ctx.font = "800 9px ui-monospace, monospace";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = accent;
-      ctx.textAlign = "left";
-      ctx.globalAlpha = 0.9;
-      ctx.fillText(`${Math.round(clamp01(p.decay) * 100)}%  ·  ${Math.round(clamp01(p.size) * 100)}%`, 5, ry);
-      ctx.textAlign = "right";
-      if (frozen) {
-        ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(elapsed * 3));
-        ctx.fillText("❄ FROZEN", w - 5, ry);
-      } else {
-        ctx.globalAlpha = 0.55;
-        ctx.fillText(`${fmtHz(p.lowCut)} – ${fmtHz(p.highCut)}`, w - 5, ry);
-      }
-      ctx.globalAlpha = 1;
+      // The readout — same 3-zone contract as the delay's: LEFT = what the reverb IS, MIDDLE =
+      // what you're TOUCHING (blank when you aren't), RIGHT = its tone (or FROZEN).
       const ctxLabel = hotGrip
         ? `${hotGrip.label} ${hotGrip.fmt((p as Record<string, number>)[hotGrip.param])}`
         : hotRibbon === "hp" ? `LOW-CUT ${fmtHz(p.lowCut)} · RES ${Math.round(p.lowCutRes * 100)}%`
         : hotRibbon === "lp" ? `HI-CUT ${fmtHz(p.highCut)} · RES ${Math.round(p.highCutRes * 100)}%`
         : hotRibbon === "band" ? `${fmtHz(p.lowCut)} Hz – ${fmtHz(p.highCut)} Hz`
         : "";
-      if (ctxLabel) {
-        ctx.textAlign = "center";
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = drag.current ? "#fff" : accent;
-        ctx.fillText(ctxLabel, w / 2, ry);
-      }
-      ctx.globalAlpha = 1;
+      drawReadout(ctx, w, accent, {
+        left: `${Math.round(clamp01(p.decay) * 100)}%  ·  ${Math.round(clamp01(p.size) * 100)}%`,
+        right: frozen ? "❄ FROZEN" : `${fmtHz(p.lowCut)} – ${fmtHz(p.highCut)}`,
+        rightAlpha: frozen ? 0.5 + 0.5 * Math.abs(Math.sin(elapsed * 3)) : 0.55,
+        mid: ctxLabel,
+        midHot: !!drag.current,
+      });
     };
     drawRef.current = draw;
 

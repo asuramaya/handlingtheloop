@@ -5,9 +5,13 @@ import { ValueCell } from "./ValueCell";
 import { GateViz } from "./GateViz";
 import { useFrameSync } from "./useFrameSync";
 
-// Trance GATE surface — SHAPE selector + SYNC toggle, the sweeping gate-envelope WYSIWYG, and
-// the shared cells (RATE / DEPTH / DUTY / SMOOTH / MIX). Mirrors the Mod/Sat/Crush contract and
-// reuses the .sat-* layout classes.
+// Trance GATE surface — the sweeping gate-envelope WYSIWYG on top, the shared knobs below it,
+// SHAPE select at the bottom. Mirrors the Sat/Crush/Mod panel contract (Viz → knobs → mode row).
+//
+// SYNC folds into the RATE cell instead of sitting as its own pill — the same move MOD's RATE
+// got: a TAP toggles it (the cell already shows the result either way, via its own format
+// function), with a 2-position .range-ticks scale as the always-visible state readout. Not a
+// peer of SHAPE, it's a property of RATE alone.
 
 interface GatePanelProps {
   deck: Deck;
@@ -38,25 +42,36 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
+      {/* The gate envelope sweeps under a playhead; an XY pad (X=RATE, Y=DEPTH). */}
+      <GateViz deck={deck} slot={slot} accent={accent} set={live} />
+
+      <div className="sat-shared">
+        <ValueCell
+          label="RATE"
+          value={get("rate")}
+          min={0}
+          max={1}
+          onChange={(v) => setParam("rate", v)}
+          format={() => (sync ? dev.divLabel : `${dev.freqHz.toFixed(1)}`)}
+          onTap={() => setParam("sync", sync ? 0 : 1)}
+        >
+          <div className="range-ticks">
+            <span className={`range-tick ${!sync ? "active" : ""}`} />
+            <span className={`range-tick ${sync ? "active" : ""}`} />
+          </div>
+        </ValueCell>
+        <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
+        <ValueCell label="DUTY" value={get("duty")} min={0} max={1} onChange={(v) => setParam("duty", v)} format={(v) => `${Math.round(v * 100)}`} />
+        <ValueCell label="SMOOTH" value={get("smooth")} min={0} max={1} onChange={(v) => setParam("smooth", v)} format={(v) => `${Math.round(v * 100)}`} />
+      </div>
+
+      {/* Mode select, bottom — same foot-strip position as every other device's mode row. */}
       <div className="sat-styles">
         {GATE_SHAPES.map((s, i) => (
           <button key={s} className={shape === i ? "active" : ""} onClick={() => setParam("shape", i)} title="Gate shape">
             {s}
           </button>
         ))}
-        <button className={`sat-punish ${sync ? "active" : ""}`} onClick={() => setParam("sync", sync ? 0 : 1)} title="Sync the rate to the deck tempo">
-          SYNC
-        </button>
-      </div>
-
-      {/* The gate envelope sweeps under a playhead; an XY pad (X=RATE, Y=DEPTH). */}
-      <GateViz deck={deck} slot={slot} accent={accent} set={live} />
-
-      <div className="sat-shared">
-        <ValueCell label="RATE" value={get("rate")} min={0} max={1} onChange={(v) => setParam("rate", v)} format={() => (sync ? dev.divLabel : `${dev.freqHz.toFixed(1)}`)} />
-        <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <ValueCell label="DUTY" value={get("duty")} min={0} max={1} onChange={(v) => setParam("duty", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <ValueCell label="SMOOTH" value={get("smooth")} min={0} max={1} onChange={(v) => setParam("smooth", v)} format={(v) => `${Math.round(v * 100)}`} />
       </div>
     </div>
   );

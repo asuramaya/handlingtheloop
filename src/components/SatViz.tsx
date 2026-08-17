@@ -3,6 +3,7 @@ import type { Deck } from "@htl/audio";
 import { SaturatorFx, SAT_STYLES } from "@htl/audio";
 import { drawCurvePanel, fitCanvas } from "./curveInset";
 import { MeterBar } from "./MeterBar";
+import { drawReadout, READOUT_H } from "./Readout";
 import { fmtHz, fmtDb } from "../util/format";
 
 // The Saturn-glass WYSIWYG for the multiband saturator. A log-frequency display:
@@ -38,8 +39,8 @@ interface SatVizProps {
 
 export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const readoutRef = useRef<HTMLCanvasElement>(null);
   const curveRef = useRef<HTMLCanvasElement>(null);
-  const readoutRef = useRef<HTMLDivElement>(null);
   const meterPeak = useRef(0); // 0..1 linear peak, read by MeterBar's own rAF
   // Whether `sel`'s band is currently on the TAPE worklet — React state (not a ref) because the
   // curve-panel label needs a re-render, but only bumped on an actual CHANGE (see the draw loop
@@ -143,6 +144,35 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
         ctx2d.stroke();
       }
 
+      // The readout — its OWN full-width canvas above fx-viz-row, not squeezed inside this one
+      // (which is narrower than the panel: the curve-preview panel sits to its right). LEFT: the
+      // SELECTED band's character. MIDDLE: what you're TOUCHING (blank when you aren't). RIGHT:
+      // that band's drive. Same 3-zone contract as Delay/Reverb — one law for every FX panel's
+      // status text, not a per-device tooltip reinvented each time.
+      const rcanvas = readoutRef.current;
+      const rctx = rcanvas?.getContext("2d");
+      if (rcanvas && rctx) {
+        const rw = rcanvas.clientWidth;
+        const rh = rcanvas.clientHeight;
+        if (rcanvas.width !== Math.round(rw * dpr) || rcanvas.height !== Math.round(rh * dpr)) {
+          rcanvas.width = Math.round(rw * dpr);
+          rcanvas.height = Math.round(rh * dpr);
+        }
+        rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        rctx.clearRect(0, 0, rw, rh);
+        const d = drag.current;
+        const midLabel =
+          d?.kind === "xover" ? `${fmtHz(dev.xoverHzOf(d.idx))} Hz`
+          : d?.kind === "drive" ? `${fmtDb(driveDb(dev.driveOf(d.idx)))} dB`
+          : "";
+        drawReadout(rctx, rw, accent, {
+          left: `${SAT_STYLES[dev.styleOf(sel)] ?? "?"}  ·  HEAT ${Math.round(dev.heatOf(sel) * 100)}%`,
+          right: `${fmtDb(driveDb(dev.driveOf(sel)))} dB`,
+          mid: midLabel,
+          midHot: !!d,
+        });
+      }
+
       // Output peak, from the SAME analyser tap (no second node needed).
       analyser.getFloatTimeDomainData(timeBuf);
       let peak = 0;
@@ -233,28 +263,16 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
     if (!canvas) return;
     const r = canvas.getBoundingClientRect();
     if (!d) return;
-    const ro = readoutRef.current;
     if (d.kind === "xover") {
       const hz = xf(e.clientX - r.left, r.width);
       set(`xover${d.idx}`, clamp01(hz2ext(hz)));
-      if (ro) {
-        ro.style.opacity = "1";
-        ro.style.left = `${clamp01((e.clientX - r.left) / r.width) * r.width}px`;
-        ro.textContent = `${fmtHz(hz)} Hz`;
-      }
     } else {
       const v = clamp01(1 - (e.clientY - r.top) / r.height);
       set(`drive${d.idx}`, v);
-      if (ro) {
-        ro.style.opacity = "1";
-        ro.style.left = `${clamp01((e.clientX - r.left) / r.width) * r.width}px`;
-        ro.textContent = `${fmtDb(driveDb(v))} dB`;
-      }
     }
   };
   const onUp = (e: React.PointerEvent) => {
     drag.current = null;
-    if (readoutRef.current) readoutRef.current.style.opacity = "0";
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -264,17 +282,19 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
 
   return (
     <>
-      <div className="fx-viz-row">
-        <div className="sat-viz">
-          <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
-          <div ref={readoutRef} className="eq-readout" style={{ opacity: 0 }} />
+      <div className="sat-status">
+        <canvas ref={readoutRef} className="sat-readout" style={{ height: READOUT_H }} />
+        <div className="fx-viz-row">
+          <div className="sat-viz">
+            <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+          </div>
+          <div className="fx-curve">
+            <canvas ref={curveRef} className="fx-curve-canvas" />
+            {isWorklet && <span className="sat-curve-worklet">◆ HYSTERESIS</span>}
+          </div>
         </div>
-        <div className="fx-curve">
-          <canvas ref={curveRef} className="fx-curve-canvas" />
-          {isWorklet && <span className="sat-curve-worklet">◆ HYSTERESIS</span>}
-        </div>
+        <MeterBar getValue={() => meterPeak.current} toPercent={(p) => Math.max(0, (20 * Math.log10(p || 1e-6) + 40) * 2.5)} format={(p) => (p < 1e-3 ? "-inf" : (20 * Math.log10(p)).toFixed(1))} unit="dBFS" label="Output level" className="sat-meter" />
       </div>
-      <MeterBar getValue={() => meterPeak.current} toPercent={(p) => Math.max(0, (20 * Math.log10(p || 1e-6) + 40) * 2.5)} format={(p) => (p < 1e-3 ? "-inf" : (20 * Math.log10(p)).toFixed(1))} unit="dBFS" label="Output level" className="sat-meter" />
     </>
   );
 }

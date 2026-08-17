@@ -37,14 +37,6 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
-      <div className="sat-styles">
-        {CRUSH_MODES.map((m, i) => (
-          <button key={m} className={mode === i ? "active" : ""} onClick={() => setParam("mode", i)}>
-            {m}
-          </button>
-        ))}
-      </div>
-
       {/* Pixel scope — live staircase over the quantization grid; also an XY pad (X=RATE, Y=BITS). */}
       <CrushViz deck={deck} slot={slot} accent={accent} set={live} />
 
@@ -54,6 +46,16 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
         <ValueCell label="JITTER" value={get("jitter")} min={0} max={1} onChange={(v) => setParam("jitter", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="CUT" value={get("cut")} min={0} max={1} onChange={(v) => setParam("cut", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="RES" value={get("res")} min={0} max={1} onChange={(v) => setParam("res", v)} format={(v) => `${Math.round(v * 100)}`} />
+      </div>
+
+      {/* Mode select, bottom — same foot-strip position as every other device's mode row (SAT's
+          STYLE row lives here too). */}
+      <div className="sat-styles">
+        {CRUSH_MODES.map((m, i) => (
+          <button key={m} className={mode === i ? "active" : ""} onClick={() => setParam("mode", i)}>
+            {m}
+          </button>
+        ))}
       </div>
     </div>
   );

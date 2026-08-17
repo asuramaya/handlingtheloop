@@ -1,11 +1,15 @@
 import { useEffect, useRef } from "react";
-import type { Deck, GateFx } from "@htl/audio";
+import { GATE_SHAPES, type Deck, type GateFx } from "@htl/audio";
+import { drawReadout, READOUT_H } from "./Readout";
 
 // WYSIWYG for the trance GATE: the GATE ENVELOPE is the star, full-width. The canvas tiles
 // several gate cycles across the width as a bright glowing shape — exactly the gain the audio
 // is multiplied by — with a vertical PLAYHEAD sweeping at the live rate, while the program
 // audio rides UNDER it as a dim level band (gated by the same envelope, so you SEE it chopped).
-// Doubles as an XY pad: drag X = RATE, Y = DEPTH.
+// Doubles as an XY pad: drag X = RATE, Y = DEPTH. The shared Readout strip is embedded directly
+// in this canvas (no curve-preview sibling to fight for width, same as CRUSH) — SHAPE on the
+// left, live RATE/DEPTH while dragging in the middle, DUTY/SMOOTH — the two params the drawn
+// envelope's own shape doesn't spell out in numbers — on the right.
 
 const CYCLES = 6; // gate cycles drawn across the (now full-width) canvas
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -49,6 +53,9 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       }
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx2d.clearRect(0, 0, w, h);
+      const vizH = Math.max(1, h - READOUT_H);
+      ctx2d.save();
+      ctx2d.translate(0, READOUT_H);
 
       // live output level (RMS) — the dim audio band the gate is chopping
       an.getFloatTimeDomainData(buf);
@@ -57,7 +64,7 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       const rms = Math.sqrt(sum / buf.length);
       const lvl = clamp01(Math.sqrt(rms) * 1.6);
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 9%, transparent)`;
-      ctx2d.fillRect(0, h - lvl * h, w, lvl * h);
+      ctx2d.fillRect(0, vizH - lvl * vizH, w, lvl * vizH);
 
       const ph = (actx.currentTime * dev.freqHz) % 1; // current phase within the cycle
 
@@ -69,11 +76,11 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
         const x = (i / N) * w;
         const p = (i / N) * CYCLES + ph; // scroll with phase
         const g = dev.gateShape(p);
-        const y = h - g * h * 0.96;
+        const y = vizH - g * vizH * 0.96;
         i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
       }
-      ctx2d.lineTo(w, h);
-      ctx2d.lineTo(0, h);
+      ctx2d.lineTo(w, vizH);
+      ctx2d.lineTo(0, vizH);
       ctx2d.closePath();
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 20%, transparent)`;
       ctx2d.fill();
@@ -82,7 +89,7 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       for (let i = 0; i <= N; i++) {
         const x = (i / N) * w;
         const p = (i / N) * CYCLES + ph;
-        const y = h - dev.gateShape(p) * h * 0.96;
+        const y = vizH - dev.gateShape(p) * vizH * 0.96;
         i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
       }
       ctx2d.strokeStyle = accent;
@@ -99,15 +106,25 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
         const x = (c / CYCLES) * w;
         ctx2d.beginPath();
         ctx2d.moveTo(x, 0);
-        ctx2d.lineTo(x, h);
+        ctx2d.lineTo(x, vizH);
         ctx2d.stroke();
       }
 
-      // rate / depth readout
-      ctx2d.fillStyle = `color-mix(in srgb, ${accent} 70%, transparent)`;
-      ctx2d.font = "10px ui-monospace, monospace";
-      ctx2d.textBaseline = "top";
-      ctx2d.fillText(dev.synced ? dev.divLabel : `${dev.freqHz.toFixed(1)}Hz`, 6, 5);
+      ctx2d.restore();
+
+      // The readout — LEFT: what the device IS (shape). MIDDLE: what you're TOUCHING (live
+      // RATE/DEPTH while dragging the XY pad, blank at rest). RIGHT: DUTY/SMOOTH — the two
+      // params the drawn envelope shape itself doesn't spell out in numbers.
+      const shapeIdx = Math.round(dev.getParam("shape"));
+      const duty = clamp01(dev.getParam("duty"));
+      const smooth = clamp01(dev.getParam("smooth"));
+      const rateLabel = dev.synced ? dev.divLabel : `${dev.freqHz.toFixed(1)}Hz`;
+      drawReadout(ctx2d, w, accent, {
+        left: `${GATE_SHAPES[shapeIdx] ?? "?"}`,
+        right: `DUTY ${Math.round(duty * 100)}%  ·  SMOOTH ${Math.round(smooth * 100)}%`,
+        mid: dragging.current ? `RATE ${rateLabel}  ·  DEPTH ${Math.round(clamp01(dev.getParam("depth")) * 100)}%` : "",
+        midHot: dragging.current,
+      });
 
       raf = requestAnimationFrame(draw);
     };
@@ -122,14 +139,18 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
     };
   }, [deck, slot, accent]);
 
-  // XY pad: X = RATE, Y = DEPTH (top = more).
+  // XY pad: X = RATE, Y = DEPTH (top = more). The readout strip at the top is a label, not a
+  // control — Y is measured from below it, same exclusion CRUSH's own embedded readout uses.
   const apply = (e: React.PointerEvent) => {
     const r = mainRef.current?.getBoundingClientRect();
     if (!r) return;
+    const vizH = Math.max(1, r.height - READOUT_H);
     set("rate", clamp01((e.clientX - r.left) / r.width));
-    set("depth", clamp01(1 - (e.clientY - r.top) / r.height));
+    set("depth", clamp01(1 - (e.clientY - r.top - READOUT_H) / vizH));
   };
   const onDown = (e: React.PointerEvent) => {
+    const r = mainRef.current?.getBoundingClientRect();
+    if (r && e.clientY - r.top < READOUT_H) return;
     dragging.current = true;
     mainRef.current?.setPointerCapture(e.pointerId);
     apply(e);

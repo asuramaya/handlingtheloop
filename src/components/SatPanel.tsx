@@ -7,11 +7,14 @@ import { SatViz } from "./SatViz";
 import { useFrameSync } from "./useFrameSync";
 
 // Saturator surface — the SatViz WYSIWYG (frequency display + draggable crossovers +
-// transfer-curve inset) plus the per-band STYLE/PUNISH/BIAS subrow for whichever band is
+// transfer-curve inset) plus the per-band STYLE/PUNISH/HEAT/BIAS/OUT subrow for whichever band is
 // currently SELECTED (pressing inside a band in SatViz selects it, mirroring the EQ's "touching
 // a node selects its band"). Each band carries its own character now — "multiband" used to mean
-// only drive varied per band while style/bias/punish were one shared setting for the whole
-// device. HEAT/TONE/OUT stay device-wide. Mirrors the Delay/Reverb panel contract otherwise.
+// only drive varied per band while everything else (style/bias/punish/heat/out) was one shared
+// setting for the whole device. Nothing is device-wide anymore: TONE was a post-sum shelf that
+// duplicated what per-band VOICING (baked into STYLE) already does, so it's gone, and HEAT/OUT
+// moved from device-wide to per-band alongside BIAS. Mirrors the Delay/Reverb panel contract
+// otherwise.
 
 interface SatPanelProps {
   deck: Deck;
@@ -50,15 +53,13 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
           band to set its drive AND select it; the transfer curve reads out bottom-right. */}
       <SatViz deck={deck} slot={slot} accent={accent} set={live} sel={sel} onSelect={setSel} />
 
-      {/* Device-wide (TONE/OUT/HEAT) | a divider | BIAS for the SELECTED band — one row, not
-          two, since the panel's height budget is shared with every other device in the rack.
-          The canvas's own dashed ring is the "which band" indicator; no separate text label. */}
+      {/* HEAT/BIAS/OUT, all for the SELECTED band — nothing device-wide left in this row (TONE
+          is gone; HEAT/OUT moved here from a device-wide row). The canvas's own dashed ring is
+          the "which band" indicator; no separate text label needed. */}
       <div className="sat-shared">
-        <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
-        <ValueCell label="OUT" value={get("out")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("out", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
-        <ValueCell label="HEAT" value={get("heat")} min={0} max={1} onChange={(v) => setParam("heat", v)} format={(v) => `${Math.round(v * 100)}`} />
-        <div className="fx-sep" />
+        <ValueCell label="HEAT" value={get(`heat${sel}`)} min={0} max={1} onChange={(v) => setParam(`heat${sel}`, v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="BIAS" value={get(`bias${sel}`)} min={0} max={1} onChange={(v) => setParam(`bias${sel}`, v)} format={(v) => `${Math.round(v * 100)}`} />
+        <ValueCell label="OUT" value={get(`out${sel}`)} min={0} max={1} pivot={0.5} onChange={(v) => setParam(`out${sel}`, v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
       </div>
 
       {/* Style select, for the SELECTED band — same foot-strip grammar as every other device's

@@ -46,13 +46,18 @@ class ModDelay extends AudioWorkletProcessor {
     // a RATE/SYNC jump changes the vibrato depth (delay velocity) instantly otherwise; ~100 ms glide
     this.phi = 0; // the LFO accumulator, cycles — offset by this.phase at read time
     this.p = 0; // the last read phase (phi+phase, wrapped) — for output[2]
-    this.sq = 0; // slewed square (a hard square on delay time is a splice per edge)
+    this.sq = [0, 0]; // slewed square, PER CHANNEL (each channel reads the LFO at its own phase)
+    this.spread = 0;  // STEREO WIDTH: cycles of LFO phase the right channel leads the left by.
+    // 0 keeps both channels on one phase — bit-identical to the mono-safe behaviour, and the
+    // default, because a stereo spread is exactly what a mono sum cancels: the two channels comb
+    // the dry differently, so summing them fills each channel's notches with the other's peaks
+    // and the effect thins out. That trade belongs to the operator, not to a default.
     this.fbLp = [0, 0]; // one-pole state for the feedback high-pass
     this.alive = true;
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.dispose) { this.alive = false; return; }
-      if (d.probe) { this.port.postMessage({ probe: { base: this.base, depth: this.depth, depthS: this.depthS, fb: this.fb, lfoHz: this.lfoHz, hzS: this.hzS, wave: this.wave, phase: this.phase, lfoOn: this.lfoOn, phi: this.phi, alive: this.alive } }); return; }
+      if (d.probe) { this.port.postMessage({ probe: { base: this.base, depth: this.depth, depthS: this.depthS, fb: this.fb, lfoHz: this.lfoHz, hzS: this.hzS, wave: this.wave, phase: this.phase, lfoOn: this.lfoOn, phi: this.phi, spread: this.spread, alive: this.alive } }); return; }
       if (d.base !== undefined) this.base = d.base;
       if (d.depth !== undefined) this.depth = d.depth;
       if (d.fb !== undefined) this.fb = d.fb;
@@ -60,6 +65,7 @@ class ModDelay extends AudioWorkletProcessor {
       if (d.wave !== undefined) this.wave = d.wave;
       if (d.phase !== undefined) this.phase = d.phase;
       if (d.lfoOn !== undefined) this.lfoOn = d.lfoOn;
+      if (d.spread !== undefined) this.spread = d.spread;
     };
   }
   cubic(buf, pos) {
@@ -74,16 +80,17 @@ class ModDelay extends AudioWorkletProcessor {
     const c4 = 0.5 * x * x * (x - 1);
     return s1 * c1 + s2 * c2 + s3 * c3 + s4 * c4;
   }
-  lfo() {
-    // -1..1 at phase (phi + phase) — sine / triangle / slewed square
-    let p = this.phi + this.phase;
+  // -1..1 at phase (phi + phase + this channel's spread) — sine / triangle / slewed square.
+  // Channel 0's phase is the one reported on output[2] (the viz reads the tapped voice's LFO).
+  lfo(c) {
+    let p = this.phi + this.phase + (c === 1 ? this.spread * 0.5 : 0);
     p -= Math.floor(p);
-    this.p = p;
+    if (c === 0) this.p = p;
     if (this.wave === 1) return p < 0.5 ? 4 * p - 1 : 3 - 4 * p;
     if (this.wave === 2) {
       const target = p < 0.5 ? 1 : -1;
-      this.sq += (target - this.sq) * 0.004; // ~5 ms edge @48k
-      return this.sq;
+      this.sq[c] += (target - this.sq[c]) * 0.004; // ~5 ms edge @48k
+      return this.sq[c];
     }
     return Math.sin(6.283185307179586 * p);
   }
@@ -104,8 +111,8 @@ class ModDelay extends AudioWorkletProcessor {
     const dslew = 1 - Math.exp(-1 / (0.06 * sampleRate)); // 60 ms for depth: CHORUS's full DEPTH
     // range is ~4 ms of delay, and 4 ms in 20 ms is a 20% pitch swoop — still a "step" to the ear
     for (let i = 0; i < frames; i++) {
-      let m = this.lfoOn ? this.lfo() : 0;
-      if (envCh) m += envCh[i];
+      const env = envCh ? envCh[i] : 0;
+      const m = (this.lfoOn ? this.lfo(0) : 0) + env;
       if (mOut) mOut[i] = m;
       if (pOut) pOut[i] = this.p;
       this.hzS += (this.lfoHz - this.hzS) * hslew;
@@ -113,10 +120,13 @@ class ModDelay extends AudioWorkletProcessor {
       if (this.phi >= 1) this.phi -= 1;
       this.depthS += (this.depth - this.depthS) * dslew;
       this.fbS += (this.fb - this.fbS) * slew;
-      let d = this.base + m * this.depthS;
-      if (!(d >= 1)) d = 1; else if (d > maxD) d = maxD; // !(d>=1) also catches NaN
-      const rp = this.w - d;
       for (let c = 0; c < nCh; c++) {
+        // Each channel reads the LFO at its OWN phase when spread > 0 — the delay itself differs
+        // per side, which is what makes an ensemble wide. At spread 0 this is m for every channel.
+        const mc = c === 0 || this.spread === 0 ? m : (this.lfoOn ? this.lfo(c) : 0) + env;
+        let d = this.base + mc * this.depthS;
+        if (!(d >= 1)) d = 1; else if (d > maxD) d = maxD; // !(d>=1) also catches NaN
+        const rp = this.w - d;
         const ring = this.ring[c] || this.ring[0];
         const wet = this.cubic(ring, ((rp % this.size) + this.size) % this.size);
         // high-pass the fed-back signal (~230 Hz) so feedback rings instead of muddying.

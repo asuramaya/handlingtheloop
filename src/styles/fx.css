@@ -2145,8 +2145,11 @@ button.room-tog:hover {
   letter-spacing: 0.5px;
   color: var(--muted);
 }
-.comp-panel .comp-sc button {
-  min-width: 72px;
+/* COMP's foot holds a MODE cycler, AUTO, and the two sidechain-source buttons; the SC pair needs
+   room for "SC: INT" without wrapping. (.comp-sc is gone — the sidechain row was folded into the
+   one foot strip every other device has, see CompPanel.) */
+.comp-panel .sat-styles button {
+  min-width: 56px;
 }
 
 /* --- the device foot: RESET · the universal wet/dry · COPY --------------------------------

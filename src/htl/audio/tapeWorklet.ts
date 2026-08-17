@@ -32,6 +32,11 @@ class Tape extends AudioWorkletProcessor {
     this.prevX = [0, 0];
     this.poleAlpha = 1 - Math.exp((-2 * Math.PI * POLE_HZ) / sampleRate);
     this.port.onmessage = (e) => {
+      // A worklet PROCESSOR is constructed asynchronously on the audio thread, so a freshly
+      // created node outputs silence for a while — measurably longer than a 14 ms crossfade.
+      // SaturatorFx uses this pong to start its fade only once this side is really running;
+      // without it the band was silent through the whole fade and then snapped in at full gain.
+      if (e.data.ping) { this.port.postMessage({ ready: true }); return; }
       if (e.data.hot !== undefined) this.hot = e.data.hot;
     };
   }

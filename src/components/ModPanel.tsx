@@ -102,6 +102,22 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
         <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="F.BACK" value={get("feedback")} min={0} max={1} onChange={(v) => setParam("feedback", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="TONE" value={get("tone")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("tone", v)} format={(v) => `${Math.round((v - 0.5) * 200)}`} />
+        {/* WIDTH — the right channel's LFO runs ahead of the left's, so the two sides comb the dry
+            differently and the image opens (measured: L/R correlation 1.000 → 0.405 across the
+            range). Rests at 0 and stays there unless you ask, because it is the one control here
+            with a MONO cost — about −1.6 dB of wet in a summed PA at full width, and a club sub
+            feed is mono. PHASER's native LFO has no per-channel phase to give, so the cell greys
+            out there rather than lying about being live. */}
+        <ValueCell
+          label="WIDTH"
+          value={get("width")}
+          min={0}
+          max={1}
+          onChange={(v) => setParam("width", v)}
+          format={(v) => (mode === 2 ? "—" : `${Math.round(v * 100)}`)}
+          active={mode !== 2}
+          disabled={mode === 2}
+        />
         <ValueCell
           label={mode === 0 ? "VOICES" : mode === 1 ? "TAPS" : mode === 2 ? "STAGES" : "PAIRS"}
           value={get("stages")}

@@ -223,6 +223,7 @@ export class SaturatorFx extends BaseFxDevice {
   private readonly shapers: (WaveShaperNode | null)[] = [];
   private readonly tapeNodes: (AudioWorkletNode | null)[] = [];
   private readonly engineGains: (GainNode | null)[] = []; // one per band, so a style swap can fade
+  private readonly aligns: (DelayNode | null)[] = []; // TAPE-only: pays back the shaper's oversampling delay
 
   private readonly xovers: Xover[] = []; // BANDS-1 crossovers (retunable)
   private apLow: [BiquadFilterNode, BiquadFilterNode] | null = null; // band0 phase-comp, tuned to the FAR crossover
@@ -352,6 +353,7 @@ export class SaturatorFx extends BaseFxDevice {
       this.shaperIns.push(shaperIn);
       this.dcBlocks.push(null as unknown as BiquadFilterNode);
       this.voicings.push(null as unknown as BiquadFilterNode);
+      this.aligns.push(null);
       this.bandGains.push(g);
       this.outGains.push(outG);
       this.shapers.push(null);
@@ -371,17 +373,29 @@ export class SaturatorFx extends BaseFxDevice {
   // fed the SAME input, so their outputs are coherent and a LINEAR fade is the correct one; each
   // engine gets its own gain node to fade, and the old one is only unhooked once it is silent.
   private static readonly ENGINE_FADE = 0.014;
+  // ★ Chromium's `oversample: "4x"` WaveShaper costs 192 SAMPLES of group delay — its up/down
+  // sampling FIRs — and it is 192 at 44.1k, 48k and 96k alike (fxlab --shaper-latency, measured
+  // with an identity curve, essentially all of it causal). The TAPE worklet has none.
+  //
+  // That is not primarily a click. It means a band running TAPE sits 4 ms AHEAD of its two
+  // neighbours, permanently, and the three bands sum out of time — comb filtering with notches
+  // every ~250 Hz, on the exact feature this device exists for (TUBE lows with TAPE mids). The
+  // style swap's ×2.7 jump was just the audible corner of it. The TAPE branch pays the same
+  // delay back so every engine is time-aligned no matter which style each band holds.
+  private static readonly SHAPER_LATENCY_SAMPLES = 192;
   private buildBandEngine(i: number, crossfade = false) {
     const ctx = this.ctx;
     const prevNode: AudioNode | null = this.tapeNodes[i] ?? this.shapers[i];
     const prevGain = this.engineGains[i] ?? null;
     const prevDc = this.dcBlocks[i] ?? null;
     const prevVoicing = this.voicings[i] ?? null;
+    const prevAlign = this.aligns[i] ?? null;
     const fade = crossfade && !!prevNode && !!prevGain;
     if (!fade) {
       if (prevNode) safeDisconnect(prevNode);
       if (prevDc) safeDisconnect(prevDc);
       if (prevVoicing) safeDisconnect(prevVoicing);
+      if (prevAlign) safeDisconnect(prevAlign);
       if (prevGain) safeDisconnect(prevGain);
       safeDisconnect(this.shaperIns[i]);
     }
@@ -397,11 +411,14 @@ export class SaturatorFx extends BaseFxDevice {
     g.gain.value = fade ? 0 : 1;
     dc.connect(voicing).connect(g).connect(this.bandGains[i]);
     let built = false;
+    let align: DelayNode | null = null;
     if (this._style[i] === TAPE_STYLE) {
       try {
         const node = new AudioWorkletNode(ctx, "tape", { numberOfInputs: 1, numberOfOutputs: 1 });
+        align = ctx.createDelay(0.05);
+        align.delayTime.value = SaturatorFx.SHAPER_LATENCY_SAMPLES / ctx.sampleRate; // exact samples
         this.shaperIns[i].connect(node);
-        node.connect(dc);
+        node.connect(align).connect(dc);
         this.tapeNodes[i] = node;
         built = true;
       } catch (e) {
@@ -416,25 +433,53 @@ export class SaturatorFx extends BaseFxDevice {
     }
     this.dcBlocks[i] = dc;
     this.voicings[i] = voicing;
+    this.aligns[i] = align;
     this.engineGains[i] = g;
     this.applyVoicing(i); // the NEW engine starts already voiced — nothing to ramp mid-signal
     this.refreshBandNonlinearity(i);
 
     if (fade && prevNode && prevGain) {
-      const t = ctx.currentTime;
       const F = SaturatorFx.ENGINE_FADE;
-      prevGain.gain.setValueAtTime(prevGain.gain.value, t);
-      prevGain.gain.linearRampToValueAtTime(0, t + F);
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(1, t + F);
+      const startFade = () => {
+        const t = ctx.currentTime;
+        prevGain.gain.cancelScheduledValues(t);
+        prevGain.gain.setValueAtTime(prevGain.gain.value, t);
+        prevGain.gain.linearRampToValueAtTime(0, t + F);
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(1, t + F);
+      };
+      const tapeNode = this.tapeNodes[i];
+      if (tapeNode) {
+        // ★ WAIT FOR THE PROCESSOR. An AudioWorkletNode's processor is constructed
+        // asynchronously on the audio thread; the node outputs silence until it exists, and that
+        // took LONGER than the 14 ms fade — so the band went quiet, the fade finished, and the
+        // engine snapped in at full gain afterwards (measured: the biggest step landed at exactly
+        // +14 ms, the fade's end). Fading into a node that isn't running yet is not a crossfade.
+        // The pong proves it's alive; the timer is the belt-and-braces path if it never answers.
+        let started = false;
+        const go = () => {
+          if (started) return;
+          started = true;
+          startFade();
+        };
+        tapeNode.port.onmessage = (e) => {
+          if ((e.data as { ready?: boolean }).ready) go();
+        };
+        tapeNode.port.postMessage({ ping: true });
+        setTimeout(go, 150);
+      } else {
+        startFade();
+      }
       // Unhook only once the old engine is fully faded — a worklet left connected keeps running,
       // and a node disconnected mid-fade is the very cut this exists to avoid.
       setTimeout(() => {
         safeDisconnect(prevNode);
+        if (prevAlign) safeDisconnect(prevAlign);
         safeDisconnect(prevDc);
         safeDisconnect(prevVoicing);
         safeDisconnect(prevGain);
-      }, F * 1000 + 60);
+      }, F * 1000 + 260); // ≥ the ping timeout above, or the old engine is cut mid-fade
     }
   }
 

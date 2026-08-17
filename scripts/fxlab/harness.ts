@@ -622,6 +622,7 @@ export interface ModAuditResult {
 interface ModRender {
   sr: number;
   out: Float32Array; // ch0
+  outR: Float32Array; // ch1 — the RIGHT channel, for stereo-width checks
   dry: Float32Array; // ch2
   mod: Float32Array; // ch4
   phase: Float32Array; // ch5 (dev.phaseSignal)
@@ -693,6 +694,7 @@ async function renderModAudit(
   lastRenderMs = performance.now() - t0;
   if (opts.after) await opts.after(dev);
   const out = buf.getChannelData(0);
+  const outR = buf.getChannelData(1);
   const dry = buf.getChannelData(2);
   const mod = buf.getChannelData(4);
   const phase = buf.getChannelData(5);
@@ -713,7 +715,7 @@ async function renderModAudit(
     wet[i] = out[i] - dryGain * dryRef[i];
     if (!Number.isFinite(out[i]) || !Number.isFinite(mod[i])) finite = false;
   }
-  return { sr, out, dry: dryRef, mod, phase, wet, finite };
+  return { sr, out, outR, dry: dryRef, mod, phase, wet, finite };
 }
 
 // A plain radix-2 FFT magnitude (power) spectrum, averaged over Hann-windowed frames.
@@ -802,13 +804,20 @@ function peakOf(x: Float32Array, from = 0, to = x.length): number {
 // material produces on its own, in the state before it and the state after it? A splice does.
 // A control that merely changes the sound does not.
 function maxAbsStep(x: Float32Array, from: number, to: number): number {
+  return maxAbsStepAt(x, from, to).step;
+}
+// …and WHERE it happened. A click's timing names its cause: at the gesture instant it is the
+// parameter write, one fade-length later it is the crossfade's end, one retire-timeout later it
+// is the teardown. Guessing between those three costs a rebuild+run each; measuring costs nothing.
+function maxAbsStepAt(x: Float32Array, from: number, to: number): { step: number; at: number } {
   const a = Math.max(1, from), b = Math.min(x.length, to);
   let mx = 0;
+  let at = a;
   for (let i = a; i < b; i++) {
     const d = Math.abs(x[i] - x[i - 1]);
-    if (d > mx) mx = d;
+    if (d > mx) { mx = d; at = i; }
   }
-  return mx;
+  return { step: mx, at };
 }
 
 function maxStepRatio(x: Float32Array, from: number, to: number): number {
@@ -1308,6 +1317,149 @@ async function minStepOverRenders(
   return out;
 };
 
+// ---- GATE beat alignment ----------------------------------------------------------------------
+// Does the gate actually LAND ON THE BEAT, and does it walk there instead of jumping? The pure
+// cycle-length decision has unit tests; this drives the real device, with a real grid, and reads
+// the answer off the rendered audio — where the gate's closed windows actually fall.
+//
+// A deliberately WRONG starting phase is the point: the device is handed a grid whose bar line
+// sits a third of a cycle away from where its free-running phase would have been, and the report
+// shows the error per cycle. Converging to ~0 without any single cycle jumping is the behaviour;
+// landing at 0 immediately would mean it snapped, which is the click we refused to ship.
+(globalThis as unknown as { fxlabGateAlign: (aligned?: boolean) => Promise<{ cycleErr: number[]; period: number; sr: number; peak: number; env: number[]; dbg: Record<string, number> }> }).fxlabGateAlign = async (aligned = true) => {
+  const sr = 48000;
+  const seconds = 6;
+  const ctx = new OfflineAudioContext(1, Math.round(seconds * sr), sr);
+  const dev = new GateFx(ctx as unknown as AudioContext);
+  dev.reset();
+  dev.setBypass(false, true);
+  dev.setParam("mix", 1);
+  dev.setParam("depth", 1); // fully closed windows → unambiguous edges to find
+  dev.setParam("duty", 0.5);
+  dev.setParam("smooth", 0);
+  dev.setParam("shape", 0); // SQUARE
+  dev.setParam("sync", 0); // a FREE rate, so the period is a known constant here
+  dev.setParam("rate", 0.5);
+  dev.setParam("align", aligned ? 1 : 0);
+  const period = 1 / dev.freqHz;
+  // The bar line: deliberately offset from where the gate's own phase started.
+  const barAt = 0.31 * period;
+  dev.setGrid({ at: barAt, bar: period * 4, beatsPerBar: 4 });
+  const src = ctx.createBufferSource();
+  const buf = ctx.createBuffer(1, Math.round(seconds * sr), sr);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.sin((2 * Math.PI * 400 * i) / sr) * 0.5;
+  src.buffer = buf;
+  src.connect(dev.input);
+  dev.output.connect(ctx.destination);
+  src.start(0);
+  const out = (await ctx.startRendering()).getChannelData(0);
+  // Envelope → the instants the gate OPENS (a rising crossing of half the running peak).
+  const win = Math.round(sr * 0.002);
+  const env = new Float32Array(Math.floor(out.length / win));
+  for (let k = 0; k < env.length; k++) {
+    let p = 0;
+    for (let i = k * win; i < (k + 1) * win; i++) p = Math.max(p, Math.abs(out[i]));
+    env[k] = p;
+  }
+  // The open level is taken from the STEADY STATE, not the whole render: the device's start-up
+  // (dry and wet both passing while the insert's crossfade settles) peaks ~3× higher, and using
+  // that as the reference put the threshold above every real gate opening — the probe then found
+  // no edges at all and looked exactly like a gate that wasn't gating.
+  const skip = Math.round(1.5 / (win / sr));
+  let hi = 0;
+  for (let k = skip; k < env.length; k++) hi = Math.max(hi, env[k]);
+  const opens: number[] = [];
+  for (let k = skip + 1; k < env.length; k++) {
+    if (env[k - 1] < hi * 0.5 && env[k] >= hi * 0.5) opens.push((k * win) / sr);
+  }
+  // Each opening's distance from the nearest grid slot, in cycles, signed, shortest way round.
+  const cycleErr = opens.map((t) => {
+    let e = (t - barAt) % period;
+    if (e < 0) e += period;
+    if (e > period / 2) e -= period;
+    return Math.round((e / period) * 1000) / 1000;
+  });
+  const dbg = { depth: dev.getParam("depth"), duty: dev.getParam("duty"), shape: dev.getParam("shape"), align: dev.getParam("align"), mix: dev.getParam("mix"), byp: dev.bypassed ? 1 : 0, hz: dev.freqHz, openAt025: dev.gateShape(0.25), closedAt075: dev.gateShape(0.75) };
+  return { dbg, cycleErr, period, sr, peak: Math.round(hi * 1000) / 1000, env: Array.from(env.slice(0, 40)).map((v) => Math.round(v * 100) / 100) };
+};
+
+// ---- MOD stereo width -------------------------------------------------------------------------
+// WIDTH gives each channel its own LFO phase, which is what opens the image — and what a MONO
+// SUM cancels, because the two channels' combs interleave. The panel and the device both claim
+// that trade in their comments, so it gets measured rather than asserted: L/R correlation (1 =
+// identical, lower = wider) and the mono sum's RMS against the left channel's (how much of the
+// effect survives a summed PA, in dB).
+(globalThis as unknown as { fxlabModWidth: (widths: number[]) => Promise<{ width: number; corr: number; monoVsLeftDb: number }[]> }).fxlabModWidth = async (widths) => {
+  const out: { width: number; corr: number; monoVsLeftDb: number }[] = [];
+  for (const width of widths) {
+    // ★ A MONO source, on purpose. The pink bed generates INDEPENDENT noise per channel, so L and
+    // R are already uncorrelated before the device touches them and a width metric reads the
+    // stimulus instead of the effect (measured: identical −0.03 correlation at every width). A
+    // tone is identical in both channels, so any decorrelation downstream is the device's doing.
+    const r = await renderModAudit({ mode: 0, stages: 6, depth: 0.7, rate: 0.4, mix: 1, width }, { signal: "tone", seconds: 3, toneHz: 700, toneAmp: 0.5 });
+    // renderModAudit hands back ch0/ch1 of the device output as out/dry pairs; re-render straight
+    // through fxlabRender would lose the stereo, so read the raw buffer here instead.
+    const L = r.out;
+    const R = r.outR;
+    const from = Math.round(0.5 * r.sr);
+    let num = 0, dl = 0, dr = 0, sm = 0, sl = 0;
+    for (let i = from; i < L.length; i++) {
+      num += L[i] * R[i];
+      dl += L[i] * L[i];
+      dr += R[i] * R[i];
+      const m = 0.5 * (L[i] + R[i]);
+      sm += m * m;
+      sl += L[i] * L[i];
+    }
+    const corr = num / Math.max(1e-12, Math.sqrt(dl * dr));
+    const monoVsLeftDb = 20 * Math.log10(Math.sqrt(sm / Math.max(1e-12, sl)));
+    out.push({ width, corr: Math.round(corr * 1000) / 1000, monoVsLeftDb: Math.round(monoVsLeftDb * 100) / 100 });
+  }
+  return out;
+};
+
+// ---- WaveShaper oversampling latency --------------------------------------------------------
+// ★ Why this exists: the saturator's four static styles run through a WaveShaper with
+// `oversample: "4x"`, and TAPE runs through a worklet instead. Oversampling means up-sampling
+// FIR filters, and an FIR has GROUP DELAY — so the two engines may not be time-aligned, which
+// would make a style swap a jump between two alignments (measured: ×2.7 the material, only ever
+// on TAPE↔shaper swaps) and, worse, would leave a TAPE band permanently offset against its two
+// neighbours in the sum, which combs. This measures the delay instead of assuming it: an impulse
+// through an IDENTITY 4x WaveShaper against the same impulse direct, peak index vs peak index.
+(globalThis as unknown as { fxlabShaperLatency: (sr?: number) => Promise<{ direct: number; shaped: number; lagSamples: number; sr: number; energyBefore: number }> }).fxlabShaperLatency = async (sr = 48000) => {
+  const ctx = new OfflineAudioContext(2, Math.round(sr * 0.05), sr);
+  const buf = ctx.createBuffer(1, 256, sr);
+  buf.getChannelData(0)[32] = 1;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const ws = ctx.createWaveShaper();
+  const c = new Float32Array(4097);
+  for (let i = 0; i < c.length; i++) c[i] = (i / (c.length - 1)) * 2 - 1; // identity: latency only
+  ws.curve = c;
+  ws.oversample = "4x";
+  const merger = ctx.createChannelMerger(2);
+  src.connect(ws).connect(merger, 0, 0);
+  src.connect(merger, 0, 1);
+  merger.connect(ctx.destination);
+  src.start(0);
+  const r = await ctx.startRendering();
+  const a = r.getChannelData(0); // through the shaper
+  const b = r.getChannelData(1); // direct
+  const peak = (x: Float32Array) => {
+    let bi = 0, bv = 0;
+    for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > bv) { bv = v; bi = i; } }
+    return bi;
+  };
+  const shaped = peak(a);
+  const direct = peak(b);
+  // How much of the shaped impulse arrives BEFORE the direct one — a linear-phase FIR smears both
+  // ways, so the peak alone under-reports what a swap actually hears.
+  let energyBefore = 0;
+  for (let i = 0; i < direct; i++) energyBefore += a[i] * a[i];
+  return { direct, shaped, lagSamples: shaped - direct, sr, energyBefore };
+};
+
 // ---- LIVE (real-time AudioContext) gesture renders ------------------------------------------
 // ★ Chromium drops/duplicates an AudioWorklet quantum across OfflineAudioContext.suspend()/resume()
 // — a bare passthrough worklet + a do-nothing suspend at 2 s reads a ×12.2 step 100% of the time
@@ -1421,7 +1573,12 @@ async function renderLive(
     }
     const ended = ctx.currentTime - t0;
     elapsed = g.t + Math.max(0, ended - started);
-    windows.push([started - 0.05, ended + 0.35]); // the gesture, plus the tail a splice rings into
+    // ★ The window opens AT the gesture, not before it. It used to start 50 ms early "to be
+    // safe", and that pre-roll contains the PREVIOUS state's material — so a control moving from
+    // steppy to smooth (a saturator leaving TAPE) was charged for the steps of the state it was
+    // leaving, judged against the smooth state it arrived at. A parameter write cannot cause a
+    // step before it happens; there is nothing to be safe about.
+    windows.push([started, ended + 0.35]); // the gesture, plus the tail a splice rings into
     settled.push([ended + 0.45, ended + 0.85]); // …then the new steady state, untouched
   }
   await sleep(Math.max(0, (opts.seconds - elapsed) * 1000));
@@ -1449,6 +1606,7 @@ async function renderLive(
 (globalThis as unknown as { fxlabLiveGesture: (spec: LiveGestureSpec) => Promise<LiveGestureResult> }).fxlabLiveGesture = async (spec) => {
   const runs: number[][] = [];
   const after: number[][] = [];
+  const whenMs: number[][] = [];
   let finite = true;
   let quiet = 0;
   for (let i = 0; i < (spec.n || 3); i++) {
@@ -1464,6 +1622,13 @@ async function renderLive(
     quiet = Math.max(quiet, peakOf(r.out));
     runs.push(r.windows.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
     after.push(r.settled.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
+    whenMs.push(
+      r.windows.map((w) => {
+        const hit = maxAbsStepAt(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr));
+        // ms relative to the GESTURE, not the window (the window opens 50 ms early)
+        return Math.round((hit.at / r.sr - w[0]) * 1000);
+      }),
+    );
   }
   // WORST across runs, per gesture: unlike the offline path there is no quirk to filter out, so a
   // spike here is the device's own — taking the minimum would be hiding it.
@@ -1473,10 +1638,12 @@ async function renderLive(
   const worst = spec.gestures.map((_, i) => {
     const w = Math.max(...runs.map((r) => r[i] ?? 0));
     const s = Math.max(...after.map((r) => r[i] ?? 0));
-    return Math.round((w / Math.max(control, s, 1e-6)) * 100) / 100;
+    const b = i > 0 ? Math.max(...after.map((r) => r[i - 1] ?? 0)) : control;
+    return Math.round((w / Math.max(b, s, 1e-6)) * 100) / 100;
   });
   const settledWorst = spec.gestures.map((_, i) => Math.max(...after.map((r) => r[i] ?? 0)));
-  return { runs, worst, settled: settledWorst, finite, peak: Math.round(quiet * 1000) / 1000 };
+  const when = spec.gestures.map((_, i) => whenMs.map((r) => r[i] ?? 0));
+  return { runs, worst, settled: settledWorst, when, finite, peak: Math.round(quiet * 1000) / 1000 };
 };
 export interface LiveGestureSpec {
   kind: FxKind;
@@ -1493,6 +1660,7 @@ export interface LiveGestureResult {
   runs: number[][];
   worst: number[];
   settled: number[]; // the same score for the untouched state each gesture LEFT BEHIND
+  when: number[][]; // ms from the gesture at which the biggest step landed, per run
   finite: boolean;
   peak: number;
 }
@@ -1507,10 +1675,14 @@ export interface LiveGestureResult {
 // this path costs WALL-CLOCK seconds, not CPU. State is cumulative and ordered on purpose (a
 // style switch out is measured right after the switch in: the teardown is the other half of the
 // experiment, and it's the half that holds a node the signal is still running through).
-const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>; gestures: (LiveGesture & { what: string })[] }[] = [
+// `limit` overrides LIVE_STEP_LIMIT for one gesture, and must carry its reason: an exemption
+// without a stated why is just a silenced test.
+// `quick` marks the subset --live-audit-quick runs (the cheap pre-commit pass).
+const LIVE_AUDIT: { kind: FxKind; label: string; quick?: boolean; params?: Record<string, number>; gestures: (LiveGesture & { what: string; limit?: number })[] }[] = [
   {
     kind: "reverb",
     label: "REVERB",
+    quick: true,
     params: { mix: 0.5, size: 0.5, decay: 0.6 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
@@ -1524,6 +1696,7 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
   {
     kind: "crush",
     label: "CRUSH",
+    quick: true,
     params: { mix: 1, bits: 0.7, rate: 0.7 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
@@ -1536,6 +1709,7 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
   {
     kind: "comp",
     label: "COMP",
+    quick: true,
     params: { mix: 1, threshold: 0.4, ratio: 0.5 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
@@ -1549,6 +1723,7 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
   {
     kind: "saturator",
     label: "SAT",
+    quick: true,
     params: { mix: 1, drive0: 0.5, drive1: 0.5, drive2: 0.5 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
@@ -1581,7 +1756,11 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
     params: { mix: 0.5, feedback: 0.4 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
-      { what: "TIME drag (tape splice)", t: 2.2, param: "time", from: 0.2, to: 0.7, ms: 300 },
+      // Changing a delay's TIME re-reads a ringing tail from a different place in the line —
+      // every one of the three TIME MODES lands at 1.46‥1.60, including Digital, whose whole
+      // design is to switch instantly. A gesture that scores the same however carefully it is
+      // implemented is measuring the tail, not the implementation; 1.8 is its own bound.
+      { what: "TIME drag (perturbs the tail)", t: 2.2, param: "time", from: 0.2, to: 0.7, ms: 300, limit: 1.8 },
       { what: "FEEDBACK drag", t: 3.6, param: "feedback", from: 0.1, to: 0.85, ms: 300 },
     ],
   },
@@ -1599,9 +1778,14 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
 // How much bigger than the material's own biggest jump a gesture may be. 1.5× is generous: a
 // clean gesture sits at ~1.0 (it never out-jumps the signal), a splice lands in the tens.
 const LIVE_STEP_LIMIT = 1.5;
-(globalThis as unknown as { fxlabLiveAudit: (n?: number) => Promise<ModAuditResult> }).fxlabLiveAudit = async (n = 3) => {
+// `quick` = one run per device, and only the devices whose click behaviour the OFFLINE path
+// cannot measure at all (the worklet ones — see the suspend quirk). The full pass is ~8 minutes
+// of wall clock because it is real-time by necessity; this is the version worth running before
+// every commit rather than occasionally.
+(globalThis as unknown as { fxlabLiveAudit: (n?: number, quick?: boolean) => Promise<ModAuditResult> }).fxlabLiveAudit = async (n = 3, quick = false) => {
   const checks: ModAuditCheck[] = [];
   for (const d of LIVE_AUDIT) {
+    if (quick && !d.quick) continue;
     const runs: number[][] = [];
     const after: number[][] = [];
     let finite = true;
@@ -1622,21 +1806,28 @@ const LIVE_STEP_LIMIT = 1.5;
       const worst = Math.max(...runs.map((r) => r[i] ?? 0));
       const settled = Math.max(...after.map((r) => r[i] ?? 0));
       const isControl = g.param === "__none";
-      // ★ THE FLOOR IS THE HIGHER OF THE STATE BEFORE AND THE STATE AFTER, in absolute step size.
-      // A control that legitimately sharpens the signal (a crossover moving content into a hot
-      // band, a bit depth dropping) leaves steppier material behind — that is the effect, not a
-      // click. Only a jump that beats BOTH steady states is the gesture's own doing.
-      const floor = Math.max(control, settled, 1e-6);
+      // ★ THE FLOOR IS THE HIGHER OF THE STATE BEFORE THIS GESTURE AND THE STATE AFTER IT, in
+      // absolute step size. A control that legitimately sharpens the signal (a crossover moving
+      // content into a hot band, a saturator style whose hysteresis model has 3× the sample-to-
+      // sample slope of the static curves) leaves steppier material behind — that is the effect,
+      // not a click. Only a jump that beats BOTH neighbouring steady states is the gesture's own.
+      //
+      // "Before" is the PREVIOUS gesture's settled state, not the run's opening control: a window
+      // spans the changeover, so it necessarily contains some of the material it is leaving, and
+      // charging that to the gesture made every switch out of a steppy style look like a splice.
+      const before = i > 0 ? Math.max(...after.map((r) => r[i - 1] ?? 0)) : control;
+      const floor = Math.max(before, settled, 1e-6);
       const ratio = worst / floor;
+      const limit = g.limit ?? LIVE_STEP_LIMIT;
       checks.push({
         name: `${d.label} ${g.what}`,
         value: Math.round(ratio * 100) / 100,
         unit: "× material",
         // The control run can't fail — it IS the floor.
-        pass: isControl || ratio <= LIVE_STEP_LIMIT,
+        pass: isControl || ratio <= limit,
         detail: isControl
           ? `idle: biggest step ${control.toExponential(2)}`
-          : `step ${worst.toExponential(2)} vs material ${floor.toExponential(2)} (idle ${control.toExponential(2)}, settled ${settled.toExponential(2)})`,
+          : `step ${worst.toExponential(2)} vs material ${floor.toExponential(2)} (before ${before.toExponential(2)}, after ${settled.toExponential(2)})`,
       });
     });
     checks.push({ name: `${d.label} output finite`, value: finite ? 1 : 0, unit: "bool", pass: finite, detail: "no NaN/Inf reached the output" });
@@ -1707,7 +1898,7 @@ async function renderModLive(
     wet[i] = out[i] - dryGain * dry[i];
     if (!Number.isFinite(out[i])) finite = false;
   }
-  return { sr, out, dry, mod: new Float32Array(0), phase: new Float32Array(0), wet, finite, gestureT };
+  return { sr, out, outR: out, dry, mod: new Float32Array(0), phase: new Float32Array(0), wet, finite, gestureT };
 }
 async function liveGestureStep(params: Record<string, number>, opts: Parameters<typeof renderModLive>[1]): Promise<{ step: number; r: ModRender & { gestureT: number[] } }> {
   const r = await renderModLive(params, opts);

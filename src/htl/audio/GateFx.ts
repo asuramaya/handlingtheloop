@@ -195,6 +195,16 @@ export class GateFx extends BaseFxDevice {
     // has a median step of zero, and every ratio against it explodes).
     const offlineLen = (this.ctx as unknown as { length?: number }).length;
     const until = offlineLen ? offlineLen / this.ctx.sampleRate : now + GateFx.LOOKAHEAD;
+    // ★ An offline render writes the WHOLE timeline in one pass (there is no clock to top it up),
+    // which means anything scheduled at construction would ignore every parameter set afterwards —
+    // a grid, a rate, an align flag. Offline, therefore, each tick REWRITES from now; before the
+    // render starts `now` is 0, so the rewrite is complete and free. This is exactly the rewrite
+    // that must never happen in real time, where already-written cycles are audio that is about
+    // to play and re-cutting them is the splice this scheduler exists to avoid.
+    if (offlineLen) {
+      this.phaseRamp.offset.cancelScheduledValues(now);
+      this.cycleAt = now;
+    }
     // A stall (hidden tab, suspended context) leaves cycleAt far in the past; there is no point
     // rendering history, and walking it cycle by cycle could be thousands of iterations.
     if (this.cycleAt < now) this.cycleAt = now;

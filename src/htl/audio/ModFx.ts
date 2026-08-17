@@ -202,6 +202,7 @@ export class ModFx extends BaseFxDevice {
   private _depth = 0.5;
   private _fb = 0.3;
   private _tone = 0.5;
+  private _width = 0; // stereo spread of the per-channel LFO phase (0 = mono-safe, see setWidth)
   private _stages = 6;
   private _wave = 0;
   private _src = 0;
@@ -505,7 +506,7 @@ export class ModFx extends BaseFxDevice {
             link(node, this.modTap, 1, 0, true);
             link(node, this.phaseTap, 2, 0, true);
           }
-          node.port.postMessage({ base: voiceBase * sr, depth: depthSamples, fb: this._fb * fbMult, lfoHz: this.rate.hz(), wave: this._wave, phase: k / N, lfoOn: this._src === 1 ? 0 : 1 });
+          node.port.postMessage({ base: voiceBase * sr, depth: depthSamples, fb: this._fb * fbMult, lfoHz: this.rate.hz(), wave: this._wave, phase: k / N, lfoOn: this._src === 1 ? 0 : 1, spread: this._width });
           eng.delayNodes.push(node);
           eng.nodes.push(node);
         } catch {
@@ -696,6 +697,33 @@ export class ModFx extends BaseFxDevice {
     if (eng) for (const f of eng.fbGains) f.g.gain.setTargetAtTime(this._fb * f.mult, this.ctx.currentTime, 0.02);
     this.postDelay();
   }
+  /**
+   * STEREO WIDTH — how far the right channel's LFO phase leads the left's, in half-cycles.
+   *
+   * This is the ensemble trick applied across the pair rather than across the voices: the two
+   * channels get genuinely different delay curves, so the wet combs the dry differently on each
+   * side and the image opens up. It only works on the WORKLET path (the native fallback runs one
+   * shared mod bus and has no per-channel phase to give); the fallback simply ignores it.
+   *
+   * ★ It costs mono compatibility, which is why it rests at 0 — and the cost is MEASURED, not
+   * assumed (fxlab --mod-width, a mono 700 Hz tone through a 6-voice chorus):
+   *
+   *     width   L/R corr   mono sum vs L
+   *      0.00     1.000       0.00 dB      ← channels bit-identical: the default really is mono-safe
+   *      0.50     0.629      −0.89 dB
+   *      1.00     0.405      −1.58 dB
+   *
+   * So a summed PA loses about 1.6 dB of the wet at full width, not the whole effect. Modest, but
+   * real, and a club sub feed is mono — which is why this is something you reach for rather than
+   * something already on.
+   */
+  private setWidth(v: number) {
+    this._width = clamp01(v);
+    for (const node of this.engine?.delayNodes ?? []) {
+      (node as AudioWorkletNode).port?.postMessage({ spread: this._width });
+    }
+  }
+
   private setTone(e: number) {
     this._tone = clamp01(e);
     this.applyTone();
@@ -894,6 +922,9 @@ export class ModFx extends BaseFxDevice {
       { id: "src", def: 0, get: () => this._src, set: (v) => this.setSrc(v) },
       { id: "thru", def: 0, get: () => (this._thru ? 1 : 0), set: (v) => this.setThru(v >= 0.5) },
       { id: "sync", def: 0, get: () => (this.rate.sync ? 1 : 0), set: (v) => this.setSync(v >= 0.5) },
+      // WIDTH defaults to 0 — see setWidth. It is a real stereo effect with a real mono cost, so
+      // it is something you reach for, never something that is already on.
+      { id: "width", def: 0, get: () => this._width, set: (v) => this.setWidth(v) },
     );
   }
 

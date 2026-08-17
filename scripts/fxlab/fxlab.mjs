@@ -13,6 +13,9 @@
 //   node scripts/fxlab/fxlab.mjs --churn                     # rapid real-time param-drag stress test (MOD)
 //   node scripts/fxlab/fxlab.mjs --mod-voice-sweep            # STAGES 2..12 peak/clip table (MOD chorus+flanger)
 //   node scripts/fxlab/fxlab.mjs --mod-audit                  # the 2026-08 MOD review, one number + pass line per finding
+//   node scripts/fxlab/fxlab.mjs --live-audit                 # real-time gesture/click audit, every device (~8 min)
+//   node scripts/fxlab/fxlab.mjs --live-audit-quick           # …the worklet devices only, 1 run each (pre-commit)
+//   node scripts/fxlab/fxlab.mjs --shaper-latency             # Chromium's oversample="4x" group delay, measured
 //
 // Flags: --kind --preset --params(json) --signal(impulse|burst|noise|tone|silence)
 //        --seconds --bpm --json (raw JSON only) --sweep-feedback
@@ -57,6 +60,10 @@ function parseArgs(argv) {
       // {"kind":"reverb","params":{...},"gestures":[{"t":1.5,"param":"size","from":0.2,"to":0.9,"ms":300}],"n":3}
       case "--live-gesture": a.liveGesture = JSON.parse(v); i++; break;
       case "--live-audit": a.liveAudit = true; break;
+      case "--live-audit-quick": a.liveAudit = true; a.quick = true; break;
+      case "--shaper-latency": a.shaperLatency = true; break;
+      case "--mod-width": a.modWidth = true; break;
+      case "--gate-align": a.gateAlign = true; break;
       case "--throw": a.throwPreset = v; i++; break;
       case "--throw-at": a.throwAt = Number(v); i++; break;
       case "--throw-off": a.throwOff = Number(v); i++; break;
@@ -286,9 +293,42 @@ async function main() {
       const r = await page.evaluate((g) => globalThis.fxlabLiveGesture(g), g);
       g.gestures.forEach((ges, i) => {
         const label = ges.param === "__none" ? "control" : `${ges.param}${ges.ms ? ` drag→${ges.to}` : ` →${ges.to}`}`;
-        console.log(`   ${label.padEnd(28)} ×${f(r.worst[i], 2).padStart(7)} material   (step ${r.runs.map((x) => x[i].toExponential(1)).join(" ")})`);
+        console.log(`   ${label.padEnd(28)} ×${f(r.worst[i], 2).padStart(7)} material   at ${r.when[i].map((m) => `${m >= 0 ? "+" : ""}${m}ms`).join(" ")}   (step ${r.runs.map((x) => x[i].toExponential(1)).join(" ")})`);
       });
       console.log(`   finite=${r.finite}  peak=${f(r.peak, 3)}`);
+      return;
+    }
+
+    if (args.gateAlign) {
+      console.log("\n  GATE beat alignment — phase error of each gate opening, in CYCLES (0 = on the grid):\n");
+      for (const on of [true, false]) {
+        const r = await page.evaluate((on) => globalThis.fxlabGateAlign(on), on);
+        const err = r.cycleErr;
+        const worst = err.length ? Math.max(...err.map((e) => Math.abs(e))) : NaN;
+        console.log(`   ALIGN ${on ? "on " : "off"}  (${err.length} openings, period ${f(r.period, 3)}s)`);
+        console.log(`      ${err.slice(0, 12).map((e) => (e >= 0 ? "+" : "") + f(e, 3)).join("  ")}`);
+        console.log(`      worst |error| = ${f(worst, 3)} cycles${on ? "  ← the grid line is at 0" : "  ← the grid was deliberately set 0.31 of a cycle away"}`);
+      }
+      console.log("");
+      return;
+    }
+
+    if (args.modWidth) {
+      const r = await page.evaluate(() => globalThis.fxlabModWidth([0, 0.25, 0.5, 0.75, 1]));
+      console.log("\n  MOD stereo WIDTH — what it buys, and what a mono sum costs:\n");
+      console.log("   width   L/R corr   mono sum vs L");
+      for (const x of r) console.log(`   ${f(x.width, 2).padStart(5)}   ${f(x.corr, 3).padStart(8)}   ${f(x.monoVsLeftDb, 2).padStart(8)} dB`);
+      console.log("");
+      return;
+    }
+
+    if (args.shaperLatency) {
+      console.log(`\n  WaveShaper oversample="4x" latency, measured with an identity curve:`);
+      for (const sr of [44100, 48000, 96000]) {
+        const r = await page.evaluate((sr) => globalThis.fxlabShaperLatency(sr), sr);
+        console.log(`   ${String(sr).padStart(6)} Hz: direct @ ${r.direct}  shaped @ ${r.shaped}  lag ${String(r.lagSamples).padStart(4)} samples = ${f((r.lagSamples / r.sr) * 1000, 3)} ms   (pre-peak energy ${r.energyBefore.toExponential(1)})`);
+      }
+      console.log("");
       return;
     }
 
@@ -297,8 +337,8 @@ async function main() {
       // wall-clock minutes. The offline path cannot answer this question for a worklet device at
       // all: OfflineAudioContext.suspend() injects a ×12 step into ANY worklet graph (see
       // --suspend-quirk), so those verdicts measured Chromium, not the DSP.
-      console.log("\n  FXLAB · live gesture audit — every worklet device's splice-prone gestures, on the wall clock\n");
-      const r = await page.evaluate(() => globalThis.fxlabLiveAudit(3));
+      console.log(`\n  FXLAB · live gesture audit${args.quick ? " (quick: worklet devices, 1 run each)" : ""} — splice-prone gestures, on the wall clock\n`);
+      const r = await page.evaluate((q) => globalThis.fxlabLiveAudit(q ? 1 : 3, q), !!args.quick);
       let dev = "";
       for (const c of r.checks) {
         const d = c.name.split(" ")[0];

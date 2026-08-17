@@ -1,11 +1,26 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Deck, CompFx } from "@htl/audio";
 import { useEmit, useRefresh } from "../App/spine";
 import { COMP_MODES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { MeterBar } from "./MeterBar";
+import { drawReadout, READOUT_H } from "./Readout";
+import { usePulse } from "./usePulse";
 
-// COMP surface — MODE row (GLUE / FET / OPTO / LIMIT), the gain-reduction METER, and the cells.
+// COMP surface — the gain-reduction METER, the cells, and a foot strip holding MODE / AUTO /
+// sidechain source.
+//
+// ★ THE LAST DEVICE TO JOIN THE RACK'S OWN LAWS. It was the odd one out on three counts:
+//   • Its mode row OPENED the panel, sitting directly under FxStrip's device tabs — the exact
+//     "one undifferentiated stack of pill buttons" the saturator's row was moved to the foot to
+//     escape. Every other device's mode select is the LAST thing in the panel; COMP's is now too.
+//   • MODE was four radio buttons where the rest of the rack collapses a value-selector into ONE
+//     cycler chip carrying .cyc-pips (Delay's TIME-MODE, Reverb's algorithm, MOD's MODE). Four
+//     peers also crowded AUTO — a genuine toggle — into looking like a fifth mode, which it
+//     isn't. One chip, tap to step, pips for depth; AUTO and the SC source are its real peers.
+//   • It had no Readout strip, alone in a rack of eight devices that all wear one. LEFT says what
+//     the device IS (mode · auto), RIGHT carries the sidechain — the setting most responsible for
+//     how a buss compressor behaves and the one you cannot see from the knobs.
 // The meter is not decoration: a compressor you can't see is a compressor you can't set. Every
 // decision you make here — threshold, ratio, how fast it lets go — is a decision about a number
 // you can only read off the needle. MeterBar runs it on its own rAF rather than React state, so
@@ -25,6 +40,46 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
   const getGr = useMemo(() => () => dev?.gainReduction ?? 0, [dev]);
+  const readoutRef = useRef<HTMLCanvasElement>(null);
+  const [modePulse, pulseMode] = usePulse();
+
+  // The readout runs on its own rAF, like every other device's — it reads the LIVE device rather
+  // than React state, so a mode change or a knob drag shows up without a re-render.
+  useEffect(() => {
+    const d = deck.fxDeviceAt(slot) as CompFx | undefined;
+    if (!d) return;
+    let raf = 0;
+    const draw = () => {
+      const canvas = readoutRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) {
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+          canvas.width = Math.round(w * dpr);
+          canvas.height = Math.round(h * dpr);
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        const m = Math.round(d.getParam("mode"));
+        const hp = d.getParam("scHp");
+        const look = d.getParam("lookahead");
+        const gr = d.gainReduction;
+        drawReadout(ctx, w, accent, {
+          left: `${COMP_MODES[m] ?? "?"}${d.getParam("auto") >= 0.5 ? "  ·  AUTO" : ""}`,
+          // The needle says HOW MUCH; this says the comp is working at all, which at 0.2 dB of
+          // reduction on a busy meter is otherwise easy to miss.
+          mid: gr > 0.2 ? `−${gr.toFixed(1)} dB` : "",
+          midHot: gr > 3,
+          right: `SC ${d.getParam("scExt") >= 0.5 ? "EXT" : "INT"}${hp > 20 ? `  ·  HP ${Math.round(hp)}` : ""}${look > 0 ? `  ·  LOOK ${look.toFixed(1)}ms` : ""}`,
+        });
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [deck, slot, accent]);
 
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);
@@ -41,17 +96,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
 
   return (
     <div className="fx-panel sat-panel comp-panel" style={{ ["--accent" as string]: accent }}>
-      {/* MODE is the instrument, not a preset — each one re-times the ballistics underneath. */}
-      <div className="sat-styles">
-        {COMP_MODES.map((m, i) => (
-          <button key={m} className={mode === i ? "active" : ""} onClick={() => setParam("mode", i)} title={MODE_HINT[i]}>
-            {m}
-          </button>
-        ))}
-        <button className={`sat-punish ${auto ? "active" : ""}`} onClick={() => setParam("auto", auto ? 0 : 1)} title="Auto makeup + program-dependent release">
-          AUTO
-        </button>
-      </div>
+      <canvas ref={readoutRef} className="sat-readout" style={{ height: READOUT_H }} />
 
       {/* Gain reduction — how hard it's actually working, right now. */}
       <MeterBar getValue={getGr} toPercent={(gr) => (Math.min(1, gr / GR_FLOOR) * 100)} format={(gr) => (gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`)} unit="dB GR" label="Gain reduction (dB)" rtl />
@@ -71,14 +116,36 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
             under the untouched one. The New York drum trick, for free. */}
       </div>
 
-      {/* The DJ move: let the OTHER deck drive this deck's compressor, so the incoming track carves
-          its own hole instead of two tracks fighting for the same space. */}
-      <div className="sat-styles comp-sc">
+      {/* The foot strip — same position and language as every other device. MODE is the
+          instrument (each mode re-times the ballistics underneath), AUTO is a real toggle, and
+          the SC source is the DJ move: let the OTHER deck drive this compressor, so the incoming
+          track carves its own hole instead of two tracks fighting for the same space. */}
+      <div className="sat-styles">
+        <button
+          className={`cyc active ${modePulse}`}
+          onClick={() => {
+            setParam("mode", (mode + 1) % COMP_MODES.length);
+            pulseMode();
+          }}
+          title={`Mode — tap to cycle. ${MODE_HINT[mode]}`}
+        >
+          {COMP_MODES[mode] ?? "?"}
+          <span className="cyc-pips" aria-hidden="true">
+            {COMP_MODES.map((m, i) => (
+              <i key={m} className={i === mode ? "on" : ""} />
+            ))}
+          </span>
+        </button>
+        <span className="fx-sep" />
+        <button className={auto ? "active" : ""} onClick={() => setParam("auto", auto ? 0 : 1)} title="Auto makeup + program-dependent release">
+          AUTO
+        </button>
+        <span className="fx-sep" />
         <button className={!ext ? "active" : ""} onClick={() => setParam("scExt", 0)} title="Detector listens to this channel">
           SC: INT
         </button>
         <button className={ext ? "active" : ""} onClick={() => setParam("scExt", 1)} title={`Detector listens to deck ${id === "A" ? "B" : "A"} — the other track ducks this one`}>
-          SC: DECK {id === "A" ? "B" : "A"}
+          SC: {id === "A" ? "B" : "A"}
         </button>
       </div>
     </div>

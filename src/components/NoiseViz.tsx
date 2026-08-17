@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { NOISE_TYPES, type Deck, type NoiseFx } from "@htl/audio";
+import { NOISE_DIRS, NOISE_TYPES, type Deck, type NoiseFx } from "@htl/audio";
 import { drawReadout, READOUT_H } from "./Readout";
 
 // WYSIWYG for the NOISE riser: a log-frequency display where the LIVE generated noise spectrum
@@ -52,6 +52,14 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
     const draw = () => {
       const bpm = deck.effectiveBpm;
       if (bpm) dev.setSyncBpm(bpm);
+      // The bar grid a SNAPped build lands on, and the key TONAL follows — both from the deck,
+      // both the same sources the waveform and the key badge already read, so the riser lands on
+      // the line you can see and sings in the key the header names.
+      dev.setGrid(deck.barGridCtx());
+      const key = deck.effectiveKey;
+      // tonic pitch class → Hz, in the octave a riser's pitched layer wants to start from
+      // (~65‥123 Hz, i.e. C2 up): 16.3516 is C0.
+      dev.setKeyHz(key ? 16.3516 * Math.pow(2, key.tonic / 12) * 4 : 0);
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
@@ -135,8 +143,13 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       // MANUAL, when the pad is a plain gate). MIDDLE: what you're touching on the XY pad. RIGHT:
       // the post tone, the one control the drawn sweep curve doesn't spell out as a number.
       const bars = Math.max(1, Math.round(dev.bars));
+      // SNAP only earns its label when there is a grid to snap TO — on a stopped or unanalysed
+      // deck the build runs its nominal length, and saying SNAP there would be a lying indicator
+      // (the same distinction GATE draws between ALIGN armed and actually LOCKed).
+      const snap = dev.snapped ? (dev.hasGrid ? "  ·  SNAP" : "  ·  SNAP?") : "";
+      const dirLabel = NOISE_DIRS[dev.dirIndex] ?? "UP";
       drawReadout(ctx2d, w, accent, {
-        left: `${NOISE_TYPES[dev.typeIndex] ?? "?"}  ·  ${dev.rising ? `${bars} BAR${bars > 1 ? "S" : ""}` : "MANUAL"}`,
+        left: `${NOISE_TYPES[dev.typeIndex] ?? "?"}${dev.keyLocked ? " KEY" : ""}  ·  ${dirLabel}  ·  ${dev.rising ? `${bars} BAR${bars > 1 ? "S" : ""}${snap}` : "MANUAL"}`,
         mid: dragging.current ? `SWEEP ${dev.sweepHz < 1000 ? `${Math.round(dev.sweepHz)} Hz` : `${(dev.sweepHz / 1000).toFixed(1)} kHz`}  ·  RES ${Math.round(dev.getParam("res") * 100)}%` : "",
         midHot: dragging.current,
         right: `TONE ${Math.round(dev.getParam("tone") * 100)}%`,

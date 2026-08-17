@@ -1,6 +1,6 @@
 import type { Deck, NoiseFx } from "@htl/audio";
 import { useEmit, useRefresh } from "../App/spine";
-import { NOISE_TYPES } from "@htl/audio";
+import { NOISE_DIRS, NOISE_TYPES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { NoiseViz } from "./NoiseViz";
 import { useFrameSync } from "./useFrameSync";
@@ -47,7 +47,11 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
   };
   const type = Math.round(get("type"));
   const rise = get("rise") >= 0.5;
+  const dir = Math.round(get("dir"));
+  const snap = get("snap") >= 0.5;
   const [typePulse, pulseType] = usePulse();
+  const [dirPulse, pulseDir] = usePulse();
+  const [snapPulse, pulseSnap] = usePulse();
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
@@ -77,6 +81,18 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
             <span className={`range-tick ${rise ? "active" : ""}`} />
           </div>
         </ValueCell>
+        {/* CURVE — the build's SHAPE, which is most of its character: below centre holds back and
+            then rushes (the late bloom), above centre leaps and eases in. Two fixed ramps gave
+            this device exactly one build, and every riser it made was the same event. */}
+        <ValueCell label="CURVE" value={get("curve")} min={0} max={1} pivot={0.5} onChange={(v) => setParam("curve", v)} format={(v) => (v < 0.45 ? "LATE" : v > 0.55 ? "EARLY" : "LIN")} />
+        {/* WIDTH — how much of the right channel is its OWN noise rather than a copy of the left.
+            0 is mono-safe; 1 is fully decorrelated, which is as wide as noise gets. */}
+        <ValueCell label="WIDTH" value={get("width")} min={0} max={1} onChange={(v) => setParam("width", v)} format={(v) => `${Math.round(v * 100)}`} />
+        {/* DUCK — pulls the TRACK down as the build climbs. The fader move every DJ makes by hand
+            under a riser, on the same envelope as the riser itself. */}
+        <ValueCell label="DUCK" value={get("duck")} min={0} max={1} onChange={(v) => setParam("duck", v)} format={(v) => (v <= 0 ? "OFF" : `${Math.round(v * 100)}`)} />
+        {/* IMPACT — the hit on release. A riser that ends in silence is half a gesture. */}
+        <ValueCell label="IMPACT" value={get("impact")} min={0} max={1} onChange={(v) => setParam("impact", v)} format={(v) => (v <= 0 ? "OFF" : `${Math.round(v * 100)}`)} />
       </div>
 
       {/* The foot strip — same position and language as every other device. */}
@@ -95,6 +111,36 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
               <i key={t} className={i === type ? "on" : ""} />
             ))}
           </span>
+        </button>
+        <span className="fx-sep" />
+        {/* DIR — UP is the riser, DOWN is the downlifter that goes WITH the drop rather than
+            before it. Same envelope, run the other way; the device could only build tension. */}
+        <button
+          className={`cyc active ${dirPulse}`}
+          onClick={() => {
+            setParam("dir", (dir + 1) % NOISE_DIRS.length);
+            pulseDir();
+          }}
+          title="Sweep direction — UP: a riser into the drop. DOWN: a downlifter out of it."
+        >
+          {NOISE_DIRS[dir] ?? "?"}
+          <span className="cyc-pips" aria-hidden="true">
+            {NOISE_DIRS.map((d, i) => (
+              <i key={d} className={i === dir ? "on" : ""} />
+            ))}
+          </span>
+        </button>
+        {/* SNAP — quantise the build's END to the bar grid, so it arrives on the one however
+            ragged the press was. A real toggle, so it looks like one. */}
+        <button
+          className={`${snap ? "active" : ""} ${snapPulse}`}
+          onClick={() => {
+            setParam("snap", snap ? 0 : 1);
+            pulseSnap();
+          }}
+          title="SNAP: land the build's end on the bar grid (the drop), stretching it up to half a bar to fit."
+        >
+          SNAP
         </button>
       </div>
     </div>

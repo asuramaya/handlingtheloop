@@ -1,10 +1,16 @@
 import { useEffect, useRef } from "react";
-import type { Deck, NoiseFx } from "@htl/audio";
+import { NOISE_TYPES, type Deck, type NoiseFx } from "@htl/audio";
+import { drawReadout, READOUT_H } from "./Readout";
 
 // WYSIWYG for the NOISE riser: a log-frequency display where the LIVE generated noise spectrum
 // fills in as you engage (dim when idle), the resonant SWEEP filter response glows over it, and
 // a marker rides the cutoff — so during an auto-build you watch the whole thing CLIMB. The
 // standardized curve panel (right) shows the filter response shape. XY pad: X = SWEEP, Y = RES.
+//
+// The shared Readout strip is drawn into the TOP of this canvas (the CRUSH/GATE mounting — no
+// curve-preview sibling to fight for width): LEFT what the device IS (colour · build length),
+// MIDDLE what you're TOUCHING on the pad, RIGHT the tone. NOISE was the last device in the rack
+// without one.
 
 const F_MIN = 30;
 const F_MAX = 20000;
@@ -56,31 +62,37 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       }
       ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx2d.clearRect(0, 0, w, h);
+      // Everything below draws in a frame translated under the readout strip; `h` from here on
+      // is the GRAPH's height, so no drawing can land on the strip (the CrushViz pattern).
+      const boxH = h;
+      const h2 = Math.max(1, boxH - READOUT_H);
+      ctx2d.save();
+      ctx2d.translate(0, READOUT_H);
       const nyq = actx.sampleRate / 2;
 
       // BARS build meter — FULL-HEIGHT bar columns spanning the whole viz, drawn FIRST as a
       // backdrop so the spectrum + sweep curve render on top. One column per bar, filled to the
       // live build progress + a leading playhead. RISE off = a "MANUAL" label.
-      drawRiseBars(ctx2d, w, h, accent, dev);
+      drawRiseBars(ctx2d, w, h2, accent, dev);
 
       // live generated-noise spectrum — fills in as the riser is engaged (dim until then).
       an.getByteFrequencyData(bins);
       ctx2d.beginPath();
-      ctx2d.moveTo(0, h);
+      ctx2d.moveTo(0, h2);
       let started = false;
       for (let b = 1; b < bins.length; b++) {
         const f = (b / bins.length) * nyq;
         if (f < F_MIN) continue;
         if (f > F_MAX) break;
         const x = fx(f, w);
-        const y = h - (bins[b] / 255) * h * 0.94;
+        const y = h2 - (bins[b] / 255) * h2 * 0.94;
         if (!started) {
-          ctx2d.lineTo(x, h);
+          ctx2d.lineTo(x, h2);
           started = true;
         }
         ctx2d.lineTo(x, y);
       }
-      ctx2d.lineTo(w, h);
+      ctx2d.lineTo(w, h2);
       ctx2d.closePath();
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 22%, transparent)`;
       ctx2d.fill();
@@ -93,7 +105,7 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.beginPath();
       for (let i = 0; i < NR; i++) {
         const x = fx(freqs[i], w);
-        const y = h - clamp01(resp[i] / mx) * h * 0.92;
+        const y = h2 - clamp01(resp[i] / mx) * h2 * 0.92;
         i === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
       }
       ctx2d.strokeStyle = accent;
@@ -109,13 +121,26 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       ctx2d.lineWidth = dev.throwing ? 2.4 : 1.4;
       ctx2d.beginPath();
       ctx2d.moveTo(mxx, 0);
-      ctx2d.lineTo(mxx, h);
+      ctx2d.lineTo(mxx, h2);
       ctx2d.stroke();
 
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 70%, transparent)`;
       ctx2d.font = "10px ui-monospace, monospace";
       ctx2d.textBaseline = "top";
       ctx2d.fillText(dev.throwing ? (dev.rising ? "RISE" : "ON") : "", 6, 5);
+
+      ctx2d.restore();
+
+      // The readout. LEFT: what the device IS — the noise colour, and the build it will run (or
+      // MANUAL, when the pad is a plain gate). MIDDLE: what you're touching on the XY pad. RIGHT:
+      // the post tone, the one control the drawn sweep curve doesn't spell out as a number.
+      const bars = Math.max(1, Math.round(dev.bars));
+      drawReadout(ctx2d, w, accent, {
+        left: `${NOISE_TYPES[dev.typeIndex] ?? "?"}  ·  ${dev.rising ? `${bars} BAR${bars > 1 ? "S" : ""}` : "MANUAL"}`,
+        mid: dragging.current ? `SWEEP ${dev.sweepHz < 1000 ? `${Math.round(dev.sweepHz)} Hz` : `${(dev.sweepHz / 1000).toFixed(1)} kHz`}  ·  RES ${Math.round(dev.getParam("res") * 100)}%` : "",
+        midHot: dragging.current,
+        right: `TONE ${Math.round(dev.getParam("tone") * 100)}%`,
+      });
 
       raf = requestAnimationFrame(draw);
     };
@@ -131,13 +156,19 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
   }, [deck, slot, accent]);
 
   // XY pad: X = SWEEP, Y = RES (top = more resonance).
+  // The readout strip at the top is a LABEL, not part of the pad — Y is measured from below it
+  // (the same exclusion CRUSH and GATE use), so RES 100% is the top of the graph rather than a
+  // point you can only reach by dragging onto the text.
   const apply = (e: React.PointerEvent) => {
     const r = mainRef.current?.getBoundingClientRect();
     if (!r) return;
+    const vizH = Math.max(1, r.height - READOUT_H);
     set("sweep", clamp01((e.clientX - r.left) / r.width));
-    set("res", clamp01(1 - (e.clientY - r.top) / r.height));
+    set("res", clamp01(1 - (e.clientY - r.top - READOUT_H) / vizH));
   };
   const onDown = (e: React.PointerEvent) => {
+    const r = mainRef.current?.getBoundingClientRect();
+    if (r && e.clientY - r.top < READOUT_H) return; // the strip is not a control
     dragging.current = true;
     mainRef.current?.setPointerCapture(e.pointerId);
     apply(e);

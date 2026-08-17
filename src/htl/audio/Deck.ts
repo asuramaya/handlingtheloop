@@ -1,5 +1,5 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
-import { beatTimeOffset, shiftKey } from "../analysis/analyze";
+import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
@@ -1334,6 +1334,28 @@ export class Deck {
       if (len > 0 && pos > this.loop.start) pos = this.loop.start + ((pos - this.loop.start) % len);
     }
     return Math.max(0, Math.min(this._duration, pos));
+  }
+
+  /**
+   * The deck's BAR GRID expressed in AUDIO-CONTEXT time: `at` = the ctx time of the bar line at
+   * or before the playhead, `bar` = that bar's length in ctx seconds. Null when there is nothing
+   * to lock to (stopped, unloaded, or unanalysed).
+   *
+   * ★ It is derived from `barAnchor(beatgrid)` — the SAME dynamic tracked-beat grid the waveform
+   * draws its bar lines from — so a tempo-synced effect that anchors to this lands on the lines
+   * the human is already reading, not on a second, subtly different re-derivation of the beat.
+   * Track seconds convert by the sounding rate, which folds in tempo, bend and sync trim, so a
+   * nudge moves the grid exactly as much as it moves the music.
+   */
+  barGridCtx(): { at: number; bar: number } | null {
+    const g = this.beatgrid;
+    if (!g || !this._loaded || !this._playing) return null;
+    const rate = this.effRate();
+    if (!(rate > 0)) return null;
+    const pos = this.position();
+    const { start, length } = barAnchor(g, pos);
+    if (!(length > 0)) return null;
+    return { at: this.ctx.currentTime + (start - pos) / rate, bar: length / rate };
   }
 
   // --- follower visual clock ---

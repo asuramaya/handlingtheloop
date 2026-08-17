@@ -39,6 +39,7 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
   };
   const shape = Math.round(get("shape"));
   const sync = get("sync") >= 0.5;
+  const align = get("align") >= 0.5;
 
   return (
     <div className="fx-panel sat-panel" style={{ ["--accent" as string]: accent }}>
@@ -63,6 +64,27 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
         <ValueCell label="DEPTH" value={get("depth")} min={0} max={1} onChange={(v) => setParam("depth", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="DUTY" value={get("duty")} min={0} max={1} onChange={(v) => setParam("duty", v)} format={(v) => `${Math.round(v * 100)}`} />
         <ValueCell label="SMOOTH" value={get("smooth")} min={0} max={1} onChange={(v) => setParam("smooth", v)} format={(v) => `${Math.round(v * 100)}`} />
+        {/* SHIFT — where the gate's cycle sits against the bar line, as a fraction of a cycle.
+            50% is the offbeat gate, which is a performance move, not a correction. It folds ALIGN
+            into itself the same way RATE holds SYNC: a TAP toggles ALIGN (the cell greys to FREE,
+            where a shift has nothing to be shifted against), a drag moves the offset. Present in
+            both states — a control that vanished in FREE would reflow the row under your finger,
+            the rule the MOD panel already settled. */}
+        <ValueCell
+          label="SHIFT"
+          value={get("shift")}
+          min={0}
+          max={1}
+          onChange={(v) => setParam("shift", v)}
+          format={(v) => (align ? `${Math.round(v * 100)}` : "—")}
+          onTap={() => setParam("align", align ? 0 : 1)}
+          active={align}
+        >
+          <div className="range-ticks">
+            <span className={`range-tick ${!align ? "active" : ""}`} />
+            <span className={`range-tick ${align ? "active" : ""}`} />
+          </div>
+        </ValueCell>
       </div>
 
       {/* Mode select, bottom — same foot-strip position as every other device's mode row. */}

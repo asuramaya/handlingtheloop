@@ -40,9 +40,13 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
 
     let raf = 0;
     const draw = () => {
-      // keep the synced gate locked to live tempo
+      // keep the synced gate locked to live tempo AND to the deck's bar grid. barGridCtx() is
+      // derived from the same beatgrid the waveform draws, so ALIGN puts the gate on the lines
+      // you can see. This call is also the scheduler's clock — GateFx writes its next cycles
+      // from here, every frame.
       const bpm = deck.effectiveBpm;
       if (bpm) dev.setSyncBpm(bpm);
+      dev.setGrid(deck.barGridCtx());
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
@@ -66,7 +70,10 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       ctx2d.fillStyle = `color-mix(in srgb, ${accent} 9%, transparent)`;
       ctx2d.fillRect(0, vizH - lvl * vizH, w, lvl * vizH);
 
-      const ph = (actx.currentTime * dev.freqHz) % 1; // current phase within the cycle
+      // ★ The phase comes from the DEVICE, not from currentTime × rate. The gate's cycles are
+      // scheduled (and stretched, while it catches up to the grid), so a main-thread guess would
+      // draw a wave that isn't the one being heard — exactly the drift MOD's viz was cured of.
+      const ph = dev.phaseNow;
 
       // THE STAR — the gate envelope tiled across CYCLES, bright and glowing. Phase advances
       // left→right so the wave appears to flow through the playhead.
@@ -99,7 +106,7 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       ctx2d.stroke();
       ctx2d.shadowBlur = 0;
 
-      // cycle boundary ticks (the beats) — faint guides
+      // cycle boundary ticks — faint guides for the gate's OWN period
       ctx2d.strokeStyle = `color-mix(in srgb, ${accent} 12%, transparent)`;
       ctx2d.lineWidth = 1;
       for (let c = 1; c < CYCLES; c++) {
@@ -108,6 +115,41 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
         ctx2d.moveTo(x, 0);
         ctx2d.lineTo(x, vizH);
         ctx2d.stroke();
+      }
+
+      // ★ THE DECK'S GRID, ON THE GATE'S AXIS — the whole point of the indicator. The x axis is
+      // "cycles ahead of now", so a bar line lands at (k − barPhase)·cyclesPerBar cycles out.
+      // Bright = a bar, dimmer = a beat, same hierarchy the waveform uses, so you can read
+      // whether the window is sitting ON the beat or beside it WITHOUT trusting a label.
+      // In FREE mode these lines visibly crawl against the envelope — that IS the "you are not
+      // on the grid" signal, and it's the honest one.
+      const cpb = dev.cyclesPerBar;
+      if (cpb > 0) {
+        const barPh = dev.barPhaseAt(actx.currentTime);
+        const cpBeat = cpb / Math.max(1, dev.beatsPerBar);
+        const drawLine = (cyclesAhead: number, width: number, alpha: number) => {
+          if (cyclesAhead < 0 || cyclesAhead > CYCLES) return;
+          const x = (cyclesAhead / CYCLES) * w;
+          ctx2d.strokeStyle = `color-mix(in srgb, ${accent} ${alpha}%, transparent)`;
+          ctx2d.lineWidth = width;
+          ctx2d.beginPath();
+          ctx2d.moveTo(x, 0);
+          ctx2d.lineTo(x, vizH);
+          ctx2d.stroke();
+        };
+        // beats first, so the bar line draws over them
+        for (let b = 0; ; b++) {
+          const ahead = (b - barPh * Math.max(1, dev.beatsPerBar)) * cpBeat;
+          if (ahead > CYCLES) break;
+          if (ahead >= 0) drawLine(ahead, 1, 34);
+          if (b > 512) break; // a pathological rate can't spin this
+        }
+        for (let k = 0; ; k++) {
+          const ahead = (k - barPh) * cpb;
+          if (ahead > CYCLES) break;
+          if (ahead >= 0) drawLine(ahead, 2, 85);
+          if (k > 128) break;
+        }
       }
 
       ctx2d.restore();
@@ -119,8 +161,16 @@ export function GateViz({ deck, slot, accent, set }: GateVizProps) {
       const duty = clamp01(dev.getParam("duty"));
       const smooth = clamp01(dev.getParam("smooth"));
       const rateLabel = dev.synced ? dev.divLabel : `${dev.freqHz.toFixed(1)}Hz`;
+      // ALIGN leads the left zone: it is the thing that decides whether any of the rest lands on
+      // the beat. LOCK/PULL is a live state, not a setting — PULL means the catch-up is still
+      // walking the gate onto the grid, which is why the envelope is visibly sliding right now.
+      // Three states, not two: ALIGN means "armed, but there is no grid to lock to" (a stopped or
+      // unanalysed deck). Calling that PULL would be a lying indicator — it claims the gate is
+      // actively walking onto a beat when there is no beat in the room.
+      const alignLabel = !dev.aligned ? "FREE" : dev.cyclesPerBar <= 0 ? "ALIGN" : dev.locked ? "LOCK" : "PULL";
+      const shiftPct = Math.round(dev.shift * 100);
       drawReadout(ctx2d, w, accent, {
-        left: `${GATE_SHAPES[shapeIdx] ?? "?"}`,
+        left: `${GATE_SHAPES[shapeIdx] ?? "?"}  ·  ${alignLabel}${dev.aligned && shiftPct ? `  ·  SHIFT ${shiftPct}%` : ""}`,
         right: `DUTY ${Math.round(duty * 100)}%  ·  SMOOTH ${Math.round(smooth * 100)}%`,
         mid: dragging.current ? `RATE ${rateLabel}  ·  DEPTH ${Math.round(clamp01(dev.getParam("depth")) * 100)}%` : "",
         midHot: dragging.current,

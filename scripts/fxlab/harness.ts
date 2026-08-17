@@ -784,14 +784,22 @@ function peakOf(x: Float32Array, from = 0, to = x.length): number {
   return p;
 }
 // Click score: the biggest sample-to-sample step over the median step of the same material.
+//
+// ★ THE MEDIAN IS TAKEN OVER SOUNDING MATERIAL ONLY. A GATE closes completely at DEPTH 1, so
+// half of every cycle is digital silence and the plain median step is exactly 0 — every ratio
+// against it came back ~1e8 and read as a catastrophic click when the device was working
+// perfectly. Sampling the denominator only where the signal is actually above a floor makes the
+// score mean the same thing for a chopped signal as for a continuous one. (The MAX still scans
+// everything: a click during a silent passage is still a click, and is in fact the worst kind.)
 function maxStepRatio(x: Float32Array, from: number, to: number): number {
   const a = Math.max(1, from), b = Math.min(x.length, to);
+  const floor = peakOf(x, a, b) * 1e-3;
   const steps: number[] = [];
   let mx = 0;
   for (let i = a; i < b; i++) {
     const d = Math.abs(x[i] - x[i - 1]);
     if (d > mx) mx = d;
-    if ((i & 63) === 0) steps.push(d);
+    if ((i & 63) === 0 && (Math.abs(x[i]) > floor || Math.abs(x[i - 1]) > floor)) steps.push(d);
   }
   steps.sort((p, q) => p - q);
   const med = steps[Math.floor(steps.length / 2)] || 1e-9;
@@ -1504,14 +1512,19 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
   },
   {
     kind: "gate",
+    // ★ SHAPE is pinned in `params`, not switched mid-list. Each shape has its own step floor —
+    // RAMP snaps shut by design and reads ×22 where SQUARE reads ×2 — so a shape change inside
+    // the run moves the baseline under every gesture after it, and they all get judged against
+    // the wrong idle. If a shape switch itself needs measuring it deserves its own run.
     label: "GATE",
-    params: { mix: 1, depth: 0.85 },
+    params: { mix: 1, depth: 0.85, shape: 0 },
     gestures: [
       { what: "control (no gesture)", t: 1.0, param: "__none", to: 0 },
       { what: "RATE drag", t: 2.2, param: "rate", from: 0.1, to: 0.8, ms: 300 },
-      { what: "SHAPE switch", t: 3.4, param: "shape", to: 2 },
-      { what: "DEPTH drag", t: 4.6, param: "depth", from: 0.1, to: 1, ms: 300 },
-      { what: "SYNC toggle", t: 6.0, param: "sync", to: 0 },
+      { what: "DEPTH drag", t: 3.6, param: "depth", from: 0.1, to: 1, ms: 300 },
+      { what: "SYNC toggle", t: 5.0, param: "sync", to: 0 },
+      { what: "ALIGN off", t: 6.2, param: "align", to: 0 },
+      { what: "SHIFT drag (offbeat)", t: 7.4, param: "shift", from: 0, to: 0.5, ms: 300 },
     ],
   },
   {

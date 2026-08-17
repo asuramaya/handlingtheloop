@@ -222,6 +222,7 @@ export class SaturatorFx extends BaseFxDevice {
   // Swappable per-band nonlinearity — exactly one of these is non-null per band at a time.
   private readonly shapers: (WaveShaperNode | null)[] = [];
   private readonly tapeNodes: (AudioWorkletNode | null)[] = [];
+  private readonly engineGains: (GainNode | null)[] = []; // one per band, so a style swap can fade
 
   private readonly xovers: Xover[] = []; // BANDS-1 crossovers (retunable)
   private apLow: [BiquadFilterNode, BiquadFilterNode] | null = null; // band0 phase-comp, tuned to the FAR crossover
@@ -258,7 +259,6 @@ export class SaturatorFx extends BaseFxDevice {
     this.buildBandStatics();
     for (let i = 0; i < B; i++) {
       this.buildBandEngine(i);
-      this.applyVoicing(i);
     }
     this.bandSum.connect(this.wet);
     this.applyDry();
@@ -337,22 +337,21 @@ export class SaturatorFx extends BaseFxDevice {
       biasGain.gain.value = this._bias[i] * 0.4;
       this.biasSrc.connect(biasGain).connect(shaperIn);
       drive.connect(shaperIn);
-      const dc = ctx.createBiquadFilter();
-      dc.type = "highpass";
-      dc.frequency.value = DC_BLOCK_HZ;
-      dc.Q.value = LR_Q;
-      const voicing = ctx.createBiquadFilter();
+      // ★ The DC blocker and the VOICING filter are NOT built here — they belong to the engine,
+      // because both are properties of the STYLE (voicing literally changes filter `type`, which
+      // no AudioParam ramp can smooth) and both therefore have to live inside the crossfade.
+      // buildBandEngine builds them; these arrays just hold whichever pair is current.
       const g = ctx.createGain();
       const outG = ctx.createGain();
       outG.gain.value = 1; // 0.5 ext = unity
-      dc.connect(voicing).connect(g).connect(outG).connect(this.bandSum);
+      g.connect(outG).connect(this.bandSum);
       this.tapNodes[i].connect(drive);
 
       this.drives.push(drive);
       this.biasGains.push(biasGain);
       this.shaperIns.push(shaperIn);
-      this.dcBlocks.push(dc);
-      this.voicings.push(voicing);
+      this.dcBlocks.push(null as unknown as BiquadFilterNode);
+      this.voicings.push(null as unknown as BiquadFilterNode);
       this.bandGains.push(g);
       this.outGains.push(outG);
       this.shapers.push(null);
@@ -364,32 +363,79 @@ export class SaturatorFx extends BaseFxDevice {
   // torn down and rebuilt whenever that band's style changes to/from TAPE, mirroring ModFx's
   // buildEngine() mode-swap. Everything upstream (drive/bias) and downstream (dc/voicing/sum)
   // is permanent and untouched.
-  private buildBandEngine(i: number) {
-    const oldShaper = this.shapers[i];
-    const oldTape = this.tapeNodes[i];
-    if (oldShaper) safeDisconnect(oldShaper);
-    if (oldTape) safeDisconnect(oldTape);
-    safeDisconnect(this.shaperIns[i]);
+  // ★ A STYLE CHANGE CROSSFADES, IT DOES NOT CUT.
+  // Swapping the nonlinearity used to sever the old node and connect the new one in the same
+  // instant, so the band's output jumped from tape(x) to clip(x) between two samples — the
+  // difference between two transfer functions, delivered as a step (fxlab --live-audit: the jump
+  // leaving TAPE was 2.7× bigger than anything the material itself produces). The two curves are
+  // fed the SAME input, so their outputs are coherent and a LINEAR fade is the correct one; each
+  // engine gets its own gain node to fade, and the old one is only unhooked once it is silent.
+  private static readonly ENGINE_FADE = 0.014;
+  private buildBandEngine(i: number, crossfade = false) {
+    const ctx = this.ctx;
+    const prevNode: AudioNode | null = this.tapeNodes[i] ?? this.shapers[i];
+    const prevGain = this.engineGains[i] ?? null;
+    const prevDc = this.dcBlocks[i] ?? null;
+    const prevVoicing = this.voicings[i] ?? null;
+    const fade = crossfade && !!prevNode && !!prevGain;
+    if (!fade) {
+      if (prevNode) safeDisconnect(prevNode);
+      if (prevDc) safeDisconnect(prevDc);
+      if (prevVoicing) safeDisconnect(prevVoicing);
+      if (prevGain) safeDisconnect(prevGain);
+      safeDisconnect(this.shaperIns[i]);
+    }
     this.shapers[i] = null;
     this.tapeNodes[i] = null;
 
+    const dc = ctx.createBiquadFilter();
+    dc.type = "highpass";
+    dc.frequency.value = DC_BLOCK_HZ;
+    dc.Q.value = LR_Q;
+    const voicing = ctx.createBiquadFilter();
+    const g = ctx.createGain();
+    g.gain.value = fade ? 0 : 1;
+    dc.connect(voicing).connect(g).connect(this.bandGains[i]);
+    let built = false;
     if (this._style[i] === TAPE_STYLE) {
       try {
-        const node = new AudioWorkletNode(this.ctx, "tape", { numberOfInputs: 1, numberOfOutputs: 1 });
+        const node = new AudioWorkletNode(ctx, "tape", { numberOfInputs: 1, numberOfOutputs: 1 });
         this.shaperIns[i].connect(node);
-        node.connect(this.dcBlocks[i]);
+        node.connect(dc);
         this.tapeNodes[i] = node;
-        this.refreshBandNonlinearity(i);
-        return;
+        built = true;
       } catch (e) {
         console.warn("[htl] tape worklet unavailable, degrading band to native curve:", e);
       }
     }
-    const shaper = this.ctx.createWaveShaper();
-    shaper.oversample = "4x";
-    this.shaperIns[i].connect(shaper).connect(this.dcBlocks[i]);
-    this.shapers[i] = shaper;
+    if (!built) {
+      const shaper = ctx.createWaveShaper();
+      shaper.oversample = "4x";
+      this.shaperIns[i].connect(shaper).connect(dc);
+      this.shapers[i] = shaper;
+    }
+    this.dcBlocks[i] = dc;
+    this.voicings[i] = voicing;
+    this.engineGains[i] = g;
+    this.applyVoicing(i); // the NEW engine starts already voiced — nothing to ramp mid-signal
     this.refreshBandNonlinearity(i);
+
+    if (fade && prevNode && prevGain) {
+      const t = ctx.currentTime;
+      const F = SaturatorFx.ENGINE_FADE;
+      prevGain.gain.setValueAtTime(prevGain.gain.value, t);
+      prevGain.gain.linearRampToValueAtTime(0, t + F);
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(1, t + F);
+      // Unhook only once the old engine is fully faded — a worklet left connected keeps running,
+      // and a node disconnected mid-fade is the very cut this exists to avoid.
+      setTimeout(() => {
+        safeDisconnect(prevNode);
+        safeDisconnect(prevDc);
+        safeDisconnect(prevVoicing);
+        safeDisconnect(prevGain);
+      }, F * 1000 + 60);
+    }
   }
 
   // Re-apply whatever depends on style/punish/heat: the native curve (+its measured makeup) or
@@ -458,8 +504,7 @@ export class SaturatorFx extends BaseFxDevice {
   }
   private setStyle(i: number, v: number) {
     this._style[i] = clamp(Math.round(v), 0, SAT_STYLES.length - 1);
-    this.buildBandEngine(i);
-    this.applyVoicing(i);
+    this.buildBandEngine(i, true); // crossfade: this one happens with the signal running
   }
   private setPunish(i: number, on: boolean) {
     this._punish[i] = on;

@@ -791,6 +791,26 @@ function peakOf(x: Float32Array, from = 0, to = x.length): number {
 // perfectly. Sampling the denominator only where the signal is actually above a floor makes the
 // score mean the same thing for a chopped signal as for a continuous one. (The MAX still scans
 // everything: a click during a silent passage is still a click, and is in fact the worst kind.)
+// The biggest sample-to-sample jump in a window, in absolute terms.
+//
+// ★ THE LIVE AUDIT JUDGES ON THIS, NOT ON A RATIO. Every ratio needs a denominator that means
+// "a typical step of this material", and no such number survives contact with the FX rack: a
+// gate's material is silent half the time, a crusher's is a staircase of zero-steps, and a filter
+// sweep's material CHANGES WHILE YOU MEASURE IT (the median collapses as the filter smooths the
+// signal, so the ratio explodes while nothing clicked). The question a click test actually asks
+// is simpler and needs no denominator at all: did this gesture produce a jump BIGGER than the
+// material produces on its own, in the state before it and the state after it? A splice does.
+// A control that merely changes the sound does not.
+function maxAbsStep(x: Float32Array, from: number, to: number): number {
+  const a = Math.max(1, from), b = Math.min(x.length, to);
+  let mx = 0;
+  for (let i = a; i < b; i++) {
+    const d = Math.abs(x[i] - x[i - 1]);
+    if (d > mx) mx = d;
+  }
+  return mx;
+}
+
 function maxStepRatio(x: Float32Array, from: number, to: number): number {
   const a = Math.max(1, from), b = Math.min(x.length, to);
   const floor = peakOf(x, a, b) * 1e-3;
@@ -799,7 +819,12 @@ function maxStepRatio(x: Float32Array, from: number, to: number): number {
   for (let i = a; i < b; i++) {
     const d = Math.abs(x[i] - x[i - 1]);
     if (d > mx) mx = d;
-    if ((i & 63) === 0 && (Math.abs(x[i]) > floor || Math.abs(x[i - 1]) > floor)) steps.push(d);
+    // ★ …and only NON-ZERO steps. A bit-crusher's sample-and-hold output is a staircase: most
+    // consecutive samples are byte-identical, so the plain median step is 0 and every ratio
+    // against it reads in the millions — with the device doing exactly what it is for. The
+    // typical step of a staircase is the height of one stair, which is what a non-zero median is.
+    // (Strided every 16 rather than 64 so a heavily decimated signal still yields enough of them.)
+    if ((i & 15) === 0 && d > 0 && (Math.abs(x[i]) > floor || Math.abs(x[i - 1]) > floor)) steps.push(d);
   }
   steps.sort((p, q) => p - q);
   const med = steps[Math.floor(steps.length / 2)] || 1e-9;
@@ -1342,6 +1367,16 @@ interface LiveRender {
   out: Float32Array;
   finite: boolean;
   windows: [number, number][]; // one measurement window per gesture, in SECONDS from start
+  // ★ AND ONE SETTLED WINDOW PER GESTURE — a quiet stretch AFTER the tail, with the gesture's
+  // new state in force and nobody touching anything.
+  //
+  // Without it the metric cannot tell "this gesture spliced" from "this gesture changed the
+  // material". Real case: dragging the saturator's crossover reads ×42, and so does the device
+  // sitting perfectly still afterwards — moving the split point pushed more content into a
+  // hot-driven band, which squares it off, and steppier material scores higher forever. Judging
+  // the gesture against the material it REPLACED convicts every control that legitimately makes
+  // a signal sharper.
+  settled: [number, number][];
 }
 async function renderLive(
   kind: FxKind,
@@ -1368,6 +1403,7 @@ async function renderLive(
   source.start(t0);
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const windows: [number, number][] = [];
+  const settled: [number, number][] = [];
   let elapsed = 0;
   for (const g of [...opts.gestures].sort((a, b) => a.t - b.t)) {
     await sleep(Math.max(0, (g.t - elapsed) * 1000));
@@ -1386,6 +1422,7 @@ async function renderLive(
     const ended = ctx.currentTime - t0;
     elapsed = g.t + Math.max(0, ended - started);
     windows.push([started - 0.05, ended + 0.35]); // the gesture, plus the tail a splice rings into
+    settled.push([ended + 0.45, ended + 0.85]); // …then the new steady state, untouched
   }
   await sleep(Math.max(0, (opts.seconds - elapsed) * 1000));
   const rendered = await new Promise<{ a: Float32Array; b: Float32Array; start: number }>((resolve) => {
@@ -1404,13 +1441,14 @@ async function renderLive(
   const out = rendered.a.subarray(startOff);
   let finite = true;
   for (let i = 0; i < out.length; i++) if (!Number.isFinite(out[i])) finite = false;
-  return { sr, out, finite, windows };
+  return { sr, out, finite, windows, settled };
 }
 
 // One run → the worst step ratio around each gesture. A device that is genuinely click-free reads
 // ~1‥3 here (the median-step normaliser makes ~1 the floor for any material).
 (globalThis as unknown as { fxlabLiveGesture: (spec: LiveGestureSpec) => Promise<LiveGestureResult> }).fxlabLiveGesture = async (spec) => {
   const runs: number[][] = [];
+  const after: number[][] = [];
   let finite = true;
   let quiet = 0;
   for (let i = 0; i < (spec.n || 3); i++) {
@@ -1424,12 +1462,21 @@ async function renderLive(
     });
     if (!r.finite) finite = false;
     quiet = Math.max(quiet, peakOf(r.out));
-    runs.push(r.windows.map((w) => Math.round(maxStepRatio(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr)) * 100) / 100));
+    runs.push(r.windows.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
+    after.push(r.settled.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
   }
   // WORST across runs, per gesture: unlike the offline path there is no quirk to filter out, so a
   // spike here is the device's own — taking the minimum would be hiding it.
-  const worst = spec.gestures.map((_, i) => Math.max(...runs.map((r) => r[i] ?? 0)));
-  return { runs, worst, finite, peak: Math.round(quiet * 1000) / 1000 };
+  // Reported as the audit's own discriminator: the gesture's biggest jump over the biggest jump
+  // the material makes on its own, before and after.
+  const control = Math.max(...runs.map((r) => r[0] ?? 0));
+  const worst = spec.gestures.map((_, i) => {
+    const w = Math.max(...runs.map((r) => r[i] ?? 0));
+    const s = Math.max(...after.map((r) => r[i] ?? 0));
+    return Math.round((w / Math.max(control, s, 1e-6)) * 100) / 100;
+  });
+  const settledWorst = spec.gestures.map((_, i) => Math.max(...after.map((r) => r[i] ?? 0)));
+  return { runs, worst, settled: settledWorst, finite, peak: Math.round(quiet * 1000) / 1000 };
 };
 export interface LiveGestureSpec {
   kind: FxKind;
@@ -1445,6 +1492,7 @@ export interface LiveGestureSpec {
 export interface LiveGestureResult {
   runs: number[][];
   worst: number[];
+  settled: number[]; // the same score for the untouched state each gesture LEFT BEHIND
   finite: boolean;
   peak: number;
 }
@@ -1548,41 +1596,47 @@ const LIVE_AUDIT: { kind: FxKind; label: string; params?: Record<string, number>
 // no worse than max(4, control × 1.6). A device whose control is already high can only ever be
 // cleared of making things WORSE — and that is the honest limit of what this metric can say
 // about it, which is a thing the report has to admit rather than paper over.
-const LIVE_STEP_LIMIT = 4;
-const LIVE_CONTROL_SLACK = 1.6;
+// How much bigger than the material's own biggest jump a gesture may be. 1.5× is generous: a
+// clean gesture sits at ~1.0 (it never out-jumps the signal), a splice lands in the tens.
+const LIVE_STEP_LIMIT = 1.5;
 (globalThis as unknown as { fxlabLiveAudit: (n?: number) => Promise<ModAuditResult> }).fxlabLiveAudit = async (n = 3) => {
   const checks: ModAuditCheck[] = [];
   for (const d of LIVE_AUDIT) {
     const runs: number[][] = [];
+    const after: number[][] = [];
     let finite = true;
     for (let i = 0; i < n; i++) {
       const r = await renderLive(d.kind, d.params || {}, {
         signal: "tone",
-        seconds: Math.max(...d.gestures.map((g) => g.t)) + 1.5,
+        seconds: Math.max(...d.gestures.map((g) => g.t)) + 2,
         toneAmp: 0.5,
         gestures: d.gestures,
       });
       if (!r.finite) finite = false;
-      runs.push(r.windows.map((w) => maxStepRatio(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
+      runs.push(r.windows.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
+      after.push(r.settled.map((w) => maxAbsStep(r.out, Math.round(w[0] * r.sr), Math.round(w[1] * r.sr))));
     }
-    // Gesture 0 is the control by construction (see LIVE_AUDIT) — the device's own step floor.
+    // Gesture 0 is the control by construction (see LIVE_AUDIT) — the device idling.
     const control = Math.max(...runs.map((r) => r[0] ?? 0));
-    const limit = Math.max(LIVE_STEP_LIMIT, control * LIVE_CONTROL_SLACK);
     d.gestures.forEach((g, i) => {
       const worst = Math.max(...runs.map((r) => r[i] ?? 0));
+      const settled = Math.max(...after.map((r) => r[i] ?? 0));
       const isControl = g.param === "__none";
+      // ★ THE FLOOR IS THE HIGHER OF THE STATE BEFORE AND THE STATE AFTER, in absolute step size.
+      // A control that legitimately sharpens the signal (a crossover moving content into a hot
+      // band, a bit depth dropping) leaves steppier material behind — that is the effect, not a
+      // click. Only a jump that beats BOTH steady states is the gesture's own doing.
+      const floor = Math.max(control, settled, 1e-6);
+      const ratio = worst / floor;
       checks.push({
         name: `${d.label} ${g.what}`,
-        value: Math.round(worst * 100) / 100,
-        unit: "×median step",
-        // The control run can't fail — it IS the floor. What it can do is be loud enough that this
-        // device's verdicts are only ever "no worse than idle", which the detail says out loud.
-        pass: isControl || worst <= limit,
+        value: Math.round(ratio * 100) / 100,
+        unit: "× material",
+        // The control run can't fail — it IS the floor.
+        pass: isControl || ratio <= LIVE_STEP_LIMIT,
         detail: isControl
-          ? control > LIVE_STEP_LIMIT
-            ? `device's OWN step floor — it chops/quantises by design, so its gestures are only judged against ${limit.toFixed(1)}, never absolutely`
-            : `idle floor; gestures judged against ${limit.toFixed(1)}`
-          : `${(worst / Math.max(1e-9, control)).toFixed(1)}× idle · worst of ${n} live runs: ${runs.map((r) => (r[i] ?? 0).toFixed(1)).join(" ")}`,
+          ? `idle: biggest step ${control.toExponential(2)}`
+          : `step ${worst.toExponential(2)} vs material ${floor.toExponential(2)} (idle ${control.toExponential(2)}, settled ${settled.toExponential(2)})`,
       });
     });
     checks.push({ name: `${d.label} output finite`, value: finite ? 1 : 0, unit: "bool", pass: finite, detail: "no NaN/Inf reached the output" });

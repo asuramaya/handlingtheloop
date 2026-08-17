@@ -286,7 +286,7 @@ async function main() {
       const r = await page.evaluate((g) => globalThis.fxlabLiveGesture(g), g);
       g.gestures.forEach((ges, i) => {
         const label = ges.param === "__none" ? "control" : `${ges.param}${ges.ms ? ` drag→${ges.to}` : ` →${ges.to}`}`;
-        console.log(`   ${label.padEnd(28)} worst ×${f(r.worst[i], 2).padStart(6)}   runs ${r.runs.map((x) => f(x[i], 1)).join(" ")}`);
+        console.log(`   ${label.padEnd(28)} ×${f(r.worst[i], 2).padStart(7)} material   (step ${r.runs.map((x) => x[i].toExponential(1)).join(" ")})`);
       });
       console.log(`   finite=${r.finite}  peak=${f(r.peak, 3)}`);
       return;

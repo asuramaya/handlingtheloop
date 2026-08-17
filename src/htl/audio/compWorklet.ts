@@ -41,6 +41,9 @@ class Comp extends AudioWorkletProcessor {
     this.lookMs = 0;      // lookahead (ms)
     this.ceilingDb = -0.3;// LIMIT: the brickwall
 
+    // ★ Two values that a MODE change moves instantly, and that a splice lives in if you let it:
+    this.lookNow = 0;     // the lookahead the READ POINTER is actually using, in fractional samples
+    this.makeupS = -1;    // slewed makeup gain (linear); −1 = "not primed yet", see process()
     this.envDb = 0;       // the smoothed gain reduction, in dB (≤ 0)
     this.rms = 0;         // RMS detector state
     this.scHpZ = [0, 0];  // one-pole HP state, per channel
@@ -109,7 +112,19 @@ class Comp extends AudioWorkletProcessor {
     const makeupLin = Math.exp((mode === 3 ? this.makeupDb : makeup) / DB);
 
     const look = Math.min(0.01, Math.max(0, this.lookMs / 1000));
-    const lookN = Math.round(look * sr);
+    const lookN = look * sr; // fractional on purpose — this.lookNow WALKS toward it, see below
+    // ★ THE LOOKAHEAD IS A DELAY LINE, AND A DELAY LINE'S LENGTH CANNOT JUMP.
+    // MODE posts its own ballistics, and GLUE→LIMIT takes lookMs 0 → 1.5, which moved the ring's
+    // read pointer 72 samples in one sample: a splice, straight into the output, on a control
+    // whose entire job is to make the sound MORE controlled (fxlab --live-audit: ×25 the median
+    // step, both directions). The read position walks instead, at 1/256 of a sample per sample —
+    // 1.5 ms of travel takes ~0.4 s and deviates the pitch by 0.4%, which is nothing, and the
+    // ring is read with linear interpolation so the walk itself is smooth.
+    const lookStep = 1 / 256;
+    // …and the same for MAKEUP: auto-makeup is derived from threshold and ratio, so a mode change
+    // moves it several dB at once. A gain step IS a click, however good the reason for it.
+    const mkC = Math.exp(-1 / (sr * 0.02)); // ~20 ms
+    if (this.makeupS < 0) this.makeupS = makeupLin; // first block: land on it, don't ramp from 0
 
     for (let i = 0; i < n; i++) {
       // ---- detect ----------------------------------------------------------
@@ -159,17 +174,25 @@ class Comp extends AudioWorkletProcessor {
       const coef = target < this.envDb ? atkC : relC;
       this.envDb = target + (this.envDb - target) * coef;
 
-      const g = Math.exp(this.envDb / DB) * makeupLin;
+      this.makeupS = makeupLin + (this.makeupS - makeupLin) * mkC;
+      const g = Math.exp(this.envDb / DB) * this.makeupS;
       if (-this.envDb > this.grMax) this.grMax = -this.envDb;
 
       // ---- apply to the LOOKAHEAD-delayed audio ----------------------------
       // The detector sees the sample NOW; the output is playing one lookahead ago. So the gain is
       // already down by the time the peak arrives — which is the whole trick of a brickwall.
+      const dl = lookN - this.lookNow;
+      this.lookNow += dl > lookStep ? lookStep : dl < -lookStep ? -lookStep : dl;
+      const L = this.ringLen;
+      const rp = this.ringW - this.lookNow;
+      const ri = Math.floor(rp);
+      const rf = rp - ri;
+      const r0 = ((ri % L) + L) % L;
+      const r1 = (r0 + 1) % L;
       for (let c = 0; c < ch; c++) {
         const ring = this.ring[c];
         ring[this.ringW] = inp[c] ? inp[c][i] : 0;
-        const r = lookN > 0 ? (this.ringW - lookN + this.ringLen) % this.ringLen : this.ringW;
-        let y = ring[r] * g;
+        let y = (this.lookNow > 0.0001 ? ring[r0] + (ring[r1] - ring[r0]) * rf : ring[this.ringW]) * g;
         // LIMIT is a guarantee, not a suggestion: whatever slipped past the detector gets clamped.
         if (mode === 3) {
           const ceil = Math.exp(this.ceilingDb / DB);

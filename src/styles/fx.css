@@ -412,22 +412,8 @@ body:not(.no-glow) .fx-chip.on {
   font-size: 12px;
 }
 
-.eq-readout {
-  position: absolute;
-  top: 4px;
-  transform: translateX(-50%);
-  padding: 1px 6px;
-  font-size: 9.5px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  background: color-mix(in srgb, #000 55%, transparent);
-  border-radius: 5px;
-  pointer-events: none;
-  white-space: nowrap;
-  transition: opacity 0.1s;
-  z-index: 3;
-}
+/* (The EQ's floating cursor pill is gone: the shared Readout strip drawn into the top of
+   .eq-curve-canvas carries the cursor's freq/level in its middle zone now — see EqCurve.tsx.) */
 .eq-curve {
   position: relative;
   /* The curve is the surplus-absorber inside .eq-pro (which owns --fx-body-h): it fills
@@ -1853,15 +1839,28 @@ button.room-tog:hover {
 }
 /* ★ Reused verbatim by Comp/Gate/Crush/Noise/Mod's own mode-select rows — a change here is a
    rack-wide change, not a saturator-only one. */
+/* ★ ROWS NEVER WRAP — THEY SCROLL. A narrow deck used to wrap these rows (STAGES/RES landing on a
+   line of their own, DIODE/PUNISH under TUBE/TAPE, a MODE chip clipped to "HASER"), which both
+   eats panel height and reflows the controls under your finger. Each row is its own horizontal
+   scroller instead (scrollbar hidden; drag/wheel/trackpad slides it), at EVERY width — the phone
+   rule from the 768px block, promoted, because a narrow desktop deck has exactly the same
+   problem. Cells/buttons grow to fill when there is room and never shrink below their content. */
 .sat-styles {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   flex: 0 0 auto;
 }
+.sat-styles::-webkit-scrollbar {
+  display: none;
+}
 .sat-styles button {
-  flex: 1;
+  flex: 1 0 auto;
   min-width: 44px;
+  white-space: nowrap;
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
@@ -1876,6 +1875,38 @@ button.room-tog:hover {
   border-color: var(--accent);
   color: var(--text);
 }
+/* Held. A mode button that doesn't move under the finger reads as "did that even take?" on a
+   touch screen, where there is no hover state to have told you the target was live. */
+.sat-styles button:active {
+  transform: translateY(0.5px) scale(0.97);
+  background: color-mix(in srgb, var(--accent) 30%, var(--panel));
+  color: #fff;
+}
+/* Fired-but-invisible: a right-click on the MODE chip arms THRU, and the only evidence is a 5px
+   corner dot you weren't looking at. Same one-shot law as the cells (.vcell.pulsing) — two
+   alternating names so a fast re-toggle actually flashes twice. */
+@keyframes fxbtn-pulse-a {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 80%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+@keyframes fxbtn-pulse-b {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 80%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+.sat-styles button.pulsing.p0 {
+  animation: fxbtn-pulse-a 0.22s ease-out;
+}
+.sat-styles button.pulsing.p1 {
+  animation: fxbtn-pulse-b 0.22s ease-out;
+}
 .sat-styles button.active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 20%, var(--panel));
@@ -1886,21 +1917,87 @@ button.room-tog:hover {
   background: color-mix(in srgb, #ff6a3d 24%, var(--panel));
   color: #fff;
 }
+/* MOD's MODE cycler — CHORUS/FLANGER/PHASER collapsed into ONE button (tap cycles) instead of
+   three peers, the same move Delay's TIME-MODE/STEREO chips already use. Reuses .cyc-pips
+   verbatim (it's written as a standalone class, not scoped to .fx-chip) so the "a cycler must
+   show its depth" rule holds here too — a button that only shows its current value lies about
+   there being two more behind it. Always styled `active`: like Reverb's algorithm chip, it
+   reads as a value selector, not a toggle — there's no "off" state to distinguish. */
+.sat-styles button.cyc {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+/* THRU lives on the MODE chip (right-click), not a peer button that only exists in FLANGER — a
+   control popping in/out as you cycle modes reflows the whole row under your finger. The dot is
+   visible in EVERY mode: it's a standing flag on the device, not something that only exists
+   while you happen to be looking at flanger (mirrors STAGES: present-but-disabled elsewhere,
+   never absent). */
+.sat-styles button.cyc.thru-on::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 4px 1px #fff;
+}
 .sat-bands,
 .sat-shared {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
-  justify-content: space-between;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  justify-content: flex-start;
   flex: 0 0 auto;
+}
+.sat-bands::-webkit-scrollbar,
+.sat-shared::-webkit-scrollbar {
+  display: none;
 }
 .sat-bands .vcell,
 .sat-shared .vcell {
-  flex: 1;
+  flex: 1 0 auto;
+  min-width: 52px;
 }
 /* Output-level meter, under the viz row — reuses the generic MeterBar primitive. */
 .sat-meter {
   flex: 0 0 auto;
+}
+/* Wraps the readout + viz row + meter flush together (no dead gaps between them) — the panel's
+   own flex-column gap still separates this whole block from the STYLE/BIAS row below. */
+.sat-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1 1 0;
+  min-height: 0;
+}
+/* The readout — its own full-width strip, spanning the whole panel (viz canvas + curve-preview
+   panel together), not squeezed inside the narrower viz canvas alone. Same border/background
+   formula as .sat-viz, capped at the TOP only, so it reads as one continuous bordered box with
+   the row below (which loses its own top corners here, and only here — .sat-viz/.fx-curve are
+   shared by other devices with no readout above them, so the override is scoped to this panel). */
+.sat-readout {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 70%, #000);
+}
+.sat-status .fx-viz-row .sat-viz,
+.sat-status .fx-viz-row .fx-curve {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* FX viz row: the main display (flex) + a fixed curve-preview panel to its RIGHT. The ROW is
@@ -1937,6 +2034,46 @@ button.room-tog:hover {
   width: 100%;
   height: 100%;
   display: block;
+}
+/* MOD's curve inset doubles as the WAVE control — it already draws the shape a SINE/TRI/SQUARE
+   button row used to pick, so a click cycles it directly. Scoped to THIS panel's curve inset
+   only: SAT/COMP's own .fx-curve is a read-only transfer-curve preview, not a control. */
+.fx-curve.mod-wave {
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.fx-curve.mod-wave:hover {
+  filter: brightness(1.25);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+/* Held / fired. The panel's CONTENT changes on click (a new wave shape is drawn), but the shapes
+   differ subtly enough — and the pips sit small in the corner — that the click itself needs to
+   land visibly. Pressed = pushed in; fired = the whole inset rings once. */
+.fx-curve.mod-wave:active {
+  transform: scale(0.985);
+  border-color: var(--accent);
+}
+@keyframes modwave-pulse-a {
+  0% {
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 12px -2px color-mix(in srgb, var(--accent) 90%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent, 0 0 0 transparent;
+  }
+}
+@keyframes modwave-pulse-b {
+  0% {
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 12px -2px color-mix(in srgb, var(--accent) 90%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent, 0 0 0 transparent;
+  }
+}
+.fx-curve.mod-wave.pulsing.p0 {
+  animation: modwave-pulse-a 0.24s ease-out;
+}
+.fx-curve.mod-wave.pulsing.p1 {
+  animation: modwave-pulse-b 0.24s ease-out;
 }
 /* The TAPE worklet has no single-valued transfer curve (it's a stateful process) — this label
    replaces the curve panel's canvas when the selected band is running on it. */
@@ -2293,5 +2430,31 @@ body:not(.no-glow) .fx-mix-fill::after {
   .fx-delay .fx-chip {
     flex: 0 0 auto;
     padding: 4px 8px;
+  }
+  /* Same fix, same reason, for the style-select row (shared by Sat/Comp/Gate/Crush/Noise/Mod)
+     and Sat's own TONE/OUT/HEAT/BIAS row: wrapping to a second line ate panel height a phone
+     can't spare, and cells that shrink to fit go unreadable. Slide instead. */
+  .sat-styles,
+  .sat-bands,
+  .sat-shared {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .sat-styles::-webkit-scrollbar,
+  .sat-bands::-webkit-scrollbar,
+  .sat-shared::-webkit-scrollbar {
+    display: none;
+  }
+  .sat-styles button {
+    flex: 0 0 auto;
+    min-width: 44px;
+  }
+  .sat-bands .vcell,
+  .sat-shared .vcell {
+    flex: 0 0 auto;
+    min-width: 52px;
   }
 }

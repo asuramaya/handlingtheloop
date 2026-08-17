@@ -1806,6 +1806,59 @@ body.no-glow .hw-btn.shift.on {
     inset 0 0 0 1px var(--accent),
     0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+/* ★ THE PRESS LANGUAGE (see ValueCell.tsx). A cell is a BUTTONOID as well as a knob — a tap can
+   toggle a mode, a right-click can reset it or open a menu — and a <div> gets none of the :active
+   feedback a <button> gets for free, so those presses used to land in silence. */
+/* HELD — the cell has your pointer (a tap in progress, or a value drag). Reads as pushed-in:
+   darker face, no lift. Deliberately quieter than :focus, which means SELECTED, not pressed. */
+.vcell.pressing {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  transform: translateY(0.5px);
+}
+.vcell.pressing .vcell-knob-track {
+  stroke: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+/* HOLDS A TAP — the quiet at-rest advertisement that there's a second control in here (RATE's tap
+   flips SYNC, a stem cell's tap mutes). The label leaves grey on hover; nothing moves, nothing
+   reserves space, so a row of knobs still reads as a row of knobs. */
+.vcell.tappable:hover .vcell-label {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}
+/* FIRED — one-shot, ~220 ms, for an action whose RESULT is somewhere else on screen (or nowhere
+   visible at all: a reset onto the value you already had). Two alternating classes so a second
+   tap inside the window restarts the animation instead of silently continuing the first. */
+/* Two IDENTICAL keyframe sets, on purpose: an animation restarts only when its NAME changes, so
+   re-applying the same name (p0 → p0) would run out the first flash and show nothing. */
+@keyframes vcell-pulse-a {
+  0% {
+    box-shadow:
+      inset 0 0 0 1px var(--accent),
+      0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 0 transparent,
+      0 0 0 6px transparent;
+  }
+}
+@keyframes vcell-pulse-b {
+  0% {
+    box-shadow:
+      inset 0 0 0 1px var(--accent),
+      0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 0 transparent,
+      0 0 0 6px transparent;
+  }
+}
+.vcell.pulsing.p0 {
+  animation: vcell-pulse-a 0.22s ease-out;
+}
+.vcell.pulsing.p1 {
+  animation: vcell-pulse-b 0.22s ease-out;
+}
 .vcell.off {
   opacity: 0.4;
 }

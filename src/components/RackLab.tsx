@@ -3,42 +3,30 @@ import { createPortal } from "react-dom";
 
 // RACKLAB — UNWIRED layout prototypes for stem-routed FX. No audio, no rack, no routing.
 //
-// Two candidates, switchable, because the first two attempts both failed the same way and the
-// failure is worth stating: BOTH made the plumbing the loudest thing on screen. A stem×device grid
-// of dots, then a wall of sixteen saturated send blocks — different drawings of the same mistake,
-// which is treating ROUTING STATE as the content. It is not the content. The devices are.
+// ★ THE CORRECTION THAT MATTERS (operator, on seeing candidate C beside the real deck):
+//   master/detail is right, "but there isn't enough room." True — and the reason is that the lab
+//   was measuring the wrong box. The host is not a page; it is a DECK COLUMN, ~430 px wide, and
+//   there are TWO of them side by side. A 148 px rail eats a third of that.
 //
-// The references, none of which routes per device:
-//   • Ableton — parallel CHAINS in a rack; the chain list shows a NAME, routing lives behind
-//     selection. • FL Studio — channels → mixer inserts; routing is a mixer concern with send
-//     knobs. • Traktor Stem Decks — each stem carries VOLUME, FILTER and FX SEND: the control is
-//     an AMOUNT on the stem, small, at the edge. • djay Pro AI — stem-specific effects are
-//     assigned to PADS: the stem is part of the EFFECT'S IDENTITY, not a routing decision.
+//   The room already exists, and it is HORIZONTAL. `.fx-tabs` is a chip row that scrolls instead
+//   of squishing (fx.css:45) with the device panel beneath it — the shipped strip is ALREADY
+//   master/detail. So nothing new gets invented: the chains ride in the same kind of row, or they
+//   are folded into the chips that are already there.
 //
-//   C · MASTER / DETAIL — the shape the references actually have, and the reason A and B both
-//       read as spreadsheets: they REPEAT THE DEVICE LIST PER CHANNEL. Ableton does not. It is
-//       macros ┃ a collapsible chain LIST ┃ ONE device area, and the chain list has a literal
-//       Chain/Hide toggle because the list is scaffolding, not content. FL is the same pattern —
-//       channel strips plus ONE insert panel for the selection. So: a narrow rail of one-line
-//       chain strips, and beside it the rack that already ships, showing the SELECTED chain only.
-//       Below the rail's width threshold the rail becomes a chip row and the rack stays put — the
-//       phone gets the same layout with the master laid on its side, which is why this survives
-//       375 px without a second design.
+//   D1 · CHAIN TABS — one extra 22 px row above the device tabs. Selecting a chain repopulates
+//        the device row beneath it. Costs one row of height and ZERO width, and it is the only
+//        candidate that can express two devices of the SAME KIND on different stems — which
+//        matters because the rack is FIXED-MEMBERSHIP (FxStrip.tsx:170): one REVERB exists, so
+//        without chains "vox reverb + drum reverb at once" is unsayable.
 //
-//       It also dissolves A vs B. Ableton's macros are this app's FX PADS: the pads are the play
-//       surface, chains are the machinery a pad points at. B is the front, A is the back, and the
-//       pad row at the top of this candidate is where they meet.
+//   D2 · PER-DEVICE TARGET — zero new rows. The stem target is a property of the device chip: a
+//        2 px coloured underline on the chip, and the four sends live in the device panel's own
+//        header, revealed the way this app already reveals detail (right-click / long-press, as
+//        the I/O strip folds DEST/SRC into MIC/REC). Cheapest possible surface. The cost is the
+//        fixed bank: one device, one target, so you cannot have two differently-aimed reverbs.
 //
-//   A · CHAINS, QUIET — Ableton's chain list at Traktor's visual weight. A chain is one line: a
-//       thin edge in its source colour, a name, and a small source label (ALL / DRUM / VOICE
-//       +INST). The four sends open only when you touch that label. The device list is the
-//       biggest thing in the card, because it is what you came for.
-//
-//   B · TARGETED PRESETS — djay's model, and the only candidate that adds NO new surface at all.
-//       The stem lives in the effect's name and a coloured tag; VOX ECHO sits in the bank next to
-//       ECHO. There is nothing to route, nothing to reorder, nothing that lays out differently on
-//       a phone. The cost is that you get the combinations someone shipped, not arbitrary ones —
-//       a preset-authoring problem rather than a UI one.
+//   C · RAIL — candidate C kept for contrast, at deck-column width, so the "not enough room"
+//        verdict stays visible next to the two that fit.
 
 const LANES = [
   { id: "drums", label: "DRUM", color: "#ff5d73" },
@@ -48,11 +36,10 @@ const LANES = [
 ] as const;
 type LaneId = (typeof LANES)[number]["id"];
 type Sends = Record<LaneId, number>;
-const laneOf = (id: LaneId) => LANES.find((l) => l.id === id)!;
 const ALL: Sends = { drums: 1, bass: 1, vocals: 1, other: 1 };
 const NONE: Sends = { drums: 0, bass: 0, vocals: 0, other: 0 };
 
-// "ALL" / "DRUM" / "VOICE +INST" — the summary that replaces four coloured panels in the common
+// "ALL" / "DRUM" / "VOICE +1" — the summary that replaces four coloured panels in the common
 // cases, which are nearly all the cases.
 function describe(s: Sends): { text: string; colors: string[] } {
   const on = LANES.filter((l) => s[l.id] > 0);
@@ -71,45 +58,39 @@ interface Chain {
   gen?: boolean;
 }
 const CHAINS: Chain[] = [
-  { id: "mix", name: "MIX", sends: { ...ALL }, devices: ["EQ", "SAT", "COMP"] },
-  { id: "a", name: "DRUM CHOP", sends: { ...NONE, drums: 1 }, devices: ["GATE", "CRUSH"] },
-  { id: "b", name: "VOX AIR", sends: { ...NONE, vocals: 1, other: 0.4 }, devices: ["REVERB", "DELAY"] },
+  { id: "mix", name: "MIX", sends: { ...ALL }, devices: ["EQ", "SAT", "REVERB", "DELAY", "CRUSH", "GATE", "MOD", "COMP"] },
+  { id: "a", name: "DRUM", sends: { ...NONE, drums: 1 }, devices: ["GATE", "CRUSH", "COMP"] },
+  { id: "b", name: "VOX", sends: { ...NONE, vocals: 1, other: 0.4 }, devices: ["REVERB", "DELAY", "SAT"] },
   { id: "c", name: "RISER", sends: { ...NONE }, devices: ["NOISE"], gen: true },
 ];
 
-interface Preset {
-  name: string;
-  device: string;
-  stem?: LaneId;
-}
-const PRESETS: Preset[] = [
-  { name: "ECHO", device: "DELAY" },
-  { name: "VERB", device: "REVERB" },
-  { name: "SAT", device: "SAT" },
-  { name: "CRUSH", device: "CRUSH" },
-  { name: "GATE", device: "GATE" },
-  { name: "RISER", device: "NOISE" },
-  { name: "VOX ECHO", device: "DELAY", stem: "vocals" },
-  { name: "VOX AIR", device: "REVERB", stem: "vocals" },
-  { name: "DRUM CHOP", device: "GATE", stem: "drums" },
-  { name: "DRUM CRUSH", device: "CRUSH", stem: "drums" },
-  { name: "BASS GRIT", device: "SAT", stem: "bass" },
-  { name: "INST WASH", device: "REVERB", stem: "other" },
+// The shipped bank, fixed membership — EQ plus the seven permanent residents.
+const BANK: { kind: string; stem: LaneId | null }[] = [
+  { kind: "EQ", stem: null },
+  { kind: "SAT", stem: null },
+  { kind: "REVERB", stem: "vocals" },
+  { kind: "DELAY", stem: "vocals" },
+  { kind: "CRUSH", stem: null },
+  { kind: "GATE", stem: "drums" },
+  { kind: "MOD", stem: null },
+  { kind: "COMP", stem: null },
+  { kind: "NOISE", stem: null },
 ];
 
+// DECK-COLUMN widths, not page widths. The screenshot's two decks sit at ~450 px each; a phone
+// gives one deck the whole screen; a 4 K widescreen gives each deck room it does not need.
 const WIDTHS = [
+  { w: 320, label: "phone deck" },
   { w: 375, label: "iPhone" },
-  { w: 430, label: "Pro Max" },
-  { w: 768, label: "tablet" },
-  { w: 1280, label: "laptop" },
-  { w: 1920, label: "1080p" },
-  { w: 2560, label: "4K half" },
+  { w: 450, label: "★ desktop" },
+  { w: 560, label: "wide deck" },
+  { w: 720, label: "4K deck" },
   { w: 0, label: "fill" },
 ];
 
 export function RackLab() {
-  const [view, setView] = useState<"a" | "b" | "c">("c");
-  const [width, setWidth] = useState(0);
+  const [view, setView] = useState<"d1" | "d2" | "c">("d1");
+  const [width, setWidth] = useState(450);
   const [full, setFull] = useState(false);
   const stage = useRef<HTMLDivElement>(null);
   const [avail, setAvail] = useState(0);
@@ -122,22 +103,22 @@ export function RackLab() {
     return () => ro.disconnect();
   }, [full]);
   // `zoom`, not `transform: scale` — zoom scales LAYOUT, so the prototype still measures its
-  // simulated width and its own breakpoints fire. A transform scales pixels and leaves a 2560 px
-  // layout box behind.
+  // simulated width and its own breakpoints fire. A transform scales pixels and leaves the
+  // original layout box behind.
   const zoom = width && avail && width > avail ? avail / width : 1;
 
   const body = (
     <div className={`rl ${full ? "rl-full" : ""}`}>
       <div className="rl-head">
         <div className="rl-views">
+          <button className={view === "d1" ? "active" : ""} onClick={() => setView("d1")}>
+            D1 · chain tabs
+          </button>
+          <button className={view === "d2" ? "active" : ""} onClick={() => setView("d2")}>
+            D2 · per-device
+          </button>
           <button className={view === "c" ? "active" : ""} onClick={() => setView("c")}>
-            C · master/detail
-          </button>
-          <button className={view === "a" ? "active" : ""} onClick={() => setView("a")}>
-            A · chains
-          </button>
-          <button className={view === "b" ? "active" : ""} onClick={() => setView("b")}>
-            B · targeted presets
+            C · rail
           </button>
         </div>
         <div className="rl-widths">
@@ -156,29 +137,26 @@ export function RackLab() {
       {zoom < 1 && <div className="rl-zoom">shown at {Math.round(zoom * 100)}%</div>}
       <div className="rl-stage" ref={stage}>
         <div className="rl-frame" style={width ? { width, zoom } : undefined}>
-          {view === "c" ? <MasterDetailView sim={width} /> : view === "a" ? <ChainsView sim={width} /> : <TargetsView sim={width} />}
+          {view === "d1" ? <ChainTabsView /> : view === "d2" ? <PerDeviceView /> : <RailView />}
         </div>
       </div>
       <p className="rl-note">
-        {view === "c" ? (
+        {view === "d1" ? (
           <>
-            <b>C · master/detail.</b> The prior art's actual shape: pads (Ableton's macros) on top, a narrow chain{" "}
-            <b>rail</b> that collapses, and <b>one</b> device area — the rack that ships today, showing the selected chain. A
-            and B both repeated the device list per channel, which no DAW does and which is why they read as spreadsheets.
-            Under 700&nbsp;px the rail lies on its side as a chip row and nothing else moves, so the phone and the 4&nbsp;K
-            are the same layout at two aspect ratios.
+            <b>D1 · chain tabs.</b> One extra 22&nbsp;px row above the device tabs, in the same chip language that already
+            scrolls instead of squishing. Zero width cost. The only candidate that can say <b>two reverbs on different
+            stems</b> — which the fixed-membership bank otherwise makes unsayable.
           </>
-        ) : view === "a" ? (
+        ) : view === "d2" ? (
           <>
-            <b>A · chains.</b> A chain is a stem send set plus a serial device list — the list is exactly the rack that ships
-            today. The sources collapse to a label (<b>ALL</b>, <b>DRUM</b>, <b>VOICE +INST</b>); tap it to open the four
-            sends. Ordering is never a question because every chain is linear, and a generator is simply a chain with no input.
+            <b>D2 · per-device.</b> No new surface at all: the stem target is a 2&nbsp;px underline on the chip you already
+            tap, and the sends live in the device panel's header behind the app's existing right-click reveal. Cheapest thing
+            that could work — but one device, one target, so differently-aimed copies of the same effect are impossible.
           </>
         ) : (
           <>
-            <b>B · targeted presets.</b> No routing surface at all: the stem is part of the effect's identity, so VOX ECHO sits
-            in the bank beside ECHO and you throw it the same way. Nothing to reorder, nothing that lays out differently on a
-            phone. The cost is the combinations someone shipped rather than arbitrary ones.
+            <b>C · rail,</b> at deck-column width — kept only to show the verdict. A 148&nbsp;px rail takes a third of a
+            450&nbsp;px deck, and there are two decks. The room in this layout is horizontal and it is already spent.
           </>
         )}
       </p>
@@ -190,100 +168,34 @@ export function RackLab() {
   return full ? createPortal(body, document.body) : body;
 }
 
-function useCols(sim: number, at: number) {
-  const box = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(1200);
-  useEffect(() => {
-    const el = box.current;
-    if (!el || sim) return;
-    const ro = new ResizeObserver(() => setW(el.clientWidth));
-    ro.observe(el);
-    setW(el.clientWidth);
-    return () => ro.disconnect();
-  }, [sim]);
-  return { box, wide: (sim || w) >= at };
-}
-
-function ChainsView({ sim }: { sim: number }) {
-  const { box, wide } = useCols(sim, 700);
-  const [chains, setChains] = useState(CHAINS);
-  const [open, setOpen] = useState<string | null>(null); // which chain's sends are being edited
-  const setSend = (id: string, lane: LaneId) =>
-    setChains((prev) =>
-      prev.map((c) => (c.id !== id ? c : { ...c, sends: { ...c.sends, [lane]: c.sends[lane] === 0 ? 0.4 : c.sends[lane] < 1 ? 1 : 0 } })),
-    );
-
+// A stand-in for the shipped device panel: the dome/curve area, its foot, nothing real.
+function PanelBody({ name, head }: { name: string; head?: React.ReactNode }) {
   return (
-    <div ref={box} className={`rl-chains ${wide ? "wide" : ""}`}>
-      {chains.map((c) => {
-        const d = describe(c.sends);
-        return (
-          <div key={c.id} className={`rl-chain ${c.gen ? "gen" : ""}`}>
-            {/* ★ ONE LINE. The colour is a 3px edge, not a fill: routing is state you GLANCE at,
-                and sixteen saturated blocks made it the loudest thing in the room. */}
-            <div className="rl-chain-head" style={{ ["--edge" as string]: c.gen ? "#ffb03a" : d.colors[0] ?? "var(--line)" }}>
-              <span className="rl-chain-name">{c.name}</span>
-              {c.gen ? (
-                <span className="rl-src gen">GEN</span>
-              ) : (
-                <button className={`rl-src ${open === c.id ? "open" : ""}`} onClick={() => setOpen(open === c.id ? null : c.id)}>
-                  <span className="rl-src-dots">
-                    {d.colors.map((col, i) => (
-                      <i key={i} style={{ background: col }} />
-                    ))}
-                  </span>
-                  {d.text}
-                </button>
-              )}
-            </div>
-            {open === c.id && !c.gen && (
-              <div className="rl-sends">
-                {LANES.map((l) => {
-                  const v = c.sends[l.id];
-                  return (
-                    <button key={l.id} className={`rl-send ${v ? "on" : ""}`} style={{ ["--lane" as string]: l.color }} onClick={() => setSend(c.id, l.id)}>
-                      <span className="rl-send-bar">
-                        <i style={{ width: `${Math.round(v * 100)}%` }} />
-                      </span>
-                      <span className="rl-send-lab">{l.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <div className="rl-devs">
-              {c.devices.map((dev, i) => (
-                <div key={`${dev}${i}`} className="rl-dev">
-                  <span className="rl-grip">⠿</span>
-                  <span className="rl-dev-name">{dev}</span>
-                </div>
-              ))}
-              <button className="rl-adddev">+ device</button>
-            </div>
-          </div>
-        );
-      })}
-      <button className="rl-newchain">+ chain</button>
+    <div className="rl-panel">
+      {head}
+      <div className="rl-panel-art">
+        <span>{name}</span>
+      </div>
+      <div className="rl-panel-foot">
+        <i />
+        <i />
+        <i />
+      </div>
     </div>
   );
 }
 
-function TargetsView({ sim }: { sim: number }) {
-  const { box, wide } = useCols(sim, 620);
-  const [sel, setSel] = useState("VOX ECHO");
+function Sends({ sends, onLane }: { sends: Sends; onLane: (l: LaneId) => void }) {
   return (
-    <div ref={box} className={`rl-targets ${wide ? "wide" : ""}`}>
-      {PRESETS.map((p) => {
-        const l = p.stem ? laneOf(p.stem) : null;
+    <div className="rl-sends">
+      {LANES.map((l) => {
+        const v = sends[l.id];
         return (
-          <button
-            key={p.name}
-            className={`rl-tile ${sel === p.name ? "active" : ""} ${l ? "targeted" : ""}`}
-            style={l ? ({ ["--lane" as string]: l.color } as React.CSSProperties) : undefined}
-            onClick={() => setSel(p.name)}
-          >
-            <span className="rl-tile-name">{p.name}</span>
-            <span className="rl-tile-sub">{l ? l.label : "FULL"}</span>
+          <button key={l.id} className={`rl-send ${v ? "on" : ""}`} style={{ ["--lane" as string]: l.color }} onClick={() => onLane(l.id)}>
+            <span className="rl-send-lab">{l.label}</span>
+            <span className="rl-send-bar">
+              <i style={{ width: `${Math.round(v * 100)}%` }} />
+            </span>
           </button>
         );
       })}
@@ -291,95 +203,57 @@ function TargetsView({ sim }: { sim: number }) {
   );
 }
 
-// ---- C · MASTER / DETAIL --------------------------------------------------------------------
-// Eight pads bound to chains — Ableton's macro row, which in this app already exists as the FX
-// pads. A pad is the play surface; the chain behind it is the machinery, and most of the time you
-// never open the rail at all.
-const PADS: { name: string; chain: string | null }[] = [
-  { name: "ECHO", chain: "mix" },
-  { name: "VERB", chain: "mix" },
-  { name: "CHOP", chain: "a" },
-  { name: "CRUSH", chain: "a" },
-  { name: "VOX AIR", chain: "b" },
-  { name: "SWEEP", chain: "b" },
-  { name: "RISER", chain: "c" },
-  { name: "—", chain: null },
-];
+const bump = (v: number) => (v === 0 ? 0.4 : v < 1 ? 1 : 0);
 
-function MasterDetailView({ sim }: { sim: number }) {
-  const { box, wide } = useCols(sim, 700);
+// ---- D1 · CHAIN TABS -------------------------------------------------------------------------
+function ChainTabsView() {
   const [chains, setChains] = useState(CHAINS);
   const [sel, setSel] = useState("a");
-  const [railOpen, setRailOpen] = useState(true); // Ableton's literal Chain / Hide toggle
+  const [dev, setDev] = useState(0);
   const [sendsOpen, setSendsOpen] = useState(false);
-  const [pad, setPad] = useState<string | null>(null);
   const chain = chains.find((c) => c.id === sel) ?? chains[0];
   const d = describe(chain.sends);
-  const setSend = (id: string, lane: LaneId) =>
-    setChains((prev) =>
-      prev.map((c) => (c.id !== id ? c : { ...c, sends: { ...c.sends, [lane]: c.sends[lane] === 0 ? 0.4 : c.sends[lane] < 1 ? 1 : 0 } })),
-    );
+  const device = chain.devices[Math.min(dev, chain.devices.length - 1)];
 
   return (
-    <div ref={box} className={`rl-md ${wide ? "wide" : ""}`}>
-      {/* The pads. The headline, because it is what you touch while playing. */}
-      <div className="rl-pads">
-        {PADS.map((p) => {
-          const c = p.chain ? chains.find((x) => x.id === p.chain) : null;
-          const col = c ? (c.gen ? "#ffb03a" : describe(c.sends).colors[0] ?? "var(--line)") : "var(--line)";
+    <div className="rl-strip">
+      {/* MASTER — chains, in the same chip row language. 22px. */}
+      <div className="rl-row rl-row-chain">
+        {chains.map((c) => {
+          const cd = describe(c.sends);
           return (
             <button
-              key={p.name}
-              className={`rl-pad ${pad === p.name ? "on" : ""} ${p.chain ? "" : "empty"}`}
-              style={{ ["--edge" as string]: col }}
+              key={c.id}
+              className={`rl-chip chain ${sel === c.id ? "sel" : ""}`}
+              style={{ ["--edge" as string]: c.gen ? "#ffb03a" : cd.colors[0] ?? "var(--line)" }}
               onClick={() => {
-                setPad(pad === p.name ? null : p.name);
-                if (p.chain) setSel(p.chain);
+                setSel(c.id);
+                setDev(0);
+                setSendsOpen(false);
               }}
             >
-              {p.name}
+              {c.name}
             </button>
           );
         })}
+        <button className="rl-chip add">+</button>
       </div>
-
-      <div className="rl-md-body">
-        {/* MASTER — one line per chain. Never a device list; that is the whole correction. */}
-        <div className={`rl-rail ${railOpen ? "" : "hid"}`}>
-          <div className="rl-rail-head">
-            <span>CHAINS</span>
-            <button onClick={() => setRailOpen((v) => !v)}>{railOpen ? (wide ? "‹" : "▴") : wide ? "›" : "▾"}</button>
-          </div>
-          {railOpen && (
-            <div className="rl-rail-list">
-              {chains.map((c) => {
-                const cd = describe(c.sends);
-                return (
-                  <button
-                    key={c.id}
-                    className={`rl-strip ${sel === c.id ? "sel" : ""}`}
-                    style={{ ["--edge" as string]: c.gen ? "#ffb03a" : cd.colors[0] ?? "var(--line)" }}
-                    onClick={() => {
-                      setSel(c.id);
-                      setSendsOpen(false);
-                    }}
-                  >
-                    <span className="rl-strip-name">{c.name}</span>
-                    <span className="rl-strip-src">{c.gen ? "GEN" : cd.text}</span>
-                  </button>
-                );
-              })}
-              <button className="rl-newchain" onClick={() => undefined}>
-                + chain
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* DETAIL — the rack that already ships, for the selection and nothing else. */}
-        <div className="rl-detail">
-          <div className="rl-detail-head" style={{ ["--edge" as string]: chain.gen ? "#ffb03a" : d.colors[0] ?? "var(--line)" }}>
-            <span className="rl-chain-name">{chain.name}</span>
+      {/* DETAIL, level 1 — the shipped device row, for this chain. */}
+      <div className="rl-row">
+        {chain.devices.map((k, i) => (
+          <button key={`${k}${i}`} className={`rl-chip ${i === Math.min(dev, chain.devices.length - 1) ? "sel" : ""}`} onClick={() => setDev(i)}>
+            {k}
+          </button>
+        ))}
+      </div>
+      {/* DETAIL, level 2 — the device panel, unchanged from what ships. */}
+      <PanelBody
+        name={device}
+        head={
+          <div className="rl-panel-head">
+            <span className="rl-chain-tag" style={{ ["--edge" as string]: chain.gen ? "#ffb03a" : d.colors[0] ?? "var(--line)" }}>
+              {chain.name}
+            </span>
             {chain.gen ? (
               <span className="rl-src gen">GEN</span>
             ) : (
@@ -393,37 +267,114 @@ function MasterDetailView({ sim }: { sim: number }) {
               </button>
             )}
           </div>
-          {sendsOpen && !chain.gen && (
-            <div className="rl-sends row">
-              {LANES.map((l) => {
-                const v = chain.sends[l.id];
-                return (
-                  <button key={l.id} className={`rl-send ${v ? "on" : ""}`} style={{ ["--lane" as string]: l.color }} onClick={() => setSend(chain.id, l.id)}>
-                    <span className="rl-send-bar">
-                      <i style={{ width: `${Math.round(v * 100)}%` }} />
-                    </span>
-                    <span className="rl-send-lab">{l.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="rl-slots">
-            {chain.devices.map((dev, i) => (
-              <div key={`${dev}${i}`} className="rl-slot">
-                <div className="rl-slot-head">
-                  <span className="rl-grip">⠿</span>
-                  {dev}
-                </div>
-                <div className="rl-slot-body">
-                  {[0, 1, 2, 3].map((k) => (
-                    <i key={k} />
-                  ))}
-                </div>
-              </div>
-            ))}
-            <button className="rl-addslot">+ device</button>
+        }
+      />
+      {sendsOpen && !chain.gen && (
+        <Sends
+          sends={chain.sends}
+          onLane={(l) => setChains((prev) => prev.map((c) => (c.id !== chain.id ? c : { ...c, sends: { ...c.sends, [l]: bump(c.sends[l]) } })))}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---- D2 · PER-DEVICE TARGET ------------------------------------------------------------------
+function PerDeviceView() {
+  const [bank, setBank] = useState(BANK);
+  const [sel, setSel] = useState(2);
+  const [open, setOpen] = useState(false);
+  const cur = bank[sel];
+  const lane = cur.stem ? LANES.find((l) => l.id === cur.stem)! : null;
+  const sends: Sends = { ...NONE, ...(cur.stem ? { [cur.stem]: 1 } : ALL) } as Sends;
+
+  return (
+    <div className="rl-strip">
+      {/* ONE row — exactly what ships, plus a 2px underline where a device is aimed. */}
+      <div className="rl-row">
+        {bank.map((b, i) => {
+          const l = b.stem ? LANES.find((x) => x.id === b.stem)! : null;
+          return (
+            <button
+              key={b.kind}
+              className={`rl-chip ${sel === i ? "sel" : ""} ${l ? "aimed" : ""}`}
+              style={l ? ({ ["--edge" as string]: l.color } as React.CSSProperties) : undefined}
+              onClick={() => {
+                setSel(i);
+                setOpen(false);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setSel(i);
+                setOpen(true);
+              }}
+            >
+              {b.kind}
+            </button>
+          );
+        })}
+      </div>
+      <PanelBody
+        name={cur.kind}
+        head={
+          <div className="rl-panel-head">
+            <button className={`rl-src ${open ? "open" : ""}`} style={lane ? ({ ["--edge" as string]: lane.color } as React.CSSProperties) : undefined} onClick={() => setOpen((v) => !v)}>
+              {lane && (
+                <span className="rl-src-dots">
+                  <i style={{ background: lane.color }} />
+                </span>
+              )}
+              {lane ? lane.label : "ALL STEMS"}
+            </button>
+            <span className="rl-hint">right-click a chip to aim it</span>
           </div>
+        }
+      />
+      {open && (
+        <Sends
+          sends={sends}
+          onLane={(l) => setBank((prev) => prev.map((b, i) => (i !== sel ? b : { ...b, stem: b.stem === l ? null : l })))}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---- C · RAIL (kept for contrast, at deck-column width) --------------------------------------
+function RailView() {
+  const [sel, setSel] = useState("a");
+  const chain = CHAINS.find((c) => c.id === sel) ?? CHAINS[0];
+  return (
+    <div className="rl-strip">
+      <div className="rl-md-body">
+        <div className="rl-rail">
+          <div className="rl-rail-head">
+            <span>CHAINS</span>
+          </div>
+          {CHAINS.map((c) => {
+            const cd = describe(c.sends);
+            return (
+              <button
+                key={c.id}
+                className={`rl-railrow ${sel === c.id ? "sel" : ""}`}
+                style={{ ["--edge" as string]: c.gen ? "#ffb03a" : cd.colors[0] ?? "var(--line)" }}
+                onClick={() => setSel(c.id)}
+              >
+                <span className="rl-railrow-name">{c.name}</span>
+                <span className="rl-railrow-src">{c.gen ? "GEN" : cd.text}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="rl-rail-detail">
+          <div className="rl-row">
+            {chain.devices.map((k, i) => (
+              <button key={`${k}${i}`} className={`rl-chip ${i === 0 ? "sel" : ""}`}>
+                {k}
+              </button>
+            ))}
+          </div>
+          <PanelBody name={chain.devices[0]} />
         </div>
       </div>
     </div>

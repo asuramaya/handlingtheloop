@@ -114,49 +114,155 @@
   color: var(--accent);
 }
 
-/* ---- A · CHAINS, QUIET --------------------------------------------------------------------- */
-/* A uniform GRID, not ragged flex: the previous version's `flex: 1 1 260px` gave every row a
-   different column width, which read as an accident rather than a layout. */
-.rl-chains {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  align-items: start;
-}
-.rl-chains.wide {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-}
-.rl-chain {
+
+/* ---- THE DECK COLUMN ----------------------------------------------------------------------- */
+/* Every candidate renders inside one deck column, because that is the real host: ~450 px, and
+   there are two of them. The chip rows below are the shipped `.fx-tabs` at prototype weight —
+   they SCROLL rather than squish (fx.css:45), which is where all the remaining room is. */
+.rl-strip {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 7px 8px;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 82%, #000 8%);
+}
+.rl-row {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.rl-row::-webkit-scrollbar {
+  display: none;
+}
+.rl-chip {
+  flex: 0 0 auto; /* never shrink — the row scrolls, exactly as the shipped strip does */
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--panel));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.rl-chip.sel {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+}
+/* D2's whole surface: a 2 px underline saying where this device is aimed. */
+.rl-chip.aimed {
+  border-bottom: 2px solid var(--edge);
+}
+.rl-chip.aimed.sel {
+  border-bottom-color: var(--edge);
+}
+/* D1's chain row — the same chip, marked by a left edge instead of a fill so the two rows do not
+   compete for the eye. */
+.rl-row-chain .rl-chip.chain {
+  border-left: 3px solid var(--edge);
+}
+.rl-chip.add {
+  color: var(--muted);
+  border-color: var(--line);
+  background: transparent;
+}
+
+.rl-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
   min-width: 0;
 }
-/* ★ The routing is a 3 px EDGE, not a fill. Colour marks; it does not shout. */
-.rl-chain-head {
+.rl-panel-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-left: 7px;
-  border-left: 3px solid var(--edge);
-  min-height: 18px;
+  gap: 6px;
+  min-height: 16px;
 }
-.rl-chain-name {
-  flex: 1 1 auto;
-  font-size: 11px;
+.rl-chain-tag {
+  padding-left: 6px;
+  border-left: 3px solid var(--edge);
+  font-size: 9.5px;
   font-weight: 800;
   letter-spacing: 0.06em;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-/* The source SUMMARY replaces four coloured panels in the cases that are nearly all the cases:
-   everything, or one stem. It opens the sends only when touched. */
+.rl-hint {
+  margin-left: auto;
+  font-size: 7.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  opacity: 0.7;
+  white-space: nowrap;
+}
+/* Stand-in for the real device art (the reverb dome, the EQ curve) at its real height. */
+.rl-panel-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 132px;
+  border-radius: 6px;
+  background: color-mix(in srgb, #000 30%, transparent);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+.rl-panel-foot {
+  display: flex;
+  gap: 5px;
+}
+.rl-panel-foot i {
+  flex: 1 1 0;
+  height: 20px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* The four sends, revealed on demand — horizontal bars, small, at the edge (Traktor's weight). */
+.rl-sends {
+  display: flex;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, #000 22%, transparent);
+}
+.rl-send {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  min-width: 0;
+}
+.rl-send-lab {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--lane) 70%, var(--muted));
+}
+.rl-send-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lane) 12%, transparent);
+  overflow: hidden;
+  display: flex;
+}
+.rl-send-bar i {
+  background: var(--lane);
+}
 .rl-src {
   display: inline-flex;
   align-items: center;
@@ -190,243 +296,28 @@
   height: 8px;
   border-radius: 1px;
 }
-/* The sends, only while editing: horizontal bars, small, at the edge — Traktor's weight. */
-.rl-sends {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 5px 6px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #000 22%, transparent);
-}
-.rl-send {
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-}
-.rl-send-lab {
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--lane) 70%, var(--muted));
-  text-align: left;
-  order: -1;
-}
-.rl-send-bar {
-  height: 7px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--lane) 12%, transparent);
-  overflow: hidden;
-  display: flex;
-}
-.rl-send-bar i {
-  background: var(--lane);
-}
-.rl-devs {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.rl-dev {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 24px;
-  padding: 0 7px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-.rl-dev-name {
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  color: var(--text);
-}
-.rl-grip {
-  color: var(--muted);
-  opacity: 0.45;
-  font-size: 10px;
-  cursor: grab;
-}
-.rl-adddev,
-.rl-newchain {
-  padding: 3px 8px;
-  border: 1px dashed var(--line);
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  text-align: center;
-}
-.rl-chain.gen {
-  background: color-mix(in srgb, #ffb03a 6%, transparent);
-}
 
-/* ---- B · TARGETED PRESETS ------------------------------------------------------------------ */
-/* The whole model: a bank of tiles, exactly the shape the FX pads already are. A targeted preset
-   carries a coloured underline and the stem's name; an untargeted one says FULL. There is no
-   routing surface, so there is nothing here that needs a different layout at any width — the grid
-   just fits more columns. */
-.rl-targets {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-}
-.rl-targets.wide {
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-}
-.rl-tile {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 9px 10px 8px;
-  border: 1px solid var(--line);
-  border-bottom: 3px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
-  cursor: pointer;
-  min-height: 46px;
-}
-.rl-tile.targeted {
-  border-bottom-color: var(--lane);
-}
-.rl-tile.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
-}
-.rl-tile.targeted.active {
-  border-bottom-color: var(--lane);
-}
-.rl-tile-name {
-  font-size: 11.5px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  color: var(--text);
-}
-.rl-tile-sub {
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-.rl-tile.targeted .rl-tile-sub {
-  color: var(--lane);
-}
-
-
-/* ---- C · MASTER / DETAIL -------------------------------------------------------------------- */
-/* The corrected shape: pads on top, a narrow chain RAIL, and ONE device area. The rail is
-   scaffolding — it carries a name and a source summary and nothing else, because the moment a
-   channel grows a device list you have written a spreadsheet, which is exactly what A and B were. */
-.rl-md {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-.rl-pads {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
-}
-.rl-md.wide .rl-pads {
-  grid-template-columns: repeat(8, 1fr);
-}
-.rl-pad {
-  padding: 10px 6px;
-  border: 1px solid var(--line);
-  border-bottom: 3px solid var(--edge);
-  border-radius: 7px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.rl-pad.on {
-  background: color-mix(in srgb, var(--edge) 22%, var(--panel));
-  border-color: color-mix(in srgb, var(--edge) 60%, transparent);
-  color: #fff;
-}
-.rl-pad.empty {
-  color: var(--muted);
-  opacity: 0.5;
-}
-
+/* ---- C · RAIL, kept only to show the verdict ------------------------------------------------ */
 .rl-md-body {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-/* ★ The ONE breakpoint in the whole candidate. Above it the rail is a column beside the rack;
-   below it the same strips lie on their side as a scrolling chip row. Nothing else moves — the
-   phone and the 4 K render the same layout at two aspect ratios. */
-.rl-md.wide .rl-md-body {
-  flex-direction: row;
+  gap: 6px;
   align-items: flex-start;
+  min-width: 0;
 }
 .rl-rail {
+  flex: 0 0 148px; /* ← a third of the deck. This is the whole finding. */
+  width: 148px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-.rl-md.wide .rl-rail {
-  flex: 0 0 148px;
-  width: 148px;
-}
-.rl-md.wide .rl-rail.hid {
-  flex-basis: 26px;
-  width: 26px;
+  gap: 4px;
 }
 .rl-rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
   font-size: 8.5px;
   font-weight: 800;
   letter-spacing: 0.1em;
   color: var(--muted);
 }
-.rl-rail.hid .rl-rail-head span {
-  display: none;
-}
-.rl-rail-head button {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.4;
-  cursor: pointer;
-}
-.rl-rail-list {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-}
-.rl-md.wide .rl-rail-list {
-  flex-direction: column;
-  overflow: visible;
-}
-/* A strip is ~26 px — Ableton's chain row is a mixer line, not a card. */
-.rl-strip {
+.rl-railrow {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -435,20 +326,16 @@
   border: 1px solid var(--line);
   border-left: 3px solid var(--edge);
   border-radius: 5px;
-  background: color-mix(in srgb, var(--surface) 82%, #000 8%);
+  background: var(--panel);
   cursor: pointer;
   white-space: nowrap;
-  flex: 0 0 auto;
 }
-.rl-md.wide .rl-strip {
-  flex: 0 0 auto;
-}
-.rl-strip.sel {
+.rl-railrow.sel {
   border-color: var(--accent);
   border-left-color: var(--edge);
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
-.rl-strip-name {
+.rl-railrow-name {
   flex: 1 1 auto;
   font-size: 10px;
   font-weight: 800;
@@ -457,90 +344,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rl-strip-src {
+.rl-railrow-src {
   font-size: 7.5px;
   font-weight: 800;
-  letter-spacing: 0.06em;
   color: var(--muted);
 }
-
-.rl-detail {
+.rl-rail-detail {
   flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 82%, #000 8%);
-}
-.rl-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 7px;
-  border-left: 3px solid var(--edge);
-  min-height: 18px;
-}
-.rl-sends.row {
-  flex-direction: row;
-  gap: 8px;
-}
-.rl-sends.row .rl-send {
-  flex: 1 1 0;
-  grid-template-columns: 1fr;
-  gap: 3px;
-}
-.rl-sends.row .rl-send-lab {
-  text-align: center;
-}
-/* The device area: real slots, the size the shipped rack's devices actually are. */
-.rl-slots {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 6px;
-  align-items: start;
-}
-.rl-slot {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px 7px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  min-width: 0;
-}
-.rl-slot-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  color: var(--text);
-}
-.rl-slot-body {
-  display: flex;
   gap: 5px;
-}
-.rl-slot-body i {
-  flex: 1 1 0;
-  height: 26px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-}
-.rl-addslot {
-  min-height: 46px;
-  border: 1px dashed var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  cursor: pointer;
 }
 
 /* FULL SCREEN — a 4 K layout cannot be judged inside a 440 px settings panel even scaled. */

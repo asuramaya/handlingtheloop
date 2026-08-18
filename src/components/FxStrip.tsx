@@ -433,13 +433,28 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // Adjusting wet/dry (the FLX BEAT-FX knob or the on-screen MIX cell) dismisses the browse — it means
   // "I'm tuning this now", not still picking. Preset cycling PRESERVES mix, so this never false-fires;
   // EQ has no mix param, and the first observation is skipped.
-  const curMix = selDev ? selDev.getParam("mix") : null; // EQ included now that Eq3 maps "mix"
-  const lastMixRef = useRef<number | null>(null);
+  //
+  // ★ It watches the MENU'S device, and it remembers which slot that reading came from. Watching
+  // the SELECTED device was a race: opening the menu also selects the tab you right-clicked, so
+  // right-clicking SAT while REVERB was focused changed the observed mix from reverb's to sat's —
+  // a different device's value, read as a fader move — and the watchdog shut the menu it had just
+  // opened. Nobody touched a fader; the subject changed underneath the observer.
+  const menuMix = menuDev ? menuDev.getParam("mix") : null; // EQ included now that Eq3 maps "mix"
+  const lastMixRef = useRef<{ slot: number; mix: number } | null>(null);
   useEffect(() => {
-    if (menu && lastMixRef.current != null && curMix != null && curMix !== lastMixRef.current) closeMenu();
-    lastMixRef.current = curMix;
+    if (!menu || menuMix == null) {
+      lastMixRef.current = null; // nothing open: the next open starts from its own first reading
+      return;
+    }
+    const prev = lastMixRef.current;
+    if (prev && prev.slot === menu.slot && prev.mix !== menuMix) {
+      closeMenu();
+      lastMixRef.current = null;
+      return;
+    }
+    lastMixRef.current = { slot: menu.slot, mix: menuMix };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curMix, menu]);
+  }, [menuMix, menu]);
   // Mouse/touch opens are STICKY (dismiss by clicking away or picking) — cancel any pending
   // hardware auto-dismiss so a deliberate open isn't yanked shut mid-browse.
   const cancelMenuTimer = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } };

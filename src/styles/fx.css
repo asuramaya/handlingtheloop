@@ -138,38 +138,37 @@
   padding-left: 8px;
   flex: 0 0 auto;
 }
-/* The master is the channel everything lands on, so it is drawn as a destination, not a source:
-   no stem letters, a solid accent edge on the side the signal ARRIVES from. */
-.fx-chain.master {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-  padding-left: 8px;
-}
-.fx-chain.master.sel {
-  border-left-color: var(--accent);
-}
+/* The master carries no stem letters and no edge — it is named, and that is enough. */
 
-/* The four-lane picker, open only while a chain's sources are being set. A stem has exactly ONE
-   owner, so these are not four independent switches: taking one takes it from whoever held it. */
-.fx-stems {
+/* THE STEMS — four square toggles at the top of a chain's own menu. Always four, always the same
+   order, lit where the chain listens. They used to unfold an extra ROW under the chain row, which
+   shoved the whole rack down every time you glanced at a source. */
+.fx-stemgrid {
   display: flex;
   gap: 4px;
-  margin-bottom: 4px;
+  padding: 4px 6px 2px;
 }
-.fx-stem {
+.fx-stemsq {
   flex: 1 1 0;
-  padding: 3px 4px;
-  border: 1px solid color-mix(in srgb, var(--lane) 30%, var(--panel));
+  aspect-ratio: 1;
+  max-width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--lane) 28%, var(--panel));
   border-radius: 5px;
   background: transparent;
-  color: color-mix(in srgb, var(--lane) 75%, var(--muted));
-  font-size: 8px;
+  color: color-mix(in srgb, var(--lane) 55%, var(--muted));
+  font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.06em;
   cursor: pointer;
-  min-width: 0;
 }
-.fx-stem.on {
-  background: color-mix(in srgb, var(--lane) 22%, transparent);
+.fx-stemsq:hover {
+  border-color: var(--lane);
+  color: #fff;
+}
+.fx-stemsq.on {
+  background: color-mix(in srgb, var(--lane) 24%, transparent);
   border-color: var(--lane);
   color: #fff;
 }
@@ -188,33 +187,43 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
 }
-/* THE ACT ROW — "what you can do here", above "what you can recall here". Both menus open with
-   it, so make/throw-away is never buried under a scrolling list of names. */
+/* THE ACTS — three verbs, GLYPHS, riding on the menu's own title line: ＋ save this as a preset,
+   ✎ rename, ✕ delete/remove. Spelled out they were sentences wider than the menu ("✕ Remove from
+   VOCAL AIR"), and they are the same three verbs in every menu, so they are learned once. The
+   meaning lives in the tooltip and the aria-label, not in the row. */
 .fx-menu-acts {
-  display: flex;
-  gap: 4px;
-  padding: 3px 4px;
+  display: inline-flex;
+  gap: 3px;
+  margin-left: auto;
 }
-.fx-palette-item.act {
-  flex: 1 1 0;
-  text-align: center;
+.fx-act {
+  width: 20px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 4px 6px;
-  white-space: nowrap;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
 }
-.fx-palette-item.act:hover {
+.fx-act:hover {
+  color: #fff;
   border-color: var(--accent);
-  color: #fff;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
-.fx-palette-item.act.danger {
-  color: color-mix(in srgb, #ff5d73 80%, var(--muted));
-  border-color: color-mix(in srgb, #ff5d73 30%, var(--line));
-}
-.fx-palette-item.act.danger:hover {
-  color: #fff;
+.fx-act.danger:hover {
   border-color: #ff5d73;
   background: color-mix(in srgb, #ff5d73 18%, transparent);
+}
+.fx-preset-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain
    names ("Everything But Drums") do not wrap. */
@@ -367,7 +376,11 @@ body:not(.no-glow) .fx-tab.sel {
   overflow-y: auto;
 }
 .fx-preset-head {
-  padding: 3px 10px 5px;
+  /* The title line CARRIES the acts, so it is a row, not a label. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 5px 10px;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;

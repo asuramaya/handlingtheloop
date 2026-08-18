@@ -2099,7 +2099,11 @@ export class Deck {
   // but is never destroyed, so the eq* proxies / color filter / automix / MIDI always have
   // a live target (no audio while the EQ is out). The EQ's PARAMS still ride the eq*
   // ControlParams; the `fx` snapshot syncs only its presence + position (empty params).
-  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise"]);
+  // ★ Every kind the rack can hold, and it must STAY that way: applyFxSnapshot filters incoming
+  // slots against this set, so a kind missing here is saved by fxSnapshot() and then silently
+  // dropped on the way back in — its params reset on every reload, profile load and room sync.
+  // "comp" was missing exactly that way despite being permanently resident (see RACK_ORDER).
+  private static readonly FX_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"]);
   // Effects driven by a momentary pad-throw — added DORMANT (bypassed) so the pad is the trigger.
   private static readonly PAD_THROW_KINDS: ReadonlySet<string> = new Set<FxKind>(["saturator", "crush", "mod", "gate", "noise"]);
   // The permanent pad-FX bank: every FX pad's backing device is ALWAYS resident, in pad-layout

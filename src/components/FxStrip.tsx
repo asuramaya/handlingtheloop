@@ -80,7 +80,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // that already exists. It costs one 22 px row and no width, which is the whole reason it is a
   // row of chips and not the rail this started as: the host is a ~450 px deck column, twice.
   const [chains, setChains] = useState<FxChain[]>([]);
-  const [selChain, setSelChain] = useState(0);
+  const [selChain, setSelChain] = useState(0); // index into `chains`; the master is always last
   const [stemPick, setStemPick] = useState(false); // the four-lane picker, open on the selected chip
   // ADD A DEVICE — a fork of the preset menu, in two steps: pick the effect, then pick the sound
   // it lands with. A chain is built the way a real chain is built, one deliberate device at a
@@ -126,14 +126,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // list that could drift from it.
   useEffect(() => {
     if (!ready || chains.length) return;
-    setChains([{ id: "mix", name: "MIX", stems: 0b1111, kinds: devices.map((d) => d.kind) }]);
+    setChains([{ id: "mix", name: "MIX", stems: 0, kinds: devices.map((d) => d.kind), master: true }]);
   }, [ready, chains.length, devices]);
   // Hand the model to the engine. A single all-stems chain is passed as EMPTY — not as a
   // one-chain special case but as "no chains", which restores the plain serial rack and switches
   // the per-stem taps back off. Nothing about the default path costs anything.
   useEffect(() => {
     if (!ready || !chains.length) return;
-    const plain = chains.length === 1 && (chains[0].stems & 0b1111) === 0b1111;
+    const plain = chains.length === 1; // the master alone IS the serial rack
     deck.setFxChains(plain ? [] : chains);
   }, [deck, ready, chains]);
   // Selecting a chain whose devices don't include the current selection would leave the panel
@@ -223,12 +223,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const toggleStem = (bit: number) => {
     setChains((prev) => {
       const cur = prev[selChain];
-      if (!cur) return prev;
+      if (!cur || cur.master) return prev; // the master takes the SUM of the chains, not stems
       const taking = !(cur.stems & bit);
       return prev.map((c, i) =>
         i === selChain
           ? { ...c, stems: taking ? c.stems | bit : c.stems & ~bit }
-          : taking
+          : taking && !c.master
             ? { ...c, stems: c.stems & ~bit } // a stem has exactly one owner
             : c,
       );
@@ -237,9 +237,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const addChain = () => {
     setChains((prev) => {
       const id = `c${prev.length}${Date.now().toString(36).slice(-3)}`;
-      return [...prev, { id, name: `CHAIN ${prev.length}`, stems: 0, kinds: [] }];
+      const at = Math.max(0, prev.length - 1); // …before the master, which is always last
+      const next = [...prev];
+      next.splice(at, 0, { id, name: `CHAIN ${at + 1}`, stems: 0, kinds: [] });
+      return next;
     });
-    setSelChain(chains.length);
+    setSelChain(Math.max(0, chains.length - 1));
     setStemPick(true); // a new chain hears nothing until it is given a stem — say so immediately
   };
   const dropDeviceOnChain = (kind: FxKind, target: number) => {
@@ -248,15 +251,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   const removeChain = (at: number) => {
     setChains((prev) => {
-      if (prev.length < 2 || at === 0) return prev; // the first chain is the mix; it cannot leave
       const dead = prev[at];
-      // Its stems and its devices go home to the first chain rather than vanishing — a delete
-      // that silently drops a stem would mute part of the track with no visible cause.
+      if (!dead || dead.master || prev.length < 2) return prev; // the master is the channel; it cannot leave
+      // Its devices go home to the master rather than vanishing. Its STEMS need no rehoming: a
+      // stem no chain claims runs dry into the sum, which is exactly where it belongs.
       return prev
-        .map((c, i) => (i === 0 ? { ...c, stems: c.stems | dead.stems, kinds: [...c.kinds, ...dead.kinds.filter((k: FxKind) => !c.kinds.includes(k))] } : c))
+        .map((c) => (c.master ? { ...c, kinds: [...c.kinds, ...dead.kinds.filter((k: FxKind) => !c.kinds.includes(k))] } : c))
         .filter((_, i) => i !== at);
     });
-    setSelChain(0);
+    setSelChain((v) => Math.max(0, v - 1));
   };
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
@@ -550,29 +553,52 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           when tapped again. Drag a device tab onto a chip to move that device into that chain. */}
       {ready && chains.length > 0 && (
         <div className="fx-chains">
-          {chains.map((c, i) => (
-            <button
-              key={c.id}
-              className={`fx-chain ${i === selChain ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""}`}
-              title={chainTitle(c, i)}
-              onClick={() => {
-                if (i === selChain) setStemPick((v) => !v);
-                else { setSelChain(i); setStemPick(false); }
-              }}
-              onContextMenu={(e) => { e.preventDefault(); removeChain(i); }}
-              onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const k = tabs[dragFrom ?? -1]?.kind;
-                if (k) dropDeviceOnChain(k, i);
-                setDragFrom(null);
-                setDropAt(null);
-              }}
-            >
-              <span className="fx-chain-name">{c.name}</span>
-              {i === 0 && (c.stems & 0b1111) === 0b1111 ? (
-                <span className="fx-chain-src all">ALL</span>
-              ) : (
+          {chains.map((c, i) =>
+            c.master ? (
+              <span key="add-wrap" className="fx-chain-tail">
+              <button className="fx-chain add" title="New chain" onClick={addChain}>
+                ＋
+              </button>
+              {/* ★ THE MASTER, pinned rightmost at a constant place — because that is where it
+                  is in the SIGNAL, not a layout preference. It has no stem selector: it does not
+                  take stems, it takes the SUM of the chains, after them. */}
+              <button
+                key={c.id}
+                className={`fx-chain master ${i === selChain ? "sel" : ""}`}
+                title={`${c.name}: the master channel — every chain sums here`}
+                onClick={() => { setSelChain(i); setStemPick(false); }}
+                onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const k = tabs[dragFrom ?? -1]?.kind;
+                  if (k) dropDeviceOnChain(k, i);
+                  setDragFrom(null);
+                  setDropAt(null);
+                }}
+              >
+                <span className="fx-chain-name">{c.name}</span>
+              </button>
+              </span>
+            ) : (
+              <button
+                key={c.id}
+                className={`fx-chain ${i === selChain ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""}`}
+                title={chainTitle(c, i)}
+                onClick={() => {
+                  if (i === selChain) setStemPick((v) => !v);
+                  else { setSelChain(i); setStemPick(false); }
+                }}
+                onContextMenu={(e) => { e.preventDefault(); removeChain(i); }}
+                onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const k = tabs[dragFrom ?? -1]?.kind;
+                  if (k) dropDeviceOnChain(k, i);
+                  setDragFrom(null);
+                  setDropAt(null);
+                }}
+              >
+                <span className="fx-chain-name">{c.name}</span>
                 <span className="fx-chain-src">
                   {chainInitials(c).map((x) => (
                     <i key={x.ch} className={x.on ? "on" : ""} style={{ ["--lane" as string]: x.color }}>
@@ -580,12 +606,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     </i>
                   ))}
                 </span>
-              )}
-            </button>
-          ))}
-          <button className="fx-chain add" title="New chain" onClick={addChain}>
-            +
-          </button>
+              </button>
+            ),
+          )}
         </div>
       )}
       {/* The picker, only while a chain's sources are being set. Taking a stem takes it FROM

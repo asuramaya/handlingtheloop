@@ -127,6 +127,26 @@
   color: var(--muted);
   padding: 2px 9px;
 }
+/* ＋ and the MASTER travel together at the END of the row, and `margin-left: auto` pushes the
+   pair to the right edge whenever there is spare width — so the master sits at a CONSTANT place,
+   which is where it is in the signal. The row still scrolls when there isn't spare width; the
+   pair simply stays last. */
+.fx-chain-tail {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 8px;
+  flex: 0 0 auto;
+}
+/* The master is the channel everything lands on, so it is drawn as a destination, not a source:
+   no stem letters, a solid accent edge on the side the signal ARRIVES from. */
+.fx-chain.master {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  padding-left: 8px;
+}
+.fx-chain.master.sel {
+  border-left-color: var(--accent);
+}
 
 /* The four-lane picker, open only while a chain's sources are being set. A stem has exactly ONE
    owner, so these are not four independent switches: taking one takes it from whoever held it. */

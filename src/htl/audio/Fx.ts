@@ -64,12 +64,19 @@ export interface FxDevice {
   dispose?(): void;
 }
 
-/** One parallel CHAIN: a set of stems, and the devices that process them.
+/** One CHAIN: a set of stems, and the devices that process them.
  *
- *  The model is a PARTITION, not a send matrix. A stem belongs to exactly one chain, so nothing
- *  is heard twice and no gain staging is needed anywhere — the chains sum back to unity because
- *  together they are the mix. `stems` is a 4-bit mask (1=DRUM 2=BASS 4=VOICE 8=INST); ALL_STEMS
- *  means "the whole signal", which is the single-chain default and the path that ships today.
+ *  ★ THE TOPOLOGY. Stem chains are PARALLEL and they PARTITION the stems — a stem belongs to
+ *  exactly one chain, so nothing is heard twice and no gain staging is needed anywhere. They all
+ *  sum into the MASTER chain, which is not a peer and does not select stems: it is the channel
+ *  everything arrives at, downstream of every chain, and it processes the sum.
+ *
+ *      DRUM ─┐                                 (a stem no chain claimed
+ *      BASS ─┼─→ [chain A: GATE → CRUSH] ─┐     runs straight into the sum,
+ *     VOICE ─┤                            ├─→ ( + ) → [MASTER: EQ → COMP] → out
+ *      INST ─┴─→ [chain B: REVERB] ───────┘
+ *
+ *  `stems` is a 4-bit mask (1=DRUM 2=BASS 4=VOICE 8=INST) and is meaningless on the master.
  *  `kinds` names devices by kind, because the rack is fixed-membership: one instance of each
  *  exists, so a chain does not own devices, it claims them. */
 export interface FxChain {
@@ -77,6 +84,8 @@ export interface FxChain {
   name: string;
   stems: number;
   kinds: FxKind[];
+  /** The master channel. Exactly one chain carries this, and it is always last. */
+  master?: boolean;
 }
 export const ALL_STEMS = 0b1111;
 
@@ -134,7 +143,7 @@ export class FxRack {
   /** Does any chain listen to a stem SUBSET? The only question the deck needs answered, because
    *  it is exactly the condition for turning the (not free) per-stem taps on. */
   get needsStems(): boolean {
-    return this.chains.some((c) => (c.stems & ALL_STEMS) !== ALL_STEMS);
+    return this.chains.some((c) => !c.master);
   }
 
   /** Re-wire chainIn → dev0 → dev1 → … → output. Splicing gain nodes is click-free,
@@ -161,45 +170,69 @@ export class FxRack {
       }
     }
     this.chainNodes = [];
-    if (!this.chains.length) {
-      let prev: AudioNode = this.chainIn;
-      for (const d of this.devices) {
-        prev.connect(d.input);
-        prev = d.output;
-      }
-      prev.connect(this.output);
-      return;
-    }
-    // PARALLEL. Each chain gets its own head gain fed either by the whole signal (chainIn, so the
-    // pre-rack analyser tap on `input` keeps working untouched) or by just the stem taps it owns.
-    // A chain whose stems are unreachable — taps not up yet, no stretch node — is left SILENT
-    // rather than fed the full mix: hearing the whole track through a drums-only chain is a
-    // louder wrong answer than hearing nothing, and it resolves itself the moment taps attach.
-    for (const c of this.chains) {
-      const head = this.output.context.createGain();
-      this.chainNodes.push(head);
-      if ((c.stems & ALL_STEMS) === ALL_STEMS) {
-        this.chainIn.connect(head);
-      } else if (this.stemTap) {
-        for (let i = 0; i < 4; i++) {
-          if (!(c.stems & (1 << i))) continue;
-          const tap = this.stemTap(i);
-          try {
-            tap?.connect(head);
-          } catch {
-            /* a tap that cannot connect stays silent — see above */
-          }
-        }
-      }
-      let prev: AudioNode = head;
-      for (const k of c.kinds) {
+    // Run one chain's devices in order, from `from`, and return the node its signal leaves on.
+    const runDevices = (kinds: readonly FxKind[], from: AudioNode): AudioNode => {
+      let prev = from;
+      for (const k of kinds) {
         const d = this.devices.find((x) => x.kind === k);
         if (!d) continue;
         prev.connect(d.input);
         prev = d.output;
       }
-      prev.connect(this.output);
+      return prev;
+    };
+    if (!this.chains.length) {
+      runDevices(this.devices.map((d) => d.kind), this.chainIn).connect(this.output);
+      return;
     }
+    const master = this.chains.find((c) => c.master) ?? this.chains[this.chains.length - 1];
+    const stemChains = this.chains.filter((c) => c !== master);
+    if (!stemChains.length) {
+      // Only the master: the plain serial rack again, just addressed by name.
+      runDevices(master.kinds, this.chainIn).connect(this.output);
+      return;
+    }
+    // The sum every parallel branch arrives at, and the master's input. The master does not
+    // select stems — it is the channel everything lands on, after the chains.
+    const sum = this.output.context.createGain();
+    this.chainNodes.push(sum);
+    let anyTap = false;
+    const claimed = stemChains.reduce((m, c) => m | c.stems, 0);
+    for (const c of stemChains) {
+      const head = this.output.context.createGain();
+      this.chainNodes.push(head);
+      for (let i = 0; i < 4; i++) {
+        if (!(c.stems & (1 << i))) continue;
+        const tap = this.stemTap?.(i);
+        if (!tap) continue;
+        try {
+          tap.connect(head);
+          anyTap = true;
+        } catch {
+          /* a tap that cannot connect leaves this chain silent — see the fallback below */
+        }
+      }
+      runDevices(c.kinds, head).connect(sum);
+    }
+    // A stem NO chain claimed still has to be heard: it runs dry into the sum, so building a
+    // drums-only chain never silently drops the rest of the track.
+    for (let i = 0; i < 4; i++) {
+      if (claimed & (1 << i)) continue;
+      const tap = this.stemTap?.(i);
+      if (!tap) continue;
+      try {
+        tap.connect(sum);
+        anyTap = true;
+      } catch {
+        /* ignore */
+      }
+    }
+    // FALLBACK, and it is not optional: if no tap could be reached at all (no stretch node yet,
+    // a hot-swap mid-rebuild), every branch above is silent and the deck would go quiet with a
+    // full rack showing. Feed the sum the whole signal instead — wrong routing beats no audio,
+    // and the next rebuild with live taps replaces it.
+    if (!anyTap) this.chainIn.connect(sum);
+    runDevices(master.kinds, sum).connect(this.output);
   }
 
   add(device: FxDevice, slot = this.devices.length): FxDevice {

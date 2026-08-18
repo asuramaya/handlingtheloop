@@ -234,6 +234,27 @@ export class NoiseFx extends BaseFxDevice {
   }
   private applyRes() {
     this.sweep.Q.setTargetAtTime(-3.01 + clamp01(this._res) * 25, this.ctx.currentTime, 0.02); // Q is in dB for a highpass: −3.01 = flat, up = resonant
+    this.applyTrim();
+  }
+
+  /**
+   * ★ RES WAS A VOLUME CONTROL WEARING A RESONANCE LABEL.
+   *
+   * The resonant high-pass's corner peak was never paid for, so turning RES up made the whole
+   * device louder — measured, at a completed build and full wet: −0.1 dB at RES 0, +3.8 at 0.25,
+   * +7.8 at 0.5, +11.2 at 0.75, +15.3 at 1. Essentially 15.4 dB of straight gain across the
+   * knob's travel, which meant the device clipped on its own at the DEFAULT resonance and the
+   * DEFAULT mix (peak 1.02), and a control that is supposed to change character was mostly
+   * changing level.
+   *
+   * The trim pays it back, so RES now moves the peak's SHAPE — a whistle emerging out of the bed
+   * — while the level stays put. The extra 0.86 leaves the wet a little under full scale at full
+   * wet, because this is a SEND: the track is still passing through underneath at unity, and a
+   * layer that reaches 0 dBFS by itself has already spent the master's headroom.
+   */
+  private applyTrim() {
+    const comp = Math.pow(10, (-15.4 * clamp01(this._res)) / 20);
+    this.preMix.gain.setTargetAtTime(0.86 * comp, this.ctx.currentTime, 0.02);
   }
   private applyTone() {
     this.tone.frequency.setTargetAtTime(toneHzOf(this._tone), this.ctx.currentTime, 0.02);

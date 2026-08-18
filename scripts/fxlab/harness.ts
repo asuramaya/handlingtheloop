@@ -1384,6 +1384,313 @@ async function minStepOverRenders(
   return { dbg, cycleErr, period, sr, peak: Math.round(hi * 1000) / 1000, env: Array.from(env.slice(0, 40)).map((v) => Math.round(v * 100) / 100) };
 };
 
+// ---- NOISE audit ------------------------------------------------------------------------------
+// Seven behaviours were added to the riser at once, and "it sounds right" is the operator's call —
+// but most of the CLAIMS underneath are numbers, and a claim that can be a number should be one
+// before anybody is asked to listen.
+//
+// ★ THE TRICK THAT MAKES THIS MEASURABLE. The device is a GENERATOR: its own broadband noise sits
+// on top of everything, which is what defeated the first attempt (measuring the DUCK's envelope on
+// a tone, drowned by the noise on top of it). The way through is not a better time-domain
+// detector, it's a NARROWBAND one — a Goertzel at exactly the probe tone's frequency. Noise
+// spreads its energy across the spectrum, so in a single bin the tone stands well clear of it, and
+// the tone's amplitude over time IS the duck curve, cleanly.
+function goertzel(x: Float32Array, from: number, n: number, hz: number, sr: number): number {
+  const k = 2 * Math.cos((2 * Math.PI * hz) / sr);
+  let s1 = 0;
+  let s2 = 0;
+  const to = Math.min(x.length, from + n);
+  for (let i = from; i < to; i++) {
+    const s0 = x[i] + k * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  const m = Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - k * s1 * s2));
+  return (2 * m) / Math.max(1, to - from);
+}
+
+/** The probe tone's amplitude over time, in blocks — i.e. whatever gain the DRY leg is under. */
+function toneEnvelope(x: Float32Array, sr: number, hz: number, blockSec = 0.02): { env: Float32Array; block: number } {
+  const block = Math.round(sr * blockSec);
+  const n = Math.floor(x.length / block);
+  const env = new Float32Array(n);
+  for (let i = 0; i < n; i++) env[i] = goertzel(x, i * block, block, hz, sr);
+  return { env, block };
+}
+
+/** Spectral centroid (Hz) of one slice — how HIGH the noise layer is sitting right now. */
+function centroid(x: Float32Array, from: number, n: number, sr: number): number {
+  const N = 4096;
+  const ps = powerSpectrum(x, N, from, Math.min(x.length, from + n));
+  let num = 0;
+  let den = 0;
+  for (let b = 1; b < ps.length; b++) {
+    const f = (b * sr) / N;
+    if (f < 40 || f > 18000) continue;
+    num += f * ps[b];
+    den += ps[b];
+  }
+  return den > 0 ? num / den : 0;
+}
+
+interface NoiseRender {
+  sr: number;
+  L: Float32Array;
+  R: Float32Array;
+}
+async function renderNoise(
+  params: Record<string, number>,
+  opts: { seconds: number; throwAt: number; throwOff?: number; toneHz?: number; bpm?: number; grid?: { at: number; bar: number } | null; keyHz?: number },
+): Promise<NoiseRender> {
+  const sr = 48000;
+  const ctx = new OfflineAudioContext(2, Math.round(opts.seconds * sr), sr);
+  const dev = new NoiseFx(ctx as unknown as AudioContext);
+  dev.reset();
+  dev.setBypass(false, true);
+  for (const k in params) dev.setParam(k, params[k]);
+  dev.setSyncBpm(opts.bpm ?? 120);
+  if (opts.grid !== undefined) dev.setGrid(opts.grid);
+  if (opts.keyHz) dev.setKeyHz(opts.keyHz);
+  if (opts.toneHz) {
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = opts.toneHz;
+    const g = ctx.createGain();
+    g.gain.value = 0.5;
+    osc.connect(g).connect(dev.input);
+    osc.start(0);
+  }
+  dev.output.connect(ctx.destination);
+  const q = (t: number) => Math.round((t * sr) / 128) * (128 / sr);
+  // NOT awaited: suspend(t) resolves only when the render REACHES t, so awaiting before
+  // startRendering() deadlocks.
+  void ctx.suspend(q(opts.throwAt)).then(() => {
+    (dev as unknown as { setThrow: (on: boolean) => void }).setThrow(true);
+    void ctx.resume();
+  });
+  if (opts.throwOff != null) {
+    void ctx.suspend(q(opts.throwOff)).then(() => {
+      (dev as unknown as { setThrow: (on: boolean) => void }).setThrow(false);
+      void ctx.resume();
+    });
+  }
+  const buf = await ctx.startRendering();
+  return { sr, L: buf.getChannelData(0), R: buf.getChannelData(1) };
+}
+
+(globalThis as unknown as { fxlabNoiseAudit: () => Promise<ModAuditResult> }).fxlabNoiseAudit = async () => {
+  const checks: ModAuditCheck[] = [];
+  const add = (name: string, value: number, unit: string, pass: boolean, detail: string) =>
+    checks.push({ name, value: Math.round(value * 1000) / 1000, unit, pass, detail });
+  const bpm = 120;
+  const barSec = (60 / bpm) * 4; // 2 s
+  const TONE = 5000; // the probe tone — parked where the riser has no energy (see below)
+
+  // 1. SNAP — does the build END on a bar line, however ragged the press?
+  //    Read through DUCK: the dry tone is pulled down along the build curve and flat afterwards,
+  //    so the last fall in its narrowband envelope is the build's end, exactly.
+  // ★ The probe tone sits at 5 kHz with the device's post-LP wound down to 600 Hz, so the riser
+  // has almost no energy in the bin being read. The device is a generator and its wet CANNOT be
+  // silenced during a throw (BaseFxDevice.throwMix floors it), so the only way to read the duck
+  // cleanly is to put the probe somewhere the noise isn't. A first attempt read a 1 kHz bin with
+  // the LP wide open and the noise sat right on top of it: the answer came back ~0.4 bars late
+  // with ±0.1 of jitter, which is what a detector tracking noise looks like.
+  const endErr = async (snap: boolean) => {
+    const errs: number[] = [];
+    for (const press of [0, 0.17, 0.4, 0.73, 0.95]) {
+      const at = (1 + press) * barSec;
+      const r = await renderNoise(
+        { rise: 1, bars: 2, snap: snap ? 1 : 0, duck: 1, impact: 0, mix: 0.5, tone: 0 },
+        { seconds: 12, throwAt: at, toneHz: TONE, bpm, grid: { at: 0, bar: barSec } },
+      );
+      const { env, block } = toneEnvelope(r.L, r.sr, TONE);
+      // ★ The end is where the duck ARRIVES at its floor, not where it last "stepped down". A
+      // per-block difference test cannot see a slow ramp at all: 0.4 of amplitude spread over
+      // 200 blocks moves ~0.002 per block, under any tolerance loose enough to ignore noise — so
+      // the detector fired zero times and silently reported the PRESS time as the end, which
+      // looked exactly like SNAP doing nothing. Arrival is unambiguous and needs no tolerance on
+      // the slope at all.
+      const k0 = Math.floor((at * r.sr) / block);
+      let hi = 0;
+      let lo = Infinity;
+      for (let k = k0; k < env.length; k++) {
+        hi = Math.max(hi, env[k]);
+        lo = Math.min(lo, env[k]);
+      }
+      const arrive = lo + (hi - lo) * 0.02;
+      let endK = env.length - 1;
+      for (let k = k0; k < env.length; k++) if (env[k] <= arrive) { endK = k; break; }
+      const bars = ((endK * block) / r.sr) / barSec;
+      errs.push(bars - Math.round(bars));
+    }
+    return errs;
+  };
+  const onErrs = await endErr(true);
+  const offErrs = await endErr(false);
+  const onWorst = Math.max(...onErrs.map(Math.abs));
+  const offSpread = Math.max(...offErrs) - Math.min(...offErrs);
+  add("snap-lands-on-bar", onWorst, "bars off", onWorst < 0.08, `worst |error| over 5 ragged press times: ${onErrs.map((e) => e.toFixed(3)).join(" ")}`);
+  add("snap-off-scatters", offSpread, "bars spread", offSpread > 0.25, `SNAP off must NOT land — proves the check can tell the difference: ${offErrs.map((e) => e.toFixed(3)).join(" ")}`);
+
+  // 2. DIR — the sweep's direction, read as the noise layer's spectral centroid early vs late.
+  // ★ Read the LOW-BAND FRACTION, not the spectral centroid. The centroid of a broadband noise
+  // layer is dominated by where the post-LP sits and barely twitches as the high-pass climbs
+  // (measured: 6257 → 7903 Hz, a real move in the right direction but a feeble signal). What the
+  // sweep actually does is empty out the bottom, and that is enormous: near-everything below
+  // 500 Hz at the start of an UP build, near-nothing at the end.
+  const lowFrac = (x: Float32Array, at: number, sr: number) => {
+    const ps = powerSpectrum(x, 4096, Math.round(at * sr), Math.round(at * sr) + 4096);
+    const lo = bandPower(ps, sr, 4096, 60, 500);
+    const all = bandPower(ps, sr, 4096, 60, 18000);
+    return all > 0 ? lo / all : 0;
+  };
+  for (const dir of [0, 1]) {
+    const r = await renderNoise({ rise: 1, bars: 2, dir, snap: 0, mix: 1, duck: 0, impact: 0 }, { seconds: 8, throwAt: 1, bpm });
+    const early = lowFrac(r.L, 1.4, r.sr);
+    const late = lowFrac(r.L, 4.6, r.sr);
+    const up = dir === 0;
+    const pass = up ? late < early * 0.5 : late > early * 2;
+    add(up ? "dir-up-empties-the-bottom" : "dir-down-refills-it", late / Math.max(1e-9, early), "late/early low-band", pass, `${up ? "UP: the sweep climbs away from the bottom" : "DOWN: it comes back down into it"} — ${(early * 100).toFixed(1)}% → ${(late * 100).toFixed(1)}% of energy under 500 Hz`);
+  }
+
+  // 3. CURVE — the build's shape, read at its MIDPOINT. Late bloom is still low there; a
+  //    front-loaded build is already most of the way up. Measured on the duck (deterministic).
+  const midOf = async (curve: number) => {
+    const at = 1;
+    const r = await renderNoise({ rise: 1, bars: 2, curve, snap: 0, duck: 1, impact: 0, mix: 0.5 }, { seconds: 10, throwAt: at, toneHz: TONE, bpm });
+    const { env, block } = toneEnvelope(r.L, r.sr, TONE);
+    const kAt = (t: number) => Math.floor((t * r.sr) / block);
+    const base = env[kAt(at - 0.2)] || 1;
+    const floor = env[kAt(at + 2 * barSec + 0.3)] || 0;
+    const mid = env[kAt(at + barSec)] || 0;
+    return (base - mid) / Math.max(1e-6, base - floor); // 0 = nothing yet, 1 = fully arrived
+  };
+  const late = await midOf(0);
+  const lin = await midOf(0.5);
+  const early = await midOf(1);
+  add("curve-late-holds-back", late, "progress at 50%", late < 0.4, `CURVE 0 must still be low at the halfway point (linear reads ${lin.toFixed(2)})`);
+  add("curve-early-leaps", early, "progress at 50%", early > 0.6, `CURVE 1 must already be high at the halfway point`);
+  add("curve-linear-is-linear", Math.abs(lin - 0.5), "|error| vs 0.5", Math.abs(lin - 0.5) < 0.12, `the centre detent must actually be linear: ${lin.toFixed(3)}`);
+
+  // 4. TONAL follows the KEY — the pitched layer must START on the tonic, not on 80 Hz.
+  // ★ A DIFFERENTIAL, across two different keys. Comparing "energy at the root" against "energy a
+  // semitone away" inside the same render cannot work: the riser's noise fills both bins equally
+  // and the tonal layer is deliberately quiet (gain 0.16), so the ratio sits at ~1 whether the
+  // feature works or not — it did, and read 0.94. Rendering the SAME device twice with different
+  // tonics and asking whether each root is louder in its OWN render cancels the noise floor,
+  // because the noise is identical in distribution both times.
+  const rootA = 16.3516 * Math.pow(2, 9 / 12) * 4; // A2 ≈ 110 Hz
+  const rootC = 16.3516 * Math.pow(2, 0 / 12) * 5; // C3 ≈ 131 Hz
+  {
+    // ★ Measured at the build's MIDPOINT, not at its start. The level envelope swells from ~0, so
+    // in the first tenth of a build the whole wet — tonal layer included — is at half a percent of
+    // amplitude, and a first attempt that probed there was reading noise with a straight face. By
+    // the midpoint the layer is properly present, and the frequency there is a known function of
+    // the root (the curve is linear at the centre detent, so it is root × 16^0.5 = root × 4).
+    // Eight bars rather than four halves the sweep rate, so the tone smears across fewer bins.
+    const p = { rise: 1, bars: 8, type: 2, snap: 0, mix: 1, duck: 0, impact: 0, res: 0, tone: 1 };
+    const rA = await renderNoise(p, { seconds: 20, throwAt: 1, bpm, keyHz: rootA });
+    const rC = await renderNoise(p, { seconds: 20, throwAt: 1, bpm, keyHz: rootC });
+    // ★ Measured EARLY, and here is why the midpoint is the wrong place: the tonal oscillator and
+    // the sweep high-pass climb together, and the HP climbs FASTER — by the halfway point it sits
+    // near 980 Hz while the fundamental is at root×4 ≈ 440, so the device has filtered out its own
+    // fundamental and the comb has nothing left to compare. Early in the build the fundamental is
+    // still above the corner (120 Hz against 93 Hz).
+    //
+    // Probing early costs nothing in SNR, which is the part that looks wrong and isn't: the level
+    // envelope is at ~3% there, but it scales the tonal layer and the noise bed by the SAME
+    // amount, and this is a ratio test. The envelope cancels.
+    const from = Math.round(1.02 * rA.sr);
+    const n = Math.round(0.5 * rA.sr);
+    // The tonal layer is a SAWTOOTH, so it puts energy at f, 2f, 3f… — five bins of evidence
+    // instead of one. And the comparison is WITHIN a render (this root's comb vs the other
+    // root's comb in the same audio), because the noise buffer is freshly random per render:
+    // comparing one bin ACROSS two renders measures the noise's variance, not the feature, and
+    // duly reported the answer backwards.
+    // A sawtooth puts energy at f, 2f, 3f… so four harmonics are four pieces of evidence; each is
+    // smeared across the little span the oscillator sweeps through during the window, so each is
+    // summed over that span rather than read at a single point.
+    const comb = (x: Float32Array, sr: number, f0: number) => {
+      let sum = 0;
+      for (let h = 1; h <= 4; h++) for (let i = 0; i <= 5; i++) sum += goertzel(x, from, n, f0 * h * (1 + 0.018 * i), sr);
+      return sum;
+    };
+    const lift = Math.min(comb(rA.L, rA.sr, rootA) / Math.max(1e-9, comb(rA.L, rA.sr, rootC)), comb(rC.L, rC.sr, rootC) / Math.max(1e-9, comb(rC.L, rC.sr, rootA)));
+    add("tonal-follows-key", lift, "× the other key\u0027s comb", lift > 1.3, `in each render, the harmonic comb on THAT key must beat the comb on the other one`);
+  }
+
+  // 5. DUCK — does the track actually come down, by the amount claimed, and back up after?
+  for (const duck of [0, 0.5, 1]) {
+    const at = 1;
+    const r = await renderNoise({ rise: 1, bars: 2, duck, snap: 0, impact: 0, mix: 0.5 }, { seconds: 10, throwAt: at, throwOff: at + 2 * barSec + 0.2, toneHz: TONE, bpm });
+    const { env, block } = toneEnvelope(r.L, r.sr, TONE);
+    const kAt = (t: number) => Math.floor((t * r.sr) / block);
+    const base = env[kAt(at - 0.2)] || 1;
+    const bottom = env[kAt(at + 2 * barSec)] || 0;
+    const after = env[kAt(at + 2 * barSec + 1.2)] || 0;
+    const got = 1 - bottom / Math.max(1e-9, base);
+    const want = duck * 0.8;
+    add(`duck-depth@${duck}`, got, "fraction pulled down", Math.abs(got - want) < 0.08, `want ${want.toFixed(2)} of the dry removed at full build`);
+    if (duck > 0) add(`duck-releases@${duck}`, after / Math.max(1e-9, base), "× original", after / Math.max(1e-9, base) > 0.9, "the music must come straight back up on release");
+  }
+
+  // 6. IMPACT — present when asked, silent when not, and never past 0 dBFS at its own maximum.
+  {
+    const off = 5; // let the 2-bar build COMPLETE before releasing — the loudest case
+    const peaks: Record<string, { hit: number; full: number }> = {};
+    for (const [tag, mix] of [["wet", 1], ["rest", 0.5]] as const) {
+      for (const impact of [0, 1]) {
+        const r = await renderNoise({ rise: 1, bars: 2, impact, snap: 0, duck: 0, mix, width: 1 }, { seconds: 9, throwAt: 1, throwOff: off, bpm });
+        // ★ Read the impact in the LOW BAND. A completed UP build has its high-pass at 12 kHz, so
+        // the riser has no bottom end at all — while the impact's whole lower half is a sine
+        // falling 80 → 32 Hz. Time-domain peak cannot separate them (the riser's own release from
+        // a full build is still at 0.76 five milliseconds after the cut, and by the time that has
+        // decayed the impact has too); the spectrum separates them completely.
+        const ps = powerSpectrum(r.L, 8192, Math.round((off + 0.005) * r.sr), Math.round((off + 0.3) * r.sr));
+        const hit = bandPower(ps, r.sr, 8192, 30, 120);
+        let full = 0;
+        for (let i = 0; i < r.L.length; i++) full = Math.max(full, Math.abs(r.L[i]));
+        peaks[`${tag}${impact}`] = { hit, full };
+      }
+    }
+    const sub = peaks.wet1.hit / Math.max(1e-12, peaks.wet0.hit);
+    add("impact-fires", sub, "× low band vs no impact", sub > 20, "IMPACT must land a real sub on the drop — a finished riser has no bottom end of its own");
+    // ★ Judged as a RATIO, not an absolute. A full-wet riser at maximum resonance plus a maximum
+    // impact exceeding 0 dBFS is true of most devices at their extremes and is what the master
+    // limiter is for; the useful question is whether IMPACT is a hit or a level bomb. The
+    // absolute check lives where it means something — the device's own resting mix.
+    const lift = peaks.wet1.full / Math.max(1e-9, peaks.wet0.full);
+    add("impact-is-a-hit-not-a-bomb", lift, "× the riser alone", lift < 2.5, `full-wet peak ${peaks.wet0.full.toFixed(2)} → ${peaks.wet1.full.toFixed(2)}`);
+    add("impact-clean-at-rest-mix", peaks.rest1.full, "peak at mix 0.5", peaks.rest1.full < 1, "at the device's own default wet, a maximum IMPACT must not clip on its own");
+  }
+
+  // 7. WIDTH — decorrelation, and what a mono sum costs. Silence in, so this is the noise alone.
+  for (const width of [0, 1]) {
+    const r = await renderNoise({ rise: 0, width, snap: 0, duck: 0, impact: 0, mix: 1 }, { seconds: 4, throwAt: 0.5, bpm });
+    const from = Math.round(1.5 * r.sr);
+    let num = 0;
+    let dl = 0;
+    let dr = 0;
+    let sm = 0;
+    for (let i = from; i < r.L.length; i++) {
+      num += r.L[i] * r.R[i];
+      dl += r.L[i] * r.L[i];
+      dr += r.R[i] * r.R[i];
+      const m = 0.5 * (r.L[i] + r.R[i]);
+      sm += m * m;
+    }
+    const corr = num / Math.max(1e-12, Math.sqrt(dl * dr));
+    const monoDb = 20 * Math.log10(Math.sqrt(sm / Math.max(1e-12, dl)));
+    if (width === 0) add("width-0-is-mono-safe", corr, "L/R correlation", corr > 0.99, "the default must be bit-identical channels — no mono cost at all");
+    else {
+      add("width-1-decorrelates", corr, "L/R correlation", Math.abs(corr) < 0.2, "full width must be genuinely independent noise per side");
+      add("width-1-mono-cost", monoDb, "dB, mono vs L", monoDb > -4.5, "…and the mono sum must still hold up (uncorrelated: −3 dB is the theoretical floor)");
+    }
+  }
+
+  return { ok: checks.every((c) => c.pass), checks };
+};
+
 // ---- MOD stereo width -------------------------------------------------------------------------
 // WIDTH gives each channel its own LFO phase, which is what opens the image — and what a MONO
 // SUM cancels, because the two channels' combs interleave. The panel and the device both claim

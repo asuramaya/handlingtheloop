@@ -16,6 +16,8 @@
 //   node scripts/fxlab/fxlab.mjs --live-audit                 # real-time gesture/click audit, every device (~8 min)
 //   node scripts/fxlab/fxlab.mjs --live-audit-quick           # …the worklet devices only, 1 run each (pre-commit)
 //   node scripts/fxlab/fxlab.mjs --shaper-latency             # Chromium's oversample="4x" group delay, measured
+//   node scripts/fxlab/fxlab.mjs --noise-audit                # the riser: snap / dir / curve / key / duck / impact / width
+//   node scripts/fxlab/fxlab.mjs --gate-align                 # does the GATE land on the beat
 //
 // Flags: --kind --preset --params(json) --signal(impulse|burst|noise|tone|silence)
 //        --seconds --bpm --json (raw JSON only) --sweep-feedback
@@ -64,6 +66,7 @@ function parseArgs(argv) {
       case "--shaper-latency": a.shaperLatency = true; break;
       case "--mod-width": a.modWidth = true; break;
       case "--gate-align": a.gateAlign = true; break;
+      case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
       case "--throw-at": a.throwAt = Number(v); i++; break;
       case "--throw-off": a.throwOff = Number(v); i++; break;
@@ -296,6 +299,18 @@ async function main() {
         console.log(`   ${label.padEnd(28)} ×${f(r.worst[i], 2).padStart(7)} material   at ${r.when[i].map((m) => `${m >= 0 ? "+" : ""}${m}ms`).join(" ")}   (step ${r.runs.map((x) => x[i].toExponential(1)).join(" ")})`);
       });
       console.log(`   finite=${r.finite}  peak=${f(r.peak, 3)}`);
+      return;
+    }
+
+    if (args.noiseAudit) {
+      console.log("\n  FXLAB · NOISE audit — the riser's seven claims, as numbers\n");
+      const r = await page.evaluate(() => globalThis.fxlabNoiseAudit());
+      for (const c of r.checks) {
+        console.log(`   ${c.pass ? "✓" : "✗"} ${c.name.padEnd(28)} ${f(c.value, 3).padStart(9)} ${c.unit.padEnd(22)} ${c.detail}`);
+      }
+      const bad = r.checks.filter((c) => !c.pass);
+      console.log(`\n  ${r.checks.length - bad.length}/${r.checks.length} pass${bad.length ? ` — ${bad.map((c) => c.name).join(", ")}` : ""}\n`);
+      process.exitCode = r.ok ? 0 : 1;
       return;
     }
 

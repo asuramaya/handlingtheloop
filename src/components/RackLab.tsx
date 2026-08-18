@@ -1,49 +1,60 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
-// RACKLAB — an UNWIRED layout prototype for stem-routed FX. No audio, no rack, no routing: this
-// exists only to answer the design questions before a week of DSP is spent betting on them.
+// RACKLAB — an UNWIRED layout prototype for stem-routed FX. No audio, no rack, no routing.
 //
-//   1. Does an explicit SUM line read as "this is where four stems become one"?
-//   2. Do per-lane dots read as "which stems enter this device", at a glance, without labels?
-//   3. Does the whole thing survive 375 px to 4K — which is the actual hard part.
+// ★ THE UNIT OF ROUTING IS A CHAIN, NOT A DEVICE. The first version of this put a stem×device grid
+// in the rack — a sum line, a dot per lane per device — and it was wrong. Four references solve
+// this problem and NOT ONE of them routes per device:
 //
-// ★ THE WIDTH SIMULATOR IS THE POINT. The rack has to work on a phone held in one hand and on a
-// 4K widescreen, and judging that by dragging a window edge is guesswork you do once and then
-// stop doing. The preset widths render the REAL component at the REAL breakpoints, side by side
-// with the number, so a layout that only works at the width you happen to be sitting at cannot
-// quietly ship. Everything below is measured from the CONTAINER, never the viewport, precisely so
-// this simulation is honest — a viewport media query would report the window and lie here.
+//   • Ableton — an Audio Effect Rack holds parallel CHAINS; each chain gets the same input and
+//     runs it serially through its OWN devices, and the chains mix at the output. You pick a chain
+//     from a list. There is no per-device routing anywhere in it.
+//   • FL Studio — channels route to mixer INSERTS, each insert a serial FX slot list pointing at
+//     another insert or the master; shared effects are send knobs. Routing is a mixer concern.
+//   • Traktor Stem Decks — the closest prior art: each stem carries VOLUME, FILTER and FX SEND.
+//     The routing control lives ON THE STEM, as an amount.
+//   • djay Pro AI — stem-specific effects are assigned to PADS: the stem is part of the effect's
+//     identity, not a separate routing decision.
+//
+// The grid was making the plumbing legible instead of making it disappear. So: a CHAIN is a stem
+// SEND SET plus a serial device list, and the device list is exactly the rack that ships today —
+// same tabs, same panels, same order, nothing new to lay out. Ordering stops being a question
+// because every chain is linear. A generator is simply a chain with no input. And the default
+// state IS today: one chain, fed by everything.
+//
+// The trade, stated plainly: two devices in the same chain always hear the same stems. "Gate the
+// drums and reverb the vocals" costs a second CHAIN rather than a second row of dots — which is
+// exactly what it costs in all four references.
 
 const LANES = [
   { id: "drums", label: "DRUM", color: "#ff5d73" },
   { id: "bass", label: "BASS", color: "#b06bff" },
   { id: "vocals", label: "VOICE", color: "#5dff9e" },
   { id: "other", label: "INST", color: "#36c2ff" },
-  { id: "layer", label: "LAYER", color: "#ffb03a" }, // generators sum in here — see NOISE below
 ] as const;
 type LaneId = (typeof LANES)[number]["id"];
+type Sends = Record<LaneId, number>;
 
-interface Row {
+const ALL: Sends = { drums: 1, bass: 1, vocals: 1, other: 1 };
+const NONE: Sends = { drums: 0, bass: 0, vocals: 0, other: 0 };
+
+interface Chain {
   id: string;
   name: string;
-  gen?: boolean; // a GENERATOR: produces, never processes — pinned above the stem zone
-  lanes: LaneId[]; // which lanes enter it (stem zone only; ignored below the sum line)
+  sends: Sends;
+  devices: string[];
+  gen?: boolean; // a generator chain: produces, takes no input — the sends strip is meaningless
 }
 
-// A plausible starting rack, deliberately showing the interesting cases: a device on one lane, a
-// device on a subset, a generator, and a mix zone that looks exactly like today's rack.
-const INITIAL: Row[] = [
-  { id: "noise", name: "NOISE", gen: true, lanes: [] },
-  { id: "eq", name: "EQ", lanes: ["drums", "bass", "vocals", "other"] },
-  { id: "gate", name: "GATE", lanes: ["drums"] },
-  { id: "crush", name: "CRUSH", lanes: ["bass"] },
-  { id: "mod", name: "MOD", lanes: ["vocals", "other"] },
-  { id: "reverb", name: "REVERB", lanes: ["vocals", "layer"] },
-  { id: "delay", name: "DELAY", lanes: [] },
-  { id: "sat", name: "SAT", lanes: [] },
-  { id: "comp", name: "COMP", lanes: [] },
+const INITIAL: Chain[] = [
+  { id: "mix", name: "MIX", sends: { ...ALL }, devices: ["EQ", "SAT", "COMP"] },
+  { id: "a", name: "DRUM CHOP", sends: { ...NONE, drums: 1 }, devices: ["GATE", "CRUSH"] },
+  { id: "b", name: "VOX AIR", sends: { ...NONE, vocals: 1, other: 0.4 }, devices: ["REVERB", "DELAY"] },
+  { id: "c", name: "RISER", sends: { ...NONE }, devices: ["NOISE"], gen: true },
 ];
-const INITIAL_SUM = 6; // rows [0,SUM) are stem-zone; the divider sits here; the rest are mix
+
+const PALETTE = ["EQ", "DELAY", "REVERB", "SAT", "CRUSH", "MOD", "GATE", "COMP"];
 
 const WIDTHS = [
   { w: 375, label: "iPhone" },
@@ -56,19 +67,16 @@ const WIDTHS = [
 ];
 
 export function RackLab() {
-  const [rows, setRows] = useState<Row[]>(INITIAL);
-  const [sumAt, setSumAt] = useState(INITIAL_SUM);
+  const [chains, setChains] = useState<Chain[]>(INITIAL);
+  const [sel, setSel] = useState("mix");
   const [width, setWidth] = useState(0);
   const [full, setFull] = useState(false);
-  // ★ ZOOM-TO-FIT, and `zoom` rather than `transform: scale`. A simulated 2560 px rack does not
-  // fit in a 440 px settings panel, and the two obvious answers are both wrong: clamping it to the
-  // panel means the button says 2560 and the layout is 440 (the first version of this did exactly
-  // that, silently, and every preset reported the same mode), while a horizontal scrollbar means
-  // judging a wide layout through a letterbox. Scaling it down shows the whole thing at once —
-  // which is what a layout review actually needs. `zoom` is used because it scales LAYOUT: the
-  // rack still measures its simulated width, so its own breakpoints fire correctly, and the
-  // container's height follows. `transform` would scale the pixels while leaving the layout box
-  // at full size, so the rack would measure 2560 and occupy 2560 of empty column.
+
+  // ★ Zoom-to-fit, and `zoom` rather than `transform: scale`. A simulated 2560 px rack does not fit
+  // in a 440 px settings panel; clamping it would make the ruler lie, and a scrollbar would mean
+  // judging a wide layout through a letterbox. `zoom` scales LAYOUT, so the rack still measures its
+  // simulated width and its own breakpoints fire; `transform` would scale pixels and leave a
+  // 2560 px layout box behind.
   const stage = useRef<HTMLDivElement>(null);
   const [avail, setAvail] = useState(0);
   useEffect(() => {
@@ -81,34 +89,39 @@ export function RackLab() {
   }, [full]);
   const zoom = width && avail && width > avail ? avail / width : 1;
 
-  const move = (from: number, to: number) => {
-    const clamped = Math.max(0, Math.min(rows.length - 1, to));
-    if (clamped === from) return;
-    // A generator can only live in the stem zone — it injects, so there is nothing upstream of it
-    // to process. Dragging one below the line is refused rather than silently corrected.
-    const r = rows[from];
-    setRows((prev) => {
-      const next = prev.slice();
-      next.splice(from, 1);
-      next.splice(clamped, 0, r);
-      return next;
+  const setSend = (id: string, lane: LaneId) =>
+    setChains((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const v = c.sends[lane];
+        const next = v === 0 ? 0.4 : v < 1 ? 1 : 0; // off → part → full → off
+        return { ...c, sends: { ...c.sends, [lane]: next } };
+      }),
+    );
+  const addChain = () =>
+    setChains((prev) => {
+      const id = `x${prev.length}`;
+      setSel(id);
+      return [...prev, { id, name: `CHAIN ${prev.length}`, sends: { ...NONE }, devices: [] }];
     });
-    // The divider stays put in ABSOLUTE terms unless the move crossed it.
-    setSumAt((s) => {
-      if (from < s && clamped >= s) return s - 1;
-      if (from >= s && clamped < s) return s + 1;
-      return s;
-    });
-  };
+  const moveDevice = (id: string, from: number, to: number) =>
+    setChains((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const d = c.devices.slice();
+        const [x] = d.splice(from, 1);
+        d.splice(Math.max(0, Math.min(d.length, to)), 0, x);
+        return { ...c, devices: d };
+      }),
+    );
+  const addDevice = (id: string, name: string) => setChains((prev) => prev.map((c) => (c.id === id ? { ...c, devices: [...c.devices, name] } : c)));
+  const dropDevice = (id: string, i: number) => setChains((prev) => prev.map((c) => (c.id === id ? { ...c, devices: c.devices.filter((_, k) => k !== i) } : c)));
 
-  const toggleLane = (id: string, lane: LaneId) =>
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, lanes: r.lanes.includes(lane) ? r.lanes.filter((l) => l !== lane) : [...r.lanes, lane] } : r)));
-
-  return (
+  const body = (
     <div className={`rl ${full ? "rl-full" : ""}`}>
       <div className="rl-head">
         <div className="rl-title">
-          RACKLAB — stem-routed FX layout (unwired)
+          RACKLAB — chains, not a matrix (unwired)
           {zoom < 1 && <em> · shown at {Math.round(zoom * 100)}%</em>}
         </div>
         <div className="rl-widths">
@@ -126,30 +139,46 @@ export function RackLab() {
       </div>
       <div className="rl-stage" ref={stage}>
         <div className="rl-frame" style={width ? { width, zoom } : undefined}>
-          <RackView rows={rows} sumAt={sumAt} sim={width} onMove={move} onSum={setSumAt} onToggle={toggleLane} />
+          <ChainRack
+            chains={chains}
+            sel={sel}
+            sim={width}
+            onSel={setSel}
+            onSend={setSend}
+            onAdd={addChain}
+            onMove={moveDevice}
+            onAddDevice={addDevice}
+            onDrop={dropDevice}
+          />
         </div>
       </div>
       <p className="rl-note">
-        Rows are processing order, top to bottom. Above the <b>SUM</b> line each device sees only the lanes it is dotted for and
-        runs one instance per lane; below it, the rack is exactly what ships today. Drag a row to reorder or to cross the line;
-        drag the line itself to move where the stems become a mix.
+        A <b>chain</b> is a stem send set plus a serial device list — the device list is exactly the rack that ships today.
+        Tap a send to cycle it off → part → full. Narrow shows one chain at a time; wide lays them side by side, which is what
+        the extra width is actually for. Default state is one chain fed by everything, i.e. today.
       </p>
     </div>
   );
+  // ★ Portalled to the body when expanded. The settings panel animates in with a TRANSFORM, and a
+  // transformed ancestor becomes the containing block for position:fixed — so "full screen" was
+  // full-settings-panel, 397 px wide, which is the one width it was built to escape.
+  return full ? createPortal(body, document.body) : body;
 }
 
-function RackView({ rows, sumAt, sim, onMove, onSum, onToggle }: { rows: Row[]; sumAt: number; sim: number; onMove: (a: number, b: number) => void; onSum: (n: number) => void; onToggle: (id: string, l: LaneId) => void }) {
+function ChainRack(props: {
+  chains: Chain[];
+  sel: string;
+  sim: number;
+  onSel: (id: string) => void;
+  onSend: (id: string, l: LaneId) => void;
+  onAdd: () => void;
+  onMove: (id: string, a: number, b: number) => void;
+  onAddDevice: (id: string, n: string) => void;
+  onDrop: (id: string, i: number) => void;
+}) {
+  const { chains, sel, sim } = props;
   const box = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(1200);
-  // ★ Measured from the CONTAINER, never the viewport — in the real app this panel shares the
-  // screen with a dock whose width the rack does not control, so a viewport media query would be
-  // answering a question nobody asked.
-  //
-  // …but when the simulator is driving, the simulated width is used DIRECTLY rather than measured.
-  // Under `zoom`, a ResizeObserver reports the VISUAL size, and a 2560 px rack zoomed to fit a
-  // 430 px panel is visually 430 px — so the observer never fires, and every preset silently
-  // rendered in the same mode while the ruler underneath said 2560. Measurement is right for the
-  // real thing and a lie inside a simulation of it.
   useEffect(() => {
     const el = box.current;
     if (!el || sim) return;
@@ -159,102 +188,153 @@ function RackView({ rows, sumAt, sim, onMove, onSum, onToggle }: { rows: Row[]; 
     return () => ro.disconnect();
   }, [sim]);
   const eff = sim || w;
-  // Three presentations of the SAME data, not three layouts: the columns collapse, the dots stay.
-  const mode = eff >= 760 ? "matrix" : eff >= 430 ? "inline" : "stacked";
-
-  const drag = useRef<{ from: number; kind: "row" | "sum" } | null>(null);
-  const rowH = useRef(34);
-  const onDown = (i: number, kind: "row" | "sum") => (e: React.PointerEvent) => {
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    drag.current = { from: i, kind };
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    rowH.current = Math.max(20, r.height);
-  };
-  const onMoveEv = (e: React.PointerEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    const el = box.current;
-    if (!el) return;
-    const y = e.clientY - el.getBoundingClientRect().top;
-    const idx = Math.round(y / rowH.current) - 1;
-    if (d.kind === "sum") onSum(Math.max(0, Math.min(rows.length, idx)));
-    else if (idx !== d.from) {
-      onMove(d.from, idx);
-      drag.current = { ...d, from: Math.max(0, Math.min(rows.length - 1, idx)) };
-    }
-  };
-  const end = () => (drag.current = null);
+  // ★ The ONLY width decision: one chain at a time, or all of them side by side. There is no third
+  // layout and no re-flowed matrix — a wide screen shows MORE CHAINS, which is exactly how Ableton
+  // uses width too. Below the threshold the chips are the navigation; above it they are redundant.
+  // 700, not 1100: a tablet has room for two chains side by side, and one 768 px-wide chain is a
+  // column of empty space with a device list down one edge. Above the threshold the count is left
+  // to flex-wrap and a max-width per chain, so the layout keeps adding COLUMNS as width arrives
+  // instead of stretching four of them into bands.
+  const columns = eff >= 700;
+  const shown = columns ? chains : chains.filter((c) => c.id === sel);
 
   return (
-    <div ref={box} className={`rl-rack rl-${mode}`} onPointerMove={onMoveEv} onPointerUp={end} onPointerCancel={end}>
-      {mode === "matrix" && (
-        <div className="rl-colhead">
-          <span />
-          {LANES.map((l) => (
-            <span key={l.id} style={{ color: l.color }}>
-              {l.label}
-            </span>
+    <div ref={box} className={`rl-rack ${columns ? "rl-cols" : "rl-one"}`}>
+      {!columns && (
+        <div className="rl-chips">
+          {chains.map((c) => (
+            <button key={c.id} className={c.id === sel ? "active" : ""} onClick={() => props.onSel(c.id)}>
+              <span className="rl-chip-dots">
+                {LANES.map((l) => (
+                  <i key={l.id} style={{ background: l.color, opacity: c.sends[l.id] ? 0.35 + 0.65 * c.sends[l.id] : 0.12 }} />
+                ))}
+              </span>
+              {c.name}
+            </button>
           ))}
+          <button className="rl-add" onClick={props.onAdd} title="New chain">
+            +
+          </button>
         </div>
       )}
-      {rows.map((r, i) => (
-        <div key={r.id}>
-          {i === sumAt && <SumLine onDown={onDown(i, "sum")} />}
-          <RackRow row={r} stem={i < sumAt} mode={mode} onDown={onDown(i, "row")} onToggle={onToggle} />
-        </div>
-      ))}
-      {sumAt >= rows.length && <SumLine onDown={onDown(rows.length, "sum")} />}
-    </div>
-  );
-}
-
-function SumLine({ onDown }: { onDown: (e: React.PointerEvent) => void }) {
-  return (
-    <div className="rl-sum" onPointerDown={onDown} title="Where the stems become a mix — drag to move">
-      <span className="rl-sum-bars">
-        {LANES.slice(0, 4).map((l) => (
-          <i key={l.id} style={{ background: l.color }} />
+      <div className="rl-chainwrap">
+        {shown.map((c) => (
+          <ChainCard key={c.id} chain={c} {...props} />
         ))}
-      </span>
-      <span className="rl-sum-label">∑ SUM</span>
-      <span className="rl-sum-rule" />
+        {columns && (
+          <button className="rl-newcol" onClick={props.onAdd}>
+            + CHAIN
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
-function RackRow({ row, stem, mode, onDown, onToggle }: { row: Row; stem: boolean; mode: string; onDown: (e: React.PointerEvent) => void; onToggle: (id: string, l: LaneId) => void }) {
-  // The instance count is the honest price of a subset: a device on three lanes IS three devices.
-  // Showing it next to the dots means the cost is never a surprise discovered in a CPU meter.
-  const n = row.lanes.length;
+function ChainCard({
+  chain,
+  onSend,
+  onMove,
+  onAddDevice,
+  onDrop,
+}: {
+  chain: Chain;
+  onSend: (id: string, l: LaneId) => void;
+  onMove: (id: string, a: number, b: number) => void;
+  onAddDevice: (id: string, n: string) => void;
+  onDrop: (id: string, i: number) => void;
+}) {
+  const drag = useRef<number | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const [pick, setPick] = useState(false);
+
   return (
-    <div className={`rl-row ${stem ? "stem" : "mix"} ${row.gen ? "gen" : ""}`}>
-      <span className="rl-grip" onPointerDown={onDown}>
-        ⠿
-      </span>
-      <span className="rl-name">
-        {row.name}
-        {row.gen && <i className="rl-tag">GEN</i>}
-      </span>
-      {stem ? (
-        <span className="rl-lanes">
+    <div className={`rl-chain ${chain.gen ? "gen" : ""}`}>
+      <div className="rl-chain-head">
+        <span className="rl-chain-name">{chain.name}</span>
+        {chain.gen && <i className="rl-tag">GEN</i>}
+      </div>
+
+      {/* THE SENDS — Traktor's placement: the routing is an AMOUNT on the stem, not a switch on the
+          device. A generator chain has no input, so it says so rather than showing four dead sends. */}
+      {chain.gen ? (
+        <div className="rl-nosend">no input — generates</div>
+      ) : (
+        <div className="rl-sends">
           {LANES.map((l) => {
-            const on = row.lanes.includes(l.id);
+            const v = chain.sends[l.id];
             return (
               <button
                 key={l.id}
-                className={`rl-dot ${on ? "on" : ""}`}
+                className={`rl-send ${v ? "on" : ""}`}
                 style={{ ["--lane" as string]: l.color }}
-                onClick={() => onToggle(row.id, l.id)}
-                title={`${l.label}${on ? " — on" : ""}`}
+                onClick={() => onSend(chain.id, l.id)}
+                title={`${l.label} → this chain`}
               >
-                {mode === "matrix" ? "" : <i>{l.label}</i>}
+                <span className="rl-send-bar">
+                  <i style={{ height: `${Math.round(v * 100)}%` }} />
+                </span>
+                <span className="rl-send-lab">{l.label}</span>
               </button>
             );
           })}
-          {mode !== "stacked" && n > 1 && <em className="rl-cost">×{n}</em>}
-        </span>
+        </div>
+      )}
+
+      {/* THE DEVICES — a plain serial list, which is the rack that already ships. */}
+      <div
+        className="rl-devs"
+        ref={list}
+        onPointerMove={(e) => {
+          if (drag.current == null || !list.current) return;
+          const y = e.clientY - list.current.getBoundingClientRect().top;
+          const to = Math.floor(y / 26);
+          if (to !== drag.current) {
+            onMove(chain.id, drag.current, to);
+            drag.current = Math.max(0, Math.min(chain.devices.length - 1, to));
+          }
+        }}
+        onPointerUp={() => (drag.current = null)}
+        onPointerCancel={() => (drag.current = null)}
+      >
+        {chain.devices.map((d, i) => (
+          <div key={`${d}${i}`} className="rl-dev">
+            <span
+              className="rl-grip"
+              onPointerDown={(e) => {
+                (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                drag.current = i;
+              }}
+            >
+              ⠿
+            </span>
+            <span className="rl-dev-name">{d}</span>
+            <button className="rl-x" onClick={() => onDrop(chain.id, i)} title="Remove">
+              ✕
+            </button>
+          </div>
+        ))}
+        {!chain.devices.length && <div className="rl-empty">empty</div>}
+      </div>
+
+      {pick ? (
+        <div className="rl-pick">
+          {PALETTE.map((p) => (
+            <button
+              key={p}
+              onClick={() => {
+                onAddDevice(chain.id, p);
+                setPick(false);
+              }}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       ) : (
-        <span className="rl-mixtag">MIX</span>
+        <button className="rl-adddev" onClick={() => setPick(true)}>
+          + device
+        </button>
       )}
     </div>
   );

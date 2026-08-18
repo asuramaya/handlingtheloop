@@ -89,77 +89,92 @@
 .rl-rack {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+/* CHAIN CHIPS — the navigation, below the columns threshold. Each chip carries the four lane
+   colours at the opacity of that chain's send, so the chip says WHAT FEEDS IT before you open it:
+   a chip with one bright dot is a chain aimed at one stem, and you can read that without a label. */
+.rl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.rl-chips button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rl-chips button.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+.rl-chip-dots {
+  display: flex;
+  gap: 2px;
+}
+.rl-chip-dots i {
+  width: 4px;
+  height: 10px;
+  border-radius: 2px;
+}
+.rl-add {
+  min-width: 26px;
+  justify-content: center;
+}
+
+/* ONE CHAIN, or ALL OF THEM. That is the only width decision — a wide screen shows MORE CHAINS
+   rather than a re-flowed grid, which is how Ableton spends width too. */
+.rl-chainwrap {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.rl-one .rl-chainwrap > * {
+  flex: 1 1 auto;
+}
+.rl-cols .rl-chainwrap {
+  flex-wrap: wrap;
+}
+.rl-cols .rl-chain {
+  flex: 1 1 260px;
+  max-width: 380px; /* at 4 K the chains stay readable columns instead of stretching into bands */
+}
+
+.rl-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 80%, #000 8%);
-  overflow: hidden;
-  touch-action: none;
+  min-width: 0;
 }
-
-/* MATRIX (≥760px): lane columns with headers, dots aligned under them. The device column takes
-   the slack, so at 4K the matrix does not stretch into a starfield — the dots stay a readable
-   cluster on the right and the names get the room instead. */
-.rl-colhead {
-  display: grid;
-  grid-template-columns: 1fr repeat(5, 46px);
-  gap: 0 4px;
-  padding: 4px 8px 3px;
-  border-bottom: 1px solid var(--line);
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-align: center;
+.rl-chain.gen {
+  background: color-mix(in srgb, #ffb03a 7%, transparent);
 }
-.rl-row {
+.rl-chain-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
-  min-height: 30px;
+  gap: 6px;
 }
-.rl-row:first-child {
-  border-top: none;
-}
-.rl-matrix .rl-row {
-  display: grid;
-  grid-template-columns: 1fr repeat(5, 46px);
-  gap: 0 4px;
-}
-.rl-matrix .rl-row .rl-lanes {
-  display: contents; /* the dots ARE the columns — no wrapper box between them and the grid */
-}
-.rl-matrix .rl-dot {
-  justify-self: center;
-}
-.rl-matrix .rl-cost {
-  display: none; /* the count is already obvious when the dots are columns */
-}
-.rl-grip {
-  color: var(--muted);
-  cursor: grab;
-  font-size: 12px;
-  line-height: 1;
-  opacity: 0.55;
-  touch-action: none;
-}
-.rl-matrix .rl-grip,
-.rl-inline .rl-grip {
-  position: absolute;
-  margin-left: -14px;
-}
-.rl-name {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.rl-chain-name {
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--text);
-  white-space: nowrap;
-}
-.rl-row.mix .rl-name {
-  color: var(--muted);
 }
 .rl-tag {
   font-style: normal;
@@ -170,124 +185,151 @@
   background: color-mix(in srgb, #ffb03a 26%, transparent);
   color: #ffb03a;
 }
-.rl-lanes {
+
+/* THE SENDS — an AMOUNT per stem (Traktor's FX SEND), four of them, set ONCE for the chain rather
+   than once per device. A vertical bar reads as a level at any size and needs no number. */
+.rl-sends {
   display: flex;
-  align-items: center;
   gap: 4px;
-  margin-left: auto;
 }
-/* A dot is the whole control: colour says which lane, fill says whether it is on. At matrix width
-   the label is dropped entirely — the column header already says it, and repeating it 9 times is
-   noise. Below that the dot carries its own label, because there is no header to lean on. */
-.rl-dot {
-  display: inline-flex;
+.rl-send {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 2px 5px;
-  border: 1px solid color-mix(in srgb, var(--lane) 40%, transparent);
-  border-radius: 999px;
+  padding: 4px 2px;
+  border: 1px solid color-mix(in srgb, var(--lane) 32%, transparent);
+  border-radius: 5px;
   background: transparent;
-  color: color-mix(in srgb, var(--lane) 70%, var(--muted));
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
   cursor: pointer;
-  min-width: 16px;
-  min-height: 16px;
-  justify-content: center;
+  min-width: 0;
 }
-.rl-dot i {
-  font-style: normal;
-}
-.rl-dot.on {
-  background: var(--lane);
+.rl-send.on {
   border-color: var(--lane);
-  color: #06080c;
+  background: color-mix(in srgb, var(--lane) 12%, transparent);
+}
+.rl-send-bar {
+  position: relative;
+  width: 100%;
+  height: 22px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lane) 12%, transparent);
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+.rl-send-bar i {
+  width: 100%;
+  background: var(--lane);
   box-shadow: 0 0 8px -2px var(--lane);
 }
-.rl-matrix .rl-dot {
-  width: 15px;
-  height: 15px;
-  padding: 0;
-  border-radius: 50%;
-}
-.rl-cost {
-  font-style: normal;
-  font-size: 9px;
+.rl-send-lab {
+  font-size: 8px;
   font-weight: 800;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--lane) 75%, var(--muted));
 }
-.rl-mixtag {
-  margin-left: auto;
-  font-size: 8.5px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-/* STACKED (<430px): the name and the lanes are two lines. A phone has no room for a matrix and
-   pretending otherwise produces 8px dots nobody can hit — the dots go full-width instead, which
-   makes them BIGGER on the smallest screen rather than smaller. */
-.rl-stacked .rl-row {
-  flex-wrap: wrap;
-  row-gap: 5px;
-}
-.rl-stacked .rl-lanes {
-  flex: 1 0 100%;
-  margin-left: 0;
-  gap: 5px;
-}
-.rl-stacked .rl-dot {
-  flex: 1 1 0;
-  min-height: 24px; /* a real touch target, not a decoration */
+.rl-nosend {
+  padding: 5px 6px;
+  border: 1px dashed color-mix(in srgb, #ffb03a 40%, transparent);
   border-radius: 5px;
-}
-.rl-stacked .rl-mixtag {
-  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #ffb03a;
+  text-align: center;
 }
 
-/* THE SUM LINE — the one place the four become one, drawn as the four lane colours running into
-   a single rule. It is the object the whole model rests on, so it is the loudest thing here. */
-.rl-sum {
+/* THE DEVICES — a plain serial list. This is the rack that already ships; the prototype draws it
+   flat because the point is the CONTAINER, not the panels inside it. */
+.rl-devs {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 6px;
+  overflow: hidden;
+  touch-action: none;
+  min-height: 26px;
+}
+.rl-dev {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
+  gap: 7px;
+  height: 26px;
+  padding: 0 7px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 50%, transparent);
+}
+.rl-dev:first-child {
+  border-top: none;
+}
+.rl-dev-name {
+  flex: 1 1 auto;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--text);
+  min-width: 0;
+}
+.rl-grip {
+  color: var(--muted);
+  opacity: 0.5;
   cursor: grab;
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  border-top: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  font-size: 11px;
   touch-action: none;
 }
-.rl-sum-bars {
-  display: flex;
-  gap: 2px;
+.rl-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0.5;
 }
-.rl-sum-bars i {
-  width: 8px;
-  height: 10px;
-  border-radius: 2px;
+.rl-x:hover {
+  opacity: 1;
+  color: #e0556a;
 }
-.rl-sum-label {
+.rl-empty {
+  padding: 6px;
+  text-align: center;
   font-size: 9px;
+  color: var(--muted);
+  opacity: 0.5;
+}
+.rl-adddev,
+.rl-newcol {
+  padding: 4px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
   font-weight: 800;
-  letter-spacing: 0.12em;
-  color: var(--accent);
+  letter-spacing: 0.05em;
+  cursor: pointer;
 }
-.rl-sum-rule {
-  flex: 1 1 auto;
-  height: 1px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 60%, transparent), transparent);
+.rl-newcol {
+  align-self: stretch;
+  min-width: 90px;
 }
-.rl-row.gen {
-  background: color-mix(in srgb, #ffb03a 7%, transparent);
+.rl-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rl-pick button {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 9.5px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
-/* FULL SCREEN — a 4 K layout cannot be judged inside a 440 px settings panel even scaled, so the
-   lab can take the whole window. It is a prototype surface, so this is deliberately crude: fixed,
-   opaque, on top, with the same close button that opened it. */
+/* FULL SCREEN — a 4 K layout cannot be judged inside a 440 px settings panel even scaled. */
 .rl-full {
   position: fixed;
   inset: 0;

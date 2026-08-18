@@ -96,7 +96,7 @@ import { STEM_NAMES, type StemName, type Stems, type PackedStems } from "../stem
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
-import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot } from "./Fx";
+import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot, type FxChain } from "./Fx";
 import { FACTORY_PRESETS, type FxPreset } from "./fxPresets";
 import { CompFx } from "./CompFx";
 import { DelayFx } from "./DelayFx";
@@ -525,6 +525,19 @@ export class Deck {
     return this._keylock;
   }
 
+  /** Declare the deck's parallel FX chains (a PARTITION of the stems — see FxRack.setChains).
+   *  Empty = the plain serial rack, and the per-stem taps go back off, so a deck that isn't using
+   *  stem FX ends up in exactly the state it was in before the feature existed. */
+  setFxChains(chains: FxChain[]) {
+    this.rack.setChains(chains);
+    const needs = this.rack.needsStems;
+    this.setStemTaps(needs);
+    this.rack.setStemSource(needs ? (i) => this.stemTap(i) : null);
+  }
+  get fxChains(): readonly FxChain[] {
+    return this.rack.chainList;
+  }
+
   /** Turn the per-stem taps on or off. OFF is the default and costs nothing anywhere: the worklet
    *  skips the per-group overlap-add and allocates no side FIFOs, and no nodes exist here.
    *  ⚠ While ON the producer is forced to WSOLA — the phase vocoder sums the stems before its FFT
@@ -588,7 +601,13 @@ export class Deck {
     // (Re)load the current PCM in case a track was set before the node attached, and
     // re-assert the current tempo/pitch (now port messages, so they must be re-sent).
     this.loadEnginePcm();
-    if (this.stemTapsOn) node.port.postMessage({ type: "taps", on: true });
+    if (this.stemTapsOn) {
+      node.port.postMessage({ type: "taps", on: true });
+      // The taps belonged to the previous node; the rack is holding dead references until it
+      // re-asks. A hot-swap mid-set (or the first attach after a chain was configured before the
+      // gesture that built the engine) is exactly when a stem chain would otherwise go silent.
+      this.rack.setStemSource((i) => this.stemTap(i));
+    }
     this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
     this.updatePitch();
   }

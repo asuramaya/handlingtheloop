@@ -64,6 +64,22 @@ export interface FxDevice {
   dispose?(): void;
 }
 
+/** One parallel CHAIN: a set of stems, and the devices that process them.
+ *
+ *  The model is a PARTITION, not a send matrix. A stem belongs to exactly one chain, so nothing
+ *  is heard twice and no gain staging is needed anywhere — the chains sum back to unity because
+ *  together they are the mix. `stems` is a 4-bit mask (1=DRUM 2=BASS 4=VOICE 8=INST); ALL_STEMS
+ *  means "the whole signal", which is the single-chain default and the path that ships today.
+ *  `kinds` names devices by kind, because the rack is fixed-membership: one instance of each
+ *  exists, so a chain does not own devices, it claims them. */
+export interface FxChain {
+  id: string;
+  name: string;
+  stems: number;
+  kinds: FxKind[];
+}
+export const ALL_STEMS = 0b1111;
+
 export class FxRack {
   /** Channel signal enters here (the deck's source + pre-rack taps connect to this). */
   readonly input: GainNode;
@@ -74,6 +90,12 @@ export class FxRack {
   // rebuild). Only `chainIn` and device outputs are re-wired.
   private readonly chainIn: GainNode;
   private readonly devices: FxDevice[] = [];
+  // Parallel chains. EMPTY is the default and means the plain serial rack above — not a
+  // one-chain special case but literally the original code path, so a deck that never touches
+  // stem FX cannot pay for the feature in nodes, in taps, or in behaviour.
+  private chains: FxChain[] = [];
+  private chainNodes: GainNode[] = [];
+  private stemTap: ((index: number) => AudioNode | null) | null = null;
 
   constructor(ctx: AudioContext) {
     this.input = ctx.createGain();
@@ -93,6 +115,28 @@ export class FxRack {
     return this.devices.findIndex((d) => d.kind === kind);
   }
 
+  /** How to reach a stem tap (Deck supplies it; null while no stretch node is attached). Setting
+   *  it does not turn anything on — only a chain that asks for a stem subset ever calls it. */
+  setStemSource(fn: ((index: number) => AudioNode | null) | null) {
+    this.stemTap = fn;
+    if (this.chains.length) this.rebuild();
+  }
+
+  /** Declare the parallel chains. An empty list (or a single chain over ALL_STEMS holding every
+   *  device in order) is the serial rack, restored exactly. */
+  setChains(chains: FxChain[]) {
+    this.chains = chains.map((c) => ({ ...c, kinds: [...c.kinds] }));
+    this.rebuild();
+  }
+  get chainList(): readonly FxChain[] {
+    return this.chains;
+  }
+  /** Does any chain listen to a stem SUBSET? The only question the deck needs answered, because
+   *  it is exactly the condition for turning the (not free) per-stem taps on. */
+  get needsStems(): boolean {
+    return this.chains.some((c) => (c.stems & ALL_STEMS) !== ALL_STEMS);
+  }
+
   /** Re-wire chainIn → dev0 → dev1 → … → output. Splicing gain nodes is click-free,
    *  so add/remove/reorder are seamless. Device outputs only ever feed the next device
    *  or `output` (no external taps), so a blanket `output.disconnect()` is safe. */
@@ -109,12 +153,53 @@ export class FxRack {
         /* ignore */
       }
     }
-    let prev: AudioNode = this.chainIn;
-    for (const d of this.devices) {
-      prev.connect(d.input);
-      prev = d.output;
+    for (const g of this.chainNodes) {
+      try {
+        g.disconnect();
+      } catch {
+        /* ignore */
+      }
     }
-    prev.connect(this.output);
+    this.chainNodes = [];
+    if (!this.chains.length) {
+      let prev: AudioNode = this.chainIn;
+      for (const d of this.devices) {
+        prev.connect(d.input);
+        prev = d.output;
+      }
+      prev.connect(this.output);
+      return;
+    }
+    // PARALLEL. Each chain gets its own head gain fed either by the whole signal (chainIn, so the
+    // pre-rack analyser tap on `input` keeps working untouched) or by just the stem taps it owns.
+    // A chain whose stems are unreachable — taps not up yet, no stretch node — is left SILENT
+    // rather than fed the full mix: hearing the whole track through a drums-only chain is a
+    // louder wrong answer than hearing nothing, and it resolves itself the moment taps attach.
+    for (const c of this.chains) {
+      const head = this.output.context.createGain();
+      this.chainNodes.push(head);
+      if ((c.stems & ALL_STEMS) === ALL_STEMS) {
+        this.chainIn.connect(head);
+      } else if (this.stemTap) {
+        for (let i = 0; i < 4; i++) {
+          if (!(c.stems & (1 << i))) continue;
+          const tap = this.stemTap(i);
+          try {
+            tap?.connect(head);
+          } catch {
+            /* a tap that cannot connect stays silent — see above */
+          }
+        }
+      }
+      let prev: AudioNode = head;
+      for (const k of c.kinds) {
+        const d = this.devices.find((x) => x.kind === k);
+        if (!d) continue;
+        prev.connect(d.input);
+        prev = d.output;
+      }
+      prev.connect(this.output);
+    }
   }
 
   add(device: FxDevice, slot = this.devices.length): FxDevice {

@@ -7,6 +7,7 @@ import { submitBugReport } from "@htl/debug/report";
 import type { UseMidi } from "@htl/midi";
 import type { DebugSection } from "../../App";
 import { MidiDebug } from "../MidiDebug";
+import { RackLab } from "../RackLab";
 
 export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugSection[] }) {
   // Live diagnostics — poll the collector (engine/session/device) a few times a second
@@ -51,6 +52,17 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
 
   return (
     <>
+      {/* RACKLAB — the stem-routed FX layout prototype. Unwired on purpose: it answers whether the
+          design reads before any of the routing gets built. Lives in Debug because it is a
+          question, not a feature; it leaves with the answer. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <h3>Rack lab</h3>
+          <p>Layout prototype for stem-routed FX — no audio, nothing wired.</p>
+        </div>
+        <RackLab />
+      </div>
+
       {/* One-click bug report — the whole flight recorder in a sentence + a button. Packs the build
           SHA, device, live engine/session snapshot, the recent-event ring and any crash trace into a
           single bounded report so it can actually be diagnosed. */}

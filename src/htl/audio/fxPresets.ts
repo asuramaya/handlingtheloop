@@ -306,3 +306,18 @@ export function deleteChainPreset(name: string): ChainPreset[] {
   }
   return list;
 }
+
+export function renameChainPreset(oldName: string, newName: string): ChainPreset[] {
+  const clean = newName.trim();
+  const list = loadChainPresets();
+  const found = list.find((p) => p.name === oldName);
+  if (!clean || !found) return list;
+  const next = list.filter((p) => p.name !== oldName && p.name !== clean);
+  next.push({ name: clean, stems: found.stems, kinds: found.kinds });
+  try {
+    localStorage.setItem(CHAIN_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+  return next;
+}

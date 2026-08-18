@@ -145,8 +145,24 @@
    shoved the whole rack down every time you glanced at a source. */
 .fx-stemgrid {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 4px 6px 2px;
+}
+/* A deck with nothing separated yet: the squares stay in place and go inert, with the reason
+   spelled out under them. A control that disappears when it can't be used teaches nothing. */
+.fx-stemgrid.cold .fx-stemsq {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.fx-stemgrid-note {
+  flex: 1 0 100%;
+  padding-top: 2px;
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .fx-stemsq {
   flex: 1 1 0;
@@ -225,43 +241,31 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The ADD picker's rows: the effect name is the button, and a ›-marked row grows a preset flyout
-   beside the menu on hover. The flyout is positioned to the row, and flips to the left when the
-   menu is already near the right edge, so it never opens off-screen. */
-.fx-add-row {
-  position: relative;
-}
+/* The ADD picker: the effect name is the whole button, and a ›-marked row opens its factory bank
+   on hover. ★ The flyout is FIXED and a SIBLING of the menu, not a child of it — the menu scrolls
+   (max-height + overflow-y), and an absolutely-positioned child of a scrolling box is clipped by
+   it, which is why it first appeared as a bare sliver pinned to the menu's edge. Its position is
+   measured from the row that opened it, on whichever side has room. */
 .fx-add-more {
   float: right;
   opacity: 0.5;
   margin-left: 8px;
 }
-.fx-add-row.hot > .fx-palette-item {
+.fx-palette-item.hot {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: #fff;
 }
 .fx-add-fly {
-  position: absolute;
-  left: 100%;
-  top: -6px;
-  margin-left: 4px;
+  position: fixed;
   z-index: 42;
-  min-width: 150px;
-  max-height: 220px;
+  width: 170px;
+  max-height: 230px;
   overflow-y: auto;
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius: 8px;
   background: var(--panel);
   box-shadow: 0 10px 28px -8px #000;
-}
-/* Near the right edge the parent menu has already flipped to the cursor's left; the flyout has to
-   follow it, or it opens straight back into the wall the menu just moved away from. */
-.fx-preset-menu.flip-left .fx-add-fly {
-  left: auto;
-  right: 100%;
-  margin-left: 0;
-  margin-right: 4px;
 }
 
 /* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefO
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind, FxChain } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
-import { loadChainPresets, saveChainPreset, deleteChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
+import { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
@@ -140,7 +140,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const closeMenu = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } setMenu(null); };
   useEffect(() => () => { if (menuTimerRef.current) clearTimeout(menuTimerRef.current); }, []);
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
-  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: number } | { mode: "chainName"; at: number } | null>(null);
+  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: number } | { mode: "chainPreset"; name: string } | null>(null);
 
   // ---- CHAINS ---------------------------------------------------------------------------------
   // A chain is a set of STEMS plus the devices that process them, and the set is a PARTITION: a
@@ -169,7 +169,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setChainMenu({ x, y, at });
   };
   const [chainTick, setChainTick] = useState(0); // bump to re-read saved chain presets
-  const [addHover, setAddHover] = useState<FxKind | null>(null); // which row's preset flyout is open
+  // The flyout's row AND its screen position. It cannot live inside the menu: the menu scrolls
+  // (max-height + overflow-y), and an absolutely-positioned child of a scrolling box is CLIPPED by
+  // it — which is why it appeared as a bare sliver against the menu's right edge. So it is
+  // positioned `fixed`, measured from the row that opened it.
+  const [addHover, setAddHover] = useState<{ kind: FxKind; x: number; y: number; flip: boolean } | null>(null);
   const devices = deck.fxDevices; // the whole rack, in order
   // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the other eight
   // can only be built once the worklets attach, so for a beat at every boot `fxDevices` IS the EQ,
@@ -934,7 +938,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           onClose={() => setChainMenu(null)}
           acts={[
             { glyph: "＋", title: "Save this chain as a preset", onClick: () => { setDialog({ mode: "chain", at: chainMenu.at }); setChainMenu(null); } },
-            { glyph: "✎", title: "Rename this chain", onClick: () => { setDialog({ mode: "chainName", at: chainMenu.at }); setChainMenu(null); } },
             ...(chains[chainMenu.at].master
               ? [] // the master is the channel; it cannot leave
               : [{ glyph: "✕", title: `Delete ${chains[chainMenu.at].name}`, danger: true, onClick: () => { removeChain(chainMenu.at); setChainMenu(null); } }]),
@@ -945,19 +948,25 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               whole extra ROW under the chain row, which pushed the rack down every time you
               glanced at a source. A stem has exactly one owner, so taking one takes it from
               whoever held it; there is no "both" to draw. */}
-          <div className="fx-stemgrid">
+          <div className={`fx-stemgrid ${deck.hasStems ? "" : "cold"}`}>
             {LANES.map((l) => (
               <button
                 key={l.label}
                 className={`fx-stemsq ${chains[chainMenu.at].stems & l.bit ? "on" : ""}`}
                 style={{ ["--lane" as string]: l.color }}
-                title={l.label}
+                // A deck with no stems separated yet cannot route one. The squares stay VISIBLE
+                // and go inert rather than disappearing: a control that vanishes teaches nothing,
+                // and the chain you are looking at is still a real chain — it just has no sources
+                // to hand it until the stems land.
+                disabled={!deck.hasStems}
+                title={deck.hasStems ? l.label : `${l.label} — no stems on this deck yet`}
                 aria-label={l.label}
                 onClick={() => toggleStem(l.bit, chainMenu.at)}
               >
                 {l.label[0]}
               </button>
             ))}
+            {!deck.hasStems && <span className="fx-stemgrid-note">no stems loaded</span>}
           </div>
           <div className="fx-preset-sep" />
           {factoryChainPresets().map((p) => (
@@ -970,6 +979,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             <div key={`uc:${p.name}`} className="fx-preset-row">
               <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.at, p)}>
                 {p.name}
+              </button>
+              {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones above are read-only,
+                  exactly as the factory effect presets are. This is the pattern the effect menu
+                  already uses; the chain menu had a rename act in its header instead, so the same
+                  verb lived in two different places depending on which menu you were in. */}
+              <button className="fx-preset-mini" title="Rename this saved chain" aria-label="Rename saved chain" onClick={() => setDialog({ mode: "chainPreset", name: p.name })}>
+                ✎
               </button>
               <button className="fx-preset-mini danger" title="Remove this saved chain" aria-label="Remove saved chain" onClick={() => { deleteChainPreset(p.name); setChainTick((t) => t + 1); }}>
                 ✕
@@ -990,45 +1006,58 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the
               menu: there when you want them, never in the way when you don't. */}
           {others.map((d) => (
-            <div
+            <button
               key={d.kind}
-              className={`fx-add-row ${addHover === d.kind ? "hot" : ""}`}
-              onMouseEnter={() => setAddHover(d.kind)}
-              onMouseLeave={() => setAddHover((k) => (k === d.kind ? null : k))}
+              className={`fx-palette-item ${addHover?.kind === d.kind ? "hot" : ""}`}
+              role="menuitem"
+              onMouseEnter={(e) => {
+                const bank = factoryFxPresets(d.kind);
+                if (!bank.length) { setAddHover(null); return; }
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                // Open on whichever side has room. 170 px is the flyout's own min-width; asking
+                // the DOM would mean rendering it first, in the wrong place, for one frame.
+                const flip = r.right + 174 > window.innerWidth - 6;
+                setAddHover({ kind: d.kind, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
+              }}
+              onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}
             >
-              <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}>
-                {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
-                {factoryFxPresets(d.kind).length > 0 && <span className="fx-add-more">›</span>}
-              </button>
-              {addHover === d.kind && factoryFxPresets(d.kind).length > 0 && (
-                <div className="fx-add-fly">
-                  <div className="fx-preset-head">
-                    <span className="fx-preset-title">{KIND_LABEL[d.kind] ?? d.kind.toUpperCase()} presets</span>
-                  </div>
-                  <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}>
-                    Default
-                  </button>
-                  {factoryFxPresets(d.kind).map((pr, i) => (
-                    <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(d.kind, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
-                      {pr.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+              {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
+              {factoryFxPresets(d.kind).length > 0 && <span className="fx-add-more">›</span>}
+            </button>
           ))}
         </FxMenu>
+      )}
+      {addMenu && addHover && (
+        <div
+          className="fx-add-fly"
+          style={{ left: addHover.x, top: Math.max(6, Math.min(addHover.y, window.innerHeight - 240)) }}
+          onMouseEnter={() => setAddHover(addHover)}
+          onMouseLeave={() => setAddHover(null)}
+        >
+          <div className="fx-preset-head">
+            <span className="fx-preset-title">{KIND_LABEL[addHover.kind] ?? addHover.kind.toUpperCase()}</span>
+          </div>
+          <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); }}>
+            Default
+          </button>
+          {factoryFxPresets(addHover.kind).map((pr, i) => (
+            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
+              {pr.name}
+            </button>
+          ))}
+        </div>
       )}
 
       {dialog && (
         <PromptModal
-          title={dialog.mode === "chainName" ? "Rename chain" : dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
-          initial={dialog.mode === "rename" ? dialog.name : dialog.mode === "chain" || dialog.mode === "chainName" ? chains[dialog.at]?.name ?? "" : ""}
-          placeholder={dialog.mode === "chain" || dialog.mode === "chainName" ? "Chain name" : "Preset name"}
-          submitLabel={dialog.mode === "rename" || dialog.mode === "chainName" ? "Rename" : "Save"}
+          title={dialog.mode === "chainPreset" ? "Rename saved chain" : dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
+          initial={dialog.mode === "rename" || dialog.mode === "chainPreset" ? dialog.name : dialog.mode === "chain" ? chains[dialog.at]?.name ?? "" : ""}
+          placeholder={dialog.mode === "chain" || dialog.mode === "chainPreset" ? "Chain name" : "Preset name"}
+          submitLabel={dialog.mode === "rename" || dialog.mode === "chainPreset" ? "Rename" : "Save"}
           onSubmit={(v) => {
-            if (dialog.mode === "chainName") {
-              setChains((prev) => prev.map((x, i) => (i === dialog.at ? { ...x, name: v.trim().toUpperCase() || x.name } : x)));
+            if (dialog.mode === "chainPreset") {
+              renameChainPreset(dialog.name, v);
+              setChainTick((t) => t + 1);
               return;
             }
             if (dialog.mode === "chain") {

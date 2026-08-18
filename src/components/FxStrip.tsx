@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind, FxChain } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
@@ -46,10 +46,44 @@ interface MenuAct {
   onClick: () => void;
 }
 function FxMenu({ x, y, head, acts, onClose, wide, innerRef, children }: { x: number; y: number; head: React.ReactNode; acts?: MenuAct[]; onClose: () => void; wide?: boolean; innerRef?: React.Ref<HTMLDivElement>; children: React.ReactNode }) {
+  const box = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; flipped: boolean } | null>(null);
+  // ★ FLIP, THEN CLAMP. A menu opens at the cursor, and a cursor near the right edge of a deck
+  // column (or near the bottom of the viewport) puts most of the menu somewhere it cannot be
+  // read — the COMP bank ran off the screen with half its presets past the edge. So: measure
+  // after layout, flip to the other side of the cursor if that side has room, and clamp to the
+  // viewport either way. Position is applied in one pass before paint (useLayoutEffect), so the
+  // menu never appears in the wrong place first.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const M = 6; // never touch the edge
+    let left = x;
+    const flipped = x + r.width > vw - M;
+    if (flipped) left = x - r.width; // flip to the cursor's left
+    left = Math.max(M, Math.min(left, vw - r.width - M));
+    let top = y;
+    if (y + r.height > vh - M) top = y - r.height; // flip above the cursor
+    top = Math.max(M, Math.min(top, vh - r.height - M));
+    setPos({ left, top, flipped });
+  }, [x, y, children]);
   return (
     <>
       <div className="fx-menu-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={innerRef} className={`fx-palette fx-preset-menu ${wide ? "fx-chain-menu" : ""}`} role="menu" style={{ left: x, top: y }}>
+      <div
+        ref={(n) => {
+          box.current = n;
+          if (typeof innerRef === "function") innerRef(n);
+          else if (innerRef) (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = n;
+        }}
+        className={`fx-palette fx-preset-menu ${wide ? "fx-chain-menu" : ""} ${pos?.flipped ? "flip-left" : ""}`}
+        role="menu"
+        // Hidden for the one frame between mount and measurement — an unplaced menu flashing at
+        // the cursor before jumping is the same flicker this is meant to remove.
+        style={pos ? { left: pos.left, top: pos.top } : { left: x, top: y, visibility: "hidden" }}
+      >
         <div className="fx-preset-head">
           <span className="fx-preset-title">{head}</span>
           {acts && acts.length > 0 && (
@@ -135,24 +169,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setChainMenu({ x, y, at });
   };
   const [chainTick, setChainTick] = useState(0); // bump to re-read saved chain presets
+  const [addHover, setAddHover] = useState<FxKind | null>(null); // which row's preset flyout is open
   const devices = deck.fxDevices; // the whole rack, in order
   // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the other eight
   // can only be built once the worklets attach, so for a beat at every boot `fxDevices` IS the EQ,
   // alone — and a strip that renders that list faithfully shows a one-tab rack with the EQ in it.
   // That's the legacy "EQ is the one special device" surface, reconstructed by accident, at load.
   const ready = deck.fxRackReady;
-  const multi = chains.length > 1;
   const chain = chains[Math.min(selChain, Math.max(0, chains.length - 1))];
   // The device row shows the SELECTED chain's devices, in that chain's own order. With one chain
   // it is the whole rack, unfiltered — the original list, not a filtered copy of it.
-  const tabs = !ready ? [] : multi && chain ? chain.kinds.map((k: FxKind) => devices.find((d) => d.kind === k)).filter(Boolean) as typeof devices : devices;
-  // In multi-chain mode the row continues past this chain's devices with the ones it does NOT
-  // hold, dimmed. Tapping a dim chip moves that device into this chain. That is the whole
-  // populate gesture, and it works on a phone — drag-and-drop onto a chip is the mouse shortcut
-  // for the same thing, not the only way in.
-  const others = !ready || !multi || !chain ? [] : devices.filter((d) => !chain.kinds.includes(d.kind));
+  const tabs = !ready ? [] : chain ? (chain.kinds.map((k: FxKind) => devices.find((d) => d.kind === k)).filter(Boolean) as typeof devices) : devices;
+  // Everything the selected chain does not hold — including devices no chain holds at all, which
+  // is how a removed effect finds its way back.
+  const others = !ready || !chain ? [] : devices.filter((d) => !chain.kinds.includes(d.kind));
   const savedChains = useMemo(() => loadChainPresets(), [chainTick]);
-  const gi = (i: number) => (multi ? devices.findIndex((d) => d.kind === tabs[i]?.kind) : i); // shown index → rack index
+  const gi = (i: number) => devices.findIndex((d) => d.kind === tabs[i]?.kind); // shown index → rack index
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = ready ? devices[cur] : undefined;
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -182,19 +214,21 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // the per-stem taps back off. Nothing about the default path costs anything.
   useEffect(() => {
     if (!ready || !chains.length) return;
-    const plain = chains.length === 1; // the master alone IS the serial rack
+    // The serial fast path is only the same graph while the master holds EVERY device; once one
+    // has been removed, the chain list is the truth and the rack has to be built from it.
+    const plain = chains.length === 1 && chains[0].kinds.length === devices.length;
     deck.setFxChains(plain ? [] : chains);
   }, [deck, ready, chains]);
   // Selecting a chain whose devices don't include the current selection would leave the panel
   // showing a device this chain cannot hear.
   useEffect(() => {
-    if (!multi || !chain) return;
+    if (!chain) return;
     const here = devices[cur]?.kind;
     if (here && !chain.kinds.includes(here)) {
       const first = devices.findIndex((d) => d.kind === chain.kinds[0]);
       if (first >= 0) setSel(first);
     }
-  }, [multi, chain, devices, cur]);
+  }, [chain, devices, cur]);
   // Bring the selected tab into view in the scrollable row — so revealing an off-screen effect
   // (right-click its FX pad → selectKind) actually surfaces its tab. block:nearest = no page jump.
   useEffect(() => {
@@ -297,6 +331,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setChains((prev) => prev.map((c, i) => (i === target ? { ...c, kinds: [...c.kinds.filter((k: FxKind) => k !== kind), kind] } : { ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) })));
     setSelChain(target);
   };
+  /** Take a device out of whatever chain holds it — the master included. It does not disappear:
+   *  the rack is fixed-membership, so the instance lives on, unclaimed and out of the signal
+   *  path, until a chain adds it again. */
+  const removeDeviceFromChain = (kind: FxKind) => {
+    setChains((prev) => prev.map((c) => ({ ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) })));
+  };
+
   const removeChain = (at: number) => {
     setChains((prev) => {
       const dead = prev[at];
@@ -323,7 +364,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // Commit a drag at the current INSERTION point. Removing the source first shifts later
   // slots down one, so insertion point p maps to final index p-1 when dragging rightward.
   const dropHere = () => {
-    if (multi && chain && dragFrom != null && dropAt != null) {
+    if (chain && dragFrom != null && dropAt != null) {
       // Multi-chain: order is a property of the CHAIN, not of the rack, so the reorder happens in
       // the chain's own kind list and the rack is left alone.
       const from = dragFrom, to = dragFrom < dropAt ? dropAt - 1 : dropAt;
@@ -748,7 +789,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           />
         )}
         {/* ＋ — the only way a device enters a chain. Opens the two-step picker below. */}
-        {multi && others.length > 0 && (
+        {others.length > 0 && (
           <button
             className="fx-tab fx-tab-add"
             title="Add an effect to this chain"
@@ -771,7 +812,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       </div>
 
       <div className="fx-stage">
-        {multi && chain && chain.kinds.length === 0 ? (
+        {chain && chain.kinds.length === 0 ? (
           <div className="fx-panel fx-unknown">
             {chain.name} is empty — tap a dimmed device above to move it into this chain.
           </div>
@@ -836,12 +877,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           innerRef={menuRef}
           head={`${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} presets`}
           onClose={() => setMenu(null)}
-          // ★ IDENTICAL EVERYWHERE. This menu is about the device's PRESETS and nothing else, so
-          // it is the same menu whether the device sits in the master or in a stem chain. It used
-          // to grow a "remove from this chain" act only inside a chain, which made right-clicking
-          // two tabs in a row flicker between two different menus. Where a device LIVES is a chain
-          // question: drag its tab onto a chain chip (or onto MASTER to send it home).
-          acts={[{ glyph: "＋", title: "Save the current settings as a preset", onClick: () => saveCurrent(menu.slot) }]}
+          // ★ IDENTICAL EVERYWHERE — the master's devices get exactly the menu a stem chain's do.
+          // Two menus that differ by context is what made right-clicking two tabs in a row flicker
+          // between shapes; the fix is one shape, not a smarter guess about which to show.
+          // ✕ takes the effect OUT of whatever holds it, master included: the rack is
+          // fixed-membership, so the device still exists — it is simply in no chain, and out of
+          // the signal path, until something claims it again.
+          acts={[
+            { glyph: "＋", title: "Save the current settings as a preset", onClick: () => saveCurrent(menu.slot) },
+            {
+              glyph: "✕",
+              // Named after the chain that actually HOLDS it, which is not always the selected one.
+              title: `Remove ${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} from ${chains.find((c) => c.kinds.includes(menuDev.kind))?.name ?? "the rack"}`,
+              danger: true,
+              onClick: () => { removeDeviceFromChain(menuDev.kind); setMenu(null); },
+            },
+          ]}
         >
           <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
             Default
@@ -933,42 +984,39 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           chain in an unknown state. Both steps are the same list widget, so there is nothing new
           to learn and nothing new to style. */}
       {addMenu && chain && (
-        <FxMenu
-          x={addMenu.x}
-          y={addMenu.y}
-          head={
-            addMenu.kind ? (
-              <>
-                <button className="fx-preset-back" title="Back to the effect list" onClick={() => setAddMenu({ x: addMenu.x, y: addMenu.y })}>
-                  ‹
-                </button>
-                {KIND_LABEL[addMenu.kind] ?? addMenu.kind.toUpperCase()} — start from
-              </>
-            ) : (
-              `Add to ${chain.name}`
-            )
-          }
-          onClose={() => setAddMenu(null)}
-        >
-          {!addMenu.kind ? (
-            others.map((d) => (
-              <button key={d.kind} className="fx-palette-item" role="menuitem" onClick={() => setAddMenu({ ...addMenu, kind: d.kind })}>
+        <FxMenu x={addMenu.x} y={addMenu.y} head={`Add to ${chain.name}`} onClose={() => { setAddMenu(null); setAddHover(null); }}>
+          {/* CLICK ADDS. The two-step version made you answer a question you usually don't have —
+              most of the time you want the effect, not a particular preset of it. So the click is
+              the whole gesture, and the presets live in a flyout that opens on HOVER beside the
+              menu: there when you want them, never in the way when you don't. */}
+          {others.map((d) => (
+            <div
+              key={d.kind}
+              className={`fx-add-row ${addHover === d.kind ? "hot" : ""}`}
+              onMouseEnter={() => setAddHover(d.kind)}
+              onMouseLeave={() => setAddHover((k) => (k === d.kind ? null : k))}
+            >
+              <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}>
                 {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
+                {factoryFxPresets(d.kind).length > 0 && <span className="fx-add-more">›</span>}
               </button>
-            ))
-          ) : (
-            <>
-              <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addMenu.kind!); setAddMenu(null); }}>
-                Default
-              </button>
-              {factoryFxPresets(addMenu.kind).length > 0 && <div className="fx-preset-sep" />}
-              {factoryFxPresets(addMenu.kind).map((pr, i) => (
-                <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(addMenu.kind!, pr, i + 1); setAddMenu(null); }}>
-                  {pr.name}
-                </button>
-              ))}
-            </>
-          )}
+              {addHover === d.kind && factoryFxPresets(d.kind).length > 0 && (
+                <div className="fx-add-fly">
+                  <div className="fx-preset-head">
+                    <span className="fx-preset-title">{KIND_LABEL[d.kind] ?? d.kind.toUpperCase()} presets</span>
+                  </div>
+                  <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}>
+                    Default
+                  </button>
+                  {factoryFxPresets(d.kind).map((pr, i) => (
+                    <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(d.kind, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
+                      {pr.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </FxMenu>
       )}
 

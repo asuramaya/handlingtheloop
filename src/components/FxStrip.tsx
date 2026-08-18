@@ -211,7 +211,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // list that could drift from it.
   useEffect(() => {
     if (!ready || chains.length) return;
-    setChains([{ id: "mix", name: "MASTER", stems: 0, kinds: devices.map((d) => d.kind), master: true }]);
+    // ★ The master boots with the two devices that belong ON a master — the EQ you mix with and
+    // the comp that glues it. The other seven are the pad-FX bank: things you THROW at a chain,
+    // not things a channel is born holding. They still exist (the rack is fixed-membership) and
+    // are simply unclaimed until a chain adds them.
+    const boot: FxKind[] = ["eq", "comp"];
+    setChains([{ id: "mix", name: "MASTER", stems: 0, kinds: boot.filter((k) => devices.some((d) => d.kind === k)), master: true }]);
   }, [ready, chains.length, devices]);
   // Hand the model to the engine. A single all-stems chain is passed as EMPTY — not as a
   // one-chain special case but as "no chains", which restores the plain serial rack and switches
@@ -898,17 +903,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             },
           ]}
         >
-          <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
-            Default
-          </button>
-          {/* Factory bank — built-in, read-only (apply only, no rename/remove). The applied one is marked. */}
-          {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
-          {factoryPresets.map((p, i) => (
-            <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p); }}>
-              {p.name}
-            </button>
-          ))}
-          {menuPresets.length > 0 && <div className="fx-preset-sep" />}
+          {/* ★ YOURS FIRST. The saved ones are what gets reached for mid-set; the factory bank is
+              a place you go shopping, once. It used to run Default → factory → yours, which put
+              the thing you actually use at the bottom of a scroll. */}
           {menuPresets.map((p) => (
             <div key={p.name} className="fx-preset-row">
               <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply" onClick={() => applyPreset(menu.slot, p)}>
@@ -921,6 +918,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 ✕
               </button>
             </div>
+          ))}
+          {menuPresets.length > 0 && <div className="fx-preset-sep" />}
+          <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
+            Default
+          </button>
+          {/* Factory bank — built-in, read-only (apply only, no rename/remove). The applied one is marked. */}
+          {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
+          {factoryPresets.map((p, i) => (
+            <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p); }}>
+              {p.name}
+            </button>
           ))}
         </FxMenu>
       )}
@@ -969,21 +977,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             {!deck.hasStems && <span className="fx-stemgrid-note">no stems loaded</span>}
           </div>
           <div className="fx-preset-sep" />
-          {factoryChainPresets().map((p) => (
-            <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.at, p)}>
-              {p.name}
-            </button>
-          ))}
-          {savedChains.length > 0 && <div className="fx-preset-sep" />}
+          {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
+              below is a place you go shopping, once. */}
           {savedChains.map((p) => (
             <div key={`uc:${p.name}`} className="fx-preset-row">
               <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.at, p)}>
                 {p.name}
               </button>
-              {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones above are read-only,
-                  exactly as the factory effect presets are. This is the pattern the effect menu
-                  already uses; the chain menu had a rename act in its header instead, so the same
-                  verb lived in two different places depending on which menu you were in. */}
+              {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones below are read-only,
+                  exactly as the factory effect presets are. */}
               <button className="fx-preset-mini" title="Rename this saved chain" aria-label="Rename saved chain" onClick={() => setDialog({ mode: "chainPreset", name: p.name })}>
                 ✎
               </button>
@@ -991,6 +993,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 ✕
               </button>
             </div>
+          ))}
+          {savedChains.length > 0 && <div className="fx-preset-sep" />}
+          {factoryChainPresets().map((p) => (
+            <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.at, p)}>
+              {p.name}
+            </button>
           ))}
         </FxMenu>
       )}

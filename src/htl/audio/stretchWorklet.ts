@@ -80,6 +80,17 @@ class Stretch extends AudioWorkletProcessor {
     // itself spikes the audio thread; the drawn playhead is clock-based (Deck.position
     // reads ctx.currentTime, not this producer cursor) so deepening it never desyncs.
     this.reserve = 0;
+    // STEM TAPS — the routing substrate for per-stem FX (chains). OFF by default and free when
+    // off: the OLA below sums the gain-weighted groups in one pass exactly as it always has, and
+    // nothing here is allocated. Switched ON, the SAME grain (same search, same seating, same
+    // window) is overlap-added per group into four side FIFOs, drained by the SAME read cursor —
+    // so the four taps are sample-aligned with each other by construction, and their sum is the
+    // main output. The expensive half of WSOLA (the cross-correlation search) is shared; only the
+    // OLA inner loop multiplies. ⚠ The phase vocoder cannot do this: it sums the groups in the
+    // TIME domain before the FFT precisely so there is ONE FFT per frame, and per-stem taps would
+    // mean four. So taps force the WSOLA producer (see process) and the host is told.
+    this.taps = false;
+    this.tapOlaL = null; this.tapOlaR = null; this.tapRingL = null; this.tapRingR = null;
     // declick
     this.gain = 0; this.gainTarget = 0;
     this.kGain = 1 - Math.exp(-1 / (0.005 * this.sr)); // ~5 ms
@@ -177,6 +188,7 @@ class Stretch extends AudioWorkletProcessor {
     // overlap → flat OLA gain.
     for (let i = 0; i < FS; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / FS);
     this.olaL = new Float32Array(FS); this.olaR = new Float32Array(FS);
+    if (this.taps) this.allocTaps(); // grain geometry changed → the per-stem accumulators follow it
     this.target = new Float32Array(this.OVL); // mono continuation reference
     // Scratch for the gain-weighted mono of the whole span a grain reads: the search
     // range (±SEARCH) plus the continuation-refresh tail (HS+OVL). Filled once per
@@ -202,7 +214,7 @@ class Stretch extends AudioWorkletProcessor {
       // still queued in the output FIFO — drop them so the previous track can't bleed through
       // before the next start/seek re-seats the read head. (start/seek reset these anyway, but
       // a swap that isn't immediately followed by one would otherwise drain stale audio.)
-      this.wHead = 0; this.rHead = 0; this.olaL.fill(0); this.olaR.fill(0); this.seekPending = -1;
+      this.wHead = 0; this.rHead = 0; this.olaL.fill(0); this.olaR.fill(0); this.clearTaps(); this.seekPending = -1;
       // Publish for the scratch worklet — same arrays, no copy (see the module-scope note above).
       globalThis.__htlPcm.set(this.deckId, { gL: this.gL, gR: this.gR, length: this.length, pcmScale: this.pcmScale });
     } else if (d.type === 'start') {
@@ -215,6 +227,8 @@ class Stretch extends AudioWorkletProcessor {
       this.playing = false; this.gainTarget = 0;
     } else if (d.type === 'loop') {
       this.loopActive = !!d.active; this.loopStart = (d.start || 0) * this.sr; this.loopEnd = (d.end || 0) * this.sr;
+    } else if (d.type === 'taps') {
+      this.setTaps(!!d.on);
     } else if (d.type === 'stemGain') {
       if (d.index >= 0 && d.index < 4) this.gain_[d.index] = d.value;
     } else if (d.type === 'clear') {
@@ -246,7 +260,7 @@ class Stretch extends AudioWorkletProcessor {
     this.idealPos = Math.max(0, offsetSec * this.sr);
     this.grainStart = this.idealPos;
     this.naturalNext = this.idealPos;
-    this.olaL.fill(0); this.olaR.fill(0);
+    this.olaL.fill(0); this.olaR.fill(0); this.clearTaps();
     this.wHead = 0; this.rHead = 0;
     this.debt = 0; this.energyEMA = 0;
     this.seekPending = -1; // a hard reset (start/clear) cancels any pending declick-seek
@@ -263,6 +277,29 @@ class Stretch extends AudioWorkletProcessor {
     let s = 0;
     for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) s += ga * (this.gL[g][idx] + this.gR[g][idx]); }
     return s;
+  }
+  // (De)allocate the four per-stem accumulators + FIFOs. Called on the toggle and on any grain
+  // geometry change; freeing nulls them so the taps-off path allocates nothing at all.
+  allocTaps() {
+    const FS = this.FS;
+    this.tapOlaL = []; this.tapOlaR = []; this.tapRingL = []; this.tapRingR = [];
+    for (let g = 0; g < 4; g++) {
+      this.tapOlaL.push(new Float32Array(FS)); this.tapOlaR.push(new Float32Array(FS));
+      this.tapRingL.push(new Float32Array(RING)); this.tapRingR.push(new Float32Array(RING));
+    }
+  }
+  setTaps(on) {
+    if (on === this.taps) return;
+    this.taps = on;
+    if (!on) { this.tapOlaL = null; this.tapOlaR = null; this.tapRingL = null; this.tapRingR = null; return; }
+    this.allocTaps();
+    // Turning taps on mid-flight swaps the producer (PV → WSOLA) and starts the side FIFOs empty
+    // while the main FIFO is mid-grain: re-seat through the declick so neither is heard tearing.
+    if (this.loaded && this.playing) this.seekPending = Math.max(0, this.idealPos / this.sr);
+  }
+  clearTaps() {
+    if (!this.taps || !this.tapOlaL) return;
+    for (let g = 0; g < 4; g++) { this.tapOlaL[g].fill(0); this.tapOlaR[g].fill(0); }
   }
   refreshTarget() {
     const base = this.naturalNext;
@@ -313,16 +350,48 @@ class Stretch extends AudioWorkletProcessor {
     const gs = base + bestD;
     // overlap-add the windowed, stem-mixed grain
     const olaL = this.olaL, olaR = this.olaR, len = this.length, scale = this.pcmScale;
-    for (let i = 0; i < FS; i++) {
-      const si = gs + i; const w = win[i];
-      if (si >= 0 && si < len) {
-        let l = 0, r = 0;
-        for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) { l += ga * this.gL[g][si]; r += ga * this.gR[g][si]; } }
-        olaL[i] += w * l * scale; olaR[i] += w * r * scale; // PCM (int16 mobile / float32 desktop) → output
+    if (!this.taps) {
+      // The hot path, byte-for-byte what it always was: one gain-weighted sum per sample.
+      for (let i = 0; i < FS; i++) {
+        const si = gs + i; const w = win[i];
+        if (si >= 0 && si < len) {
+          let l = 0, r = 0;
+          for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) { l += ga * this.gL[g][si]; r += ga * this.gR[g][si]; } }
+          olaL[i] += w * l * scale; olaR[i] += w * r * scale; // PCM (int16 mobile / float32 desktop) → output
+        }
+      }
+    } else {
+      // Tapped: the same window over the same grain, kept SEPARATE per group. The main
+      // accumulator still gets the sum, in the same order, so the main output is unchanged.
+      const tL = this.tapOlaL, tR = this.tapOlaR, nG = this.nG;
+      for (let i = 0; i < FS; i++) {
+        const si = gs + i; const w = win[i];
+        if (si >= 0 && si < len) {
+          const ws = w * scale;
+          let l = 0, r = 0;
+          for (let g = 0; g < nG; g++) {
+            const ga = this.gain_[g]; if (!ga) continue;
+            const gl = ga * this.gL[g][si], gr = ga * this.gR[g][si];
+            l += gl; r += gr;
+            tL[g][i] += ws * gl; tR[g][i] += ws * gr;
+          }
+          olaL[i] += w * l * scale; olaR[i] += w * r * scale;
+        }
       }
     }
     // emit the first HS (now-complete) samples into the FIFO
     for (let i = 0; i < HS; i++) { const w = this.wHead & RMASK; this.ringL[w] = olaL[i]; this.ringR[w] = olaR[i]; this.wHead++; }
+    if (this.taps) {
+      // Side FIFOs ride the SAME write cursor, so they need no cursor of their own — one read
+      // head (rHead, below) drains all five in lockstep and alignment is structural, not tuned.
+      const base = this.wHead - HS;
+      for (let g = 0; g < 4; g++) {
+        const oL = this.tapOlaL[g], oR = this.tapOlaR[g], rL = this.tapRingL[g], rR = this.tapRingR[g];
+        for (let i = 0; i < HS; i++) { const w = (base + i) & RMASK; rL[w] = oL[i]; rR[w] = oR[i]; }
+        oL.copyWithin(0, HS, FS); oL.fill(0, OVL, FS);
+        oR.copyWithin(0, HS, FS); oR.fill(0, OVL, FS);
+      }
+    }
     olaL.copyWithin(0, HS, FS); olaL.fill(0, OVL, FS);
     olaR.copyWithin(0, HS, FS); olaR.fill(0, OVL, FS);
     // Advance the drift-free clock. Normally by Ha; through a transient by HS (1:1
@@ -526,6 +595,13 @@ class Stretch extends AudioWorkletProcessor {
     if (!out || out.length === 0) return true;
     const frames = out[0].length;
     const outL = out[0], outR = out.length > 1 ? out[1] : out[0];
+    // Stem taps: outputs[1..4] = DRUM/BASS/VOICE/INST, present only when the host built the node
+    // with five outputs AND switched taps on. Zeroed up front so every early-out below (not
+    // loaded, muted, FIFO dry) silences them along with the main pair, instead of leaving the
+    // previous quantum's samples behind in a buffer the graph reuses.
+    const tapped = this.taps && !!this.tapRingL && outputs.length > 4;
+    const tOut = tapped ? [outputs[1], outputs[2], outputs[3], outputs[4]] : null;
+    if (tapped) for (let g = 0; g < 4; g++) { const o = tOut[g]; if (o && o.length) { o[0].fill(0); if (o.length > 1) o[1].fill(0); } }
     if (!this.loaded) { outL.fill(0); if (out.length > 1) outR.fill(0); return true; }
 
     // glide speed/pitch toward their targets (de-zipper) — was the AudioParam ramp
@@ -535,7 +611,11 @@ class Stretch extends AudioWorkletProcessor {
     // analysis hop = synthesisHop · speed/pitch (β = pitch/speed → hop_a = hop_s/β).
     // WSOLA synthesis hop = HS; the phase-locked vocoder's = Rs. Same drift-free
     // clock either way; the engine flag just picks which producer fills the FIFO.
-    const pv = this.engineMode === 'pv' && !!this.pvWin;
+    // ⚠ Taps force WSOLA. The PV sums the groups before its FFT by design (one FFT per frame at
+    // any stem count); per-stem taps there would mean four FFTs per frame — a real cost, not a
+    // refactor. So while any stem-routed chain is live the producer is WSOLA, and the host is told
+    // rather than left wondering why the engine setting stopped taking.
+    const pv = this.engineMode === 'pv' && !!this.pvWin && !this.taps;
     const synHop = pv ? this.Rs : this.HS;
     const Aa = synHop * speed / pitch;
     const gamma = pitch;             // resample ratio
@@ -576,6 +656,15 @@ class Stretch extends AudioWorkletProcessor {
       const l = useAa ? this.sincRing(this.ringL, this.rHead, c) : this.cubicRing(this.ringL, this.rHead);
       const r = useAa ? this.sincRing(this.ringR, this.rHead, c) : this.cubicRing(this.ringR, this.rHead);
       outL[i] = l * this.gain; outR[i] = r * this.gain;
+      if (tapped) {
+        // Same reader, same cursor, same declick gain — so sum(taps) == main, sample for sample.
+        for (let g = 0; g < 4; g++) {
+          const o = tOut[g]; if (!o || !o.length) continue;
+          const sl = useAa ? this.sincRing(this.tapRingL[g], this.rHead, c) : this.cubicRing(this.tapRingL[g], this.rHead);
+          o[0][i] = sl * this.gain;
+          if (o.length > 1) o[1][i] = (useAa ? this.sincRing(this.tapRingR[g], this.rHead, c) : this.cubicRing(this.tapRingR[g], this.rHead)) * this.gain;
+        }
+      }
       this.rHead += gamma;
     }
     // Pre-roll headroom: with a reserve configured (host raises it during on-device stem

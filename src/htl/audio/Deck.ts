@@ -309,6 +309,13 @@ export class Deck {
   private _pitchSemis = 0; // musical key shift, −12 … +12 semitones
   key: KeyInfo | null = null; // detected musical key (set after setBuffer)
   private stretchNode: AudioWorkletNode | null = null; // unified tempo+pitch engine (owns playback)
+  // STEM TAPS — outputs [1..4] of the stretch node (DRUM/BASS/VOICE/INST), the substrate a
+  // stem-routed FX chain sends from. Off by default: the worklet does not even allocate the side
+  // FIFOs, and the mix path (output 0 → rack) is untouched either way. One GainNode per stem is
+  // interposed so a caller has a stable node to fan out from — the tap itself is a fixed output
+  // index and cannot be reconnected per chain.
+  private stemTapsOn = false;
+  private stemTapNodes: GainNode[] | null = null;
   private extractSeq = 0; // request id for extractRegion round-trips to the worklet
   lastDiag: Record<string, number> | null = null; // TEMP iPhone playback diagnostics (worklet heartbeat)
   get stretchAttached() { return this.stretchNode != null; } // did the playback worklet attach?
@@ -518,10 +525,47 @@ export class Deck {
     return this._keylock;
   }
 
+  /** Turn the per-stem taps on or off. OFF is the default and costs nothing anywhere: the worklet
+   *  skips the per-group overlap-add and allocates no side FIFOs, and no nodes exist here.
+   *  ⚠ While ON the producer is forced to WSOLA — the phase vocoder sums the stems before its FFT
+   *  by design, so per-stem taps there would cost four FFTs a frame instead of one. */
+  setStemTaps(on: boolean) {
+    if (on === this.stemTapsOn) return;
+    this.stemTapsOn = on;
+    this.stretchNode?.port.postMessage({ type: "taps", on });
+    if (!on && this.stemTapNodes) {
+      for (const g of this.stemTapNodes) { try { g.disconnect(); } catch { /* ignore */ } }
+      this.stemTapNodes = null;
+    }
+  }
+  get stemTapsEnabled() { return this.stemTapsOn; }
+  /** The tap for one stem (0=DRUM 1=BASS 2=VOICE 3=INST) — a GainNode fed by the matching worklet
+   *  output. Turns the taps on as a side effect, because asking for one is the only reason to have
+   *  them. Null if no stretch node is attached yet (pre-gesture); ask again after attach. */
+  stemTap(index: number): GainNode | null {
+    const node = this.stretchNode;
+    if (!node || index < 0 || index > 3) return null;
+    if (!this.stemTapsOn) this.setStemTaps(true);
+    if (!this.stemTapNodes) {
+      this.stemTapNodes = [];
+      for (let g = 0; g < 4; g++) {
+        const n = this.ctx.createGain();
+        try {
+          node.connect(n, g + 1); // output 0 is the mix; 1..4 are the stems
+        } catch {
+          /* a node built before taps existed (1 output) — leave it silent rather than throw */
+        }
+        this.stemTapNodes.push(n);
+      }
+    }
+    return this.stemTapNodes[index];
+  }
+
   /** Attach (or hot-swap) the unified time-stretch worklet — THE playback engine: it owns the
    *  playhead, looping, stems, and tempo+pitch, and its output feeds the rack (→ EQ → fader).
    *  Re-attach reloads the current PCM and re-sends speed/pitch (they're port messages). */
   attachStretchNode(node: AudioWorkletNode) {
+    this.stemTapNodes = null; // the taps belong to the OLD node; rebuilt lazily against the new one
     if (this.stretchNode) {
       try {
         this.stretchNode.disconnect();
@@ -544,6 +588,7 @@ export class Deck {
     // (Re)load the current PCM in case a track was set before the node attached, and
     // re-assert the current tempo/pitch (now port messages, so they must be re-sent).
     this.loadEnginePcm();
+    if (this.stemTapsOn) node.port.postMessage({ type: "taps", on: true });
     this.stretchNode?.port.postMessage({ type: "speed", value: this.effRate() });
     this.updatePitch();
   }

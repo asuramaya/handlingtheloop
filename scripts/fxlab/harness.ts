@@ -22,6 +22,7 @@ import { CRUSH_WORKLET_SRC } from "../../src/htl/audio/crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "../../src/htl/audio/modDelayWorklet";
 import { COMP_WORKLET_SRC } from "../../src/htl/audio/compWorklet";
 import { TAPE_WORKLET_SRC } from "../../src/htl/audio/tapeWorklet";
+import { STRETCH_WORKLET_SRC } from "../../src/htl/audio/stretchWorklet";
 import { factoryFxPresets } from "../../src/htl/audio/fxPresets";
 import type { FxDevice, FxKind } from "../../src/htl/audio/Fx";
 
@@ -1794,7 +1795,7 @@ async function liveContext(): Promise<AudioContext> {
   // EVERY worklet the rack owns, not just MOD's: the suspend quirk is a property of the offline
   // context, so reverb / crush / comp / the saturator's TAPE style are all equally unmeasurable
   // there and all need this same live path.
-  for (const src of [MOD_DELAY_WORKLET_SRC, REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, COMP_WORKLET_SRC, TAPE_WORKLET_SRC, REC_WORKLET_SRC]) {
+  for (const src of [MOD_DELAY_WORKLET_SRC, REVERB_WORKLET_SRC, CRUSH_WORKLET_SRC, COMP_WORKLET_SRC, TAPE_WORKLET_SRC, STRETCH_WORKLET_SRC, REC_WORKLET_SRC]) {
     const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
     await ctx.audioWorklet.addModule(url); // no try/catch on purpose: a missing module here means
     // the device under test silently becomes its native fallback, which is worse than no number
@@ -2220,4 +2221,93 @@ async function liveGestureStep(params: Record<string, number>, opts: Parameters<
     out.push(Math.round(step * 100) / 100);
   }
   return out;
+};
+
+// ---- STEM TAPS — a NULL TEST of the routing substrate ----------------------------------------
+// The claim the stem-FX chains rest on: outputs [1..4] of the stretch worklet, summed, ARE the
+// mix on output [0]. Not "close" — the same grain, the same window, the same read cursor, so the
+// difference should be float dust. This measures it the only way that cannot flatter itself:
+// sum the four taps, subtract the mix, and look at what is left. A wiring error, an off-by-one in
+// the side FIFOs, or a tap reading a stale cursor all survive a peak/RMS check and all fail this.
+//
+// ⚠ It also asserts its own INPUT (obligation e2cb519e): a null test over silence cancels
+// perfectly and proves nothing, so the residual is reported RELATIVE to the mix's own level and
+// the mix level is reported too. Read both numbers or read neither.
+(globalThis as unknown as {
+  fxlabStemTaps: (opts?: { seconds?: number; pitch?: number; speed?: number; stemGains?: number[]; noTaps?: boolean }) => Promise<{
+    sr: number; mixPeak: number; mixRms: number; residPeak: number; residRms: number; nullDb: number; finite: boolean; diag: Record<string, number> | null;
+  }>;
+}).fxlabStemTaps = async (opts = {}) => {
+  // ⚠ REAL-TIME, not offline — and not for the usual reason. An OfflineAudioContext renders far
+  // faster than the control thread drains a worklet's port queue: of six setup messages exactly
+  // ONE (loadPcm) reached the processor before the render finished, so `start` never arrived and
+  // every case measured silence. The first version of this probe reported that silence as a
+  // perfect null. It is only visible at all because the numbers are printed next to the mix level
+  // they are relative to (obligation e2cb519e) — read a bare "−inf dB null" and you would ship it.
+  const seconds = opts.seconds ?? 2;
+  const ctx = await liveContext();
+  const sr = ctx.sampleRate;
+
+  // FOUR DISTINGUISHABLE STEMS: a different frequency per group, and a phase-shifted right
+  // channel, so a tap wired to the wrong output — or two taps sharing one FIFO, or R copied from
+  // L — leaves a residual instead of cancelling anyway.
+  const n = Math.ceil((seconds + 4) * sr);
+  const freqs = [55, 110, 440, 1320];
+  const gL: Float32Array[] = [], gR: Float32Array[] = [];
+  for (let g = 0; g < 4; g++) {
+    const L = new Float32Array(n), R = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      L[i] = 0.2 * Math.sin(2 * Math.PI * freqs[g] * t);
+      R[i] = 0.2 * Math.sin(2 * Math.PI * freqs[g] * t + 0.7);
+    }
+    gL.push(L); gR.push(R);
+  }
+
+  const node = new AudioWorkletNode(ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "LAB" + Math.round(sr) } });
+  let diag: Record<string, number> | null = null;
+  node.port.onmessage = (e: MessageEvent) => { const m = e.data as { type?: string }; if (m?.type === "diag") diag = e.data as Record<string, number>; };
+  if (!opts.noTaps) node.port.postMessage({ type: "taps", on: true });
+  node.port.postMessage({ type: "loadPcm", gL, gR, length: n, int16: false });
+  const gains = opts.stemGains ?? [1, 1, 1, 1];
+  for (let g = 0; g < 4; g++) node.port.postMessage({ type: "stemGain", index: g, value: gains[g] });
+  if (opts.speed !== undefined) node.port.postMessage({ type: "speed", value: opts.speed });
+  if (opts.pitch !== undefined) node.port.postMessage({ type: "pitch", value: opts.pitch });
+  node.port.postMessage({ type: "start", offset: 0 });
+
+  // Input 0 = the mix (output 0). Input 1 = the four taps summed with the mix INVERTED — one
+  // graph, one grain seating, so there is no chance of differencing two separate renders.
+  const rec = new AudioWorkletNode(ctx, "fxlabrec", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+  node.connect(rec, 0, 0);
+  const resid = ctx.createGain();
+  const inv = ctx.createGain(); inv.gain.value = -1;
+  node.connect(inv, 0); inv.connect(resid);
+  for (let g = 0; g < 4; g++) node.connect(resid, g + 1);
+  resid.connect(rec, 0, 1);
+  const sink = ctx.createGain(); sink.gain.value = 0;
+  rec.connect(sink).connect(ctx.destination);
+
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+  const got = await new Promise<{ a: Float32Array; b: Float32Array }>((resolve) => {
+    rec.port.onmessage = (e: MessageEvent) => resolve(e.data as { a: Float32Array; b: Float32Array });
+    rec.port.postMessage({ stop: true });
+  });
+  node.port.postMessage({ type: "stop" });
+  node.port.postMessage({ type: "clear" });
+  try { node.disconnect(); rec.disconnect(); resid.disconnect(); inv.disconnect(); sink.disconnect(); } catch { /* ignore */ }
+
+  const mix = got.a, res = got.b;
+  // Skip the first 300 ms: the declick fade-in and the FIFO's first fill are start-up, not routing.
+  const s0 = Math.min(mix.length, Math.round(0.3 * sr));
+  let mp = 0, rp = 0, ms = 0, rs = 0, finite = true;
+  for (let i = s0; i < mix.length; i++) {
+    const a = Math.abs(mix[i]), b = Math.abs(res[i]);
+    if (a > mp) mp = a;
+    if (b > rp) rp = b;
+    ms += mix[i] * mix[i]; rs += res[i] * res[i];
+    if (!Number.isFinite(mix[i]) || !Number.isFinite(res[i])) finite = false;
+  }
+  const cnt = Math.max(1, mix.length - s0);
+  const mixRms = Math.sqrt(ms / cnt), residRms = Math.sqrt(rs / cnt);
+  return { sr, mixPeak: mp, mixRms, residPeak: rp, residRms, nullDb: 20 * Math.log10((residRms + 1e-30) / (mixRms + 1e-30)), finite, diag };
 };

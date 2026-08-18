@@ -269,11 +269,16 @@ export class AudioEngine {
       if (await this.addModuleOnce("stretch", STRETCH_WORKLET_SRC)) {
         try {
           if (!this.deckA.stretchAttached) {
-            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
+            // FIVE outputs: [0] the mix (what has always been here) and [1..4] the per-stem taps
+            // for stem-routed FX chains. The taps stay SILENT and cost nothing until a chain asks
+            // for them (Deck.setStemTaps → the worklet's taps flag); declaring them at
+            // construction is the only way to have them at all, since a node's output count is
+            // fixed for its lifetime and the PCM lives inside this node.
+            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "A" } }));
             this.deckA.configureStretch(this.stretchCfg);
           }
           if (!this.deckB.stretchAttached) {
-            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
+            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "B" } }));
             this.deckB.configureStretch(this.stretchCfg);
           }
         } catch (e) {

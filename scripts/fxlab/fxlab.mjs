@@ -18,6 +18,7 @@
 //   node scripts/fxlab/fxlab.mjs --shaper-latency             # Chromium's oversample="4x" group delay, measured
 //   node scripts/fxlab/fxlab.mjs --noise-audit                # the riser: snap / dir / curve / key / duck / impact / width
 //   node scripts/fxlab/fxlab.mjs --gate-align                 # does the GATE land on the beat
+//   node scripts/fxlab/fxlab.mjs --stem-taps                  # NULL TEST: do the 4 stem taps sum to the mix output
 //
 // Flags: --kind --preset --params(json) --signal(impulse|burst|noise|tone|silence)
 //        --seconds --bpm --json (raw JSON only) --sweep-feedback
@@ -66,6 +67,7 @@ function parseArgs(argv) {
       case "--shaper-latency": a.shaperLatency = true; break;
       case "--mod-width": a.modWidth = true; break;
       case "--gate-align": a.gateAlign = true; break;
+      case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
       case "--throw-at": a.throwAt = Number(v); i++; break;
@@ -311,6 +313,35 @@ async function main() {
       const bad = r.checks.filter((c) => !c.pass);
       console.log(`\n  ${r.checks.length - bad.length}/${r.checks.length} pass${bad.length ? ` — ${bad.map((c) => c.name).join(", ")}` : ""}\n`);
       process.exitCode = r.ok ? 0 : 1;
+      return;
+    }
+
+    if (args.stemTaps) {
+      console.log("\n  STEM TAPS — null test: (tap1+tap2+tap3+tap4) − mix. Silence means the substrate is exact.\n");
+      const cases = [
+        { name: "CONTROL taps-off", opts: { noTaps: true }, control: true },
+        { name: "unity", opts: {} },
+        { name: "tempo 1.25x", opts: { speed: 1.25 } },
+        { name: "pitch +2st", opts: { pitch: 1.1225 } },
+        { name: "both", opts: { speed: 0.85, pitch: 0.89 } },
+        { name: "one stem muted", opts: { stemGains: [1, 0, 1, 1] } },
+      ];
+      let worst = -Infinity;
+      for (const c of cases) {
+        const r = await page.evaluate((o) => globalThis.fxlabStemTaps(o), c.opts);
+        // The control is the test's own falsifier: taps OFF means the side outputs are silent, so
+        // the "residual" is the whole mix and the null MUST be ~0 dB. A control that nulls is a
+        // broken probe, not a passing one — that is the state this file shipped in for one run.
+        if (!c.control) worst = Math.max(worst, r.nullDb);
+        else if (r.nullDb < -20) console.log("   ⚠ CONTROL NULLED — the probe is measuring nothing; every number below is worthless.");
+        
+        console.log(
+          `   ${c.name.padEnd(18)} mix ${f(r.mixRms, 5)} rms / ${f(r.mixPeak, 4)} pk   residual ${r.residRms.toExponential(2)} rms   NULL ${f(r.nullDb, 1).padStart(7)} dB${c.control ? "  ← must be ~0" : ""}${r.finite ? "" : "   ⚠ NON-FINITE"}`,
+        );
+      }
+      // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
+      console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
+      process.exitCode = worst < -100 ? 0 : 1;
       return;
     }
 

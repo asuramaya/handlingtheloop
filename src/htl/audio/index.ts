@@ -17,6 +17,7 @@ export { REVERB_WORKLET_SRC } from "./reverbWorklet";
 export { CRUSH_WORKLET_SRC } from "./crushWorklet";
 export { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 export { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets, FACTORY_PRESETS, type FxPreset } from "./fxPresets";
+export { loadChainPresets, saveChainPreset, deleteChainPreset, factoryChainPresets, type ChainPreset } from "./fxPresets";
 export { decodeAudio } from "./decode";
 export { MicInput, type MicRoute } from "./MicInput";
 export { Recorder, type Take } from "./Recorder";

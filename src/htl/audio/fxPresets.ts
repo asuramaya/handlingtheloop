@@ -238,3 +238,71 @@ export function deleteFxPreset(kind: string, name: string): FxPreset[] {
   }
   return list;
 }
+
+// ---- CHAIN presets ----------------------------------------------------------------------------
+// A chain preset is a stem set plus a device list — "what a DRUM CHOP chain IS" — saved and
+// recalled as one thing. Same storage shape as the per-effect presets above (localStorage, shared
+// across decks), one key for all chains rather than one per kind, because a chain is not typed.
+//
+// It deliberately does NOT carry the devices' params: those are the effects' own presets, already
+// saved per kind, and baking a snapshot of them in here would fork the same sound into two places
+// that then drift. A chain preset says WHICH devices, on WHICH stems, in WHICH order.
+export interface ChainPreset {
+  name: string;
+  stems: number;
+  kinds: string[];
+}
+
+// FACTORY chain presets — the handful of stem chains worth having before anyone builds one, so
+// the feature is not an empty room on first open. Each names the stems by mask (1=DRUM 2=BASS
+// 4=VOICE 8=INST) and the devices in signal order.
+export const FACTORY_CHAINS: ChainPreset[] = [
+  { name: "Drum Chop", stems: 1, kinds: ["gate", "crush"] },
+  { name: "Drum Glue", stems: 1, kinds: ["comp", "saturator"] },
+  { name: "Bass Grit", stems: 2, kinds: ["saturator", "comp"] },
+  { name: "Vocal Air", stems: 4, kinds: ["reverb", "delay"] },
+  { name: "Vocal Throw", stems: 4, kinds: ["delay", "mod"] },
+  { name: "Music Wash", stems: 8, kinds: ["reverb", "mod"] },
+  { name: "Everything But Drums", stems: 0b1110, kinds: ["gate"] },
+  { name: "Acapella Filter", stems: 4, kinds: ["eq"] },
+];
+
+const CHAIN_KEY = "htl:chainpresets";
+
+export function factoryChainPresets(): ChainPreset[] {
+  return FACTORY_CHAINS;
+}
+
+export function loadChainPresets(): ChainPreset[] {
+  try {
+    const raw = localStorage.getItem(CHAIN_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && typeof p.stems === "number" && Array.isArray(p.kinds)) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveChainPreset(name: string, stems: number, kinds: string[]): ChainPreset[] {
+  const clean = name.trim();
+  if (!clean) return loadChainPresets();
+  const list = loadChainPresets().filter((p) => p.name !== clean); // overwrite a same-name preset
+  list.push({ name: clean, stems, kinds: [...kinds] });
+  try {
+    localStorage.setItem(CHAIN_KEY, JSON.stringify(list));
+  } catch {
+    /* quota / unavailable — it just won't persist */
+  }
+  return list;
+}
+
+export function deleteChainPreset(name: string): ChainPreset[] {
+  const list = loadChainPresets().filter((p) => p.name !== name);
+  try {
+    localStorage.setItem(CHAIN_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore */
+  }
+  return list;
+}

@@ -188,6 +188,40 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
 }
+/* THE ACT ROW — "what you can do here", above "what you can recall here". Both menus open with
+   it, so make/throw-away is never buried under a scrolling list of names. */
+.fx-menu-acts {
+  display: flex;
+  gap: 4px;
+  padding: 3px 4px;
+}
+.fx-palette-item.act {
+  flex: 1 1 0;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+.fx-palette-item.act:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+.fx-palette-item.act.danger {
+  color: color-mix(in srgb, #ff5d73 80%, var(--muted));
+  border-color: color-mix(in srgb, #ff5d73 30%, var(--line));
+}
+.fx-palette-item.act.danger:hover {
+  color: #fff;
+  border-color: #ff5d73;
+  background: color-mix(in srgb, #ff5d73 18%, transparent);
+}
+/* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain
+   names ("Everything But Drums") do not wrap. */
+.fx-chain-menu {
+  min-width: 190px;
+}
+
 .fx-preset-back {
   margin-right: 5px;
   padding: 0 5px;

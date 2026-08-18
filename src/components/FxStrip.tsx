@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "rea
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind, FxChain } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
+import { loadChainPresets, saveChainPreset, deleteChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
@@ -68,7 +69,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const closeMenu = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } setMenu(null); };
   useEffect(() => () => { if (menuTimerRef.current) clearTimeout(menuTimerRef.current); }, []);
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
-  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | null>(null);
+  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: number } | null>(null);
 
   // ---- CHAINS ---------------------------------------------------------------------------------
   // A chain is a set of STEMS plus the devices that process them, and the set is a PARTITION: a
@@ -87,6 +88,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // time; the whole rack laid out at once and struck through was a list of things you did NOT
   // choose, which is the opposite of a workflow.
   const [addMenu, setAddMenu] = useState<{ x: number; y: number; kind?: FxKind } | null>(null);
+  // The CHAIN menu — right-click a chain chip. Right-click used to delete the chain outright,
+  // which is a destructive act on a single unconfirmable gesture; it lives in here now, under a
+  // label, alongside the thing you actually reach for often (recall a chain you have built).
+  const [chainMenu, setChainMenu] = useState<{ x: number; y: number; at: number } | null>(null);
+  const [chainTick, setChainTick] = useState(0); // bump to re-read saved chain presets
   const devices = deck.fxDevices; // the whole rack, in order
   // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the other eight
   // can only be built once the worklets attach, so for a beat at every boot `fxDevices` IS the EQ,
@@ -103,6 +109,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // populate gesture, and it works on a phone — drag-and-drop onto a chip is the mouse shortcut
   // for the same thing, not the only way in.
   const others = !ready || !multi || !chain ? [] : devices.filter((d) => !chain.kinds.includes(d.kind));
+  const savedChains = useMemo(() => loadChainPresets(), [chainTick]);
   const gi = (i: number) => (multi ? devices.findIndex((d) => d.kind === tabs[i]?.kind) : i); // shown index → rack index
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = ready ? devices[cur] : undefined;
@@ -126,7 +133,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // list that could drift from it.
   useEffect(() => {
     if (!ready || chains.length) return;
-    setChains([{ id: "mix", name: "MIX", stems: 0, kinds: devices.map((d) => d.kind), master: true }]);
+    setChains([{ id: "mix", name: "MASTER", stems: 0, kinds: devices.map((d) => d.kind), master: true }]);
   }, [ready, chains.length, devices]);
   // Hand the model to the engine. A single all-stems chain is passed as EMPTY — not as a
   // one-chain special case but as "no chains", which restores the plain serial rack and switches
@@ -249,6 +256,20 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setChains((prev) => prev.map((c, i) => (i === target ? { ...c, kinds: [...c.kinds.filter((k: FxKind) => k !== kind), kind] } : { ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) })));
     setSelChain(target);
   };
+  /** Take a device out of a stem chain. It does not disappear — the rack is fixed-membership, so
+   *  it goes home to the master, which is where every device lives when nothing else claims it. */
+  const removeDeviceFromChain = (kind: FxKind) => {
+    setChains((prev) => {
+      const masterAt = prev.findIndex((c) => c.master);
+      if (masterAt < 0) return prev;
+      return prev.map((c, i) =>
+        i === masterAt
+          ? { ...c, kinds: c.kinds.includes(kind) ? c.kinds : [...c.kinds, kind] }
+          : { ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) },
+      );
+    });
+  };
+
   const removeChain = (at: number) => {
     setChains((prev) => {
       const dead = prev[at];
@@ -441,6 +462,23 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     else applyDefault(slot);
   };
 
+  /** Recall a chain preset INTO a chain: its stems (taken from whoever held them, since a stem
+   *  has one owner) and its device list, in the preset's order. On the master, only the devices
+   *  land — the master has no stems to set. */
+  const applyChainPreset = (at: number, p: ChainPreset) => {
+    const kinds = p.kinds.filter((k): k is FxKind => devices.some((d) => d.kind === k));
+    setChains((prev) =>
+      prev.map((c, i) => {
+        if (i === at) return { ...c, name: p.name.toUpperCase(), stems: c.master ? c.stems : p.stems, kinds };
+        // Everyone else gives up what this chain just claimed — both the stems and the devices,
+        // because each of those has exactly one home.
+        return { ...c, stems: c.master ? c.stems : c.stems & ~p.stems, kinds: c.kinds.filter((k: FxKind) => !kinds.includes(k)) };
+      }),
+    );
+    setSelChain(at);
+    setChainMenu(null);
+  };
+
   const applyDefault = (slot: number) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
@@ -567,6 +605,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 className={`fx-chain master ${i === selChain ? "sel" : ""}`}
                 title={`${c.name}: the master channel — every chain sums here`}
                 onClick={() => { setSelChain(i); setStemPick(false); }}
+                onContextMenu={(e) => { e.preventDefault(); cancelMenuTimer(); setMenu(null); setChainMenu({ x: e.clientX, y: e.clientY, at: i }); }}
                 onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -588,7 +627,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                   if (i === selChain) setStemPick((v) => !v);
                   else { setSelChain(i); setStemPick(false); }
                 }}
-                onContextMenu={(e) => { e.preventDefault(); removeChain(i); }}
+                onContextMenu={(e) => { e.preventDefault(); cancelMenuTimer(); setMenu(null); setChainMenu({ x: e.clientX, y: e.clientY, at: i }); }}
                 onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -772,6 +811,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           <div className="fx-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
           <div ref={menuRef} className="fx-palette fx-preset-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
             <div className="fx-preset-head">{KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} presets</div>
+            {/* The ACTS first, under their own rule — the same shape as the chain menu, so both
+                menus read "what you can DO here" before "what you can RECALL here". */}
+            <div className="fx-menu-acts">
+              <button className="fx-palette-item act" role="menuitem" onClick={() => saveCurrent(menu.slot)}>
+                ＋ Save current…
+              </button>
+              {multi && chain && !chain.master && chain.kinds.includes(menuDev.kind) && (
+                <button className="fx-palette-item act danger" role="menuitem" onClick={() => { removeDeviceFromChain(menuDev.kind); setMenu(null); }}>
+                  ✕ Remove from {chain.name}
+                </button>
+              )}
+            </div>
+            <div className="fx-preset-sep" />
             <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
               Default
             </button>
@@ -796,9 +848,58 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 </button>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {/* THE CHAIN MENU. Same widget as the preset menu, re-laid so the two ACTS — make one, throw
+          one away — sit at the top under their own rule, and the recall list runs beneath. Delete
+          is a labelled item here rather than a bare right-click, because a right-click that
+          destroys a chain is a gesture with no name and no second chance. */}
+      {chainMenu && chains[chainMenu.at] && (
+        <>
+          <div className="fx-menu-backdrop" onClick={() => setChainMenu(null)} onContextMenu={(e) => { e.preventDefault(); setChainMenu(null); }} />
+          <div className="fx-palette fx-preset-menu fx-chain-menu" role="menu" style={{ left: chainMenu.x, top: chainMenu.y }}>
+            <div className="fx-preset-head">{chains[chainMenu.at].name}</div>
+            <div className="fx-menu-acts">
+              <button className="fx-palette-item act" role="menuitem" onClick={() => { addChain(); setChainMenu(null); }}>
+                ＋ New chain
+              </button>
+              {!chains[chainMenu.at].master && (
+                <button className="fx-palette-item act danger" role="menuitem" onClick={() => { removeChain(chainMenu.at); setChainMenu(null); }}>
+                  ✕ Delete chain
+                </button>
+              )}
+            </div>
             <div className="fx-preset-sep" />
-            <button className="fx-palette-item fx-preset-save" role="menuitem" onClick={() => saveCurrent(menu.slot)}>
-              ＋ Save current…
+            {factoryChainPresets().map((p) => (
+              <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.at, p)}>
+                {p.name}
+              </button>
+            ))}
+            {savedChains.length > 0 && <div className="fx-preset-sep" />}
+            {savedChains.map((p) => (
+              <div key={`uc:${p.name}`} className="fx-preset-row">
+                <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.at, p)}>
+                  {p.name}
+                </button>
+                <button
+                  className="fx-preset-mini danger"
+                  title="Remove this saved chain"
+                  aria-label="Remove saved chain"
+                  onClick={() => { deleteChainPreset(p.name); setChainTick((t) => t + 1); }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <div className="fx-preset-sep" />
+            <button
+              className="fx-palette-item fx-preset-save"
+              role="menuitem"
+              onClick={() => { setDialog({ mode: "chain", at: chainMenu.at }); setChainMenu(null); }}
+            >
+              ＋ Save this chain…
             </button>
           </div>
         </>
@@ -855,11 +956,20 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
 
       {dialog && (
         <PromptModal
-          title={dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
-          initial={dialog.mode === "rename" ? dialog.name : ""}
-          placeholder="Preset name"
-          submitLabel={dialog.mode === "save" ? "Save" : "Rename"}
+          title={dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
+          initial={dialog.mode === "rename" ? dialog.name : dialog.mode === "chain" ? chains[dialog.at]?.name ?? "" : ""}
+          placeholder={dialog.mode === "chain" ? "Chain name" : "Preset name"}
+          submitLabel={dialog.mode === "rename" ? "Rename" : "Save"}
           onSubmit={(v) => {
+            if (dialog.mode === "chain") {
+              const c = chains[dialog.at];
+              if (c) {
+                saveChainPreset(v, c.stems, c.kinds);
+                setChains((prev) => prev.map((x, i) => (i === dialog.at ? { ...x, name: v.trim().toUpperCase() || x.name } : x)));
+                setChainTick((t) => t + 1);
+              }
+              return;
+            }
             if (dialog.mode === "save") saveFxPreset(dialog.kind, v, dialog.params);
             else renameFxPreset(dialog.kind, dialog.name, v);
             setPresetTick((t) => t + 1);

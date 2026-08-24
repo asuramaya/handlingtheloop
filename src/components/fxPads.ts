@@ -79,6 +79,45 @@ export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
   return pads.slice(0, 8);
 }
 
+// ★ ONE GESTURE, THREE TRANSPORTS. Touch, keyboard and MIDI all press the same pad, so the
+// press/release rule lives HERE, once, keyed by deck+slot rather than by input device. That also
+// makes the transports interoperable: press with a finger, release with the key, and the pad
+// behaves — because the held state belongs to the PAD, not to whoever pushed it.
+export const FX_HOLD_MS = 220; // the single tunable the whole gesture rests on — tune by ear
+const heldPads = new Map<string, number>();
+
+/** Press. Engages if the pad is not already live, and reports whether it fired (so the caller can
+ *  emit the intent) and which device to reveal. Repeats are ignored — a held keyboard key
+ *  auto-repeats forty times a second, and each one would re-fire the throw. */
+export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: boolean; kind?: FxKind } {
+  const pad = padsForDeck(deck)[slot];
+  if (!pad) return { fired: false };
+  const key = `${deckId}${slot}`;
+  if (heldPads.has(key)) return { fired: false, kind: pad.kind };
+  heldPads.set(key, performance.now());
+  if (pad.active?.(deck) ?? false) return { fired: false, kind: pad.kind }; // already latched
+  pad.on(deck);
+  return { fired: true, kind: pad.kind };
+}
+
+/** Release. A quick tap LATCHES (leave it on); a hold past the threshold lets go — which is also
+ *  how a lit pad is turned off: press it, hold, release. Returns whether it actually released. */
+export function fxPadRelease(deck: Deck, deckId: string, slot: number): boolean {
+  const key = `${deckId}${slot}`;
+  const t = heldPads.get(key);
+  heldPads.delete(key);
+  const pad = padsForDeck(deck)[slot];
+  if (t == null || !pad) return false;
+  if (performance.now() - t < FX_HOLD_MS) return false; // a tap — it stays latched
+  pad.off?.(deck);
+  return true;
+}
+
+/** Drop any held state for a deck — focus moved, the board was re-bound, a device vanished. */
+export function fxPadsClear(deckId: string): void {
+  for (const k of [...heldPads.keys()]) if (k.startsWith(deckId)) heldPads.delete(k);
+}
+
 /** Fire an FX pad (keyboard/MIDI 1-8 in fx mode). `on` = key down (press), false = key up. */
 export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
   const pad = padsForDeck(deck)[slot];

@@ -9,7 +9,7 @@ import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
-import { fireFxPad } from "../components/fxPads";
+import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 
 export interface MidiRoutingDeps {
@@ -174,9 +174,12 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
                 deck.rollOut();
                 emitRef.current({ kind: "loop", deck: id, action: "exit" });
                 refresh();
-              } else if (deck.padMode === "fx2") {
-                fireFxPad(deck, i, false);
-                emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: i });
+              } else if (deck.padMode === "fx" || deck.padMode === "fx2") {
+                // ★ PARITY. A controller pad releases through the SAME gesture the finger and the
+                // key use — quick release latches, held release lets go — instead of fx2 being the
+                // only surface that could hold. The press half already shares it: MIDI routes
+                // hotcueN through the same HANDLERS entry the keyboard does.
+                if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
                 refresh();
               }
             }

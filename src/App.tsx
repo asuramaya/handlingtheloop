@@ -5,7 +5,7 @@ import type { FxStripCtl } from "./components/FxStrip";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
-import { fireFxPad, padsForDeck, fxPadArg } from "./components/fxPads";
+import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -662,9 +662,6 @@ function AppBody() {
   const fxCtlA = useRef<FxStripCtl | null>(null);
   const fxCtlB = useRef<FxStripCtl | null>(null);
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
-  // Which FX pad keys are physically down, per deck — the keyboard's half of the one gesture.
-  const fxKeyHeld = useRef(new Map<string, number>());
-  const FX_HOLD_MS = 220; // same threshold as the on-screen pad (DeckControls)
   // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed.
   const xfaderLedRef = useRef<boolean | null>(null);
   // Tracks our last eqStemMode edge so we can FORCE the FLX hardware Smart-CFX off (0x96/0x00 0x00)
@@ -864,30 +861,15 @@ function AppBody() {
     };
     // Keyboard/MIDI FX pad (1-8 in fx mode): no key-up, so a hold-FX toggles. Emit the
     // resulting phase over the board bus so it syncs + records like the on-screen pad.
-    // ★ ONE GESTURE, ON THE KEYBOARD TOO. It used to toggle, because "the keyboard has no
-    // key-up" — it does; nothing was listening. Down engages (ignoring auto-repeat, which would
-    // otherwise re-fire a held key forty times a second); up decides, exactly as the pad does:
-    // quick release stays latched, held past the threshold lets go.
+    // The keyboard transport for the shared pad gesture (fxPads). It used to toggle, on the
+    // grounds that "the keyboard has no key-up" — it does; nothing was listening.
     const fxKeyDown = (deck: DeckRef, id: DeckId, i: number) => {
-      const pads = padsForDeck(deck);
-      if (!pads[i]) return; // an empty slot in this chain — nothing to throw
-      if (fxKeyHeld.current.has(`${id}${i}`)) return; // already down (auto-repeat)
-      fxKeyHeld.current.set(`${id}${i}`, performance.now());
-      if (!(pads[i]!.active?.(deck) ?? false)) {
-        fireFxPad(deck, i, true);
-        emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i) });
-      }
-      const kind = pads[i]!.kind;
+      const { fired, kind } = fxPadPress(deck, id, i);
+      if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i) });
       if (kind) fxCtlFor(id)?.selectKind(kind); // press IS reveal
     };
     const fxKeyUp = (deck: DeckRef, id: DeckId, i: number) => {
-      const t = fxKeyHeld.current.get(`${id}${i}`);
-      fxKeyHeld.current.delete(`${id}${i}`);
-      const pads = padsForDeck(deck);
-      if (t == null || !pads[i]) return;
-      if (performance.now() - t < FX_HOLD_MS) return; // a tap — leave it latched
-      fireFxPad(deck, i, false);
-      emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
+      if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
     };
     const padModeKey = (deck: DeckRef, id: DeckId, m: PadMode) => {
       if (PAD_MODE_RESERVED.has(m)) return; // KEY isn't built yet — match the on-screen disabled state
@@ -1251,20 +1233,15 @@ function AppBody() {
     // down-stroke action — so this resolves the key to a pad index and hands it to fxKeyUp, which
     // decides whether it was a tap (stay latched) or a hold (let go).
     const onKeyRelease = (e: KeyboardEvent) => {
-      const held = fxKeyHeld.current;
-      if (!held.size) return;
       const actionId = keyIndex.get(e.code);
       if (!actionId?.startsWith("hotcue")) return;
       const i = Number(actionId.slice(6)) - 1;
       if (!(i >= 0 && i < 8)) return;
       // Release BOTH decks' held copies of this pad index: focus can move between the press and
       // the release, and a pad left latched because you tabbed decks mid-hold is a stuck effect.
-      for (const d of ["A", "B"] as DeckId[]) {
-        if (!held.has(`${d}${i}`)) continue;
-        const deck = d === "A" ? engine.deckA : engine.deckB;
-        if (deck.padMode === "fx" || deck.padMode === "fx2") fxKeyUp(deck, d, i);
-        else held.delete(`${d}${i}`);
-      }
+      // Release BOTH decks' copies: focus can move between the press and the release, and a pad
+      // left latched because you tabbed decks mid-hold is a stuck effect nobody asked for.
+      for (const d of ["A", "B"] as DeckId[]) fxKeyUp(d === "A" ? engine.deckA : engine.deckB, d, i);
       refresh();
     };
     window.addEventListener("keydown", onKey);

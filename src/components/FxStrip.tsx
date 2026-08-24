@@ -363,6 +363,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   // Commit a drag at the current INSERTION point. Removing the source first shifts later
   // slots down one, so insertion point p maps to final index p-1 when dragging rightward.
+  /** Step the SELECTED device one place along its chain. The one implementation of "reorder",
+   *  shared by the hardware FX SELECT knob, the ◀ ▶ menu acts (touch) and the drag (mouse). */
+  const moveSelBy = (dir: number) => {
+    const c = deck.fxChain(deck.fxFocus);
+    if (!c) return;
+    const here = c.devices.indexOf(deck.fxDeviceAt(cur) as never);
+    if (here < 0) return;
+    const to = Math.max(0, Math.min(c.devices.length - 1, here + dir));
+    if (to === here) return;
+    deck.moveFxIn(c.id, here, to);
+    const idx = deck.fxDevices.indexOf(c.devices[to]);
+    if (idx >= 0) setSel(idx); // the selection follows the device, not the position
+    broadcastRack();
+    refresh();
+  };
+
   const dropHere = () => {
     if (chain && dragFrom != null && dropAt != null) {
       // ★ Order is the CHAIN's, and the pads read the same list — so this drag is simultaneously
@@ -392,15 +408,20 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   useEffect(() => {
     if (!ctlRef) return;
     ctlRef.current = {
+      // ★ Both of these walk THE CHAIN, not the deck's flat device list. Stepping off the end of
+      // a drum chain into the master's devices would be a hardware knob quietly crossing a routing
+      // boundary — the knob is aimed at a chain, exactly as the pads are.
       navSel: (dir) => {
         if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; }
         setMenu(null); // moving to another effect closes the preset browse
-        select(Math.max(0, Math.min(live.current.len - 1, live.current.cur + dir)));
+        const c = deck.fxChain(deck.fxFocus);
+        if (!c || !c.devices.length) return;
+        const here = c.devices.findIndex((d) => d === deck.fxDeviceAt(live.current.cur));
+        const next = c.devices[Math.max(0, Math.min(c.devices.length - 1, (here < 0 ? 0 : here) + dir))];
+        const idx = deck.fxDevices.indexOf(next);
+        if (idx >= 0) select(idx);
       },
-      moveSel: (dir) => {
-        const L = live.current;
-        reorder(L.cur, Math.max(0, Math.min(L.len - 1, L.cur + dir)));
-      },
+      moveSel: (dir) => moveSelBy(dir),
       stepChain: (dir) => {
         const list = deck.fxChainList;
         if (list.length < 2) return;
@@ -882,6 +903,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           // fixed-membership, so the device still exists — it is simply in no chain, and out of
           // the signal path, until something claims it again.
           acts={[
+            // ★ TOUCH PARITY. Reordering was drag-only, and HTML5 drag-and-drop does not exist on
+            // touch — so a phone could not change the device order, which since pad order IS
+            // processing order means a phone could not rewire the graph at all. These two do the
+            // same job with a tap, and they are reachable the same way on every surface.
+            { glyph: "◀", title: "Move earlier in the chain", onClick: () => { moveSelBy(-1); setMenu(null); } },
+            { glyph: "▶", title: "Move later in the chain", onClick: () => { moveSelBy(1); setMenu(null); } },
             { glyph: "＋", title: "Save the current settings as a preset", onClick: () => saveCurrent(menu.slot) },
             {
               glyph: "✕",

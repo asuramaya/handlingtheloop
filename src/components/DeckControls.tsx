@@ -3,7 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
-import { padsForDeck, fxPadArg } from "./fxPads";
+import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -186,39 +186,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     const kind = padsForDeck(deck)[slot]?.kind;
     if (kind) fxCtlRef?.current?.selectKind(kind);
   };
-  // ★ ONE GESTURE. Down ENGAGES — always, immediately, so a performance control never waits to
-  // find out what you meant. Up decides what it WAS: released quickly it stays LATCHED; held past
-  // the threshold it lets go. That is Ableton Push's Repeat button, and it is the shape the mode
-  // research argues for — a held throw is a quasimode you cannot forget you are in, while a latch
-  // is a real mode and therefore owes visible state (the pad stays lit).
-  const PAD_HOLD_MS = 220; // the one number the whole gesture rests on — tune by ear
-  const padDownAt = useRef<{ slot: number; t: number } | null>(null);
+  // The gesture itself lives in fxPads (shared by touch, keyboard and MIDI) — this is just the
+  // pointer transport for it.
   const fxPadDown = (e: React.PointerEvent, slot: number) => {
     if (e.button !== 0) return;
-    const pad = padsForDeck(deck)[slot];
-    if (!pad) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    padDownAt.current = { slot, t: performance.now() };
-    if (!(pad.active?.(deck) ?? false)) {
-      pad.on(deck);
-      emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
-    }
-    // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which also closes the
-    // hole chains opened, where a pad could engage something that was not on screen.
-    if (pad.kind) fxCtlRef?.current?.selectKind(pad.kind);
+    const { fired, kind } = fxPadPress(deck, id, slot);
+    if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
+    // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which closes the hole
+    // chains opened, where a pad could engage something that was not on screen.
+    if (kind) fxCtlRef?.current?.selectKind(kind);
     refresh();
   };
   const fxPadUp = (slot: number) => {
-    const rec = padDownAt.current;
-    padDownAt.current = null;
-    const pad = padsForDeck(deck)[slot];
-    if (!pad) return;
-    // Quick tap → leave it latched. Held → let it go, which is also how you un-latch: press a lit
-    // pad, hold, and it drops on release.
-    if (rec && rec.slot === slot && performance.now() - rec.t >= PAD_HOLD_MS) {
-      pad.off?.(deck);
-      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
-    }
+    if (fxPadRelease(deck, id, slot)) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
     refresh();
   };
   // The FX bank scrolls now instead of crushing (cues-loops.css) — but a pad thrown from

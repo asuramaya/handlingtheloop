@@ -275,3 +275,13 @@ body:not(.no-glow) .pad.fx2.latched {
   }
 }
 
+
+/* A pad is a performance surface, not a form control: it does not keep focus after a click (see
+   DeckControls' blur on pointer-up), because Chrome paints :focus-visible on the last-clicked
+   element the instant you touch the keyboard — so playing the bank from 1-8 after clicking one
+   pad made that pad look mysteriously special. Genuine keyboard navigation still gets a ring,
+   drawn in the app's own language rather than the browser's. */
+.pad:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}

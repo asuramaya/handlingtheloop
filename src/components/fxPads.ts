@@ -84,18 +84,24 @@ export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
 // makes the transports interoperable: press with a finger, release with the key, and the pad
 // behaves — because the held state belongs to the PAD, not to whoever pushed it.
 export const FX_HOLD_MS = 220; // the single tunable the whole gesture rests on — tune by ear
-const heldPads = new Map<string, number>();
+// What is physically down, and whether it was ALREADY lit when it went down — the second half is
+// what makes a tap a TOGGLE rather than a one-way switch.
+const heldPads = new Map<string, { t: number; wasOn: boolean }>();
 
 /** Press. Engages if the pad is not already live, and reports whether it fired (so the caller can
  *  emit the intent) and which device to reveal. Repeats are ignored — a held keyboard key
  *  auto-repeats forty times a second, and each one would re-fire the throw. */
-export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: boolean; kind?: FxKind } {
+export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: boolean; repeat?: boolean; kind?: FxKind } {
   const pad = padsForDeck(deck)[slot];
   if (!pad) return { fired: false };
   const key = `${deckId}${slot}`;
-  if (heldPads.has(key)) return { fired: false, kind: pad.kind };
-  heldPads.set(key, performance.now());
-  if (pad.active?.(deck) ?? false) return { fired: false, kind: pad.kind }; // already latched
+  // Already down: a keyboard auto-repeat, forty a second. Say so, so the caller can skip the
+  // reveal and the re-render too — swallowing only the throw still left the panel re-selecting
+  // and the deck re-rendering for as long as the key was held.
+  if (heldPads.has(key)) return { fired: false, repeat: true, kind: pad.kind };
+  const wasOn = pad.active?.(deck) ?? false;
+  heldPads.set(key, { t: performance.now(), wasOn });
+  if (wasOn) return { fired: false, kind: pad.kind }; // already lit — the release decides its fate
   pad.on(deck);
   return { fired: true, kind: pad.kind };
 }
@@ -104,11 +110,16 @@ export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: b
  *  how a lit pad is turned off: press it, hold, release. Returns whether it actually released. */
 export function fxPadRelease(deck: Deck, deckId: string, slot: number): boolean {
   const key = `${deckId}${slot}`;
-  const t = heldPads.get(key);
+  const rec = heldPads.get(key);
   heldPads.delete(key);
   const pad = padsForDeck(deck)[slot];
-  if (t == null || !pad) return false;
-  if (performance.now() - t < FX_HOLD_MS) return false; // a tap — it stays latched
+  if (!rec || !pad) return false;
+  // ★ A TAP IS A TOGGLE. Tapping a dark pad lights it; tapping a LIT one puts it out. It used to
+  // only engage, so a second tap did nothing and the pad could be turned off only by holding it —
+  // which reads as a stuck effect, because every other latching control in the world toggles.
+  // A HOLD is momentary either way: past the threshold, release always lets go.
+  const held = performance.now() - rec.t >= FX_HOLD_MS;
+  if (!held && !rec.wasOn) return false; // quick tap that turned it on — leave it latched
   pad.off?.(deck);
   return true;
 }

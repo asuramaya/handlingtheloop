@@ -191,15 +191,21 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const fxPadDown = (e: React.PointerEvent, slot: number) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    const { fired, kind } = fxPadPress(deck, id, slot);
+    const { fired, repeat, kind } = fxPadPress(deck, id, slot);
+    if (repeat) return;
     if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
     // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which closes the hole
     // chains opened, where a pad could engage something that was not on screen.
     if (kind) fxCtlRef?.current?.selectKind(kind);
     refresh();
   };
-  const fxPadUp = (slot: number) => {
+  const fxPadUp = (slot: number, el?: HTMLElement) => {
     if (fxPadRelease(deck, id, slot)) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
+    // ★ Drop the focus a click leaves behind. Chrome shows :focus-visible on the last-clicked
+    // element the moment you touch the KEYBOARD — so clicking a pad and then playing the bank
+    // from 1-8 painted a focus ring on whichever pad you happened to click last, which reads as
+    // one pad being mysteriously special. A pad is not a form control; it does not keep focus.
+    el?.blur();
     refresh();
   };
   // The FX bank scrolls now instead of crushing (cues-loops.css) — but a pad thrown from
@@ -571,8 +577,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               disabled={!pad}
               title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
               onPointerDown={(e) => fxPadDown(e, i)}
-              onPointerUp={() => fxPadUp(i)}
-              onPointerCancel={() => fxPadUp(i)}
+              onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
+              onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad?.label ?? "—"}
@@ -595,8 +601,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               disabled={!pad}
               title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint}` : "Empty slot"}
               onPointerDown={(e) => fxPadDown(e, i)}
-              onPointerUp={() => fxPadUp(i)}
-              onPointerCancel={() => fxPadUp(i)}
+              onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
+              onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad?.label ?? "—"}

@@ -720,23 +720,16 @@ body {
 /* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
    carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no
    "bou…" truncation); STEM = "full" across the top + the 4 parts in a 2×2 below. */
-.ctx-menu.smp-menu {
-  min-width: 212px;
-  border-color: var(--line);
-  padding: 6px;
-}
-.smp-menu .smp-modes,
-.smp-menu .smp-stems {
+/* The sampler pad menu is the SHARED menu shell now (ContextMenu), so these style its contents
+   rather than a second card: the mode chips, the two sliders, and their label rows. The stem row
+   left entirely — it is the same StemPicker the FX chain menu uses. */
+.fx-preset-menu .smp-modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
   padding: 2px 2px 8px;
 }
-.smp-menu .smp-stems button:first-child {
-  grid-column: 1 / -1; /* "full" spans the top row, the 4 stems fill the 2×2 under it */
-}
-.smp-menu .smp-modes button,
-.smp-menu .smp-stems button {
+.fx-preset-menu .smp-modes button {
   padding: 7px 4px;
   font-size: 11px;
   font-weight: 700;
@@ -748,31 +741,29 @@ body {
   color: var(--muted);
   cursor: pointer;
 }
-.smp-menu .smp-modes button:hover,
-.smp-menu .smp-stems button:hover {
+.fx-preset-menu .smp-modes button:hover {
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
-.smp-menu .smp-modes button.active,
-.smp-menu .smp-stems button.active {
+.fx-preset-menu .smp-modes button.active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, var(--panel));
   color: var(--text);
 }
 /* LEVEL row: the label carries a live % on the right (the JSX adds the readout span). */
-.smp-menu .smp-lvl {
+.fx-preset-menu .smp-lvl {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
 }
-.smp-menu .smp-lvl-val {
+.fx-preset-menu .smp-lvl-val {
   font-size: 11px;
   font-weight: 700;
   color: var(--text);
   letter-spacing: 0;
   text-transform: none;
 }
-.smp-menu .smp-gain {
+.fx-preset-menu .smp-gain {
   width: calc(100% - 8px);
   margin: 2px 4px 8px;
   accent-color: var(--accent);

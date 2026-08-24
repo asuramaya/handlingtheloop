@@ -5,6 +5,7 @@ import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
+import { Menu } from "./ContextMenu";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -182,10 +183,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // Right-click an FX pad = REVEAL its effect's control surface in the rack below (tweak / "mode
   // making"). No load — the device is already a live resident; this just selects its tab. CENS has
   // no backing device, so it has nothing to reveal. (Touch reveals via the rack tabs directly.)
+  // Right-click an FX pad = open that effect's own menu, exactly as right-clicking a sampler pad
+  // opens that pad's. (Touch reaches the same controls the other way: a press reveals the device's
+  // panel in the rack below, and a long-press on an FX pad cannot open a menu because a long press
+  // IS the momentary throw.)
   const fxReveal = (e: React.MouseEvent, slot: number) => {
     e.preventDefault();
     const kind = padsForDeck(deck)[slot]?.kind;
-    if (kind) fxCtlRef?.current?.selectKind(kind);
+    if (kind) fxCtlRef?.current?.openMenu(kind, e.clientX, e.clientY);
   };
   // The gesture itself lives in fxPads (shared by touch, keyboard and MIDI) — this is just the
   // pointer transport for it.
@@ -614,50 +619,55 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         )}
 
         {smpMenu && sampler && (
-          <>
-            <div className="ctx-backdrop" onClick={() => setSmpMenu(null)} onContextMenu={(e) => e.preventDefault()} />
-            <div className="ctx-menu smp-menu" style={{ left: Math.min(smpMenu.x, window.innerWidth - 200), top: Math.min(smpMenu.y, window.innerHeight - 220) }}>
-              <div className="ctx-label">Mode</div>
-              <div className="smp-modes">
-                {(["oneshot", "gate", "loop", "bounce"] as const).map((m) => (
-                  <button key={m} className={sampler.pads[smpMenu.i].mode === m ? "active" : ""} onClick={() => { sampler.setMode(smpMenu.i, m); refresh(); }}>
-                    {m === "oneshot" ? "1-shot" : m}
-                  </button>
-                ))}
-              </div>
-              <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
-              <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
-              {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
-              <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
-              <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
-              {sampler.pads[smpMenu.i].route !== "master" && (
-                <>
-                  <div className="ctx-label">Stems</div>
-                  {/* The SAME picker the FX chain menu uses. Here the set is a FILTER — any subset,
-                      and FULL clears it back to the mix — where a chain's set is a partition. Same
-                      question, same widget; only the meaning differs. */}
-                  <StemPicker
-                    mask={stemsToMask(sampler.pads[smpMenu.i].stems)}
-                    hasStems={deck.hasStems}
-                    full
-                    note="no stems on this deck"
-                    onFull={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
-                    onToggle={(bit) => {
-                      const next = stemsToMask(sampler.pads[smpMenu.i].stems) ^ bit;
-                      sampler.setStems(smpMenu.i, next === 0 ? undefined : maskToStems(next));
-                      refresh();
-                    }}
-                  />
-                </>
-              )}
-              <div className="ctx-sep" />
-              {/* Re-slice only makes sense for a LOCAL region pad; global pads carry an uploaded file. */}
-              {sampler.pads[smpMenu.i].route !== "master" && (
-                <button onClick={() => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); }}>↻ Re-slice from deck</button>
-              )}
-              <button className="ctx-danger" onClick={() => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); }}>✕ Clear pad</button>
+          <Menu
+            x={smpMenu.x}
+            y={smpMenu.y}
+            head={`PAD ${smpMenu.i + 1}`}
+            onClose={() => setSmpMenu(null)}
+            acts={[
+              // Glyphs, like every other menu in the app — these were sentences at the bottom of
+              // their own second implementation. Re-slice only makes sense for a LOCAL region pad;
+              // a global pad carries an uploaded file.
+              ...(sampler.pads[smpMenu.i].route !== "master"
+                ? [{ glyph: "↻", title: "Re-slice this pad from the deck", onClick: () => { sampler.assignRegion(smpMenu.i); setSmpMenu(null); refresh(); } }]
+                : []),
+              { glyph: "✕", title: "Clear this pad", danger: true, onClick: () => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); } },
+            ]}
+          >
+            <div className="ctx-label">Mode</div>
+            <div className="smp-modes">
+              {(["oneshot", "gate", "loop", "bounce"] as const).map((m) => (
+                <button key={m} className={sampler.pads[smpMenu.i].mode === m ? "active" : ""} onClick={() => { sampler.setMode(smpMenu.i, m); refresh(); }}>
+                  {m === "oneshot" ? "1-shot" : m}
+                </button>
+              ))}
             </div>
-          </>
+            <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
+            <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
+            {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
+            <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
+            <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
+            {sampler.pads[smpMenu.i].route !== "master" && (
+              <>
+                <div className="ctx-label">Stems</div>
+                {/* The SAME picker the FX chain menu uses. Here the set is a FILTER — any subset,
+                    and FULL clears it back to the mix — where a chain's set is a partition. Same
+                    question, same widget; only the meaning differs. */}
+                <StemPicker
+                  mask={stemsToMask(sampler.pads[smpMenu.i].stems)}
+                  hasStems={deck.hasStems}
+                  full
+                  note="no stems on this deck"
+                  onFull={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
+                  onToggle={(bit) => {
+                    const next = stemsToMask(sampler.pads[smpMenu.i].stems) ^ bit;
+                    sampler.setStems(smpMenu.i, next === 0 ? undefined : maskToStems(next));
+                    refresh();
+                  }}
+                />
+              </>
+            )}
+          </Menu>
         )}
 
         {/* The − / + nudge steppers and the ±range pill buttons that used to live here are both

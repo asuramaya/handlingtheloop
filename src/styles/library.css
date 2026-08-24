@@ -851,6 +851,7 @@ th.col-thumb {
   color: var(--muted);
   padding: 4px 10px 6px;
 }
+.fx-preset-menu .ctx-label,
 .ctx-label {
   font-size: 10px;
   letter-spacing: 1px;

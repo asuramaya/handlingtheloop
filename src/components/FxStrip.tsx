@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
@@ -14,6 +14,12 @@ import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
 import { StemPicker, STEMS } from "./StemPicker";
+import { Menu } from "./ContextMenu";
+
+// Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
+// the rack has always known, now offered per chain instead of once globally.
+const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"] as const;
+
 import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
 
@@ -31,81 +37,6 @@ import { useLongPress } from "./useLongPress";
 // Per-device params stay inside the device's own panel. Every device gets the same shell, so
 // wet/dry is always in the same place — it used to be cell 6-of-12 on the delay and cell
 // 9-of-10 on the comp.
-
-// ONE menu. The preset menu, the chain menu and the add-a-device picker are the same widget with
-// different contents — head, a row of glyph ACTS, then the list. It lives here as a component so
-// there is a single thing to change when the shape changes; three hand-rolled copies is three
-// places to forget.
-//
-// The acts are GLYPHS with tooltips, not sentences: they are the same three verbs everywhere —
-// ＋ save this as a preset, ✎ rename, ✕ delete/remove — so the row is read once and known after.
-// "✕ Remove from VOCAL AIR" spelled out was wider than the menu it sat in.
-interface MenuAct {
-  glyph: string;
-  title: string;
-  danger?: boolean;
-  onClick: () => void;
-}
-function FxMenu({ x, y, head, acts, onClose, wide, innerRef, children }: { x: number; y: number; head: React.ReactNode; acts?: MenuAct[]; onClose: () => void; wide?: boolean; innerRef?: React.Ref<HTMLDivElement>; children: React.ReactNode }) {
-  const box = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number; flipped: boolean } | null>(null);
-  // ★ FLIP, THEN CLAMP. A menu opens at the cursor, and a cursor near the right edge of a deck
-  // column (or near the bottom of the viewport) puts most of the menu somewhere it cannot be
-  // read — the COMP bank ran off the screen with half its presets past the edge. So: measure
-  // after layout, flip to the other side of the cursor if that side has room, and clamp to the
-  // viewport either way. Position is applied in one pass before paint (useLayoutEffect), so the
-  // menu never appears in the wrong place first.
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const M = 6; // never touch the edge
-    let left = x;
-    const flipped = x + r.width > vw - M;
-    if (flipped) left = x - r.width; // flip to the cursor's left
-    left = Math.max(M, Math.min(left, vw - r.width - M));
-    let top = y;
-    if (y + r.height > vh - M) top = y - r.height; // flip above the cursor
-    top = Math.max(M, Math.min(top, vh - r.height - M));
-    setPos({ left, top, flipped });
-  }, [x, y, children]);
-  return (
-    <>
-      <div className="fx-menu-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div
-        ref={(n) => {
-          box.current = n;
-          if (typeof innerRef === "function") innerRef(n);
-          else if (innerRef) (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = n;
-        }}
-        className={`fx-palette fx-preset-menu ${wide ? "fx-chain-menu" : ""} ${pos?.flipped ? "flip-left" : ""}`}
-        role="menu"
-        // Hidden for the one frame between mount and measurement — an unplaced menu flashing at
-        // the cursor before jumping is the same flicker this is meant to remove.
-        style={pos ? { left: pos.left, top: pos.top } : { left: x, top: y, visibility: "hidden" }}
-      >
-        <div className="fx-preset-head">
-          <span className="fx-preset-title">{head}</span>
-          {acts && acts.length > 0 && (
-            <span className="fx-menu-acts">
-              {acts.map((a) => (
-                <button key={a.glyph + a.title} className={`fx-act ${a.danger ? "danger" : ""}`} title={a.title} aria-label={a.title} role="menuitem" onClick={a.onClick}>
-                  {a.glyph}
-                </button>
-              ))}
-            </span>
-          )}
-        </div>
-        {children}
-      </div>
-    </>
-  );
-}
-
-// Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
-// the rack has always known, now offered per chain instead of once globally.
-const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"] as const;
 
 const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE", comp: "COMP" };
 interface FxStripProps {
@@ -126,6 +57,7 @@ export interface FxStripCtl {
   moveSel: (dir: number) => void; // SHIFT+BEAT ◀▶: reorder the selected effect left/right
   selectKind: (kind: FxKind) => void; // reveal a device's panel by kind (FX pad right-click)
   stepChain: (dir: number) => void; // walk the chain row — this is what AIMS the pad bank
+  openMenu: (kind: FxKind, x: number, y: number) => void; // that device's own menu, at a cursor
   cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
   closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
 }
@@ -418,6 +350,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         if (idx >= 0) select(idx);
       },
       moveSel: (dir) => moveSelBy(dir),
+      // Right-clicking an FX pad opens the DEVICE's menu, the way right-clicking a sampler pad
+      // opens that pad's. Two banks side by side answering the same gesture two different ways was
+      // the last thing separating them.
+      openMenu: (kind, x, y) => {
+        const here = deck.fxChain(deck.fxFocus)?.devices.find((d) => d.kind === kind);
+        const slot = here ? deck.fxDevices.indexOf(here) : -1;
+        if (slot < 0) return;
+        cancelMenuTimer();
+        select(slot);
+        setMenu({ slot, x, y });
+      },
       stepChain: (dir) => {
         const list = deck.fxChainList;
         if (list.length < 2) return;
@@ -886,7 +829,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       {/* Preset menu — right-click an effect tab. Same FxMenu as the chain menu and the picker:
           one widget, one place to change it. */}
       {menu && menuDev && (
-        <FxMenu
+        <Menu
           x={menu.x}
           y={menu.y}
           innerRef={menuRef}
@@ -942,7 +885,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               {p.name}
             </button>
           ))}
-        </FxMenu>
+        </Menu>
       )}
 
       {/* THE CHAIN MENU. Same widget as the preset menu, re-laid so the two ACTS — make one, throw
@@ -950,7 +893,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           is a labelled item here rather than a bare right-click, because a right-click that
           destroys a chain is a gesture with no name and no second chance. */}
       {chainMenu && chains.some((c) => c.id === chainMenu.id) && (
-        <FxMenu
+        <Menu
           x={chainMenu.x}
           y={chainMenu.y}
           wide
@@ -998,7 +941,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               {p.name}
             </button>
           ))}
-        </FxMenu>
+        </Menu>
       )}
 
       {/* The device picker — the preset menu's shape, one step earlier in the workflow. Step 1
@@ -1006,7 +949,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           chain in an unknown state. Both steps are the same list widget, so there is nothing new
           to learn and nothing new to style. */}
       {addMenu && chain && (
-        <FxMenu x={addMenu.x} y={addMenu.y} head={`Add to ${chain.name}`} onClose={() => { setAddMenu(null); setAddHover(null); }}>
+        <Menu x={addMenu.x} y={addMenu.y} head={`Add to ${chain.name}`} onClose={() => { setAddMenu(null); setAddHover(null); }}>
           {/* CLICK ADDS. The two-step version made you answer a question you usually don't have —
               most of the time you want the effect, not a particular preset of it. So the click is
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the
@@ -1047,7 +990,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               </button>
             );
           })}
-        </FxMenu>
+        </Menu>
       )}
       {addMenu && addHover && (
         <div

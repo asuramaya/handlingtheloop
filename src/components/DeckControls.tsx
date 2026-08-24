@@ -3,7 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
-import { FX_PADS } from "./fxPads";
+import { padsForDeck } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -183,42 +183,42 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // no backing device, so it has nothing to reveal. (Touch reveals via the rack tabs directly.)
   const fxReveal = (e: React.MouseEvent, slot: number) => {
     e.preventDefault();
-    const kind = FX_PADS[slot]?.kind;
+    const kind = padsForDeck(deck)[slot]?.kind;
     if (kind) fxCtlRef?.current?.selectKind(kind);
   };
-  // BOTH FX pad-modes (FX and its FX2 shifted peer) now LATCH — tap toggles the effect's throw
-  // on/off and leaves it (no momentary hold/release). The device's own throw state IS the latch
-  // (read pad.active), so there's no extra state to track. Right-click still reveals the panel;
-  // the throw mirrors over the board bus so it syncs + records. (Matches the keyboard 1-8, which
-  // already toggle a held pad rather than needing a key-up.)
-  const fx2Toggle = (e: React.PointerEvent, slot: number) => {
+  // ★ ONE GESTURE. Down ENGAGES — always, immediately, so a performance control never waits to
+  // find out what you meant. Up decides what it WAS: released quickly it stays LATCHED; held past
+  // the threshold it lets go. That is Ableton Push's Repeat button, and it is the shape the mode
+  // research argues for — a held throw is a quasimode you cannot forget you are in, while a latch
+  // is a real mode and therefore owes visible state (the pad stays lit).
+  const PAD_HOLD_MS = 220; // the one number the whole gesture rests on — tune by ear
+  const padDownAt = useRef<{ slot: number; t: number } | null>(null);
+  const fxPadDown = (e: React.PointerEvent, slot: number) => {
     if (e.button !== 0) return;
-    const pad = FX_PADS[slot];
-    if (!pad) return;
-    const on = !(pad.active?.(deck) ?? false);
-    if (on) pad.on(deck);
-    else pad.off?.(deck);
-    emit({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: slot });
-    refresh();
-  };
-  // FX2 (the shifted FX layer) is MOMENTARY — engage on press, throw OFF on release — so it
-  // reads DISTINCTLY from FX (which latches). Mirrors ROLL ↔ LOOP: the shifted peer is
-  // on-while-held, the base latches. Pointer-capture keeps the up event even if the finger
-  // slides off the pad.
-  const fx2Down = (e: React.PointerEvent, slot: number) => {
-    if (e.button !== 0) return;
-    const pad = FX_PADS[slot];
+    const pad = padsForDeck(deck)[slot];
     if (!pad) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    pad.on(deck);
-    emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot });
+    padDownAt.current = { slot, t: performance.now() };
+    if (!(pad.active?.(deck) ?? false)) {
+      pad.on(deck);
+      emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot });
+    }
+    // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which also closes the
+    // hole chains opened, where a pad could engage something that was not on screen.
+    if (pad.kind) fxCtlRef?.current?.selectKind(pad.kind);
     refresh();
   };
-  const fx2Up = (slot: number) => {
-    const pad = FX_PADS[slot];
+  const fxPadUp = (slot: number) => {
+    const rec = padDownAt.current;
+    padDownAt.current = null;
+    const pad = padsForDeck(deck)[slot];
     if (!pad) return;
-    pad.off?.(deck);
-    emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
+    // Quick tap → leave it latched. Held → let it go, which is also how you un-latch: press a lit
+    // pad, hold, and it drops on release.
+    if (rec && rec.slot === slot && performance.now() - rec.t >= PAD_HOLD_MS) {
+      pad.off?.(deck);
+      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
+    }
     refresh();
   };
   // The FX bank scrolls now instead of crushing (cues-loops.css) — but a pad thrown from
@@ -227,7 +227,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // source-agnostic since it reacts to the resulting STATE, not the trigger. A no-op via
   // the browser's own "nearest" logic when it's already visible.
   const fxBankRef = useRef<HTMLDivElement>(null);
-  const activeFxIdx = FX_PADS.findIndex((pad) => pad.active?.(deck));
+  const activeFxIdx = padsForDeck(deck).findIndex((pad) => pad?.active?.(deck));
   useEffect(() => {
     if (deck.padMode !== "fx" && deck.padMode !== "fx2") return;
     if (activeFxIdx < 0) return;
@@ -582,16 +582,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             glow while held); right-click = reveal that effect's panel below to dial it in. */}
         {deck.padMode === "fx" && (
         <div className="hotcues fx-bank" ref={fxBankRef}>
-          {FX_PADS.map((pad, i) => (
+          {padsForDeck(deck).map((pad, i) => (
             <button
-              key={pad.label}
-              className={`pad fx ${pad.active?.(deck) ? "playing latched" : ""}`}
+              key={pad?.label ?? `empty${i}`}
+              className={`pad fx ${pad ? "" : "empty"} ${pad?.active?.(deck) ? "playing latched" : ""}`}
               data-cue={i + 1}
-              title={`${pad.label} (latch) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
-              onPointerDown={(e) => fx2Toggle(e, i)}
+              disabled={!pad}
+              title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
+              onPointerDown={(e) => fxPadDown(e, i)}
+              onPointerUp={() => fxPadUp(i)}
+              onPointerCancel={() => fxPadUp(i)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
-              {pad.label}
+              {pad?.label ?? "—"}
               <span className="kbd">{i + 1}</span>
             </button>
           ))}
@@ -603,18 +606,19 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             while held. Right-click reveals the panel. */}
         {deck.padMode === "fx2" && (
         <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
-          {FX_PADS.map((pad, i) => (
+          {padsForDeck(deck).map((pad, i) => (
             <button
-              key={pad.label}
-              className={`pad fx fx2 ${pad.active?.(deck) ? "playing" : ""}`}
+              key={pad?.label ?? `e${i}`}
+              className={`pad fx fx2 ${pad ? "" : "empty"} ${pad?.active?.(deck) ? "playing" : ""}`}
               data-cue={i + 1}
-              title={`${pad.label} (hold) — ${pad.hint}${pad.kind ? " · right-click to tweak" : ""}`}
-              onPointerDown={(e) => fx2Down(e, i)}
-              onPointerUp={() => fx2Up(i)}
-              onPointerCancel={() => fx2Up(i)}
+              disabled={!pad}
+              title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint}` : "Empty slot"}
+              onPointerDown={(e) => fxPadDown(e, i)}
+              onPointerUp={() => fxPadUp(i)}
+              onPointerCancel={() => fxPadUp(i)}
               onContextMenu={(e) => fxReveal(e, i)}
             >
-              {pad.label}
+              {pad?.label ?? "—"}
               <span className="kbd">{i + 1}</span>
             </button>
           ))}

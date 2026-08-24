@@ -5,7 +5,7 @@ import type { FxStripCtl } from "./components/FxStrip";
 import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
 import { SamplerStrip } from "./components/SamplerStrip";
 import { useSampler, deckPadBase } from "./components/useSampler";
-import { FX_PADS, fireFxPad } from "./components/fxPads";
+import { fireFxPad, padsForDeck } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -862,7 +862,9 @@ function AppBody() {
     // Keyboard/MIDI FX pad (1-8 in fx mode): no key-up, so a hold-FX toggles. Emit the
     // resulting phase over the board bus so it syncs + records like the on-screen pad.
     const fxKey = (deck: DeckRef, id: DeckId, i: number) => {
-      const on = FX_PADS[i].hold ? !(FX_PADS[i].active?.(deck) ?? false) : true;
+      const pads = padsForDeck(deck);
+      if (!pads[i]) return; // an empty slot in this chain — nothing to throw
+      const on = pads[i]!.hold ? !(pads[i]!.active?.(deck) ?? false) : true;
       fireFxPad(deck, i, on);
       emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: on ? "down" : "up", arg: i });
     };

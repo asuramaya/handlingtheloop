@@ -76,16 +76,27 @@ export interface FxDevice {
  *     VOICE ─┤                            ├─→ ( + ) → [MASTER: EQ → COMP] → out
  *      INST ─┴─→ [chain B: REVERB] ───────┘
  *
- *  `stems` is a 4-bit mask (1=DRUM 2=BASS 4=VOICE 8=INST) and is meaningless on the master.
- *  `kinds` names devices by kind, because the rack is fixed-membership: one instance of each
- *  exists, so a chain does not own devices, it claims them. */
+ *  ★ A CHAIN OWNS ITS DEVICES — real instances, not claims on a shared bank. One global instance
+ *  per effect was never a design decision; it was a fossil of there having been ONE rack to put
+ *  it in. So kinds are unique WITHIN a chain and duplicated freely ACROSS chains: an EQ and a
+ *  COMP on every chain, a gate on the drums and another on the master, two reverbs aimed
+ *  differently. All of that was unsayable while the rack was one flat list.
+ *
+ *  `stems` is a 4-bit mask (1=DRUM 2=BASS 4=VOICE 8=INST) and is meaningless on the master. */
 export interface FxChain {
-  id: string;
+  readonly id: string;
   name: string;
   stems: number;
-  kinds: FxKind[];
+  devices: FxDevice[];
   /** The master channel. Exactly one chain carries this, and it is always last. */
   master?: boolean;
+}
+/** The address of a device now that there is more than one place to be. A slot INDEX only ever
+ *  worked because there was a single rack; kinds are unique within a chain by rule, so this pair
+ *  is stable across reorder and readable in a log. */
+export interface FxAddr {
+  chain: string;
+  kind: FxKind;
 }
 export const ALL_STEMS = 0b1111;
 
@@ -98,11 +109,9 @@ export class FxRack {
   // (the deck taps `input` for its pre-rack spectrum analyser, which must survive every
   // rebuild). Only `chainIn` and device outputs are re-wired.
   private readonly chainIn: GainNode;
-  private readonly devices: FxDevice[] = [];
-  // Parallel chains. EMPTY is the default and means the plain serial rack above — not a
-  // one-chain special case but literally the original code path, so a deck that never touches
-  // stem FX cannot pay for the feature in nodes, in taps, or in behaviour.
-  private chains: FxChain[] = [];
+  // The MASTER chain exists from construction and can never leave: it is the channel, and every
+  // legacy slot-indexed call below addresses it. Before chains existed, everything WAS the master.
+  private readonly chains: FxChain[] = [{ id: "master", name: "MASTER", stems: 0, devices: [], master: true }];
   private chainNodes: GainNode[] = [];
   private stemTap: ((index: number) => AudioNode | null) | null = null;
 
@@ -114,8 +123,29 @@ export class FxRack {
     this.rebuild();
   }
 
+  // ---- the master, addressed the old way ------------------------------------------------------
+  // Every slot-indexed entry point means THE MASTER CHAIN. That is not a shim: the flat rack these
+  // callers were written against is exactly the master, so session snapshots, profiles and MIDI
+  // bindings keep addressing the same devices they always did while chains grow up beside them.
+  private get devices(): FxDevice[] {
+    return this.master.devices;
+  }
+  get master(): FxChain {
+    return this.chains.find((c) => c.master) ?? this.chains[this.chains.length - 1];
+  }
   get list(): readonly FxDevice[] {
     return this.devices;
+  }
+  /** Every device in the rack, in SIGNAL order — stem chains first, then the master. This is the
+   *  index space the panels and the slot-addressed calls walk; with only a master chain it IS the
+   *  master's list, which is what every one of those callers was written against. */
+  get allDevices(): readonly FxDevice[] {
+    return this.chains.flatMap((c) => c.devices);
+  }
+  /** Where a device lives — the address that replaces "slot 3". */
+  addrOf(device: FxDevice): FxAddr | undefined {
+    for (const c of this.chains) if (c.devices.includes(device)) return { chain: c.id, kind: device.kind };
+    return undefined;
   }
   deviceAt(slot: number): FxDevice | undefined {
     return this.devices[slot];
@@ -124,26 +154,98 @@ export class FxRack {
     return this.devices.findIndex((d) => d.kind === kind);
   }
 
+  // ---- chains ----------------------------------------------------------------------------------
+  get chainList(): readonly FxChain[] {
+    return this.chains;
+  }
+  chain(id: string): FxChain | undefined {
+    return this.chains.find((c) => c.id === id);
+  }
+  /** Find a device by its address. Undefined if the chain is gone or never held that kind. */
+  device(addr: FxAddr): FxDevice | undefined {
+    return this.chain(addr.chain)?.devices.find((d) => d.kind === addr.kind);
+  }
+  /** A new stem chain, inserted BEFORE the master (which is always last, because that is where it
+   *  is in the signal). Returns it. */
+  addChain(id: string, name: string, stems = 0): FxChain {
+    const c: FxChain = { id, name, stems, devices: [] };
+    this.chains.splice(Math.max(0, this.chains.length - 1), 0, c);
+    this.rebuild();
+    return c;
+  }
+  /** Delete a stem chain, disposing every device it owned — they were its instances, not the
+   *  rack's, so there is no homeless-device state to represent. The master cannot be removed.
+   *  Its stems simply go unclaimed, which routes them dry into the sum. */
+  removeChain(id: string): boolean {
+    const i = this.chains.findIndex((c) => c.id === id && !c.master);
+    if (i < 0) return false;
+    for (const d of this.chains[i].devices) this.disposeDevice(d);
+    this.chains.splice(i, 1);
+    this.rebuild();
+    return true;
+  }
+  setChainStems(id: string, stems: number) {
+    const c = this.chain(id);
+    if (!c || c.master) return;
+    // A stem has exactly ONE owner: whoever else held these loses them in the same act, so the
+    // partition can never be violated by any sequence of calls.
+    for (const o of this.chains) if (o !== c && !o.master) o.stems &= ~stems;
+    c.stems = stems;
+    this.rebuild();
+  }
+  setChainName(id: string, name: string) {
+    const c = this.chain(id);
+    if (c) c.name = name;
+  }
+  /** Put a device into a chain. Refused if that chain already holds the kind — unique WITHIN a
+   *  chain is the invariant the (chain, kind) address rests on. */
+  addDevice(chainId: string, device: FxDevice, at = Number.MAX_SAFE_INTEGER): FxDevice | null {
+    const c = this.chain(chainId);
+    if (!c || c.devices.some((d) => d.kind === device.kind)) return null;
+    c.devices.splice(Math.max(0, Math.min(at, c.devices.length)), 0, device);
+    this.rebuild();
+    return device;
+  }
+  removeDevice(addr: FxAddr): boolean {
+    const c = this.chain(addr.chain);
+    if (!c) return false;
+    const i = c.devices.findIndex((d) => d.kind === addr.kind);
+    if (i < 0) return false;
+    const [d] = c.devices.splice(i, 1);
+    this.rebuild(); // rebuild FIRST so nothing is still wired to a device about to be torn down
+    this.disposeDevice(d);
+    return true;
+  }
+  moveDevice(chainId: string, from: number, to: number) {
+    const c = this.chain(chainId);
+    if (!c || from === to) return;
+    const [d] = c.devices.splice(from, 1);
+    if (!d) return;
+    c.devices.splice(Math.max(0, Math.min(to, c.devices.length)), 0, d);
+    this.rebuild();
+  }
+  private disposeDevice(d: FxDevice) {
+    try {
+      d.output.disconnect();
+    } catch {
+      /* ignore */
+    }
+    // The EQ is the deck's own single instance when it sits in the master; it has no dispose() and
+    // must survive. Everything else is this chain's to destroy.
+    d.dispose?.();
+  }
+
   /** How to reach a stem tap (Deck supplies it; null while no stretch node is attached). Setting
    *  it does not turn anything on — only a chain that asks for a stem subset ever calls it. */
   setStemSource(fn: ((index: number) => AudioNode | null) | null) {
     this.stemTap = fn;
-    if (this.chains.length) this.rebuild();
-  }
-
-  /** Declare the parallel chains. An empty list (or a single chain over ALL_STEMS holding every
-   *  device in order) is the serial rack, restored exactly. */
-  setChains(chains: FxChain[]) {
-    this.chains = chains.map((c) => ({ ...c, kinds: [...c.kinds] }));
     this.rebuild();
   }
-  get chainList(): readonly FxChain[] {
-    return this.chains;
-  }
-  /** Does any chain listen to a stem SUBSET? The only question the deck needs answered, because
-   *  it is exactly the condition for turning the (not free) per-stem taps on. */
+
+  /** Does any chain listen to stems? The only question the deck needs answered — it is exactly
+   *  the condition for turning the (not free) per-stem taps on. */
   get needsStems(): boolean {
-    return this.chains.some((c) => !c.master);
+    return this.chains.some((c) => !c.master && c.stems !== 0);
   }
 
   /** Re-wire chainIn → dev0 → dev1 → … → output. Splicing gain nodes is click-free,
@@ -155,7 +257,7 @@ export class FxRack {
     } catch {
       /* nothing connected yet */
     }
-    for (const d of this.devices) {
+    for (const c of this.chains) for (const d of c.devices) {
       try {
         d.output.disconnect();
       } catch {
@@ -171,25 +273,19 @@ export class FxRack {
     }
     this.chainNodes = [];
     // Run one chain's devices in order, from `from`, and return the node its signal leaves on.
-    const runDevices = (kinds: readonly FxKind[], from: AudioNode): AudioNode => {
+    const runDevices = (devs: readonly FxDevice[], from: AudioNode): AudioNode => {
       let prev = from;
-      for (const k of kinds) {
-        const d = this.devices.find((x) => x.kind === k);
-        if (!d) continue;
+      for (const d of devs) {
         prev.connect(d.input);
         prev = d.output;
       }
       return prev;
     };
-    if (!this.chains.length) {
-      runDevices(this.devices.map((d) => d.kind), this.chainIn).connect(this.output);
-      return;
-    }
-    const master = this.chains.find((c) => c.master) ?? this.chains[this.chains.length - 1];
+    const master = this.master;
     const stemChains = this.chains.filter((c) => c !== master);
     if (!stemChains.length) {
       // Only the master: the plain serial rack again, just addressed by name.
-      runDevices(master.kinds, this.chainIn).connect(this.output);
+      runDevices(master.devices, this.chainIn).connect(this.output);
       return;
     }
     // The sum every parallel branch arrives at, and the master's input. The master does not
@@ -212,7 +308,7 @@ export class FxRack {
           /* a tap that cannot connect leaves this chain silent — see the fallback below */
         }
       }
-      runDevices(c.kinds, head).connect(sum);
+      runDevices(c.devices, head).connect(sum);
     }
     // A stem NO chain claimed still has to be heard: it runs dry into the sum, so building a
     // drums-only chain never silently drops the rest of the track.
@@ -232,7 +328,7 @@ export class FxRack {
     // full rack showing. Feed the sum the whole signal instead — wrong routing beats no audio,
     // and the next rebuild with live taps replaces it.
     if (!anyTap) this.chainIn.connect(sum);
-    runDevices(master.kinds, sum).connect(this.output);
+    runDevices(master.devices, sum).connect(this.output);
   }
 
   add(device: FxDevice, slot = this.devices.length): FxDevice {

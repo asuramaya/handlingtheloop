@@ -96,7 +96,7 @@ import { STEM_NAMES, type StemName, type Stems, type PackedStems } from "../stem
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
-import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot, type FxChain } from "./Fx";
+import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot, type FxChain, type FxAddr } from "./Fx";
 import { FACTORY_PRESETS, type FxPreset } from "./fxPresets";
 import { CompFx } from "./CompFx";
 import { DelayFx } from "./DelayFx";
@@ -523,19 +523,6 @@ export class Deck {
   }
   get keylock() {
     return this._keylock;
-  }
-
-  /** Declare the deck's parallel FX chains (a PARTITION of the stems — see FxRack.setChains).
-   *  Empty = the plain serial rack, and the per-stem taps go back off, so a deck that isn't using
-   *  stem FX ends up in exactly the state it was in before the feature existed. */
-  setFxChains(chains: FxChain[]) {
-    this.rack.setChains(chains);
-    const needs = this.rack.needsStems;
-    this.setStemTaps(needs);
-    this.rack.setStemSource(needs ? (i) => this.stemTap(i) : null);
-  }
-  get fxChains(): readonly FxChain[] {
-    return this.rack.chainList;
   }
 
   /** Turn the per-stem taps on or off. OFF is the default and costs nothing anywhere: the worklet
@@ -2183,11 +2170,14 @@ export class Deck {
   // Devices that can never be removed/added at runtime (fixed-membership rack): the EQ channel
   // strip + the whole pad-FX bank. Reorder still applies (chain order is musical); presence doesn't.
   private static readonly PERMANENT_KINDS: ReadonlySet<string> = new Set<FxKind>(["eq", ...Deck.RACK_ORDER]);
-  private makeFx(kind: string): FxDevice | null {
-    if (this.rack.list.some((d) => d.kind === kind)) return null; // ONE of each kind per channel
+  /** Build a device FOR A CHAIN. Uniqueness is per chain now (the rack refuses a duplicate kind),
+   *  so this makes a fresh instance every time — except the master's EQ, which stays the deck's own
+   *  `this.eq` because the eq* ControlParams, the session sync and the EQ throw all address that
+   *  one object by name. A stem chain that wants an EQ gets its own. */
+  private makeFx(kind: string, chainId = "master"): FxDevice | null {
     switch (kind) {
       case "eq":
-        return this.eq; // single instance (the guard above prevents a second)
+        return chainId === "master" ? this.eq : new Eq3(this.ctx);
       case "delay":
         return new DelayFx(this.ctx);
       case "reverb":
@@ -2208,12 +2198,21 @@ export class Deck {
         return null;
     }
   }
-  /** The whole device chain in order (EQ included, wherever it sits). */
+  /** Every device this deck owns, in SIGNAL order — stem chains first, then the master. Slot
+   *  indices walk THIS list. With only a master chain (the default, and everything that shipped
+   *  before chains) it is exactly the old flat rack, so nothing that addresses a slot had to
+   *  learn a new trick. */
   get fxDevices(): readonly FxDevice[] {
-    return this.rack.list;
+    return this.rack.allDevices;
   }
   fxDeviceAt(i: number): FxDevice | undefined {
-    return this.rack.deviceAt(i);
+    return this.rack.allDevices[i];
+  }
+  /** Which chain a slot belongs to — the bridge between the index space above and the address
+   *  space the chains actually use. */
+  fxAddrAt(i: number): FxAddr | undefined {
+    const d = this.rack.allDevices[i];
+    return d ? this.rack.addrOf(d) : undefined;
   }
   /** This deck's signal BEFORE its own rack — what the other deck's compressor listens to when its
    *  sidechain is set to EXT. It has to be the pre-rack tap: patch a deck's OUTPUT into the other
@@ -2227,6 +2226,82 @@ export class Deck {
   /** The channel's compressor (a permanent rack resident) — for the engine's sidechain patching. */
   get compDevice(): CompFx | undefined {
     return this.rack.deviceAt(this.rack.indexOf("comp")) as CompFx | undefined;
+  }
+
+  // ---- CHAINS ----------------------------------------------------------------------------------
+  // The chain list lives HERE, in the engine, not in a component: the strip renders it, the pads
+  // play it, and a session will one day sync it — three readers means it cannot belong to any one
+  // of them.
+  get fxChainList(): readonly FxChain[] {
+    return this.rack.chainList;
+  }
+  fxChain(id: string): FxChain | undefined {
+    return this.rack.chain(id);
+  }
+  fxDevice(addr: FxAddr): FxDevice | undefined {
+    return this.rack.device(addr);
+  }
+  addFxChain(name: string, stems = 0): FxChain {
+    const id = `c${this.chainSeq++}`;
+    const c = this.rack.addChain(id, name, stems);
+    this.syncStemTaps();
+    return c;
+  }
+  removeFxChain(id: string): boolean {
+    const ok = this.rack.removeChain(id);
+    if (ok) this.syncStemTaps();
+    return ok;
+  }
+  setFxChainStems(id: string, stems: number) {
+    this.rack.setChainStems(id, stems);
+    this.syncStemTaps();
+  }
+  setFxChainName(id: string, name: string) {
+    this.rack.setChainName(id, name);
+  }
+  /** Create a device and put it in a chain. Null if the chain already holds that kind, or the kind
+   *  is unknown. Pad-throw kinds land DORMANT, exactly as they do in the master rack. */
+  addFxTo(chainId: string, kind: FxKind, at?: number): FxDevice | null {
+    const d = this.makeFx(kind, chainId);
+    if (!d) return null;
+    if (!this.rack.addDevice(chainId, d, at)) {
+      if (d !== this.eq) d.dispose?.(); // refused (duplicate kind) — do not leak the instance
+      return null;
+    }
+    if (Deck.PAD_THROW_KINDS.has(kind)) d.setBypass(true, true);
+    return d;
+  }
+  removeFxFrom(addr: FxAddr): boolean {
+    return this.rack.removeDevice(addr);
+  }
+  moveFxIn(chainId: string, from: number, to: number) {
+    this.rack.moveDevice(chainId, from, to);
+  }
+  /** Turn the per-stem taps on iff some chain actually listens to stems, and (re)hand the rack the
+   *  way to reach them. Idempotent — every chain edit ends here. */
+  private syncStemTaps() {
+    const needs = this.rack.needsStems;
+    this.setStemTaps(needs);
+    this.rack.setStemSource(needs ? (i) => this.stemTap(i) : null);
+  }
+  private chainSeq = 1;
+
+  // ★ THE PADS' AIM. A pad is a pointer, and what it points AT is the focused chain — so the same
+  // GATE pad chops the master while you are on the master and chops the drums the moment you move
+  // to a drum chain. The master is the fallback, never a silent one: if the focused chain has no
+  // device of that kind the pad simply does not light.
+  private focusedChain = "master";
+  setFxFocus(id: string) {
+    this.focusedChain = id;
+  }
+  get fxFocus(): string {
+    return this.focusedChain;
+  }
+  /** Resolve a kind for a PAD: the focused chain only. Deliberately NOT falling back to the
+   *  master — a pad that silently fires somewhere else is worse than one that does nothing, and
+   *  the strip shows you which chain you are on. */
+  private padDev(kind: FxKind): FxDevice | undefined {
+    return this.rack.chain(this.focusedChain)?.devices.find((d) => d.kind === kind);
   }
 
   hasFxKind(kind: FxKind): boolean {
@@ -2258,17 +2333,20 @@ export class Deck {
    *  constructors, and before addModule() those throw and the device degrades to its native
    *  fallback for good. AudioEngine calls this once ensureWorklets() resolves (see its ctor). */
   ensurePadFx() {
-    for (const kind of Deck.RACK_ORDER) {
-      if (this.rack.indexOf(kind) >= 0) continue; // already resident (re-run guard)
-      const d = this.makeFx(kind);
-      if (!d) continue;
-      this.rack.add(d);
-      // hard: this is initial dormant setup, not a live "turn it off" — nothing has ever sounded
-      // yet, so there's no tail to ring out and a delay/reverb shouldn't idle live for 2.4s at boot.
-      d.setBypass(true, true); // dormant: wet pruned (zero CPU) until a pad throws or you un-bypass it
+    // ★ The master boots holding the two devices that belong ON a master — the EQ you mix with and
+    // the comp that glues it. The rest are not "missing": a chain now OWNS its devices, so the
+    // pad-FX bank is built where it is asked for, one instance per chain, instead of nine
+    // permanent residents of the only rack there used to be.
+    for (const kind of Deck.MASTER_BOOT) {
+      if (this.rack.indexOf(kind) >= 0) continue; // re-run guard
+      const d = this.makeFx(kind, "master");
+      if (d) this.rack.add(d);
     }
+    this._rackReady = true;
     this.onRackReady?.();
   }
+  private static readonly MASTER_BOOT: readonly FxKind[] = ["eq", "comp"];
+  private _rackReady = false;
   /** ★ Is the rack a RACK yet? The EQ is built in the constructor, but the other eight can only be
    *  built once the worklets are attached (see ensurePadFx) — so for a beat at boot `fxDevices` is
    *  the EQ, ALONE. A surface that renders that list faithfully shows a one-tab rack with the EQ
@@ -2276,7 +2354,7 @@ export class Deck {
    *  isn't a stale render or a missing refresh: the rack really is half-built, and the answer is to
    *  not present it until it's whole. */
   get fxRackReady(): boolean {
-    return Deck.RACK_ORDER.every((k) => this.rack.indexOf(k) >= 0);
+    return this._rackReady;
   }
   /** Fired when the rack finishes provisioning — the UI has no other way to learn it (the fill-in
    *  happens in a promise callback, off React's world entirely). Idempotent: ensurePadFx may re-run. */
@@ -2285,17 +2363,17 @@ export class Deck {
     this.rack.move(from, to);
   }
   setFxParam(i: number, param: string, v: number) {
-    this.rack.deviceAt(i)?.setParam(param, v);
+    this.fxDeviceAt(i)?.setParam(param, v);
   }
   setFxBypass(i: number, on: boolean, hard = false) {
-    this.rack.deviceAt(i)?.setBypass(on, hard);
+    this.fxDeviceAt(i)?.setBypass(on, hard);
   }
   resetFxAt(i: number) {
-    this.rack.deviceAt(i)?.reset();
+    this.fxDeviceAt(i)?.reset();
   }
   /** Character only — keeps the wet/dry and the on/off (see FxDevice.resetParams). */
   resetFxParamsAt(i: number) {
-    this.rack.deviceAt(i)?.resetParams();
+    this.fxDeviceAt(i)?.resetParams();
   }
   // ECHO OUT / REVERB OUT — the two time-based pad throws. They used to run their own
   // snapshot-and-restore here (a `wasBypassed` capture + a 2.4 s re-bypass timer), which meant a
@@ -2304,77 +2382,77 @@ export class Deck {
   // single source of truth, and the ring-out survives as a per-device release delay
   // (DelayFx/ReverbFx.throwReleaseMs = 2400 ms) rather than a bespoke timer on the deck.
   echoOut(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("delay")) as DelayFx | undefined)?.setThrow(on);
+    (this.padDev("delay") as DelayFx | undefined)?.setThrow(on);
   }
   /** A delay device is present to throw an echo from (gates the ECHO control). */
   get canEchoOut(): boolean {
-    return this.rack.indexOf("delay") >= 0;
+    return !!this.padDev("delay");
   }
   get echoingOut(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("delay")) as DelayFx | undefined)?.throwing ?? false;
+    return (this.padDev("delay") as DelayFx | undefined)?.throwing ?? false;
   }
   reverbOut(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("reverb")) as ReverbFx | undefined)?.setThrow(on);
+    (this.padDev("reverb") as ReverbFx | undefined)?.setThrow(on);
   }
   get canReverbOut(): boolean {
-    return this.rack.indexOf("reverb") >= 0;
+    return !!this.padDev("reverb");
   }
   get reverbingOut(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("reverb")) as ReverbFx | undefined)?.throwing ?? false;
+    return (this.padDev("reverb") as ReverbFx | undefined)?.throwing ?? false;
   }
   // SATURATOR THROW — slam the rack's saturator drive while held (pad-FX). No-op without a
   // saturator in the chain (canSatThrow gates the pad).
   satThrow(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("saturator")) as SaturatorFx | undefined)?.setThrow(on);
+    (this.padDev("saturator") as SaturatorFx | undefined)?.setThrow(on);
   }
   get canSatThrow(): boolean {
-    return this.rack.indexOf("saturator") >= 0;
+    return !!this.padDev("saturator");
   }
   get satThrowing(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("saturator")) as SaturatorFx | undefined)?.throwing ?? false;
+    return (this.padDev("saturator") as SaturatorFx | undefined)?.throwing ?? false;
   }
   // CRUSH THROW — smash the rack's bitcrusher to a heavy setting while held (pad-FX). No-op
   // without a crusher in the chain (canCrushThrow gates the pad).
   crushThrow(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("crush")) as CrushFx | undefined)?.setThrow(on);
+    (this.padDev("crush") as CrushFx | undefined)?.setThrow(on);
   }
   get canCrushThrow(): boolean {
-    return this.rack.indexOf("crush") >= 0;
+    return !!this.padDev("crush");
   }
   get crushThrowing(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("crush")) as CrushFx | undefined)?.throwing ?? false;
+    return (this.padDev("crush") as CrushFx | undefined)?.throwing ?? false;
   }
   // MOD THROW — deepen the rack modulator's swirl (depth + feedback) while held (pad-FX).
   modThrow(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("mod")) as ModFx | undefined)?.setThrow(on);
+    (this.padDev("mod") as ModFx | undefined)?.setThrow(on);
   }
   get canModThrow(): boolean {
-    return this.rack.indexOf("mod") >= 0;
+    return !!this.padDev("mod");
   }
   get modThrowing(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("mod")) as ModFx | undefined)?.throwing ?? false;
+    return (this.padDev("mod") as ModFx | undefined)?.throwing ?? false;
   }
   // GATE THROW — slam the rack's trance-gate to a full-depth stutter while held (pad-FX). No-op
   // without a gate in the chain (canGateThrow gates the pad).
   gateThrow(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("gate")) as GateFx | undefined)?.setThrow(on);
+    (this.padDev("gate") as GateFx | undefined)?.setThrow(on);
   }
   get canGateThrow(): boolean {
-    return this.rack.indexOf("gate") >= 0;
+    return !!this.padDev("gate");
   }
   get gateThrowing(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("gate")) as GateFx | undefined)?.throwing ?? false;
+    return (this.padDev("gate") as GateFx | undefined)?.throwing ?? false;
   }
   // NOISE THROW — engage the rack's noise riser while held (RISE mode auto-builds, else a manual
   // gate at the current sweep); release cuts it (the drop). No-op without a noise device.
   noiseThrow(on: boolean): void {
-    (this.rack.deviceAt(this.rack.indexOf("noise")) as NoiseFx | undefined)?.setThrow(on);
+    (this.padDev("noise") as NoiseFx | undefined)?.setThrow(on);
   }
   get canNoiseThrow(): boolean {
-    return this.rack.indexOf("noise") >= 0;
+    return !!this.padDev("noise");
   }
   get noiseThrowing(): boolean {
-    return (this.rack.deviceAt(this.rack.indexOf("noise")) as NoiseFx | undefined)?.throwing ?? false;
+    return (this.padDev("noise") as NoiseFx | undefined)?.throwing ?? false;
   }
   /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
    *  to the other deck's EQ; an effect copies to the other's same-kind device (added if

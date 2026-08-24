@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
-import type { Deck, FxKind, FxChain } from "@htl/audio";
+import type { Deck, FxKind } from "@htl/audio";
 import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
 import { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
@@ -102,6 +102,10 @@ function FxMenu({ x, y, head, acts, onClose, wide, innerRef, children }: { x: nu
   );
 }
 
+// Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
+// the rack has always known, now offered per chain instead of once globally.
+const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"] as const;
+
 const KIND_LABEL: Record<string, string> = { eq: "EQ", delay: "DELAY", reverb: "REVERB", chorus: "CHORUS", saturator: "SAT", crush: "CRUSH", mod: "MOD", gate: "GATE", noise: "NOISE", comp: "COMP" };
 interface FxStripProps {
   deck: Deck;
@@ -140,7 +144,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const closeMenu = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } setMenu(null); };
   useEffect(() => () => { if (menuTimerRef.current) clearTimeout(menuTimerRef.current); }, []);
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
-  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: number } | { mode: "chainPreset"; name: string } | null>(null);
+  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: string } | { mode: "chainPreset"; name: string } | null>(null);
 
   // ---- CHAINS ---------------------------------------------------------------------------------
   // A chain is a set of STEMS plus the devices that process them, and the set is a PARTITION: a
@@ -151,8 +155,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // The row of chain chips is the MASTER of a master/detail pair whose detail is the device row
   // that already exists. It costs one 22 px row and no width, which is the whole reason it is a
   // row of chips and not the rail this started as: the host is a ~450 px deck column, twice.
-  const [chains, setChains] = useState<FxChain[]>([]);
-  const [selChain, setSelChain] = useState(0); // index into `chains`; the master is always last
+  // Chains are the DECK's, not this component's — the strip renders them, the pads play them, and
+  // a session will one day sync them. Three readers means the list cannot belong to any one.
+  const [selChainId, setSelChainId] = useState("master");
   // ADD A DEVICE — a fork of the preset menu, in two steps: pick the effect, then pick the sound
   // it lands with. A chain is built the way a real chain is built, one deliberate device at a
   // time; the whole rack laid out at once and struck through was a list of things you did NOT
@@ -161,12 +166,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // The CHAIN menu — right-click a chain chip. Right-click used to delete the chain outright,
   // which is a destructive act on a single unconfirmable gesture; it lives in here now, under a
   // label, alongside the thing you actually reach for often (recall a chain you have built).
-  const [chainMenu, setChainMenu] = useState<{ x: number; y: number; at: number } | null>(null);
-  const openChainMenu = (at: number, x: number, y: number) => {
+  const [chainMenu, setChainMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const openChainMenu = (id: string, x: number, y: number) => {
     cancelMenuTimer();
     setMenu(null);
-    setSelChain(at);
-    setChainMenu({ x, y, at });
+    setSelChainId(id);
+    setChainMenu({ x, y, id });
   };
   const [chainTick, setChainTick] = useState(0); // bump to re-read saved chain presets
   // The flyout's row AND its screen position. It cannot live inside the menu: the menu scrolls
@@ -174,21 +179,26 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // it — which is why it appeared as a bare sliver against the menu's right edge. So it is
   // positioned `fixed`, measured from the row that opened it.
   const [addHover, setAddHover] = useState<{ kind: FxKind; x: number; y: number; flip: boolean } | null>(null);
-  const devices = deck.fxDevices; // the whole rack, in order
-  // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the other eight
-  // can only be built once the worklets attach, so for a beat at every boot `fxDevices` IS the EQ,
-  // alone — and a strip that renders that list faithfully shows a one-tab rack with the EQ in it.
-  // That's the legacy "EQ is the one special device" surface, reconstructed by accident, at load.
+  const devices = deck.fxDevices; // every device this deck owns, in signal order
+  // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the rest can
+  // only be built once the worklets attach, so for a beat at every boot the rack is the EQ alone —
+  // and a strip that renders that faithfully shows the legacy "EQ is the one special device"
+  // surface, reconstructed by accident, at load.
   const ready = deck.fxRackReady;
-  const chain = chains[Math.min(selChain, Math.max(0, chains.length - 1))];
-  // The device row shows the SELECTED chain's devices, in that chain's own order. With one chain
-  // it is the whole rack, unfiltered — the original list, not a filtered copy of it.
-  const tabs = !ready ? [] : chain ? (chain.kinds.map((k: FxKind) => devices.find((d) => d.kind === k)).filter(Boolean) as typeof devices) : devices;
-  // Everything the selected chain does not hold — including devices no chain holds at all, which
-  // is how a removed effect finds its way back.
-  const others = !ready || !chain ? [] : devices.filter((d) => !chain.kinds.includes(d.kind));
+  const chains = deck.fxChainList;
+  const chain = chains.find((c) => c.id === selChainId) ?? deck.fxChain("master");
+  // ★ Selecting a chain AIMS THE PADS at it. The strip and the pad bank are the same list read at
+  // two distances, so there is no second act of assignment anywhere in the system.
+  if (chain && deck.fxFocus !== chain.id) deck.setFxFocus(chain.id);
+  // The device row IS the selected chain's device list. Not a filter of a global rack — the chain
+  // owns these instances.
+  const tabs = !ready || !chain ? [] : chain.devices;
+  // What this chain could still be given. Kinds are unique WITHIN a chain and free ACROSS chains,
+  // so this is every kind the chain doesn't already hold — a chain can have its own EQ even while
+  // the master has one.
+  const others = !ready || !chain ? [] : (ALL_KINDS.filter((k) => !chain.devices.some((d) => d.kind === k)) as FxKind[]);
   const savedChains = useMemo(() => loadChainPresets(), [chainTick]);
-  const gi = (i: number) => devices.findIndex((d) => d.kind === tabs[i]?.kind); // shown index → rack index
+  const gi = (i: number) => devices.indexOf(tabs[i]); // shown index → the deck's flat slot index
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = ready ? devices[cur] : undefined;
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -206,36 +216,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     };
   }, [deck, refresh, ready]);
   useEffect(() => onSelect?.(cur), [cur, onSelect]); // keep App's per-deck "current FX" ref in sync
-  // The rack is FIXED-MEMBERSHIP: one instance of each device exists, so the default chain is
-  // built from whatever the rack actually holds once the worklets land, never from a hard-coded
-  // list that could drift from it.
+  // Keep the selection inside the chain being shown: a panel for a device this chain doesn't own
+  // is a panel for something you are not listening to.
   useEffect(() => {
-    if (!ready || chains.length) return;
-    // ★ The master boots with the two devices that belong ON a master — the EQ you mix with and
-    // the comp that glues it. The other seven are the pad-FX bank: things you THROW at a chain,
-    // not things a channel is born holding. They still exist (the rack is fixed-membership) and
-    // are simply unclaimed until a chain adds them.
-    const boot: FxKind[] = ["eq", "comp"];
-    setChains([{ id: "mix", name: "MASTER", stems: 0, kinds: boot.filter((k) => devices.some((d) => d.kind === k)), master: true }]);
-  }, [ready, chains.length, devices]);
-  // Hand the model to the engine. A single all-stems chain is passed as EMPTY — not as a
-  // one-chain special case but as "no chains", which restores the plain serial rack and switches
-  // the per-stem taps back off. Nothing about the default path costs anything.
-  useEffect(() => {
-    if (!ready || !chains.length) return;
-    // The serial fast path is only the same graph while the master holds EVERY device; once one
-    // has been removed, the chain list is the truth and the rack has to be built from it.
-    const plain = chains.length === 1 && chains[0].kinds.length === devices.length;
-    deck.setFxChains(plain ? [] : chains);
-  }, [deck, ready, chains]);
-  // Selecting a chain whose devices don't include the current selection would leave the panel
-  // showing a device this chain cannot hear.
-  useEffect(() => {
-    if (!chain) return;
-    const here = devices[cur]?.kind;
-    if (here && !chain.kinds.includes(here)) {
-      const first = devices.findIndex((d) => d.kind === chain.kinds[0]);
-      if (first >= 0) setSel(first);
+    if (!chain || !chain.devices.length) return;
+    if (!chain.devices.includes(devices[cur])) {
+      const i = devices.indexOf(chain.devices[0]);
+      if (i >= 0) setSel(i);
     }
   }, [chain, devices, cur]);
   // Bring the selected tab into view in the scrollable row — so revealing an off-screen effect
@@ -305,59 +292,54 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // (DBVI, D‧V‧, ‧‧VI) rather than a sentence to parse. "DRUM +1" made you count.
   // MIX is the special case: it is the catch-all every unclaimed stem falls back to, so when it
   // holds all four it says so in a word instead of spelling out the whole alphabet.
-  const chainInitials = (c: FxChain) => LANES.map((l) => ({ ch: l.label[0], on: !!(c.stems & l.bit), color: l.color }));
-  const chainTitle = (c: FxChain, i: number) => {
+  const chainInitials = (c: { stems: number }) => LANES.map((l) => ({ ch: l.label[0], on: !!(c.stems & l.bit), color: l.color }));
+  const chainTitle = (c: { name: string; stems: number }) => {
     const on = LANES.filter((l) => c.stems & l.bit).map((l) => l.label);
     if (!on.length) return `${c.name}: no stems — this chain hears nothing`;
-    if (on.length === 4) return `${c.name}: every stem${i === 0 ? " (the mix)" : ""}`;
+    if (on.length === 4) return `${c.name}: every stem`;
     return `${c.name}: ${on.join(", ")}`;
   };
-  const toggleStem = (bit: number, at = selChain) => {
-    setChains((prev) => {
-      const cur = prev[at];
-      if (!cur || cur.master) return prev; // the master takes the SUM of the chains, not stems
-      const taking = !(cur.stems & bit);
-      return prev.map((c, i) =>
-        i === at
-          ? { ...c, stems: taking ? c.stems | bit : c.stems & ~bit }
-          : taking && !c.master
-            ? { ...c, stems: c.stems & ~bit } // a stem has exactly one owner
-            : c,
-      );
-    });
+  // Every edit below is an ENGINE call, then a refresh. There is no local copy of the chain list
+  // to keep in step, which is the whole reason the list moved into the deck.
+  const toggleStem = (bit: number, id = selChainId) => {
+    const c = deck.fxChain(id);
+    if (!c || c.master) return; // the master takes the SUM of the chains, not stems
+    deck.setFxChainStems(id, c.stems & bit ? c.stems & ~bit : c.stems | bit);
+    refresh();
   };
   const addChain = () => {
-    setChains((prev) => {
-      const id = `c${prev.length}${Date.now().toString(36).slice(-3)}`;
-      const at = Math.max(0, prev.length - 1); // …before the master, which is always last
-      const next = [...prev];
-      next.splice(at, 0, { id, name: `CHAIN ${at + 1}`, stems: 0, kinds: [] });
-      return next;
-    });
-    setSelChain(Math.max(0, chains.length - 1));
+    const c = deck.addFxChain(`CHAIN ${chains.filter((x) => !x.master).length + 1}`);
+    setSelChainId(c.id);
+    refresh();
   };
-  const dropDeviceOnChain = (kind: FxKind, target: number) => {
-    setChains((prev) => prev.map((c, i) => (i === target ? { ...c, kinds: [...c.kinds.filter((k: FxKind) => k !== kind), kind] } : { ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) })));
-    setSelChain(target);
+  /** Give a device to a chain. Kinds are unique WITHIN a chain, free ACROSS them — so this never
+   *  takes anything from anyone: it BUILDS one here. */
+  const addDeviceToChain = (kind: FxKind, id = selChainId, preset?: { name: string; params: Record<string, number> }, presetIdx = 0) => {
+    const d = deck.addFxTo(id, kind);
+    if (!d) return;
+    presetIdxRef.current[kind] = presetIdx;
+    const slot = deck.fxDevices.indexOf(d);
+    if (slot >= 0) {
+      select(slot);
+      if (preset) applyPreset(slot, preset);
+    }
+    setSelChainId(id);
+    broadcastRack();
+    refresh();
   };
-  /** Take a device out of whatever chain holds it — the master included. It does not disappear:
-   *  the rack is fixed-membership, so the instance lives on, unclaimed and out of the signal
-   *  path, until a chain adds it again. */
-  const removeDeviceFromChain = (kind: FxKind) => {
-    setChains((prev) => prev.map((c) => ({ ...c, kinds: c.kinds.filter((k: FxKind) => k !== kind) })));
+  /** Take a device out of a chain. It is that chain's instance, so this DESTROYS it — there is no
+   *  homeless-device state to represent, and nothing left running that nothing can reach. */
+  const removeDeviceFromChain = (kind: FxKind, id = selChainId) => {
+    deck.removeFxFrom({ chain: id, kind });
+    broadcastRack();
+    refresh();
   };
-
-  const removeChain = (at: number) => {
-    setChains((prev) => {
-      const dead = prev[at];
-      if (!dead || dead.master || prev.length < 2) return prev; // the master is the channel; it cannot leave
-      // Its devices go home to the master rather than vanishing. Its STEMS need no rehoming: a
-      // stem no chain claims runs dry into the sum, which is exactly where it belongs.
-      return prev
-        .map((c) => (c.master ? { ...c, kinds: [...c.kinds, ...dead.kinds.filter((k: FxKind) => !c.kinds.includes(k))] } : c))
-        .filter((_, i) => i !== at);
-    });
-    setSelChain((v) => Math.max(0, v - 1));
+  const removeChain = (id: string) => {
+    if (deck.removeFxChain(id)) {
+      setSelChainId("master");
+      broadcastRack();
+      refresh();
+    }
   };
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
@@ -374,18 +356,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // slots down one, so insertion point p maps to final index p-1 when dragging rightward.
   const dropHere = () => {
     if (chain && dragFrom != null && dropAt != null) {
-      // Multi-chain: order is a property of the CHAIN, not of the rack, so the reorder happens in
-      // the chain's own kind list and the rack is left alone.
-      const from = dragFrom, to = dragFrom < dropAt ? dropAt - 1 : dropAt;
-      setChains((prev) =>
-        prev.map((c, i) => {
-          if (i !== selChain) return c;
-          const ks = [...c.kinds];
-          const [k] = ks.splice(from, 1);
-          ks.splice(Math.max(0, Math.min(to, ks.length)), 0, k);
-          return { ...c, kinds: ks };
-        }),
-      );
+      // ★ Order is the CHAIN's, and the pads read the same list — so this drag is simultaneously
+      // "rearrange my pads" and "rewire the graph". There is no second list to keep in step.
+      deck.moveFxIn(chain.id, dragFrom, dragFrom < dropAt ? dropAt - 1 : dropAt);
+      broadcastRack();
+      refresh();
       setDragFrom(null);
       setDropAt(null);
       return;
@@ -517,7 +492,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
   const tabLong = useLongPress<number>((slot, x, y) => { cancelMenuTimer(); select(slot); setMenu({ slot, x, y }); });
   // Touch has no right-click: long-press a chain chip for the same menu.
-  const chainLong = useLongPress<number>((at, x, y) => openChainMenu(at, x, y));
+  const chainLong = useLongPress<string>((id, x, y) => openChainMenu(id, x, y));
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
@@ -543,34 +518,20 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   // "Default" is the flat PRESET, and a preset never touches the blend or the on/off — same rule
   // as RESET and as every other preset in the bank.
-  /** Move a device into the selected chain and land it on a chosen starting point. The rack is
-   *  fixed-membership, so this never CREATES a device — it claims the one instance that exists,
-   *  which is also why the device leaves whatever chain held it before. */
-  const addDeviceToChain = (kind: FxKind, preset?: { name: string; params: Record<string, number> }, presetIdx = 0) => {
-    dropDeviceOnChain(kind, selChain);
-    const slot = devices.findIndex((d) => d.kind === kind);
-    if (slot < 0) return;
-    select(slot);
-    presetIdxRef.current[kind] = presetIdx;
-    if (preset) applyPreset(slot, preset);
-    else applyDefault(slot);
-  };
-
-  /** Recall a chain preset INTO a chain: its stems (taken from whoever held them, since a stem
-   *  has one owner) and its device list, in the preset's order. On the master, only the devices
-   *  land — the master has no stems to set. */
-  const applyChainPreset = (at: number, p: ChainPreset) => {
-    const kinds = p.kinds.filter((k): k is FxKind => devices.some((d) => d.kind === k));
-    setChains((prev) =>
-      prev.map((c, i) => {
-        if (i === at) return { ...c, name: p.name.toUpperCase(), stems: c.master ? c.stems : p.stems, kinds };
-        // Everyone else gives up what this chain just claimed — both the stems and the devices,
-        // because each of those has exactly one home.
-        return { ...c, stems: c.master ? c.stems : c.stems & ~p.stems, kinds: c.kinds.filter((k: FxKind) => !kinds.includes(k)) };
-      }),
-    );
-    setSelChain(at);
+  /** Recall a chain preset into a chain: its stems, and its devices BUILT fresh in the preset's
+   *  order. Nothing is taken from another chain — kinds are unique within a chain and free across
+   *  them, so a recall creates instances rather than moving anyone else's. */
+  const applyChainPreset = (id: string, p: ChainPreset) => {
+    const c = deck.fxChain(id);
+    if (!c) return;
+    for (const d of [...c.devices]) deck.removeFxFrom({ chain: id, kind: d.kind });
+    if (!c.master) deck.setFxChainStems(id, p.stems);
+    deck.setFxChainName(id, p.name.toUpperCase());
+    for (const k of p.kinds) deck.addFxTo(id, k as FxKind);
+    setSelChainId(id);
     setChainMenu(null);
+    broadcastRack();
+    refresh();
   };
 
   const applyDefault = (slot: number) => {
@@ -685,7 +646,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           when tapped again. Drag a device tab onto a chip to move that device into that chain. */}
       {ready && chains.length > 0 && (
         <div className="fx-chains">
-          {chains.map((c, i) =>
+          {chains.map((c) =>
             c.master ? (
               <span key="add-wrap" className="fx-chain-tail">
               <button className="fx-chain add" title="New chain" onClick={addChain}>
@@ -696,16 +657,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                   take stems, it takes the SUM of the chains, after them. */}
               <button
                 key={c.id}
-                className={`fx-chain master ${i === selChain ? "sel" : ""}`}
+                className={`fx-chain master ${c.id === chain?.id ? "sel" : ""}`}
                 title={`${c.name}: the master channel — every chain sums here`}
                 // No menu, deliberately: there is nothing to set. The master takes no stems, it
                 // cannot be deleted, and it is not a chain you would save and recall.
-                onClick={() => setSelChain(i)}
+                onClick={() => setSelChainId(c.id)}
                 onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(e) => {
                   e.preventDefault();
                   const k = tabs[dragFrom ?? -1]?.kind;
-                  if (k) dropDeviceOnChain(k, i);
+                  // Drag a device onto another chip: it is BUILT there and destroyed here — the
+                  // instances are per chain, so nothing is handed over, a copy is made and the
+                  // original stops existing.
+                  if (k && c.id !== chain?.id) { addDeviceToChain(k, c.id); removeDeviceFromChain(k, chain?.id ?? "master"); }
                   setDragFrom(null);
                   setDropAt(null);
                 }}
@@ -716,16 +680,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             ) : (
               <button
                 key={c.id}
-                className={`fx-chain ${i === selChain ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""}`}
-                title={chainTitle(c, i)}
-                onClick={() => { if (!chainLong.fired.current) setSelChain(i); }}
-                {...chainLong.bind(i)}
-                onContextMenu={(e) => { e.preventDefault(); openChainMenu(i, e.clientX, e.clientY); }}
+                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""}`}
+                title={chainTitle(c)}
+                onClick={() => { if (!chainLong.fired.current) setSelChainId(c.id); }}
+                {...chainLong.bind(c.id)}
+                onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
                 onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
                 onDrop={(e) => {
                   e.preventDefault();
                   const k = tabs[dragFrom ?? -1]?.kind;
-                  if (k) dropDeviceOnChain(k, i);
+                  // Drag a device onto another chip: it is BUILT there and destroyed here — the
+                  // instances are per chain, so nothing is handed over, a copy is made and the
+                  // original stops existing.
+                  if (k && c.id !== chain?.id) { addDeviceToChain(k, c.id); removeDeviceFromChain(k, chain?.id ?? "master"); }
                   setDragFrom(null);
                   setDropAt(null);
                 }}
@@ -821,7 +788,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       </div>
 
       <div className="fx-stage">
-        {chain && chain.kinds.length === 0 ? (
+        {chain && chain.devices.length === 0 ? (
           <div className="fx-panel fx-unknown">
             {chain.name} is empty — tap a dimmed device above to move it into this chain.
           </div>
@@ -897,9 +864,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             {
               glyph: "✕",
               // Named after the chain that actually HOLDS it, which is not always the selected one.
-              title: `Remove ${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} from ${chains.find((c) => c.kinds.includes(menuDev.kind))?.name ?? "the rack"}`,
+              title: `Remove ${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} from ${chains.find((c) => c.devices.includes(menuDev))?.name ?? "the rack"}`,
               danger: true,
-              onClick: () => { removeDeviceFromChain(menuDev.kind); setMenu(null); },
+              onClick: () => { removeDeviceFromChain(menuDev.kind, chains.find((c) => c.devices.includes(menuDev))?.id ?? "master"); setMenu(null); },
             },
           ]}
         >
@@ -937,18 +904,18 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           one away — sit at the top under their own rule, and the recall list runs beneath. Delete
           is a labelled item here rather than a bare right-click, because a right-click that
           destroys a chain is a gesture with no name and no second chance. */}
-      {chainMenu && chains[chainMenu.at] && (
+      {chainMenu && chains.some((c) => c.id === chainMenu.id) && (
         <FxMenu
           x={chainMenu.x}
           y={chainMenu.y}
           wide
-          head={chains[chainMenu.at].name}
+          head={(deck.fxChain(chainMenu.id)?.name ?? "")}
           onClose={() => setChainMenu(null)}
           acts={[
-            { glyph: "＋", title: "Save this chain as a preset", onClick: () => { setDialog({ mode: "chain", at: chainMenu.at }); setChainMenu(null); } },
-            ...(chains[chainMenu.at].master
+            { glyph: "＋", title: "Save this chain as a preset", onClick: () => { setDialog({ mode: "chain", at: chainMenu.id }); setChainMenu(null); } },
+            ...(!!deck.fxChain(chainMenu.id)?.master
               ? [] // the master is the channel; it cannot leave
-              : [{ glyph: "✕", title: `Delete ${chains[chainMenu.at].name}`, danger: true, onClick: () => { removeChain(chainMenu.at); setChainMenu(null); } }]),
+              : [{ glyph: "✕", title: `Delete ${(deck.fxChain(chainMenu.id)?.name ?? "")}`, danger: true, onClick: () => { removeChain(chainMenu.id); setChainMenu(null); } }]),
           ]}
         >
           {/* ★ THE STEMS, at the top of the menu that opens on the chip they belong to — four
@@ -960,7 +927,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             {LANES.map((l) => (
               <button
                 key={l.label}
-                className={`fx-stemsq ${chains[chainMenu.at].stems & l.bit ? "on" : ""}`}
+                className={`fx-stemsq ${(deck.fxChain(chainMenu.id)?.stems ?? 0) & l.bit ? "on" : ""}`}
                 style={{ ["--lane" as string]: l.color }}
                 // A deck with no stems separated yet cannot route one. The squares stay VISIBLE
                 // and go inert rather than disappearing: a control that vanishes teaches nothing,
@@ -969,7 +936,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 disabled={!deck.hasStems}
                 title={deck.hasStems ? l.label : `${l.label} — no stems on this deck yet`}
                 aria-label={l.label}
-                onClick={() => toggleStem(l.bit, chainMenu.at)}
+                onClick={() => toggleStem(l.bit, chainMenu.id)}
               >
                 {l.label[0]}
               </button>
@@ -981,7 +948,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               below is a place you go shopping, once. */}
           {savedChains.map((p) => (
             <div key={`uc:${p.name}`} className="fx-preset-row">
-              <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.at, p)}>
+              <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.id, p)}>
                 {p.name}
               </button>
               {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones below are read-only,
@@ -996,7 +963,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           ))}
           {savedChains.length > 0 && <div className="fx-preset-sep" />}
           {factoryChainPresets().map((p) => (
-            <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.at, p)}>
+            <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.id, p)}>
               {p.name}
             </button>
           ))}
@@ -1013,24 +980,24 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               most of the time you want the effect, not a particular preset of it. So the click is
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the
               menu: there when you want them, never in the way when you don't. */}
-          {others.map((d) => (
+          {others.map((k) => (
             <button
-              key={d.kind}
-              className={`fx-palette-item ${addHover?.kind === d.kind ? "hot" : ""}`}
+              key={k}
+              className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
               role="menuitem"
               onMouseEnter={(e) => {
-                const bank = factoryFxPresets(d.kind);
+                const bank = factoryFxPresets(k);
                 if (!bank.length) { setAddHover(null); return; }
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 // Open on whichever side has room. 170 px is the flyout's own min-width; asking
                 // the DOM would mean rendering it first, in the wrong place, for one frame.
                 const flip = r.right + 174 > window.innerWidth - 6;
-                setAddHover({ kind: d.kind, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
+                setAddHover({ kind: k, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
               }}
-              onClick={() => { addDeviceToChain(d.kind); setAddMenu(null); setAddHover(null); }}
+              onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); }}
             >
-              {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
-              {factoryFxPresets(d.kind).length > 0 && <span className="fx-add-more">›</span>}
+              {KIND_LABEL[k] ?? k.toUpperCase()}
+              {factoryFxPresets(k).length > 0 && <span className="fx-add-more">›</span>}
             </button>
           ))}
         </FxMenu>
@@ -1049,7 +1016,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             Default
           </button>
           {factoryFxPresets(addHover.kind).map((pr, i) => (
-            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
+            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind, selChainId, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
               {pr.name}
             </button>
           ))}
@@ -1059,7 +1026,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       {dialog && (
         <PromptModal
           title={dialog.mode === "chainPreset" ? "Rename saved chain" : dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
-          initial={dialog.mode === "rename" || dialog.mode === "chainPreset" ? dialog.name : dialog.mode === "chain" ? chains[dialog.at]?.name ?? "" : ""}
+          initial={dialog.mode === "rename" || dialog.mode === "chainPreset" ? dialog.name : dialog.mode === "chain" ? deck.fxChain(dialog.at)?.name ?? "" : ""}
           placeholder={dialog.mode === "chain" || dialog.mode === "chainPreset" ? "Chain name" : "Preset name"}
           submitLabel={dialog.mode === "rename" || dialog.mode === "chainPreset" ? "Rename" : "Save"}
           onSubmit={(v) => {
@@ -1069,11 +1036,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               return;
             }
             if (dialog.mode === "chain") {
-              const c = chains[dialog.at];
+              const c = deck.fxChain(dialog.at);
               if (c) {
-                saveChainPreset(v, c.stems, c.kinds);
-                setChains((prev) => prev.map((x, i) => (i === dialog.at ? { ...x, name: v.trim().toUpperCase() || x.name } : x)));
+                saveChainPreset(v, c.stems, c.devices.map((d) => d.kind));
+                deck.setFxChainName(c.id, v.trim().toUpperCase() || c.name);
                 setChainTick((t) => t + 1);
+                refresh();
               }
               return;
             }

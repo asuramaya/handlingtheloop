@@ -37,9 +37,25 @@ export const FX_PADS: FxPadDef[] = [
   { label: "NOISE", kind: "noise", hold: true, on: (d) => d.noiseThrow(true), off: (d) => d.noiseThrow(false), active: (d) => d.noiseThrowing, hint: "Noise riser — sweep up while held, cut on release" },
 ];
 
+// ★ THE BANK IS THE FOCUSED CHAIN. A pad is a pointer, slot i is device i of the chain you are
+// looking at, and pad order IS processing order — the same list the strip renders and the graph
+// runs. Nothing is bound, so nothing can dangle; move a device and its pad moves with it.
+// FX_PADS above stops being the bank and becomes the DEFINITION table: what a GATE pad does when
+// there is a gate to do it to.
+const BY_KIND = new Map<string, FxPadDef>(FX_PADS.filter((p) => p.kind).map((p) => [p.kind as string, p]));
+
+/** The eight slots for a deck, right now: the focused chain's devices in order, padded out. A
+ *  null slot is an empty slot — it is not a broken pad, it is a chain with room in it. */
+export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
+  const chain = deck.fxChain(deck.fxFocus) ?? deck.fxChain("master");
+  const pads = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? null);
+  while (pads.length < 8) pads.push(null);
+  return pads.slice(0, 8);
+}
+
 /** Fire an FX pad (keyboard/MIDI 1-8 in fx mode). `on` = key down (press), false = key up. */
 export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
-  const pad = FX_PADS[slot];
+  const pad = padsForDeck(deck)[slot];
   if (!pad) return;
   if (on) pad.on(deck);
   else pad.off?.(deck);

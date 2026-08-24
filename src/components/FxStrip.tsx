@@ -124,6 +124,7 @@ export interface FxStripCtl {
   navSel: (dir: number) => void; // BEAT ◀▶: move the selected effect tab
   moveSel: (dir: number) => void; // SHIFT+BEAT ◀▶: reorder the selected effect left/right
   selectKind: (kind: FxKind) => void; // reveal a device's panel by kind (FX pad right-click)
+  stepChain: (dir: number) => void; // walk the chain row — this is what AIMS the pad bank
   cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
   closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
 }
@@ -187,9 +188,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const ready = deck.fxRackReady;
   const chains = deck.fxChainList;
   const chain = chains.find((c) => c.id === selChainId) ?? deck.fxChain("master");
-  // ★ Selecting a chain AIMS THE PADS at it. The strip and the pad bank are the same list read at
-  // two distances, so there is no second act of assignment anywhere in the system.
-  if (chain && deck.fxFocus !== chain.id) deck.setFxFocus(chain.id);
+
   // The device row IS the selected chain's device list. Not a filter of a global rack — the chain
   // owns these instances.
   const tabs = !ready || !chain ? [] : chain.devices;
@@ -216,6 +215,16 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     };
   }, [deck, refresh, ready]);
   useEffect(() => onSelect?.(cur), [cur, onSelect]); // keep App's per-deck "current FX" ref in sync
+  // ★ Selecting a chain AIMS THE PADS at it — the strip and the pad bank are the same list read at
+  // two distances, so this is the only act of assignment in the system. In an effect, not in the
+  // render body: aiming a performance surface is a side effect on the engine, and a render can run
+  // twice.
+  useEffect(() => {
+    if (chain && deck.fxFocus !== chain.id) {
+      deck.setFxFocus(chain.id);
+      refresh();
+    }
+  }, [deck, chain, refresh]);
   // Keep the selection inside the chain being shown: a panel for a device this chain doesn't own
   // is a panel for something you are not listening to.
   useEffect(() => {
@@ -392,8 +401,21 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const L = live.current;
         reorder(L.cur, Math.max(0, Math.min(L.len - 1, L.cur + dir)));
       },
+      stepChain: (dir) => {
+        const list = deck.fxChainList;
+        if (list.length < 2) return;
+        const at = Math.max(0, list.findIndex((c) => c.id === deck.fxFocus));
+        const next = list[(at + dir + list.length) % list.length];
+        setSelChainId(next.id);
+        deck.setFxFocus(next.id);
+        refresh();
+      },
       selectKind: (kind) => {
-        const idx = deck.fxDevices.findIndex((d) => d.kind === kind);
+        // ★ There can be several devices of a kind now — one per chain. Reveal the one in the
+        // chain the pads are AIMED at; "first of that kind anywhere" would open a panel for a
+        // device you are not listening to.
+        const here = deck.fxChain(deck.fxFocus)?.devices.find((d) => d.kind === kind);
+        const idx = here ? deck.fxDevices.indexOf(here) : deck.fxDevices.findIndex((d) => d.kind === kind);
         if (idx >= 0) select(idx);
       },
       // FX SELECT (hardware): step the SELECTED effect through Default → its factory bank → wrap,

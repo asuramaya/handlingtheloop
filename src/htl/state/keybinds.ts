@@ -45,6 +45,11 @@ export const KEY_ACTIONS: KeyAction[] = [
   // Pad-mode selectors: switch what the 8 pads (and the keyboard 1-8) do. U=cue, I=loop.
   // U·I·O·P read left-to-right across the on-screen mode row, which is ordered to mirror
   // the FLX4's physical bank buttons: CUE · FX · LOOP · SMP (HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER).
+  // ★ Chain switching. With chains, the pad bank is AIMED by the chain you have selected — so a
+  // keyboard/controller player who cannot change that selection cannot re-aim their pads at all.
+  // "<" and ">" walk the chain row; the pads and the panel follow.
+  { id: "chainPrev", label: "Previous FX chain", group: "Pads", defaultKey: "Comma" },
+  { id: "chainNext", label: "Next FX chain", group: "Pads", defaultKey: "Period" },
   { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
   { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI", shiftLabel: "Pad mode: FX2 (latch)" },
   { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO", shiftLabel: "Pad mode: Roll" },

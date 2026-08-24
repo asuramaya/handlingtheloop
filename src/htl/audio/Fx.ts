@@ -209,6 +209,10 @@ export class FxRack {
   removeDevice(addr: FxAddr): boolean {
     const c = this.chain(addr.chain);
     if (!c) return false;
+    // ★ The master's EQ is the CHANNEL EQ. The eq* ControlParams, the session sync and the EQ
+    // throw all address that one object, so pulling it out of the graph leaves every EQ control
+    // on the deck driving a device nothing can hear. A stem chain's own EQ is ordinary and goes.
+    if (c.master && addr.kind === "eq") return false;
     const i = c.devices.findIndex((d) => d.kind === addr.kind);
     if (i < 0) return false;
     const [d] = c.devices.splice(i, 1);

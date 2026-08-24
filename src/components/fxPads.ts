@@ -44,11 +44,37 @@ export const FX_PADS: FxPadDef[] = [
 // there is a gate to do it to.
 const BY_KIND = new Map<string, FxPadDef>(FX_PADS.filter((p) => p.kind).map((p) => [p.kind as string, p]));
 
+// A device the throw table has no entry for — the COMP, or a stem chain's own EQ — is still a
+// device in the chain, and a pad that reads "—" next to a comp you can see is a lie. So it gets a
+// generic pad: the throw is its BYPASS. Same gesture, same latch/momentary, nothing special-cased
+// at the surface.
+const KIND_PAD = new Map<string, FxPadDef>();
+function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
+  const found = KIND_PAD.get(kind);
+  if (found) return found;
+  const dev = (d: Deck) => d.fxChain(d.fxFocus)?.devices.find((x) => x.kind === kind);
+  const pad: FxPadDef = {
+    label,
+    kind,
+    hold: true,
+    on: (d) => dev(d)?.setBypass(false),
+    off: (d) => dev(d)?.setBypass(true),
+    active: (d) => {
+      const x = dev(d);
+      return !!x && !x.bypassed;
+    },
+    hint: "In / out of this chain",
+  };
+  KIND_PAD.set(kind, pad);
+  void deck;
+  return pad;
+}
+
 /** The eight slots for a deck, right now: the focused chain's devices in order, padded out. A
  *  null slot is an empty slot — it is not a broken pad, it is a chain with room in it. */
 export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
   const chain = deck.fxChain(deck.fxFocus) ?? deck.fxChain("master");
-  const pads = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? null);
+  const pads: (FxPadDef | null)[] = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? genericPad(deck, d.kind, d.kind.toUpperCase()));
   while (pads.length < 8) pads.push(null);
   return pads.slice(0, 8);
 }
@@ -61,6 +87,28 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
   else pad.off?.(deck);
 }
 
+// ★ A SLOT IS NOT AN ADDRESS ANY MORE. Slot 3 means "the fourth device of the chain I am aimed
+// at", so a recorded or relayed fxPad gesture replayed against a different focus fires a
+// DIFFERENT effect. The wire form carries the chain with it — "<chainId>:<slot>" — and the
+// receiver aims there for the duration of the gesture, then puts its focus back.
+// ⚠ Chain ids are per deck and per machine, and chains do NOT sync yet: across devices the id
+// will usually be unknown, and this falls back to the receiver's own focus. That is the same
+// divergence as before, no worse — but it is not fixed until chains themselves sync.
+export function fxPadArg(deck: Deck, slot: number): string {
+  return `${deck.fxFocus}:${slot}`;
+}
+export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): void {
+  const raw = String(arg);
+  const cut = raw.lastIndexOf(":");
+  const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
+  const chain = cut >= 0 ? raw.slice(0, cut) : "";
+  const back = deck.fxFocus;
+  const known = chain && deck.fxChain(chain);
+  if (known) deck.setFxFocus(chain);
+  fireFxPad(deck, slot, on);
+  if (known) deck.setFxFocus(back);
+}
+
 // Sync + replay over the board-agnostic gesture bus: a recorded/relayed "fxPad" gesture applies
 // by slot index, so any pad added to FX_PADS above is covered with no protocol/applyIntent edit.
-registerBoardAction("fxPad", (deck, phase, arg) => fireFxPad(deck, Number(arg), phase !== "up"));
+registerBoardAction("fxPad", (deck, phase, arg) => fireFxPadArg(deck, arg as string | number, phase !== "up"));

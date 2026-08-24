@@ -3,7 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
-import { padsForDeck } from "./fxPads";
+import { padsForDeck, fxPadArg } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -201,7 +201,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     padDownAt.current = { slot, t: performance.now() };
     if (!(pad.active?.(deck) ?? false)) {
       pad.on(deck);
-      emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: slot });
+      emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
     }
     // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which also closes the
     // hole chains opened, where a pad could engage something that was not on screen.
@@ -217,7 +217,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     // pad, hold, and it drops on release.
     if (rec && rec.slot === slot && performance.now() - rec.t >= PAD_HOLD_MS) {
       pad.off?.(deck);
-      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: slot });
+      emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
     }
     refresh();
   };

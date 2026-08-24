@@ -33,7 +33,7 @@ const COLOR_GROUPS: { id: string; title: string; desc: string; targets: ColorTar
   {
     id: "decks",
     title: "Decks",
-    desc: "Each deck's signature colour — its waveform, buttons, faders and meter.",
+    desc: "Each deck's signature colour. Its waveform, buttons, faders and meter.",
     targets: [
       { key: "accentA", label: "Deck A" },
       { key: "accentB", label: "Deck B" },
@@ -52,7 +52,7 @@ const COLOR_GROUPS: { id: string; title: string; desc: string; targets: ColorTar
   {
     id: "waveform",
     title: "Waveform",
-    desc: "Markers drawn over the waveforms, plus the waveform body (Strip — unset follows the deck colour).",
+    desc: "Markers drawn over the waveforms, plus the waveform body. Leave Strip unset to follow the deck colour.",
     targets: [
       { key: "selectorColor", label: "Playhead" },
       { key: "loopColor", label: "Loops" },
@@ -64,7 +64,7 @@ const COLOR_GROUPS: { id: string; title: string; desc: string; targets: ColorTar
   {
     id: "stems",
     title: "Stem lanes",
-    desc: "Per-stem waveform colours — they match the DRUM / BASS / VOICE / INST buttons.",
+    desc: "Per-stem waveform colours. They match the DRUM / BASS / VOICE / INST buttons.",
     targets: [
       { key: "stemDrumsColor", label: "Drums", def: "#ff5d73" },
       { key: "stemBassColor", label: "Bass", def: "#b06bff" },
@@ -166,7 +166,7 @@ export function ColorTab({
     <div className="color-tab">
       {/* Header: one-shot rolls to explore, on the right of the intro line. */}
       <div className="color-intro">
-        <span className="color-intro-text">Make it yours. Every surface follows the colours below — pick a swatch to change it live.</span>
+        <span className="color-intro-text">Make it yours. Every surface follows the colours below. Pick a swatch to change it live.</span>
         <div className="color-rolls">
           <button className="color-roll" onClick={() => set(randomTheme())} title="Roll a whole random theme">
             🎲 Random

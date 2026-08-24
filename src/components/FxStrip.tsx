@@ -653,24 +653,31 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           when tapped again. Drag a device tab onto a chip to move that device into that chain, and
           drag a chip itself to reorder the row. */}
       {ready && chains.length > 0 && (
+        <div className="fx-chain-bar">
+          {/* ★ ＋ DOES NOT SCROLL. It used to ride at the end of the row, which meant the way to
+              make a chain disappeared the moment you had enough chains to need one. It is a fixed
+              first column now, outside the scroller — the row slides underneath it. */}
+          <button className="fx-chain add" title="New chain" onClick={addChain}>
+            ＋
+          </button>
         <div className={`fx-chains ${chainDrag.from != null || tabDrag.from != null ? "dragging" : ""}`} {...chainDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
           {chains.map((c) =>
             c.master ? (
-              <span key="add-wrap" className="fx-chain-tail">
-              <button className="fx-chain add" title="New chain" onClick={addChain}>
-                ＋
-              </button>
+              <span key="master-wrap" className="fx-chain-tail">
               {/* ★ THE MASTER, pinned rightmost at a constant place — because that is where it
                   is in the SIGNAL, not a layout preference. It has no stem selector: it does not
                   take stems, it takes the SUM of the chains, after them. */}
               <button
-                key={c.id}
                 className={`fx-chain master ${c.id === chain?.id ? "sel" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
-                title={`${c.name}: the master channel — every chain sums here`}
-                // No menu, deliberately: there is nothing to set. The master takes no stems, it
-                // cannot be deleted, and it is not a chain you would save and recall.
+                title={`${c.name}: the master channel — every chain sums here · right-click for presets`}
+                // It DOES get a menu. It was refused one on the grounds that it takes no stems and
+                // cannot be deleted — but those are two rows of a menu whose main body is the
+                // saved-chain list, and "recall a rack I built" is exactly as sensible on the
+                // master as anywhere else. The menu already hides what does not apply.
                 onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } setSelChainId(c.id); }}
+                {...chainLong.bind(c.id)}
                 {...tabDrag.foreign(c.id)}
+                onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
               >
                 <span className="fx-chain-name">{c.name}</span>
               </button>
@@ -678,7 +685,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             ) : (
               <button
                 key={c.id}
-                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""} ${chainDrag.from === chains.indexOf(c) ? "dragging" : ""} ${chainDrag.at === chains.indexOf(c) ? "drop-before" : ""} ${chainDrag.at === chains.indexOf(c) + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""} ${chainDrag.from === chains.indexOf(c) ? "is-dragging" : ""} ${chainDrag.at === chains.indexOf(c) ? "drop-before" : ""} ${chainDrag.at === chains.indexOf(c) + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
                 title={`${chainTitle(c)} · drag to reorder · right-click for stems and presets`}
                 onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (!chainLong.fired.current) setSelChainId(c.id); }}
                 {...chainLong.bind(c.id)}
@@ -687,6 +694,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
               >
                 <span className="fx-chain-name">{c.name}</span>
+                {/* The stem letters are a PREVIEW of what this chain hears. With nothing separated
+                    there is nothing to preview — four dead letters on every chip is noise that
+                    looks like state. Same rule as the picker in the menu: absent, not dimmed. */}
+                {deck.hasStems && (
                 <span className="fx-chain-src">
                   {chainInitials(c).map((x) => (
                     <i key={x.ch} className={x.on ? "on" : ""} style={{ ["--lane" as string]: x.color }}>
@@ -694,17 +705,30 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     </i>
                   ))}
                 </span>
+                )}
               </button>
             ),
           )}
         </div>
+        </div>
       )}
       <div className="fx-head">
+      {/* ★ SAME RULE AS THE CHAIN ROW's ＋: the way to add a device cannot be the thing that
+          scrolls out of sight once you have added a few. Fixed first column, row slides under. */}
+      {others.length > 0 && (
+        <button
+          className="fx-tab fx-tab-add"
+          title="Add an effect to this chain"
+          onClick={(e) => { cancelMenuTimer(); setMenu(null); setAddMenu({ x: e.clientX, y: e.clientY }); }}
+        >
+          ＋
+        </button>
+      )}
       <div className={`fx-tabs ${tabDrag.from != null ? "dragging" : ""}`} role="tablist" ref={tabsRef} {...tabDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
         {tabs.map((d, i) => (
           <button
             key={d.kind}
-            className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "dragging" : ""}`}
+            className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
             onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); }}
             onContextMenu={(e) => openPresetMenu(e, gi(i))}
             {...tabLong.bind(gi(i))}
@@ -716,18 +740,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
           </button>
         ))}
-        {/* ＋ — the only way a device enters a chain. Opens the two-step picker below. */}
-        {others.length > 0 && (
-          <button
-            className="fx-tab fx-tab-add"
-            title="Add an effect to this chain"
-            onClick={(e) => { cancelMenuTimer(); setMenu(null); setAddMenu({ x: e.clientX, y: e.clientY }); }}
-          >
-            ＋
-          </button>
-        )}
-        {/* Fixed-membership rack: the EQ + the pad-FX bank are permanent residents — no add/remove.
-            Reorder by dragging a tab; dial / save presets by right-clicking one. */}
       </div>
         {/* COPY used to live here, as a permanent header button for a thing touched about once a
             session. It is in the menus now — on the device, and on the chain — where the rest of
@@ -736,9 +748,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
 
       <div className="fx-stage">
         {chain && chain.devices.length === 0 ? (
-          <div className="fx-panel fx-unknown">
-            {chain.name} is empty — tap a dimmed device above to move it into this chain.
-          </div>
+          // The ＋ is right there, one row up and pinned. A sentence explaining it is a sentence
+          // you read once and then read past forever.
+          <div className="fx-panel fx-unknown fx-empty">EMPTY</div>
         ) : !selDev ? (
           <div className="fx-panel fx-unknown">Loading effects…</div>
         ) : selDev.kind === "eq" ? (
@@ -878,7 +890,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               takes it from whoever held it; there is no "both" to draw.
               Absent entirely with no stems on the deck: a chain cannot hear a stem that has not
               been separated, so the question does not apply and is not asked. */}
-          {deck.hasStems && (
+          {deck.hasStems && !deck.fxChain(chainMenu.id)?.master && (
             <>
               <div className="ctx-label">Stems</div>
               <StemPicker
@@ -887,9 +899,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 onAll={() => { deck.setFxChainStems(chainMenu.id, ALL_STEM_BITS); refresh(); }}
                 onToggle={(bit) => toggleStem(bit, chainMenu.id)}
               />
+              <div className="fx-preset-sep" />
             </>
           )}
-          <div className="fx-preset-sep" />
           {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
               below is a place you go shopping, once. */}
           {savedChains.map((p) => (

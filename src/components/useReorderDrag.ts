@@ -60,6 +60,14 @@ export function useReorderDrag(opts: {
     y: number;
     timer?: number;
     touch: boolean;
+    el: HTMLElement; // the pill itself — it FLOATS, driven imperatively (see below)
+    row?: HTMLElement;
+    /** Item centres in ROW-CONTENT coordinates, snapshotted at drag start. ★ They must not be
+     *  re-measured mid-drag: the drop gap widens the row, which would move the very centres the
+     *  gap was decided from, and the decision would oscillate across the boundary. The layout you
+     *  are deciding against is the one you started from. */
+    centers: number[];
+    scroll0: number;
   } | null>(null);
   const cb = useRef(opts);
   cb.current = opts;
@@ -67,6 +75,10 @@ export function useReorderDrag(opts: {
   const end = () => {
     const cur = g.current;
     if (cur?.timer) clearTimeout(cur.timer);
+    if (cur) {
+      cur.el.style.transform = "";
+      cur.el.classList.remove("is-dragging");
+    }
     g.current = null;
     setFrom(null);
     setAt(null);
@@ -86,10 +98,18 @@ export function useReorderDrag(opts: {
       if (!cur.dragging) {
         if (!cur.armed || moved < SLOP_PX) return;
         cur.dragging = true;
+        // Also set from React state (see the caller): a re-render would otherwise rewrite
+        // className and strip this class off mid-drag. This one is for the very first frame.
+        cur.el.classList.add("is-dragging");
         setFrom(cur.idx);
         cb.current.onStart?.(cur.idx);
       }
-      const hit = hitTest(e.clientX, e.clientY, cb.current.group, cur.idx);
+      // ★ THE FLOAT IS IMPERATIVE. It moves every pointermove; the insertion point changes only
+      // when a boundary is crossed. Rendering the pill's position through React state would
+      // re-render the whole strip at pointer rate for a transform — so the transform is written
+      // straight to the node and only the (rare) drop decision goes through state.
+      cur.el.style.transform = `translate3d(${e.clientX - cur.x}px, ${e.clientY - cur.y}px, 0) scale(1.06)`;
+      const hit = hitTest(e.clientX, e.clientY, cb.current.group, cur);
       setAt(hit.at);
       setOnto(hit.onto);
     };
@@ -101,7 +121,7 @@ export function useReorderDrag(opts: {
       if (!cur) return;
       const dragging = cur.dragging;
       const idx = cur.idx;
-      const hit = dragging ? hitTest(e.clientX, e.clientY, cb.current.group, idx) : { at: null, onto: null };
+      const hit = dragging ? hitTest(e.clientX, e.clientY, cb.current.group, cur) : { at: null, onto: null };
       end();
       if (!dragging) return;
       if (hit.onto != null) cb.current.onDropOn?.(idx, hit.onto);
@@ -129,7 +149,15 @@ export function useReorderDrag(opts: {
       onPointerDown: (e: ReactPointerEvent) => {
         if (e.button != null && e.button > 0) return; // right-click is the menu, not a drag
         const touch = e.pointerType === "touch";
-        g.current = { idx: i, armed: !touch, dragging: false, x: e.clientX, y: e.clientY, touch };
+        const el = e.currentTarget as HTMLElement;
+        const row = document.querySelector<HTMLElement>(`[data-group="${opts.group}"][data-row]`) ?? undefined;
+        const centers = row
+          ? [...row.querySelectorAll<HTMLElement>("[data-drag]")].map((n) => {
+              const r = n.getBoundingClientRect();
+              return r.left + r.width / 2 + row.scrollLeft;
+            })
+          : [];
+        g.current = { idx: i, armed: !touch, dragging: false, x: e.clientX, y: e.clientY, touch, el, row, centers, scroll0: row?.scrollLeft ?? 0 };
         if (touch) {
           const cur = g.current;
           cur.timer = window.setTimeout(() => {
@@ -147,22 +175,22 @@ export function useReorderDrag(opts: {
 /** What is under the pointer: an insertion point between this row's items, or a foreign target.
  *  Coordinate hit-testing (rather than dragover events) is what makes one code path serve every
  *  pointer type — a finger fires no dragover, but it has coordinates like everything else. */
-function hitTest(x: number, y: number, group: string, self: number): { at: number | null; onto: string | null } {
+function hitTest(
+  x: number,
+  y: number,
+  group: string,
+  g: { idx: number; row?: HTMLElement; centers: number[] },
+): { at: number | null; onto: string | null } {
+  // The floating pill is pointer-events: none while it drags, so this reads what is UNDER it.
   const el = document.elementFromPoint(x, y) as HTMLElement | null;
   const drop = el?.closest<HTMLElement>(`[data-drop][data-group="${group}"]`);
   if (drop) return { at: null, onto: drop.dataset.drop ?? null };
-  const row = document.querySelector<HTMLElement>(`[data-group="${group}"][data-row]`);
-  if (!row) return { at: null, onto: null };
-  const items = [...row.querySelectorAll<HTMLElement>("[data-drag]")];
-  if (!items.length) return { at: null, onto: null };
+  const row = g.row;
+  if (!row || !g.centers.length) return { at: null, onto: null };
   // Outside the row entirely (vertically) — no drop, so a stray drag simply does nothing.
   const rr = row.getBoundingClientRect();
-  if (y < rr.top - 24 || y > rr.bottom + 24) return { at: null, onto: null };
-  const centers = items.map((el) => {
-    const r = el.getBoundingClientRect();
-    return r.left + r.width / 2;
-  });
-  return { at: pickInsertion(centers, x, self), onto: null };
+  if (y < rr.top - 28 || y > rr.bottom + 28) return { at: null, onto: null };
+  return { at: pickInsertion(g.centers, x + row.scrollLeft, g.idx), onto: null };
 }
 
 /** Which GAP the pointer is in: 0 = before the first item, n = after the last. Null when it is one

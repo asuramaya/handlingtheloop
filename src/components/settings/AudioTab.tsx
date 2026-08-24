@@ -221,7 +221,7 @@ export function AudioTab({
                 </option>
               ))}
             </select>
-            <p className="settings-hint muted">The main mix — including the mic — your PA / house output. (Headphone cue is the separate device below.)</p>
+            <p className="settings-hint muted">Your PA / house output. Carries the main mix and the mic. Headphone cue is set separately below.</p>
             {outputNeedsPerm && (
               <p className="settings-hint muted">
                 Device names are hidden until you grant audio permission once.{" "}
@@ -234,8 +234,7 @@ export function AudioTab({
           </>
         ) : (
           <p className="settings-hint muted">
-            This browser can’t switch the output device (Chrome or Edge can). Use your system sound settings to
-            choose a speaker.
+            This browser can’t switch outputs. Choose a speaker in your system sound settings, or use Chrome or Edge.
           </p>
         )}
       </div>
@@ -254,9 +253,9 @@ export function AudioTab({
             </button>
           </div>
           <p className="settings-hint muted">
-            Skips over a car stereo or Bluetooth speaker are corrected <strong>automatically</strong> — the app detects
-            the dropouts and adds buffering, then backs it off once playback is clean. Turn this on only to pin the full
-            ~120&nbsp;ms buffer always-on (skips the brief auto-detect), at the cost of a little extra latency on wired output.
+            Bluetooth and car-stereo skips are already fixed <strong>automatically</strong>: dropouts are detected,
+            buffering goes up, and it backs off once playback is clean. Turn this on to pin the full ~120&nbsp;ms buffer
+            from the start. Costs a little latency on wired output.
           </p>
         </div>
       )}
@@ -289,15 +288,15 @@ export function AudioTab({
             const cueLabel = outputs.find((d) => d.deviceId === settings.audioCueOutputId)?.label ?? "";
             return /\b(bluetooth|airpods?|wireless|bt|beats|buds|jabra)\b/i.test(cueLabel) ? (
               <p className="settings-hint" style={{ color: "#ffd250" }}>
-                ⚠ “{cueLabel}” looks like a Bluetooth output. Wireless headphones add ~150–300&nbsp;ms of latency
-                and can shift the cue’s pitch — use a <strong>wired / USB</strong> output for accurate cueing.
+                ⚠ “{cueLabel}” looks like a Bluetooth output. Wireless adds ~150–300&nbsp;ms of latency and can shift
+                the cue’s pitch. Use a <strong>wired / USB</strong> output to cue accurately.
               </p>
             ) : null;
           })()}
           <p className="settings-hint muted">
-            Pick a second device (headphones) to pre-listen each deck like a DJ board. The deck’s <strong>CUE</strong>{" "}
-            button becomes a fader — tap still sets / jumps the cue point, drag or scroll sets its headphone level.
-            Tapped pre-fader, so you can cue a deck that’s faded out.
+            Pick headphones to pre-listen each deck like a DJ board. The deck’s <strong>CUE</strong> button becomes a
+            fader: tap sets or jumps the cue point, drag or scroll sets its headphone level. It taps pre-fader, so a
+            deck that’s faded out can still be cued.
           </p>
           {outputNeedsPerm && (
             <p className="settings-hint muted">
@@ -324,7 +323,7 @@ export function AudioTab({
             ))}
           </select>
           <p className="settings-hint muted">
-            Input for talkover + sampling (the 🎙 on the sampler strip). Switching while the mic is live re-acquires it.
+            Input for talkover and sampling (the 🎙 on the sampler strip). Switching while the mic is live re-acquires it.
             {inputs.length > 0 && inputs.every((d) => !d.label) && (
               <>
                 {" "}Names are hidden until you grant audio access once.{" "}
@@ -357,8 +356,8 @@ export function AudioTab({
         </div>
         <p className="settings-hint muted">
           {settings.stretchEngine === "pv"
-            ? "Phase-locked vocoder — cleanest on full mixes (kills the metallic edge), more CPU."
-            : "Time-domain WSOLA — lightest CPU, crisp transients; can sound metallic on dense mixes."}
+            ? "Phase-locked vocoder. Cleanest on full mixes, no metallic edge. More CPU."
+            : "Time-domain WSOLA. Lightest CPU, crisp transients. Can sound metallic on dense mixes."}
         </p>
         <div className="seg">
           {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
@@ -409,7 +408,7 @@ export function AudioTab({
           </button>
         </div>
         <p className="settings-hint muted">
-          Keep attacks crisp under big tempo stretch; remove fizz on key-ups.
+          Keeps attacks crisp under big tempo stretch and removes fizz on key-ups.
         </p>
       </div>
 
@@ -608,14 +607,21 @@ export function AudioTab({
           // Everything else (Safari/Firefox, phones) consumes the shared cache.
           const onGpu = gpu && sup === "runs";
           const adapter = webGpuAdapterInfo();
+          // probeWebGPU() still records the adapter string even when it REJECTS that
+          // adapter for being a software fallback (SwiftShader) — surface that instead
+          // of the generic "not available" message, since it's a genuinely different,
+          // more actionable situation: WebGPU works, hardware acceleration doesn't.
+          const softwareOnly = !onGpu && !!adapter?.includes("swiftshader");
           const text = gpu
             ? onGpu
               ? adapter || "WebGPU"
               : sup === "blocked"
                 ? "Disabled after a crash — re-enable above, or use a cached result"
-                : isChromium()
-                  ? "WebGPU not available here — cached stems still load"
-                  : "Separation needs a Chromium WebGPU browser — cached stems still load here"
+                : softwareOnly
+                  ? `Only software rendering available (${adapter}) — cached stems still load here`
+                  : isChromium()
+                    ? "WebGPU not available here — cached stems still load"
+                    : "Separation needs a Chromium WebGPU browser — cached stems still load here"
             : "Plain mix · no stem separation";
           return (
             <div className={`stem-device ${onGpu ? "gpu" : "none"}`}>

@@ -25,12 +25,22 @@
    horizontal and the row has to survive 320 px without a second design.
    The colour is a 3 px LEFT EDGE, not a fill: routing is state you glance at. A wall of saturated
    blocks was the first two rejected prototypes, and the lesson stuck. */
-.fx-chains {
+/* The chain BAR: a fixed ＋ column, then the scrolling row. Two boxes rather than one, because a
+   pinned control inside its own scroller is a fight (sticky + a hidden scrollbar + a drag row that
+   hit-tests by coordinate); a sibling that simply never scrolls is not. */
+.fx-chain-bar {
   display: flex;
   gap: 4px;
   align-items: stretch;
   min-width: 0;
   margin-bottom: 4px;
+}
+.fx-chains {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 0;
+  flex: 1 1 auto;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -65,24 +75,14 @@
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 20%, var(--surface));
 }
-/* The chips drag exactly as the device tabs do — same grab cursor, same faded source, same
-   insertion edge. Two rows, one gesture, so learning it once is learning it. */
+/* The chips drag exactly as the device tabs do — same lift, same landing space. Two rows, one
+   gesture, so learning it once is learning it. (Both are styled together further down.) */
 .fx-chain {
   cursor: grab;
 }
 .fx-chain.add,
 .fx-chain.master {
   cursor: pointer; /* neither reorders: the ＋ makes one, the master is pinned to the signal */
-}
-.fx-chain.dragging {
-  opacity: 0.4;
-  cursor: grabbing;
-}
-.fx-chain.drop-before {
-  box-shadow: inset 3px 0 0 0 var(--accent);
-}
-.fx-chain.drop-after {
-  box-shadow: inset -3px 0 0 0 var(--accent);
 }
 /* A DEVICE hovering over a chip — a different act (move it INTO this chain), so a different
    mark: the whole chip lights rather than one edge. */
@@ -124,15 +124,20 @@
   opacity: 0.72;
 }
 .fx-chain.add {
+  flex: 0 0 auto;
   border-color: var(--line);
+  border-style: dashed;
   background: transparent;
   color: var(--muted);
   padding: 2px 9px;
 }
-/* ＋ and the MASTER travel together at the END of the row, and `margin-left: auto` pushes the
-   pair to the right edge whenever there is spare width — so the master sits at a CONSTANT place,
-   which is where it is in the signal. The row still scrolls when there isn't spare width; the
-   pair simply stays last. */
+.fx-chain.add:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
+}
+/* The MASTER rides at the END of the row, and `margin-left: auto` pushes it to the right edge
+   whenever there is spare width — so it sits at a CONSTANT place, which is where it is in the
+   signal. The row still scrolls when there isn't spare width; it simply stays last. */
 .fx-chain-tail {
   display: inline-flex;
   gap: 4px;
@@ -185,15 +190,21 @@
 }
 
 
-/* ＋ — add an effect to this chain. Dashed, muted, and last in the row: it is scaffolding, not
-   one of the devices. The devices a chain does NOT hold are not drawn at all; a struck-through
-   list of eight things you did not choose is not a workflow. */
+/* ＋ — add an effect to this chain. Dashed and muted: it is scaffolding, not one of the devices.
+   FIRST in the header and outside the scrolling row, so it is never the thing that slides out of
+   reach. (The devices a chain does NOT hold are not drawn at all; a struck-through list of eight
+   things you did not choose is not a workflow.) */
 .fx-tab.fx-tab-add {
   color: var(--muted);
   background: transparent;
   border-color: var(--line);
   border-style: dashed;
   padding-inline: 8px;
+}
+.fx-tab.fx-tab-add {
+  flex: 0 0 auto;
+  align-self: center;
+  cursor: pointer; /* it is not draggable — nothing to reorder */
 }
 .fx-tab.fx-tab-add:hover {
   color: var(--accent);
@@ -349,10 +360,6 @@ body:not(.no-glow) .fx-tab.sel {
 .fx-tab {
   cursor: grab;
 }
-.fx-tab.dragging {
-  opacity: 0.4;
-  cursor: grabbing;
-}
 /* A pointer-drag is ours the moment it starts, so nothing under it may run its own gesture — a
    text selection dragged out of a tab is the classic way a hand-rolled drag looks broken. */
 .fx-tabs.dragging,
@@ -360,12 +367,84 @@ body:not(.no-glow) .fx-tab.sel {
   user-select: none;
   -webkit-user-select: none;
 }
-/* Drop indicators — a bright edge marking the INSERTION point (gap) the drop lands in. */
-.fx-tab.drop-before {
-  box-shadow: inset 3px 0 0 0 var(--accent);
+
+/* ---- THE DRAG ITSELF -------------------------------------------------------------------------
+   ★ THE PILL YOU GRABBED IS THE PILL THAT MOVES. It lifts off the row and rides the pointer;
+   `translate3d` is written straight to the node every pointermove (see useReorderDrag), so this
+   rule only has to describe what "lifted" LOOKS like. Nothing here transitions transform — a
+   transition on the thing tracking your finger is lag, and lag is the whole feeling of a bad drag.
+
+   `pointer-events: none` is load-bearing, not polish: the floating pill sits under the cursor, and
+   the drop hit-test reads what is UNDERNEATH it. */
+.fx-tab.is-dragging,
+.fx-chain.is-dragging {
+  position: relative;
+  z-index: 30;
+  cursor: grabbing;
+  pointer-events: none;
+  opacity: 0.94;
+  border-color: var(--accent);
+  box-shadow:
+    0 10px 18px -6px rgba(0, 0, 0, 0.75),
+    0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+    0 0 18px -4px color-mix(in srgb, var(--accent) 70%, transparent);
+  transition: box-shadow 0.12s, opacity 0.12s; /* NOT transform */
 }
-.fx-tab.drop-after {
-  box-shadow: inset -3px 0 0 0 var(--accent);
+
+/* THE LANDING SPACE — outside the pill, never inside it. A stroke drawn on a pill's own edge says
+   "this pill is special"; the drop is not about a pill, it is about the GAP the dragged one falls
+   into. So the row opens a real space and lights it, and the neighbours slide apart to make it —
+   which is the same thing your hand is about to do. */
+.fx-tab,
+.fx-chain {
+  position: relative;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s,
+    margin-left 0.13s ease, margin-right 0.13s ease;
+}
+.fx-tab.drop-before,
+.fx-chain.drop-before {
+  margin-left: 18px;
+}
+.fx-tab.drop-after,
+.fx-chain.drop-after {
+  margin-right: 18px;
+}
+.fx-tab.drop-before::before,
+.fx-tab.drop-after::after,
+.fx-chain.drop-before::before,
+.fx-chain.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: fx-drop-in 0.13s ease-out both;
+}
+body:not(.no-glow) .fx-tab.drop-before::before,
+body:not(.no-glow) .fx-tab.drop-after::after,
+body:not(.no-glow) .fx-chain.drop-before::before,
+body:not(.no-glow) .fx-chain.drop-after::after {
+  box-shadow: 0 0 12px 0 color-mix(in srgb, var(--accent) 85%, transparent);
+}
+.fx-tab.drop-before::before,
+.fx-chain.drop-before::before {
+  left: -12px;
+}
+.fx-tab.drop-after::after,
+.fx-chain.drop-after::after {
+  right: -12px;
+}
+@keyframes fx-drop-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.3);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 .fx-palette {
   position: absolute;
@@ -2706,4 +2785,16 @@ body:not(.no-glow) .fx-mix-fill::after {
     flex: 0 0 auto;
     min-width: 52px;
   }
+}
+
+/* An empty chain says so in the one word that is true. It used to explain itself in a sentence,
+   and the ＋ that answers it is pinned one row above — a sentence you read once and read past
+   forever is worse than a label you never have to read at all. */
+.fx-empty {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
 }

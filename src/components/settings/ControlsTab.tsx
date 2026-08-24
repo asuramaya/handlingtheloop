@@ -17,8 +17,8 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
           </button>
         </div>
         <p className="settings-hint">
-          How the platter responds to a GRAB — mouse, touch, or a MIDI jog wheel — and release. Play/Pause and Spinback
-          have their own timing below, under Vinyl Speed Adjust.
+          How the platter responds when you grab it and let go, by mouse, touch or MIDI jog wheel. Play/Pause and
+          Spinback have their own timing below.
         </p>
         <Slider
           label="Weight"
@@ -58,7 +58,7 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
             <span className="toggle-knob" />
           </button>
         </div>
-        <p className="settings-hint">MIDI jog wheel only — mouse/touch scratching ignores these three.</p>
+        <p className="settings-hint">MIDI jog wheel only. Mouse and touch scratching ignore these three.</p>
         <Slider
           label="Sensitivity"
           hint={settings.jogSensitivity < 0.95 ? "fine" : settings.jogSensitivity > 1.05 ? "fast" : "vinyl"}
@@ -89,8 +89,8 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
           </button>
         </div>
         <p className="settings-hint">
-          How the Play/Pause BUTTONS (and the Spinback key/pad) spin the platter up and down like a real motor —
-          separate from grabbing the jog wheel itself, above.
+          How the Play/Pause buttons and the Spinback key spin the platter up and down like a real motor. Grabbing the
+          jog wheel is separate, above.
         </p>
         <div className="settings-row">
           <span className="settings-label">Turntable motor</span>

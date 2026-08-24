@@ -723,18 +723,23 @@ body {
 /* The sampler pad menu is the SHARED menu shell now (ContextMenu), so these style its contents
    rather than a second card: the mode chips, the two sliders, and their label rows. The stem row
    left entirely — it is the same StemPicker the FX chain menu uses. */
+/* One letter per mode now (S G L B), so they sit in a row of four like the stem cells above them
+   rather than a 2x2 of words. */
 .fx-preset-menu .smp-modes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 4px;
-  padding: 2px 2px 8px;
+  padding: 2px 6px 8px;
+}
+.fx-preset-menu .smp-modes button {
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  max-width: 34px;
 }
 .fx-preset-menu .smp-modes button {
   padding: 7px 4px;
   font-size: 11px;
   font-weight: 700;
   text-align: center;
-  text-transform: capitalize;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);

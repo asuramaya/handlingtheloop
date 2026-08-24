@@ -634,31 +634,17 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               { glyph: "✕", title: "Clear this pad", danger: true, onClick: () => { sampler.clearPad(smpMenu.i); setSmpMenu(null); refresh(); } },
             ]}
           >
-            <div className="ctx-label">Mode</div>
-            <div className="smp-modes">
-              {(["oneshot", "gate", "loop", "bounce"] as const).map((m) => (
-                <button key={m} className={sampler.pads[smpMenu.i].mode === m ? "active" : ""} onClick={() => { sampler.setMode(smpMenu.i, m); refresh(); }}>
-                  {m === "oneshot" ? "1-shot" : m}
-                </button>
-              ))}
-            </div>
-            <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
-            <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
-            {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
-            <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
-            <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
-            {sampler.pads[smpMenu.i].route !== "master" && (
+            {/* STEMS FIRST — it is the question that decides what this pad even IS (a slice of the
+                whole mix, or of the drums). The mode/level/pitch below shape how it plays.
+                Absent entirely with no stems on the deck: a sample cannot be a stem slice of a
+                track that has not been separated, so the question does not apply. */}
+            {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
               <>
                 <div className="ctx-label">Stems</div>
-                {/* The SAME picker the FX chain menu uses. Here the set is a FILTER — any subset,
-                    and FULL clears it back to the mix — where a chain's set is a partition. Same
-                    question, same widget; only the meaning differs. */}
                 <StemPicker
                   mask={stemsToMask(sampler.pads[smpMenu.i].stems)}
-                  hasStems={deck.hasStems}
-                  full
-                  note="no stems on this deck"
-                  onFull={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
+                  allOn={!sampler.pads[smpMenu.i].stems?.length}
+                  onAll={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
                   onToggle={(bit) => {
                     const next = stemsToMask(sampler.pads[smpMenu.i].stems) ^ bit;
                     sampler.setStems(smpMenu.i, next === 0 ? undefined : maskToStems(next));
@@ -667,6 +653,26 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 />
               </>
             )}
+            <div className="ctx-label">Mode</div>
+            {/* One letter each, like the stem cells above: S(hot) G(ate) L(oop) B(ounce). The words
+                were the only thing in either menu still spelling itself out. */}
+            <div className="smp-modes">
+              {([
+                { m: "oneshot", ch: "S", label: "One-shot" },
+                { m: "gate", ch: "G", label: "Gate" },
+                { m: "loop", ch: "L", label: "Loop" },
+                { m: "bounce", ch: "B", label: "Bounce" },
+              ] as const).map((x) => (
+                <button key={x.m} className={sampler.pads[smpMenu.i].mode === x.m ? "active" : ""} title={x.label} aria-label={x.label} onClick={() => { sampler.setMode(smpMenu.i, x.m); refresh(); }}>
+                  {x.ch}
+                </button>
+              ))}
+            </div>
+            <div className="ctx-label smp-lvl"><span>Level</span><span className="smp-lvl-val">{Math.round(sampler.pads[smpMenu.i].gain * 100)}%</span></div>
+            <input className="smp-gain" type="range" min={0} max={1.5} step={0.05} value={sampler.pads[smpMenu.i].gain} onChange={(e) => { sampler.setGain(smpMenu.i, Number(e.target.value)); refresh(); }} />
+            {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
+            <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
+            <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
           </Menu>
         )}
 

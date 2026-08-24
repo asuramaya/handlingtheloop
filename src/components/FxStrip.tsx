@@ -13,7 +13,7 @@ import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
-import { StemPicker, STEMS } from "./StemPicker";
+import { StemPicker, STEMS, ALL_STEM_BITS } from "./StemPicker";
 import { Menu } from "./ContextMenu";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
@@ -907,16 +907,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           ]}
         >
           {/* ★ THE STEMS, at the top of the menu that opens on the chip they belong to. Same
-              control the sampler's pad menu uses to pick which parts of the track a grab keeps —
-              one question, one widget, one set of colours. A stem has exactly one owner, so
-              taking one takes it from whoever held it; there is no "both" to draw. */}
-          <div className="ctx-label">Stems</div>
-          <StemPicker
-            mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
-            hasStems={deck.hasStems}
-            note="no stems loaded"
-            onToggle={(bit) => toggleStem(bit, chainMenu.id)}
-          />
+              control the sampler's pad menu uses to pick which parts of a grab to keep — one
+              question, one widget, one set of colours. A stem has exactly one owner, so taking one
+              takes it from whoever held it; there is no "both" to draw.
+              Absent entirely with no stems on the deck: a chain cannot hear a stem that has not
+              been separated, so the question does not apply and is not asked. */}
+          {deck.hasStems && (
+            <>
+              <div className="ctx-label">Stems</div>
+              <StemPicker
+                mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
+                allOn={((deck.fxChain(chainMenu.id)?.stems ?? 0) & ALL_STEM_BITS) === ALL_STEM_BITS}
+                onAll={() => { deck.setFxChainStems(chainMenu.id, ALL_STEM_BITS); refresh(); }}
+                onToggle={(bit) => toggleStem(bit, chainMenu.id)}
+              />
+            </>
+          )}
           <div className="fx-preset-sep" />
           {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
               below is a place you go shopping, once. */}

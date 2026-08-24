@@ -22,6 +22,7 @@ const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate",
 
 import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
+import { insertionToIndex, useReorderDrag } from "./useReorderDrag";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
 // the EQ curve keeps its full height). EVERY device — the EQ included — is a first-class
@@ -66,8 +67,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const emit = useEmit();
   const refresh = useRefresh();
   const [sel, setSel] = useState(0); // selected rack index
-  const [dragFrom, setDragFrom] = useState<number | null>(null); // tab being dragged
-  const [dropAt, setDropAt] = useState<number | null>(null); // INSERTION point 0..len (gap the drop lands in)
   const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu (right-click summon)
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
   // Hardware preset browsing (FLX FX SELECT): a per-kind cursor (0 = Default, 1..N = factory bank)
@@ -281,6 +280,39 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
 
   const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
 
+  // ★ TWO DRAGS, ONE GESTURE. Devices reorder within a chain; chains reorder within the row. They
+  // are the same act on two rows, so they are the same hook — and because it hit-tests by
+  // coordinate rather than riding HTML5 drag-and-drop, the gesture exists on touch. That is what
+  // let the ◀ ▶ menu buttons go: they were there because dragging did not work on a phone.
+  const draggedRef = useRef(false); // a drag ends in a click; that click is not a selection
+  const tabDrag = useReorderDrag({
+    group: `fx-tabs-${id}`,
+    onStart: () => { draggedRef.current = true; tabLong.cancel(); cancelMenuTimer(); setMenu(null); setAddMenu(null); setChainMenu(null); },
+    // `at` is an INSERTION point: removing the source first shifts later slots down one, so a
+    // rightward move lands at at-1.
+    onReorder: (from, at) => {
+      const to = insertionToIndex(from, at);
+      if (chain) { deck.moveFxIn(chain.id, from, to); broadcastRack(); refresh(); }
+      else reorder(from, Math.max(0, Math.min(to, deck.fxDevices.length - 1)));
+    },
+    // Dropped on a chain chip: the device is BUILT there and destroyed here — instances are per
+    // chain, so nothing is handed over.
+    onDropOn: (from, chainId) => {
+      const k = tabs[from]?.kind;
+      if (!k || chainId === chain?.id) return;
+      addDeviceToChain(k, chainId);
+      removeDeviceFromChain(k, chain?.id ?? "master");
+    },
+  });
+  const chainDrag = useReorderDrag({
+    group: `fx-chains-${id}`,
+    onStart: () => { draggedRef.current = true; chainLong.cancel(); setChainMenu(null); },
+    onReorder: (from, at) => {
+      const c = chains[from];
+      if (c && deck.moveFxChain(c.id, insertionToIndex(from, at))) { broadcastRack(); refresh(); }
+    },
+  });
+
   // Drag a tab to reorder the chain. The dragged device stays selected as it moves.
   const reorder = (from: number, to: number) => {
     if (from === to) return;
@@ -305,25 +337,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     if (idx >= 0) setSel(idx); // the selection follows the device, not the position
     broadcastRack();
     refresh();
-  };
-
-  const dropHere = () => {
-    if (chain && dragFrom != null && dropAt != null) {
-      // ★ Order is the CHAIN's, and the pads read the same list — so this drag is simultaneously
-      // "rearrange my pads" and "rewire the graph". There is no second list to keep in step.
-      deck.moveFxIn(chain.id, dragFrom, dragFrom < dropAt ? dropAt - 1 : dropAt);
-      broadcastRack();
-      refresh();
-      setDragFrom(null);
-      setDropAt(null);
-      return;
-    }
-    if (dragFrom != null && dropAt != null) {
-      const finalIdx = Math.max(0, Math.min(dragFrom < dropAt ? dropAt - 1 : dropAt, deck.fxDevices.length - 1));
-      reorder(dragFrom, finalIdx);
-    }
-    setDragFrom(null);
-    setDropAt(null);
   };
 
   // The FLX BEAT FX section drives this strip over `ctlRef`. The rack is fixed-membership now
@@ -472,9 +485,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setMenu({ slot, x: e.clientX, y: e.clientY });
   };
   // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
-  const tabLong = useLongPress<number>((slot, x, y) => { cancelMenuTimer(); select(slot); setMenu({ slot, x, y }); });
+  const tabLong = useLongPress<number>((slot, x, y) => { tabDrag.cancel(); cancelMenuTimer(); select(slot); setMenu({ slot, x, y }); });
   // Touch has no right-click: long-press a chain chip for the same menu.
-  const chainLong = useLongPress<string>((id, x, y) => openChainMenu(id, x, y));
+  const chainLong = useLongPress<string>((id, x, y) => { chainDrag.cancel(); openChainMenu(id, x, y); });
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
@@ -597,11 +610,23 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     }
     refresh();
   };
-  const copyToOther = () => {
-    if (!selDev) return;
-    deck.copyFxTo(otherDeck, cur); // ensures the other deck has the same device + params
+  /** ⇄ ONE DEVICE. It lands in the other deck's chain of the same NAME — a reverb built on your
+   *  drums is a reverb ON DRUMS, and a copy that forgets that half is not a copy. If the other deck
+   *  has no such chain, the copy brings the chain with it (see Deck.copyFxTo). */
+  const copyDeviceToOther = (slot: number) => {
+    const addr = deck.fxAddrAt(slot);
+    if (!addr) return;
+    deck.copyFxTo(otherDeck, addr);
     broadcastRack(otherId, otherDeck); // presence/order/effect-params
     emitControls(otherId); // eq params (and the rest of the other deck's control state)
+    refresh();
+  };
+  /** ⇄ A WHOLE CHAIN — name, stems, devices, params and order. This is the unit a DJ actually
+   *  built, and the one worth handing to the other deck in a single act. */
+  const copyChainToOther = (chainId: string) => {
+    deck.copyFxChainTo(otherDeck, chainId);
+    broadcastRack(otherId, otherDeck);
+    emitControls(otherId);
     refresh();
   };
   // The universal wet/dry. The EQ rides the eq* ControlParams (eqMix); every other device
@@ -625,9 +650,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           it. One line, the same chip language, and it SCROLLS rather than compresses, so it costs
           a deck column nothing in width at any size. A chip carries the chain's name and, as a
           left edge, the colour of the stems it owns; the selected chip opens the four-lane picker
-          when tapped again. Drag a device tab onto a chip to move that device into that chain. */}
+          when tapped again. Drag a device tab onto a chip to move that device into that chain, and
+          drag a chip itself to reorder the row. */}
       {ready && chains.length > 0 && (
-        <div className="fx-chains">
+        <div className={`fx-chains ${chainDrag.from != null || tabDrag.from != null ? "dragging" : ""}`} {...chainDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
           {chains.map((c) =>
             c.master ? (
               <span key="add-wrap" className="fx-chain-tail">
@@ -639,22 +665,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                   take stems, it takes the SUM of the chains, after them. */}
               <button
                 key={c.id}
-                className={`fx-chain master ${c.id === chain?.id ? "sel" : ""}`}
+                className={`fx-chain master ${c.id === chain?.id ? "sel" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
                 title={`${c.name}: the master channel — every chain sums here`}
                 // No menu, deliberately: there is nothing to set. The master takes no stems, it
                 // cannot be deleted, and it is not a chain you would save and recall.
-                onClick={() => setSelChainId(c.id)}
-                onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const k = tabs[dragFrom ?? -1]?.kind;
-                  // Drag a device onto another chip: it is BUILT there and destroyed here — the
-                  // instances are per chain, so nothing is handed over, a copy is made and the
-                  // original stops existing.
-                  if (k && c.id !== chain?.id) { addDeviceToChain(k, c.id); removeDeviceFromChain(k, chain?.id ?? "master"); }
-                  setDragFrom(null);
-                  setDropAt(null);
-                }}
+                onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } setSelChainId(c.id); }}
+                {...tabDrag.foreign(c.id)}
               >
                 <span className="fx-chain-name">{c.name}</span>
               </button>
@@ -662,22 +678,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             ) : (
               <button
                 key={c.id}
-                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""}`}
-                title={chainTitle(c)}
-                onClick={() => { if (!chainLong.fired.current) setSelChainId(c.id); }}
+                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""} ${chainDrag.from === chains.indexOf(c) ? "dragging" : ""} ${chainDrag.at === chains.indexOf(c) ? "drop-before" : ""} ${chainDrag.at === chains.indexOf(c) + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+                title={`${chainTitle(c)} · drag to reorder · right-click for stems and presets`}
+                onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (!chainLong.fired.current) setSelChainId(c.id); }}
                 {...chainLong.bind(c.id)}
+                {...chainDrag.bind(chains.indexOf(c))}
+                {...tabDrag.foreign(c.id)}
                 onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
-                onDragOver={(e) => { if (dragFrom != null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const k = tabs[dragFrom ?? -1]?.kind;
-                  // Drag a device onto another chip: it is BUILT there and destroyed here — the
-                  // instances are per chain, so nothing is handed over, a copy is made and the
-                  // original stops existing.
-                  if (k && c.id !== chain?.id) { addDeviceToChain(k, c.id); removeDeviceFromChain(k, chain?.id ?? "master"); }
-                  setDragFrom(null);
-                  setDropAt(null);
-                }}
               >
                 <span className="fx-chain-name">{c.name}</span>
                 <span className="fx-chain-src">
@@ -693,59 +700,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         </div>
       )}
       <div className="fx-head">
-      <div className="fx-tabs" role="tablist" ref={tabsRef}>
+      <div className={`fx-tabs ${tabDrag.from != null ? "dragging" : ""}`} role="tablist" ref={tabsRef} {...tabDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
         {tabs.map((d, i) => (
           <button
             key={d.kind}
-            className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${dropAt === i ? "drop-before" : ""} ${dropAt === i + 1 ? "drop-after" : ""} ${dragFrom === i ? "dragging" : ""}`}
-            onClick={() => { if (tabLong.fired.current) return; select(gi(i)); }}
+            className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "dragging" : ""}`}
+            onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); }}
             onContextMenu={(e) => openPresetMenu(e, gi(i))}
             {...tabLong.bind(gi(i))}
-            draggable
-            onDragStart={(e) => {
-              setDragFrom(i);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragOver={(e) => {
-              if (dragFrom == null) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              // Insertion point = before this tab, or after it (cursor past its midpoint).
-              const r = e.currentTarget.getBoundingClientRect();
-              const p = e.clientX > r.left + r.width / 2 ? i + 1 : i;
-              if (dropAt !== p) setDropAt(p);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              dropHere();
-            }}
-            onDragEnd={() => {
-              setDragFrom(null);
-              setDropAt(null);
-            }}
+            {...tabDrag.bind(i)}
             role="tab"
             aria-selected={cur === i}
-            title="Drag to reorder · right-click for presets"
+            title="Drag to reorder, or onto a chain chip to move it there · right-click for presets"
           >
             {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
           </button>
         ))}
-        {/* Trailing drop zone: lets a drag land AFTER the last tab (otherwise the end slot,
-            e.g. right of the EQ, has no tab to drop onto and is unreachable). Only live mid-drag. */}
-        {dragFrom != null && (
-          <div
-            className={`fx-drop-end ${dropAt === tabs.length ? "active" : ""}`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              if (dropAt !== tabs.length) setDropAt(tabs.length);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              dropHere();
-            }}
-          />
-        )}
         {/* ＋ — the only way a device enters a chain. Opens the two-step picker below. */}
         {others.length > 0 && (
           <button
@@ -759,14 +729,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         {/* Fixed-membership rack: the EQ + the pad-FX bank are permanent residents — no add/remove.
             Reorder by dragging a tab; dial / save presets by right-clicking one. */}
       </div>
-        {/* COPY — touched about once a session. Tucked into the header, out of the way of the
-            three controls you actually perform with. Parked outside the scrolling tab row so it
-            doesn't slide off. */}
-        {selDev && (
-          <button className="fx-copy" title={`Copy this device to deck ${otherId}`} aria-label={`Copy this device to deck ${otherId}`} onClick={copyToOther}>
-            ⇄
-          </button>
-        )}
+        {/* COPY used to live here, as a permanent header button for a thing touched about once a
+            session. It is in the menus now — on the device, and on the chain — where the rest of
+            "what can I do to this?" already is, and where it can say WHICH thing it copies. */}
       </div>
 
       <div className="fx-stage">
@@ -842,12 +807,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           // fixed-membership, so the device still exists — it is simply in no chain, and out of
           // the signal path, until something claims it again.
           acts={[
-            // ★ TOUCH PARITY. Reordering was drag-only, and HTML5 drag-and-drop does not exist on
-            // touch — so a phone could not change the device order, which since pad order IS
-            // processing order means a phone could not rewire the graph at all. These two do the
-            // same job with a tap, and they are reachable the same way on every surface.
-            { glyph: "◀", title: "Move earlier in the chain", onClick: () => { moveSelBy(-1); setMenu(null); } },
-            { glyph: "▶", title: "Move later in the chain", onClick: () => { moveSelBy(1); setMenu(null); } },
+            // ◀ ▶ used to sit here, because reordering was HTML5 drag-and-drop and that does not
+            // exist on touch — so a phone needed buttons to rewire the graph at all. The drag is
+            // pointer-based now and works with a finger, so the buttons are gone: one gesture for
+            // one act, on every surface. (The hardware SHIFT+BEAT knob still calls moveSelBy.)
+            { glyph: "⇄", title: `Copy ${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} to deck ${otherId}`, onClick: () => { copyDeviceToOther(menu.slot); setMenu(null); } },
             { glyph: "＋", title: "Save the current settings as a preset", onClick: () => saveCurrent(menu.slot) },
             {
               glyph: "✕",
@@ -900,6 +864,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           head={(deck.fxChain(chainMenu.id)?.name ?? "")}
           onClose={() => setChainMenu(null)}
           acts={[
+            // The whole chain, to the other deck — name, stems, devices, params, order.
+            { glyph: "⇄", title: `Copy ${(deck.fxChain(chainMenu.id)?.name ?? "this chain")} to deck ${otherId}`, onClick: () => { copyChainToOther(chainMenu.id); setChainMenu(null); } },
             { glyph: "＋", title: "Save this chain as a preset", onClick: () => { setDialog({ mode: "chain", at: chainMenu.id }); setChainMenu(null); } },
             ...(!!deck.fxChain(chainMenu.id)?.master
               ? [] // the master is the channel; it cannot leave

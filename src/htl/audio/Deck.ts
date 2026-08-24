@@ -2263,6 +2263,22 @@ export class Deck {
   setFxChainName(id: string, name: string) {
     this.rack.setChainName(id, name);
   }
+  /** Drag a chain to a new place in the row. Arrangement only — chains are parallel, so nothing
+   *  in the graph moves (see FxRack.moveChain). */
+  moveFxChain(id: string, to: number): boolean {
+    return this.rack.moveChain(id, to);
+  }
+  /** The chain on `other` that MEANS the same thing as `c` — matched by NAME, created with the
+   *  same stems if it has none. Ids are per-deck sequence numbers and mean nothing across decks;
+   *  the name is what a DJ recognises, and what both chips read. */
+  private likeChainOn(other: Deck, c: FxChain): FxChain {
+    if (c.master) return other.rack.master;
+    const hit = other.rack.chainList.find((o) => !o.master && o.name === c.name);
+    if (hit) return hit;
+    const made = other.addFxChain(c.name);
+    if (c.stems) other.setFxChainStems(made.id, c.stems); // enforces the partition on THAT deck
+    return made;
+  }
   /** Create a device and put it in a chain. Null if the chain already holds that kind, or the kind
    *  is unknown. Pad-throw kinds land DORMANT, exactly as they do in the master rack. */
   addFxTo(chainId: string, kind: FxKind, at?: number): FxDevice | null {
@@ -2463,24 +2479,40 @@ export class Deck {
   get noiseThrowing(): boolean {
     return (this.padDev("noise") as NoiseFx | undefined)?.throwing ?? false;
   }
-  /** Copy the device at rack index `i` to `other` — same kind, same params. The EQ copies
-   *  to the other deck's EQ; an effect copies to the other's same-kind device (added if
-   *  missing). Returns the destination rack index on `other`, or −1. */
-  copyFxTo(other: Deck, i: number): number {
-    const src = this.rack.deviceAt(i);
-    if (!src) return -1;
-    let dstIdx = other.rack.list.findIndex((d) => d.kind === src.kind);
-    if (dstIdx < 0) {
-      const added = other.addFx(src.kind);
-      if (!added) return -1;
-      dstIdx = other.rack.list.indexOf(added);
-    }
-    const dst = other.rack.deviceAt(dstIdx);
-    if (!dst) return -1;
+  /** Copy ONE device to the other deck. ★ A COPY CARRIES ITS ADDRESS. A device lives at
+   *  (chain, kind), and a reverb built on your drums is a reverb ON DRUMS — landing it in the other
+   *  deck's master would keep the effect and throw away the half of it that matters. So it lands in
+   *  the chain of the same NAME, and if the other deck has no such chain the copy brings the chain
+   *  with it. Returns the destination address, or null. */
+  copyFxTo(other: Deck, addr: FxAddr): FxAddr | null {
+    const from = this.rack.chain(addr.chain);
+    const src = this.rack.device(addr);
+    if (!from || !src) return null;
+    const dstChain = this.likeChainOn(other, from);
+    const dst = dstChain.devices.find((d) => d.kind === src.kind) ?? other.addFxTo(dstChain.id, src.kind);
+    if (!dst) return null;
     const p = src.snapshotParams();
     for (const k in p) dst.setParam(k, p[k]);
     dst.setBypass(src.bypassed, true); // administrative copy, not a live toggle — land it instantly
-    return dstIdx;
+    return { chain: dstChain.id, kind: src.kind };
+  }
+  /** Copy a WHOLE chain — its name, its stems, and every device it holds with its params and its
+   *  ORDER, which inside a chain is signal order and so has to travel too. Devices the destination
+   *  already holds are overwritten in place; devices it holds that this one does not are LEFT
+   *  ALONE and settle after the copied run. A copy adds, it does not prune: silently deleting the
+   *  other deck's work is not something a one-click gesture gets to do. Returns the destination
+   *  chain id, or null. */
+  copyFxChainTo(other: Deck, chainId: string): string | null {
+    const c = this.rack.chain(chainId);
+    if (!c) return null;
+    const dst = this.likeChainOn(other, c);
+    if (!c.master && dst.stems !== c.stems) other.setFxChainStems(dst.id, c.stems);
+    for (const d of c.devices) this.copyFxTo(other, { chain: c.id, kind: d.kind });
+    c.devices.forEach((d, i) => {
+      const at = dst.devices.findIndex((x) => x.kind === d.kind);
+      if (at >= 0 && at !== i) other.moveFxIn(dst.id, at, i);
+    });
+    return dst.id;
   }
   /** Serialize the WHOLE chain (order + presence) for the session snapshot + profiles. The
    *  EQ carries no params here — those ride the eq* ControlParams — just its slot/position. */

@@ -188,6 +188,24 @@ export class FxRack {
     this.rebuild();
     return true;
   }
+  /** Reorder the chain row. ★ CHAIN ORDER IS NOT SIGNAL ORDER — stem chains are PARALLEL and all
+   *  sum into the master, so moving one changes nothing you can hear. What it changes is the order
+   *  you WALK: the chip row, the chain-step knob, and the flat device list every slot address
+   *  reads. That is arrangement, and arrangement is worth being able to set by hand. No rebuild:
+   *  not one edge in the graph is different afterwards, and tearing the whole rack down to put it
+   *  back identically is a click nobody asked for. The master neither moves nor can be moved past —
+   *  its place at the end IS its place in the signal. */
+  moveChain(id: string, to: number): boolean {
+    const from = this.chains.findIndex((c) => c.id === id);
+    if (from < 0 || this.chains[from].master) return false;
+    const masterAt = this.chains.findIndex((c) => c.master);
+    const [c] = this.chains.splice(from, 1);
+    // After the splice the master has shifted left iff it sat after the source.
+    const limit = masterAt < 0 ? this.chains.length : from < masterAt ? masterAt - 1 : masterAt;
+    const dst = Math.max(0, Math.min(to, limit));
+    this.chains.splice(dst, 0, c);
+    return dst !== from;
+  }
   setChainStems(id: string, stems: number) {
     const c = this.chain(id);
     if (!c || c.master) return;

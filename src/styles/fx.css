@@ -18,30 +18,6 @@
   flex: 0 0 auto;
   min-width: 0;
 }
-/* COPY — touched about once a session. Deliberately quiet, and out of the way of the three
-   controls you actually perform with (which live in the foot). */
-.fx-copy {
-  flex: 0 0 auto;
-  width: 26px;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--panel));
-  border-radius: 6px;
-  cursor: pointer;
-  opacity: 0.5;
-  transition: opacity 0.12s, border-color 0.12s, color 0.12s;
-}
-.fx-copy:hover {
-  opacity: 1;
-  color: #fff;
-  border-color: var(--accent);
-}
-
 /* ---- THE CHAIN ROW ---------------------------------------------------------------------------
    Master/detail, laid on its side. One 22 px row above the device tabs: the chains. It uses the
    same chip language as .fx-tabs and the same rule — SLIDE, never squish — because the host is a
@@ -88,6 +64,32 @@
   color: #fff;
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+}
+/* The chips drag exactly as the device tabs do — same grab cursor, same faded source, same
+   insertion edge. Two rows, one gesture, so learning it once is learning it. */
+.fx-chain {
+  cursor: grab;
+}
+.fx-chain.add,
+.fx-chain.master {
+  cursor: pointer; /* neither reorders: the ＋ makes one, the master is pinned to the signal */
+}
+.fx-chain.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+.fx-chain.drop-before {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.fx-chain.drop-after {
+  box-shadow: inset -3px 0 0 0 var(--accent);
+}
+/* A DEVICE hovering over a chip — a different act (move it INTO this chain), so a different
+   mark: the whole chip lights rather than one edge. */
+.fx-chain.drop-in {
+  color: #fff;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 34%, var(--surface));
 }
 .fx-chain-name {
   color: inherit;
@@ -344,11 +346,19 @@ body:not(.no-glow) .fx-tab.sel {
   opacity: 0.5;
   text-decoration: line-through;
 }
-.fx-tab[draggable] {
+.fx-tab {
   cursor: grab;
 }
 .fx-tab.dragging {
   opacity: 0.4;
+  cursor: grabbing;
+}
+/* A pointer-drag is ours the moment it starts, so nothing under it may run its own gesture — a
+   text selection dragged out of a tab is the classic way a hand-rolled drag looks broken. */
+.fx-tabs.dragging,
+.fx-chains.dragging {
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* Drop indicators — a bright edge marking the INSERTION point (gap) the drop lands in. */
 .fx-tab.drop-before {
@@ -356,26 +366,6 @@ body:not(.no-glow) .fx-tab.sel {
 }
 .fx-tab.drop-after {
   box-shadow: inset -3px 0 0 0 var(--accent);
-}
-/* Trailing drop zone: fills the gap after the last tab for hit-testing, but stays INVISIBLE
-   — only a thin insertion line at its left edge (right after the last tab) shows the target,
-   so dragging to the far right doesn't paint a giant empty box. */
-.fx-drop-end {
-  flex: 1 1 24px;
-  min-width: 24px;
-  align-self: stretch;
-  position: relative;
-}
-.fx-drop-end.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 2px;
-  bottom: 2px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-  box-shadow: 0 0 8px -1px color-mix(in srgb, var(--accent) 80%, transparent);
 }
 .fx-palette {
   position: absolute;

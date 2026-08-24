@@ -40,5 +40,8 @@ export function useLongPress<T = void>(onLongPress: (payload: T, x: number, y: n
     onTouchCancel: clear,
   });
 
-  return { bind, fired };
+  // ★ THE TWO GESTURES SHARE A PRESS. A finger that holds still opens the menu; a finger that holds
+  // then MOVES reorders. Whichever commits first has to call the other off, or a slow drag that
+  // pauses under the long-press slop opens a menu on top of itself. This is that call.
+  return { bind, fired, cancel: clear };
 }

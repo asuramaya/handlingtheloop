@@ -248,8 +248,17 @@
    measured from the row that opened it, on whichever side has room. */
 .fx-add-more {
   float: right;
-  opacity: 0.5;
   margin-left: 8px;
+  /* Its own tap target, because on touch it is the ONLY way to the preset bank — hover is not a
+     gesture a finger has. 24px so a thumb can hit it without hitting the row it sits in. */
+  min-width: 24px;
+  text-align: center;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.fx-add-more:hover {
+  opacity: 1;
+  color: var(--accent);
 }
 .fx-palette-item.hot {
   background: color-mix(in srgb, var(--accent) 14%, transparent);

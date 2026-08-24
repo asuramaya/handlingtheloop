@@ -1029,26 +1029,42 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               most of the time you want the effect, not a particular preset of it. So the click is
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the
               menu: there when you want them, never in the way when you don't. */}
-          {others.map((k) => (
-            <button
-              key={k}
-              className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
-              role="menuitem"
-              onMouseEnter={(e) => {
-                const bank = factoryFxPresets(k);
-                if (!bank.length) { setAddHover(null); return; }
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                // Open on whichever side has room. 170 px is the flyout's own min-width; asking
-                // the DOM would mean rendering it first, in the wrong place, for one frame.
-                const flip = r.right + 174 > window.innerWidth - 6;
-                setAddHover({ kind: k, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
-              }}
-              onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); }}
-            >
-              {KIND_LABEL[k] ?? k.toUpperCase()}
-              {factoryFxPresets(k).length > 0 && <span className="fx-add-more">›</span>}
-            </button>
-          ))}
+          {others.map((k) => {
+            const bank = factoryFxPresets(k);
+            // ★ TOUCH IS PERFORM *AND* CREATE. A phone has no keyboard and no controller, so
+            // anything it cannot reach it cannot do at all — and the preset flyout opened on
+            // HOVER, which does not exist on touch. So the chevron is its OWN tap target: tap the
+            // name to add with Default, tap the › to choose what it lands on. Hover still opens it
+            // for a mouse; the tap target is the parity, not a replacement.
+            const openFly = (el: HTMLElement) => {
+              const r = el.getBoundingClientRect();
+              const flip = r.right + 174 > window.innerWidth - 6;
+              setAddHover({ kind: k, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
+            };
+            return (
+              <button
+                key={k}
+                className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
+                role="menuitem"
+                onMouseEnter={(e) => { if (bank.length) openFly(e.currentTarget); }}
+                onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); }}
+              >
+                {KIND_LABEL[k] ?? k.toUpperCase()}
+                {bank.length > 0 && (
+                  <span
+                    className="fx-add-more"
+                    role="button"
+                    tabIndex={-1}
+                    aria-label={`${KIND_LABEL[k] ?? k} presets`}
+                    title="Choose what it lands on"
+                    onClick={(e) => { e.stopPropagation(); openFly(e.currentTarget.parentElement as HTMLElement); }}
+                  >
+                    ›
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </FxMenu>
       )}
       {addMenu && addHover && (

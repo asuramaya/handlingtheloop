@@ -4,6 +4,7 @@ import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
+import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -629,33 +630,24 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               {/* Pitch: varispeed repitch in semitones (play one grab as any note). Dbl-click the row label to reset. */}
               <div className="ctx-label smp-lvl" onDoubleClick={() => { sampler.setPitch(smpMenu.i, 0); refresh(); }}><span>Pitch</span><span className="smp-lvl-val">{sampler.pads[smpMenu.i].pitch > 0 ? "+" : ""}{sampler.pads[smpMenu.i].pitch} st</span></div>
               <input className="smp-gain smp-pitch" type="range" min={-12} max={12} step={1} value={sampler.pads[smpMenu.i].pitch} onChange={(e) => { sampler.setPitch(smpMenu.i, Number(e.target.value)); refresh(); }} />
-              {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
+              {sampler.pads[smpMenu.i].route !== "master" && (
                 <>
                   <div className="ctx-label">Stems</div>
-                  {/* Multi-select: each stem toggles in/out of the chopped subset; "full" clears to the
-                      mix. Derived from what was audible at grab, editable here. */}
-                  <div className="smp-modes smp-stems">
-                    {(() => {
-                      const cur = sampler.pads[smpMenu.i].stems ?? [];
-                      return (
-                        <>
-                          <button className={cur.length === 0 ? "active" : ""} onClick={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}>full</button>
-                          {STEM_CELLS.map((s) => {
-                            const on = cur.includes(s.name);
-                            return (
-                              <button
-                                key={s.name}
-                                className={on ? "active" : ""}
-                                onClick={() => { sampler.setStems(smpMenu.i, on ? cur.filter((n) => n !== s.name) : [...cur, s.name]); refresh(); }}
-                              >
-                                {s.label.toLowerCase()}
-                              </button>
-                            );
-                          })}
-                        </>
-                      );
-                    })()}
-                  </div>
+                  {/* The SAME picker the FX chain menu uses. Here the set is a FILTER — any subset,
+                      and FULL clears it back to the mix — where a chain's set is a partition. Same
+                      question, same widget; only the meaning differs. */}
+                  <StemPicker
+                    mask={stemsToMask(sampler.pads[smpMenu.i].stems)}
+                    hasStems={deck.hasStems}
+                    full
+                    note="no stems on this deck"
+                    onFull={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
+                    onToggle={(bit) => {
+                      const next = stemsToMask(sampler.pads[smpMenu.i].stems) ^ bit;
+                      sampler.setStems(smpMenu.i, next === 0 ? undefined : maskToStems(next));
+                      refresh();
+                    }}
+                  />
                 </>
               )}
               <div className="ctx-sep" />

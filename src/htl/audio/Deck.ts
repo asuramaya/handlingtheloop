@@ -824,6 +824,7 @@ export class Deck {
     this._bend = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.stemsLoaded = false;
+    this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = false; // ...and it is NOT this track's neural split until one lands
     this.stemsVideoId = null;
     this.stemMuted = { vocals: false, drums: false, bass: false, other: false };
@@ -895,6 +896,7 @@ export class Deck {
   markRemoteStems(present: boolean, neural = true) {
     this.remoteStems = present;
     this.stemsLoaded = present;
+    this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = present && neural;
     if (!present) this.stemPyramids = null;
   }
@@ -1148,6 +1150,7 @@ export class Deck {
   setStems(stems: Stems | null, neural = false, videoId?: string) {
     this.stems = stems;
     this.stemsLoaded = !!stems;
+    this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = !!stems && neural;
     this.stemsVideoId = stems ? (videoId ?? null) : null;
     // Real local stems (desktop neural OR the on-device DSP baseline) are authoritative —
@@ -1301,6 +1304,7 @@ export class Deck {
   loadPackedStems(packed: PackedStems, neural = false, videoId?: string) {
     this.stems = null;
     this.stemsLoaded = true;
+    this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = neural;
     this.stemsVideoId = videoId ?? null;
     this.remoteStems = false; // real local stems — no longer mirroring a host's remote view
@@ -2280,7 +2284,12 @@ export class Deck {
   /** Turn the per-stem taps on iff some chain actually listens to stems, and (re)hand the rack the
    *  way to reach them. Idempotent — every chain edit ends here. */
   private syncStemTaps() {
-    const needs = this.rack.needsStems;
+    // ★ A STEM CHAIN NEEDS STEMS TO EXIST. Without them the worklet holds ONE pcm group, so tap 0
+    // carries the WHOLE TRACK and taps 1-3 are silent — a "drums" chain would process everything
+    // while bass/voice/inst chains got nothing, which is the worst possible failure: it looks
+    // routed and sounds wrong. With no stems the rack falls back to feeding the sum the whole
+    // signal (see FxRack.rebuild), so the deck plays normally and the stem chains simply wait.
+    const needs = this.rack.needsStems && this.hasStems;
     this.setStemTaps(needs);
     this.rack.setStemSource(needs ? (i) => this.stemTap(i) : null);
   }

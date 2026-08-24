@@ -280,6 +280,18 @@ export class FxRack {
       }
     }
     this.chainNodes = [];
+    // The stem taps are the DECK's nodes, reused across rebuilds — so their outgoing edges to the
+    // heads we just threw away survive unless we cut them here. Left in place they pile up one set
+    // per rebuild, feeding a growing pile of orphans forever.
+    if (this.stemTap) {
+      for (let i = 0; i < 4; i++) {
+        try {
+          this.stemTap(i)?.disconnect();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     // Run one chain's devices in order, from `from`, and return the node its signal leaves on.
     const runDevices = (devs: readonly FxDevice[], from: AudioNode): AudioNode => {
       let prev = from;

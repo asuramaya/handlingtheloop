@@ -140,22 +140,58 @@
 }
 /* The master carries no stem letters and no edge — it is named, and that is enough. */
 
-/* THE STEMS — four square toggles at the top of a chain's own menu. Always four, always the same
-   order, lit where the chain listens. They used to unfold an extra ROW under the chain row, which
-   shoved the whole rack down every time you glanced at a source. */
-.fx-stemgrid {
+/* THE STEM PICKER — one control, two menus (the FX chain menu and the sampler pad menu). Four
+   fixed cells in the stem colours, always all four, lit where the set includes them; the sampler
+   adds a leading FULL cell for "no filter", which a chain has no equivalent of. It used to unfold
+   an extra ROW under the chain row, shoving the whole rack down every time you glanced at a
+   source, and the sampler drew the same idea as plain text buttons in a different language. */
+.stem-pick {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   padding: 4px 6px 2px;
 }
-/* A deck with nothing separated yet: the squares stay in place and go inert, with the reason
-   spelled out under them. A control that disappears when it can't be used teaches nothing. */
-.fx-stemgrid.cold .fx-stemsq {
+.stem-cell {
+  flex: 1 1 0;
+  min-width: 26px;
+  aspect-ratio: 1;
+  max-width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--lane, var(--line)) 28%, var(--panel));
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--lane, var(--muted)) 55%, var(--muted));
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.stem-cell.wide {
+  aspect-ratio: auto;
+  max-width: none;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  --lane: var(--accent);
+}
+.stem-cell:hover:not(:disabled) {
+  border-color: var(--lane, var(--accent));
+  color: #fff;
+}
+.stem-cell.on {
+  background: color-mix(in srgb, var(--lane, var(--accent)) 24%, transparent);
+  border-color: var(--lane, var(--accent));
+  color: #fff;
+}
+/* A deck with nothing separated yet: the cells stay in place and go inert, with the reason under
+   them. A control that disappears when it cannot be used teaches nothing. */
+.stem-pick.cold .stem-cell {
   opacity: 0.35;
   cursor: not-allowed;
 }
-.fx-stemgrid-note {
+.stem-pick-note {
   flex: 1 0 100%;
   padding-top: 2px;
   font-size: 7.5px;
@@ -164,30 +200,7 @@
   text-transform: uppercase;
   color: var(--muted);
 }
-.fx-stemsq {
-  flex: 1 1 0;
-  aspect-ratio: 1;
-  max-width: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--lane) 28%, var(--panel));
-  border-radius: 5px;
-  background: transparent;
-  color: color-mix(in srgb, var(--lane) 55%, var(--muted));
-  font-size: 11px;
-  font-weight: 800;
-  cursor: pointer;
-}
-.fx-stemsq:hover {
-  border-color: var(--lane);
-  color: #fff;
-}
-.fx-stemsq.on {
-  background: color-mix(in srgb, var(--lane) 24%, transparent);
-  border-color: var(--lane);
-  color: #fff;
-}
+
 
 /* ＋ — add an effect to this chain. Dashed, muted, and last in the row: it is scaffolding, not
    one of the devices. The devices a chain does NOT hold are not drawn at all; a struck-through

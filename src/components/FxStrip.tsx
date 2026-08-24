@@ -13,6 +13,7 @@ import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
+import { StemPicker, STEMS } from "./StemPicker";
 import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
 
@@ -290,12 +291,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // partition true: a stem handed to one chain is taken from whoever held it, and a device moved
   // into one chain leaves the other. There is no state in which a stem is in two chains, because
   // there is no code path that can put it there.
-  const LANES: { bit: number; label: string; color: string }[] = [
-    { bit: 1, label: "DRUM", color: "#ff5d73" },
-    { bit: 2, label: "BASS", color: "#b06bff" },
-    { bit: 4, label: "VOICE", color: "#5dff9e" },
-    { bit: 8, label: "INST", color: "#36c2ff" },
-  ];
+  const LANES = STEMS; // the chip initials and the picker read the same table
   // The source read-out is the four INITIALS, each in its stem's colour, and it is always the
   // same four positions — so "which stems does this chain hear" is a glance at a fixed shape
   // (DBVI, D‧V‧, ‧‧VI) rather than a sentence to parse. "DRUM +1" made you count.
@@ -967,31 +963,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               : [{ glyph: "✕", title: `Delete ${(deck.fxChain(chainMenu.id)?.name ?? "")}`, danger: true, onClick: () => { removeChain(chainMenu.id); setChainMenu(null); } }]),
           ]}
         >
-          {/* ★ THE STEMS, at the top of the menu that opens on the chip they belong to — four
-              square toggles, always all four, lit where this chain listens. They used to unfold a
-              whole extra ROW under the chain row, which pushed the rack down every time you
-              glanced at a source. A stem has exactly one owner, so taking one takes it from
-              whoever held it; there is no "both" to draw. */}
-          <div className={`fx-stemgrid ${deck.hasStems ? "" : "cold"}`}>
-            {LANES.map((l) => (
-              <button
-                key={l.label}
-                className={`fx-stemsq ${(deck.fxChain(chainMenu.id)?.stems ?? 0) & l.bit ? "on" : ""}`}
-                style={{ ["--lane" as string]: l.color }}
-                // A deck with no stems separated yet cannot route one. The squares stay VISIBLE
-                // and go inert rather than disappearing: a control that vanishes teaches nothing,
-                // and the chain you are looking at is still a real chain — it just has no sources
-                // to hand it until the stems land.
-                disabled={!deck.hasStems}
-                title={deck.hasStems ? l.label : `${l.label} — no stems on this deck yet`}
-                aria-label={l.label}
-                onClick={() => toggleStem(l.bit, chainMenu.id)}
-              >
-                {l.label[0]}
-              </button>
-            ))}
-            {!deck.hasStems && <span className="fx-stemgrid-note">no stems loaded</span>}
-          </div>
+          {/* ★ THE STEMS, at the top of the menu that opens on the chip they belong to. Same
+              control the sampler's pad menu uses to pick which parts of the track a grab keeps —
+              one question, one widget, one set of colours. A stem has exactly one owner, so
+              taking one takes it from whoever held it; there is no "both" to draw. */}
+          <div className="ctx-label">Stems</div>
+          <StemPicker
+            mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
+            hasStems={deck.hasStems}
+            note="no stems loaded"
+            onToggle={(bit) => toggleStem(bit, chainMenu.id)}
+          />
           <div className="fx-preset-sep" />
           {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
               below is a place you go shopping, once. */}

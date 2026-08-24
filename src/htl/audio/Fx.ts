@@ -60,6 +60,10 @@ export interface FxDevice {
    *  neutral on a double-click (the delay's wet/dry rests at 28%, the saturator's at 100%). */
   paramDefault(id: string): number;
 
+  /** Turn a live throw into a plain latch — engaged, but at the user's own settings rather than
+   *  the throw's boost and mix floor. Absent on devices with no throw of their own (the EQ). */
+  latchThrow?(): void;
+
   /** Free any held nodes/buffers when removed from the rack (reverb IR, delay lines). */
   dispose?(): void;
 }
@@ -710,6 +714,26 @@ export abstract class BaseFxDevice implements FxDevice {
    *  a restoration of it. null opts a device out of the floor entirely (none currently do). */
   protected get throwMix(): number | null {
     return this.paramDefault("mix");
+  }
+
+  /** ★ Convert a LIVE throw into a plain latch: drop the throw's character boost and its mix
+   *  floor, but leave the device ENGAGED at the settings the DJ actually dialled.
+   *
+   *  This is what makes tap and hold two different musical acts on one pad. A hold is a SLAM — the
+   *  boost, and a mix floor that guarantees you hear it. A tap brings the effect in as you left
+   *  it, at your wet percentage, which is the artistic control: the pad becomes an on/off for a
+   *  sound you built rather than a preset that overwrites it every time you touch it.
+   *
+   *  After this the device is no longer "thrown", so it will NOT re-bypass itself on release —
+   *  it is simply on, exactly as if you had un-bypassed it by hand. */
+  latchThrow() {
+    if (!this._thrown) return;
+    this._thrown = false;
+    this.applyThrowBoost(false);
+    this._mixGuard.release((v) => this.setMix(v));
+    this._throwPrevBypass = false; // it stays on now — there is nothing to return to
+    this._releasePending = false;
+    this._releaseGen++; // cancel any pending re-bypass from an earlier release
   }
 
   /** Engage/release a throw. The CALLER's lifetime decides latch (sticky) vs momentary (held). When

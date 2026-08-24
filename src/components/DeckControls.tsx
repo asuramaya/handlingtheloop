@@ -3,7 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
 import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
-import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease } from "./fxPads";
+import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -214,7 +214,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // source-agnostic since it reacts to the resulting STATE, not the trigger. A no-op via
   // the browser's own "nearest" logic when it's already visible.
   const fxBankRef = useRef<HTMLDivElement>(null);
-  const activeFxIdx = padsForDeck(deck).findIndex((pad) => pad?.active?.(deck));
+  const activeFxIdx = padsForDeck(deck).findIndex((pad) => pad && fxPadIsOn(deck, pad));
   useEffect(() => {
     if (deck.padMode !== "fx" && deck.padMode !== "fx2") return;
     if (activeFxIdx < 0) return;
@@ -572,7 +572,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `empty${i}`}
-              className={`pad fx ${pad ? "" : "empty"} ${pad?.active?.(deck) ? "playing latched" : ""}`}
+              className={`pad fx ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing latched" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
               title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
@@ -596,7 +596,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `e${i}`}
-              className={`pad fx fx2 ${pad ? "" : "empty"} ${pad?.active?.(deck) ? "playing" : ""}`}
+              className={`pad fx fx2 ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
               title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint}` : "Empty slot"}

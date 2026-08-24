@@ -83,7 +83,20 @@ export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
 // press/release rule lives HERE, once, keyed by deck+slot rather than by input device. That also
 // makes the transports interoperable: press with a finger, release with the key, and the pad
 // behaves — because the held state belongs to the PAD, not to whoever pushed it.
-export const FX_HOLD_MS = 220; // the single tunable the whole gesture rests on — tune by ear
+export const FX_HOLD_MS = 220;
+
+/** The device a pad points at, in the chain the pads are aimed at. */
+function padDevice(deck: Deck, pad: FxPadDef) {
+  return pad.kind ? deck.fxChain(deck.fxFocus)?.devices.find((d) => d.kind === pad.kind) : undefined;
+}
+/** Is this pad's effect audible right now? A device can be live in TWO ways since a tap started
+ *  latching it at the user's own mix: mid-throw (the device's own `throwing` flag) or simply
+ *  un-bypassed. Reading only the first left a latched pad dark while its effect was running. */
+export function fxPadIsOn(deck: Deck, pad: FxPadDef): boolean {
+  if (pad.active?.(deck)) return true;
+  const d = padDevice(deck, pad);
+  return !!d && pad.kind !== "eq" && !d.bypassed; // the EQ is always in circuit; its pad is a curve throw
+} // the single tunable the whole gesture rests on — tune by ear
 // What is physically down, and whether it was ALREADY lit when it went down — the second half is
 // what makes a tap a TOGGLE rather than a one-way switch.
 const heldPads = new Map<string, { t: number; wasOn: boolean }>();
@@ -99,7 +112,7 @@ export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: b
   // reveal and the re-render too — swallowing only the throw still left the panel re-selecting
   // and the deck re-rendering for as long as the key was held.
   if (heldPads.has(key)) return { fired: false, repeat: true, kind: pad.kind };
-  const wasOn = pad.active?.(deck) ?? false;
+  const wasOn = fxPadIsOn(deck, pad);
   heldPads.set(key, { t: performance.now(), wasOn });
   if (wasOn) return { fired: false, kind: pad.kind }; // already lit — the release decides its fate
   pad.on(deck);
@@ -119,8 +132,20 @@ export function fxPadRelease(deck: Deck, deckId: string, slot: number): boolean 
   // which reads as a stuck effect, because every other latching control in the world toggles.
   // A HOLD is momentary either way: past the threshold, release always lets go.
   const held = performance.now() - rec.t >= FX_HOLD_MS;
-  if (!held && !rec.wasOn) return false; // quick tap that turned it on — leave it latched
+  const dev = padDevice(deck, pad);
+  if (!held && !rec.wasOn) {
+    // ★ TAP TO LATCH — and settle to what the DJ dialled. The press fired a throw (boost + a mix
+    // floor that guarantees you hear it), which is right for a hold; for a latch it would leave
+    // the effect stuck at the throw's percentage forever, overwriting the wet you set. So the
+    // moment a press turns out to be a tap, the throw becomes a plain engagement at your own
+    // settings. Hold = slam. Tap = bring it in as it is.
+    dev?.latchThrow?.();
+    return false;
+  }
   pad.off?.(deck);
+  // A LATCHED device is not "thrown", so releasing the throw does not put it away — take it out
+  // of circuit explicitly. Never the EQ: that is the channel EQ and its pad throws a curve.
+  if (!held && rec.wasOn && dev && pad.kind !== "eq" && !dev.bypassed) dev.setBypass(true);
   return true;
 }
 

@@ -88,12 +88,14 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
       style={{ ["--xa" as string]: accentA, ["--xb" as string]: accentB }}
       title={smart ? "Smart Fader armed — throw the fader to auto-transition (tempo morph + bass swap)" : undefined}
     >
-      {/* THE MODE, SAID OUT LOUD. The chip that used to announce this is gone, so the bar names its
-          own state — and only when that state is not the ordinary one, so the resting board stays
-          quiet. The keybind rides along under body.show-keys, as every other control's does. */}
-      {(smart || !enabled) && (
-        <span className={`xbar-mode ${smart ? "smart" : "off"}`} aria-live="polite">
-          {smart ? "SMART" : "FADER OFF"}
+      {/* ★ ONLY THE STATE YOU CANNOT SEE. Smart-armed is unmistakable — the whole track becomes a
+          breathing A↔B gradient — so a pill spelling "SMART" next to it is a caption on a picture
+          that already said it. Disabled is NOT: it is a 45% opacity change, which reads as "dim"
+          rather than "off" and is easily confused with the session lock. So that one keeps its
+          label, and the resting board still says nothing. */}
+      {!enabled && (
+        <span className="xbar-mode off" aria-live="polite">
+          FADER OFF
           {kbd && <i className="xbar-kbd">{kbd}</i>}
         </span>
       )}

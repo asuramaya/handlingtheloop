@@ -392,23 +392,9 @@ body {
   width: min(560px, 80%);
 }
 
-/* ---- Sampler strip (over the A/B crossfader) -------------------------------- */
-/* 12 pads: [A A A A | G G G G | B B B B]. Position encodes the route — left four
-   into deck A's channel, middle four to master (global files), right four into
-   deck B's channel. A relative wrapper anchors the error toast + context menu. */
-.sampler-strip {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  width: 100%; /* fill the middle third's width — controls spread evenly */
-  margin: 6px 0 2px;
-  /* This strip is the master/global zone — it must NOT borrow deck A's hue (which is what --accent
-     resolves to in this part of the tree). Re-point --accent at a bright NEUTRAL (interface text)
-     so active states (lit LED, selector value, on-fills) pop without a deck colour; resting borders
-     stay --line. */
-  --accent: color-mix(in srgb, var(--text) 68%, var(--line));
-}
+/* ---- The old sampler strip's wrapper lived here. The GLOBAL pads moved into the decks' GLBL
+   pad-mode long ago and the I/O row that replaced them is `.board-bar` now, so the wrapper has
+   nothing left to wrap. (.smp-pad below still dresses the pads themselves.) */
 .smp-pad {
   flex: 1 1 0;
   min-width: 0;
@@ -519,270 +505,194 @@ body {
   float: right;
   opacity: 0.7;
 }
-/* Controls-only I/O strip: ONE adaptive row filling the full width, every control an equal-width
-   sibling that grows to share it. Three functional zones (mic · capture · monitor) split by thin
-   `.smp-io-sep` rules. Controls are TYPED: AMOUNT (.vcell knob, LABEL+value) · ACTION (single word;
-   TOGGLE carries an LED). The old DEST/SRC selector cells are FOLDED into the MIC/REC buttonoids
-   (right-click / hold opens the picker), so there's no standalone selector control on the strip. */
-.smp-io {
+/* ---- THE BOARD BAR --------------------------------------------------------------------------
+   The full-width I/O strip lived here: seven equal-weight cells stretching to fill a row they
+   could never fill honestly, because their content was gated on `engine.canMic` — which is
+   `!!getUserMedia`, i.e. "this is a browser". It is one row now: the master fader, the
+   crossfader, and a contextual glyph per plugged-in device. See BoardBar.tsx for the reasoning;
+   what follows is only how it looks. */
+.board-bar {
   position: relative;
-  display: grid;
-  /* INPUT | MASTER anchor | OUTPUT — SMART never moves. minmax(0,1fr) (not a bare 1fr,
-     which is minmax(AUTO,1fr)) lets the side columns shrink BELOW their content's
-     min-content, so a busy OUTPUT zone (REC·MON + cue BLEND·LVL) can never blow past its
-     1fr share, steal width from INPUT, and shove the centre anchor off-axis / overflow.
-     Overcrowded cells WRAP within their zone (below) instead of collapsing to slivers. */
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: stretch;
-  gap: 0;
-  flex: 1 1 auto;
-  width: 100%;
-}
-/* ★ FIXED PILLS IN A SCROLLING VIEWPORT — the chain row's grammar, third time. Cells no longer
-   stretch to fill the board: they were told to because the row was ALWAYS full width no matter how
-   little was in it, so seven controls each took ~270px and the perimeter value-ring (which only
-   reads on a squarish box) turned into scattered dots. Gate the content properly and the pressure
-   is gone: each cell is its natural ~84px, the row is short because it HAS little in it, and the
-   width is derived rather than picked by a max-width constant.
-   And it SCROLLS rather than wraps — wrapping grows the bar downward and shoves the crossfader,
-   which is the one thing under it that must not move. */
-.smp-io-zone {
   display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.smp-io-zone::-webkit-scrollbar { display: none; }
-/* A scroller with a hidden scrollbar has to say so some other way, or a control clipped mid-border
-   just reads as broken. The flanks fade at their OUTER edge — the direction the optional controls
-   go — so "there is more this way" is visible without spending a row on a scrollbar.
-   It costs nothing when there is nothing to scroll: both flanks HUG THE ANCHOR, so with room to
-   spare the outer 22px is empty background and the fade falls on nothing. The mask can only ever
-   bite something that is genuinely clipped, which is why this needs no JS to switch it on. */
-.smp-io-in {
-  mask-image: linear-gradient(90deg, transparent 0, #000 22px);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 22px);
-}
-.smp-io-out {
-  mask-image: linear-gradient(270deg, transparent 0, #000 22px);
-  -webkit-mask-image: linear-gradient(270deg, transparent 0, #000 22px);
-}
-/* ★ THE CLUSTER, AND WHAT OVERFLOW IS ALLOWED TO EAT. Both flanks hug the anchor, so the strip
-   reads as one master section in the middle of the board instead of two clumps at the far edges.
-   The rule that makes scrolling safe: ALWAYS-PRESENT CONTROLS SIT NEAREST THE ANCHOR, contextual
-   arrivals extend outward — so anything that scrolls out of sight is optional by construction.
-   The left flank is `row-reverse` to get that: DOM order stays MIC → DUCK (which is how it reads
-   and how it tabs), while on screen MIC sits against the anchor and DUCK is the one that can go. */
-.smp-io-in {
-  flex-direction: row-reverse;
-  justify-content: flex-start;
-  padding-right: 8px;
-}
-.smp-io-out {
-  justify-content: flex-start;
-  padding-left: 8px;
-}
-/* MASTER anchor — fixed width, framed by hairlines so it reads as the centre of the board and holds
-   its place while the flanking zones reflow (mic in, cue device out). */
-.smp-io-mid {
+  align-items: stretch;
+  gap: 6px;
   flex: 0 0 auto;
-  justify-content: center;
-  border-left: 1px solid var(--line);
-  border-right: 1px solid var(--line);
-  padding: 0 8px;
+  width: 100%;
+  padding: 4px 0 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  /* The board's master/global zone must NOT borrow deck A's hue (which is what --accent resolves
+     to in this part of the tree). A bright NEUTRAL, so lit states pop without a deck colour. */
+  --accent: color-mix(in srgb, var(--text) 68%, var(--line));
 }
-/* Never grow, never shrink. 84px is wide enough for LABEL over a value and close enough to square
-   that the value ring reads again. */
-.smp-io-zone > button,
-.smp-io-zone > .vcell {
-  flex: 0 0 84px;
-  width: 84px;
-}
-.smp-io-mid > .vcell { flex: 0 0 104px; } /* MASTER: a stable, slightly-wider anchor cell */
-/* THE LIMITER, INSIDE THE MASTER. Gain reduction is drawn as a red wash eating in from the cell's
-   RIGHT EDGE — the same right-to-left convention COMP's own GR meter uses — so "how loud" and "how
-   hard is it fighting" are one object read in one glance. A full-height wash rather than a hairline
-   because the cell's floor already belongs to the value ring's handle, and two indicators sharing
-   six pixels is how you get something that looks broken. Silent at rest: at 0 dB the fill has no
-   width and the readout formats to an empty string, so an unlimited master says nothing at all. */
-.smp-io-master { position: relative; }
-.smp-master-gr {
-  position: absolute;
-  inset: 1px;
-  display: block;
-  pointer-events: none;
-  z-index: 0;
-}
-.smp-master-gr .meter-bar-track {
-  position: absolute;
-  inset: 0;
-  height: auto;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-}
-.smp-master-gr .meter-bar-fill {
-  background: linear-gradient(270deg, color-mix(in srgb, #ff5470 42%, transparent), transparent);
-}
-.smp-master-gr .meter-bar-read {
-  position: absolute;
-  right: 4px;
-  bottom: 1px;
+/* The crossfader gives up its own row chrome — it is a member of this one now. */
+.board-bar .xfader-bar {
+  flex: 1 1 auto;
   min-width: 0;
-  font-size: 8px;
-  font-weight: 800;
-  color: #ff8fa0;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
 }
-.smp-io button {
-  font: 700 10px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.03em;
+
+/* MASTER — meter, fader and limiter as one object. It is the only thing here that is never
+   contextual, so it holds the left end at a fixed width and never moves. */
+.mfader {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+.mfader.disabled { opacity: 0.5; pointer-events: none; }
+.mfader-track {
+  position: relative;
+  width: 132px;
+  height: 22px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: var(--panel);
-  color: var(--text);
-  cursor: pointer;
-  /* Match the .vcell height (38px) so every cell on a line is the SAME height — the zones center
-     their children (for the wrap case), which otherwise let the height-less buttons render short
-     next to the fixed-height knob cells. Uniform height, wrapped or not. */
-  height: 38px;
-  padding: 3px 8px;
-  white-space: nowrap;
-  text-align: center;
-}
-.smp-io-cell.on {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
-}
-.smp-io button:hover {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-}
-/* REC button: the action label over a small SOURCE tag (the source picker folded in via right-click /
-   hold, so there's no separate SRC cell). Tag hides while recording (then it just says STOP). */
-.smp-io-rec {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  line-height: 1.05;
-}
-.smp-io-rec-lab {
-  font-weight: 800;
-}
-.smp-io-rec-src {
-  font-size: 8px;
-  letter-spacing: 0.5px;
-  color: var(--muted);
-}
-/* The DEST / SRC picker popup (reuses .ctx-menu). */
-.smp-route-menu {
-  min-width: 150px;
-}
-.smp-route-menu button.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-/* TOGGLE (MON): an LED that lights when on — unmistakably a switch, not a label or a cycler. */
-.smp-io-toggle::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  margin-right: 5px;
-  vertical-align: middle;
-  opacity: 0.5;
-}
-.smp-io-toggle.on {
-  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
-  border-color: var(--accent);
-  color: var(--text);
-}
-.smp-io-toggle.on::before {
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 0 5px var(--accent);
-  opacity: 1;
-}
-.smp-io-btn.on {
-  background: color-mix(in srgb, var(--accent) 26%, var(--panel));
-  border-color: var(--accent);
-}
-/* Capture-landed flash — a transient chip showing where the take went (it's in GLBL pad-mode now,
-   off-strip). Absolutely placed so it never nudges the row; fades out on its own. */
-.smp-io-landed {
-  position: absolute;
-  top: -16px;
-  left: 50%;
-  transform: translateX(-50%);
-  font: 800 10px ui-monospace, monospace;
-  letter-spacing: 0.04em;
-  color: #06080c;
-  background: var(--neon-lime, #5dff9e);
-  padding: 2px 7px;
-  border-radius: 4px;
-  white-space: nowrap;
-  animation: smp-landed 2.6s ease-out forwards;
-  pointer-events: none;
-}
-@keyframes smp-landed {
-  0% { opacity: 0; transform: translate(-50%, 4px); }
-  12% { opacity: 1; transform: translate(-50%, 0); }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
-}
-.smp-io-rec.armed {
-  background: color-mix(in srgb, #c0334e 40%, var(--panel));
-  border-color: #e23a57;
-  color: #fff;
-  animation: smp-rec-pulse 1s ease-in-out infinite;
-}
-@keyframes smp-rec-pulse {
-  50% {
-    opacity: 0.55;
-  }
-}
-/* Mic input-level meter — a thin bar under the 🎙 button, width driven by engine.micLevel. */
-.smp-io-meter {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 2px;
-  height: 2px;
-  border-radius: 1px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--bg);
   overflow: hidden;
 }
-.smp-io-meter > span {
-  display: block;
+/* Live output level, painted straight to the DOM on the shared rAF. */
+.mfader-lvl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 58%, transparent));
+}
+/* Gain reduction, from the RIGHT — COMP's own convention, and the one place on the board where
+   red means "the ceiling is working", not "something broke". */
+.mfader-gr {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: linear-gradient(270deg, color-mix(in srgb, #ff5470 55%, transparent), transparent);
+}
+.mfader-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
+  margin: 0;
+  opacity: 0; /* transparent hit-area — the pill below is the visible handle */
+  cursor: pointer;
+  z-index: 2;
+}
+.mfader-val {
+  width: 34px;
+  height: 18px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 85%, var(--panel));
+  box-shadow: none;
+}
+.mfader-cap {
+  align-self: center;
+  font: 800 8px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.1em;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+/* THE DEVICE GLYPHS — one tap for the thing you do, hold / right-click for its cluster. Each is
+   present only while its device is, so a board with no mic and no cue output shows exactly one. */
+.board-io {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+.io-glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.io-glyph:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.io-glyph-mark { position: relative; z-index: 1; }
+/* The record dot carries its source as a tiny tag, so "what will this capture" needs no cell. */
+.io-rec { width: 40px; }
+.io-rec .io-glyph-tag {
+  position: absolute;
+  right: 3px;
+  bottom: 0;
+  z-index: 1;
+  font: 800 6px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+.io-rec.armed {
+  color: #fff;
+  border-color: #ff5470;
+  background: color-mix(in srgb, #ff5470 30%, var(--surface));
+  animation: io-rec-pulse 1.1s ease-in-out infinite;
+}
+@keyframes io-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
+  50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
+}
+/* MIC lit = talkover live. Its input level rises INSIDE the glyph, so the one thing you need to
+   know while talking ("is it hearing me") is on the control you just pressed. */
+.io-mic.on {
+  color: #08111a;
+  border-color: var(--accent);
   background: var(--accent);
 }
-.smp-io-btn {
-  position: relative;
+.io-mic.busy { opacity: 0.6; }
+.io-glyph-meter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
 }
-/* Mobile: the middle third is narrow, so tighten the anchor + gutters to buy width before
-   the zones start wrapping. SMART stays centred (narrower, not moved); the flanking zones
-   still wrap gracefully when the mic and/or a cue device are both present. @media adds no
-   specificity, so these same-selector rules win only by coming LATER in source. */
+.io-glyph-meter > span {
+  display: block;
+  width: 100%;
+  height: 0;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.io-mic.on .io-glyph-meter > span { background: color-mix(in srgb, #08111a 22%, transparent); }
+.io-landed {
+  align-self: center;
+  font: 800 8px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+/* A cluster popover holds its two amounts side by side, inside the shared menu's width cap. */
+.io-pop-row {
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px 4px;
+}
+.io-pop-row > .vcell { flex: 1 1 0; min-width: 0; }
+.io-pop-cell { height: 38px; }
+
 @media (max-width: 768px) {
-  .smp-io-in { padding-right: 5px; }
-  .smp-io-out { padding-left: 5px; }
-  .smp-io-mid { padding: 0 5px; }
-  .smp-io-mid > .vcell { flex-basis: 84px; } /* trimmed from 104 — keeps grow/shrink 0 */
-  /* Narrow: the pills stay legible and the zones scroll, exactly as the chain row does. Wrapping
-     here would push the crossfader down the screen on the device with the least of it. */
-  .smp-io-zone > button,
-  .smp-io-zone > .vcell { flex-basis: 72px; width: 72px; }
-  .smp-io-zone { gap: 3px; }
-  .smp-io button { padding: 3px 4px; }
+  /* Narrow: the master keeps its meter but gives up length; the glyphs never shrink — they are
+     the only way to the mic and the recorder on a surface with no keyboard. */
+  .mfader-track { width: 92px; }
+  .mfader { padding-right: 5px; }
+  .board-io { padding-left: 5px; }
+  .board-bar { gap: 4px; }
 }
+
 /* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
    carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no
    "bou…" truncation); STEM = "full" across the top + the 4 parts in a 2×2 below. */

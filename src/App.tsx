@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { DeckControls } from "./components/DeckControls";
 import type { FxStripCtl } from "./components/FxStrip";
-import { Crossfader, crossfadeGainsDb } from "./components/Crossfader";
-import { SamplerStrip } from "./components/SamplerStrip";
+import { crossfadeGainsDb } from "./components/Crossfader";
+import { BoardBar } from "./components/BoardBar";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
@@ -368,9 +368,12 @@ function AppBody() {
   const [cueMix, setCueMixSt] = useState(0); // 0 = full CUE (PFL) … 1 = full MST (master)
   const [cueLevel, setCueLevelSt] = useState(1); // headphone master output level
   const [masterVol, setMasterVolSt] = useState(1); // master output volume (SMART buttonoid + FLX MASTER knob)
-  // The sampler-strip MIC cell owns its level state; this ref lets the FLX MIC LEVEL knob
+  // The board bar’s MIC cluster owns its level state; this ref lets the FLX MIC LEVEL knob
   // push the display value into it (the knob already drives engine.setMicLevel directly).
   const micVolSetRef = useRef<((v: number) => void) | null>(null);
+  // The mic's on/off, published by the board bar so the `micToggle` key can reach it. A GLOBAL
+  // action like focusToggle — it is not a deck's, so it is handled before the deck dispatch below.
+  const micToggleRef = useRef<(() => void) | null>(null);
   const [zoom, setZoom] = useState<Record<DeckId, number>>({ A: 8, B: 8 }); // per-deck waveform zoom (real seconds)
   const setZoomFor = useCallback((id: DeckId, next: number) => {
     setZoom((z) => ({ ...z, [id]: next }));
@@ -1218,6 +1221,12 @@ function AppBody() {
       e.preventDefault();
       if (actionId === "focusToggle") {
         setFocused((f) => (f === "A" ? "B" : "A"));
+        return;
+      }
+      // ★ GLOBAL, like focusToggle — the mic belongs to the room, not to a deck, so it never
+      // reaches the per-deck dispatch (and its gate) below.
+      if (actionId === "micToggle") {
+        micToggleRef.current?.();
         return;
       }
       const id = focused;
@@ -2302,7 +2311,7 @@ function AppBody() {
   useEffect(() => {
     samplerApplyRef.current = sampler.applyRemote;
   }, [sampler.applyRemote]);
-  // Bridge to the sampler's trigger/release (set by SamplerStrip) so MIDI-learned + 1-8
+  // Bridge to the sampler's trigger/release (set by BoardBar) so MIDI-learned + 1-8
   // keyboard pads fire the sampler without threading the api through the keymap effect.
   const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
   // A decoded MidiEvent is fanned out to the SAME handlers the keyboard/buttons use, so a hardware
@@ -3429,10 +3438,11 @@ function AppBody() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
-          <SamplerStrip
+          <BoardBar
             sampler={sampler}
             ctlRef={samplerCtl}
             micSetRef={micVolSetRef}
+            micToggleRef={micToggleRef}
             master={{
               value: masterVol,
               canControl: !boardLocked,
@@ -3453,23 +3463,23 @@ function AppBody() {
                   }
                 : null
             }
-          />
-          <Crossfader
-            deckA={engine.deckA}
-            deckB={engine.deckB}
-            accentA={ACCENT.A}
-            accentB={ACCENT.B}
-            crossfade={crossfade}
-            onCrossfade={dragCrossfade}
-            // ONLY the session lock. The DJ's own disable is `enabled` below, which dims the bar
-            // but leaves it live — because the right-click that turns it back on is on the bar.
-            locked={boardLocked}
-            smart={smartFaderArmed}
-            enabled={xfaderEnabled}
-            canControl={!boardLocked}
-            kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
-            onToggleSmart={() => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false)}
-            onToggleEnabled={() => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false)}
+            xfader={{
+              deckA: engine.deckA,
+              deckB: engine.deckB,
+              accentA: ACCENT.A,
+              accentB: ACCENT.B,
+              crossfade,
+              onCrossfade: dragCrossfade,
+              // ONLY the session lock. The DJ's own disable is `enabled`, which dims the bar but
+              // leaves it live — because the right-click that turns it back on is on the bar.
+              locked: boardLocked,
+              smart: smartFaderArmed,
+              enabled: xfaderEnabled,
+              canControl: !boardLocked,
+              kbd: codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? ""),
+              onToggleSmart: () => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false),
+              onToggleEnabled: () => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false),
+            }}
           />
           <div className="decks-row">
           <DeckControls

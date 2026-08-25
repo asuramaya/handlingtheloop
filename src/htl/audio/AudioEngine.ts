@@ -54,6 +54,12 @@ export class AudioEngine {
   private readonly xfadeB: GainNode;
   private readonly musicBus: GainNode; // decks + region samples sum here → master; the mic auto-duck modulates its gain
   private readonly master: GainNode;
+  // ★ THE MASTER'S OWN METER TAP. Post master-volume, PRE-limiter: what you asked for, before the
+  // ceiling takes any of it back — `masterGr` says how much it took, and the two together are the
+  // whole story of the output. Its own analyser, so a master meter never has to reach into a deck's
+  // (theirs are per-deck, post-fader, and pre-crossfade).
+  private readonly masterMeter: AnalyserNode;
+  private readonly masterMeterBuf: Float32Array<ArrayBuffer>;
   // Live mic (talkover + sampling source) and the capture recorder (any node → AudioBuffer).
   readonly mic: MicInput;
   readonly recorder: Recorder;
@@ -108,6 +114,11 @@ export class AudioEngine {
     this.limiter.release.value = 0.25;
     this.master.connect(this.limiter);
     this.limiter.connect(this.ctx.destination);
+    this.masterMeter = this.ctx.createAnalyser();
+    this.masterMeter.fftSize = 1024;
+    this.masterMeter.smoothingTimeConstant = 0; // the UI owns its ballistics, as every other meter here does
+    this.masterMeterBuf = new Float32Array(this.masterMeter.fftSize);
+    this.master.connect(this.masterMeter);
 
     this.xfadeA = this.ctx.createGain();
     this.xfadeB = this.ctx.createGain();
@@ -199,6 +210,17 @@ export class AudioEngine {
     } catch (e) {
       console.warn("[htl] master limiter unavailable, keeping the native compressor:", e);
     }
+  }
+  /** Instantaneous master peak in dBFS (−100 = silence … 0 = full scale). Unsmoothed, so several
+   *  readers a frame are free; the meter applies its own attack/decay. */
+  masterLevelDb(): number {
+    this.masterMeter.getFloatTimeDomainData(this.masterMeterBuf);
+    let peak = 0;
+    for (let i = 0; i < this.masterMeterBuf.length; i++) {
+      const a = Math.abs(this.masterMeterBuf[i]);
+      if (a > peak) peak = a;
+    }
+    return peak > 1e-5 ? 20 * Math.log10(peak) : -100;
   }
   /** Live gain reduction on the master, in dB (≥ 0) — for the master meter's GR needle. */
   get masterGr(): number {

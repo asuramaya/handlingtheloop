@@ -19,6 +19,11 @@ export interface KeyAction {
 // map. `focusToggle` is the only non-deck action (Tab switches the focused deck).
 export const KEY_ACTIONS: KeyAction[] = [
   { id: "focusToggle", label: "Switch focused deck (A ↔ B)", group: "Global", defaultKey: "Tab" },
+  // ★ THE MIC HAD NO KEY, and that is exactly why its button had to live permanently on the board:
+  // with no binding, an on-screen control was the only way in on every surface, so the whole input
+  // section was pinned there for everyone. Backquote is the classic push-to-talk key, it is global
+  // rather than deck-scoped, and it sits far from the transport row so a fumble cannot hit it.
+  { id: "micToggle", label: "Microphone talkover on / off", group: "Global", defaultKey: "Backquote" },
 
   { id: "play", label: "Play / pause", group: "Transport", defaultKey: "Space", shiftLabel: "Reset channel" },
   { id: "cue", label: "Cue", group: "Transport", defaultKey: "KeyC", shiftLabel: "Jump to start" },

@@ -853,7 +853,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               the thing you actually use at the bottom of a scroll. */}
           {menuPresets.map((p) => (
             <div key={p.name} className="fx-preset-row">
-              <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Apply" onClick={() => applyPreset(menu.slot, p)}>
+              <button className="fx-palette-item fx-preset-apply" role="menuitem" title={`Apply ${p.name}`} onClick={() => applyPreset(menu.slot, p)}>
                 {p.name}
               </button>
               <button className="fx-preset-mini" title="Rename" aria-label="Rename preset" onClick={() => renamePreset(menuDev.kind, p.name)}>
@@ -920,7 +920,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               below is a place you go shopping, once. */}
           {savedChains.map((p) => (
             <div key={`uc:${p.name}`} className="fx-preset-row" onMouseEnter={(e) => setChainHover({ key: `uc:${p.name}`, preset: p, ...flyFrom(e.currentTarget) })}>
-              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `uc:${p.name}` ? "hot" : ""}`} role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.id, p)}>
+              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `uc:${p.name}` ? "hot" : ""}`} role="menuitem" title={`Recall ${p.name}`} onClick={() => applyChainPreset(chainMenu.id, p)}>
                 {p.name}
               </button>
               {/* ★ TOUCH PARITY, the same way the add picker got it: hover does not exist on a
@@ -967,7 +967,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           {/* The stems are shown ALWAYS, unlike the picker on the chip — this is a description,
               not a control. A manifest may state a fact the deck cannot act on yet; an input may
               not ask a question the deck cannot answer. */}
-          <div className="fly-line">
+          <div className="fly-stems">
             <span className="fly-key">Stems</span>
             <span className="fx-chain-src">
               {LANES.map((l) => (
@@ -983,16 +983,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           ) : (
             chainHover.preset.kinds.map((k, i) => (
               <div key={`${k}${i}`} className="fly-line">
-                <span className="fly-key">{i + 1}</span>
+                <span className="fly-num">{i + 1}</span>
                 <span className="fly-dev">{KIND_LABEL[k as FxKind] ?? k.toUpperCase()}</span>
               </div>
             ))
           )}
-          {/* ★ SAY WHAT IT DOES NOT CARRY. A chain preset is which devices, on which stems, in
-              which order — never their settings, deliberately (see fxPresets.ts: baking the params
-              in here would fork the same sound into two places that then drift). Leaving that
-              unsaid makes this window promise a sound it does not restore. */}
-          <div className="fly-note">Devices only. Each lands on its own Default.</div>
         </MenuFly>
       )}
 
@@ -1052,7 +1047,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             Default
           </button>
           {factoryFxPresets(addHover.kind).map((pr, i) => (
-            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind, selChainId, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
+            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" title={pr.name} onClick={() => { addDeviceToChain(addHover.kind, selChainId, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
               {pr.name}
             </button>
           ))}

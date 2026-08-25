@@ -278,39 +278,47 @@
   z-index: 43;
 }
 /* A manifest row: a small key, then the thing. Not a control — nothing in here is clickable, so
-   nothing in here is styled as if it were. */
+   nothing in here is styled as if it were, and it is packed tighter than a row you have to hit. */
+.fly-stems,
 .fly-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 10px;
-  font-size: 11px;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 10.5px;
   font-weight: 700;
   color: var(--text);
 }
 .fly-key {
-  min-width: 34px;
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--text) 45%, transparent);
 }
+/* The index column is a digit or two, so it is sized for a digit or two. It used to share the
+   STEMS label's 34 px, which indented every device name by the width of a word that was not
+   there. */
+.fly-num {
+  flex: 0 0 auto;
+  min-width: 10px;
+  font-size: 9px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--text) 40%, transparent);
+}
 .fly-dev {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   letter-spacing: 0.04em;
 }
 .fly-empty {
-  padding: 6px 10px;
+  padding: 4px 8px;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.2em;
   color: color-mix(in srgb, var(--muted) 70%, transparent);
-}
-.fly-note {
-  padding: 6px 10px 4px;
-  font-size: 9.5px;
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--text) 40%, transparent);
 }
 
 /* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain
@@ -511,13 +519,42 @@ body:not(.no-glow) .fx-chain.drop-after::after {
   inset: 0;
   z-index: 40;
 }
+/* ★ THE MENU IS NEVER WIDER THAN ITS OWN STEM ROW. Five cells at 34 px, four 4 px gaps and the
+   row's padding come to ~198 — the widest thing a menu ever legitimately has to hold. Without the
+   cap a single long name sets the width for everything, and one preset called
+   "holyshitholyshitholyshit" made the whole menu (and the flyout beside it) span half a deck.
+   Names that do not fit are truncated to a tooltip, or wrapped where they are the title. */
+:root {
+  --fx-menu-w: 200px;
+}
 .fx-preset-menu {
   position: fixed;
   top: auto;
   right: auto;
   z-index: 41;
   max-height: 240px;
+  max-width: var(--fx-menu-w);
   overflow-y: auto;
+  overflow-x: hidden;
+}
+/* A row shows what it can and hands the rest to the tooltip. `min-width: 0` is what actually lets
+   it: a flex item defaults to min-content, so without it the text refuses to shrink and the box
+   grows instead of the ellipsis appearing. */
+.fx-palette-item {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The TITLE is the one place the whole name has to be readable, so it wraps rather than truncates
+   — inside the cap, which means a name with no spaces has to be allowed to break mid-word. */
+.fx-preset-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fx-menu-acts {
+  flex: 0 0 auto; /* the verbs never give up room to a long title */
+  margin-left: auto;
 }
 .fx-preset-head {
   /* The title line CARRIES the acts, so it is a row, not a label. */

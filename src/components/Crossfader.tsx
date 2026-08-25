@@ -16,8 +16,18 @@ interface CrossfaderProps {
   accentB: string;
   crossfade: number;
   onCrossfade: (v: number) => void;
+  // ★ TWO KINDS OF "OFF", AND THEY MUST NOT SHARE A CLASS. `locked` is the SESSION lock — someone
+  // else has the board, so the bar is inert at the CSS level (pointer-events: none). `enabled` is
+  // the DJ's own switch, and the way back from it lives ON the bar (right-click / long-press), so a
+  // disabled fader has to stay interactive. Folding the two together is how you build a switch that
+  // can be turned off and never on: the SMART chip used to be the escape hatch, and it is gone.
   locked?: boolean; // the crossfader is a whole-board move → blocked for non-full-controllers
   smart?: boolean; // Smart Fader armed → the throw scrubs an auto-transition (tempo morph + bass swap)
+  enabled?: boolean; // is the crossfader live at all? (disabled = thrown positions are ignored)
+  canControl?: boolean; // may this user toggle either of the above? (false = non-controller in a session)
+  onToggleSmart?: () => void; // TAP THE HANDLE — fader ↔ smart (mirrors the `T` key)
+  onToggleEnabled?: () => void; // right-click / long-press the bar — enable/disable (mirrors `Shift+T`)
+  kbd?: string; // keybind hint for the smart toggle (drawn on the bar under body.show-keys)
 }
 
 const FLOOR_DB = -60; // dBFS floor for the glow brightness
@@ -26,9 +36,22 @@ const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballisti
 // The A↔B crossfader as a HORIZONTAL bar. The strip is always an A↔B blend gradient; instead of a
 // discrete level meter, each side's GLOW brightens with that deck's post-crossfade output (louder =
 // brighter), so position (handle), blend (gradient) and level (glow) never fight for the same pixels.
-export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart }: CrossfaderProps) {
+export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart, enabled = true, canControl = true, onToggleSmart, onToggleEnabled, kbd }: CrossfaderProps) {
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   const trackRef = useRef<HTMLDivElement>(null);
+  // ★ THE MODE LIVES ON THE FADER. Smart Fader used to be a chip in the I/O strip that meant three
+  // unrelated things at once — drag it for MASTER VOLUME, tap it to arm smart, hold it to disable
+  // the crossfader — two of which were about this bar and only sat over there because that was the
+  // middle of the board. The smart fader is a property of the fader, so it is a property of the
+  // fader: TAP THE HANDLE to switch fader ↔ smart, right-click / long-press the bar to disable it.
+  //
+  // The tap rides the range input rather than the pill (the pill is `pointer-events: none` so the
+  // native thumb keeps every drag). A press that neither MOVED nor CHANGED THE VALUE landed on the
+  // handle and stayed there — which a throw never does, so a fast mix can never trip the toggle.
+  const press = useRef<{ x: number; v: number } | null>(null);
+  const hold = useRef<number | undefined>(undefined);
+  const heldRef = useRef(false); // the long-press fired → swallow the tap that follows it
+  const toggleEnabled = () => { if (canControl) onToggleEnabled?.(); };
   // Live crossfade attenuation per side, read each frame without re-running the rAF.
   const gains = useRef({ a: 0, b: 0 });
   const g = crossfadeGainsDb(crossfade);
@@ -61,22 +84,55 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
 
   return (
     <div
-      className={`xfader-bar ${locked ? "locked" : ""} ${smart ? "smart-armed" : ""}`}
+      className={`xfader-bar ${locked ? "locked" : ""} ${smart ? "smart-armed" : ""} ${enabled ? "" : "xfader-off"}`}
       style={{ ["--xa" as string]: accentA, ["--xb" as string]: accentB }}
       title={smart ? "Smart Fader armed — throw the fader to auto-transition (tempo morph + bass swap)" : undefined}
     >
+      {/* THE MODE, SAID OUT LOUD. The chip that used to announce this is gone, so the bar names its
+          own state — and only when that state is not the ordinary one, so the resting board stays
+          quiet. The keybind rides along under body.show-keys, as every other control's does. */}
+      {(smart || !enabled) && (
+        <span className={`xbar-mode ${smart ? "smart" : "off"}`} aria-live="polite">
+          {smart ? "SMART" : "FADER OFF"}
+          {kbd && <i className="xbar-kbd">{kbd}</i>}
+        </span>
+      )}
       <div className="xbar-track" ref={trackRef}>
         {/* Per-side level glow — opacity tracks --a-lvl / --b-lvl (set by the rAF above). */}
         <span className="xglow xglow-a" />
         <span className="xglow xglow-b" />
         <input
           type="range" className="xbar-input" min={-1} max={1} step={0.01} value={crossfade}
-          title="A ↔ B crossfade — double-click / right-click re-centres"
+          title={`A ↔ B crossfade — double-click re-centres · tap the handle for ${smart ? "FADER" : "SMART"} · right-click / hold to ${enabled ? "disable" : "enable"} the fader`}
           // The thumb is transparent now (the .xbar-val pill is the visible handle), so the colour
           // vars live on the pill, not here — this input is just the drag hit-area.
-          onChange={(e) => onCrossfade(Number(e.target.value))}
-          onDoubleClick={() => onCrossfade(0)}
-          onContextMenu={(e) => { e.preventDefault(); onCrossfade(0); }}
+          onChange={(e) => { if (enabled) onCrossfade(Number(e.target.value)); }}
+          onDoubleClick={() => { if (enabled) onCrossfade(0); }}
+          // ★ PRIMARY BUTTON ONLY. A right-click fires pointerdown/pointerup too, so without this
+          // the same gesture toggled the mode AND enable/disable — a right-click that did both.
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            heldRef.current = false;
+            press.current = { x: e.clientX, v: crossfade };
+            if (e.pointerType === "touch") {
+              clearTimeout(hold.current);
+              hold.current = window.setTimeout(() => { heldRef.current = true; navigator.vibrate?.(8); toggleEnabled(); }, 480);
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.button !== 0) { press.current = null; return; }
+            clearTimeout(hold.current);
+            const p = press.current;
+            press.current = null;
+            if (!p || heldRef.current || !canControl) return;
+            // Landed on the handle and never left it: no drag, no value change. Anywhere else on
+            // the track the click JUMPS the fader, which is a value change, so this cannot fire.
+            if (Math.abs(e.clientX - p.x) < 4 && crossfade === p.v) onToggleSmart?.();
+          }}
+          onPointerCancel={() => { clearTimeout(hold.current); press.current = null; }}
+          // Re-centre lives on the double-click (it always has); the right-click is worth more as
+          // the enable/disable, which otherwise has no home now the SMART chip is gone.
+          onContextMenu={(e) => { e.preventDefault(); toggleEnabled(); }}
         />
         {/* A↔B position (0 = full A, 50 = centre, 100 = full B). The pill IS the handle now; --xpct
             snaps its colour to the side it landed on (matches the old thumb). */}

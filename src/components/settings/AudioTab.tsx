@@ -24,6 +24,7 @@ import {
   stemFailLevel,
   resetStemGuard,
   type StemModel,
+  MIC_NONE,
 } from "@htl";
 import type { StemStatus } from "../../App";
 import { LyricsSettings, type LyricDeck } from "../LyricsSettings";
@@ -314,7 +315,12 @@ export function AudioTab({
           <div className="settings-section-head">
             <span className="settings-label">Microphone</span>
           </div>
+          {/* ★ SAME SHAPE AS THE CUE OUTPUT ABOVE: "None" is a real, default choice, and choosing a
+              device is what turns the feature on. The mic section of the board follows this select —
+              pick None and MIC / DUCK / MON are gone from the board entirely, rather than sitting
+              there forever for the (many) people who never use a microphone. */}
           <select className="settings-select" value={settings.audioInputId} onChange={(e) => set({ audioInputId: e.target.value })}>
+            <option value={MIC_NONE}>None — no microphone</option>
             <option value="">System default mic</option>
             {inputs.map((d, i) => (
               <option key={d.deviceId || i} value={d.deviceId}>
@@ -323,7 +329,9 @@ export function AudioTab({
             ))}
           </select>
           <p className="settings-hint muted">
-            Input for talkover and sampling (the 🎙 on the sampler strip). Switching while the mic is live re-acquires it.
+            {settings.audioInputId === MIC_NONE
+              ? "No microphone. Pick one to put talkover, ducking and mic monitoring on the board."
+              : "Input for talkover and sampling. Switching while the mic is live re-acquires it."}
             {inputs.length > 0 && inputs.every((d) => !d.label) && (
               <>
                 {" "}Names are hidden until you grant audio access once.{" "}

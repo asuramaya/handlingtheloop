@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "rea
 import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
-import { SmartChip } from "./SmartChip";
 import { MeterBar } from "./MeterBar";
 
 // Capture sources for the record button, in cycle order. MIC is only offered when getUserMedia
@@ -22,7 +21,8 @@ export function SamplerStrip({
   ctlRef,
   micSetRef,
   phones,
-  smart,
+  master,
+  hasMic = false,
 }: {
   sampler: SamplerApi; // lifted to App (shared with the decks' SAMPLER pad-mode)
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
@@ -30,8 +30,15 @@ export function SamplerStrip({
   // Master headphone (cue-device) controls — joins the IO zone only when a 2nd output is set.
   // Owned by App so the FLX 🎧 MIX knob and these cells stay in step.
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
-  // The crossfader's SMART chip lives here (between the mic and capture zones) — see SmartChip.
-  smart?: { armed: boolean; enabled: boolean; canControl: boolean; shift: boolean; kbd: string; accentA: string; accentB: string; master: number; onToggleSmart: () => void; onToggleEnabled: () => void; onMaster: (v: number) => void };
+  // ★ MASTER, AND ONLY MASTER. This used to be the SMART chip, which meant three things at once:
+  // drag = master volume, tap = arm Smart Fader, hold = enable/disable the crossfader. The two
+  // crossfader meanings moved onto the crossfader's own handle, where they belong — leaving one
+  // control with one meaning, which is what lets the limiter's gain reduction live INSIDE it.
+  master?: { value: number; canControl: boolean; onChange: (v: number) => void };
+  // ★ IS THERE A MICROPHONE? Not "could this browser open one" (engine.canMic is literally
+  // `!!getUserMedia`, true on every machine ever) but "has the DJ plugged one in", i.e. picked a
+  // device in Settings. The whole input section of the board follows this.
+  hasMic?: boolean;
 }) {
   const s = sampler;
   const engine = useEngine();
@@ -120,7 +127,7 @@ export function SamplerStrip({
   const recLong = useRef<number | undefined>(undefined);
   const recSuppress = useRef(false);
   const pickDest = (d: "master" | "A" | "B") => { setMicDest(d); engine.setMicRoute(d); setRouteMenu(null); };
-  const SRC_ORDER: CapSource[] = engine.canMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
+  const SRC_ORDER: CapSource[] = hasMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
   const toggleRec = async () => {
     if (recording) {
@@ -162,7 +169,7 @@ export function SamplerStrip({
       <div className="smp-io">
         {/* INPUT — mic talkover (collapses to nothing when there's no mic). */}
         <div className="smp-io-zone smp-io-in">
-          {engine.canMic && (
+          {hasMic && (
             <>
               {/* AMOUNT (+ tap-toggle + right-click): TAP = mic on/off, DRAG = talkover VOL, RIGHT-CLICK =
                   destination (Room / Deck A·B FX). The mic is just "the mic"; its routing hides here. */}
@@ -199,27 +206,29 @@ export function SamplerStrip({
           )}
         </div>
 
-        {/* MASTER — the anchor. Tap = arm Smart Fader · drag / FLX MASTER knob = master volume ·
-            double-tap = unity · hold / right-click / shift-tap = enable/disable the crossfader. */}
+        {/* MASTER — the anchor, and the one control that is never contextual. Drag / FLX MASTER
+            knob = master volume · double-tap = unity. ★ ONE OBJECT: the brickwall's gain reduction
+            is drawn INTO the cell, eating in from the right along its floor, because "how loud" and
+            "how hard is it fighting" are one question. It used to be a separate meter told to wrap
+            onto its own line (`flex: 0 0 100%`) inside a shrink-to-fit zone, which cannot wrap — so
+            it rendered as an orphaned stub and a floating number beside the chip. */}
         <div className="smp-io-zone smp-io-mid">
-          {smart && (
-            <SmartChip
-              smart={smart.armed}
-              enabled={smart.enabled}
-              canControl={smart.canControl}
-              shift={smart.shift}
-              kbd={smart.kbd}
-              accentA={smart.accentA}
-              accentB={smart.accentB}
-              master={smart.master}
-              onToggleSmart={smart.onToggleSmart}
-              onToggleEnabled={smart.onToggleEnabled}
-              onMaster={smart.onMaster}
-            />
+          {master && (
+            <ValueCell
+              className="smp-io-cell smp-io-master"
+              label="MASTER"
+              value={master.value}
+              min={0}
+              max={1}
+              step={0.01}
+              reset={1} // double-tap → back to unity
+              disabled={!master.canControl}
+              format={(v) => `${Math.round(v * 100)}`}
+              onChange={master.onChange}
+            >
+              <MeterBar getValue={getMasterGr} toPercent={(gr) => Math.min(1, gr / 12) * 100} format={(gr) => (gr < 0.1 ? "" : `−${gr.toFixed(1)}`)} unit="" label="Master limiter gain reduction" rtl className="smp-master-gr" />
+            </ValueCell>
           )}
-          {/* Master brickwall GR — measured since ef5c7ed1, never rendered until now (32156af1):
-              a limiter you can't see is a limiter you can't tell is working. */}
-          <MeterBar getValue={getMasterGr} toPercent={(gr) => Math.min(1, gr / 12) * 100} format={(gr) => (gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`)} unit="dB" label="Master limiter gain reduction" rtl className="smp-master-gr" />
         </div>
 
         {/* OUTPUT — capture + headphone monitor. Grows/reflows as the cue device appears. */}
@@ -240,8 +249,11 @@ export function SamplerStrip({
           </button>
           {/* Where the take landed — it's in GLBL pad-mode now, not beside the strip. */}
           {landed != null && <span className="smp-io-landed" role="status">→ GLBL {landed + 1}</span>}
-          {/* ACTION (toggle) — hear your own mic in the cue device (lives with the monitor controls). */}
-          {engine.canMic && (
+          {/* ACTION (toggle) — hear your own mic in the cue device. ★ It needs BOTH: a mic to hear
+              and a cue device to hear it in. It used to render on `canMic` alone and then admit in
+              its own tooltip that it does nothing without a cue device — a control that is present
+              and inert is worse than one that is absent. */}
+          {hasMic && phones && (
             <button className={`smp-io-btn smp-io-toggle ${monitor ? "on" : ""}`} onClick={() => void toggleMonitor()} title="MON — monitor your own mic in the cue/headphone device (needs a cue device set)">
               MON
             </button>

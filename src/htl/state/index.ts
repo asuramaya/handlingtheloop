@@ -27,6 +27,7 @@ export {
   BAND_PALETTES,
   contrastRatio,
   contrastWarnings,
+  MIC_NONE,
   loadSettings,
   saveSettings,
   applySettings,

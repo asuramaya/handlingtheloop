@@ -8,6 +8,11 @@ import type { MidiLearnMap, MidiMap } from "../midi/types";
 import type { ColorProfile } from "./colorProfiles";
 import type { KeyProfile } from "./keyProfiles";
 
+/** `audioInputId` sentinel: no microphone at all. Distinct from "" (system default device), which
+ *  is what every pre-existing install has stored — so this can be the new default without a
+ *  migration and without changing what anyone's saved settings mean. */
+export const MIC_NONE = "none";
+
 export interface Settings {
   accentA: string; // deck A neon
   accentB: string; // deck B neon
@@ -60,7 +65,14 @@ export interface Settings {
   stemQuality: StemQuality; // demucs-GPU separation quality (shift-TTA + overlap), desktop only
   audioOutputId: string; // chosen audio output device (AudioContext.setSinkId); "" = system default
   audioCueOutputId: string; // separate cue/headphone output device (PFL pre-listen); "" = no separate cue (single output)
-  audioInputId: string; // chosen microphone input device (getUserMedia deviceId); "" = system default mic
+  // ★ THE MIC IS A DEVICE YOU PLUG IN, exactly like the cue output above it. MIC_NONE is the
+  // default and means there is no microphone — the whole talkover/monitor section of the board is
+  // absent, not merely inert. Before this, the mic UI was gated on `engine.canMic`, which is
+  // literally "does this browser have getUserMedia" — true on every machine, mic or not, so every
+  // DJ carried MIC / DUCK / MON forever whether they owned a microphone or not.
+  // "" keeps its old meaning (system default mic), so an install that was already using the mic is
+  // untouched: nothing to migrate, and no way to silently take someone's mic away.
+  audioInputId: string;
   wirelessOutput: boolean; // force the wireless (Bluetooth/CarPlay) pre-roll buffer to stop skips when the browser under-reports outputLatency (iOS reads 0) — #14
   autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
   mobileStems: boolean; // MOBILE only: split every loaded deck into on-device stems (off = plain mix). AUTO forces it on.
@@ -198,7 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
   stemQuality: "balanced", // desktop demucs-GPU: 1 shift + 50% overlap by default
   audioOutputId: "", // system default output until the user picks a device
   audioCueOutputId: "", // no separate cue device by default (CUE stays a plain button)
-  audioInputId: "", // system default microphone until the user picks one
+  audioInputId: MIC_NONE, // no microphone until one is chosen (a stored "" still means system default)
   wirelessOutput: false, // auto-detect by default; the user forces it on for a Bluetooth/CarPlay output that skips
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems

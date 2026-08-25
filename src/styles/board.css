@@ -873,47 +873,9 @@
   background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
 }
-/* SMART chip — the on-screen / touch home for the Smart-Fader arm (tap) + crossfader enable (hold)
-   toggles. Lives in the I/O strip between the mic + capture zones, so it inherits the strip's
-   equal-width button sizing (.smp-io button = flex:1) and only adds its STATE styling here: lights
-   up (A↔B glow) when armed, goes dashed-dim when off, flips to the shift tint when board shift is
-   held. Carries the keybind letter inside it (shown only under body.show-keys, desktop). */
-/* SMART buttonoid — a ValueCell (master-volume knob). .smp-io-cell / .vcell own its sizing + the
-   knob ring, so here we add ONLY the STATE styling that's unique to it. */
-.smart-chip { transition: background 0.12s, box-shadow 0.18s, border-color 0.12s; }
-/* ARMED — Smart Fader tapped on. The value RING (KnobBorder) owns the border, so the A↔B blend lives
-   INSIDE instead: a left-to-right --xa→--xb wash across the cell fill plus a two-colour glow, so the
-   deck blend reads clearly without the level ring painting over it. --xa / --xb are the live deck
-   accents, set inline. */
-.smart-chip.armed {
-  border-color: color-mix(in srgb, var(--xb, #d4a) 45%, var(--line));
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--xa, #4ad) 26%, var(--panel)),
-    color-mix(in srgb, var(--xb, #d4a) 26%, var(--panel))
-  );
-  box-shadow:
-    inset 0 0 10px color-mix(in srgb, var(--xa, #4ad) 20%, transparent),
-    0 0 8px color-mix(in srgb, var(--xa, #4ad) 34%, transparent),
-    0 0 8px color-mix(in srgb, var(--xb, #d4a) 34%, transparent);
-}
-/* OFF — crossfader disabled (held / right-clicked). Dashed, dim, label struck through. */
-.smart-chip.off {
-  border-style: dashed;
-  color: color-mix(in srgb, var(--text) 45%, var(--line));
-  box-shadow: none;
-}
-.smart-chip.off .vcell-label { text-decoration: line-through; }
-/* SHIFTED — board shift flips the cell to its alt action (enable/disable the crossfader). Same
-   yellow shift tint as the deck banks, so the remap reads in one grammar. */
-.smart-chip.shifted {
-  color: var(--shift);
-  border-color: color-mix(in srgb, var(--shift) 55%, var(--line));
-  border-style: solid;
-  background: color-mix(in srgb, var(--shift) 14%, var(--panel));
-  box-shadow: inset 0 0 9px color-mix(in srgb, var(--shift) 18%, transparent);
-}
-.smart-chip.shifted .vcell-label { text-decoration: none; }
+/* The SMART chip's styling lived here. It is gone with the chip: the smart fader is a property of
+   the FADER, so it is toggled on the fader's handle and announced by .xbar-mode at the end of this
+   file. What is left in the I/O strip is MASTER, one control with one meaning. */
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first
    flex child of .app (not floating), so it reserves its row and never overlaps
@@ -2271,3 +2233,43 @@ body.no-glow .hw-btn.shift.on {
   justify-content: center;
 }
 
+
+/* ---- The crossfader's own mode badge -----------------------------------------------------------
+   The SMART chip in the I/O strip is gone: the smart fader is a property of the FADER, so it is
+   toggled by tapping the fader's handle and announced on the fader itself. Only shown when the
+   state is not the ordinary one, so a resting board says nothing. */
+.xbar-mode {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font: 800 8px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.12em;
+  pointer-events: none; /* never in the way of a throw */
+  white-space: nowrap;
+}
+.xbar-mode.smart {
+  color: #fff;
+  background: color-mix(in srgb, var(--xa, #4ad) 40%, transparent);
+  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--xb, #d4a) 70%, transparent);
+}
+.xbar-mode.off {
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 1px dashed var(--line);
+}
+.xbar-kbd {
+  font-style: normal;
+  opacity: 0.7;
+}
+body:not(.show-keys) .xbar-kbd { display: none; }
+/* Crossfader disabled by the DJ (Shift+T, or right-click / long-press the bar). It stays VISIBLE
+   and inert rather than disappearing — the gesture that brings it back lives on it. */
+.xfader-bar.xfader-off .xbar-track { opacity: 0.45; }
+.xfader-bar.xfader-off .xbar-val { filter: grayscale(0.7); }

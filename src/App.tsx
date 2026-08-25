@@ -53,6 +53,7 @@ import {
   stretchConfig,
   stemConfig,
   setDemucsQuality,
+  MIC_NONE,
   loadSettings,
   saveSettings,
   useSettingsSync,
@@ -1290,6 +1291,10 @@ function AppBody() {
   // Chosen microphone input — remembered by the engine so the next enableMic() uses it, and
   // re-acquired live if the mic is already running. "" = system default mic.
   useEffect(() => {
+    // ★ "None" is not a device — it is the absence of one. Hand the engine nothing and make sure
+    // any stream that was live is let go, so unplugging the mic in Settings really unplugs it
+    // (the board's mic controls vanish in the same act).
+    if (settings.audioInputId === MIC_NONE) { engine.setMicOn(false); engine.disableMic(); return; }
     void engine.setMicDevice(settings.audioInputId);
   }, [engine, settings.audioInputId]);
 
@@ -3428,19 +3433,16 @@ function AppBody() {
             sampler={sampler}
             ctlRef={samplerCtl}
             micSetRef={micVolSetRef}
-            smart={{
-              armed: smartFaderArmed,
-              enabled: xfaderEnabled,
+            master={{
+              value: masterVol,
               canControl: !boardLocked,
-              shift,
-              kbd: codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? ""),
-              accentA: ACCENT.A,
-              accentB: ACCENT.B,
-              master: masterVol,
-              onMaster: (v: number) => { engine.setMasterVolume(v); setMasterVolSt(v); },
-              onToggleSmart: () => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false),
-              onToggleEnabled: () => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false),
+              onChange: (v: number) => { engine.setMasterVolume(v); setMasterVolSt(v); },
             }}
+            // ★ A MIC EXISTS WHEN ONE IS CHOSEN, not when the browser could open one. engine.canMic
+            // is `!!getUserMedia` — true everywhere — so gating on it put MIC / DUCK / MON on every
+            // DJ's board forever. The Settings input select is the switch now, exactly as the cue
+            // output select is the switch for the headphone controls.
+            hasMic={engine.canMic && settings.audioInputId !== MIC_NONE}
             phones={
               !!settings.audioCueOutputId && engine.canCueDevice
                 ? {
@@ -3459,8 +3461,15 @@ function AppBody() {
             accentB={ACCENT.B}
             crossfade={crossfade}
             onCrossfade={dragCrossfade}
-            locked={boardLocked || (!xfaderEnabled && !smartFaderArmed)}
+            // ONLY the session lock. The DJ's own disable is `enabled` below, which dims the bar
+            // but leaves it live — because the right-click that turns it back on is on the bar.
+            locked={boardLocked}
             smart={smartFaderArmed}
+            enabled={xfaderEnabled}
+            canControl={!boardLocked}
+            kbd={codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? "")}
+            onToggleSmart={() => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false)}
+            onToggleEnabled={() => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false)}
           />
           <div className="decks-row">
           <DeckControls

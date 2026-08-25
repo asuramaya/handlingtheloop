@@ -14,7 +14,7 @@ import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
 import { StemPicker, STEMS, ALL_STEM_BITS } from "./StemPicker";
-import { Menu } from "./ContextMenu";
+import { Menu, MenuFly } from "./ContextMenu";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
 // the rack has always known, now offered per chain instead of once globally.
@@ -61,6 +61,16 @@ export interface FxStripCtl {
   openMenu: (kind: FxKind, x: number, y: number) => void; // that device's own menu, at a cursor
   cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
   closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
+}
+
+/** Where a flyout hangs, and how wide it is. ★ THE WIDTH IS MEASURED, NOT CHOSEN — it comes off
+ *  the menu the row lives in, so the two windows are the same object at two sizes rather than one
+ *  box and a constant that used to be right. */
+type FlyAnchor = { left: number; right: number; top: number };
+function flyFrom(el: HTMLElement): { anchor: FlyAnchor; width: number } {
+  const r = el.getBoundingClientRect();
+  const menu = el.closest<HTMLElement>(".fx-preset-menu");
+  return { anchor: { left: r.left, right: r.right, top: r.top }, width: menu?.getBoundingClientRect().width ?? r.width };
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, ctlRef }: FxStripProps) {
@@ -111,7 +121,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // (max-height + overflow-y), and an absolutely-positioned child of a scrolling box is CLIPPED by
   // it — which is why it appeared as a bare sliver against the menu's right edge. So it is
   // positioned `fixed`, measured from the row that opened it.
-  const [addHover, setAddHover] = useState<{ kind: FxKind; x: number; y: number; flip: boolean } | null>(null);
+  const [addHover, setAddHover] = useState<{ kind: FxKind; anchor: FlyAnchor; width: number } | null>(null);
+  // The CHAIN menu's second window: what a saved/factory chain actually contains. Recalling one
+  // REPLACES the chain's devices, so "what am I about to get, and what am I about to lose" is a
+  // question worth answering before the click rather than after it.
+  const [chainHover, setChainHover] = useState<{ key: string; preset: ChainPreset; anchor: FlyAnchor; width: number } | null>(null);
   const devices = deck.fxDevices; // every device this deck owns, in signal order
   // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the rest can
   // only be built once the worklets attach, so for a beat at every boot the rack is the EQ alone —
@@ -874,7 +888,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           y={chainMenu.y}
           wide
           head={(deck.fxChain(chainMenu.id)?.name ?? "")}
-          onClose={() => setChainMenu(null)}
+          onClose={() => { setChainMenu(null); setChainHover(null); }}
           acts={[
             // The whole chain, to the other deck — name, stems, devices, params, order.
             { glyph: "⇄", title: `Copy ${(deck.fxChain(chainMenu.id)?.name ?? "this chain")} to deck ${otherId}`, onClick: () => { copyChainToOther(chainMenu.id); setChainMenu(null); } },
@@ -905,9 +919,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
               below is a place you go shopping, once. */}
           {savedChains.map((p) => (
-            <div key={`uc:${p.name}`} className="fx-preset-row">
-              <button className="fx-palette-item fx-preset-apply" role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.id, p)}>
+            <div key={`uc:${p.name}`} className="fx-preset-row" onMouseEnter={(e) => setChainHover({ key: `uc:${p.name}`, preset: p, ...flyFrom(e.currentTarget) })}>
+              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `uc:${p.name}` ? "hot" : ""}`} role="menuitem" title="Recall" onClick={() => applyChainPreset(chainMenu.id, p)}>
                 {p.name}
+              </button>
+              {/* ★ TOUCH PARITY, the same way the add picker got it: hover does not exist on a
+                  phone, so the preview needs its own tap target. */}
+              <button className="fx-preset-mini" title="What's in it" aria-label={`What is in ${p.name}`} onClick={(e) => { e.stopPropagation(); setChainHover({ key: `uc:${p.name}`, preset: p, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
+                ›
               </button>
               {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones below are read-only,
                   exactly as the factory effect presets are. */}
@@ -921,11 +940,60 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           ))}
           {savedChains.length > 0 && <div className="fx-preset-sep" />}
           {factoryChainPresets().map((p) => (
-            <button key={`fc:${p.name}`} className="fx-palette-item fx-preset-apply" role="menuitem" onClick={() => applyChainPreset(chainMenu.id, p)}>
-              {p.name}
-            </button>
+            <div key={`fc:${p.name}`} className="fx-preset-row" onMouseEnter={(e) => setChainHover({ key: `fc:${p.name}`, preset: p, ...flyFrom(e.currentTarget) })}>
+              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `fc:${p.name}` ? "hot" : ""}`} role="menuitem" onClick={() => applyChainPreset(chainMenu.id, p)}>
+                {p.name}
+              </button>
+              <button className="fx-preset-mini" title="What's in it" aria-label={`What is in ${p.name}`} onClick={(e) => { e.stopPropagation(); setChainHover({ key: `fc:${p.name}`, preset: p, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
+                ›
+              </button>
+            </div>
           ))}
         </Menu>
+      )}
+
+      {/* ★ THE SECOND WINDOW ON THE CHAIN MENU. Recalling a chain REPLACES what the chain holds,
+          which is a destructive act behind a one-word label — "Vocal Air" tells you nothing about
+          what it is or what it costs. So the same flyout that shows an effect's presets shows a
+          chain's CONTENTS: which stems it claims, and the devices it brings, in signal order. */}
+      {chainMenu && chainHover && (
+        <MenuFly
+          anchor={chainHover.anchor}
+          width={chainHover.width}
+          head={chainHover.preset.name}
+          onEnter={() => setChainHover(chainHover)}
+          onLeave={() => setChainHover(null)}
+        >
+          {/* The stems are shown ALWAYS, unlike the picker on the chip — this is a description,
+              not a control. A manifest may state a fact the deck cannot act on yet; an input may
+              not ask a question the deck cannot answer. */}
+          <div className="fly-line">
+            <span className="fly-key">Stems</span>
+            <span className="fx-chain-src">
+              {LANES.map((l) => (
+                <i key={l.label} className={chainHover.preset.stems & l.bit ? "on" : ""} style={{ ["--lane" as string]: l.color }}>
+                  {l.label[0]}
+                </i>
+              ))}
+            </span>
+          </div>
+          <div className="fx-preset-sep" />
+          {chainHover.preset.kinds.length === 0 ? (
+            <div className="fly-empty">EMPTY</div>
+          ) : (
+            chainHover.preset.kinds.map((k, i) => (
+              <div key={`${k}${i}`} className="fly-line">
+                <span className="fly-key">{i + 1}</span>
+                <span className="fly-dev">{KIND_LABEL[k as FxKind] ?? k.toUpperCase()}</span>
+              </div>
+            ))
+          )}
+          {/* ★ SAY WHAT IT DOES NOT CARRY. A chain preset is which devices, on which stems, in
+              which order — never their settings, deliberately (see fxPresets.ts: baking the params
+              in here would fork the same sound into two places that then drift). Leaving that
+              unsaid makes this window promise a sound it does not restore. */}
+          <div className="fly-note">Devices only. Each lands on its own Default.</div>
+        </MenuFly>
       )}
 
       {/* The device picker — the preset menu's shape, one step earlier in the workflow. Step 1
@@ -945,11 +1013,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             // HOVER, which does not exist on touch. So the chevron is its OWN tap target: tap the
             // name to add with Default, tap the › to choose what it lands on. Hover still opens it
             // for a mouse; the tap target is the parity, not a replacement.
-            const openFly = (el: HTMLElement) => {
-              const r = el.getBoundingClientRect();
-              const flip = r.right + 174 > window.innerWidth - 6;
-              setAddHover({ kind: k, x: flip ? r.left - 174 : r.right + 4, y: r.top - 6, flip });
-            };
+            const openFly = (el: HTMLElement) => setAddHover({ kind: k, ...flyFrom(el) });
             return (
               <button
                 key={k}
@@ -977,15 +1041,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         </Menu>
       )}
       {addMenu && addHover && (
-        <div
-          className="fx-add-fly"
-          style={{ left: addHover.x, top: Math.max(6, Math.min(addHover.y, window.innerHeight - 240)) }}
-          onMouseEnter={() => setAddHover(addHover)}
-          onMouseLeave={() => setAddHover(null)}
+        <MenuFly
+          anchor={addHover.anchor}
+          width={addHover.width}
+          head={KIND_LABEL[addHover.kind] ?? addHover.kind.toUpperCase()}
+          onEnter={() => setAddHover(addHover)}
+          onLeave={() => setAddHover(null)}
         >
-          <div className="fx-preset-head">
-            <span className="fx-preset-title">{KIND_LABEL[addHover.kind] ?? addHover.kind.toUpperCase()}</span>
-          </div>
           <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); }}>
             Default
           </button>
@@ -994,7 +1056,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               {pr.name}
             </button>
           ))}
-        </div>
+        </MenuFly>
       )}
 
       {dialog && (

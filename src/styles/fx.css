@@ -271,17 +271,46 @@
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: #fff;
 }
-.fx-add-fly {
-  position: fixed;
-  z-index: 42;
-  width: 170px;
-  max-height: 230px;
-  overflow-y: auto;
-  padding: 4px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: 0 10px 28px -8px #000;
+/* THE SECOND WINDOW. It IS the menu panel (.fx-palette .fx-preset-menu) — this only lifts it
+   above the menu that opened it. It used to be a bespoke box that never declared a column
+   direction, so its rows flowed inline and wrapped into a ragged second column. */
+.fx-menu-fly {
+  z-index: 43;
+}
+/* A manifest row: a small key, then the thing. Not a control — nothing in here is clickable, so
+   nothing in here is styled as if it were. */
+.fly-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fly-key {
+  min-width: 34px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+.fly-dev {
+  letter-spacing: 0.04em;
+}
+.fly-empty {
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+.fly-note {
+  padding: 6px 10px 4px;
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--text) 40%, transparent);
 }
 
 /* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain

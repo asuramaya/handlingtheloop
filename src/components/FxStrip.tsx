@@ -824,7 +824,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           x={menu.x}
           y={menu.y}
           innerRef={menuRef}
-          head={`${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} presets`}
           onClose={() => setMenu(null)}
           // ★ IDENTICAL EVERYWHERE — the master's devices get exactly the menu a stem chain's do.
           // Two menus that differ by context is what made right-clicking two tabs in a row flicker
@@ -887,7 +886,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           x={chainMenu.x}
           y={chainMenu.y}
           wide
-          head={(deck.fxChain(chainMenu.id)?.name ?? "")}
           onClose={() => { setChainMenu(null); setChainHover(null); }}
           acts={[
             // The whole chain, to the other deck — name, stems, devices, params, order.
@@ -906,7 +904,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               been separated, so the question does not apply and is not asked. */}
           {deck.hasStems && !deck.fxChain(chainMenu.id)?.master && (
             <>
-              <div className="ctx-label">Stems</div>
               <StemPicker
                 mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
                 allOn={((deck.fxChain(chainMenu.id)?.stems ?? 0) & ALL_STEM_BITS) === ALL_STEM_BITS}
@@ -996,7 +993,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           chain in an unknown state. Both steps are the same list widget, so there is nothing new
           to learn and nothing new to style. */}
       {addMenu && chain && (
-        <Menu x={addMenu.x} y={addMenu.y} head={`Add to ${chain.name}`} onClose={() => { setAddMenu(null); setAddHover(null); }}>
+        <Menu x={addMenu.x} y={addMenu.y} onClose={() => { setAddMenu(null); setAddHover(null); }}>
           {/* CLICK ADDS. The two-step version made you answer a question you usually don't have —
               most of the time you want the effect, not a particular preset of it. So the click is
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the

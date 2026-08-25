@@ -19,7 +19,7 @@ export interface MenuAct {
   danger?: boolean;
   onClick: () => void;
 }
-export function Menu({ x, y, head, acts, onClose, wide, innerRef, children }: { x: number; y: number; head: React.ReactNode; acts?: MenuAct[]; onClose: () => void; wide?: boolean; innerRef?: React.Ref<HTMLDivElement>; children: React.ReactNode }) {
+export function Menu({ x, y, head, acts, onClose, wide, innerRef, children }: { x: number; y: number; head?: React.ReactNode; acts?: MenuAct[]; onClose: () => void; wide?: boolean; innerRef?: React.Ref<HTMLDivElement>; children: React.ReactNode }) {
   const box = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number; flipped: boolean } | null>(null);
   // ★ FLIP, THEN CLAMP. A menu opens at the cursor, and a cursor near the right edge of a deck
@@ -58,8 +58,14 @@ export function Menu({ x, y, head, acts, onClose, wide, innerRef, children }: { 
         // the cursor before jumping is the same flicker this is meant to remove.
         style={pos ? { left: pos.left, top: pos.top } : { left: x, top: y, visibility: "hidden" }}
       >
+        {/* ★ THE HEAD IS THE VERBS, NOT A CAPTION. "EQ PRESETS" over a list of EQ presets you
+            opened by right-clicking EQ restates three things you already knew; "CHAIN 2" names the
+            chip you just clicked, which is lit. So the title is optional and mostly absent — the
+            glyph row is the head. It survives where it carries something you cannot see anywhere
+            else (the flyout names the preset it is previewing). */}
+        {(head || (acts && acts.length > 0)) && (
         <div className="fx-preset-head">
-          <span className="fx-preset-title">{head}</span>
+          {head && <span className="fx-preset-title">{head}</span>}
           {acts && acts.length > 0 && (
             <span className="fx-menu-acts">
               {acts.map((a) => (
@@ -70,6 +76,7 @@ export function Menu({ x, y, head, acts, onClose, wide, innerRef, children }: { 
             </span>
           )}
         </div>
+        )}
         {children}
       </div>
     </>

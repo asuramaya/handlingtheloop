@@ -537,6 +537,15 @@ body:not(.no-glow) .fx-chain.drop-after::after {
   overflow-y: auto;
   overflow-x: hidden;
 }
+/* ★ A SCROLLING FLEX COLUMN MUST PIN ITS CHILDREN. .fx-palette is `flex-direction: column` and
+   the menu caps its height, so every child was free to flex-SHRINK — with enough presets the rows
+   squashed into each other and the list rendered as overlapping half-height text. It was there all
+   along and only became visible when the rows gained `overflow: hidden` (before that the squashed
+   content spilled out and happened to look almost right). Children keep their height; the BOX
+   scrolls. That is what the box is for. */
+.fx-preset-menu > * {
+  flex: 0 0 auto;
+}
 /* A row shows what it can and hands the rest to the tooltip. `min-width: 0` is what actually lets
    it: a flex item defaults to min-content, so without it the text refuses to shrink and the box
    grows instead of the ellipsis appearing. */

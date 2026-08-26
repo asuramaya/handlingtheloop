@@ -27,7 +27,6 @@ interface CrossfaderProps {
   canControl?: boolean; // may this user toggle either of the above? (false = non-controller in a session)
   onToggleSmart?: () => void; // TAP THE HANDLE — fader ↔ smart (mirrors the `T` key)
   onToggleEnabled?: () => void; // right-click / long-press the bar — enable/disable (mirrors `Shift+T`)
-  kbd?: string; // keybind hint for the smart toggle (drawn on the bar under body.show-keys)
 }
 
 const FLOOR_DB = -60; // dBFS floor for the glow brightness
@@ -36,7 +35,7 @@ const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballisti
 // The A↔B crossfader as a HORIZONTAL bar. The strip is always an A↔B blend gradient; instead of a
 // discrete level meter, each side's GLOW brightens with that deck's post-crossfade output (louder =
 // brighter), so position (handle), blend (gradient) and level (glow) never fight for the same pixels.
-export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart, enabled = true, canControl = true, onToggleSmart, onToggleEnabled, kbd }: CrossfaderProps) {
+export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart, enabled = true, canControl = true, onToggleSmart, onToggleEnabled }: CrossfaderProps) {
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
   const trackRef = useRef<HTMLDivElement>(null);
   // ★ THE MODE LIVES ON THE FADER. Smart Fader used to be a chip in the I/O strip that meant three
@@ -88,17 +87,9 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
       style={{ ["--xa" as string]: accentA, ["--xb" as string]: accentB }}
       title={smart ? "Smart Fader armed — throw the fader to auto-transition (tempo morph + bass swap)" : undefined}
     >
-      {/* ★ ONLY THE STATE YOU CANNOT SEE. Smart-armed is unmistakable — the whole track becomes a
-          breathing A↔B gradient — so a pill spelling "SMART" next to it is a caption on a picture
-          that already said it. Disabled is NOT: it is a 45% opacity change, which reads as "dim"
-          rather than "off" and is easily confused with the session lock. So that one keeps its
-          label, and the resting board still says nothing. */}
-      {!enabled && (
-        <span className="xbar-mode off" aria-live="polite">
-          FADER OFF
-          {kbd && <i className="xbar-kbd">{kbd}</i>}
-        </span>
-      )}
+      {/* NO STATE LABELS. Smart-armed turns the whole track into a breathing A↔B gradient and
+          disabled greys it out — both are pictures that already say it, and a pill spelling the
+          same thing beside them is a caption on a photograph. */}
       <div className="xbar-track" ref={trackRef}>
         {/* Per-side level glow — opacity tracks --a-lvl / --b-lvl (set by the rAF above). */}
         <span className="xglow xglow-a" />

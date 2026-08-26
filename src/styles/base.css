@@ -571,127 +571,123 @@ body {
   box-shadow: 0 0 4px color-mix(in srgb, var(--text) 60%, transparent);
 }
 
-/* ---- THE FADER ROW: [tail] crossfader [tail] ------------------------------------------------
+/* ---- THE FADER ROW: [cap] crossfader [cap] ---------------------------------------------------
    The devices ride the crossfader's own ends — in on the left, out on the right — so they cost the
-   board no row. ★ THE TAILS ARE EQUAL, always: their width is set inline from whichever side needs
-   more at its widest (see BoardIo), because CSS cannot express "both flanks are as wide as the
-   wider one's contents" and an unequal pair moves the fader's centre by half their difference. */
+   board no row. ★ FLUSH: no gap between a cap and the track, and none between the buttons inside a
+   cap. The row is ONE bar with end-stops, not three objects floating near each other.
+
+   ★ THE CAPS ARE EQUAL AND THEIR BUTTONS FILL THEM. Equal because an unequal pair moves the fader's
+   centre by half their difference, and that centre is a claim about the mix. Filling because the
+   leftover pixels have to go somewhere: left-aligned in an equalised tail they pooled into a 7px
+   hole between the mic and the track, which is exactly the gap that looked wrong. A lone mic is one
+   wide cap now; two devices split their cap evenly. */
 .xrow {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 4px;
+  align-items: stretch;
+  gap: 0;
   flex: 0 0 auto;
   width: 100%;
   min-width: 0;
 }
 .xrow > .xfader-bar { flex: 1 1 auto; min-width: 0; }
-/* Contents hug the OUTER edge — the very ends of the fader's line, which is where they were asked
-   for and where a mixer's in/out live. */
 .xtail {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  /* Safety net, and it costs nothing: the width above is max(both sides), so it is already >= this
-     tail's own content and this never binds. If a measurement is ever stale it binds for a frame
-     and the tail is briefly wide rather than briefly CLIPPING — which is the failure that matters. */
+  align-items: stretch;
+  /* Safety net: the width is set inline to max(both sides), so it is already >= this cap's own
+     content and this never binds. If it ever did, the cap goes WIDE rather than clipping. */
   min-width: max-content;
 }
-.xtail-l { justify-content: flex-start; }
-.xtail-r { justify-content: flex-end; }
-/* The measured layer. The tail's WIDTH is set from JS; this is the natural-size content it is set
-   FROM, so it must never be the thing that gets stretched or observed. */
 .xtail-in {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
-/* Board language, not chin language: bordered, quiet at rest, lit when live — the same grammar as
-   every other button on this surface. */
-/* ★ THEY GROW WITH WHAT IS IN THEM. Fixed at 42px they clipped their own glyphs — an emoji has a
-   taller, wider box than a digit, and `overflow: hidden` turned that into a cut-off icon. Width is
-   content + padding now, with a floor that keeps a bare glyph a real thumb target, and the row's
-   tails measure whatever comes out (see BoardIo). */
+
+/* ---- THE DEVICE BUTTONS ----------------------------------------------------------------------
+   ★ GLYPH ONLY. Every one is exactly one slot, so the caps stay symmetric whatever is plugged in —
+   which is why the record source is the DOT'S COLOUR rather than a word beside it, and why the mic
+   shows its number only while you are moving it. Text is what makes buttons different widths, and
+   different widths are what put a hole in this row the first time. */
 .dev-btn {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  min-width: 34px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  flex: 1 1 0; /* split the cap evenly — no slack anywhere */
+  min-width: 0;
+  padding: 0;
+  border: 0;
   background: var(--surface);
   color: var(--text);
-  font: 800 11px ui-monospace, SFMono-Regular, monospace;
+  font: 800 10px ui-monospace, SFMono-Regular, monospace;
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s, color 0.12s;
+  overflow: hidden;
+  transition: background 0.12s, color 0.12s;
 }
-.dev-btn:hover { border-color: color-mix(in srgb, var(--text) 45%, var(--line)); }
+/* Flush means the divisions are hairlines, not gaps: one between neighbours, one against the track,
+   and the OUTER corners rounded so the whole row still reads as a single bar with two end-stops. */
+.xtail-in > .dev-btn + .dev-btn { border-left: 1px solid var(--line); }
+.xtail-l { border-right: 1px solid var(--line); }
+.xtail-r { border-left: 1px solid var(--line); }
+.xtail-l .dev-btn:first-child { border-radius: 5px 0 0 5px; }
+.xtail-r .dev-btn:last-child { border-radius: 0 5px 5px 0; }
+.dev-btn:hover { background: color-mix(in srgb, var(--text) 12%, var(--surface)); }
 /* The glyph gets its own line box, clear of the button's — an emoji's ascent is what was being
-   sliced off the top. */
+   sliced off the top when these were fixed-size with overflow hidden. */
 .dev-mark {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: block;
   font-size: 13px;
   line-height: 1;
 }
 .dev-val {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.2px;
+  letter-spacing: -0.3px;
 }
-/* The capture source rides BESIDE the dot, not on top of it. Absolutely positioned in a corner it
-   overlapped the glyph — the same "cram it into a fixed box" mistake as the fixed button width, and
-   invisible until a source name got drawn over an icon. The button grows for it instead. */
-.dev-tag {
-  position: relative;
-  z-index: 1;
-  font: 800 7px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
+/* The record dot carries its source as COLOUR — same information as the old "MST" tag, no text. */
+.dev-src-master { color: color-mix(in srgb, var(--text) 75%, transparent); }
+.dev-src-deckA { color: var(--deck-a, #4ad); }
+.dev-src-deckB { color: var(--deck-b, #d4a); }
+.dev-src-mic { color: #ffd250; }
+.dev-btn.dev-rec.armed {
+  color: #fff;
+  background: color-mix(in srgb, #ff5470 40%, var(--surface));
+  animation: dev-rec-pulse 1.1s ease-in-out infinite;
 }
-.dev-rec.armed .dev-tag { color: color-mix(in srgb, #fff 70%, transparent); }
-/* ★ THE MIC GROWS. Off it is a glyph, because a glyph is a toggle; LIVE it widens to carry its
-   value and becomes a drag. `width` transitions, so the group opens rather than jumps. */
+.dev-rec.armed .dev-mark { color: #fff; }
+@keyframes dev-rec-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 0 color-mix(in srgb, #ff5470 60%, transparent); }
+  50% { box-shadow: inset 0 0 14px 0 color-mix(in srgb, #ff5470 75%, transparent); }
+}
+/* ★ THE MIC IS ALSO A FADER while it is live, and it says so without text: the LEVEL you set is a
+   fill, the live input is a brighter overlay on top of it, and the number surfaces for a moment
+   whenever you move it. */
 .dev-btn.dev-mic.live {
   color: var(--bg);
-  background: color-mix(in srgb, var(--text) 82%, var(--panel));
-  border-color: color-mix(in srgb, var(--text) 82%, var(--panel));
+  background: color-mix(in srgb, var(--text) 30%, var(--surface));
   cursor: ew-resize;
   touch-action: none;
 }
 .dev-btn.dev-mic.busy { opacity: 0.55; }
-/* Its input level rises inside it, so "is it hearing me" is on the control you just pressed. */
-/* The clipping lives HERE, on the meter, not on the button — so a fill stays inside the rounded
-   corners while the glyph above it is free to be as tall as it is. */
-.dev-meter {
+.dev-set {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: stretch;
-  border-radius: 4px;
-  overflow: hidden;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  background: color-mix(in srgb, var(--text) 70%, var(--surface));
 }
-.dev-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 14%, transparent); }
-.dev-mic.live .dev-meter > span { background: color-mix(in srgb, var(--bg) 24%, transparent); }
-.dev-btn.dev-rec.armed {
-  color: #fff;
-  border-color: #ff5470;
-  background: color-mix(in srgb, #ff5470 34%, var(--surface));
-  animation: dev-rec-pulse 1.1s ease-in-out infinite;
-}
-@keyframes dev-rec-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
-  50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
-}
+.dev-mic:not(.live) .dev-set { display: none; }
+.dev-meter { position: absolute; inset: 0; z-index: 1; display: flex; align-items: stretch; }
+.dev-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 20%, transparent); }
+.dev-mic.live .dev-meter > span { background: color-mix(in srgb, var(--bg) 30%, transparent); }
+
 /* ---- TOASTS ---------------------------------------------------------------------------------
    The take-landed flash and any I/O error used to be absolutely positioned inside the fader's row —
    a row exactly as tall as its contents — so anything longer than a few words was clipped

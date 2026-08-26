@@ -34,12 +34,12 @@ import { Toasts } from "./Toasts";
 // contextual law as everywhere else, one level deeper: not "is a mic plugged in" but "are you
 // talking".
 type CapSource = "master" | "deckA" | "deckB" | "mic";
-const SRC_LABEL: Record<CapSource, string> = { master: "MST", deckA: "A", deckB: "B", mic: "MIC" };
 const SRC_FULL: Record<CapSource, string> = { master: "Master mix", deckA: "Deck A", deckB: "Deck B", mic: "Mic" };
 const SRC_TAKE: Record<CapSource, string> = { master: "Master take", deckA: "Deck A take", deckB: "Deck B take", mic: "Mic take" };
 const DEST_FULL: Record<"master" | "A" | "B", string> = { master: "Room (master / PA)", A: "Deck A — FX rack", B: "Deck B — FX rack" };
 const HOLD_MS = 460;
 const SLOP = 5; // px before a press counts as a drag rather than a tap
+const SLOT = 34; // one glyph button; a tail is `slots × SLOT` and its buttons split it evenly
 
 export function BoardIo({
   sampler,
@@ -175,6 +175,14 @@ export function BoardIo({
   // the level follows, RELATIVELY (it never jumps to where you pressed — you are talking over it).
   // A press that never moves is still the tap that turns it off.
   const micDrag = useRef<{ x: number; v: number; moved: boolean } | null>(null);
+  const [micNudging, setMicNudging] = useState(false); // showing the number, briefly, while it moves
+  const nudgeTmr = useRef<number | undefined>(undefined);
+  const flashVal = () => {
+    setMicNudging(true);
+    clearTimeout(nudgeTmr.current);
+    nudgeTmr.current = window.setTimeout(() => setMicNudging(false), 900);
+  };
+  useEffect(() => () => clearTimeout(nudgeTmr.current), []);
   const micLive = useRef({ micVol, micOn });
   micLive.current = { micVol, micOn };
   useEffect(() => {
@@ -186,6 +194,7 @@ export function BoardIo({
       const next = Math.max(0, Math.min(1, d.v + (e.clientX - d.x) / 140));
       setMicVol(next);
       engine.setMicLevel(next);
+      flashVal();
     };
     const up = () => { micDrag.current = null; };
     window.addEventListener("pointermove", move);
@@ -208,6 +217,7 @@ export function BoardIo({
     const next = Math.max(0, Math.min(1, micLive.current.micVol + d));
     setMicVol(next);
     engine.setMicLevel(next);
+    flashVal();
   };
   const micBtn = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -224,34 +234,23 @@ export function BoardIo({
 
   const SRC_ORDER: CapSource[] = hasMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
-  // ★ THE TAILS ARE MEASURED, NOT ASSUMED. They were fixed constants mirroring the CSS, which
-  // meant a button whose content grew (an emoji renders taller and wider than a digit, and the mic
-  // widens when it goes live) got CLIPPED by a number written down somewhere else. So the buttons
-  // size to their content and the tails observe them: both take the wider side's width, which keeps
-  // the fader's centre on the deck seam without anyone having to keep two files in agreement.
-  const lIn = useRef<HTMLDivElement>(null);
-  const rIn = useRef<HTMLDivElement>(null);
-  const [tail, setTail] = useState(0);
-  useEffect(() => {
-    const measure = () => {
-      const l = lIn.current?.scrollWidth ?? 0;
-      const r = rIn.current?.scrollWidth ?? 0;
-      // Round up: a fractional width that rounds DOWN clips the last pixel of a glyph.
-      setTail(Math.ceil(Math.max(l, r)));
-    };
-    measure();
-    // Observe the CONTENT, never the tail — the tail's width is what we are setting, so watching it
-    // would be a feedback loop that never settles.
-    const ro = new ResizeObserver(measure);
-    if (lIn.current) ro.observe(lIn.current);
-    if (rIn.current) ro.observe(rIn.current);
-    return () => ro.disconnect();
-  }, [hasMic, phones, micOn, recording]);
+  // ★ THE TAILS ARE EQUAL AND THE BUTTONS FILL THEM, so there is no slack anywhere. Both take
+  // `slots` — whichever side holds more controls — and inside a tail the buttons SPLIT it evenly.
+  // A lone mic is therefore one wide cap rather than a small button with 7px of dead air beside it,
+  // which is what the gap was: equalisation doing its job and nobody deciding where the leftover
+  // pixels went.
+  //
+  // A constant is safe again here only because the buttons are GLYPH-ONLY and fixed height: nothing
+  // in them can grow and outrun the number. (That was the earlier bug — a measured emoji clipped by
+  // a width written down in the CSS. `min-width: max-content` on the tail stays as the belt.)
+  const leftSlots = hasMic ? 1 : 0;
+  const rightSlots = 1 + (phones ? 1 : 0);
+  const tail = Math.max(leftSlots, rightSlots) * SLOT;
 
   return (
     <div className="xrow">
-      <div className="xtail xtail-l" style={{ width: tail || undefined }}>
-      <div className="xtail-in" ref={lIn}>
+      <div className="xtail xtail-l" style={{ width: tail }}>
+      <div className="xtail-in">
       {hasMic && (
         <button
           ref={micBtn}
@@ -269,9 +268,16 @@ export function BoardIo({
           title={micOn ? `Talkover ON at ${Math.round(micVol * 100)} — tap to mute, drag to set level · hold for ducking, destination, monitoring` : "Talkover off — tap to go live · hold for ducking, destination, monitoring"}
           {...holdBind("mic")}
         >
+          {/* Two layers, both silent at rest: the LEVEL you set as a fill, the live input as a
+              brighter overlay. The number appears only while you are dragging — a value readout
+              that is always on would make this button a different width from every other one. */}
+          <span className="dev-set" style={{ width: `${Math.round(micVol * 100)}%` }} />
           <span className="dev-meter"><span ref={meterRef} /></span>
-          <span className="dev-mark" aria-hidden="true">🎙</span>
-          {micOn && <span className="dev-val">{Math.round(micVol * 100)}</span>}
+          {micNudging ? (
+            <span className="dev-val">{Math.round(micVol * 100)}</span>
+          ) : (
+            <span className="dev-mark" aria-hidden="true">🎙</span>
+          )}
         </button>
       )}
       </div>
@@ -279,8 +285,8 @@ export function BoardIo({
 
       {children}
 
-      <div className="xtail xtail-r" style={{ width: tail || undefined }}>
-      <div className="xtail-in" ref={rIn}>
+      <div className="xtail xtail-r" style={{ width: tail }}>
+      <div className="xtail-in">
       <button
         className={`dev-btn dev-rec ${recording ? "armed" : ""}`}
         onClick={tapped(() => void toggleRec())}
@@ -288,8 +294,10 @@ export function BoardIo({
         title={recording ? "Stop — the take drops into the next free GLBL pad" : `Record ${SRC_FULL[recSrc]} → next free GLBL pad · hold / right-click to change source`}
         {...holdBind("rec")}
       >
-        <span className="dev-mark" aria-hidden="true">{recording ? "■" : "●"}</span>
-        <span className="dev-tag">{SRC_LABEL[recSrc]}</span>
+        {/* ★ GLYPH ONLY, so the source is the DOT'S COLOUR rather than a word beside it: master is
+            neutral, a deck takes that deck's accent, the mic takes the lit tint. Same information,
+            no text, and every button stays exactly one slot wide. */}
+        <span className={`dev-mark dev-src-${recSrc}`} aria-hidden="true">{recording ? "■" : "●"}</span>
       </button>
       {phones && (
         <button

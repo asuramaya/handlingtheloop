@@ -64,7 +64,6 @@ import {
   type ColorValue,
   mergeBindings,
   bindingIndex,
-  codeLabel,
   TEMPO_RANGES,
   PITCH_RANGES,
   nextSkip,
@@ -3472,7 +3471,6 @@ function AppBody() {
               smart: smartFaderArmed,
               enabled: xfaderEnabled,
               canControl: !boardLocked,
-              kbd: codeLabel(mergeBindings(settings.keyBindings).smartFader?.primary ?? ""),
               onToggleSmart: () => handlersRef.current.smartFaderToggle?.(engine.deckA, "A", false),
               onToggleEnabled: () => handlersRef.current.xfaderToggle?.(engine.deckA, "A", false),
             }}

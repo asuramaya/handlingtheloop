@@ -874,8 +874,7 @@
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
 }
 /* The SMART chip's styling lived here. It is gone with the chip: the smart fader is a property of
-   the FADER, so it is toggled on the fader's handle and announced by .xbar-mode at the end of this
-   file. What is left in the I/O strip is MASTER, one control with one meaning. */
+   the FADER, so it is toggled on the fader's handle and shown by the track's own state. What is left in the I/O strip is MASTER, one control with one meaning. */
 
 /* Top chin: a thin full-width bar with the three panel launchers. It's the first
    flex child of .app (not floating), so it reserves its row and never overlaps
@@ -2234,42 +2233,13 @@ body.no-glow .hw-btn.shift.on {
 }
 
 
-/* ---- The crossfader's own mode badge -----------------------------------------------------------
-   The SMART chip in the I/O strip is gone: the smart fader is a property of the FADER, so it is
-   toggled by tapping the fader's handle and announced on the fader itself. Only shown when the
-   state is not the ordinary one, so a resting board says nothing. */
-.xbar-mode {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font: 800 8px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.12em;
-  pointer-events: none; /* never in the way of a throw */
-  white-space: nowrap;
-}
-.xbar-mode.smart {
-  color: #fff;
-  background: color-mix(in srgb, var(--xa, #4ad) 40%, transparent);
-  box-shadow: 0 0 10px -2px color-mix(in srgb, var(--xb, #d4a) 70%, transparent);
-}
-.xbar-mode.off {
-  color: color-mix(in srgb, var(--text) 55%, transparent);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-  border: 1px dashed var(--line);
-}
-.xbar-kbd {
-  font-style: normal;
-  opacity: 0.7;
-}
-body:not(.show-keys) .xbar-kbd { display: none; }
+/* The crossfader's mode BADGE lived here and is gone. Smart-armed turns the whole track into a
+   breathing A↔B gradient and disabled greys it out; both are pictures that already say it, and a
+   pill spelling the same thing beside them is a caption on a photograph. */
 /* Crossfader disabled by the DJ (Shift+T, or right-click / long-press the bar). It stays VISIBLE
    and inert rather than disappearing — the gesture that brings it back lives on it. */
 .xfader-bar.xfader-off .xbar-track { opacity: 0.45; }
+/* Flush against the end caps: the track's own corners are square where a cap meets it (see
+   .xtail in base.css), so the row reads as one continuous bar rather than three tiles. */
+.xrow > .xfader-bar .xbar-track { border-radius: 0; }
 .xfader-bar.xfader-off .xbar-val { filter: grayscale(0.7); }

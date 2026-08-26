@@ -21,12 +21,13 @@ import { type SamplerApi } from "./useSampler";
 //   ★ NOTHING FLANKS THE CROSSFADER, and anything sharing its row must span the FULL width.
 //
 // The master obeys that by being a BAND, not a pill (MasterBand): full width, a few pixels tall,
-// zero width taken from the fader. The devices obey it by being a tight CENTRED cluster in a row of
-// their own (BoardIo) — on the deck seam, where a mixer's master section sits.
+// zero width taken from the fader. The devices sit in the fader's own TAILS (BoardIo) — which is
+// allowed only because they are EQUAL, so the centre does not move, and only because the master
+// left: two 163px flanks on a 390px board leave the fader 64px of throw, two icon tails do not.
 //
 // They were briefly in the chin, and that was a category error: these are controls you touch WHILE
 // PLAYING, and the chin is what you touch while not. Performance controls belong on the performance
-// surface; the constraint was never "off the board", it was "not flanking the fader".
+// surface; the constraint was never "off the board", it was "not moving the fader's centre".
 export function BoardBar({
   master,
   xfader,
@@ -56,8 +57,11 @@ export function BoardBar({
       {master && (
         <MasterBand engine={engine} value={master.value} onChange={master.onChange} disabled={!master.canControl} />
       )}
-      <Crossfader {...xfader} />
-      <BoardIo sampler={sampler} ctlRef={ctlRef} micSetRef={micSetRef} micToggleRef={micToggleRef} phones={phones} hasMic={hasMic} />
+      {/* BoardIo owns the row: [tail] crossfader [tail]. It has to, because the tails' width is a
+          function of which devices exist, and only it knows that. */}
+      <BoardIo sampler={sampler} ctlRef={ctlRef} micSetRef={micSetRef} micToggleRef={micToggleRef} phones={phones} hasMic={hasMic}>
+        <Crossfader {...xfader} />
+      </BoardIo>
     </div>
   );
 }

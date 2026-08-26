@@ -589,23 +589,32 @@ body {
   box-shadow: 0 0 4px color-mix(in srgb, var(--text) 60%, transparent);
 }
 
-/* ---- THE DEVICE CLUSTER --------------------------------------------------------------------
-   A tight, CENTRED group on the deck seam, directly under the crossfader — where a mixer's master
-   section sits. Centred is the whole point: the same 154px group reads as one deliberate object on
-   a 390px phone and on a 1900px desktop, where a full-width row of the same controls reads as two
-   things pinned to opposite edges with a hole between them. And because it is its own row, it
-   flanks nothing: the fader above keeps its full width and its centre on the seam. */
-.dev-row {
+/* ---- THE FADER ROW: [tail] crossfader [tail] ------------------------------------------------
+   The devices ride the crossfader's own ends — in on the left, out on the right — so they cost the
+   board no row. ★ THE TAILS ARE EQUAL, always: their width is set inline from whichever side needs
+   more at its widest (see BoardIo), because CSS cannot express "both flanks are as wide as the
+   wider one's contents" and an unequal pair moves the fader's centre by half their difference. */
+.xrow {
   position: relative;
   display: flex;
-  justify-content: center;
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
   width: 100%;
-  min-height: 24px;
-  padding-top: 3px;
+  min-width: 0;
 }
+.xrow > .xfader-bar { flex: 1 1 auto; min-width: 0; }
+/* Contents hug the OUTER edge — the very ends of the fader's line, which is where they were asked
+   for and where a mixer's in/out live. */
+.xtail {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.xtail-l { justify-content: flex-start; }
+.xtail-r { justify-content: flex-end; }
 /* Board language, not chin language: bordered, quiet at rest, lit when live — the same grammar as
    every other button on this surface. */
 .dev-btn {
@@ -669,7 +678,7 @@ body {
   50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
 }
 /* Where the take landed, and any I/O error — transient, so they float over the board rather than
-   reserving space in a row that is otherwise exactly as big as its contents. */
+   reserving space in a row that has none to give. */
 .io-landed {
   position: absolute;
   left: 50%;

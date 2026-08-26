@@ -1,25 +1,31 @@
-import { useEffect, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 import { Menu } from "./ContextMenu";
 
-// ★ THE DEVICE CLUSTER — a TIGHT, CENTRED group on the deck seam, directly under the crossfader.
-// Which is where a real mixer puts its master section: channel · MASTER · channel.
+// ★ THE DEVICES SIT IN THE CROSSFADER'S OWN TAILS — mic at the left end, capture and cue at the
+// right — so they cost the board no row at all. IN on the left, OUT on the right, which is a real
+// mixer's convention rather than an arbitrary split.
 //
-// Two homes were tried and rejected, and the reasons are the design:
-//   • A full-width strip above the fader. It failed not because it was a row but because it was
-//     LOPSIDED — master pinned left, devices pinned right, a hole between them. A line with a hole
-//     in it reads as leftovers no matter how correct its contents are.
-//   • The chin. It failed on CATEGORY: these are things you touch WHILE PLAYING, and the chin is
-//     things you touch while not. Mic and REC beside Settings and Discover makes both worse.
-// So they are on the board, where performance controls belong — but centred and tight, so the
-// group is obviously deliberate, and in its own row, so it flanks nothing. A centred cluster is the
-// one shape that reads as intentional at any size: 154px of it on a 390px phone and on a 1900px
-// desktop look like the same object, which is the whole point of one surface that scales.
+// Four homes were tried; the rejects are the design:
+//   • A full-width strip above the fader — LOPSIDED (master left, devices right, a hole between).
+//     A line with a hole in it reads as leftovers however correct its contents are.
+//   • The chin — a CATEGORY error. These are touched WHILE PLAYING; the chin is what you touch
+//     while not. Mic and REC beside Settings and Discover made both rows worse.
+//   • A centred cluster in its own row under the fader — deliberate-looking, but a whole row spent
+//     on three buttons is a row spent on three buttons.
 //
-// Everything here is contextual. With no microphone and no cue device the cluster is a single
-// record button, still centred, still deliberate.
+// ★ FLANKING THE FADER IS ONLY SAFE BECAUSE THE TAILS ARE EQUAL AND THE MASTER LEFT. The earlier
+// arithmetic that killed this idea assumed a 163px master fader on one side: two of those on a
+// 390px board leave the fader 64px of throw. The master is a hairline BAND now (MasterBand), so the
+// tails are icon-sized, and a phone can afford them. But equal is not optional — unequal tails move
+// the fader's centre by half their difference, and that centre is a claim about the mix.
+//
+// So both tails are sized to `TAIL`, the wider side's WIDEST state. Widest-state, not current, so
+// the fader does not reflow under your hand when the mic goes live. It is still contextual: the
+// width is derived from which devices EXIST, so a bare rig gets one small record button and two
+// 42px tails.
 //
 // ★ AND THE MIC GROWS. What needs a permanent CONTROL rather than a permanent toggle? Only the mic
 // level. So: off it is a glyph, because a glyph is a toggle; LIVE it widens to carry its value and
@@ -33,6 +39,11 @@ const SRC_TAKE: Record<CapSource, string> = { master: "Master take", deckA: "Dec
 const DEST_FULL: Record<"master" | "A" | "B", string> = { master: "Room (master / PA)", A: "Deck A — FX rack", B: "Deck B — FX rack" };
 const HOLD_MS = 460;
 const SLOP = 5; // px before a press counts as a drag rather than a tap
+// Button metrics, mirrored in base.css. Kept here because the TAIL width is computed, not styled:
+// CSS has no way to say "both flanks are as wide as the wider one's contents".
+const BTN = 42;
+const MIC_LIVE = 76; // the mic widens when talkover is on — reserve for it so nothing reflows
+const GAP = 4;
 
 export function BoardIo({
   sampler,
@@ -41,6 +52,7 @@ export function BoardIo({
   micToggleRef,
   phones,
   hasMic = false,
+  children,
 }: {
   sampler: SamplerApi;
   ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
@@ -48,6 +60,7 @@ export function BoardIo({
   micToggleRef?: MutableRefObject<(() => void) | null>;
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
   hasMic?: boolean;
+  children?: ReactNode; // the crossfader itself — it sits BETWEEN the two tails
 }) {
   const s = sampler;
   const engine = useEngine();
@@ -195,8 +208,14 @@ export function BoardIo({
 
   const SRC_ORDER: CapSource[] = hasMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
+  // Both tails, sized to whichever side needs more at ITS widest.
+  const leftMax = hasMic ? MIC_LIVE : 0;
+  const rightMax = BTN + (phones ? BTN + GAP : 0);
+  const tail = Math.max(leftMax, rightMax);
+
   return (
-    <div className="dev-row">
+    <div className="xrow">
+      <div className="xtail xtail-l" style={{ width: tail }}>
       {hasMic && (
         <button
           className={`dev-btn dev-mic ${micOn ? "live" : ""} ${micBusy ? "busy" : ""}`}
@@ -212,6 +231,11 @@ export function BoardIo({
           {micOn && <span className="dev-val">{Math.round(micVol * 100)}</span>}
         </button>
       )}
+      </div>
+
+      {children}
+
+      <div className="xtail xtail-r" style={{ width: tail }}>
       <button
         className={`dev-btn dev-rec ${recording ? "armed" : ""}`}
         onClick={tapped(() => void toggleRec())}
@@ -233,6 +257,7 @@ export function BoardIo({
           <span className="dev-mark" aria-hidden="true">🎧</span>
         </button>
       )}
+      </div>
 
       {landed != null && <span className="io-landed" role="status">→ GLBL {landed + 1}</span>}
       {(s.error || ioErr) && (

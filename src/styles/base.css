@@ -589,67 +589,92 @@ body {
   box-shadow: 0 0 4px color-mix(in srgb, var(--text) 60%, transparent);
 }
 
-/* ---- THE DEVICE BUTTONS, in the chin -----------------------------------------------------------
-   Chin-sized by necessity (that row is tight) and chin-shaped by intent: they should read as part
-   of the app's own row, not as a foreign cluster bolted to it. Fixed width, so they never take
-   flex from the navigation beside them. */
-.chin-btn.chin-io {
+/* ---- THE DEVICE CLUSTER --------------------------------------------------------------------
+   A tight, CENTRED group on the deck seam, directly under the crossfader — where a mixer's master
+   section sits. Centred is the whole point: the same 154px group reads as one deliberate object on
+   a 390px phone and on a 1900px desktop, where a full-width row of the same controls reads as two
+   things pinned to opposite edges with a hole between them. And because it is its own row, it
+   flanks nothing: the fader above keeps its full width and its centre on the seam. */
+.dev-row {
   position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
   flex: 0 0 auto;
-  width: 40px;
+  width: 100%;
+  min-height: 24px;
+  padding-top: 3px;
+}
+/* Board language, not chin language: bordered, quiet at rest, lit when live — the same grammar as
+   every other button on this surface. */
+.dev-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 22px;
   padding: 0;
   overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
   font: 800 11px ui-monospace, SFMono-Regular, monospace;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s, width 0.14s ease;
 }
-.chin-io-mark { position: relative; z-index: 1; font-size: 14px; line-height: 1; }
-.chin-io-val {
+.dev-btn:hover { border-color: color-mix(in srgb, var(--text) 45%, var(--line)); }
+.dev-mark { position: relative; z-index: 1; font-size: 13px; line-height: 1; }
+.dev-val {
   position: relative;
   z-index: 1;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.2px;
 }
-.chin-io-tag {
+.dev-tag {
   position: absolute;
   right: 3px;
-  bottom: 3px;
+  bottom: 2px;
   z-index: 1;
   font: 800 6px ui-monospace, SFMono-Regular, monospace;
   color: color-mix(in srgb, var(--text) 40%, transparent);
 }
-/* ★ THE MIC GROWS. Off it is a toggle and an icon is a toggle; LIVE it is also a fader, so it
-   widens to carry its value and becomes draggable. The control appears exactly while the thing it
-   controls is happening. */
-.chin-btn.chin-mic { cursor: pointer; }
-.chin-btn.chin-mic.live {
-  width: 74px;
-  gap: 5px;
-  /* Lit = inverted, derived from the theme's own text colour so it works on any palette (the chin
-     has no deck accent to borrow, and shouldn't). */
+/* ★ THE MIC GROWS. Off it is a glyph, because a glyph is a toggle; LIVE it widens to carry its
+   value and becomes a drag. `width` transitions, so the group opens rather than jumps. */
+.dev-btn.dev-mic.live {
+  width: 76px;
   color: var(--bg);
   background: color-mix(in srgb, var(--text) 82%, var(--panel));
+  border-color: color-mix(in srgb, var(--text) 82%, var(--panel));
   cursor: ew-resize;
   touch-action: none;
 }
-.chin-btn.chin-mic.busy { opacity: 0.55; }
+.dev-btn.dev-mic.busy { opacity: 0.55; }
 /* Its input level rises inside it, so "is it hearing me" is on the control you just pressed. */
-.chin-io-meter { position: absolute; inset: 0; display: flex; align-items: stretch; }
-.chin-io-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 12%, transparent); }
-.chin-mic.live .chin-io-meter > span { background: color-mix(in srgb, var(--bg) 22%, transparent); }
-.chin-btn.chin-rec.armed {
+.dev-meter { position: absolute; inset: 0; display: flex; align-items: stretch; }
+.dev-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 14%, transparent); }
+.dev-mic.live .dev-meter > span { background: color-mix(in srgb, var(--bg) 24%, transparent); }
+.dev-btn.dev-rec.armed {
   color: #fff;
-  background: color-mix(in srgb, #ff5470 40%, var(--panel));
-  animation: io-rec-pulse 1.1s ease-in-out infinite;
+  border-color: #ff5470;
+  background: color-mix(in srgb, #ff5470 34%, var(--surface));
+  animation: dev-rec-pulse 1.1s ease-in-out infinite;
 }
-@keyframes io-rec-pulse {
-  0%, 100% { box-shadow: inset 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
-  50% { box-shadow: inset 0 0 12px 0 color-mix(in srgb, #ff5470 70%, transparent); }
+@keyframes dev-rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
+  50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
 }
-/* Where the take landed, and any I/O error — both belong to the chin now, so both float under it
-   rather than inside a row that no longer exists. */
+/* Where the take landed, and any I/O error — transient, so they float over the board rather than
+   reserving space in a row that is otherwise exactly as big as its contents. */
 .io-landed {
-  position: fixed;
-  top: 46px;
-  right: 10px;
+  position: absolute;
+  left: 50%;
+  bottom: -20px;
+  transform: translateX(-50%);
   z-index: 60;
   padding: 3px 7px;
   border-radius: 5px;
@@ -659,11 +684,13 @@ body {
   letter-spacing: 0.06em;
   color: var(--text);
   white-space: nowrap;
+  pointer-events: none;
 }
-.smp-error.chin-error {
-  position: fixed;
-  top: 46px;
-  right: 10px;
+.smp-error.dev-error {
+  position: absolute;
+  left: 50%;
+  bottom: -26px;
+  transform: translateX(-50%);
   z-index: 60;
   max-width: min(340px, calc(100vw - 20px));
 }

@@ -4,20 +4,28 @@ import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 import { Menu } from "./ContextMenu";
 
-// ★ THE DEVICES LIVE IN THE CHIN, NOT ON THE BOARD. They were a full-width strip above the
-// crossfader, then a lopsided one — and a lopsided line with a hole in it reads as leftovers no
-// matter how correct its contents are. They are not board controls: a microphone, a recorder and a
-// headphone output are things attached to the APP, which is what the chin already holds.
+// ★ THE DEVICE CLUSTER — a TIGHT, CENTRED group on the deck seam, directly under the crossfader.
+// Which is where a real mixer puts its master section: channel · MASTER · channel.
 //
-// The chin is tight (eight items, most of them flex), so these must be chin-SIZED — which forced
-// the honest question of what actually needs a permanent control:
-//   • REC        — a toggle. An icon is a toggle. ✓
-//   • CUE        — a way in to two settings. An icon. ✓
-//   • MIC on/off — a toggle. An icon. ✓
-//   • MIC level  — a control, and the operator's rule is that it must be instant.
-// So the mic GROWS. Off, it is an icon like the rest; live, it becomes a cell you can drag. The
-// control appears exactly while the thing it controls is happening — the same contextual law the
-// rest of this app follows, one level deeper: not "is a mic plugged in" but "are you talking".
+// Two homes were tried and rejected, and the reasons are the design:
+//   • A full-width strip above the fader. It failed not because it was a row but because it was
+//     LOPSIDED — master pinned left, devices pinned right, a hole between them. A line with a hole
+//     in it reads as leftovers no matter how correct its contents are.
+//   • The chin. It failed on CATEGORY: these are things you touch WHILE PLAYING, and the chin is
+//     things you touch while not. Mic and REC beside Settings and Discover makes both worse.
+// So they are on the board, where performance controls belong — but centred and tight, so the
+// group is obviously deliberate, and in its own row, so it flanks nothing. A centred cluster is the
+// one shape that reads as intentional at any size: 154px of it on a 390px phone and on a 1900px
+// desktop look like the same object, which is the whole point of one surface that scales.
+//
+// Everything here is contextual. With no microphone and no cue device the cluster is a single
+// record button, still centred, still deliberate.
+//
+// ★ AND THE MIC GROWS. What needs a permanent CONTROL rather than a permanent toggle? Only the mic
+// level. So: off it is a glyph, because a glyph is a toggle; LIVE it widens to carry its value and
+// becomes a drag. The control appears exactly while the thing it controls is happening — the same
+// contextual law as everywhere else, one level deeper: not "is a mic plugged in" but "are you
+// talking".
 type CapSource = "master" | "deckA" | "deckB" | "mic";
 const SRC_LABEL: Record<CapSource, string> = { master: "MST", deckA: "A", deckB: "B", mic: "MIC" };
 const SRC_FULL: Record<CapSource, string> = { master: "Master mix", deckA: "Deck A", deckB: "Deck B", mic: "Mic" };
@@ -188,10 +196,10 @@ export function BoardIo({
   const SRC_ORDER: CapSource[] = hasMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
   return (
-    <>
+    <div className="dev-row">
       {hasMic && (
         <button
-          className={`chin-btn chin-io chin-mic ${micOn ? "live" : ""} ${micBusy ? "busy" : ""}`}
+          className={`dev-btn dev-mic ${micOn ? "live" : ""} ${micBusy ? "busy" : ""}`}
           onPointerDown={micDown}
           onClick={tapped(() => { if (micDrag.current?.moved) return; void toggleMic(); })}
           aria-label="Microphone talkover"
@@ -199,36 +207,36 @@ export function BoardIo({
           title={micOn ? `Talkover ON at ${Math.round(micVol * 100)} — tap to mute, drag to set level · hold for ducking, destination, monitoring` : "Talkover off — tap to go live · hold for ducking, destination, monitoring"}
           {...holdBind("mic")}
         >
-          <span className="chin-io-meter"><span ref={meterRef} /></span>
-          <span className="chin-io-mark" aria-hidden="true">🎙</span>
-          {micOn && <span className="chin-io-val">{Math.round(micVol * 100)}</span>}
+          <span className="dev-meter"><span ref={meterRef} /></span>
+          <span className="dev-mark" aria-hidden="true">🎙</span>
+          {micOn && <span className="dev-val">{Math.round(micVol * 100)}</span>}
         </button>
       )}
       <button
-        className={`chin-btn chin-io chin-rec ${recording ? "armed" : ""}`}
+        className={`dev-btn dev-rec ${recording ? "armed" : ""}`}
         onClick={tapped(() => void toggleRec())}
         aria-label="Record"
         title={recording ? "Stop — the take drops into the next free GLBL pad" : `Record ${SRC_FULL[recSrc]} → next free GLBL pad · hold / right-click to change source`}
         {...holdBind("rec")}
       >
-        <span className="chin-io-mark" aria-hidden="true">{recording ? "■" : "●"}</span>
-        <span className="chin-io-tag">{SRC_LABEL[recSrc]}</span>
+        <span className="dev-mark" aria-hidden="true">{recording ? "■" : "●"}</span>
+        <span className="dev-tag">{SRC_LABEL[recSrc]}</span>
       </button>
       {phones && (
         <button
-          className="chin-btn chin-io chin-cue"
+          className="dev-btn dev-cue"
           onClick={tapped(() => setPop({ kind: "cue", x: 0, y: 0 }))}
           aria-label="Headphone cue"
           title="Headphone cue — blend and level"
           {...holdBind("cue")}
         >
-          <span className="chin-io-mark" aria-hidden="true">🎧</span>
+          <span className="dev-mark" aria-hidden="true">🎧</span>
         </button>
       )}
 
       {landed != null && <span className="io-landed" role="status">→ GLBL {landed + 1}</span>}
       {(s.error || ioErr) && (
-        <div className="smp-error chin-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
+        <div className="smp-error dev-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
           {s.error || ioErr} <span className="smp-error-x">✕</span>
         </div>
       )}
@@ -281,6 +289,6 @@ export function BoardIo({
           </div>
         </Menu>
       )}
-    </>
+    </div>
   );
 }

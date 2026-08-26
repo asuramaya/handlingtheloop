@@ -1,7 +1,10 @@
+import type { MutableRefObject } from "react";
 import type { Deck } from "@htl/audio";
 import { useEngine } from "../App/spine";
 import { MasterBand } from "./MasterBand";
 import { Crossfader } from "./Crossfader";
+import { BoardIo } from "./BoardIo";
+import { type SamplerApi } from "./useSampler";
 
 // ★ WHAT IS LEFT OF THE I/O STRIP: nothing. The board's row is the crossfader, with the master
 // drawn as a hairline directly above it.
@@ -17,14 +20,30 @@ import { Crossfader } from "./Crossfader";
 //
 //   ★ NOTHING FLANKS THE CROSSFADER, and anything sharing its row must span the FULL width.
 //
-// The master obeys that by being a band, not a pill (MasterBand). The devices obey it by leaving
-// the board entirely for the chin (BoardIo), where a microphone, a recorder and a headphone output
-// belong anyway: they are attached to the APP, not to the mix.
+// The master obeys that by being a BAND, not a pill (MasterBand): full width, a few pixels tall,
+// zero width taken from the fader. The devices obey it by being a tight CENTRED cluster in a row of
+// their own (BoardIo) — on the deck seam, where a mixer's master section sits.
+//
+// They were briefly in the chin, and that was a category error: these are controls you touch WHILE
+// PLAYING, and the chin is what you touch while not. Performance controls belong on the performance
+// surface; the constraint was never "off the board", it was "not flanking the fader".
 export function BoardBar({
   master,
   xfader,
+  sampler,
+  ctlRef,
+  micSetRef,
+  micToggleRef,
+  phones,
+  hasMic,
 }: {
   master?: { value: number; canControl: boolean; onChange: (v: number) => void };
+  sampler: SamplerApi;
+  ctlRef?: MutableRefObject<{ trigger: (i: number) => void; release: (i: number) => void } | null>;
+  micSetRef?: MutableRefObject<((v: number) => void) | null>;
+  micToggleRef?: MutableRefObject<(() => void) | null>;
+  phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
+  hasMic?: boolean;
   xfader: {
     deckA: Deck; deckB: Deck; accentA: string; accentB: string; crossfade: number;
     onCrossfade: (v: number) => void; locked?: boolean; smart?: boolean; enabled?: boolean;
@@ -38,6 +57,7 @@ export function BoardBar({
         <MasterBand engine={engine} value={master.value} onChange={master.onChange} disabled={!master.canControl} />
       )}
       <Crossfader {...xfader} />
+      <BoardIo sampler={sampler} ctlRef={ctlRef} micSetRef={micSetRef} micToggleRef={micToggleRef} phones={phones} hasMic={hasMic} />
     </div>
   );
 }

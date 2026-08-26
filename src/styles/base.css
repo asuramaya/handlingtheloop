@@ -514,41 +514,60 @@ body {
 .board-bar {
   position: relative;
   display: flex;
-  align-items: stretch;
-  gap: 6px;
+  flex-direction: column;
+  gap: 3px;
   flex: 0 0 auto;
   width: 100%;
-  padding: 4px 0 0;
+  padding: 3px 0 0;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   /* The board's master/global zone must NOT borrow deck A's hue (which is what --accent resolves
      to in this part of the tree). A bright NEUTRAL, so lit states pop without a deck colour. */
   --accent: color-mix(in srgb, var(--text) 68%, var(--line));
 }
-/* The crossfader gives up its own row chrome — it is a member of this one now. */
+/* ★ THE FADER'S LINE IS ITS OWN. Full width, so its 50 lands on the seam between the two deck
+   columns — at every screen size, with nothing to balance and no breakpoint to keep honest. */
 .board-bar .xfader-bar {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
   padding: 0;
   background: transparent;
   border-bottom: 0;
 }
+/* The globals strip. Lopsided on purpose: master at the left edge, devices at the right, and the
+   space between them is space. It constrains nothing, which is exactly why it is allowed to. */
+.board-globals {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+}
+.board-gap { flex: 1 1 auto; min-width: 4px; }
 
 /* MASTER — meter, fader and limiter as one object. It is the only thing here that is never
    contextual, so it holds the left end at a fixed width and never moves. */
+/* ★ SHRINK ORDER IS THE DESIGN. The gap goes first, then the master gives up length — and the
+   device controls never shrink at all, because on a phone there is no keyboard and they are the
+   only way to the mic and the recorder. Container-relative by construction: no vw, which would
+   measure the WINDOW while this control lives inside a third of it. */
 .mfader {
-  flex: 0 0 auto;
+  flex: 0 1 158px;
+  min-width: 86px;
   display: flex;
   align-items: center;
   gap: 5px;
-  padding-right: 8px;
-  border-right: 1px solid var(--line);
 }
 .mfader.disabled { opacity: 0.5; pointer-events: none; }
 .mfader-track {
   position: relative;
-  width: 132px;
-  height: 22px;
+  /* Fluid inside .mfader's shrink allowance — never so short that the meter stops meaning
+     anything, and nothing below it depends on how long it is. */
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--bg);
@@ -585,7 +604,7 @@ body {
 }
 .mfader-val {
   width: 34px;
-  height: 18px;
+  height: 16px;
   font-size: 11px;
   background: color-mix(in srgb, var(--accent) 85%, var(--panel));
   box-shadow: none;
@@ -604,15 +623,25 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-left: 8px;
-  border-left: 1px solid var(--line);
 }
+/* A strip-height control cell: the MIC, which is a CELL and not a glyph because a live mic is
+   ridden (tap = on/off, drag = level) rather than configured. .vcell owns the knob ring and the
+   gestures; this only resizes it to the strip. */
+.board-cell.vcell {
+  min-width: 52px;
+  width: 52px;
+  height: 26px;
+  padding: 1px 4px;
+  gap: 0;
+}
+.board-cell .vcell-label { font-size: 7px; letter-spacing: 0.4px; }
+.board-cell .vcell-value { font-size: 11px; line-height: 1; }
 .io-glyph {
   position: relative;
   display: grid;
   place-items: center;
   width: 30px;
-  height: 22px;
+  height: 26px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -684,14 +713,9 @@ body {
 .io-pop-row > .vcell { flex: 1 1 0; min-width: 0; }
 .io-pop-cell { height: 38px; }
 
-@media (max-width: 768px) {
-  /* Narrow: the master keeps its meter but gives up length; the glyphs never shrink — they are
-     the only way to the mic and the recorder on a surface with no keyboard. */
-  .mfader-track { width: 92px; }
-  .mfader { padding-right: 5px; }
-  .board-io { padding-left: 5px; }
-  .board-bar { gap: 4px; }
-}
+/* No mobile override for the strip: the master track is already fluid (clamp) and the cells are
+   already the size a thumb needs. The one thing that must NOT shrink is the mic cell and the record
+   dot — on a phone there is no keyboard, so they are the only way in. */
 
 /* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
    carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no

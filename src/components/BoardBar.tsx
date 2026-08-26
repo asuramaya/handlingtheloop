@@ -7,20 +7,31 @@ import { Menu } from "./ContextMenu";
 import { MasterFader } from "./MasterFader";
 import { Crossfader } from "./Crossfader";
 
-// ★ THE BOARD'S ONE ROW. There used to be two: a full-width I/O strip of seven equal-weight cells,
-// and the crossfader beneath it. The strip was permanently full because its content was gated on
-// `engine.canMic` — which is `!!getUserMedia`, i.e. "this is a browser" — so every DJ carried MIC /
-// DUCK / MON / BLEND / LVL forever whether they owned a microphone or not.
+// ★ THE BOARD BAR: A GLOBALS STRIP, THEN THE CROSSFADER ALONE ON ITS OWN LINE.
 //
-// Sorting those controls by how often you touch them settles the whole layout:
-//   • MASTER + the limiter — a READOUT you want to see constantly, set once.
-//   • MIC on/off — mid-set, urgent, one gesture. (It has a key now: see `micToggle`.)
+// It began as a full-width I/O strip of seven equal-weight cells above the fader, permanently full
+// because its content was gated on `engine.canMic` — which is `!!getUserMedia`, i.e. "this is a
+// browser" — so every DJ carried MIC / DUCK / MON / BLEND / LVL forever whether they owned a
+// microphone or not. Gating that properly emptied it, and everything left fitted on one line WITH
+// the fader — which is where the real constraint showed up.
+//
+// ★ NOTHING SHARES THE CROSSFADER'S LINE. Its centre is a CLAIM: at 50 the mix is equal, and the
+// pixel that says so has to be the seam between deck A's column and deck B's. Anything flanking it
+// pushes that pixel by half the flanks' difference (measured: 163px of master vs 83px of glyphs put
+// the centre 40px into B). Balancing the flanks fixes it on a desktop and kills it on a phone —
+// two 163px flanks on a 390px board leave the fader 64px of throw, which is a switch, not a
+// crossfader. Anything flanking the fader costs a PROPORTION of the board, never a constant.
+// So nothing flanks it. The fader is full-width and dead-centre at every size, with no arithmetic
+// to get wrong and no breakpoint to maintain — which is the whole point of one surface that scales
+// both ways.
+//
+// The strip above it holds what is genuinely global, sorted by how often you touch it:
+//   • MASTER + the limiter — a readout you want to see constantly, set once.
+//   • MIC — on/off AND level, both one gesture, because a live mic is ridden, not configured.
 //   • REC — deliberate, occasional.
-//   • DUCK · DEST · MON · BLEND · LVL — configuration. Once per gig, per rig.
-// Five of the seven are settings wearing performance clothes. So the row is: the master fader at
-// one end, the crossfader between, and a CONTEXTUAL GLYPH per plugged-in device at the other —
-// each glyph one tap for the thing you actually do, and a hold / right-click for its cluster.
-// The board gets a whole row of height back and nothing became unreachable.
+//   • DUCK · DEST · MON · BLEND · LVL — configuration. Once per gig, per rig, behind a hold.
+// Because the strip constrains nothing, its contents are free to be contextual: a board with no
+// microphone and no cue output shows a master and a record dot, and that is the whole line.
 
 type CapSource = "master" | "deckA" | "deckB" | "mic";
 const SRC_LABEL: Record<CapSource, string> = { master: "MST", deckA: "A", deckB: "B", mic: "MIC" };
@@ -173,25 +184,38 @@ export function BoardBar({
 
   return (
     <div className="board-bar">
-      {master && (
-        <MasterFader engine={engine} value={master.value} onChange={master.onChange} disabled={!master.canControl} />
-      )}
-      <Crossfader {...xfader} />
-      {/* THE DEVICE GLYPHS — each present only while its device is. A board with no microphone and
-          no cue output shows one: the record dot. */}
-      <div className="board-io">
+      {/* THE GLOBALS STRIP. It constrains nothing below it, so it is free to be lopsided: master at
+          the left edge, devices at the right, whatever is between them empty. */}
+      <div className="board-globals">
+        {master && (
+          <MasterFader engine={engine} value={master.value} onChange={master.onChange} disabled={!master.canControl} />
+        )}
+        <span className="board-gap" />
+        {/* Each control present only while its device is. */}
+        <div className="board-io">
+        {/* ★ A LIVE MIC IS RIDDEN, NOT CONFIGURED. On/off and level are both things you reach for
+            mid-sentence, so neither is allowed to be a tap deep: this is a cell, not a glyph —
+            TAP toggles talkover, DRAG sets the level, and only the settings you dial once (ducking,
+            destination, monitoring) live behind the hold. Its live input rises inside it, so "is it
+            hearing me" is on the control you just pressed. */}
         {hasMic && (
-          <button
-            className={`io-glyph io-mic ${micOn ? "on" : ""} ${micBusy ? "busy" : ""}`}
-            onClick={tapped(() => void toggleMic())}
-            title={`${micOn ? "Talkover ON" : "Talkover off"} — tap to toggle · right-click / hold for level, ducking, destination and monitoring`}
-            aria-label="Microphone talkover"
-            aria-pressed={micOn}
-            {...glyphHold("mic")}
+          <ValueCell
+            className={`board-cell io-mic ${micOn ? "on" : ""}`}
+            label={micBusy ? "MIC…" : "MIC"}
+            value={micVol}
+            min={0}
+            max={1}
+            step={0.02}
+            reset={0.85}
+            active={micOn}
+            disabled={micBusy}
+            format={(v) => `${Math.round(v * 100)}`}
+            onTap={() => void toggleMic()}
+            onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }}
+            onContextMenu={(e) => setPop({ kind: "mic", x: e.clientX, y: e.clientY })}
           >
             <span className="io-glyph-meter"><span ref={meterRef} /></span>
-            <span className="io-glyph-mark">🎙</span>
-          </button>
+          </ValueCell>
         )}
         <button
           className={`io-glyph io-rec ${recording ? "armed" : ""}`}
@@ -216,7 +240,10 @@ export function BoardBar({
         )}
         {/* Where the take landed — GLBL pad-mode is on the decks, not beside this row. */}
         {landed != null && <span className="io-landed" role="status">→ GLBL {landed + 1}</span>}
+        </div>
       </div>
+      {/* ★ ALONE ON ITS LINE, full width, centre on the deck seam — at every screen size. */}
+      <Crossfader {...xfader} />
 
       {(s.error || ioErr) && (
         <div className="smp-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
@@ -226,11 +253,11 @@ export function BoardBar({
 
       {/* THE CLUSTERS. Everything that is configuration, behind the glyph it configures. Built on
           the shared Menu, which retires one more `.ctx-menu` hand-positioned popup. */}
+      {/* LEVEL is NOT in the mic cluster — it is on the cell you opened this from. A setting that
+          has a home on the board does not get a second one in a menu. */}
       {pop?.kind === "mic" && (
         <Menu x={pop.x || 40} y={pop.y || 40} head="MIC" onClose={() => setPop(null)}>
           <div className="io-pop-row">
-            <ValueCell className="io-pop-cell" label="LEVEL" value={micVol} min={0} max={1} step={0.02} reset={0.85}
-              format={(v) => `${Math.round(v * 100)}`} onChange={(v) => { setMicVol(v); engine.setMicLevel(v); }} />
             <ValueCell className="io-pop-cell" label="DUCK" value={duck} min={0} max={1} step={0.02} reset={0.6}
               format={(v) => `${Math.round(v * 100)}`} onChange={(v) => { setDuck(v); engine.setMicDuck(v); }} />
           </div>

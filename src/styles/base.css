@@ -506,27 +506,24 @@ body {
   opacity: 0.7;
 }
 /* ---- THE BOARD BAR --------------------------------------------------------------------------
-   The full-width I/O strip lived here: seven equal-weight cells stretching to fill a row they
-   could never fill honestly, because their content was gated on `engine.canMic` — which is
-   `!!getUserMedia`, i.e. "this is a browser". It is one row now: the master fader, the
-   crossfader, and a contextual glyph per plugged-in device. See BoardBar.tsx for the reasoning;
-   what follows is only how it looks. */
+   The crossfader, with the master drawn as a hairline directly above it. Nothing else: the I/O
+   strip that used to sit here is gone (see BoardBar.tsx for the arc), and the devices moved to the
+   chin. The one rule this row enforces is that ANYTHING SHARING IT SPANS THE FULL WIDTH — the
+   fader's centre has to land on the seam between the deck columns at every screen size, and a
+   flank of any fixed size breaks that on a phone. */
 .board-bar {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 3px;
   flex: 0 0 auto;
   width: 100%;
-  padding: 3px 0 0;
+  padding: 2px 0 0;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   /* The board's master/global zone must NOT borrow deck A's hue (which is what --accent resolves
      to in this part of the tree). A bright NEUTRAL, so lit states pop without a deck colour. */
   --accent: color-mix(in srgb, var(--text) 68%, var(--line));
 }
-/* ★ THE FADER'S LINE IS ITS OWN. Full width, so its 50 lands on the seam between the two deck
-   columns — at every screen size, with nothing to balance and no breakpoint to keep honest. */
 .board-bar .xfader-bar {
   flex: 0 0 auto;
   width: 100%;
@@ -535,176 +532,142 @@ body {
   background: transparent;
   border-bottom: 0;
 }
-/* The globals strip. Lopsided on purpose: master at the left edge, devices at the right, and the
-   space between them is space. It constrains nothing, which is exactly why it is allowed to. */
-.board-globals {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-  height: 26px;
-}
-.board-gap { flex: 1 1 auto; min-width: 4px; }
 
-/* MASTER — meter, fader and limiter as one object. It is the only thing here that is never
-   contextual, so it holds the left end at a fixed width and never moves. */
-/* ★ SHRINK ORDER IS THE DESIGN. The gap goes first, then the master gives up length — and the
-   device controls never shrink at all, because on a phone there is no keyboard and they are the
-   only way to the mic and the recorder. Container-relative by construction: no vw, which would
-   measure the WINDOW while this control lives inside a third of it. */
-.mfader {
-  flex: 0 1 158px;
-  min-width: 86px;
+/* THE MASTER BAND — a full-board hairline. The painted bar is 5px; the ELEMENT is 13px, because a
+   5px drag target is not a target. It costs the row a few pixels and no width at all, which is the
+   only way a master can share this line without pushing the fader off centre. */
+.mband {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 13px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
 }
-.mfader.disabled { opacity: 0.5; pointer-events: none; }
-.mfader-track {
+.mband.disabled { opacity: 0.4; pointer-events: none; }
+.mband-paint {
   position: relative;
-  /* Fluid inside .mfader's shrink allowance — never so short that the meter stops meaning
-     anything, and nothing below it depends on how long it is. */
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 20px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--bg);
+  display: block;
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--line) 70%, var(--bg));
   overflow: hidden;
 }
-/* Live output level, painted straight to the DOM on the shared rAF. */
-.mfader-lvl {
+.mband:hover .mband-paint,
+.mband:focus-visible .mband-paint { background: color-mix(in srgb, var(--line) 100%, var(--bg)); }
+/* Live output level, from the left. Written straight to the DOM on the shared rAF. */
+.mband-lvl {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
   width: 0;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 58%, transparent));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent), color-mix(in srgb, var(--accent) 85%, transparent));
 }
-/* Gain reduction, from the RIGHT — COMP's own convention, and the one place on the board where
-   red means "the ceiling is working", not "something broke". */
-.mfader-gr {
+/* Gain reduction, from the RIGHT — COMP's own convention, and the one place on the board where red
+   means "the ceiling is working", not "something broke". */
+.mband-gr {
   position: absolute;
   right: 0;
   top: 0;
   bottom: 0;
   width: 0;
-  background: linear-gradient(270deg, color-mix(in srgb, #ff5470 55%, transparent), transparent);
+  background: linear-gradient(270deg, color-mix(in srgb, #ff5470 80%, transparent), transparent);
 }
-.mfader-input {
+/* The volume you SET, as a cap line — distinct from the level that moves under it. */
+.mband-tick {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0; /* transparent hit-area — the pill below is the visible handle */
-  cursor: pointer;
-  z-index: 2;
-}
-.mfader-val {
-  width: 34px;
-  height: 16px;
-  font-size: 11px;
-  background: color-mix(in srgb, var(--accent) 85%, var(--panel));
-  box-shadow: none;
-}
-.mfader-cap {
-  align-self: center;
-  font: 800 8px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.1em;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--text) 60%, transparent);
 }
 
-/* THE DEVICE GLYPHS — one tap for the thing you do, hold / right-click for its cluster. Each is
-   present only while its device is, so a board with no mic and no cue output shows exactly one. */
-.board-io {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-/* A strip-height control cell: the MIC, which is a CELL and not a glyph because a live mic is
-   ridden (tap = on/off, drag = level) rather than configured. .vcell owns the knob ring and the
-   gestures; this only resizes it to the strip. */
-.board-cell.vcell {
-  min-width: 52px;
-  width: 52px;
-  height: 26px;
-  padding: 1px 4px;
-  gap: 0;
-}
-.board-cell .vcell-label { font-size: 7px; letter-spacing: 0.4px; }
-.board-cell .vcell-value { font-size: 11px; line-height: 1; }
-.io-glyph {
+/* ---- THE DEVICE BUTTONS, in the chin -----------------------------------------------------------
+   Chin-sized by necessity (that row is tight) and chin-shaped by intent: they should read as part
+   of the app's own row, not as a foreign cluster bolted to it. Fixed width, so they never take
+   flex from the navigation beside them. */
+.chin-btn.chin-io {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 26px;
+  flex: 0 0 auto;
+  width: 40px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
   overflow: hidden;
-  transition: border-color 0.12s, background 0.12s, color 0.12s;
+  font: 800 11px ui-monospace, SFMono-Regular, monospace;
 }
-.io-glyph:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
-.io-glyph-mark { position: relative; z-index: 1; }
-/* The record dot carries its source as a tiny tag, so "what will this capture" needs no cell. */
-.io-rec { width: 40px; }
-.io-rec .io-glyph-tag {
+.chin-io-mark { position: relative; z-index: 1; font-size: 14px; line-height: 1; }
+.chin-io-val {
+  position: relative;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+.chin-io-tag {
   position: absolute;
   right: 3px;
-  bottom: 0;
+  bottom: 3px;
   z-index: 1;
   font: 800 6px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--text) 45%, transparent);
+  color: color-mix(in srgb, var(--text) 40%, transparent);
 }
-.io-rec.armed {
+/* ★ THE MIC GROWS. Off it is a toggle and an icon is a toggle; LIVE it is also a fader, so it
+   widens to carry its value and becomes draggable. The control appears exactly while the thing it
+   controls is happening. */
+.chin-btn.chin-mic { cursor: pointer; }
+.chin-btn.chin-mic.live {
+  width: 74px;
+  gap: 5px;
+  /* Lit = inverted, derived from the theme's own text colour so it works on any palette (the chin
+     has no deck accent to borrow, and shouldn't). */
+  color: var(--bg);
+  background: color-mix(in srgb, var(--text) 82%, var(--panel));
+  cursor: ew-resize;
+  touch-action: none;
+}
+.chin-btn.chin-mic.busy { opacity: 0.55; }
+/* Its input level rises inside it, so "is it hearing me" is on the control you just pressed. */
+.chin-io-meter { position: absolute; inset: 0; display: flex; align-items: stretch; }
+.chin-io-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.chin-mic.live .chin-io-meter > span { background: color-mix(in srgb, var(--bg) 22%, transparent); }
+.chin-btn.chin-rec.armed {
   color: #fff;
-  border-color: #ff5470;
-  background: color-mix(in srgb, #ff5470 30%, var(--surface));
+  background: color-mix(in srgb, #ff5470 40%, var(--panel));
   animation: io-rec-pulse 1.1s ease-in-out infinite;
 }
 @keyframes io-rec-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
-  50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
+  0%, 100% { box-shadow: inset 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
+  50% { box-shadow: inset 0 0 12px 0 color-mix(in srgb, #ff5470 70%, transparent); }
 }
-/* MIC lit = talkover live. Its input level rises INSIDE the glyph, so the one thing you need to
-   know while talking ("is it hearing me") is on the control you just pressed. */
-.io-mic.on {
-  color: #08111a;
-  border-color: var(--accent);
-  background: var(--accent);
-}
-.io-mic.busy { opacity: 0.6; }
-.io-glyph-meter {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-}
-.io-glyph-meter > span {
-  display: block;
-  width: 100%;
-  height: 0;
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-.io-mic.on .io-glyph-meter > span { background: color-mix(in srgb, #08111a 22%, transparent); }
+/* Where the take landed, and any I/O error — both belong to the chin now, so both float under it
+   rather than inside a row that no longer exists. */
 .io-landed {
-  align-self: center;
-  font: 800 8px ui-monospace, SFMono-Regular, monospace;
+  position: fixed;
+  top: 46px;
+  right: 10px;
+  z-index: 60;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font: 800 9px ui-monospace, SFMono-Regular, monospace;
   letter-spacing: 0.06em;
-  color: var(--accent);
+  color: var(--text);
   white-space: nowrap;
 }
-/* A cluster popover holds its two amounts side by side, inside the shared menu's width cap. */
+.smp-error.chin-error {
+  position: fixed;
+  top: 46px;
+  right: 10px;
+  z-index: 60;
+  max-width: min(340px, calc(100vw - 20px));
+}
+/* A cluster popover holds its amounts side by side, inside the shared menu's width cap. */
 .io-pop-row {
   display: flex;
   gap: 4px;
@@ -712,10 +675,6 @@ body {
 }
 .io-pop-row > .vcell { flex: 1 1 0; min-width: 0; }
 .io-pop-cell { height: 38px; }
-
-/* No mobile override for the strip: the master track is already fluid (clamp) and the cells are
-   already the size a thumb needs. The one thing that must NOT shrink is the mic cell and the record
-   dot — on a phone there is no keyboard, so they are the only way in. */
 
 /* Pad context menu — a compact card. Neutral chrome (border + chips); only the SELECTED chip
    carries the deck accent, so it never reads as a wall of colour. MODE = 2×2 (full words fit, no

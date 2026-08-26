@@ -4,6 +4,7 @@ import { DeckControls } from "./components/DeckControls";
 import type { FxStripCtl } from "./components/FxStrip";
 import { crossfadeGainsDb } from "./components/Crossfader";
 import { BoardBar } from "./components/BoardBar";
+import { BoardIo } from "./components/BoardIo";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
@@ -3349,6 +3350,26 @@ function AppBody() {
           onSeeAll={toggleDiscover}
         />
         <RoomBar room={room} onExpand={toggleSocial} />
+        {/* ★ THE DEVICES. A microphone, a recorder and a headphone output are attached to the APP,
+            not to the mix — so they live in the app's own row, chin-sized, each present only while
+            its device is. See BoardIo for why the mic is the one that grows. */}
+        <BoardIo
+          sampler={sampler}
+          ctlRef={samplerCtl}
+          micSetRef={micVolSetRef}
+          micToggleRef={micToggleRef}
+          hasMic={engine.canMic && settings.audioInputId !== MIC_NONE}
+          phones={
+            !!settings.audioCueOutputId && engine.canCueDevice
+              ? {
+                  mix: cueMix,
+                  level: cueLevel,
+                  onMix: (v) => { engine.setCueMix(v); setCueMixSt(v); },
+                  onLevel: (v) => { engine.setCueLevel(v); setCueLevelSt(v); },
+                }
+              : null
+          }
+        />
         <button
           className={`chin-btn chin-info ${helpOpen ? "active" : ""}`}
           onClick={() => setHelpOpen((v) => !v)}
@@ -3439,30 +3460,11 @@ function AppBody() {
             button banks side by side beneath it. */}
         <div className="decks-third">
           <BoardBar
-            sampler={sampler}
-            ctlRef={samplerCtl}
-            micSetRef={micVolSetRef}
-            micToggleRef={micToggleRef}
             master={{
               value: masterVol,
               canControl: !boardLocked,
               onChange: (v: number) => { engine.setMasterVolume(v); setMasterVolSt(v); },
             }}
-            // ★ A MIC EXISTS WHEN ONE IS CHOSEN, not when the browser could open one. engine.canMic
-            // is `!!getUserMedia` — true everywhere — so gating on it put MIC / DUCK / MON on every
-            // DJ's board forever. The Settings input select is the switch now, exactly as the cue
-            // output select is the switch for the headphone controls.
-            hasMic={engine.canMic && settings.audioInputId !== MIC_NONE}
-            phones={
-              !!settings.audioCueOutputId && engine.canCueDevice
-                ? {
-                    mix: cueMix,
-                    level: cueLevel,
-                    onMix: (v) => { engine.setCueMix(v); setCueMixSt(v); },
-                    onLevel: (v) => { engine.setCueLevel(v); setCueLevelSt(v); },
-                  }
-                : null
-            }
             xfader={{
               deckA: engine.deckA,
               deckB: engine.deckB,

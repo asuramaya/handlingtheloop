@@ -485,26 +485,8 @@ body {
   font-size: 11px;
   opacity: 0.7;
 }
-/* Inline error/notice toast under the strip. */
-.smp-error {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin-top: 4px;
-  z-index: 5;
-  padding: 6px 10px;
-  font-size: 11px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #c0334e 22%, var(--panel));
-  border: 1px solid #c0334e;
-  color: var(--text);
-  cursor: pointer;
-}
-.smp-error-x {
-  float: right;
-  opacity: 0.7;
-}
+/* `.smp-error` — the inline notice that lived under the I/O strip — is retired with the strip.
+   Every board notice is a floating toast now; see `.toasts` below. */
 /* ---- THE BOARD BAR --------------------------------------------------------------------------
    The crossfader, with the master drawn as a hairline directly above it. Nothing else: the I/O
    strip that used to sit here is gone (see BoardBar.tsx for the arc), and the devices moved to the
@@ -611,51 +593,75 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-width: 0;
+  /* Safety net, and it costs nothing: the width above is max(both sides), so it is already >= this
+     tail's own content and this never binds. If a measurement is ever stale it binds for a frame
+     and the tail is briefly wide rather than briefly CLIPPING — which is the failure that matters. */
+  min-width: max-content;
 }
 .xtail-l { justify-content: flex-start; }
 .xtail-r { justify-content: flex-end; }
+/* The measured layer. The tail's WIDTH is set from JS; this is the natural-size content it is set
+   FROM, so it must never be the thing that gets stretched or observed. */
+.xtail-in {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
 /* Board language, not chin language: bordered, quiet at rest, lit when live — the same grammar as
    every other button on this surface. */
+/* ★ THEY GROW WITH WHAT IS IN THEM. Fixed at 42px they clipped their own glyphs — an emoji has a
+   taller, wider box than a digit, and `overflow: hidden` turned that into a cut-off icon. Width is
+   content + padding now, with a floor that keeps a bare glyph a real thumb target, and the row's
+   tails measure whatever comes out (see BoardIo). */
 .dev-btn {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   flex: 0 0 auto;
-  width: 42px;
-  height: 22px;
-  padding: 0;
-  overflow: hidden;
+  min-width: 34px;
+  height: 24px;
+  padding: 0 7px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--surface);
   color: var(--text);
   font: 800 11px ui-monospace, SFMono-Regular, monospace;
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s, color 0.12s, width 0.14s ease;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
 }
 .dev-btn:hover { border-color: color-mix(in srgb, var(--text) 45%, var(--line)); }
-.dev-mark { position: relative; z-index: 1; font-size: 13px; line-height: 1; }
+/* The glyph gets its own line box, clear of the button's — an emoji's ascent is what was being
+   sliced off the top. */
+.dev-mark {
+  position: relative;
+  z-index: 1;
+  display: block;
+  font-size: 13px;
+  line-height: 1;
+}
 .dev-val {
   position: relative;
   z-index: 1;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.2px;
 }
+/* The capture source rides BESIDE the dot, not on top of it. Absolutely positioned in a corner it
+   overlapped the glyph — the same "cram it into a fixed box" mistake as the fixed button width, and
+   invisible until a source name got drawn over an icon. The button grows for it instead. */
 .dev-tag {
-  position: absolute;
-  right: 3px;
-  bottom: 2px;
+  position: relative;
   z-index: 1;
-  font: 800 6px ui-monospace, SFMono-Regular, monospace;
-  color: color-mix(in srgb, var(--text) 40%, transparent);
+  font: 800 7px ui-monospace, SFMono-Regular, monospace;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
 }
+.dev-rec.armed .dev-tag { color: color-mix(in srgb, #fff 70%, transparent); }
 /* ★ THE MIC GROWS. Off it is a glyph, because a glyph is a toggle; LIVE it widens to carry its
    value and becomes a drag. `width` transitions, so the group opens rather than jumps. */
 .dev-btn.dev-mic.live {
-  width: 76px;
   color: var(--bg);
   background: color-mix(in srgb, var(--text) 82%, var(--panel));
   border-color: color-mix(in srgb, var(--text) 82%, var(--panel));
@@ -664,7 +670,16 @@ body {
 }
 .dev-btn.dev-mic.busy { opacity: 0.55; }
 /* Its input level rises inside it, so "is it hearing me" is on the control you just pressed. */
-.dev-meter { position: absolute; inset: 0; display: flex; align-items: stretch; }
+/* The clipping lives HERE, on the meter, not on the button — so a fill stays inside the rounded
+   corners while the glyph above it is free to be as tall as it is. */
+.dev-meter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+  border-radius: 4px;
+  overflow: hidden;
+}
 .dev-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 14%, transparent); }
 .dev-mic.live .dev-meter > span { background: color-mix(in srgb, var(--bg) 24%, transparent); }
 .dev-btn.dev-rec.armed {
@@ -677,31 +692,58 @@ body {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, #ff5470 55%, transparent); }
   50% { box-shadow: 0 0 9px 1px color-mix(in srgb, #ff5470 65%, transparent); }
 }
-/* Where the take landed, and any I/O error — transient, so they float over the board rather than
-   reserving space in a row that has none to give. */
-.io-landed {
-  position: absolute;
+/* ---- TOASTS ---------------------------------------------------------------------------------
+   The take-landed flash and any I/O error used to be absolutely positioned inside the fader's row —
+   a row exactly as tall as its contents — so anything longer than a few words was clipped
+   mid-sentence with the remainder lying across the decks. They are out of the board now: fixed,
+   bottom-centre, capped, and WRAPPING rather than truncating. A notice you cannot finish reading is
+   worse than no notice. */
+.toasts {
+  position: fixed;
   left: 50%;
-  bottom: -20px;
+  bottom: max(14px, env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
-  z-index: 60;
-  padding: 3px 7px;
-  border-radius: 5px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  font: 800 9px ui-monospace, SFMono-Regular, monospace;
-  letter-spacing: 0.06em;
-  color: var(--text);
-  white-space: nowrap;
+  z-index: 200;
+  display: flex;
+  flex-direction: column-reverse; /* newest nearest the bottom edge, where the eye already is */
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
   pointer-events: none;
 }
-.smp-error.dev-error {
-  position: absolute;
-  left: 50%;
-  bottom: -26px;
-  transform: translateX(-50%);
-  z-index: 60;
-  max-width: min(340px, calc(100vw - 20px));
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.75);
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  animation: toast-in 0.16s ease-out both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.toast-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.toast-x { flex: 0 0 auto; opacity: 0.5; font-size: 10px; line-height: 1.5; }
+.toast:hover .toast-x { opacity: 1; }
+.toast-ok {
+  border-color: color-mix(in srgb, var(--text) 30%, var(--line));
+  font-weight: 700;
+}
+.toast-warn {
+  border-color: color-mix(in srgb, #ff5470 55%, var(--line));
+  background: color-mix(in srgb, #ff5470 12%, var(--panel));
 }
 /* A cluster popover holds its amounts side by side, inside the shared menu's width cap. */
 .io-pop-row {

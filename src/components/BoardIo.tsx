@@ -3,6 +3,7 @@ import { useEngine } from "../App/spine";
 import { type SamplerApi } from "./useSampler";
 import { ValueCell } from "./ValueCell";
 import { Menu } from "./ContextMenu";
+import { Toasts } from "./Toasts";
 
 // ★ THE DEVICES SIT IN THE CROSSFADER'S OWN TAILS — mic at the left end, capture and cue at the
 // right — so they cost the board no row at all. IN on the left, OUT on the right, which is a real
@@ -39,11 +40,6 @@ const SRC_TAKE: Record<CapSource, string> = { master: "Master take", deckA: "Dec
 const DEST_FULL: Record<"master" | "A" | "B", string> = { master: "Room (master / PA)", A: "Deck A — FX rack", B: "Deck B — FX rack" };
 const HOLD_MS = 460;
 const SLOP = 5; // px before a press counts as a drag rather than a tap
-// Button metrics, mirrored in base.css. Kept here because the TAIL width is computed, not styled:
-// CSS has no way to say "both flanks are as wide as the wider one's contents".
-const BTN = 42;
-const MIC_LIVE = 76; // the mic widens when talkover is on — reserve for it so nothing reflows
-const GAP = 4;
 
 export function BoardIo({
   sampler,
@@ -205,21 +201,68 @@ export function BoardIo({
     if (!micOn || e.button !== 0) return; // only a LIVE mic is a fader; off, it is purely a toggle
     micDrag.current = { x: e.clientX, v: micLive.current.micVol, moved: false };
   };
+  /** ★ RESTORED. As a ValueCell the mic had a wheel handler and arrow keys; as a plain button it
+   *  had neither, which was a straight regression with no design behind it — a desktop DJ scrolls
+   *  over a control, and a keyboard has to be able to reach a level at all. */
+  const nudgeMic = (d: number) => {
+    const next = Math.max(0, Math.min(1, micLive.current.micVol + d));
+    setMicVol(next);
+    engine.setMicLevel(next);
+  };
+  const micBtn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const node = micBtn.current;
+    if (!node) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!micLive.current.micOn) return;
+      e.preventDefault();
+      nudgeMic(e.deltaY < 0 ? 0.02 : -0.02);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [engine, hasMic]);
 
   const SRC_ORDER: CapSource[] = hasMic ? ["master", "deckA", "deckB", "mic"] : ["master", "deckA", "deckB"];
 
-  // Both tails, sized to whichever side needs more at ITS widest.
-  const leftMax = hasMic ? MIC_LIVE : 0;
-  const rightMax = BTN + (phones ? BTN + GAP : 0);
-  const tail = Math.max(leftMax, rightMax);
+  // ★ THE TAILS ARE MEASURED, NOT ASSUMED. They were fixed constants mirroring the CSS, which
+  // meant a button whose content grew (an emoji renders taller and wider than a digit, and the mic
+  // widens when it goes live) got CLIPPED by a number written down somewhere else. So the buttons
+  // size to their content and the tails observe them: both take the wider side's width, which keeps
+  // the fader's centre on the deck seam without anyone having to keep two files in agreement.
+  const lIn = useRef<HTMLDivElement>(null);
+  const rIn = useRef<HTMLDivElement>(null);
+  const [tail, setTail] = useState(0);
+  useEffect(() => {
+    const measure = () => {
+      const l = lIn.current?.scrollWidth ?? 0;
+      const r = rIn.current?.scrollWidth ?? 0;
+      // Round up: a fractional width that rounds DOWN clips the last pixel of a glyph.
+      setTail(Math.ceil(Math.max(l, r)));
+    };
+    measure();
+    // Observe the CONTENT, never the tail — the tail's width is what we are setting, so watching it
+    // would be a feedback loop that never settles.
+    const ro = new ResizeObserver(measure);
+    if (lIn.current) ro.observe(lIn.current);
+    if (rIn.current) ro.observe(rIn.current);
+    return () => ro.disconnect();
+  }, [hasMic, phones, micOn, recording]);
 
   return (
     <div className="xrow">
-      <div className="xtail xtail-l" style={{ width: tail }}>
+      <div className="xtail xtail-l" style={{ width: tail || undefined }}>
+      <div className="xtail-in" ref={lIn}>
       {hasMic && (
         <button
+          ref={micBtn}
           className={`dev-btn dev-mic ${micOn ? "live" : ""} ${micBusy ? "busy" : ""}`}
           onPointerDown={micDown}
+          onKeyDown={(e) => {
+            if (!micOn) return;
+            const step = e.shiftKey ? 0.01 : 0.05;
+            if (e.key === "ArrowDown" || e.key === "ArrowLeft") { e.preventDefault(); nudgeMic(-step); }
+            if (e.key === "ArrowUp" || e.key === "ArrowRight") { e.preventDefault(); nudgeMic(step); }
+          }}
           onClick={tapped(() => { if (micDrag.current?.moved) return; void toggleMic(); })}
           aria-label="Microphone talkover"
           aria-pressed={micOn}
@@ -232,10 +275,12 @@ export function BoardIo({
         </button>
       )}
       </div>
+      </div>
 
       {children}
 
-      <div className="xtail xtail-r" style={{ width: tail }}>
+      <div className="xtail xtail-r" style={{ width: tail || undefined }}>
+      <div className="xtail-in" ref={rIn}>
       <button
         className={`dev-btn dev-rec ${recording ? "armed" : ""}`}
         onClick={tapped(() => void toggleRec())}
@@ -258,13 +303,20 @@ export function BoardIo({
         </button>
       )}
       </div>
+      </div>
 
-      {landed != null && <span className="io-landed" role="status">→ GLBL {landed + 1}</span>}
-      {(s.error || ioErr) && (
-        <div className="smp-error dev-error" role="status" onClick={() => { s.clearError(); setIoErr(null); }}>
-          {s.error || ioErr} <span className="smp-error-x">✕</span>
-        </div>
-      )}
+      {/* ★ TOASTS FLOAT, they do not live in the row. These were absolutely positioned inside the
+          fader's row, which meant they were clipped by it AND overlapped the decks below — a
+          message you cannot finish reading is worse than no message. They are a fixed, bottom-centre
+          stack now: out of the board entirely, wrapping instead of truncating, and self-dismissing,
+          because a notice that needs a click to go away is a modal wearing a toast's clothes. */}
+      <Toasts
+        items={[
+          landed != null ? { id: "landed", kind: "ok" as const, text: `Take landed → GLBL ${landed + 1}` } : null,
+          s.error || ioErr ? { id: "err", kind: "warn" as const, text: (s.error || ioErr) as string } : null,
+        ].filter(Boolean) as { id: string; kind: "ok" | "warn"; text: string }[]}
+        onDismiss={(id) => { if (id === "err") { s.clearError(); setIoErr(null); } else setLanded(null); }}
+      />
 
       {/* LEVEL is not in the mic cluster — it is the button you opened this from. A setting with a
           home on the surface does not get a second one in a menu. */}

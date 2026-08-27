@@ -206,8 +206,13 @@ export function BoardIo({
       window.removeEventListener("pointercancel", up);
     };
   }, [engine]);
+  // ★ THE LEVEL IS SETTABLE WHETHER OR NOT THE MIC IS LIVE. It used to be gated on `micOn`, on the
+  // reasoning that an idle glyph should not also be a fader — but the consequence was that you
+  // could not dial your talkover level BEFORE going on, which is exactly when you would want to.
+  // Tap still toggles; a press that moves sets the level instead (the `moved` flag already told
+  // those two apart), so nothing about the off state's primary gesture changes.
   const micDown = (e: ReactPointerEvent) => {
-    if (!micOn || e.button !== 0) return; // only a LIVE mic is a fader; off, it is purely a toggle
+    if (e.button !== 0) return;
     micDrag.current = { x: e.clientX, v: micLive.current.micVol, moved: false };
   };
   /** ★ RESTORED. As a ValueCell the mic had a wheel handler and arrow keys; as a plain button it
@@ -224,7 +229,6 @@ export function BoardIo({
     const node = micBtn.current;
     if (!node) return;
     const onWheel = (e: WheelEvent) => {
-      if (!micLive.current.micOn) return;
       e.preventDefault();
       nudgeMic(e.deltaY < 0 ? 0.02 : -0.02);
     };
@@ -257,7 +261,6 @@ export function BoardIo({
           className={`dev-btn dev-mic ${micOn ? "live" : ""} ${micBusy ? "busy" : ""}`}
           onPointerDown={micDown}
           onKeyDown={(e) => {
-            if (!micOn) return;
             const step = e.shiftKey ? 0.01 : 0.05;
             if (e.key === "ArrowDown" || e.key === "ArrowLeft") { e.preventDefault(); nudgeMic(-step); }
             if (e.key === "ArrowUp" || e.key === "ArrowRight") { e.preventDefault(); nudgeMic(step); }
@@ -265,7 +268,7 @@ export function BoardIo({
           onClick={tapped(() => { if (micDrag.current?.moved) return; void toggleMic(); })}
           aria-label="Microphone talkover"
           aria-pressed={micOn}
-          title={micOn ? `Talkover ON at ${Math.round(micVol * 100)} — tap to mute, drag to set level · hold for ducking, destination, monitoring` : "Talkover off — tap to go live · hold for ducking, destination, monitoring"}
+          title={`Talkover ${micOn ? "ON" : "off"} at ${Math.round(micVol * 100)} — tap to ${micOn ? "mute" : "go live"}, drag or scroll to set level · hold for ducking, destination, monitoring`}
           {...holdBind("mic")}
         >
           {/* Two layers, both silent at rest: the LEVEL you set as a fill, the live input as a
@@ -288,7 +291,7 @@ export function BoardIo({
       <div className="xtail xtail-r" style={{ width: tail }}>
       <div className="xtail-in">
       <button
-        className={`dev-btn dev-rec ${recording ? "armed" : ""}`}
+        className={`dev-btn dev-rec ${recording ? "armed" : ""} ${recSrc !== "master" ? "off-src" : ""}`}
         onClick={tapped(() => void toggleRec())}
         aria-label="Record"
         title={recording ? "Stop — the take drops into the next free GLBL pad" : `Record ${SRC_FULL[recSrc]} → next free GLBL pad · hold / right-click to change source`}

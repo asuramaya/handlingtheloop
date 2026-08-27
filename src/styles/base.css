@@ -655,6 +655,14 @@ body {
 .dev-src-deckA { color: var(--deck-a, #4ad); }
 .dev-src-deckB { color: var(--deck-b, #d4a); }
 .dev-src-mic { color: #ffd250; }
+/* ★ A NON-DEFAULT CAPTURE SOURCE GETS A RING as well as the dot's colour. Colour alone is a
+   difference you have to know to look for; a ring is a difference you notice. Master stays plain,
+   so the ring means exactly "this is not the mix". */
+.dev-rec.off-src {
+  /* A neutral ring, deliberately — the DOT carries which source, the ring carries only "not the
+     mix". Tinting the ring too would make the least-informative half the loudest. */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 45%, transparent);
+}
 .dev-btn.dev-rec.armed {
   color: #fff;
   background: color-mix(in srgb, #ff5470 40%, var(--surface));
@@ -668,13 +676,20 @@ body {
 /* ★ THE MIC IS ALSO A FADER while it is live, and it says so without text: the LEVEL you set is a
    fill, the live input is a brighter overlay on top of it, and the number surfaces for a moment
    whenever you move it. */
-.dev-btn.dev-mic.live {
-  color: var(--bg);
-  background: color-mix(in srgb, var(--text) 30%, var(--surface));
+/* The mic is a fader in BOTH states, so it owns the pointer in both: `touch-action: none` has to be
+   unconditional or a drag on a phone scrolls the page instead of setting the level. */
+.dev-btn.dev-mic {
   cursor: ew-resize;
   touch-action: none;
 }
+.dev-btn.dev-mic.live {
+  color: var(--bg);
+  background: color-mix(in srgb, var(--text) 30%, var(--surface));
+}
 .dev-btn.dev-mic.busy { opacity: 0.55; }
+/* The level you have set. Visible whether or not the mic is live — you cannot dial a value blind,
+   and the whole point of an off-state fader is being able to set it before you go on. Quiet when
+   idle so it reads as a setting rather than a state. */
 .dev-set {
   position: absolute;
   left: 0;
@@ -683,7 +698,7 @@ body {
   z-index: 0;
   background: color-mix(in srgb, var(--text) 70%, var(--surface));
 }
-.dev-mic:not(.live) .dev-set { display: none; }
+.dev-mic:not(.live) .dev-set { background: color-mix(in srgb, var(--text) 13%, transparent); }
 .dev-meter { position: absolute; inset: 0; z-index: 1; display: flex; align-items: stretch; }
 .dev-meter > span { display: block; width: 0; background: color-mix(in srgb, var(--text) 20%, transparent); }
 .dev-mic.live .dev-meter > span { background: color-mix(in srgb, var(--bg) 30%, transparent); }

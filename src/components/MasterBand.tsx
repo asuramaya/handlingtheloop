@@ -32,6 +32,11 @@ export function MasterBand({ engine, value, onChange, disabled }: { engine: Audi
   const drag = useRef<{ x: number; v: number; w: number } | null>(null);
   const live = useRef({ value, onChange, disabled });
   live.current = { value, onChange, disabled };
+  const nudge = (d: number) => {
+    const L = live.current;
+    if (L.disabled) return;
+    L.onChange(Math.max(0, Math.min(1, L.value + d)));
+  };
 
   useEffect(() => {
     let raf = 0;
@@ -48,6 +53,22 @@ export function MasterBand({ engine, value, onChange, disabled }: { engine: Audi
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [engine]);
+
+  // ★ PARITY WITH EVERY OTHER FADER HERE. As the SMART chip the master was a ValueCell, which
+  // carries a wheel handler and a right-click reset; as a hand-rolled band it had neither. A
+  // desktop DJ scrolls over a control — losing that was a regression, not a design choice.
+  // Non-passive, because a wheel over a fader must not also scroll the page behind it.
+  useEffect(() => {
+    const node = boxRef.current;
+    if (!node) return;
+    const onWheel = (e: WheelEvent) => {
+      if (live.current.disabled) return;
+      e.preventDefault();
+      nudge(e.deltaY < 0 ? 0.02 : -0.02);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -88,6 +109,8 @@ export function MasterBand({ engine, value, onChange, disabled }: { engine: Audi
         drag.current = { x: e.clientX, v: value, w: Math.max(120, w * 0.5) };
       }}
       onDoubleClick={() => { if (!disabled) onChange(1); }}
+      // Right-click resets to unity, as it does on every ValueCell on this board.
+      onContextMenu={(e) => { e.preventDefault(); if (!disabled) onChange(1); }}
       onKeyDown={(e) => {
         if (disabled) return;
         const step = e.shiftKey ? 0.01 : 0.05;

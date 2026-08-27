@@ -29,6 +29,21 @@ interface CrossfaderProps {
   onToggleEnabled?: () => void; // right-click / long-press the bar — enable/disable (mirrors `Shift+T`)
 }
 
+/** The handle's width — the transparent thumb's, and the visible pill's. They are one handle. */
+export const HANDLE_W = 38;
+/** Where the handle's centre sits, measured from the track's left edge. `frac × (w − HANDLE_W) +
+ *  HANDLE_W/2` — the same arithmetic the pill's own `left` uses, because it has to be. */
+export function handleCentre(trackW: number, crossfade: number): number {
+  const frac = Math.max(0, Math.min(1, (crossfade + 1) / 2));
+  return frac * (trackW - HANDLE_W) + HANDLE_W / 2;
+}
+/** Is this x (relative to the track's left) on the handle? ★ The answer decides whether a press is
+ *  a BUTTON press or a THROW: everywhere but the handle, a press on this native range jumps the
+ *  value to that point, so a hold that began off-handle would toggle the fader AND move it. */
+export function isOnHandle(x: number, trackW: number, crossfade: number): boolean {
+  return Math.abs(x - handleCentre(trackW, crossfade)) <= HANDLE_W / 2;
+}
+
 const FLOOR_DB = -60; // dBFS floor for the glow brightness
 const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballistics)
 
@@ -49,6 +64,10 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
   // handle and stayed there — which a throw never does, so a fast mix can never trip the toggle.
   const press = useRef<{ x: number; v: number } | null>(null);
   const hold = useRef<number | undefined>(undefined);
+  const onHandle = (x: number) => {
+    const r = trackRef.current?.getBoundingClientRect();
+    return !!r && isOnHandle(x - r.left, r.width, crossfade);
+  };
   const heldRef = useRef(false); // the long-press fired → swallow the tap that follows it
   const toggleEnabled = () => { if (canControl) onToggleEnabled?.(); };
   // Live crossfade attenuation per side, read each frame without re-running the rAF.
@@ -96,21 +115,34 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
         <span className="xglow xglow-b" />
         <input
           type="range" className="xbar-input" min={-1} max={1} step={0.01} value={crossfade}
-          title={`A ↔ B crossfade — double-click re-centres · tap the handle for ${smart ? "FADER" : "SMART"} · right-click / hold to ${enabled ? "disable" : "enable"} the fader`}
+          title={`A ↔ B crossfade — double-click re-centres · tap the handle for ${smart ? "FADER" : "SMART"} · right-click, or hold the handle, to ${enabled ? "disable" : "enable"} the fader`}
           // The thumb is transparent now (the .xbar-val pill is the visible handle), so the colour
           // vars live on the pill, not here — this input is just the drag hit-area.
           onChange={(e) => { if (enabled) onCrossfade(Number(e.target.value)); }}
           onDoubleClick={() => { if (enabled) onCrossfade(0); }}
           // ★ PRIMARY BUTTON ONLY. A right-click fires pointerdown/pointerup too, so without this
           // the same gesture toggled the mode AND enable/disable — a right-click that did both.
+          // ★ THE HANDLE IS THE BUTTON, THE TRACK IS THE FADER. Both toggles live on the handle and
+          // nowhere else, which is what makes them safe on touch:
+          //   • the handle is a 38px transparent thumb, so pressing it does NOT jump the value —
+          //     anywhere else on the track a press throws the fader to that point, and a hold that
+          //     began with a throw is a gesture with a side effect nobody asked for;
+          //   • and the hold is CANCELLED BY MOVEMENT. It was not, and it was only cleared on
+          //     pointerup — so any touch blend lasting longer than 480 ms fired enable/disable
+          //     mid-throw, switching the crossfader off and recentring it. A slow blend is the most
+          //     ordinary thing a DJ does.
           onPointerDown={(e) => {
             if (e.button !== 0) return;
             heldRef.current = false;
             press.current = { x: e.clientX, v: crossfade };
-            if (e.pointerType === "touch") {
+            if (e.pointerType === "touch" && onHandle(e.clientX)) {
               clearTimeout(hold.current);
               hold.current = window.setTimeout(() => { heldRef.current = true; navigator.vibrate?.(8); toggleEnabled(); }, 480);
             }
+          }}
+          onPointerMove={(e) => {
+            const p = press.current;
+            if (p && Math.abs(e.clientX - p.x) > 4) clearTimeout(hold.current); // it is a throw, not a hold
           }}
           onPointerUp={(e) => {
             if (e.button !== 0) { press.current = null; return; }

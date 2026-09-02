@@ -225,6 +225,9 @@ built, so they carry the *why* and the dead ends, not just the shape:
 | [**map**](./docs/map.md) | ★ the whole system in one read — start here |
 | [**docs/README**](./docs/README.md) | docs ↔ code inventory: what is covered, what is not |
 | [app-architecture](./docs/app-architecture.md) | how App.tsx is decomposed; where a new feature plugs in |
+| [analysis](./docs/analysis.md) | the beatgrid — and everything downstream that inherits its errors |
+| [sync](./docs/sync.md) | the two sync planes: your setup across machines vs playing together |
+| [stems](./docs/stems.md) | the shipped separation pipeline, and why phones never separate |
 | [fx-rack](./docs/fx-rack.md) | the device rack, stem chains, and the preset/chain bank engine |
 | [shared-session](./docs/shared-session.md) | rooms, anchors, intents, the attachment model |
 | [social-layer](./docs/social-layer.md) | profiles, follows, presence, notifications, the three surfaces |

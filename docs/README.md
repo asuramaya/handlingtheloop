@@ -18,13 +18,13 @@ is the detail behind it.
 | `src/components` — the whole UI | 77 files · 19.8k | [app-architecture](./app-architecture.md) (App.tsx decomposition only) | **thin** — no doc covers the deck UI, the waveform, or the library panel |
 | `src/styles` | 15 files · 13.6k | — | **none**. Conventions live in the CSS comments |
 | `server/` — resolver, accounts, room, social, admin | 41 files · 10.3k | [youtube-relay](./youtube-relay.md) (cold-load fallback only) | **thin** — `accounts.ts` (1.1k) and `room.ts` (1.4k) have no doc |
-| `src/htl/automix` — auto-DJ | 12 files · 2.9k | [smart-fader](./smart-fader.md) covers the *gesture*, not the mixer | **gap** |
-| `src/htl/analysis` — LOD pyramid, beatgrid, key, palette | 8 files · 2.6k | — | **gap** — the beatgrid is the most-questioned subsystem and has no doc |
-| `src/htl/room` — session protocol + client | 10 files · 2.5k | [shared-session](./shared-session.md) | ⚠ **stale header** — says phases 2–3 "not yet wired"; there are 28 intent kinds and it shipped |
-| `src/htl/stems` — cache, separator worker, model registry, GPU queue | 9 files · 2.1k | [engine-stem-paging](./engine-stem-paging.md) | that doc is a **design for something not built** (verified: no pager, no SAB ring in `stems/`). The *shipped* pipeline is undocumented |
+| `src/htl/automix` — auto-DJ | 12 files · 2.9k | [smart-fader](./smart-fader.md) covers the *gesture*, not the mixer | **gap** — the remaining one worth closing |
+| `src/htl/analysis` — LOD pyramid, beatgrid, key, palette | 8 files · 2.6k | [analysis](./analysis.md) | current (2026-09-01) |
+| `src/htl/room` — session protocol + client | 10 files · 2.5k | [shared-session](./shared-session.md) · [sync](./sync.md) (how it differs from account sync) | ⚠ **stale header** — says phases 2–3 "not yet wired"; there are 28 intent kinds and it shipped |
+| `src/htl/stems` — cache, separator worker, model registry, GPU queue | 9 files · 2.1k | [stems](./stems.md) (shipped pipeline) · [engine-stem-paging](./engine-stem-paging.md) (a design, **not built**) | current |
 | `src/App` — spine + 7 concern hooks | 7 files · 2.0k | [app-architecture](./app-architecture.md) | current |
 | `src/htl/lyrics` — align, LRC, convergence | 12 files · ~2k | — | **gap** — a whole subsystem, `lrcAlign.ts` alone is 967 lines |
-| `src/htl/state` — settings, account sync, session snapshot | 13 files · 1.8k | — | **gap** — the LWW sync contract is only in comments |
+| `src/htl/state` — settings, account sync, session snapshot | 13 files · 1.8k | [sync](./sync.md) | current (2026-09-01) |
 | `src/htl/midi` — layer + device profiles | 10 files · 1.5k | [ddj-flx4](./ddj-flx4.md) (one profile, hardware-verified) | the *layer* (learn, routing, profiles) is undocumented |
 | `src/components/social` | 16 files · 1.5k | [social-layer](./social-layer.md) | plan-shaped; shipped since |
 | `src/htl/media` — YouTube source + OAuth headers | 11 files · 1.0k | README "How it works" | adequate |
@@ -51,18 +51,31 @@ Read the body, distrust the status line:
 - **[engine-stem-paging](./engine-stem-paging.md)** — honestly labelled "design,
   not yet built", and still true. It is a *proposal*, not a description.
 
-## The five gaps worth closing first
+## The gaps
 
-Ranked by how much a reader loses without them:
+Three of the five originally listed here were closed on 2026-09-01
+([analysis](./analysis.md), [sync](./sync.md), [stems](./stems.md)). What is left,
+ranked by what a reader loses:
 
-1. **The beatgrid + analysis chain.** Everything downstream (SYNC, quantize, loops,
-   auto-mix, phrase anchors) inherits its errors, and it has no doc at all.
-2. **The account/sync contract.** Two one-way legs, last-write-wins by timestamp,
-   a 256 KB server cap — spread across `settingsSync.ts`, `fxPresets.ts` and
-   `App.tsx` as comments, and it has already produced one silent cross-device
-   data-loss bug.
-3. **The shipped stems pipeline** — model registry, the concurrency-1 GPU queue,
-   what runs where and why phones never separate.
-4. **`server/room.ts` + the two Durable Objects** — 1.4k lines holding every live
-   session. `shared-session.md` describes the protocol, not the server.
-5. **The auto-mixer.** 1k lines choosing when and how two tracks meet.
+1. **`server/room.ts` + the two Durable Objects** — 1.4k lines holding every live
+   session. [shared-session](./shared-session.md) describes the protocol, not the
+   server that runs it.
+2. **The auto-mixer.** 1k lines choosing when and how two tracks meet.
+   [smart-fader](./smart-fader.md) documents the hand gesture that shares its DSP,
+   not the machine.
+3. **The MIDI layer** — learn, routing, profiles. One device profile is documented
+   ([ddj-flx4](./ddj-flx4.md)); the layer under it is not.
+4. **The library + its sync**, which has had two live data-loss bugs.
+5. **`server/accounts.ts`** (1.1k) — auth, the social graph, moderation.
+
+### A note on method
+
+An inventory is only useful if it names **absence**, and absence matches no grep.
+The way this list was built: enumerate the system from the *code* side —
+directories, `/api/*` routes, D1 tables, storage keys — then ask, per item, which
+document has ever heard of it. Reading the existing docs would never have
+surfaced the lyrics subsystem or the analysis chain.
+
+And rank by **consequence**, not size. The beatgrid was never the biggest gap; it
+was the worst one, because SYNC, quantize, loops, auto-mix and phrase anchors all
+inherit its errors.

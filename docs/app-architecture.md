@@ -1,7 +1,9 @@
 # App.tsx architecture — the spine + concern hooks
 
 `src/App.tsx` is the integration hub of the whole client. It was ~4779 lines; a decomposition
-pass (2026-06) brought it to ~3400 by lifting self-contained concerns into `src/App/*` hooks. This
+pass (2026-06) brought it to ~3400 by lifting self-contained concerns into `src/App/*` hooks (it has
+since drifted back to ~3.7k — the carve pattern at the end of this file is how to take the next
+slice). This
 doc is the map: what lives where, the pattern used, and **why the auto-mix region is deliberately
 left in App**.
 

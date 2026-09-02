@@ -55,7 +55,7 @@ The journey worth knowing, because almost every subsystem is on it.
    → decodeAudio()          src/htl/audio/decode.ts → an AudioBuffer
    → analyzeTrackAsync()    a worker: LOD peak pyramid, beatgrid, key, palette
                             (cached in D1 by videoId — the second person to load
-                            this track skips the analysis entirely)
+                            this track skips the analysis entirely) → analysis.md
    → deck.setBuffer()       the deck now has PCM and a grid
  you press ▶
    → source → stretch worklet → FxRack → trim → level → crossfader → master
@@ -66,7 +66,7 @@ capable device runs HT-Demucs in a worker behind a concurrency-1 GPU queue (stem
 and Whisper take turns), then uploads the result so nobody else pays for it.
 Phones never separate — `canSeparate()` says no — they download. Afterwards the
 deck runs **four synced sources** instead of one, and each stem can be claimed by
-a different FX chain.
+a different FX chain. See **[stems.md](./stems.md)**.
 
 ---
 
@@ -115,7 +115,8 @@ Four stores, and the split is deliberate.
 | **D1** (server) | accounts, settings blob, library blob, social graph, rooms, analysis, lyrics, captions, community index, moderation | 28 tables; the cross-device truth |
 | **R2** (server) | audio (`a/${videoId}`), stems, album art, avatars, samples, recorded sets | big binaries, edge-served |
 
-**The client is the source of truth; the server is a mirror.** Settings and
+**The client is the source of truth; the server is a mirror** — the full contract,
+and the two edges that have cut, are in **[sync.md](./sync.md)**. Settings and
 library sync as **last-write-wins blobs** stamped by the client
 (`htl:settingsUpdatedAt`), reconciled on load and pushed debounced. That is cheap
 and total-order-free, and its two sharp edges are both real:

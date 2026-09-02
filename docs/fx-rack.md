@@ -105,21 +105,35 @@ opaquely):
   the EQ slot carries empty params). `applyFxSnapshot(undefined)` is a no-op so an older
   snapshot can't wipe a guest's EQ.
 
-## Sampler — a 12-pad strip
+## Sampler — 24 pads, three banks
 
-`Sampler.ts` (voice engine) + `useSampler.ts` (state) + `SamplerStrip.tsx` (UI). Pads route
-by **position**: 0–3 → deck A channel (`deckA.rack.input`, so the deck's FX shape them),
-4–7 → master (global, cut through), 8–11 → deck B channel.
+`Sampler.ts` (voice engine, and the one place the **pad layout** is written down) +
+`useSampler.ts` (state) + the pad grid inside `DeckControls.tsx` / the GLBL strip in
+`BoardIo.tsx`. Pads are one **flat index** routed by position:
 
-- **Region pads (A/B)** capture a slice of the loaded track (the active loop, else 4 beats
-  from the playhead) — positions into `deck.buffer`, stored client-side per videoId.
-- **Global file pads (master)** are uploaded clips (≤30 s, ≤12 MB), account-stored in R2+D1
-  (`server/samples.ts` `handleSampleRoute`, wired in `worker/index.ts`; the table
-  self-creates via `ensureUserSamples`, so the `0011_samples.sql` migration is optional).
+| Index | Bank | Route | What a pad holds |
+| --- | --- | --- | --- |
+| 0–7 | **GLBL** (global) | master, post-crossfade | an uploaded/recorded clip, account-stored |
+| 8–15 | **SMP**, deck A | `deckA.rack.input` — the deck's FX shape it | a region of deck A's track |
+| 16–23 | **SMP**, deck B | deck B's channel | a region of deck B's track |
 
-Per-pad mode (oneshot/gate/loop) + gain; one voice per pad (retrigger replaces). MIDI:
-`sampler0..11` learnable controls routed by position.
+On a deck, **SMP** is the pad-mode showing that deck's 8 region pads and **GLBL** is its
+shift peer showing the 8 global ones — so a deck's 8 physical pads reach both banks.
+Stems are a *mix*, not triggers: they live in the stem mixer and never on a pad.
 
+- **Region pads (SMP)** capture a slice of the loaded track (the active loop, else 4 beats
+  from the playhead) — positions into `deck.buffer`, stored client-side per videoId, plus a
+  per-pad **pitch**.
+- **Global pads (GLBL)** are uploaded or recorded clips (≤30 s, ≤12 MB — `MAX_SAMPLE_MS` /
+  `MAX_SAMPLE_BYTES`), account-stored in R2+D1 (`server/samples.ts` `handleSampleRoute`,
+  wired in `worker/index.ts`; the table self-creates via `ensureUserSamples`, so the
+  `0011_samples.sql` migration is optional). A recorder take lands in the next free GLBL pad.
+
+Per-pad mode (oneshot/gate/loop/bounce) + gain + pitch; one voice per pad (retrigger
+replaces). MIDI: `sampler0..23` learnable actions, **the same flat index** — `controls.ts`
+derives its count and labels from `Sampler.ts` so the two cannot drift (they did once:
+a 12-global learn list against an 8-global sampler mapped every learned pad past the
+eighth onto the wrong one, and named four pads that do not exist).
 
 ---
 

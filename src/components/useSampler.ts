@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import type { AudioEngine, DeckId, SampleMode, StemName } from "@htl";
 import { STEM_NAMES } from "@htl";
 import type { Intent } from "@htl/room";
-import { decodeAudio } from "@htl/audio";
+import {
+  decodeAudio,
+  SAMPLER_GLOBAL_COUNT,
+  SAMPLER_REGION_COUNT,
+  samplerRouteOf,
+} from "@htl/audio";
 import {
   MAX_SAMPLE_BYTES,
   MAX_SAMPLE_MS,
@@ -21,8 +26,10 @@ import type { Me } from "@htl/account";
 //   16-23 → deck B region (B channel): deck B's track.
 // Region pads are positions only (per-track, local); global pads are files (R2/D1).
 
-export const GLOBAL_COUNT = 8;
-export const DECK_REGION_COUNT = 8;
+// The layout itself lives in @htl/audio (Sampler.ts) — see the note there. These aliases keep
+// every existing caller (and this file's own arithmetic) reading the way it always did.
+export const GLOBAL_COUNT = SAMPLER_GLOBAL_COUNT;
+export const DECK_REGION_COUNT = SAMPLER_REGION_COUNT;
 // A deck's 8 pads are all GRAB slots: capture a region/loop of the loaded track and trigger it
 // through the deck channel (the LOCAL sampler). The GLOBAL sampler (8 uploaded one-shots) is a
 // separate bank, shown as SMP's shift peer. (Stems are a MIX, not triggers — they live in the
@@ -32,12 +39,11 @@ export const GLOBAL_PADS = Array.from({ length: GLOBAL_COUNT }, (_, i) => `g${i}
 const REGION_KEY = "htl:samplerRegions"; // { [videoId]: (RegionDesc|null)[8] }
 const GLOBAL_META_KEY = "htl:samplerGlobalMeta"; // { g0:{mode,gain}, ... } (server holds the file+name)
 
-export const routeOf = (i: number): "A" | "master" | "B" =>
-  i < GLOBAL_COUNT ? "master" : i < GLOBAL_COUNT + DECK_REGION_COUNT ? "A" : "B";
+export const routeOf = samplerRouteOf;
 const regionDeck = (i: number): DeckId => (i < GLOBAL_COUNT + DECK_REGION_COUNT ? "A" : "B");
 const regionSlot = (i: number): number =>
   i < GLOBAL_COUNT + DECK_REGION_COUNT ? i - GLOBAL_COUNT : i - GLOBAL_COUNT - DECK_REGION_COUNT; // 0..7
-const globalSlot = (i: number): number => i; // 0..11
+const globalSlot = (i: number): number => i; // 0..GLOBAL_COUNT-1
 /** First pad index of a deck's 8-pad region bank (so the deck's SAMPLER pad-mode slices it). */
 export const deckPadBase = (deckId: DeckId): number =>
   deckId === "A" ? GLOBAL_COUNT : GLOBAL_COUNT + DECK_REGION_COUNT; // 8 | 16

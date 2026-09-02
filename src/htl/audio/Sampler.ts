@@ -11,6 +11,20 @@
 export type SampleMode = "oneshot" | "gate" | "loop" | "bounce";
 export type SampleRoute = "A" | "master" | "B";
 
+// ★ THE PAD LAYOUT lives HERE, in the core lib, because two unrelated modules must agree on it:
+// useSampler.ts (which owns the pads) and midi/controls.ts (which lets a user LEARN one onto
+// hardware). They cannot import each other — a component may import from @htl, never the reverse
+// — so when the numbers were written down twice they drifted, and a 12-global learn list against
+// an 8-global sampler mapped every learned pad past the 8th onto the wrong one, silently.
+export const SAMPLER_GLOBAL_COUNT = 8; // uploaded/captured one-shots, master route (the GLBL bank)
+export const SAMPLER_REGION_COUNT = 8; // per-deck GRAB pads: a slice of that deck's own track
+export const SAMPLER_PAD_COUNT = SAMPLER_GLOBAL_COUNT + SAMPLER_REGION_COUNT * 2; // 24, flat
+
+/** Flat pad index → the route its voice takes. 0-7 master, 8-15 deck A, 16-23 deck B. */
+export const samplerRouteOf = (i: number): SampleRoute =>
+  i < SAMPLER_GLOBAL_COUNT ? "master" : i < SAMPLER_GLOBAL_COUNT + SAMPLER_REGION_COUNT ? "A" : "B";
+
+
 export interface PlayOpts {
   buffer: AudioBuffer;
   offset?: number; // seconds into the buffer (region start; 0 for a whole file)

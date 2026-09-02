@@ -22,6 +22,15 @@ export { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset
 export { decodeAudio } from "./decode";
 export { MicInput, type MicRoute } from "./MicInput";
 export { Recorder, type Take } from "./Recorder";
-export { Sampler, type SampleMode, type SampleRoute, type PlayOpts } from "./Sampler";
+export {
+  Sampler,
+  SAMPLER_GLOBAL_COUNT,
+  SAMPLER_REGION_COUNT,
+  SAMPLER_PAD_COUNT,
+  samplerRouteOf,
+  type SampleMode,
+  type SampleRoute,
+  type PlayOpts,
+} from "./Sampler";
 export { getCachedTrack, setCachedTrack, getCachedMeta, dropCachedBuffer, type CachedTrack } from "./trackCache";
 export { STRETCH_WORKLET_SRC } from "./stretchWorklet";

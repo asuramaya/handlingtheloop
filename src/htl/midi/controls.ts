@@ -4,6 +4,7 @@
 // then wiggle the hardware" rows; a capture writes a LearnedBinding keyed by `id`.
 
 import type { ControlSpec, DeckId, FaderTarget } from "./types";
+import { SAMPLER_GLOBAL_COUNT, SAMPLER_PAD_COUNT, SAMPLER_REGION_COUNT } from "../audio/Sampler";
 
 export interface LearnControl {
   id: string; // stable key into the learn map
@@ -69,12 +70,20 @@ export const LEARN_CONTROLS: LearnControl[] = [
   ...perDeck("focus", "Focus deck", "Modifier", (deck) => ({ kind: "focus", deck })),
   // Hot cues 1..8
   ...Array.from({ length: 8 }, (_, i) => i + 1).flatMap((n) => perDeck(`hotcue${n}`, `Hot cue ${n}`, "Hot cues", () => action(`hotcue${n}`))),
-  // Sampler pads 1..28 — one flat learnable action per pad; the sampler routes each by
-  // index (0-11 → 12 GLOBAL master pads, 12-19 → deck A region pads, 20-27 → deck B region
-  // pads). Labelled by bank so a controller can map a board's pads onto whichever it likes.
-  ...Array.from({ length: 28 }, (_, i) => ({
+  // Sampler pads — one flat learnable action per pad, and the index IS the sampler's own flat
+  // index (useSampler.ts): 0-7 → the 8 GLOBAL master pads, 8-15 → deck A region pads, 16-23 →
+  // deck B. Labelled by bank so a controller can map a board's pads onto whichever it likes.
+  // ★ The counts come from Sampler.ts, the one place the layout is written down. They were once
+  // spelled 12/8/28 here against a real 8/8/24 sampler, which silently mapped every learned pad
+  // past the 8th onto the WRONG pad — and named four that do not exist.
+  ...Array.from({ length: SAMPLER_PAD_COUNT }, (_, i) => ({
     id: `sampler${i}`,
-    label: i < 12 ? `Global pad ${i + 1}` : i < 20 ? `Deck A pad ${i - 11}` : `Deck B pad ${i - 19}`,
+    label:
+      i < SAMPLER_GLOBAL_COUNT
+        ? `Global pad ${i + 1}`
+        : i < SAMPLER_GLOBAL_COUNT + SAMPLER_REGION_COUNT
+          ? `Deck A pad ${i - SAMPLER_GLOBAL_COUNT + 1}`
+          : `Deck B pad ${i - SAMPLER_GLOBAL_COUNT - SAMPLER_REGION_COUNT + 1}`,
     group: "Sampler",
     control: action(`sampler${i}`),
   })),

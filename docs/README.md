@@ -17,20 +17,20 @@ is the detail behind it.
 | `src/htl/audio` — engine, decks, FX devices, worklets, bank engine | 45 files · 15.6k | [fx-rack](./fx-rack.md) (rack, chains, banks, sampler) · [audio-io](./audio-io.md) (mic, cue, recording) | current; the **DSP of each device** is documented only in its own file header |
 | `src/components` — the whole UI | 77 files · 19.8k | [app-architecture](./app-architecture.md) (App.tsx decomposition only) | **thin** — no doc covers the deck UI, the waveform, or the library panel |
 | `src/styles` | 15 files · 13.6k | — | **none**. Conventions live in the CSS comments |
-| `server/` — resolver, accounts, room, social, admin | 41 files · 10.3k | [youtube-relay](./youtube-relay.md) (cold-load fallback only) | **thin** — `accounts.ts` (1.1k) and `room.ts` (1.4k) have no doc |
-| `src/htl/automix` — auto-DJ | 12 files · 2.9k | [smart-fader](./smart-fader.md) covers the *gesture*, not the mixer | **gap** — the remaining one worth closing |
+| `server/` — resolver, accounts, room, social, admin | 41 files · 10.3k | [rooms-server](./rooms-server.md) · [accounts](./accounts.md) · [youtube-relay](./youtube-relay.md) | current (2026-09-01) |
+| `src/htl/automix` — auto-DJ | 12 files · 2.9k | [automix](./automix.md) · [smart-fader](./smart-fader.md) (the gesture) | current |
 | `src/htl/analysis` — LOD pyramid, beatgrid, key, palette | 8 files · 2.6k | [analysis](./analysis.md) | current (2026-09-01) |
 | `src/htl/room` — session protocol + client | 10 files · 2.5k | [shared-session](./shared-session.md) · [sync](./sync.md) (how it differs from account sync) | ⚠ **stale header** — says phases 2–3 "not yet wired"; there are 28 intent kinds and it shipped |
 | `src/htl/stems` — cache, separator worker, model registry, GPU queue | 9 files · 2.1k | [stems](./stems.md) (shipped pipeline) · [engine-stem-paging](./engine-stem-paging.md) (a design, **not built**) | current |
 | `src/App` — spine + 7 concern hooks | 7 files · 2.0k | [app-architecture](./app-architecture.md) | current |
 | `src/htl/lyrics` — align, LRC, convergence | 12 files · ~2k | — | **gap** — a whole subsystem, `lrcAlign.ts` alone is 967 lines |
 | `src/htl/state` — settings, account sync, session snapshot | 13 files · 1.8k | [sync](./sync.md) | current (2026-09-01) |
-| `src/htl/midi` — layer + device profiles | 10 files · 1.5k | [ddj-flx4](./ddj-flx4.md) (one profile, hardware-verified) | the *layer* (learn, routing, profiles) is undocumented |
+| `src/htl/midi` — layer + device profiles | 10 files · 1.5k | [control-surfaces](./control-surfaces.md) · [ddj-flx4](./ddj-flx4.md) (one profile, hardware-verified) | current |
 | `src/components/social` | 16 files · 1.5k | [social-layer](./social-layer.md) | plan-shaped; shipped since |
 | `src/htl/media` — YouTube source + OAuth headers | 11 files · 1.0k | README "How it works" | adequate |
-| `src/htl/library` — Collection, playlists, sync | 8 files · 0.8k | — | **gap** (it has had two live data-loss bugs; see the file comments) |
+| `src/htl/library` — Collection, playlists, sync | 8 files · 0.8k | [accounts](./accounts.md) | current — ⚠ two live data-loss bugs in its history; read before touching `resync.ts` |
 | `migrations/` — 26 D1 migrations | 467 lines | [DEPLOY](../DEPLOY.md) (how to apply) | schema itself undocumented |
-| `src/htl/gamepad` | 3 files · 358 | — | small; the file header suffices |
+| `src/htl/gamepad` | 3 files · 358 | [control-surfaces](./control-surfaces.md) | current |
 | `src/htl/persistence` | 3 files · 327 | — | small |
 | `src/htl/fingerprint` | 1 file · 35 | — | small |
 | `scripts/draglab` — UI + account harness | 4 files · 451 | [DEV](../DEV.md) | current |
@@ -53,20 +53,22 @@ Read the body, distrust the status line:
 
 ## The gaps
 
-Three of the five originally listed here were closed on 2026-09-01
-([analysis](./analysis.md), [sync](./sync.md), [stems](./stems.md)). What is left,
-ranked by what a reader loses:
+All five originally listed here were closed on 2026-09-01. The inventory above is
+the current state; what is left undocumented is deliberate:
 
-1. **`server/room.ts` + the two Durable Objects** — 1.4k lines holding every live
-   session. [shared-session](./shared-session.md) describes the protocol, not the
-   server that runs it.
-2. **The auto-mixer.** 1k lines choosing when and how two tracks meet.
-   [smart-fader](./smart-fader.md) documents the hand gesture that shares its DSP,
-   not the machine.
-3. **The MIDI layer** — learn, routing, profiles. One device profile is documented
-   ([ddj-flx4](./ddj-flx4.md)); the layer under it is not.
-4. **The library + its sync**, which has had two live data-loss bugs.
-5. **`server/accounts.ts`** (1.1k) — auth, the social graph, moderation.
+- **`src/styles`** (13.6k lines) — conventions live in the CSS comments, and a
+  stylesheet doc rots faster than any other kind.
+- **The DSP of each FX device** — every `*Fx.ts` opens with its own design
+  rationale, which is the right place for it. [fx-rack](./fx-rack.md) covers the
+  architecture they share.
+- **`src/htl/lyrics`** — the caption ribbon works; Whisper transcription is ON
+  HOLD after eleven attempts. Documenting a parked subsystem would mostly record
+  what failed, and that is already in the file headers and the decision graph.
+- **`scripts/fxlab`** — ⚠ carries a known trap: *it asserts nothing about its own
+  input*, so a green measurement is not a green feature. Fix that before trusting
+  a number out of it.
+- **Individual components** — 77 files. The ones worth reading are named in
+  [map.md](./map.md).
 
 ### A note on method
 

@@ -226,6 +226,10 @@ built, so they carry the *why* and the dead ends, not just the shape:
 | [**docs/README**](./docs/README.md) | docs ↔ code inventory: what is covered, what is not |
 | [app-architecture](./docs/app-architecture.md) | how App.tsx is decomposed; where a new feature plugs in |
 | [analysis](./docs/analysis.md) | the beatgrid — and everything downstream that inherits its errors |
+| [automix](./docs/automix.md) | the auto-DJ, built to be interrupted |
+| [control-surfaces](./docs/control-surfaces.md) | MIDI, gamepad and keyboard converging on one path |
+| [accounts](./docs/accounts.md) | identity, connected services, and the library's identity problem |
+| [rooms-server](./docs/rooms-server.md) | the two Durable Objects behind every live session |
 | [sync](./docs/sync.md) | the two sync planes: your setup across machines vs playing together |
 | [stems](./docs/stems.md) | the shipped separation pipeline, and why phones never separate |
 | [fx-rack](./docs/fx-rack.md) | the device rack, stem chains, and the preset/chain bank engine |

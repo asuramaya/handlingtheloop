@@ -52,7 +52,11 @@ export function maskToStems(mask: number): StemName[] {
 
 const LONG_PRESS_MS = 460; // the same dwell ValueCell uses for its own touch context menu
 
-export function StemPicker({ mask, onCommit }: { mask: number; onCommit: (mask: number) => void }) {
+/** `disabled` = this deck has no separated stems yet. The cells stay VISIBLE and go inert rather
+ *  than disappearing: a control that vanishes teaches nothing, and the chain you are looking at is
+ *  still a real chain — it just has no sources to hand it until the stems land. (That was ruled
+ *  once, in 2493dfc, and then quietly lost when the menu was rebuilt; this is it restored.) */
+export function StemPicker({ mask, onCommit, disabled = false }: { mask: number; onCommit: (mask: number) => void; disabled?: boolean }) {
   // What the cells show WHILE a sweep is in progress. The paint has to be visible as it happens —
   // cells that stay dark until you let go read as a control that ignored you — but it must not
   // reach the engine yet, so it is local state, not a stream of commits.
@@ -123,18 +127,20 @@ export function StemPicker({ mask, onCommit }: { mask: number; onCommit: (mask: 
 
   return (
     <>
-      <div ref={rowRef} className="stem-pick" onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+      <div ref={rowRef} className={`stem-pick ${disabled ? "cold" : ""}`} onPointerMove={disabled ? undefined : onMove} onPointerUp={disabled ? undefined : onUp} onPointerCancel={disabled ? undefined : onUp}>
         {STEMS.map((s) => (
           <button
             key={s.name}
             data-bit={s.bit}
             className={`stem-cell ${shown & s.bit ? "on" : ""}`}
             style={{ ["--lane" as string]: s.color }}
-            title={`${s.label} — drag to paint, right-click to solo`}
+            disabled={disabled}
+            title={disabled ? `${s.label} — no stems on this deck yet` : `${s.label} — drag to paint, right-click to solo`}
             aria-label={s.label}
             aria-pressed={!!(shown & s.bit)}
-            onPointerDown={onDown(s.bit)}
+            onPointerDown={disabled ? undefined : onDown(s.bit)}
             onContextMenu={(e) => {
+              if (disabled) return void e.preventDefault();
               e.preventDefault();
               clearLong();
               paint.current = null;
@@ -149,7 +155,7 @@ export function StemPicker({ mask, onCommit }: { mask: number; onCommit: (mask: 
       {/* A gesture nobody is told about is a gesture nobody uses — and "A" at least explained
           itself. This is a menu, not a live surface, so one muted line is affordable here where it
           would be clutter on the deck. */}
-      <div className="stem-hint">drag to paint · right-click to solo</div>
+      <div className="stem-hint">{disabled ? "no stems on this deck yet — separate to route them" : "drag to paint · right-click to solo"}</div>
     </>
   );
 }

@@ -188,6 +188,15 @@
   font-weight: 800;
   cursor: pointer;
 }
+/* INERT, not gone. The deck has no separated stems yet, so the squares still say what the control
+   IS and which four lanes it offers — they just cannot be answered. Dimmed and un-clickable beats
+   absent, which reads as "this chain has no such setting". */
+.stem-pick.cold {
+  opacity: 0.42;
+}
+.stem-pick.cold .stem-cell {
+  cursor: not-allowed;
+}
 .stem-cell:hover:not(:disabled) {
   border-color: var(--lane, var(--accent));
   color: #fff;

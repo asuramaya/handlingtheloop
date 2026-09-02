@@ -40,6 +40,16 @@ export interface FxDevice {
    *  curve-throw (see Deck.eqThrowing) — it doesn't implement this. */
   readonly throwing: boolean;
 
+  /** ★ THIS DEVICE IS A PASS-THROUGH BECAUSE ITS WORKLET WAS NOT READY when it was built.
+   *  A worklet-backed device (comp, reverb, the saturator's tape band) constructs its
+   *  AudioWorkletNode in its constructor, and if addModule() has not landed yet that throws — so
+   *  it wires input straight to wet and carries audio rather than dropping the channel. Which is
+   *  right, and used to be PERMANENT: the device sat there looking normal and doing nothing for
+   *  the life of the deck. The pad bank avoided it by waiting for ensureWorklets(); a rack
+   *  RESTORED from a snapshot at boot does not get to choose when it arrives.
+   *  Undefined on devices that cannot degrade. See FxRack.rebuildDegraded. */
+  readonly degraded?: boolean;
+
   /** Generic param bus — the single seam session-sync/automix/MIDI address. Unknown
    *  ids are ignored (forward-compatible across versions). */
   setParam(id: string, value: number): void;
@@ -393,6 +403,31 @@ export class FxRack {
     // …and the injected voices ALWAYS reach the sum, tap or no tap: nothing else carries them.
     this.inject.connect(sum);
     runDevices(master.devices, sum).connect(this.output);
+  }
+
+  /** Replace every degraded device with a fresh one, carrying its params and bypass across.
+   *  Called once the worklets are actually registered. Returns how many were rebuilt.
+   *
+   *  In PLACE: same chain, same position, so nothing that addresses a slot or an (chain, kind)
+   *  address notices, and the rack is rebuilt once at the end rather than per device. */
+  rebuildDegraded(make: (kind: FxKind, chainId: string) => FxDevice | null): number {
+    let n = 0;
+    for (const c of this.chains) {
+      c.devices.forEach((d, i) => {
+        if (!d.degraded) return;
+        const fresh = make(d.kind, c.id);
+        if (!fresh || fresh === d || fresh.degraded) return; // still no worklet → leave it be
+        const params = d.snapshotParams();
+        const wasBypassed = d.bypassed;
+        c.devices[i] = fresh;
+        for (const k in params) fresh.setParam(k, params[k]);
+        fresh.setBypass(wasBypassed, true);
+        this.disposeDevice(d);
+        n++;
+      });
+    }
+    if (n) this.rebuild();
+    return n;
   }
 
   add(device: FxDevice, slot = this.devices.length): FxDevice {

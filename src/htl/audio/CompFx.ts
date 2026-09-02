@@ -47,6 +47,8 @@ export class CompFx extends BaseFxDevice {
     ceilingDb: -0.3,
   };
   private _gr = 0; // live gain reduction (dB, ≥ 0) — the needle
+  /** Built without its worklet → carrying audio but not compressing it. See FxDevice.degraded. */
+  degraded = false;
 
   constructor(ctx: AudioContext) {
     super(ctx, 1); // an insert: mix 1 = fully compressed (the dry leg crossfades out)
@@ -72,6 +74,7 @@ export class CompFx extends BaseFxDevice {
     } catch (e) {
       // No worklet (a very early add) → pass the audio through rather than dropping the channel.
       console.warn("[htl] comp worklet unavailable, degrading to a pass-through:", e);
+      this.degraded = true;
       this.input.connect(this.wet);
     }
 

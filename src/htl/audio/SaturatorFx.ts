@@ -210,6 +210,8 @@ const VOICING: { type: BiquadFilterType; f: number; g: number; q: number }[] = [
 export class SaturatorFx extends BaseFxDevice {
   readonly kind: FxKind = "saturator";
   static readonly BANDS = 3;
+  /** A band fell back to the native curve because the tape worklet was not ready yet. */
+  degraded = false;
 
   // Permanent per-band nodes (created once, never torn down).
   private readonly drives: GainNode[] = [];
@@ -423,6 +425,7 @@ export class SaturatorFx extends BaseFxDevice {
         built = true;
       } catch (e) {
         console.warn("[htl] tape worklet unavailable, degrading band to native curve:", e);
+        this.degraded = true;
       }
     }
     if (!built) {

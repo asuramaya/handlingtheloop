@@ -484,9 +484,25 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     const isLimit = Math.round(dev.getParam("mode")) === 3;
     const cp = curveParamsOf(dev);
     if (!isLimit) {
+      // ★ NEAREST HANDLE WINS — it cannot be "knee first, within 16px".
+      //
+      // The knee IS the threshold plus half the knee width, so the two handles sit within a few dB
+      // of each other BY DEFINITION. The labels were already split above/below to stop them
+      // colliding; the hit targets were not. Narrow the panel and the dB-per-pixel shrinks until
+      // both handles map to almost the same x — at which point a fixed 16px knee circle tested
+      // first swallows the threshold handle whole, and THRESH becomes unclickable exactly when the
+      // panel is smallest. (Reported on a phone: "the threshold button right next to the knee
+      // overlaps and is near impossible to click.")
+      //
+      // Comparing distances instead means the closer handle always answers. Two handles on top of
+      // each other still split the space between them rather than one eating the other, so
+      // whichever side of the midpoint you touch is the one you get.
       const kneeDb = cp.thresh + cp.knee / 2;
       const kp = { x: dbToX(kneeDb), y: dbToY(clamp(outputDb(kneeDb, cp), DB_MIN, DB_MAX)) };
-      if (Math.hypot(x - kp.x, y - kp.y) < 16) return { kind: "knee" };
+      const bp = { x: dbToX(cp.thresh), y: dbToY(clamp(outputDb(cp.thresh, cp), DB_MIN, DB_MAX)) };
+      const dKnee = Math.hypot(x - kp.x, y - kp.y);
+      const dBend = Math.hypot(x - bp.x, y - bp.y);
+      if (dKnee < 16 && dKnee <= dBend) return { kind: "knee" };
     }
     return { kind: "bend", startY: e.clientY, startRatio: dev.getParam("ratio") }; // no dead zone
   };

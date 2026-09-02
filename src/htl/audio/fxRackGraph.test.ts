@@ -49,11 +49,30 @@ function paths(from: StubNode, to: StubNode): number {
   return from.edges.reduce((acc, e) => acc + paths(e.to, to), 0);
 }
 
-function fakeDevice(kind: string): FxDevice {
+function fakeDevice(kind: string, degraded = false): FxDevice {
   const input = new StubNode(`${kind}.in`);
   const output = new StubNode(`${kind}.out`);
   input.connect(output); // a device passes signal through
-  return { kind, input, output, bypassed: false, setBypass() {}, reset() {}, resetParams() {}, snapshotParams: () => ({}), setParam() {}, getParam: () => 0, paramDefault: () => 0, dispose() {} } as unknown as FxDevice;
+  const params: Record<string, number> = {};
+  return {
+    kind,
+    input,
+    output,
+    degraded,
+    bypassed: false,
+    setBypass(on: boolean) {
+      (this as { bypassed: boolean }).bypassed = on;
+    },
+    reset() {},
+    resetParams() {},
+    snapshotParams: () => ({ ...params }),
+    setParam(id: string, v: number) {
+      params[id] = v;
+    },
+    getParam: (id: string) => params[id] ?? 0,
+    paramDefault: () => 0,
+    dispose() {},
+  } as unknown as FxDevice;
 }
 
 /** A rack with `taps` live stem taps, as a deck with separated stems provides. */
@@ -107,5 +126,53 @@ describe("FxRack graph — every input reaches the output", () => {
     expect(reaches(rack.inject as unknown as StubNode, out)).toBe(true);
     expect(paths(rack.inject as unknown as StubNode, out)).toBe(1);
     expect(paths(rack.input as unknown as StubNode, out)).toBe(1);
+  });
+});
+
+// A worklet-backed device built before addModule() landed carries audio without processing it.
+// That used to be permanent: a COMP restored from a saved rack at boot could race the modules and
+// come back a pass-through, looking completely normal — "the compressor sometimes does nothing".
+describe("FxRack.rebuildDegraded — repairing a device that lost the worklet race", () => {
+  it("replaces it in place, carrying params and bypass across", () => {
+    const { rack } = rackWith(0);
+    const dead = fakeDevice("comp", true);
+    rack.add(dead);
+    rack.add(fakeDevice("delay"));
+    dead.setParam("threshold", -18);
+    dead.setBypass(true, true);
+
+    const rebuilt = rack.rebuildDegraded((kind) => fakeDevice(kind));
+    expect(rebuilt).toBe(1);
+    const comp = rack.list[0];
+    expect(comp).not.toBe(dead); // a NEW instance
+    expect(comp.degraded).toBeFalsy();
+    expect(comp.getParam("threshold")).toBe(-18);
+    expect(comp.bypassed).toBe(true);
+    expect(rack.list.map((d) => d.kind)).toEqual(["comp", "delay"]); // same position
+  });
+
+  it("leaves healthy devices alone and reports nothing to do", () => {
+    const { rack } = rackWith(0);
+    const ok = fakeDevice("delay");
+    rack.add(ok);
+    expect(rack.rebuildDegraded((kind) => fakeDevice(kind))).toBe(0);
+    expect(rack.list[0]).toBe(ok);
+  });
+
+  it("gives up rather than churning when the worklet is STILL unavailable", () => {
+    const { rack } = rackWith(0);
+    const dead = fakeDevice("comp", true);
+    rack.add(dead);
+    expect(rack.rebuildDegraded((kind) => fakeDevice(kind, true))).toBe(0);
+    expect(rack.list[0]).toBe(dead);
+  });
+
+  it("repairs inside a stem chain too, and the rack still routes afterwards", () => {
+    const { rack, out } = rackWith(4);
+    const c = rack.addChain("c1", "DRUMS", 0b0001);
+    rack.addDevice(c.id, fakeDevice("comp", true));
+    expect(rack.rebuildDegraded((kind) => fakeDevice(kind))).toBe(1);
+    expect(reaches(rack.inject as unknown as StubNode, out)).toBe(true);
+    expect(paths(rack.inject as unknown as StubNode, out)).toBe(1);
   });
 });

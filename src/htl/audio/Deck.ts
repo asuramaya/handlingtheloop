@@ -2206,6 +2206,16 @@ export class Deck {
         return null;
     }
   }
+  /** ★ REPAIR THE PASS-THROUGHS. A worklet-backed device built before addModule() landed carries
+   *  audio without processing it, forever (see FxDevice.degraded). The pad bank dodges that by
+   *  waiting for ensureWorklets(); a rack RESTORED from a saved snapshot at boot does not get to
+   *  choose when it arrives, so a COMP or a reverb in a saved rack could come back inert — looking
+   *  entirely normal, which is what made it a "sometimes it just does nothing" bug rather than an
+   *  obvious one. Called by AudioEngine once the modules are actually registered. */
+  rebuildDegradedFx(): number {
+    return this.rack.rebuildDegraded((kind, chainId) => this.makeFx(kind, chainId));
+  }
+
   /** Every device this deck owns, in SIGNAL order — stem chains first, then the master. Slot
    *  indices walk THIS list. With only a master chain (the default, and everything that shipped
    *  before chains) it is exactly the old flat rack, so nothing that addresses a slot had to

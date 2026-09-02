@@ -76,7 +76,10 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       ctx.shadowBlur = 0;
 
       ctx.fillStyle = "rgba(255,255,255,0.3)";
-      ctx.font = "7px ui-sans-serif, system-ui, sans-serif";
+      // Type that scales with the pad. At its old ~40px width everything had to be 7px; now that
+      // the phone layout lets it square out to 108px+, fixed 7px would just be small for no reason.
+      const axisPx = Math.max(7, Math.min(11, Math.round(w / 13)));
+      ctx.font = `${axisPx}px ui-sans-serif, system-ui, sans-serif`;
       ctx.textAlign = "left";
       ctx.fillText("ATK", 3, h - 3);
       ctx.save();
@@ -89,7 +92,7 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
         const atkLabel = attack < 1 ? `${(attack * 1000).toFixed(0)}µs` : `${attack.toFixed(1)}ms`;
         const relLabel = release >= 1000 ? `${(release / 1000).toFixed(2)}s` : `${release.toFixed(0)}ms`;
         ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.font = "800 8px ui-monospace, monospace";
+        ctx.font = `800 ${Math.max(8, Math.min(13, Math.round(w / 11)))}px ui-monospace, monospace`;
         ctx.textAlign = dx < w / 2 ? "left" : "right";
         ctx.fillText(atkLabel, dx < w / 2 ? Math.min(w - 2, dx + 5) : Math.max(2, dx - 5), dy < h / 2 ? Math.min(h - 4, dy + 20) : Math.max(9, dy - 14));
         ctx.fillText(relLabel, dx < w / 2 ? Math.min(w - 2, dx + 5) : Math.max(2, dx - 5), dy < h / 2 ? Math.min(h - 4, dy + 30) : Math.max(9, dy - 4));

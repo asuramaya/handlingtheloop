@@ -190,6 +190,10 @@ export class AudioEngine {
     void this.ensureWorklets().then(() => {
       this.deckA.ensurePadFx();
       this.deckB.ensurePadFx();
+      // …and repair anything built BEFORE the modules landed — a rack restored from a snapshot at
+      // boot races this, and a device that lost that race is a silent pass-through for good.
+      this.deckA.rebuildDegradedFx();
+      this.deckB.rebuildDegradedFx();
       this.installMasterLimiter();
       this.patchSidechains();
     });

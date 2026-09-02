@@ -34,6 +34,8 @@ export class ReverbFx extends BaseFxDevice {
   readonly kind: FxKind = "reverb";
 
   private readonly drive: WaveShaperNode;
+  /** Built without its FDN worklet → a dry pass rather than a reverb. See FxDevice.degraded. */
+  degraded = false;
   private readonly preDelay: DelayNode;
   private readonly inHP: BiquadFilterNode;
   private readonly inLP: BiquadFilterNode;
@@ -147,6 +149,7 @@ export class ReverbFx extends BaseFxDevice {
       for (const k in this.wp) this.node.port.postMessage({ k, v: this.wp[k] });
     } catch (e) {
       console.warn("[htl] reverb FDN worklet unavailable, degrading:", e);
+      this.degraded = true;
       this.inLP.connect(this.wSplit);
     }
 

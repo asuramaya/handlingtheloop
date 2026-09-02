@@ -3215,15 +3215,42 @@ body:not(.no-glow) .fx-mix-fill::after {
     flex: 0 0 auto;
     min-width: 52px;
   }
-  /* COMP's viz row is three columns wide (A/R pad · curve · MAKEUP/LOOK) and its two side columns
-     were sized off desktop percentages — a fixed ~90px gone before the curve gets any, on the
-     width where the curve needs it most. The pad stays square-ish and the cells stay tappable;
-     everything else the row has goes to the instrument. */
+  /* ★ COMP'S VIZ ROW STOPS BEING A ROW. Three columns (A/R pad · curve · MAKEUP/LOOK) across a
+     phone gave each of them a sliver: the A/R pad was squeezed to ~40px, which is not a pad — it
+     is a vertical strip with ATK/REL written down it in 7px type that nobody can read, and an XY
+     gesture with no X worth speaking of. Narrowing the side columns to give the curve room (what
+     this rule used to do) only made the sliver thinner.
+
+     Wrapping is the answer, not tuning. The curve takes the full width on its own line, and the
+     pad and the cells share the line under it — where the pad can finally be SQUARE, which is the
+     shape an attack/release XY surface has to be to mean anything. */
+  .comp-panel .fx-viz-row {
+    flex-wrap: wrap;
+  }
+  .comp-panel .fx-viz-row > .sat-viz {
+    order: 1;
+    flex: 1 1 100%;
+    min-height: 128px;
+  }
   .comp-ar-pad {
-    flex: 0 0 clamp(38px, 14%, 50px);
+    order: 2;
+    flex: 1 1 0;
+    /* Square, and big enough for its own labels — the reason the row wraps at all. */
+    aspect-ratio: 1 / 1;
+    min-width: 108px;
+    max-width: 168px;
   }
   .comp-side-cells {
-    flex: 0 0 clamp(40px, 12%, 52px);
+    order: 3;
+    flex: 1 1 0;
+    /* Side by side now that they have a whole line, instead of stacked in a 40px gutter. */
+    flex-direction: row;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .comp-side-cells .vcell {
+    flex: 1 1 0;
+    min-width: 0;
   }
 }
 

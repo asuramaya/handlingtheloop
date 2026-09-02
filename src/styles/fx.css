@@ -162,15 +162,6 @@
   padding: 4px 6px 2px;
   touch-action: none;
 }
-/* The gestures that replaced the "A" cell, said once, in the one place they apply. */
-.stem-hint {
-  padding: 0 6px 4px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-align: center;
-  color: color-mix(in srgb, var(--muted) 65%, transparent);
-}
 .stem-cell {
   flex: 1 1 0;
   touch-action: none;
@@ -187,15 +178,6 @@
   font-size: 11px;
   font-weight: 800;
   cursor: pointer;
-}
-/* INERT, not gone. The deck has no separated stems yet, so the squares still say what the control
-   IS and which four lanes it offers — they just cannot be answered. Dimmed and un-clickable beats
-   absent, which reads as "this chain has no such setting". */
-.stem-pick.cold {
-  opacity: 0.42;
-}
-.stem-pick.cold .stem-cell {
-  cursor: not-allowed;
 }
 .stem-cell:hover:not(:disabled) {
   border-color: var(--lane, var(--accent));

@@ -1276,15 +1276,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               control the sampler's pad menu uses to pick which parts of a grab to keep — one
               question, one widget, one set of colours. A stem has exactly one owner, so taking one
               takes it from whoever held it; there is no "both" to draw.
-              With no stems separated yet the squares stay VISIBLE and go INERT — a chain's stem
-              assignment is a property of the CHAIN, not of whatever is loaded right now, so the
-              question still applies; you just cannot answer it until the stems land. Hiding them
-              made a chain look like it had no such setting at all. */}
-          {!deck.fxChain(chainMenu.id)?.master && (
+              Absent entirely with no stems on the deck: a chain cannot hear a stem that has not
+              been separated, so the question does not apply and is not asked. */}
+          {deck.hasStems && !deck.fxChain(chainMenu.id)?.master && (
             <>
               <StemPicker
                 mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
-                disabled={!deck.hasStems}
                 onCommit={(m) => setChainStems(m, chainMenu.id)}
               />
               <div className="fx-preset-sep" />

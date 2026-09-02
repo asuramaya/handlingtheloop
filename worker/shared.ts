@@ -96,6 +96,11 @@ export interface Env extends AccountEnv {
   /** The app's own hostname, e.g. "app.handlingtheloop.com". UNSET = one origin serves everything
    *  (what ships today). Set it and the bare domain becomes a landing site — see server/hosts.ts. */
   APP_HOST?: string;
+  /** The ONE marketing hostname that counts, e.g. "handlingtheloop.com". Any other routed host
+   *  (www, a stray alias) 301s to it — the API, the socket and /.well-known are exempt, and dev /
+   *  workers.dev previews are left alone. Independent of APP_HOST: this fixes apex-and-www both
+   *  claiming to be canonical, which is true today with no split at all. */
+  SITE_HOST?: string;
 }
 
 // ---- constants ---------------------------------------------------------------

@@ -67,6 +67,57 @@ describe("routeForHost — the marketing hostname", () => {
   });
 });
 
+// SITE_HOST is independent of the split and fixes a problem that exists without it: apex and www
+// both routed, both serving the same document, each claiming itself as canonical in the share card.
+describe("routeForHost — one canonical hostname", () => {
+  const SITE = "handlingtheloop.com";
+
+  it("301s the non-canonical hostname, with no split configured at all", () => {
+    expect(routeForHost(at("https://www.handlingtheloop.com/@nina"), undefined, SITE)).toEqual({
+      kind: "redirect",
+      to: "https://handlingtheloop.com/@nina",
+    });
+    expect(routeForHost(at("https://handlingtheloop.com/@nina"), undefined, SITE)).toEqual({ kind: "app" });
+  });
+
+  it("works the other way round if www is the one you keep", () => {
+    expect(routeForHost(at("https://handlingtheloop.com/"), undefined, "www.handlingtheloop.com")).toEqual({
+      kind: "redirect",
+      to: "https://www.handlingtheloop.com/",
+    });
+  });
+
+  it("keeps the path and query", () => {
+    expect(routeForHost(at("https://www.handlingtheloop.com/set/abc123?t=90"), APP, SITE)).toEqual({
+      kind: "redirect",
+      to: "https://handlingtheloop.com/set/abc123?t=90",
+    });
+  });
+
+  it("never canonicalises the app's own hostname away", () => {
+    expect(routeForHost(at(`https://${APP}/@nina`), APP, SITE)).toEqual({ kind: "app" });
+  });
+
+  // A 301 on these would break open tabs, live sockets, and registered OAuth redirect URIs.
+  it("never canonicalises shared infrastructure", () => {
+    for (const p of ["/api/me", "/api/room", "/api/auth/google/callback", "/internal/notify", "/.well-known/x"]) {
+      expect(routeForHost(at(`https://www.handlingtheloop.com${p}`), APP, SITE)).toEqual({ kind: "app" });
+    }
+  });
+
+  it("leaves dev and preview hostnames alone — a bounced preview is a useless preview", () => {
+    for (const h of ["localhost:5173", "127.0.0.1:8787", "htl.someone.workers.dev"]) {
+      expect(routeForHost(at(`https://${h}/@nina`), undefined, SITE)).toEqual({ kind: "app" });
+    }
+  });
+
+  it("with www canonical AND a split, www still serves the landing", () => {
+    expect(routeForHost(at("https://www.handlingtheloop.com/"), APP, "www.handlingtheloop.com")).toEqual({
+      kind: "landing",
+    });
+  });
+});
+
 describe("isSharePath", () => {
   it("accepts the two share shapes, including a percent-encoded @", () => {
     expect(isSharePath("/@nina")).toBe(true);

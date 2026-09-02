@@ -347,7 +347,7 @@ export default {
 
     // Which of this Worker's two faces is being asked for? Unset APP_HOST → always the app, which
     // is the single-origin behaviour that has always run. See server/hosts.ts for the whole rule.
-    const route = routeForHost(url, env.APP_HOST);
+    const route = routeForHost(url, env.APP_HOST, env.SITE_HOST);
     if (route.kind === "redirect") return Response.redirect(route.to, 301);
 
     // Static SPA — but stamp every response with cross-origin-isolation headers so

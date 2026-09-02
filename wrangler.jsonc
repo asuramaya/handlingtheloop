@@ -21,8 +21,13 @@
   // isolation headers and the app's deep links live on APP_HOST, share links keep their card at
   // the marketing host and hand off. See server/hosts.ts for the whole decision, and its test for
   // the shape of it. Cutover checklist is in DEPLOY.md.
+  // SITE_HOST — the ONE marketing hostname. apex and www are both routed above, so without this
+  // both serve the same document and each claims itself as canonical in its own share card. Every
+  // other routed host 301s to this one (the API, the socket and /.well-known are exempt; dev and
+  // workers.dev previews are left alone). Independent of APP_HOST — this is worth setting today.
   "vars": {
-    "PUBLIC_ORIGIN": "https://handlingtheloop.com"
+    "PUBLIC_ORIGIN": "https://handlingtheloop.com",
+    "SITE_HOST": "handlingtheloop.com"
   },
   "assets": {
     "directory": "./dist",

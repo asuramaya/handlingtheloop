@@ -46,6 +46,23 @@ your own copy. Non-secret config lives in `wrangler.jsonc`'s `vars` block; that 
 | `INTERNAL_SECRET` | secret | nothing: the DO→Worker bridge falls back to `TOKEN_ENC_KEY`. **Set it anyway** — the fallback puts the at-rest encryption key in a request header on every @mention |
 | `PUBLIC_ORIGIN` | var | nothing visible: the room DO captures its bridge origin from the first connect URL and pins it forever. Set it to whichever origin serves `/api` |
 | `APP_HOST` | var | nothing: unset means one origin serves everything (see below) |
+| `SITE_HOST` | var | nothing visible, but apex and www both answer and each claims itself canonical in its own share card. **Worth setting today**, split or no split |
+
+### Root or www?
+
+**Root.** Cloudflare's CNAME flattening removes the only technical reason anyone ever preferred
+`www`, and here the share link *is* the product surface — `handlingtheloop.com/@nina` is the thing
+people paste into a chat. Four characters on every share is a real difference; nothing on the www
+side of the ledger costs four characters.
+
+What actually matters is picking **one** and 301ing the other, which is what `SITE_HOST` does. Both
+hostnames are routed, so without it both serve the same document and `ogMetaFor` stamps `og:url`
+from the request's own origin — a profile shared from `www` claims `www`, the same profile shared
+from the apex claims the apex, and the two split their own signal. Set `SITE_HOST` to
+`handlingtheloop.com` and www becomes a redirect.
+
+If you ever want www instead, set `SITE_HOST` to `www.handlingtheloop.com` — the redirect runs the
+other way with no code change.
 
 ```bash
 wrangler secret put INTERNAL_SECRET      # paste `openssl rand -base64 32`
@@ -74,6 +91,8 @@ third-party widgets, analytics. Two hostnames let each have the headers it needs
 
 **Cutover checklist:**
 
+0. Set `SITE_HOST` first, on its own, and let it settle. It is independent of the split and worth
+   doing regardless.
 1. Add the DNS record and a Worker route for `app.handlingtheloop.com` (custom domain).
 2. Register the new redirect URIs — `https://app.handlingtheloop.com/api/auth/{google,spotify,tidal}/callback`
    — with all three providers. No code change (they derive from the request origin), but TIDAL

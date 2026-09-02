@@ -105,9 +105,10 @@ describe("routeForHost — one canonical hostname", () => {
     }
   });
 
-  it("leaves dev and preview hostnames alone — a bounced preview is a useless preview", () => {
+  it("serves the APP on dev and preview hostnames, never a redirect and never the landing", () => {
     for (const h of ["localhost:5173", "127.0.0.1:8787", "htl.someone.workers.dev"]) {
       expect(routeForHost(at(`https://${h}/@nina`), undefined, SITE)).toEqual({ kind: "app" });
+      expect(routeForHost(at(`https://${h}/`), APP, SITE)).toEqual({ kind: "app" }); // ← not landing
     }
   });
 
@@ -115,6 +116,26 @@ describe("routeForHost — one canonical hostname", () => {
     expect(routeForHost(at("https://www.handlingtheloop.com/"), APP, "www.handlingtheloop.com")).toEqual({
       kind: "landing",
     });
+  });
+});
+
+// The inverted arrangement: the APP keeps the apex it has always had, the landing goes to www.
+// Same code, different values — and every migration cost of the other direction disappears.
+describe("routeForHost — app on the apex, landing on www", () => {
+  const APEX = "handlingtheloop.com";
+  const WWW = "www.handlingtheloop.com";
+  const r = (u: string) => routeForHost(at(u), APEX, WWW);
+
+  it("keeps the app, its deep links, its share links and its API on the apex", () => {
+    for (const p of ["/", "/@nina", "/set/abc123", "/settings", "/api/me", "/api/room"]) {
+      expect(r(`https://handlingtheloop.com${p}`)).toEqual({ kind: "app" });
+    }
+  });
+
+  it("serves the landing on www and hands app traffic back to the apex", () => {
+    expect(r("https://www.handlingtheloop.com/")).toEqual({ kind: "landing" });
+    expect(r("https://www.handlingtheloop.com/@nina")).toEqual({ kind: "share", to: "https://handlingtheloop.com/@nina" });
+    expect(r("https://www.handlingtheloop.com/settings")).toEqual({ kind: "redirect", to: "https://handlingtheloop.com/settings" });
   });
 });
 

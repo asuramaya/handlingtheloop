@@ -23,8 +23,10 @@
 // The decision lives here, pure, so it can be tested exhaustively instead of reasoned about
 // inside a fetch handler.
 
-/** A hostname nobody should be canonicalised away from: local dev, an IP, and the workers.dev
- *  preview domain — bouncing a preview deploy to production would make previews useless. */
+/** Local dev, an IP, and the workers.dev preview domain. These always get the APP: a preview
+ *  deploy exists to look at the thing you just built, so bouncing it to production would make it
+ *  useless — and serving it the marketing page instead would be worse, because it looks like it
+ *  worked. (The landing is still reachable there directly, at /landing.html.) */
 function isDevHost(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -84,15 +86,17 @@ export function routeForHost(url: URL, appHost?: string, siteHost?: string): Hos
   // OAuth redirect URIs already registered against whichever host is being redirected away.
   if (isSharedPath(url.pathname)) return { kind: "app" };
 
-  // The app's own hostname is never canonicalised anywhere.
+  // The app's own hostname is never canonicalised anywhere — nor is a dev/preview host, which is
+  // showing you the app by definition.
   if (app && host === app) return { kind: "app" };
+  if (isDevHost(host)) return { kind: "app" };
 
   // ★ ONE HOSTNAME FOR ONE PAGE. With apex and www both routed, both served the same document —
   // and the OG card builds og:url from the request's own origin, so a profile shared from www
   // claimed www as canonical while the same profile shared from the apex claimed the apex. Two
   // URLs for one thing, each undercutting the other. SITE_HOST names the one that counts;
   // everything else is a 301 to it, path and query intact.
-  if (site && host !== site && !isDevHost(host)) return { kind: "redirect", to: at(site) };
+  if (site && host !== site) return { kind: "redirect", to: at(site) };
 
   // No split configured: the site host serves the app, as it always has.
   if (!app) return { kind: "app" };

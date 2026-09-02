@@ -50,23 +50,27 @@ your own copy. Non-secret config lives in `wrangler.jsonc`'s `vars` block; that 
 
 ### Root or www?
 
-**Root.** Cloudflare's CNAME flattening removes the only technical reason anyone ever preferred
-`www`, and here the share link *is* the product surface — `handlingtheloop.com/@nina` is the thing
-people paste into a chat. Four characters on every share is a real difference; nothing on the www
-side of the ledger costs four characters.
+Two arrangements work, and they are the same code with different values. Choose by what the
+landing is FOR.
 
-What actually matters is picking **one** and 301ing the other, which is what `SITE_HOST` does. Both
-hostnames are routed, so without it both serve the same document and `ogMetaFor` stamps `og:url`
-from the request's own origin — a profile shared from `www` claims `www`, the same profile shared
-from the apex claims the apex, and the two split their own signal. Set `SITE_HOST` to
-`handlingtheloop.com` and www becomes a redirect.
+**A — app on the apex, landing on www** (`APP_HOST=handlingtheloop.com`,
+`SITE_HOST=www.handlingtheloop.com`). The app never moves, so **every migration cost is zero**: no
+re-sign-in, no stranded localStorage/OPFS, no new OAuth redirect URIs, no 301s on existing deep
+links, share links stay exactly where they are and stay short. The catch is that nobody types
+`www.` any more, so the landing gets only the traffic you deliberately point at it — ads, a footer
+link, a social bio. That is fine if the landing exists for campaigns and press. It is not fine if
+the landing was meant to be what a first-time visitor sees.
 
-If you ever want www instead, set `SITE_HOST` to `www.handlingtheloop.com` — the redirect runs the
-other way with no code change.
+**B — landing on the apex, app on a subdomain** (`APP_HOST=app.handlingtheloop.com`,
+`SITE_HOST=handlingtheloop.com`). A typed domain lands on the explainer. Pay the cutover below.
 
-```bash
-wrangler secret put INTERNAL_SECRET      # paste `openssl rand -base64 32`
-```
+**The recommendation is A**, for a specific reason: this app *is* its own pitch. It opens in a tab
+with nothing to install, and `handlingtheloop.com/@nina` is the front door people actually arrive
+through. The best landing page for a tool like this is the app's own signed-out state, and a
+separate marketing site is the secondary surface — which is exactly what www is good for.
+
+Either way the technical driver holds: the landing host gets no `COOP`/`COEP`, so it can carry
+YouTube embeds, widgets and analytics that the app's isolation headers make impossible.
 
 ## Splitting the landing site off the app (optional)
 
@@ -89,25 +93,25 @@ third-party widgets, analytics. Two hostnames let each have the headers it needs
   `/.well-known/*` keep answering on **both**, so a cutover doesn't break open tabs, live sockets,
   or the OAuth redirect URIs already registered against the old hostname.
 
-**Cutover checklist:**
+**Cutover checklist.** Arrangement A needs only steps 3–4, and none of the warnings after them —
+that is the whole argument for it. Arrangement B needs all of it.
 
-0. Set `SITE_HOST` first, on its own, and let it settle. It is independent of the split and worth
-   doing regardless.
-1. Add the DNS record and a Worker route for `app.handlingtheloop.com` (custom domain).
-2. Register the new redirect URIs — `https://app.handlingtheloop.com/api/auth/{google,spotify,tidal}/callback`
+1. Add the DNS record and a Worker route for `app.handlingtheloop.com` (custom domain). *(B only)*
+2. *(B only)* Register the new redirect URIs — `https://app.handlingtheloop.com/api/auth/{google,spotify,tidal}/callback`
    — with all three providers. No code change (they derive from the request origin), but TIDAL
    matches exactly: scheme, host and path.
-3. Set `"APP_HOST": "app.handlingtheloop.com"` and change `PUBLIC_ORIGIN` to the same origin.
+3. Set `APP_HOST` and `SITE_HOST` to the pair you chose, and point `PUBLIC_ORIGIN` at whichever
+   origin serves `/api` — for A that is the apex it already is.
 4. Deploy, then check: the apex serves the landing, `/@somehandle` still previews correctly when
    pasted into a chat, and a deep link like `/settings` bounces to the app.
-5. Announce the sign-in. **The session cookie is host-only** (`HttpOnly; Secure; SameSite=Lax`, no
+5. *(B only)* Announce the sign-in. **The session cookie is host-only** (`HttpOnly; Secure; SameSite=Lax`, no
    `Domain`), so everyone signs in once more on the new origin.
 
 **Do not** widen the cookie with `Domain=.handlingtheloop.com` to avoid that. It would also send
 the session to `admin.handlingtheloop.com` — a separate, Access-gated worker — and to every
 subdomain added afterwards.
 
-**Known one-time cost:** `localStorage` and OPFS are origin-scoped, so anything held only in the
+**Known one-time cost of B (A has none of this):** `localStorage` and OPFS are origin-scoped, so anything held only in the
 browser stays behind on the old origin — MIDI maps, keymaps, colour profiles, sampler regions, pad
 modes, preset banks, and the cached stem PCM. Signed-in users re-sync from D1 and barely notice;
 anonymous users start fresh. There is no clean cross-origin handoff under COOP.

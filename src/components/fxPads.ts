@@ -166,11 +166,20 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
 // at", so a recorded or relayed fxPad gesture replayed against a different focus fires a
 // DIFFERENT effect. The wire form carries the chain with it — "<chainId>:<slot>" — and the
 // receiver aims there for the duration of the gesture, then puts its focus back.
-// ⚠ Chain ids are per deck and per machine, and chains do NOT sync yet: across devices the id
-// will usually be unknown, and this falls back to the receiver's own focus. That is the same
-// divergence as before, no worse — but it is not fixed until chains themselves sync.
+// ★ AND THE CHAIN TRAVELS BY NAME, NOT BY ID. Chain ids are per-deck sequence numbers ("c3");
+// they do not survive a reload, let alone a second machine, so an id on the wire was always
+// unknown on the far side and always fell back to the receiver's focus — firing the wrong
+// effect. Chains DO sync now (DeckState.fxChains), and applyFxChainSnapshot rebuilds them by
+// NAME for exactly this reason: "what a DJ recognises is the name". So the wire carries the
+// name. The slot is still parsed off the LAST colon, so a name may contain one.
 export function fxPadArg(deck: Deck, slot: number): string {
-  return `${deck.fxFocus}:${slot}`;
+  const c = deck.fxChain(deck.fxFocus);
+  return `${!c || c.master ? "master" : c.name}:${slot}`;
+}
+/** Resolve a wire chain ref against this deck: master, then a live id (an older recording, or
+ *  our own echo), then the name — which is what a synced chain actually matches on. */
+export function chainRef(deck: Deck, ref: string) {
+  return deck.fxChain(ref) ?? deck.fxChainList.find((c) => !c.master && c.name === ref);
 }
 export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): void {
   const raw = String(arg);
@@ -178,8 +187,8 @@ export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): voi
   const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
   const chain = cut >= 0 ? raw.slice(0, cut) : "";
   const back = deck.fxFocus;
-  const known = chain && deck.fxChain(chain);
-  if (known) deck.setFxFocus(chain);
+  const known = chain ? chainRef(deck, chain) : undefined;
+  if (known) deck.setFxFocus(known.id);
   fireFxPad(deck, slot, on);
   if (known) deck.setFxFocus(back);
 }

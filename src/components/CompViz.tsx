@@ -63,18 +63,54 @@ function padOf(w: number, h: number) {
   return { l: narrow ? 26 : 32, r: 6, t: 8, b: narrow ? 9 : 13 };
 }
 
-/** ★ WHERE MAKEUP LIVES ON THE PLOT: the curve's own output end, at full-scale input.
- *  The curve is drawn WITH makeup folded in (outputDb), so that point already moves up and down
- *  by exactly the makeup — it was a control the panel was drawing and not letting you touch.
- *  Pulled slightly inside the right edge so the handle is never half off-canvas. */
-function makeupHandle(w: number, h: number, cp: { thresh: number; ratio: number; knee: number; makeup: number; mix: number }) {
+/** ★ ONE PLACE THAT KNOWS WHERE THE HANDLES ARE — drawing, hit-testing and hover all read this.
+ *  They used to each recompute it, which is exactly how they drifted apart: the labels were given
+ *  a separation rule and the hit targets were not.
+ *
+ *  It also enforces the two things the raw maths cannot:
+ *
+ *  ① THE KNEE IS PARKED OFF THE BEND. The knee sits at threshold + knee/2, so at knee = 0 it is
+ *     EXACTLY on the bend handle — under it, invisible, and (nearest-wins being a tie it won) it
+ *     stole every press meant for THRESH. So a knee of zero could never be widened and a threshold
+ *     could never be grabbed: both controls lost, at the one setting a compressor most often has.
+ *     It is held at least KNEE_MIN_SEP px along the curve instead. That makes the DOT a handle
+ *     rather than a readout, which is why its drag became relative — see applyDrag.
+ *  ② IT STAYS CLEAR OF MAKEUP. Push the threshold up near 0 dB and the knee runs into the curve's
+ *     output end, where the makeup ring lives.
+ *
+ *  Makeup sits just inside the right edge, on the curve, because the curve is drawn WITH makeup
+ *  folded in (outputDb) — the height of that end IS the makeup. */
+const KNEE_MIN_SEP = 16;
+
+interface Handles {
+  bend: { x: number; y: number };
+  /** `shown` false = there is genuinely no room for it between the bend and the plot's edge
+   *  (threshold pushed to the top of the range). It is then neither DRAWN nor HIT — a handle you
+   *  cannot see must not silently eat presses, and the bend is right there to drag back with. */
+  knee: { x: number; y: number; shown: boolean };
+  makeup: { x: number; y: number };
+}
+
+function handleGeometry(w: number, h: number, cp: CurveParams): Handles {
   const PAD = padOf(w, h);
   const plotBottom = h - PAD.b;
-  const inDb = DB_MAX - 1.5;
-  const x = PAD.l + ((inDb - DB_MIN) / (DB_MAX - DB_MIN)) * (w - PAD.l - PAD.r);
-  const outDb = clamp(outputDb(inDb, cp as CurveParams), DB_MIN, DB_MAX);
-  const y = PAD.t + ((DB_MAX - outDb) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
-  return { x, y };
+  const span = w - PAD.l - PAD.r;
+  const dbToX = (db: number) => PAD.l + ((db - DB_MIN) / (DB_MAX - DB_MIN)) * span;
+  const xToDb = (px: number) => DB_MIN + ((px - PAD.l) / span) * (DB_MAX - DB_MIN);
+  const yOf = (db: number) => PAD.t + ((DB_MAX - clamp(outputDb(db, cp), DB_MIN, DB_MAX)) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
+
+  const bendX = dbToX(cp.thresh);
+  const makeupX = dbToX(DB_MAX - 1.5);
+  const plotRight = PAD.l + span;
+  // Between its own bend and the plot's edge, and always ON the curve wherever it lands. Push the
+  // threshold to the top of its range and that gap closes completely — the knee lives at a HIGHER
+  // input dB than the threshold by definition, so there is nowhere left for it to be.
+  const kneeX = clamp(dbToX(cp.thresh + cp.knee / 2), bendX + KNEE_MIN_SEP, plotRight - 6);
+  return {
+    bend: { x: bendX, y: yOf(cp.thresh) },
+    knee: { x: kneeX, y: yOf(xToDb(kneeX)), shown: kneeX - bendX >= KNEE_MIN_SEP - 1 },
+    makeup: { x: makeupX, y: yOf(DB_MAX - 1.5) },
+  };
 }
 
 const RATIO_DRAG_PX = 160;
@@ -148,7 +184,7 @@ function transfer(inDb: number, thresh: number, ratio: number, knee: number): nu
   return inDb - (slope * (inDb - kneeLo) * t) / 2;
 }
 
-type DragState = { kind: "bend"; startY: number; startRatio: number } | { kind: "knee" } | { kind: "makeup"; startY: number; startMakeup: number };
+type DragState = { kind: "bend"; startY: number; startRatio: number } | { kind: "knee"; startX: number; startKnee: number } | { kind: "makeup"; startY: number; startMakeup: number };
 
 export function CompViz({ deck, slot, accent, set, setHot, left, children }: CompVizProps) {
   const mainRef = useRef<HTMLCanvasElement>(null);
@@ -363,27 +399,43 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "center";
 
+      const H = handleGeometry(w, h, cp);
+      const kneeOn = hover.current === "knee" || drag.current?.kind === "knee";
+      const bendOn = hover.current === "bend" || drag.current?.kind === "bend";
+      const mkOn = hover.current === "makeup" || drag.current?.kind === "makeup";
+
+      // ★ A LABEL NEEDS ROOM, OR IT NEEDS A REASON. Naming every handle permanently was right
+      // while they were far apart and became unreadable the moment they were not: push the
+      // threshold to either extreme and KNEE, THRESH and the ratio caption pile into the same
+      // corner as a smear of letters. "Opposite sides" only separates them while the curve is
+      // shallow — where it turns steep, above and below are the same place.
+      // So: when the handles are within CROWDED px, only the one you are TOUCHING is named. The
+      // rest keep their dots (a handle must never vanish) and get their names back the moment you
+      // are near them, which is when a name is worth anything anyway.
+      const CROWDED = 30;
+      const crowded =
+        (H.knee.shown && Math.hypot(H.knee.x - H.bend.x, H.knee.y - H.bend.y) < CROWDED) ||
+        Math.hypot(H.makeup.x - H.bend.x, H.makeup.y - H.bend.y) < CROWDED;
+      const nameIt = (on: boolean) => !crowded || on;
+
       // knee handle — LIMIT's knee is hardwired (~1dB) and not a user control, so there's
       // nothing here to grab in that mode.
-      if (!isLimit) {
-        const kneeDb = thresh + knee / 2;
-        const kp = { x: dbToX(kneeDb), y: dbToY(clamp(outputDb(kneeDb, cp), DB_MIN, DB_MAX)) };
-        const on = hover.current === "knee" || drag.current?.kind === "knee";
+      if (!isLimit && H.knee.shown) {
+        const kp = H.knee;
         ctx.beginPath();
-        ctx.arc(kp.x, kp.y, on ? 5.5 : 4, 0, Math.PI * 2);
-        ctx.fillStyle = on ? "#fff" : "rgba(255,255,255,0.5)";
+        ctx.arc(kp.x, kp.y, kneeOn ? 5.5 : 4, 0, Math.PI * 2);
+        ctx.fillStyle = kneeOn ? "#fff" : "rgba(255,255,255,0.5)";
         ctx.fill();
-        ctx.fillStyle = `rgba(255,255,255,${on ? 0.85 : 0.32})`;
-        // KNEE goes ABOVE its dot and THRESH BELOW its ring — deliberately opposite sides. The
-        // two handles sit within a few dB of each other by definition (the knee IS the threshold
-        // plus half the knee width), so on a narrow panel same-side labels landed on top of one
-        // another every time. Opposite sides makes that collision structurally impossible.
-        ctx.fillText("KNEE", clamp(kp.x, PAD.l + 14, w - PAD.r - 14), labelY(kp.y, on ? 5.5 : 4, PAD.t, plotBottom, "above"));
+        if (nameIt(kneeOn)) {
+          ctx.fillStyle = `rgba(255,255,255,${kneeOn ? 0.85 : 0.32})`;
+          // KNEE above its dot, THRESH below its ring — still opposite sides, which is what keeps
+          // them apart in the ordinary case the crowding rule never has to fire for.
+          ctx.fillText("KNEE", clamp(kp.x, PAD.l + 14, w - PAD.r - 14), labelY(kp.y, kneeOn ? 5.5 : 4, PAD.t, plotBottom, "above"));
+        }
       }
 
       // bend handle — threshold + ratio, or (in LIMIT) the ceiling alone
-      const bendOn = hover.current === "bend" || drag.current?.kind === "bend";
-      const bp = { x: dbToX(thresh), y: dbToY(clamp(outputDb(thresh, cp), DB_MIN, DB_MAX)) };
+      const bp = H.bend;
       ctx.beginPath();
       ctx.arc(bp.x, bp.y, bendOn ? 6.5 : 5.5, 0, Math.PI * 2);
       ctx.fillStyle = accent;
@@ -393,17 +445,17 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       ctx.strokeStyle = accent;
       ctx.lineWidth = bendOn ? 1.6 : 1;
       ctx.stroke();
-      ctx.fillStyle = bendOn ? "#fff" : `color-mix(in srgb, ${accent} 70%, transparent)`;
-      ctx.fillText(isLimit ? "CEILING" : "THRESH", clamp(bp.x, PAD.l + 18, w - PAD.r - 18), labelY(bp.y, bendOn ? 10 : 8.5, PAD.t, plotBottom, "below"));
+      if (nameIt(bendOn)) {
+        ctx.fillStyle = bendOn ? "#fff" : `color-mix(in srgb, ${accent} 70%, transparent)`;
+        ctx.fillText(isLimit ? "CEILING" : "THRESH", clamp(bp.x, PAD.l + 18, w - PAD.r - 18), labelY(bp.y, bendOn ? 10 : 8.5, PAD.t, plotBottom, "below"));
+      }
 
-      // ── MAKEUP, on the end of the curve it moves. It gets the quietest treatment of the three
-      // handles on purpose: THRESH and KNEE are shaping gestures you hunt for mid-mix, makeup is
-      // a level you set once and leave. A hollow ring rather than a filled dot, and its label only
-      // while you are near it — the plot has to stay readable as an instrument, not become a
-      // control panel with three shouting dots.
+      // ── MAKEUP, on the end of the curve it moves. The quietest of the three on purpose: THRESH
+      // and KNEE are shaping gestures you hunt for mid-mix, makeup is a level you set once. A
+      // hollow ring rather than a filled dot, and its name only while you are near it — which is
+      // the rule the other two now borrow when they get crowded.
       {
-        const mkOn = hover.current === "makeup" || drag.current?.kind === "makeup";
-        const mp = makeupHandle(w, h, cp);
+        const mp = H.makeup;
         ctx.beginPath();
         ctx.arc(mp.x, mp.y, mkOn ? 6 : 4.5, 0, Math.PI * 2);
         ctx.strokeStyle = mkOn ? "#fff" : `color-mix(in srgb, ${accent} 55%, transparent)`;
@@ -515,38 +567,23 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     const x = e.clientX - r.left,
       y = e.clientY - r.top;
 
-    const PAD = padOf(w, h);
-    const plotBottom = h - PAD.b;
-    const dbToX = (db: number) => PAD.l + ((db - DB_MIN) / (DB_MAX - DB_MIN)) * (w - PAD.l - PAD.r);
-    const dbToY = (db: number) => PAD.t + ((DB_MAX - db) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
     const isLimit = Math.round(dev.getParam("mode")) === 3;
     const cp = curveParamsOf(dev);
-    if (!isLimit) {
-      // ★ NEAREST HANDLE WINS — it cannot be "knee first, within 16px".
-      //
-      // The knee IS the threshold plus half the knee width, so the two handles sit within a few dB
-      // of each other BY DEFINITION. The labels were already split above/below to stop them
-      // colliding; the hit targets were not. Narrow the panel and the dB-per-pixel shrinks until
-      // both handles map to almost the same x — at which point a fixed 16px knee circle tested
-      // first swallows the threshold handle whole, and THRESH becomes unclickable exactly when the
-      // panel is smallest. (Reported on a phone: "the threshold button right next to the knee
-      // overlaps and is near impossible to click.")
-      //
-      // Comparing distances instead means the closer handle always answers. Two handles on top of
-      // each other still split the space between them rather than one eating the other, so
-      // whichever side of the midpoint you touch is the one you get.
-      const kneeDb = cp.thresh + cp.knee / 2;
-      const kp = { x: dbToX(kneeDb), y: dbToY(clamp(outputDb(kneeDb, cp), DB_MIN, DB_MAX)) };
-      const bp = { x: dbToX(cp.thresh), y: dbToY(clamp(outputDb(cp.thresh, cp), DB_MIN, DB_MAX)) };
-      const dKnee = Math.hypot(x - kp.x, y - kp.y);
-      const dBend = Math.hypot(x - bp.x, y - bp.y);
-      if (dKnee < 16 && dKnee <= dBend) return { kind: "knee" };
+    const H = handleGeometry(w, h, cp);
+    // ★ NEAREST HANDLE WINS, and none of them can hide under another — handleGeometry holds them
+    // apart (see KNEE_MIN_SEP). Before that pair of rules the knee sat exactly on the bend at
+    // knee = 0 and won every tie, so THRESH could not be grabbed at all; and on a narrow panel a
+    // fixed 16px knee circle tested FIRST swallowed the threshold handle whole. Comparing
+    // distances means the closer one always answers, whichever side of the midpoint you touch.
+    const dKnee = isLimit || !H.knee.shown ? Infinity : Math.hypot(x - H.knee.x, y - H.knee.y);
+    const dBend = Math.hypot(x - H.bend.x, y - H.bend.y);
+    const dMk = Math.hypot(x - H.makeup.x, y - H.makeup.y);
+    if (dKnee < 16 && dKnee <= dBend && dKnee <= dMk) {
+      // RELATIVE, like ratio: the dot is parked off the bend when the knee is narrow, so its
+      // position is a handle and not a readout — only the MOVEMENT can be trusted to mean dB.
+      return { kind: "knee", startX: x, startKnee: dev.getParam("knee") };
     }
-    // ★ MAKEUP IS THE CURVE'S OUTPUT END. The plot already draws the curve WITH makeup folded in
-    // (see outputDb), so the height of its right-hand end IS the makeup, on screen, always. It
-    // needed no new representation — only a handle, on the thing it was already moving.
-    const mp = makeupHandle(w, h, cp);
-    if (Math.hypot(x - mp.x, y - mp.y) < 18) {
+    if (dMk < 18 && dMk <= dBend) {
       return { kind: "makeup", startY: e.clientY, startMakeup: dev.getParam("makeup") };
     }
     return { kind: "bend", startY: e.clientY, startRatio: dev.getParam("ratio") }; // no dead zone
@@ -581,8 +618,10 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       const dy = d.startY - e.clientY;
       set("ratio", clamp(d.startRatio + (dy / RATIO_DRAG_PX) * (RATIO_MAX - RATIO_MIN), RATIO_MIN, RATIO_MAX));
     } else if (d.kind === "knee" && !isLimit) {
-      const thresh = dev.getParam("threshold");
-      set("knee", clamp((xToDb(x) - thresh) * 2, 0, 24));
+      // dB per pixel across the plot, doubled because the handle sits at HALF the knee width.
+      const PAD2 = padOf(w, h);
+      const dbPerPx = (DB_MAX - DB_MIN) / Math.max(1, w - PAD2.l - PAD2.r);
+      set("knee", clamp(d.startKnee + (x - d.startX) * dbPerPx * 2, 0, 24));
     } else if (d.kind === "makeup") {
       // Vertical, in the plot's OWN dB — drag the end of the curve to where you want it and the
       // number follows, rather than the number moving and the curve following it.
@@ -605,19 +644,17 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       h = r.height;
     const x = e.clientX - r.left,
       y = e.clientY - r.top;
-    const PAD = padOf(w, h);
-    const plotBottom = h - PAD.b;
-    const dbToX = (db: number) => PAD.l + ((db - DB_MIN) / (DB_MAX - DB_MIN)) * (w - PAD.l - PAD.r);
-    const dbToY = (db: number) => PAD.t + ((DB_MAX - db) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
     const isLimit = Math.round(dev.getParam("mode")) === 3;
     const cp = curveParamsOf(dev);
-    if (!isLimit) {
-      const kneeDb = cp.thresh + cp.knee / 2;
-      if (Math.hypot(x - dbToX(kneeDb), y - dbToY(clamp(outputDb(kneeDb, cp), DB_MIN, DB_MAX))) < 16) return "knee";
-    }
-    const mp = makeupHandle(w, h, cp);
-    if (Math.hypot(x - mp.x, y - mp.y) < 18) return "makeup";
-    return Math.hypot(x - dbToX(cp.thresh), y - dbToY(clamp(outputDb(cp.thresh, cp), DB_MIN, DB_MAX))) < 26 ? "bend" : null;
+    const H = handleGeometry(w, h, cp);
+    // Same order and the same geometry as hitTest — the hover ring must light on whatever a press
+    // would actually grab, or the affordance is a lie.
+    const dKnee = isLimit || !H.knee.shown ? Infinity : Math.hypot(x - H.knee.x, y - H.knee.y);
+    const dBend = Math.hypot(x - H.bend.x, y - H.bend.y);
+    const dMk = Math.hypot(x - H.makeup.x, y - H.makeup.y);
+    if (dKnee < 16 && dKnee <= dBend && dKnee <= dMk) return "knee";
+    if (dMk < 18 && dMk <= dBend) return "makeup";
+    return dBend < 26 ? "bend" : null;
   };
 
   // The middle readout zone, written every frame of a gesture. HELD → the live value; HOVERED →

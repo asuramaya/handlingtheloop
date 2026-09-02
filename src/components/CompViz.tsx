@@ -63,6 +63,20 @@ function padOf(w: number, h: number) {
   return { l: narrow ? 26 : 32, r: 6, t: 8, b: narrow ? 9 : 13 };
 }
 
+/** ★ WHERE MAKEUP LIVES ON THE PLOT: the curve's own output end, at full-scale input.
+ *  The curve is drawn WITH makeup folded in (outputDb), so that point already moves up and down
+ *  by exactly the makeup — it was a control the panel was drawing and not letting you touch.
+ *  Pulled slightly inside the right edge so the handle is never half off-canvas. */
+function makeupHandle(w: number, h: number, cp: { thresh: number; ratio: number; knee: number; makeup: number; mix: number }) {
+  const PAD = padOf(w, h);
+  const plotBottom = h - PAD.b;
+  const inDb = DB_MAX - 1.5;
+  const x = PAD.l + ((inDb - DB_MIN) / (DB_MAX - DB_MIN)) * (w - PAD.l - PAD.r);
+  const outDb = clamp(outputDb(inDb, cp as CurveParams), DB_MIN, DB_MAX);
+  const y = PAD.t + ((DB_MAX - outDb) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
+  return { x, y };
+}
+
 const RATIO_DRAG_PX = 160;
 const RATIO_MIN = 1,
   RATIO_MAX = 20;
@@ -134,12 +148,12 @@ function transfer(inDb: number, thresh: number, ratio: number, knee: number): nu
   return inDb - (slope * (inDb - kneeLo) * t) / 2;
 }
 
-type DragState = { kind: "bend"; startY: number; startRatio: number } | { kind: "knee" };
+type DragState = { kind: "bend"; startY: number; startRatio: number } | { kind: "knee" } | { kind: "makeup"; startY: number; startMakeup: number };
 
 export function CompViz({ deck, slot, accent, set, setHot, left, children }: CompVizProps) {
   const mainRef = useRef<HTMLCanvasElement>(null);
   const drag = useRef<DragState | null>(null);
-  const hover = useRef<"bend" | "knee" | null>(null);
+  const hover = useRef<"bend" | "knee" | "makeup" | null>(null);
 
   useEffect(() => {
     const canvas = mainRef.current;
@@ -382,6 +396,27 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       ctx.fillStyle = bendOn ? "#fff" : `color-mix(in srgb, ${accent} 70%, transparent)`;
       ctx.fillText(isLimit ? "CEILING" : "THRESH", clamp(bp.x, PAD.l + 18, w - PAD.r - 18), labelY(bp.y, bendOn ? 10 : 8.5, PAD.t, plotBottom, "below"));
 
+      // ── MAKEUP, on the end of the curve it moves. It gets the quietest treatment of the three
+      // handles on purpose: THRESH and KNEE are shaping gestures you hunt for mid-mix, makeup is
+      // a level you set once and leave. A hollow ring rather than a filled dot, and its label only
+      // while you are near it — the plot has to stay readable as an instrument, not become a
+      // control panel with three shouting dots.
+      {
+        const mkOn = hover.current === "makeup" || drag.current?.kind === "makeup";
+        const mp = makeupHandle(w, h, cp);
+        ctx.beginPath();
+        ctx.arc(mp.x, mp.y, mkOn ? 6 : 4.5, 0, Math.PI * 2);
+        ctx.strokeStyle = mkOn ? "#fff" : `color-mix(in srgb, ${accent} 55%, transparent)`;
+        ctx.lineWidth = mkOn ? 1.8 : 1.2;
+        ctx.stroke();
+        if (mkOn) {
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.textAlign = "right";
+          ctx.fillText("MAKEUP", clamp(mp.x - 9, PAD.l + 26, w - PAD.r), labelY(mp.y, 6, PAD.t, plotBottom, "above"));
+          ctx.textAlign = "center";
+        }
+      }
+
       // ── THE RATIO, WRITTEN ON THE THING RATIO ACTUALLY IS: the slope of the segment above the
       // knee. A number floating anywhere else in the panel is a number; sitting on the flattened
       // limb, at its own angle, it says WHICH LINE it governs — and the vertical drag that sets
@@ -391,12 +426,15 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
         by = dbToY(clamp(outputDb(DB_MAX, cp), DB_MIN, DB_MAX));
       const ax = dbToX(a),
         ay = dbToY(clamp(outputDb(a, cp), DB_MIN, DB_MAX));
-      // Sat at 65% ALONG the limb, not its midpoint — the midpoint of a short limb lands right on
-      // the knee handle and its label. Skipped outright when the limb is too short to hold the
-      // caption without covering the thing it describes.
+      // Sat at 55% ALONG the limb. Not the midpoint — that lands on the knee handle and its label
+      // when the limb is short. Not further out either: the limb's END now carries the MAKEUP
+      // ring, and the same law that separated THRESH from KNEE applies here — two things that
+      // ride the same line have to be given room on it deliberately, or they collide at exactly
+      // the width where there is least of it. Skipped outright when the limb is too short to hold
+      // the caption without covering the thing it describes.
       if (!isLimit && Math.hypot(bx - ax, by - ay) > 64) {
         ctx.save();
-        ctx.translate(ax + (bx - ax) * 0.65, ay + (by - ay) * 0.65);
+        ctx.translate(ax + (bx - ax) * 0.55, ay + (by - ay) * 0.55);
         ctx.rotate(Math.atan2(by - ay, bx - ax));
         ctx.fillStyle = `color-mix(in srgb, ${accent} 85%, transparent)`;
         ctx.font = "800 8px ui-monospace, monospace";
@@ -504,6 +542,13 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       const dBend = Math.hypot(x - bp.x, y - bp.y);
       if (dKnee < 16 && dKnee <= dBend) return { kind: "knee" };
     }
+    // ★ MAKEUP IS THE CURVE'S OUTPUT END. The plot already draws the curve WITH makeup folded in
+    // (see outputDb), so the height of its right-hand end IS the makeup, on screen, always. It
+    // needed no new representation — only a handle, on the thing it was already moving.
+    const mp = makeupHandle(w, h, cp);
+    if (Math.hypot(x - mp.x, y - mp.y) < 18) {
+      return { kind: "makeup", startY: e.clientY, startMakeup: dev.getParam("makeup") };
+    }
     return { kind: "bend", startY: e.clientY, startRatio: dev.getParam("ratio") }; // no dead zone
   };
 
@@ -538,6 +583,12 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     } else if (d.kind === "knee" && !isLimit) {
       const thresh = dev.getParam("threshold");
       set("knee", clamp((xToDb(x) - thresh) * 2, 0, 24));
+    } else if (d.kind === "makeup") {
+      // Vertical, in the plot's OWN dB — drag the end of the curve to where you want it and the
+      // number follows, rather than the number moving and the curve following it.
+      const PAD2 = padOf(w, h);
+      const dbPerPx = (DB_MAX - DB_MIN) / Math.max(1, h - PAD2.t - PAD2.b);
+      set("makeup", clamp(d.startMakeup + (d.startY - e.clientY) * dbPerPx, -12, 24));
     }
   };
 
@@ -545,7 +596,7 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
   // Deliberately NOT hitTest(): that one has no dead zone (a press anywhere grabs the bend, which
   // is right for a gesture and wrong for a label — "you are hovering THRESH" 400px from it is a
   // lie).
-  const near = (e: React.PointerEvent): "bend" | "knee" | null => {
+  const near = (e: React.PointerEvent): "bend" | "knee" | "makeup" | null => {
     const canvas = mainRef.current;
     const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
     if (!canvas || !dev) return null;
@@ -564,6 +615,8 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       const kneeDb = cp.thresh + cp.knee / 2;
       if (Math.hypot(x - dbToX(kneeDb), y - dbToY(clamp(outputDb(kneeDb, cp), DB_MIN, DB_MAX))) < 16) return "knee";
     }
+    const mp = makeupHandle(w, h, cp);
+    if (Math.hypot(x - mp.x, y - mp.y) < 18) return "makeup";
     return Math.hypot(x - dbToX(cp.thresh), y - dbToY(clamp(outputDb(cp.thresh, cp), DB_MIN, DB_MAX))) < 26 ? "bend" : null;
   };
 
@@ -579,10 +632,15 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
       setHot(isLimit ? `CEILING ${dev.getParam("ceiling").toFixed(1)} dB` : `THRESH ${dev.getParam("threshold").toFixed(1)} dB  ·  RATIO ${dev.getParam("ratio").toFixed(1)}:1`);
     } else if (d?.kind === "knee") {
       setHot(`KNEE ${dev.getParam("knee").toFixed(1)} dB`);
+    } else if (d?.kind === "makeup") {
+      const m = dev.getParam("makeup");
+      setHot(`MAKEUP ${m > 0 ? "+" : ""}${m.toFixed(1)} dB`);
     } else if (hover.current === "bend") {
       setHot(isLimit ? "CEILING  ⇄  drag" : "THRESH ⇄   ·   RATIO ⇅");
     } else if (hover.current === "knee") {
       setHot("KNEE  ⇄  soften the corner");
+    } else if (hover.current === "makeup") {
+      setHot("MAKEUP  ⇅  lift the whole output");
     } else {
       setHot(null);
     }

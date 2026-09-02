@@ -2,7 +2,6 @@ import { useCallback, useRef } from "react";
 import type { Deck, CompFx } from "@htl/audio";
 import { useEmit, useRefresh } from "../App/spine";
 import { COMP_MODES } from "@htl/audio";
-import { ValueCell } from "./ValueCell";
 import { CompViz } from "./CompViz";
 import { CompArPad } from "./CompArPad";
 import { CompHead } from "./CompHead";
@@ -79,6 +78,9 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const mode = Math.round(get("mode"));
   const auto = get("auto") >= 0.5;
   const ext = get("scExt") >= 0.5;
+  // Snapped to the nearest stop so a value set elsewhere (a preset, MIDI, a session) still lights
+  // the right pip rather than falling off the cycle.
+  const look = LOOK_STOPS.reduce((best, v) => (Math.abs(v - get("lookahead")) < Math.abs(best - get("lookahead")) ? v : best), LOOK_STOPS[0]);
 
   return (
     <div className="fx-panel sat-panel comp-panel" style={{ ["--accent" as string]: accent }}>
@@ -86,16 +88,14 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
           own head geometry (ribbon at y = READOUT_H, drawn at ribbonH − 4, hit at ribbonH). */}
       <CompHead deck={deck} slot={slot} accent={accent} set={live} hot={hot} setHot={setHot} />
 
-      {/* THRESH/RATIO/KNEE live on the curve — drag the bend, drag the knee. SC-HP/SC-LP is the
-          full-width ribbon in the head above. ATTACK/RELEASE get their own small pad to the LEFT.
-          MAKEUP/LOOK are the two cells left with nothing to be dragged ON, so they keep a narrow
-          side column instead of a whole row below. */}
-      <CompViz deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} left={<CompArPad deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} />}>
-        <div className="comp-side-cells">
-          <ValueCell label="MAKEUP" value={get("makeup")} min={-12} max={24} step={0.5} reset={0} format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`} onChange={(v) => setParam("makeup", v)} />
-          <ValueCell label="LOOK" value={get("lookahead")} min={0} max={10} step={0.1} reset={0} format={(v) => (v <= 0 ? "OFF" : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("lookahead", v)} />
-        </div>
-      </CompViz>
+      {/* THRESH/RATIO/KNEE/MAKEUP all live on the curve — drag the bend, the knee, the output end.
+          SC-HP/SC-LP is the full-width ribbon in the head above. ATTACK/RELEASE get their own pad
+          to the LEFT. Nothing keeps a side column any more: MAKEUP turned out to be something the
+          plot was already DRAWING (the curve is plotted with makeup folded in, so the height of
+          its output end IS the makeup) and only needed a handle, and LOOK — a set-once value, not
+          a mid-mix gesture — went to the foot with the other set-once controls. That gives the
+          curve the whole width the column used to hold, which is what it was short of on a phone. */}
+      <CompViz deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} left={<CompArPad deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} />} />
 
       {/* The foot strip — same position and language as every other device. MODE is the
           instrument (each mode re-times the ballistics underneath), AUTO is a real toggle, and
@@ -127,10 +127,31 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
         <button className={ext ? "active" : ""} onClick={() => setParam("scExt", ext ? 0 : 1)} title={ext ? "Detector listens to this channel — tap for the other deck" : `Detector listens to deck ${id === "A" ? "B" : "A"} — the other track ducks this one`}>
           SC: {ext ? (id === "A" ? "B" : "A") : "INT"}
         </button>
+        <span className="fx-sep" />
+        {/* LOOKAHEAD, cycled rather than dialled. It is a set-once value — you pick whether the
+            detector sees the peak coming and by how much, and then you leave it — so it belongs
+            with MODE and AUTO in the foot, in their language, not in a knob column beside the
+            instrument. Four stops cover its useful range; the pips say where you are, exactly as
+            MODE's do. */}
+        <button
+          className={`cyc ${look > 0 ? "active" : ""}`}
+          onClick={() => setParam("lookahead", LOOK_STOPS[(LOOK_STOPS.indexOf(look) + 1) % LOOK_STOPS.length] ?? 0)}
+          title="Lookahead — the detector sees the peak before it lands. Costs that much latency."
+        >
+          {look > 0 ? `LOOK ${look}ms` : "LOOK OFF"}
+          <span className="cyc-pips" aria-hidden="true">
+            {LOOK_STOPS.map((v) => (
+              <i key={v} className={v === look ? "on" : ""} />
+            ))}
+          </span>
+        </button>
       </div>
     </div>
   );
 }
+
+/** Lookahead's stops, in ms. 0 = off; 10 is the param's own ceiling. */
+const LOOK_STOPS = [0, 1, 3, 10];
 
 const MODE_HINT = [
   "GLUE — VCA buss compressor. Slow-ish attack lets transients through, auto-release holds the mix together.",

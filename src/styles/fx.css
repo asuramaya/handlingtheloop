@@ -2885,23 +2885,6 @@ button.room-tog:hover {
   touch-action: none;
   cursor: crosshair;
 }
-/* The side cells beside CompViz's canvas (MAKEUP/LOOK — the two params with nothing left to be
-   dragged ON) — narrower than a full .fx-curve-width column, since these are two thin pills, not a
-   preview canvas that needs room to be legible. No border/background of their own: each ValueCell
-   already draws its own box, and stacking those inside another bordered box would double the
-   frame. Cells keep their natural height and space out evenly rather than stretching to fill the
-   column — a ValueCell stretched tall to match the curve's height would just be a lot of dead
-   padding around a small centred number. */
-.comp-side-cells {
-  flex: 0 0 clamp(44px, 15%, 66px);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 4px;
-  min-height: 0;
-  min-width: 0;
-}
-
 /* --- the device foot: RESET · the universal wet/dry · COPY --------------------------------
    Every device wears the same foot. It replaced a row of three equal full-width bars
    (BYPASS / RESET / COPY) that gave identical weight to a control you slam mid-mix, one you
@@ -3230,9 +3213,6 @@ body:not(.no-glow) .fx-mix-fill::after {
     height: auto;
     aspect-ratio: 1 / 1; /* square by construction, at whatever width the clamp lands on */
     align-self: center;
-  }
-  .comp-side-cells {
-    flex: 0 0 clamp(44px, 14%, 58px);
   }
 }
 

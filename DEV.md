@@ -117,6 +117,12 @@ devices write in the wrong sequence, a push is refused and nobody says so. Fakin
 the *server* rather than the client is what keeps it honest: the app runs its real
 `fetchMe`, reconcile, debounce and push.
 
+**Touch is driven too**, via CDP `Input.dispatchTouchEvent` — Playwright's mouse
+emits `pointerType: "mouse"`, which arms a drag on the first pixel and skips the
+gesture race entirely. The race that matters: a drag arms after 180 ms of
+stillness, the long-press row menu fires at 460 ms, and whichever happens first
+cancels the other.
+
 ⚠ **A green harness on a synthetic path is not evidence about a real one.**
 Playwright's mouse teleports — one event at the destination, no intermediate
 elements, no unmounts under a moving pointer. When a bug report survives a passing

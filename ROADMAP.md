@@ -119,9 +119,10 @@ stems, FX, key detection, WSOLA time-stretch, recording. What is actually left:
   have now been MEASURED (the EQ bank's level spread is in docs/fx-rack.md and no
   preset is broken), but a measurement cannot say whether one sounds good.
 - **MediaSession** — lock-screen controls and better background audio on mobile.
-- **Touch coverage in draglab.** The suite drives a mouse; the 180 ms drag arm
-  racing the 460 ms long-press menu is untested, and touch is where the menus are
-  hardest.
+- ✅ ~~Touch coverage in draglab~~ — done 2026-09-01. CDP `Input.dispatchTouchEvent`
+  drives real touch-typed pointer events, and the 180 ms arm vs 460 ms long-press
+  race is asserted in both directions. What is still mouse-only: the flyout and
+  peek hover paths, which have no touch equivalent by construction.
 
 **Engine / sound**
 - **Beatgrid**: the tiered plan in `docs/`-adjacent notes — stem-cleaned onsets,

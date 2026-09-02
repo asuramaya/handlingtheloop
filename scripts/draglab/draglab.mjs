@@ -963,6 +963,62 @@ async function main() {
     check(`[${W}/d${deck}] …and it is still there after a refresh`, after === made, `${made} before reload, ${after} after`);
   });
 
+  // ── 6p. TOUCH — the gesture the suite has never driven ──────────────────────────────────
+  // ★ THE RACE THIS EXISTS FOR. A finger's horizontal drag is how you SCROLL, so a touch reorder
+  // has to say it means it: useReorderDrag arms after 180 ms of stillness, while useLongPress opens
+  // the row menu at 460 ms. Hold still → the menu. Hold, then move → a drag. Whichever happens
+  // first cancels the other, and nothing in this suite has ever proved that boundary. Playwright's
+  // mouse cannot: it emits pointerType "mouse", which arms on the first pixel and skips the race
+  // entirely. CDP Input.dispatchTouchEvent produces real touch-typed pointer events.
+  S("touch: hold-then-move reorders, hold-still opens the menu", async (deck, W) => {
+    await boot(page, deck);
+    const cdp = await page.context().newCDPSession(page);
+    const touch = async (type, x, y) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y), radiusX: 8, radiusY: 8, force: 1 }],
+      });
+
+    // (a) HOLD STILL past 460 ms → the row menu, and NO drag.
+    const r0 = await rowAt(page, 0);
+    const b0 = await r0.boundingBox();
+    await touch("touchStart", b0.x + b0.width / 2, b0.y + b0.height / 2);
+    await page.waitForTimeout(620);
+    const menuUp = await page.evaluate(() => !!document.querySelector(".fx-preset-menu.layer-3, .fx-preset-menu.layer-4"));
+    const ghostWhileStill = await page.evaluate(() => !!document.querySelector(".reorder-ghost"));
+    await touch("touchEnd", 0, 0);
+    await page.waitForTimeout(80);
+    check(`[${W}/d${deck}] touch: holding still opens the row menu`, menuUp, "no layer-3/4 menu after a 620ms hold");
+    check(`[${W}/d${deck}] …and does NOT start a drag`, !ghostWhileStill, "a ghost appeared on a still finger");
+    // Close ONLY the row menu — clicking every backdrop closes the preset menu underneath it too,
+    // and the next half of this scenario needs its rows.
+    await page.evaluate(() => [...document.querySelectorAll(".fx-menu-backdrop")].pop()?.click());
+    await page.waitForTimeout(120);
+
+    // (b) HOLD past the 180 ms arm, THEN move → a real drag, and the menu must not fire.
+    // Re-open from scratch: a touchEnd over a backdrop is a tap, and untangling which window
+    // that dismissed is not what this scenario is testing.
+    await boot(page, deck);
+    const before = await page.evaluate(TOP);
+    const src = await rowAt(page, 1);
+    const dst = await rowAt(page, 0);
+    const a = await src.boundingBox();
+    const t = await dst.boundingBox();
+    const sx = a.x + a.width / 2, sy = a.y + a.height / 2;
+    await touch("touchStart", sx, sy);
+    await page.waitForTimeout(240); // past the 180 ms arm, well short of the 460 ms menu
+    for (let i = 1; i <= 12; i++) await touch("touchMove", sx, sy + ((t.y + 1 - sy) * i) / 12);
+    const dragging = await page.evaluate(() => !!document.querySelector(".reorder-ghost"));
+    const menuStole = await page.evaluate(() => !!document.querySelector(".fx-preset-menu.layer-3, .fx-preset-menu.layer-4"));
+    await touch("touchEnd", 0, 0);
+    await page.waitForTimeout(120);
+    check(`[${W}/d${deck}] touch: hold-then-move starts a drag`, dragging, "no ghost — the 180ms arm never fired for touch");
+    check(`[${W}/d${deck}] …and the long-press menu does not steal it`, !menuStole, "the row menu opened during a touch drag");
+    const after = await page.evaluate(TOP);
+    check(`[${W}/d${deck}] …and the drop actually reorders`, after[0].name === before[1].name, `${JSON.stringify(before.slice(0, 2).map((r) => r.name))} → ${JSON.stringify(after.slice(0, 2).map((r) => r.name))}`);
+    await cdp.detach().catch(() => {});
+  });
+
   // ── 7. the ghost has to be ON TOP, or you cannot see what you are aiming ────────────────
   S("the ghost paints above the menu", async (deck, W) => {
     await boot(page, deck);

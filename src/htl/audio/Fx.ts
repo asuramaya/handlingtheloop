@@ -447,6 +447,10 @@ export interface FxParam {
 // user deliberately set HIGHER — an earlier version of this forced an exact value unconditionally,
 // which would have yanked a hand-raised mix back DOWN for the duration of the hold), remembering
 // what was there; release() restores exactly that, or does nothing if engage() never touched it.
+// It moves a VALUE and says nothing about how to get there — the setter it is handed owns that,
+// and both of them ramp: BaseFxDevice.setMix through applyWet's setTargetAtTime, Eq3.setMix
+// through its own ramp argument. A guard that stepped the blend would click on release into a
+// low dialled wet, in the middle of a curve morph that was being ramped politely around it.
 // Shared by BaseFxDevice's own throw lifecycle AND the EQ's separate curve-throw (Deck.eqThrow),
 // which can't inherit BaseFxDevice (fully-wet in-series, not a send) but wants the identical rule.
 export class MixFloorGuard {

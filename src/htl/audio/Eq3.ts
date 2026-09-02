@@ -166,9 +166,29 @@ export class Eq3 implements FxDevice {
       this.applyMix();
     }
   }
-  private applyMix() {
-    this.dry.gain.value = 1 - this._mix;
-    this.wet.gain.value = this._mix * Math.pow(10, this._out / 20);
+  // A knob ride is continuous, so `.value =` is right for it and stays the default. A PAD THROW
+  // is not: engaging the mix floor jumps the blend in one frame, and releasing it drops straight
+  // back to a low dialled wet — an audible STEP at exactly the moment the curve itself is being
+  // ramped politely around it. Same rule as `write()` below, for the same reason, including
+  // pinning the exact value at 5τ so a throw/restore cycle doesn't land short and rot the number.
+  private applyMix(seconds = 0) {
+    const dry = 1 - this._mix;
+    const wet = this._mix * Math.pow(10, this._out / 20);
+    if (seconds <= 0) {
+      this.dry.gain.value = dry;
+      this.wet.gain.value = wet;
+      return;
+    }
+    const tau = Math.max(0.002, seconds) / 5;
+    const t = this.ctx.currentTime;
+    for (const [p, v] of [
+      [this.dry.gain, dry],
+      [this.wet.gain, wet],
+    ] as const) {
+      p.cancelScheduledValues(t);
+      p.setTargetAtTime(v, t, tau);
+      p.setValueAtTime(v, t + tau * 5);
+    }
   }
   /** OUTPUT TRIM (dB) — makeup gain for the curve, on the WET path only. A boost-heavy preset
    *  can now pay for itself (pull the trim down) instead of eating the channel's headroom, which
@@ -213,9 +233,9 @@ export class Eq3 implements FxDevice {
   readonly throwing = false;
   /** Wet/dry blend: 1 = full EQ (default), 0 = flat/dry — dial back the EQ intensity or run it
    *  parallel. Only meaningful on the normal route (bypass is already all-dry). */
-  setMix(m: number) {
+  setMix(m: number, seconds = 0) {
     this._mix = Math.max(0, Math.min(1, m));
-    if (this.route === "normal") this.applyMix();
+    if (this.route === "normal") this.applyMix(seconds);
   }
   get mix() {
     return this._mix;

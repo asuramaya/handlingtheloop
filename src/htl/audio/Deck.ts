@@ -2110,6 +2110,9 @@ export class Deck {
   // send), so this pad's own throw can't inherit the base class's version — but it reuses the exact
   // SAME shared primitive rather than re-deriving the snapshot/floor/restore shape by hand.
   private readonly eqMixGuard = new MixFloorGuard();
+  // The mix moves on the same clock as the curve (Eq3.applyCurve's default morph), so a throw is
+  // ONE gesture rather than a ramped curve with a stepped blend jumping underneath it.
+  private static readonly EQ_THROW_RAMP_S = 0.012;
   private _armedEq: FxPreset | null = null;
 
   /** Arm the preset the EQ pad throws. Called on every EQ preset apply (mouse or hardware). */
@@ -2127,14 +2130,14 @@ export class Deck {
       this.eqSnapshot = this.eq.snapshotParams();
       this.eqThrowWasBypassed = this.eq.bypassed;
       if (this.eq.bypassed) this.eq.setBypass(false); // a thrown curve is audible even from bypass
-      this.eqMixGuard.engage(() => this.eq.mix, (v) => this.eq.setMix(v), this.eq.paramDefault("mix"));
+      this.eqMixGuard.engage(() => this.eq.mix, (v) => this.eq.setMix(v, Deck.EQ_THROW_RAMP_S), this.eq.paramDefault("mix"));
       this.eq.applyCurve(p.params);
     } else {
       if (!this.clearEqThrow()) return;
       // Re-read the LIVE bypass rather than trusting the capture: if you bypassed by hand during
       // the throw, setEqBypass already cleared it and this branch never runs.
       if (this.eqThrowWasBypassed && !this.eq.bypassed) this.eq.setBypass(true);
-      this.eqMixGuard.release((v) => this.eq.setMix(v));
+      this.eqMixGuard.release((v) => this.eq.setMix(v, Deck.EQ_THROW_RAMP_S));
     }
   }
   get eqThrowing(): boolean {

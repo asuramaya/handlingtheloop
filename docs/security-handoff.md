@@ -1,5 +1,10 @@
 # Security Handoff — xxit / Handling The Loop
 
+> ⚠ **Dated 2026-06-22 with a 2026-07-03 addendum; NOT re-verified since
+> (checked 2026-09-01).** The pasted-cookie path it discusses is gone end-to-end.
+> Its open items are still open as far as anyone knows, which is not the same as
+> knowing they are.
+
 **Audience:** a security-focused agent picking up where the engine/audio agent left off.
 **Date:** 2026-06-22. **History:** the FIRST pass was *grounded but shallow* (greps + spot-reads). A SECOND pass (also 2026-06-22) deep-read the whole credential + authz surface and **verified it clean** — see the "2026-06-22 DEEP AUDIT" block below, which supersedes the original Tier-1 worry.
 

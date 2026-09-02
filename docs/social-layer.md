@@ -1,5 +1,9 @@
 # Social Layer — Project Plan
 
+> ⚠ **Written as a project PLAN; the epics in it are live (2026-09-01).** Read the
+> ★ CURRENT STATE block before the roadmap prose, and treat future-tense wording
+> as historical.
+
 The social upgrade for htl: turn the room from a private multi-device control
 session into a **first-class social object** that scales from small parties to
 hundreds of listeners, add **public identity (profiles + handles)** and a

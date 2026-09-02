@@ -1,6 +1,12 @@
 # Shared DJ Session ("rooms")
 
-Status: **Phase 1 landed** (connection + presence + master claim/handoff). Phases 2–3
+> ⚠ **This status line was stale for months and is corrected here (2026-09-01).**
+> All of it shipped: the full intent bus (28 kinds in `src/htl/room/protocol.ts`),
+> state snapshots, playhead ticks, live broadcast with a crowd-shard relay tier,
+> and recorded sets. The design below is accurate as a description of the
+> protocol; read it as *what is*, not as *what is planned*.
+
+Status (original): **Phase 1 landed** (connection + presence + master claim/handoff). Phases 2–3
 (state sync + full intent bus + master ticks) are scaffolded but not yet wired.
 
 ## Goal

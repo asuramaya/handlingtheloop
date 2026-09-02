@@ -212,11 +212,18 @@ and the same actions are learnable to MIDI or a gamepad.
 
 ## Docs
 
+**[docs/map.md](./docs/map.md)** is the whole system in one read — the layers, one
+track's journey end to end, the engine, where state lives, the two sync planes,
+and where to start reading. **[docs/README.md](./docs/README.md)** is the honest
+inventory of what is documented and what is not.
+
 Per-subsystem design notes live in [`docs/`](./docs) — written as the systems were
 built, so they carry the *why* and the dead ends, not just the shape:
 
 | | |
 |---|---|
+| [**map**](./docs/map.md) | ★ the whole system in one read — start here |
+| [**docs/README**](./docs/README.md) | docs ↔ code inventory: what is covered, what is not |
 | [app-architecture](./docs/app-architecture.md) | how App.tsx is decomposed; where a new feature plugs in |
 | [fx-rack](./docs/fx-rack.md) | the device rack, stem chains, and the preset/chain bank engine |
 | [shared-session](./docs/shared-session.md) | rooms, anchors, intents, the attachment model |

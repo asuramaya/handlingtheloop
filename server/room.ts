@@ -46,21 +46,37 @@ interface RoomEnv {
   TOKEN_ENC_KEY?: string; // shared secret for the DO→Worker notification bridge (Epic I, Slice 7)
 }
 // Map a crowd frame to its catch-up cache key (so a late joiner on a relay rebuilds `now`).
-function cacheKindOf(msg: ServerMsg): "welcome" | "state" | "automix" | "stemview" | "lyrics" | "live" {
-  switch (msg.t) {
-    case "welcome":
-      return "welcome";
-    case "state":
-      return "state";
-    case "automix":
-      return "automix";
-    case "stemview":
-      return "stemview";
-    case "lyrics":
-      return "lyrics";
-    default:
-      return "live";
-  }
+// ★ TOTAL, ON PURPOSE. This used to be a switch with `default: return "live"`, which meant a NEW
+// ServerMsg type was silently ephemeral: nothing failed, nothing warned, and a late joiner on a
+// relay shard simply never saw it — a bug that only shows up on a sharded room with a listener
+// who joined late. As a Record keyed by ServerMsg["t"] the compiler now demands an answer for
+// every frame, and the answer for a genuinely ephemeral one is an explicit "live".
+export type CacheKind = "welcome" | "state" | "automix" | "stemview" | "lyrics" | "live";
+const CACHE_KIND: Record<ServerMsg["t"], CacheKind> = {
+  // Cached: the last of each IS the board a fresh listener has to be handed.
+  welcome: "welcome",
+  state: "state",
+  automix: "automix",
+  stemview: "stemview",
+  lyrics: "lyrics",
+  // "live": true of the moment and meaningless after it — a tick superseded by the next tick, a
+  // reaction burst, a chat line already in chat-history, a per-socket verdict. Not cached.
+  requests: "live",
+  presence: "live",
+  "stage-self": "live",
+  chat: "live",
+  "chat-history": "live",
+  muted: "live",
+  reactions: "live",
+  role: "live",
+  intent: "live",
+  tick: "live",
+  settings: "live",
+  kicked: "live",
+  error: "live",
+};
+function cacheKindOf(msg: ServerMsg): CacheKind {
+  return CACHE_KIND[msg.t];
 }
 
 export class DjRoom {

@@ -10,6 +10,7 @@
 // relay and this class is dormant — the live single-DO path is untouched.
 import { type Ws, type DurableObjectState } from "./roomState";
 import type { ServerMsg } from "../src/htl/room/protocol";
+import type { CacheKind } from "./room"; // one union, defined where the frames are classified
 
 declare const WebSocketPair: { new (): { 0: Ws; 1: Ws } };
 interface DObjId {
@@ -30,7 +31,7 @@ interface RelayEnv {
 // without round-tripping the master.
 interface PushBody {
   frame: ServerMsg;
-  cache?: "welcome" | "state" | "automix" | "stemview" | "lyrics" | "live";
+  cache?: CacheKind;
   cacheOnly?: boolean; // true = update the catch-up cache but DON'T re-fan to current listeners
   hostId?: string;
   idx?: number;

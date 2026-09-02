@@ -104,6 +104,11 @@ The page budget is subrequest arithmetic, not superstition: a YouTube page costs
 subrequest and its enrichment costs another, so P pages cost `1 + 2P` of a Worker
 request's 50.
 
+`truncated` on the public path means one thing only: a continuation was still pending
+when a budget ran out. Measured against the live API (2026-09-01), the declared item
+count is not usable as evidence — a 13-item playlist hands back 10 videos with no
+continuation, because unavailable videos still count toward its total.
+
 **What `truncated` buys.** A short read adds and never prunes (`749454e`): the re-sync
 reconciler takes it as an input and returns `removeIds: []`, because a track missing from
 a partial read is not evidence the user removed it. Getting this wrong destroyed real

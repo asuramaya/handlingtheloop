@@ -340,14 +340,17 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       /* a failed continuation is a short read, not a failed read — report it as truncated below */
     }
 
-    // Evidence there is more than we got: a continuation still pending on the last page we read,
-    // or a declared item count above what we actually collected. ⚠ `total_items` is a STRING here
-    // ("1,204 videos"), so the old `typeof total === "number"` test could never fire and this
-    // rested entirely on the continuation flag. Parse the digits instead.
+    // Evidence there is more than we got: a continuation still pending on the last page we read.
+    // ⚠ AND NOT the declared item count, which was the other half of this test and is a LIE for
+    // this purpose. Measured against the live API 2026-09-01: a 13-item playlist reports
+    // `total_items: "13 videos"` (a STRING, so the old `typeof total === "number"` test could
+    // never fire at all) and hands back 10 videos with has_continuation FALSE — the other three
+    // are unavailable, and they count toward the total. Trusting that gap would mark a fully-read
+    // playlist truncated forever, which never prunes, which quietly means a track deleted at the
+    // source stays in the local copy for good. A pending continuation is the only honest signal.
     const tail = pl as unknown as { has_continuation?: boolean };
-    const info = first.info as unknown as { title?: string; total_items?: string | number } | undefined;
-    const declared = Number(String(info?.total_items ?? "").replace(/[^\d]/g, ""));
-    const truncated = tail.has_continuation === true || (Number.isFinite(declared) && declared > tracks.length);
+    const info = first.info as unknown as { title?: string } | undefined;
+    const truncated = tail.has_continuation === true;
     return { title: info?.title ?? "Playlist", tracks, truncated };
   }
 

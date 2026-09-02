@@ -112,6 +112,9 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
     }
   }
 
+  // "and N are missing" — said once, the same way, wherever a re-sync reports its result.
+  const missing = (n: number) => (n ? ` · ${n} had no YouTube match` : "");
+
   // Re-sync an already-imported playlist: re-read the provider's CURRENT tracks and merge
   // any new ones into the local copy (provider playlists have no change hooks). Removed
   // tracks are pruned only for exact-id YouTube sources — matched (Spotify/TIDAL) playlists
@@ -135,6 +138,11 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       const have = new Set(pl.trackIds);
       let added = 0;
       let removed = 0;
+      // Songs the source has that we could not find on YouTube. The IMPORT path discloses these
+      // ("Imported 97 of 120 — 23 had no YouTube match"); the re-sync path used to drop them in
+      // silence, so a playlist that came back "+3" was really "+3, and two you added are missing
+      // and always will be" — the same silence, on the path a user repeats every week.
+      let unmatched = 0;
 
       if (service === "youtube") {
         // Exact-id source. The fetch is PAGE-CAPPED on both server paths (the OAuth Data API stops at
@@ -170,6 +178,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
           matched[sourceTrackKey(source)] = track.videoId;
           trackByVid.set(track.videoId, track);
         }
+        unmatched = toMatch.length - Object.keys(matched).length;
         const { newMap, addIds, removeIds } = reconcileResync({
           oldMap,
           currentIds: have,
@@ -187,7 +196,7 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
           // The source was too large to read in full (provider page guard) — this is NOT the whole
           // playlist, so NOTHING was pruned (a prune would delete tracks the user never removed).
           library.markSynced(pl.id, Date.now());
-          flash(`Synced “${cleanPlaylistName(pl.name)}”: +${added} · playlist too large to read fully — nothing removed.`, 6000);
+          flash(`Synced “${cleanPlaylistName(pl.name)}”: +${added}${missing(unmatched)} · playlist too large to read fully — nothing removed.`, 6000);
           return;
         }
       } else {
@@ -197,10 +206,10 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       library.markSynced(pl.id, Date.now());
       // Make removals EXPLICIT and give them time to read — a re-sync can legitimately nuke a
       // playlist (the source was emptied) and that must never be a silent surprise.
-      const summary = added || removed
-        ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` · removed ${removed} no longer in the source` : ""}`
+      const summary = added || removed || unmatched
+        ? `Synced “${cleanPlaylistName(pl.name)}”: +${added}${removed ? ` · removed ${removed} no longer in the source` : ""}${missing(unmatched)}`
         : "Already up to date";
-      flash(summary, removed ? 6000 : 2500);
+      flash(summary, removed || unmatched ? 6000 : 2500);
     } catch (e) {
       flash(`Re-sync failed: ${(e as Error).message}`, 6000);
     } finally {

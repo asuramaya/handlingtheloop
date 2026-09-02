@@ -71,7 +71,8 @@ export async function setAccountStatus(db: D1Database, userId: string, status: "
 // x-htl-yt-cookie accept, and the server-side use are all gone. The residential
 // relay now handles the datacenter bot wall, so a full Google session never has to
 // transit the Worker (see docs/security-handoff.md Tier 3). The `user_cookies`
-// table (migration 0006) was never wired to a route; drop it in a later migration.
+// table (migration 0006) is GONE too — dropped by migration 0027, because an empty
+// table shaped like a credential store is an invitation, not a neutral leftover.
 
 /** Accounts overview for the admin panel (with their linked services). */
 export async function listUsers(db: D1Database, limit = 200): Promise<AdminUser[]> {

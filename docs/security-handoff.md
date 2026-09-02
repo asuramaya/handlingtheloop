@@ -1,9 +1,48 @@
 # Security Handoff — xxit / Handling The Loop
 
-> ⚠ **Dated 2026-06-22 with a 2026-07-03 addendum; NOT re-verified since
-> (checked 2026-09-01).** The pasted-cookie path it discusses is gone end-to-end.
-> Its open items are still open as far as anyone knows, which is not the same as
-> knowing they are.
+> **Re-verified 2026-09-01** (metron). The June/July passes below stand; this header
+> records what the September pass actually checked, what it changed, and — the part that
+> matters — what it did NOT check, so nobody reads a partial pass as a clean bill.
+
+## 2026-09-01 PASS
+
+**Checked, with evidence:**
+
+- **Secrets, on a now-PUBLIC repo.** Full-history scan for key-shaped literals (Google API
+  keys, GitHub tokens, PEM blocks, Slack tokens, `*_SECRET=` assignments): **nothing.** The
+  one hit is `AIzaSy…`, YouTube's public InnerTube web key, and it is no longer in the tree
+  at all. `wrangler.jsonc` carries no `vars` block, so no config literal ships either.
+  `.dev.vars` is ignored and only `.dev.vars.example` is tracked.
+- **`/api/me/settings` and `/api/me/library`** (the blobs the preset/chain banks now ride):
+  actor from the session, never from the body; method-gated; size-capped (256 KB / 2 MB →
+  413). No id is accepted from the client, so there is no IDOR to have.
+- **The crowdsourced pool** (`/api/analysis`, `/api/stems`): anonymous by design, but
+  rate-limited, numerically clamped, length-bounded, magic-byte-checked on upload, and served
+  back under a fixed Content-Type. Sound.
+
+**Changed this pass** (`server/room.ts`, `worker/index.ts`, `worker/shared.ts`, migration 0027):
+
+- **The DO→Worker internal bridge was carrying the at-rest encryption key in a request
+  header.** `/internal/notify` and `/internal/presence` authenticated with `TOKEN_ENC_KEY`
+  — the key that encrypts OAuth tokens in D1 — so every @mention and every presence drop put
+  it in a header, where anything that logs headers logs it. It now prefers a dedicated
+  `INTERNAL_SECRET`, falling back to the old key so existing deployments keep working.
+  **Owed: `wrangler secret put INTERNAL_SECRET`.**
+- **The compare was `!==`** on a secret. It is constant-time now. Small window, four-line fix.
+- **The bridge's target origin was captured from the connect URL and pinned in DO storage.**
+  A request URL's host comes from the Host header; Cloudflare only routes hostnames it owns
+  to this Worker, so a forged one does not arrive — but that is a claim about the edge's
+  routing table, not about this code, and one write pins it forever. `PUBLIC_ORIGIN` removes
+  the question where it is set; the connect URL stays the fallback. Both behaviours are
+  asserted in `server/room.test.ts`.
+- **`user_cookies` (migration 0006) is dropped** (migration 0027, **not yet applied** — a
+  production schema change is the operator's call). The streaming-cookie path was removed in
+  June; an empty table shaped like a credential store is an invitation, not a leftover.
+
+**NOT checked, and still owed:** the Tier-1 authorization sweep has not been re-walked
+against the ~2 months of social/moderation/notification code written since July, and the
+relay's Access + rotation posture has not been re-verified in the live config. The
+pasted-cookie path is confirmed dead end-to-end.
 
 **Audience:** a security-focused agent picking up where the engine/audio agent left off.
 **Date:** 2026-06-22. **History:** the FIRST pass was *grounded but shallow* (greps + spot-reads). A SECOND pass (also 2026-06-22) deep-read the whole credential + authz surface and **verified it clean** — see the "2026-06-22 DEEP AUDIT" block below, which supersedes the original Tier-1 worry.

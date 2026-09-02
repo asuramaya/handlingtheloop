@@ -46,7 +46,6 @@ export async function purgeAccount(db: D1Database, userId: string): Promise<{ r2
   await tryRun(db, "DELETE FROM user_library WHERE user_id = ?", userId);
   await tryRun(db, "DELETE FROM user_track_stats WHERE user_id = ?", userId);
   await tryRun(db, "DELETE FROM user_samples WHERE user_id = ?", userId);
-  await tryRun(db, "DELETE FROM user_cookies WHERE user_id = ?", userId); // legacy 0006, unused but keyed
   // Social graph — both directions (the user as actor and as target).
   await tryRun(db, "DELETE FROM follows WHERE follower_id = ? OR followee_id = ?", userId, userId);
   await tryRun(db, "DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?", userId, userId);

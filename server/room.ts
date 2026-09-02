@@ -43,7 +43,11 @@ interface RelayNs {
 interface RoomEnv {
   RELAY?: RelayNs;
   RELAY_SHARDS?: string | number;
-  TOKEN_ENC_KEY?: string; // shared secret for the DO→Worker notification bridge (Epic I, Slice 7)
+  INTERNAL_SECRET?: string; // bearer for the DO→Worker bridge (Epic I, Slice 7)
+  TOKEN_ENC_KEY?: string; // …falling back to the at-rest key, which is how the bridge shipped
+  /** The Worker origin the bridge may POST to. The connect URL supplies it when this is unset —
+   *  see the note on `origin`. */
+  PUBLIC_ORIGIN?: string;
 }
 // Map a crowd frame to its catch-up cache key (so a late joiner on a relay rebuilds `now`).
 // ★ TOTAL, ON PURPOSE. This used to be a switch with `default: return "live"`, which meant a NEW
@@ -157,14 +161,22 @@ export class DjRoom {
   private readonly relayNs?: RelayNs;
   private roomHostId = ""; // this room's host account id (Worker passes ?rid=) — to address relays
   private relayCounts = new Map<number, number>(); // shard idx → listener count (aggregate = the crowd)
-  private origin = ""; // captured from the connect URL — the base for the DO→Worker notify bridge
-  private notifySecret = ""; // TOKEN_ENC_KEY; empty → the notify bridge is inert
+  // ★ WHERE THE BRIDGE POSTS, and why it is worth being careful about. This is captured from the
+  // first connect URL and then PINNED in durable storage, and every mention/presence POST carries
+  // the internal secret to it. A request URL's host comes from the Host header; Cloudflare only
+  // routes a hostname it owns to this Worker, so a forged one does not arrive — but "an attacker
+  // cannot influence this" is a claim about the edge's routing table, not about this code, and it
+  // is pinned forever after one write. PUBLIC_ORIGIN removes the question entirely where it is
+  // set; the connect URL remains the fallback so nothing needs configuring to work.
+  private origin = "";
+  private notifySecret = ""; // INTERNAL_SECRET, else TOKEN_ENC_KEY; empty → the bridge is inert
 
   constructor(state: DurableObjectState, env?: RoomEnv) {
     this.state = state;
     this.relayShards = Math.max(0, Math.min(64, Number(env?.RELAY_SHARDS) || 0));
     this.relayNs = env?.RELAY;
-    this.notifySecret = env?.TOKEN_ENC_KEY ?? "";
+    this.notifySecret = env?.INTERNAL_SECRET || env?.TOKEN_ENC_KEY || "";
+    this.origin = (env?.PUBLIC_ORIGIN ?? "").replace(/\/+$/, ""); // configured wins over captured
   }
   private get relayOn(): boolean {
     return this.relayShards > 0 && !!this.relayNs;
@@ -189,7 +201,7 @@ export class DjRoom {
     this.banned = new Set((await this.state.storage.get<string[]>("banned")) ?? []);
     // Persisted so the presence-offline alarm can still reach the Worker after a DO eviction (the
     // alarm fires exactly when all sockets are gone, i.e. when the in-memory origin would be lost).
-    this.origin = (await this.state.storage.get<string>("origin")) ?? this.origin;
+    if (!this.origin) this.origin = (await this.state.storage.get<string>("origin")) ?? "";
     this.loaded = true;
   }
 

@@ -509,3 +509,42 @@ describe("DjRoom presence-offline bridge (Slice 2)", () => {
     expect(presenceCalls()).toHaveLength(0);
   });
 });
+
+// The internal bridge's two hardening rules, asserted where they can otherwise regress in silence:
+// the header carries the DEDICATED secret when there is one (the at-rest key should not be riding
+// in a request header), and the POST goes where the deployment says, not where the connect URL did.
+describe("DjRoom internal-bridge configuration", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let origFetch: typeof globalThis.fetch;
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    fetchMock = vi.fn(() => Promise.resolve(new Response(null)));
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  async function mentionWith(env: Record<string, string>) {
+    const h = makeRoom(env);
+    const host = (await h.connect({ device: "host1", host: true, acct: "u-host" })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true });
+    const fan = (await h.connect({ device: "F", pub: true, acct: "u-fan" })).ws!;
+    await h.send(fan, { t: "chat", text: "@nina hi" });
+    return fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/internal/notify"));
+  }
+
+  it("prefers INTERNAL_SECRET over the at-rest encryption key", async () => {
+    const calls = await mentionWith({ INTERNAL_SECRET: "bridge", TOKEN_ENC_KEY: "atrest" });
+    expect(calls).toHaveLength(1);
+    expect((calls[0][1] as RequestInit).headers).toMatchObject({ "x-htl-internal": "bridge" });
+  });
+
+  it("posts to PUBLIC_ORIGIN when it is configured", async () => {
+    const calls = await mentionWith({ TOKEN_ENC_KEY: "sek", PUBLIC_ORIGIN: "https://handlingtheloop.com" });
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0][0])).toBe("https://handlingtheloop.com/internal/notify");
+  });
+});

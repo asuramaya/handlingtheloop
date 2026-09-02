@@ -1,0 +1,13 @@
+-- Drop `user_cookies` (migration 0006): the table that held each account's YouTube STREAMING
+-- COOKIE, encrypted at rest.
+--
+-- That whole path was removed on 2026-06-22 — the client paste UI, the client store, the Worker's
+-- x-htl-yt-cookie accept, and the server-side use. The residential relay handles the datacenter
+-- bot wall now, so a full Google session never has to transit the Worker at all. The table has
+-- been unreferenced by any route ever since; only account deletion still swept it, defensively.
+--
+-- It is dropped because an EMPTY table holding a credential shape is not free: it is a schema
+-- inviting someone to fill it again, and it is one more row for a deletion cascade to remember.
+-- Any rows still in it are rows nothing can read and nobody can refresh — deleting them is the
+-- point, not a cost. See docs/security-handoff.md, Tier 3.
+DROP TABLE IF EXISTS user_cookies;

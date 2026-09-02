@@ -273,6 +273,30 @@ function defaultOgMeta(url: URL): string {
   });
 }
 
+// ★ THE INTERNAL BRIDGE'S GUARD, in one place. Three things it has to get right:
+//
+//  1. A DEDICATED SECRET where one exists. The bridge shipped bearing TOKEN_ENC_KEY, the key that
+//     encrypts OAuth tokens at rest — so the at-rest key rides in a request header on every
+//     mention and every presence drop, and anything that ever logs headers logs it. INTERNAL_SECRET
+//     takes over when set; the fallback keeps existing deployments working until it is.
+//  2. CONSTANT TIME. A `!==` on a secret leaks its prefix through timing. The window is small over
+//     a network and the fix is four lines, so there is no argument for keeping the compare.
+//  3. FAIL CLOSED on a missing secret, which it already did.
+function internalSecret(env: Env): string {
+  return env.INTERNAL_SECRET || env.TOKEN_ENC_KEY || "";
+}
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false; // length is not secret; the contents are
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+function internalAuthed(req: Request, env: Env): boolean {
+  const secret = internalSecret(env);
+  const given = req.headers.get("x-htl-internal") ?? "";
+  return !!secret && timingSafeEqual(given, secret);
+}
+
 // DO→Worker notification bridge (Epic I, Slice 7). The room DjRoom has no D1, so when a room
 // event needs to write a notification (a chat @mention) it POSTs here. Guarded by an internal
 // shared secret (TOKEN_ENC_KEY, already provisioned for both the Worker and its DOs) — an
@@ -280,8 +304,7 @@ function defaultOgMeta(url: URL): string {
 // records the event. Inert if the secret isn't configured (plain `vite` dev, no rooms anyway).
 async function handleInternalNotify(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json(405, { error: "POST only" });
-  const secret = env.TOKEN_ENC_KEY;
-  if (!secret || req.headers.get("x-htl-internal") !== secret) return json(403, { error: "forbidden" });
+  if (!internalAuthed(req, env)) return json(403, { error: "forbidden" });
   if (!env.DB) return json(200, { ok: false });
   const b = (await req.json().catch(() => ({}))) as { toHandle?: string; actorId?: string; kind?: string };
   const kind = b.kind === "mention" ? "mention" : null;
@@ -300,8 +323,7 @@ async function handleInternalNotify(req: Request, env: Env): Promise<Response> {
 // reconnected on another DO in the meantime can't be stomped offline.
 async function handleInternalPresence(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json(405, { error: "POST only" });
-  const secret = env.TOKEN_ENC_KEY;
-  if (!secret || req.headers.get("x-htl-internal") !== secret) return json(403, { error: "forbidden" });
+  if (!internalAuthed(req, env)) return json(403, { error: "forbidden" });
   if (!env.DB) return json(200, { ok: false });
   const b = (await req.json().catch(() => ({}))) as { acct?: string; closedAt?: number };
   if (!b.acct) return json(400, { error: "bad request" });

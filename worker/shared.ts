@@ -65,6 +65,11 @@ export interface Env extends AccountEnv {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   TOKEN_ENC_KEY?: string;
+  /** Bearer for the DO→Worker internal bridge (/internal/notify, /internal/presence). Falls back
+   *  to TOKEN_ENC_KEY when unset, which is how it shipped — but they are different jobs and one of
+   *  them travels in a request header, so give it its own secret where you can:
+   *  `wrangler secret put INTERNAL_SECRET`. */
+  INTERNAL_SECRET?: string;
   // One DjRoom per account coordinates a shared live set across the account's
   // devices. Optional so plain `vite` dev (no binding) degrades gracefully.
   ROOM?: DurableObjectNamespace;

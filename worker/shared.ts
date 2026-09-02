@@ -93,6 +93,9 @@ export interface Env extends AccountEnv {
   // Allowed Origins for the shared-session WebSocket upgrade (comma-separated).
   // Defaults to the request's own origin when unset.
   WS_ALLOWED_ORIGINS?: string;
+  /** The app's own hostname, e.g. "app.handlingtheloop.com". UNSET = one origin serves everything
+   *  (what ships today). Set it and the bare domain becomes a landing site — see server/hosts.ts. */
+  APP_HOST?: string;
 }
 
 // ---- constants ---------------------------------------------------------------

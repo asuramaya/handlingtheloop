@@ -29,6 +29,7 @@ import {
   getSet,
 } from "../server/db";
 import { SECURITY_HEADERS, foldHandle } from "../server/security";
+import { routeForHost, shareBridgeHtml } from "../server/hosts";
 
 async function handleApi(url: URL, req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (req.method === "OPTIONS") {
@@ -343,16 +344,29 @@ export default {
     if (url.pathname === "/internal/notify") return handleInternalNotify(req, env);
     if (url.pathname === "/internal/presence") return handleInternalPresence(req, env);
     if (url.pathname.startsWith("/api/")) return handleApi(url, req, env, ctx);
+
+    // Which of this Worker's two faces is being asked for? Unset APP_HOST → always the app, which
+    // is the single-origin behaviour that has always run. See server/hosts.ts for the whole rule.
+    const route = routeForHost(url, env.APP_HOST);
+    if (route.kind === "redirect") return Response.redirect(route.to, 301);
+
     // Static SPA — but stamp every response with cross-origin-isolation headers so
     // `crossOriginIsolated` is true in the browser. That unlocks SharedArrayBuffer
     // and threaded WASM, so the desktop stem-separation workers (ORT threads,
     // demucs-rs) run multi-threaded instead of single-threaded (which stalls and
     // can get the tab killed). `credentialless` keeps cross-origin subresources —
     // YouTube thumbnails, the onnxruntime CDN, HuggingFace weights — loading.
-    const res = await env.ASSETS.fetch(req);
+    //
+    // ★ AND WHY THE LANDING DOES NOT GET THEM. Those two headers are the reason the split exists:
+    // they are non-negotiable for the app and fatal to a marketing page's embeds. A landing
+    // response is an ordinary document with the ordinary security headers.
+    const wantsAsset = route.kind === "landing" ? new Request(new URL("/landing.html", url), req) : req;
+    const res = await env.ASSETS.fetch(wantsAsset);
     const headers = new Headers(res.headers);
-    headers.set("Cross-Origin-Opener-Policy", "same-origin");
-    headers.set("Cross-Origin-Embedder-Policy", "credentialless");
+    if (route.kind === "app") {
+      headers.set("Cross-Origin-Opener-Policy", "same-origin");
+      headers.set("Cross-Origin-Embedder-Policy", "credentialless");
+    }
     // Baseline security headers (CSP, nosniff, framing, referrer, permissions).
     // CSP's script-src has no 'unsafe-inline', so an injected <script> can't run —
     // turning any residual HTML-injection from account-takeover into a no-op.
@@ -363,6 +377,14 @@ export default {
     let body: BodyInit | null = res.body;
     if ((res.headers.get("content-type") || "").includes("text/html")) {
       const meta = (await ogMetaFor(url, env).catch(() => null)) || defaultOgMeta(url);
+      // A share link that landed on the marketing host keeps its card HERE — the card belongs at
+      // the URL that was actually shared — and hands the human across afterwards.
+      if (route.kind === "share") {
+        return new Response(shareBridgeHtml(meta, route.to), {
+          status: 200,
+          headers: { ...Object.fromEntries(headers), "content-type": "text/html; charset=utf-8" },
+        });
+      }
       body = (await res.text()).replace("</head>", `${meta}\n</head>`);
     }
     return new Response(body, { status: res.status, statusText: res.statusText, headers });

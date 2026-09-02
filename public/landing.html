@@ -1,0 +1,118 @@
+<!doctype html>
+<!--
+  THE LANDING DOCUMENT — served at the bare domain when APP_HOST is set (server/hosts.ts).
+
+  Two constraints it must respect, both from server/security.ts:
+    • No inline <script>. The CSP has no 'unsafe-inline' for script-src, so an inline script does
+      not run — silently. Inline <style> IS allowed (style-src carries 'unsafe-inline').
+    • Nothing from the SPA build. On the marketing host every other path 301s to the app, so a
+      reference to /assets/*.js would redirect away rather than load. Keep this file standalone.
+
+  This is a starting point with real copy, not a finished marketing site — replace it freely. What
+  matters structurally is that it lives here, ships as an ordinary asset, and gets NO isolation
+  headers, so embeds and third-party widgets work on it the way they cannot on the app.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Handling The Loop</title>
+<meta name="description" content="A full DJ rig that runs in your browser. Two decks, stem separation, a real FX rack, and a room your friends can join.">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --panel: #121820;
+    --line: #1e2833;
+    --text: #e8eef5;
+    --muted: #8b9bad;
+    --accent: #00e5ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: clamp(2rem, 6vw, 6rem) 1.5rem; }
+  header { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: clamp(3rem, 10vw, 7rem); }
+  .mark { font-weight: 800; letter-spacing: -0.02em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  h1 {
+    font-size: clamp(2.25rem, 7vw, 4.5rem);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin: 0 0 1.25rem;
+    text-wrap: balance;
+    max-width: 18ch;
+  }
+  .lede { font-size: clamp(1.05rem, 2.2vw, 1.35rem); color: var(--muted); max-width: 52ch; margin: 0 0 2.5rem; }
+  .cta {
+    display: inline-block;
+    padding: 0.85rem 1.6rem;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #06222a;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .cta:hover { filter: brightness(1.1); }
+  .sub { display: block; margin-top: 0.9rem; color: var(--muted); font-size: 0.9rem; }
+  .grid {
+    display: grid;
+    gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-top: clamp(3rem, 9vw, 6rem);
+  }
+  .cell { background: var(--panel); padding: 1.5rem; }
+  .cell h2 { font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin: 0 0 0.6rem; }
+  .cell p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+  footer { margin-top: clamp(3rem, 9vw, 6rem); padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.875rem; }
+  footer a { color: var(--muted); }
+  a:focus-visible, .cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><span class="dot"></span><span class="mark">Handling The Loop</span></header>
+
+  <h1>A DJ rig that runs in a browser tab.</h1>
+  <p class="lede">
+    Two decks, four-lane stem separation, a real effects rack, hardware and gamepad control, and a
+    room your friends can walk into while you play. Nothing to install.
+  </p>
+  <a class="cta" href="https://app.handlingtheloop.com/">Open the decks</a>
+  <span class="sub">Free. Works on desktop Chrome today; phones ride along.</span>
+
+  <div class="grid">
+    <div class="cell">
+      <h2>Stems, on device</h2>
+      <p>Split any track into drums, bass, vocals and instruments — then EQ, filter and mangle each lane on its own chain.</p>
+    </div>
+    <div class="cell">
+      <h2>A rack that means it</h2>
+      <p>Parametric EQ, multiband saturation, an FDN reverb, compression, and pad-thrown effects — all of it real DSP, not presets over a filter.</p>
+    </div>
+    <div class="cell">
+      <h2>Play together</h2>
+      <p>Share one link. Friends join the same session from their own devices, or listen in while you run the set.</p>
+    </div>
+    <div class="cell">
+      <h2>Your gear works</h2>
+      <p>USB-MIDI controllers, MIDI-Learn for anything unmapped, a second output for headphone cue, and a mic input with talkover ducking.</p>
+    </div>
+  </div>
+
+  <footer>
+    <a href="https://app.handlingtheloop.com/">Open the app</a> ·
+    <a href="https://github.com/asuramaya/handlingtheloop">Source</a>
+  </footer>
+</div>
+</body>
+</html>

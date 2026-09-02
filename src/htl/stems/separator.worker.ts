@@ -25,13 +25,16 @@ const fft = new FFT(NFFT);
 type Post = (pct: number) => void;
 
 // ---- onnxruntime-web (CDN), inside the worker --------------------------------
-// 1.22.0, NOT 1.20.1: the 1.20 WebGPU EP miscomputes the demucs freq branch
-// (Conv2d/InstanceNorm/ConvTranspose2d) → garbage spectrogram stems. Fixed in 1.21+
-// (verified maxErr 3e-6 vs PyTorch). Open-Unmix (wasm EP) is unaffected by the bump.
-// Self-hosted (SAME-ORIGIN) — onnxruntime-web 1.22.0 vendored into public/ort/ at build
-// time and hash-pinned (see vite.config.ts `ortVendor`). NOT a third-party CDN: the browser
-// never trusts an external host at runtime, and same-origin satisfies COEP without any CORS
-// dance. Bump the version in vite.config.ts (path + hashes) when upgrading.
+// 1.27.0's native WebGPU EP (asyncify build), NOT 1.22.0's JSEP build: same htdemucs-core
+// graph runs real C++ WebGPU kernels (Conv/InstanceNorm/ConvTranspose2d etc.) instead of
+// JSEP's JS-bridge kernels — ~2x faster per segment on identical hardware, confirmed via a
+// 24-segment device benchmark before this switch (467-503ms/segment vs the 1.22.0 JSEP
+// build's ~1s/segment). Numerically unaffected: 1.20's WebGPU freq-branch bug (Conv2d/
+// InstanceNorm/ConvTranspose2d miscompute) was already fixed by 1.21+ and stays fixed here.
+// Self-hosted (SAME-ORIGIN) — vendored into public/ort/ at build time and hash-pinned (see
+// vite.config.ts `ortVendor`). NOT a third-party CDN: the browser never trusts an external
+// host at runtime, and same-origin satisfies COEP without any CORS dance. Bump the version
+// in vite.config.ts (path + hashes) when upgrading.
 const ORT_BASE = `/ort/`;
 // Separation is CHROMIUM + WebGPU ONLY — modelSupport/canSeparate gate every entry
 // point, so this worker never runs anywhere else. There is deliberately NO fallback
@@ -52,7 +55,14 @@ function loadOrt(threads: number): Promise<any> {
   if (!ortPromise) {
     ortPromise = (async () => {
       const ort = await import(/* @vite-ignore */ ORT_CDN);
-      ort.env.wasm.wasmPaths = ORT_BASE;
+      // Explicit filenames, not just the base dir: the native EP's default resolution
+      // doesn't reliably pick the "asyncify" variant over other wasm builds vendored
+      // alongside it (found while wiring this up — a bare base dir loaded fine in
+      // isolation but is fragile once other ORT variants share public/ort/).
+      ort.env.wasm.wasmPaths = {
+        wasm: `${ORT_BASE}ort-wasm-simd-threaded.asyncify.wasm`,
+        mjs: `${ORT_BASE}ort-wasm-simd-threaded.asyncify.mjs`,
+      };
       ort.env.wasm.numThreads = Math.max(1, threads); // wasm SIMD threads (needs COI)
       // ★ Hand ORT OUR device, from the HIGH-PERFORMANCE adapter. Left to itself, ORT
       // creates a default adapter — on a dual-GPU machine that's the integrated one, and
@@ -86,13 +96,95 @@ function loadOrt(threads: number): Promise<any> {
   }
   return ortPromise;
 }
+// The model download is a single ~170 MB fetch from a cross-origin CDN (HuggingFace, via
+// a signed-redirect URL) — long enough to be exposed to a network blip mid-transfer (seen
+// directly while wiring this up: Chrome's own network stack aborting with
+// net::ERR_NETWORK_CHANGED on ANY interface up/down event system-wide — not a CORS/COEP
+// block, curl fetching the identical bytes succeeded immediately). ort.InferenceSession.
+// create(url, …) hands the fetch to ORT's opaque internal loader with no retry, so one blip
+// on a multi-second download kills the whole separation — a latent risk under the old JSEP
+// build too (same URL, same size), just never exercised by a fresh (uncached) load until
+// now. A plain restart-from-scratch retry has bad odds if blips repeat faster than a full
+// download completes, so this RESUMES via Range requests (confirmed supported: the CDN
+// returns 206 Partial Content) instead of re-fetching all 170 MB after every blip.
+async function fetchResumable(url: string, tries = 8): Promise<ArrayBuffer | null> {
+  let received = 0;
+  let total = -1;
+  let chunks: Uint8Array[] = [];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const res = await fetch(url, received > 0 ? { headers: { Range: `bytes=${received}-` } } : undefined);
+      if (res.status === 404 && received === 0) return null; // caller decides if a 404 is expected
+      if (received > 0 && res.status === 200) {
+        // Server ignored our Range header and sent the WHOLE file again instead of a 206
+        // partial — discard whatever we'd buffered so far and treat this as a fresh full
+        // download, not more bytes to append (which would silently corrupt the assembly:
+        // stale prefix + a full second copy, both undercounted against `total`).
+        chunks = [];
+        received = 0;
+        total = -1;
+      } else if (!res.ok && res.status !== 206) {
+        throw new Error(`HTTP ${res.status} fetching ${url}`);
+      }
+      if (total < 0) {
+        const len = res.headers.get("content-length");
+        total = received + (len ? parseInt(len, 10) : NaN);
+      }
+      const reader = res.body!.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.byteLength;
+      }
+      if (!Number.isFinite(total) || received >= total) {
+        const buf = new Uint8Array(received);
+        let off = 0;
+        for (const c of chunks) {
+          buf.set(c, off);
+          off += c.byteLength;
+        }
+        return buf.buffer;
+      }
+      throw new Error(`stream ended early: ${received}/${total} bytes`);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < tries - 1) await new Promise((r) => setTimeout(r, Math.min(4000, 400 * (attempt + 1))));
+    }
+  }
+  throw lastErr;
+}
 const sessions = new Map<string, Promise<any>>();
 function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<any> {
   const cached = sessions.get(url);
   if (cached) return cached;
   // demucs-core runs ['webgpu','wasm'] so its Conv/MatMul/attention run on the GPU
   // with per-op CPU fallback.
-  const p: Promise<any> = ort.InferenceSession.create(url, { executionProviders: eps });
+  const p: Promise<any> = (async () => {
+    // htdemucs-core.onnx CAN ship its weights in a sibling .onnx.data file (external data,
+    // keeps the graph file itself small) — the currently-deployed model doesn't (single
+    // self-contained ~170 MB file), but a future re-export might, so this stays generic.
+    // The 1.22.0 JSEP loader found a sibling file automatically from a relative path; the
+    // 1.27.0 native-EP loader does NOT — it needs the mapping handed to it explicitly, or
+    // session creation fails outright ("Module.MountedFiles is not available", confirmed
+    // while wiring this up).
+    const filename = url.split("/").pop() ?? "";
+    const dataUrl = `${url}.data`;
+    // The sidecar is a SPECULATIVE probe, not a required fetch — today's model doesn't
+    // have one at all. Any outcome other than "here are the bytes" (a transient 5xx, a
+    // network blip, anything that isn't the clean 404 case fetchResumable already returns
+    // null for) must degrade to "no sidecar", NOT retry-and-throw: a Promise.all rejection
+    // here would kill an ALREADY-SUCCEEDED model download over a file that may not even
+    // exist. If a sidecar genuinely exists and this probe gives up on it, InferenceSession.
+    // create below fails on its own, with a real "missing external data" error — a much
+    // more honest failure than blaming network fragility for a load that actually worked.
+    const [modelBytes, dataBytes] = await Promise.all([fetchResumable(url), fetchResumable(dataUrl).catch(() => null)]);
+    if (!modelBytes) throw new Error(`model fetch returned 404: ${url}`);
+    const opts: Record<string, unknown> = { executionProviders: eps };
+    if (dataBytes) opts.externalData = [{ path: `${filename}.data`, data: new Uint8Array(dataBytes) }];
+    return ort.InferenceSession.create(new Uint8Array(modelBytes), opts);
+  })();
   sessions.set(url, p);
   return p;
 }

@@ -39,6 +39,106 @@ function devPublicIdentity(u: devStore.DevUser) {
 const STEM_NAMES = ["vocals", "drums", "bass", "other"];
 const STEM_CACHE_DIR = path.resolve(".stem-cache");
 
+// Dev-only RAW AUDIO cache: same idea, stands in for the Worker's R2 `a/${v}` cache-first
+// check (worker/routes/audio.ts). Without it, plain `vite` dev calls YouTube fresh on
+// EVERY load of a track. Files land in .audio-cache/.
+const AUDIO_CACHE_DIR = path.resolve(".audio-cache");
+
+// Local dev has no residential-relay credentials — YT_RELAY_URL/YT_RELAY_SECRET are
+// deployed Cloudflare Worker secrets (`wrangler secret put`), which are WRITE-ONLY: no
+// API or CLI call reads a secret's value back out once set, only its name (`wrangler
+// secret list`). So a track that trips YouTube's anti-bot wall on this box's direct
+// egress (confirmed while wiring this up: routine on commercial music specifically —
+// heavily piracy-monitored — while non-commercial clips resolve fine) has nothing to
+// fall back to locally UNLESS it borrows production's own fallback. Production already
+// holds those secrets AND has its own R2 cache-first check, so just ask the live,
+// already-working deployment for the bytes — the same request a real listener's browser
+// makes. One extra network hop on a cold local miss, cached here afterward so it's never
+// repeated. Direct local resolution is the last-resort fallback, only if prod itself is
+// unreachable (e.g. offline dev).
+const PROD_ORIGIN = "https://handlingtheloop.com";
+
+async function cacheAudioLocally(v: string, bytes: Buffer, contentType: string): Promise<void> {
+  try {
+    await fs.mkdir(AUDIO_CACHE_DIR, { recursive: true });
+    await fs.writeFile(path.join(AUDIO_CACHE_DIR, `${v}.bin`), bytes);
+    await fs.writeFile(path.join(AUDIO_CACHE_DIR, `${v}.json`), JSON.stringify({ contentType }));
+  } catch {
+    /* best-effort — a cache-write failure shouldn't affect the response already sent */
+  }
+}
+
+async function proxyFromProd(res: ServerResponse, v: string): Promise<boolean> {
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${PROD_ORIGIN}/api/audio?v=${encodeURIComponent(v)}`);
+  } catch (e) {
+    console.error(`[audio ${v}] prod-proxy unreachable: ${(e as Error)?.message ?? e}`);
+    return false;
+  }
+  if (!upstream.ok || !upstream.body) {
+    console.error(`[audio ${v}] prod-proxy returned ${upstream.status}`);
+    return false;
+  }
+  const contentType = upstream.headers.get("content-type") || "audio/mp4";
+  res.statusCode = 200;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("x-htl-cache", "miss");
+  res.setHeader("x-htl-via", "prod-proxy");
+  const reader = upstream.body.getReader();
+  const parts: Buffer[] = [];
+  let sent = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const buf = Buffer.from(value);
+      parts.push(buf);
+      sent += buf.byteLength;
+      res.write(buf);
+    }
+  } catch (e) {
+    console.error(`[audio ${v}] prod-proxy stream broke after ${sent} bytes: ${(e as Error)?.message ?? e}`);
+    // Same reasoning as streamAudio's catch: nothing physically reached the client yet
+    // if sent===0 (setHeader alone doesn't flush), so we can still report a clean
+    // failure and let the caller fall through to the next fallback (direct resolve)
+    // instead of the client seeing a raw "Failed to fetch" with no retry path.
+    if (sent === 0 && !res.headersSent) return false;
+    res.destroy(e as Error);
+    return true; // headers/bytes already committed — caller must NOT also try streamAudio
+  }
+  res.end();
+  await cacheAudioLocally(v, Buffer.concat(parts), contentType);
+  return true;
+}
+
+async function handleAudio(req: IncomingMessage, res: ServerResponse, v: string): Promise<void> {
+  const binPath = path.join(AUDIO_CACHE_DIR, `${v}.bin`);
+  const metaPath = path.join(AUDIO_CACHE_DIR, `${v}.json`);
+  try {
+    const [buf, metaRaw] = await Promise.all([fs.readFile(binPath), fs.readFile(metaPath, "utf8")]);
+    const meta = JSON.parse(metaRaw) as { contentType?: string };
+    res.statusCode = 200;
+    res.setHeader("Content-Type", meta.contentType || "audio/mp4");
+    res.setHeader("Content-Length", String(buf.length));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("x-htl-cache", "hit");
+    res.end(buf);
+    return;
+  } catch {
+    /* cold — fall through */
+  }
+
+  if (await proxyFromProd(res, v)) return;
+
+  await streamAudio(req, res, v, readAuth(req), (bytes, contentType) => cacheAudioLocally(v, bytes, contentType));
+}
+
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -322,7 +422,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
           sendJson(res, 400, { error: "missing or invalid ?v=" });
           return true;
         }
-        await streamAudio(req, res, v, readAuth(req));
+        await handleAudio(req, res, v);
         return true;
       }
       case "/api/search": {

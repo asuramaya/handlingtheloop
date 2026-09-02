@@ -3,15 +3,36 @@
 // the Vite dev middleware (Node) and a CF Worker.
 //
 // How it sidesteps YouTube's arms-race layers:
-//   - Client: ANDROID_VR (clientName 28). yt-dlp's `REQUIRE_JS_PLAYER: false`
-//     client — its formats carry DIRECT urls (no signatureCipher) and need no
-//     PoToken, so there's nothing to decipher.
+//   - Client: VISIONOS (clientName 101) — see the big comment above VISIONOS_VERSION
+//     for why this replaced ANDROID_VR on 2026-08-24. yt-dlp's `REQUIRE_JS_PLAYER:
+//     false` client with no GVS_PO_TOKEN_POLICY — formats carry DIRECT urls (no
+//     signatureCipher) and need no PO token, so there's nothing to decipher or solve.
 //   - Throttle: a naive single GET of a googlevideo url is capped to ~32 KB/s
-//     unless the `n` param is solved. We never solve it — we download in 1 MB
-//     RANGE chunks, which are served at full speed (~15 MB/s).
+//     unless the `n` param is solved. We never solve it — we download in capped-size
+//     RANGE chunks (see SAFE_CHUNK below), which are served at full speed (~15 MB/s).
 // The only off-browser need is CORS + the googlevideo IP-lock (the url is bound
 // to the resolver's IP), so the Worker resolves AND fetches the bytes; the
 // browser does the heavy compute (decode / analysis / DSP).
+
+// PRIMARY as of 2026-08-24: VISIONOS (clientName 101), NOT ANDROID_VR. YouTube shipped
+// a change to android_vr (v1.65.10, exactly this version string) on 2026-08-17 requiring
+// a GVS PO Token for every range request past ~1MB into a stream — confirmed directly
+// (resolve a real track, range-probe increasing offsets: solid to ~1.05MB, 403 past
+// ~1.1MB, on EVERY track tested, not just some) and independently confirmed in yt-dlp's
+// own maintained client table: "Since 2026.08.17, ALL formats (including live HLS and
+// itag 18) are 403'd with version 1.65.10". A real GVS PO token (self-hosted via
+// bgutil-ytdlp-pot-provider, i.e. an actual solved BotGuard challenge) does NOT unlock
+// it either — ANDROID_VR is a native app and almost certainly needs real Play Integrity
+// hardware attestation, which nothing server-side can produce.
+// VISIONOS has neither gate: yt-dlp's own INNERTUBE_CLIENTS table defines it with
+// REQUIRE_JS_PLAYER: False (direct, non-ciphered URLs, same as ANDROID_VR used to give)
+// and no GVS_PO_TOKEN_POLICY entry at all (defaults to not-required). Verified directly:
+// full byte-exact downloads of two independently-confirmed-blocked tracks, both complete
+// in under a second. ANDROID_VR is kept below, unused for audio, only as a reference/
+// fallback shape — flip PRIMARY_CLIENT back if YouTube ever closes this one too.
+const VISIONOS_VERSION = "1.02";
+const VISIONOS_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
 const ANDROID_VR_VERSION = "1.65.10";
 const ANDROID_VR_UA =
@@ -186,6 +207,16 @@ interface PlayerClient {
 }
 
 const CLIENTS: Record<string, PlayerClient> = {
+  // Primary — see the big comment above VISIONOS_VERSION for why.
+  VISIONOS: {
+    name: "VISIONOS",
+    id: "101",
+    version: VISIONOS_VERSION,
+    ua: VISIONOS_UA,
+    extra: { deviceMake: "Apple", deviceModel: "RealityDevice17,1", osName: "visionOS", osVersion: "26.5.23O471" },
+  },
+  // No longer used for audio (GVS-PO-gated past ~1MB since 2026-08-17) — kept as a
+  // reference shape / fallback should VISIONOS ever close too.
   ANDROID_VR: {
     name: "ANDROID_VR",
     id: "28",
@@ -263,11 +294,21 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
   return { http: res.status, body: parsed };
 }
 
-// Thin ANDROID_VR wrapper preserving the original throw-on-error contract used
-// by the anonymous path.
-async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
+// Priority order for the anonymous streaming path: try VISIONOS first (current
+// best client — see the big comment above VISIONOS_VERSION), fall through to
+// ANDROID_VR if it ever stops resolving outright. Does NOT protect against the
+// specific "resolves fine but the byte-range fetch is walled anyway" failure
+// ANDROID_VR has RIGHT NOW (that needs a genuinely different client, not a retry
+// on the same one) — but it does mean a future VISIONOS lockdown degrades to a
+// slower client instead of breaking outright, and costs nothing when VISIONOS
+// (the common case) just works.
+const CLIENT_CASCADE: PlayerClient[] = [CLIENTS.VISIONOS, CLIENTS.ANDROID_VR];
+
+// Thin wrapper preserving the original throw-on-error contract used by the
+// anonymous path.
+async function playerRequest(videoId: string, visitorData: string, auth?: YtAuth, fx: Fetcher = directFetch, client: PlayerClient = CLIENTS.VISIONOS): Promise<PlayerResponse> {
   const { http, body } = await rawPlayer(videoId, {
-    client: CLIENTS.ANDROID_VR,
+    client,
     visitorData,
     poToken: auth?.poToken,
   }, fx);
@@ -289,18 +330,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // visitorData on the next try is the lever that clears it (verified: rotating visitors
 // rides out the bursts). So retry generously with jittered backoff. The latency cost is
 // paid only on the rare fully-walled video; most resolve on attempt 0-1.
+//
+// Attempts are also split across CLIENT_CASCADE (most of them on the primary client,
+// the tail on the fallback) — so a future primary-client lockdown degrades to trying
+// the fallback instead of exhausting all attempts on a client that's stopped resolving.
 async function playerWithRetry(videoId: string, attempts = 6, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
   let lastErr: unknown;
+  const perClient = Math.ceil(attempts / CLIENT_CASCADE.length);
   for (let i = 0; i < attempts; i++) {
+    const client = CLIENT_CASCADE[Math.min(Math.floor(i / perClient), CLIENT_CASCADE.length - 1)];
     try {
       // Prefer the user's browser-minted visitorData (it pairs with their PO token / cookie
       // and must stay fixed for that binding); otherwise fetch our own and ROTATE it every
       // retry (force=true once past attempt 0) so a burned token can't wall every attempt.
       const visitor = auth?.visitorData || (await getVisitorData(i > 0, fx));
-      const pr = await playerRequest(videoId, visitor, auth, fx);
+      const pr = await playerRequest(videoId, visitor, auth, fx, client);
       if (pr.playabilityStatus?.status === "OK") return pr;
       lastErr = new Error(
-        `not playable: ${pr.playabilityStatus?.status ?? "unknown"}${pr.playabilityStatus?.reason ? ` (${pr.playabilityStatus.reason})` : ""}`,
+        `not playable (${client.name}): ${pr.playabilityStatus?.status ?? "unknown"}${pr.playabilityStatus?.reason ? ` (${pr.playabilityStatus.reason})` : ""}`,
       );
     } catch (e) {
       lastErr = e; // HTTP 403 / 429 / 5xx
@@ -326,11 +373,12 @@ function pickAudio(formats: RawFormat[]): RawFormat | null {
   return audio[0];
 }
 
-// Streaming is ANONYMOUS-ONLY via ANDROID_VR (the only client that yields DIRECT,
-// non-ciphered urls the worker can byte-stream). Account credentials can't unlock
-// Premium formats on this client, so none are used — `auth` only ever carries a
-// browser-minted visitorData / PO token that hardens the anonymous request against
-// datacenter bot-blocks. `playerWithRetry` already retries with a fresh visitorData.
+// Streaming is ANONYMOUS-ONLY via CLIENT_CASCADE (VISIONOS, falling back to
+// ANDROID_VR — the "JS-less", non-PO-gated clients that yield DIRECT, non-ciphered
+// urls the worker can byte-stream). Account credentials can't unlock Premium formats
+// on these clients, so none are used — `auth` only ever carries a browser-minted
+// visitorData / PO token that hardens the anonymous request against datacenter
+// bot-blocks. `playerWithRetry` already retries with a fresh visitorData per client.
 export async function resolveAudio(videoId: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<ResolvedAudio> {
   const pr = await playerWithRetry(videoId, 6, auth, fx);
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
@@ -360,6 +408,7 @@ export async function resolveAudio(videoId: string, auth?: YtAuth, fx: Fetcher =
 // direct-url clients and reports each stage, non-throwing, so /api/audio/diag can
 // show what YouTube actually returns here — and which client (if any) still works.
 const DIAG_CLIENTS: PlayerClient[] = [
+  CLIENTS.VISIONOS,
   CLIENTS.ANDROID_VR,
   { name: "IOS", id: "5", version: "19.45.4", ua: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)", extra: { deviceMake: "Apple", deviceModel: "iPhone16,2", osName: "iPhone", osVersion: "18.1.0.22B83" } },
   { name: "ANDROID", id: "3", version: "19.44.38", ua: "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip", extra: { androidSdkVersion: 34, osName: "Android", osVersion: "14" } },
@@ -633,15 +682,29 @@ export async function fetchCaptions(videoId: string, auth?: YtAuth, store?: Capt
 }
 
 /**
- * Yield the audio as 1 MB range chunks. Range requests dodge googlevideo's
- * single-stream throttle, so this runs at full bandwidth without solving `n`.
+ * Yield the audio as range chunks, capped safely below 2 MB each. Range requests
+ * dodge googlevideo's single-stream throttle, so this runs at full bandwidth
+ * without solving `n` — that part of the original design held up. What DIDN'T
+ * hold up: the 8 MB floor below effectively meant "the whole file in one range
+ * request" for any track under 8 MB — i.e. nearly every normal song. Confirmed
+ * directly (resolve a real track, fetch increasing range sizes against the SAME
+ * URL): 1 MB → 206, 2 MB → 403, 4 MB → 403, whole-file → 403. The block is keyed
+ * to REQUEST SIZE, not request count or IP — reproduced identically from a local
+ * dev IP and from production. A real player never asks for a whole song in one
+ * range either, so a giant single request reads as extraction, not playback —
+ * and YouTube's CDN applies this scrutiny more aggressively to monetized/label
+ * ("Topic" channel) content specifically, which is why most non-label clips were
+ * unaffected and every failure we'd seen was exactly that category.
  */
-// Cloudflare Workers cap subrequests per request (50 on the free plan), so we
-// size chunks to keep the count bounded no matter how long the track is — a
-// 2-hour mix still resolves in ~24 range fetches. Larger ranges are also faster
-// (fewer round trips) and, crucially, NOT throttled — only a no-range GET is.
-const MIN_CHUNK = 8 * 1024 * 1024; // 8 MB floor
-const MAX_CHUNKS = 24;
+// Cloudflare Workers cap subrequests per request (50 on the free plan), so a
+// SAFE_CHUNK-sized chunk can't be used unconditionally for arbitrarily long
+// tracks — a multi-hour mix at 1 MB/chunk would blow that budget. So: prefer the
+// safe small size, but for content so long it would need more than
+// MAX_SUBREQUESTS chunks at that size, scale the chunk size up just enough to
+// fit the budget (same tradeoff the old code made, now only for the rare very-
+// long case instead of unconditionally for every track).
+const SAFE_CHUNK = 1 * 1024 * 1024; // 1 MB — verified safe; 2 MB reproducibly 403s
+const MAX_SUBREQUESTS = 40; // headroom under the 50 cap for resolve/re-resolve calls
 
 // Fetch one byte range, retrying transient failures (intermittent 403/429/5xx
 // from datacenter IPs, or a timeout) so a single flaky chunk doesn't fail the
@@ -704,7 +767,7 @@ export async function* audioChunks(
     }
     return;
   }
-  const chunkSize = Math.max(MIN_CHUNK, Math.ceil(contentLength / MAX_CHUNKS));
+  const chunkSize = Math.max(SAFE_CHUNK, Math.ceil(contentLength / MAX_SUBREQUESTS));
   for (let start = 0; start < contentLength; start += chunkSize) {
     const end = Math.min(contentLength - 1, start + chunkSize - 1);
     try {

@@ -60,7 +60,13 @@ export async function fetchYouTubeAudio(
     } catch (e) {
       lastErr = e;
       if (signal?.aborted || (e as { name?: string })?.name === "AbortError") throw e;
-      if (e instanceof TransientAudioError && attempt === 0) {
+      // TransientAudioError (a clean 5xx from the edge) OR a raw network-level TypeError
+      // ("Failed to fetch") — the latter is what a DESTROYED connection looks like from
+      // fetch()'s perspective (no HTTP status at all), which is just as retryable as a
+      // 5xx: both mean "the attempt failed for reasons that might not recur," not "this
+      // track is genuinely unplayable" (that's a clean 4xx, which stays fatal below).
+      const transient = e instanceof TransientAudioError || e instanceof TypeError;
+      if (transient && attempt === 0) {
         await new Promise((r) => setTimeout(r, 350));
         continue;
       }

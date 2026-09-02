@@ -15,11 +15,16 @@ const htlDir = fileURLToPath(new URL("./src/htl", import.meta.url));
 // code into the COI-isolated worker. Idempotent: files already present with the right hash
 // are skipped, so only the first build needs network. Runs for every Vite entry (dev /
 // build / worker / deploy) via buildStart. public/ort/ is gitignored (33 MB of wasm).
-const ORT_VER = "1.22.0";
+//
+// 1.27.0's native WebGPU EP (asyncify build), not 1.22.0's JSEP build: same htdemucs-core
+// graph benchmarked ~2x faster per segment (real Conv/MatMul/InstanceNorm WebGPU kernels
+// instead of JSEP's JS-bridge kernels) on identical hardware — confirmed via the same
+// 24-segment harness used for the SCNet device tests. No model/UX change, pure runtime swap.
+const ORT_VER = "1.27.0";
 const ORT_FILES: Record<string, string> = {
-  "ort.webgpu.min.mjs": "e131e81c9324807e1e6f9103e8f8e936112827dcc9993cde9407a333b1f07ae0",
-  "ort-wasm-simd-threaded.jsep.mjs": "1cbcba8f2c769c1eecbab66a1b1e55ef11704515bf4306373e3db3c37cf6dcd8",
-  "ort-wasm-simd-threaded.jsep.wasm": "b45970d0632383a057c27ca5b660b216f8e00c17cf8db9f6207b5e4abc839368",
+  "ort.webgpu.min.mjs": "46988a5a025f49449850f39f95eb0d21e40e67b3beb13a0b54efd3ab5d83f60e",
+  "ort-wasm-simd-threaded.asyncify.mjs": "7236653b8565da4046e459cd0e274123419a1d9f1f8f18fd36c28058346ca655",
+  "ort-wasm-simd-threaded.asyncify.wasm": "7e83cd6cee77e478bc96a7e91b198144fb5e4126287daf1f9b54bb195ebcd55a",
 };
 function ortVendor() {
   return {

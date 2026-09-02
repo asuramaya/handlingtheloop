@@ -120,16 +120,29 @@ export function probeWebGPU(): Promise<boolean> {
       if (!adapter) return (gpuAdapterOk = false);
       // Record which GPU we got (so Settings can show Intel iGPU vs NVIDIA). `info`
       // is sync in current browsers; older ones expose requestAdapterInfo().
+      let architecture = "";
       try {
         const info: any =
           adapter.info ?? (typeof adapter.requestAdapterInfo === "function" ? await adapter.requestAdapterInfo() : null);
         if (info) {
+          architecture = info.architecture ?? "";
           gpuAdapterInfo =
             [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ").trim() || null;
         }
       } catch {
         /* adapter info unavailable; ignore */
       }
+      // A GRANTED adapter isn't necessarily real hardware — Chrome can (and, on this
+      // exact dual-GPU Linux + NVIDIA combo, silently DOES) hand back SwiftShader, its
+      // CPU-emulated software WebGPU implementation, even with both #enable-unsafe-webgpu
+      // and #ignore-gpu-blocklist on. `requestDevice()` on that still succeeds — nothing
+      // throws — so without this check the app declared GPU "usable" and ran separation
+      // on it anyway. Not a soft-failure: SwiftShader is roughly 1000x slower on this
+      // model (measured earlier this session: ~200s/segment on SwiftShader vs well under
+      // 1s on the real GPU) — indistinguishable from "stuck at 0%" from the outside.
+      // `isFallbackAdapter` is the spec-correct signal; the architecture-string check is
+      // a belt-and-suspenders backstop for browsers that don't set the flag consistently.
+      if ((adapter as any).isFallbackAdapter || architecture === "swiftshader") return (gpuAdapterOk = false);
       // Adapter present ≠ usable — confirm a device is actually grantable.
       const device = await adapter.requestDevice();
       if (!device) return (gpuAdapterOk = false);
@@ -176,14 +189,16 @@ export function isIOSDevice(): boolean {
 // (which can fail at page-load before a user gesture). iOS 26 is the first WebKit
 // to ship WebGPU default-on, so `"gpu" in navigator` on iOS already implies ≥26.
 //
-// DISABLED (2026-06-10): the iPhone experiment confirmed on-device demucs via
-// ORT-web's WebGPU EP HARD-crashes Safari 26 — the documented JSEP memory leak
-// (onnxruntime#26827: runaway memory, tab killed), not a soft failure a try/catch
-// can catch. So phones do NOT attempt on-device GPU separation; they use the R2
-// cache for demucs results (desktop separates once → every phone downloads it).
-// If a NON-JSEP WebGPU runtime ever ships for Safari, this is the flag to revisit —
-// note #26827's root cause is a WebKit wasm-COMPILE pathology, so per-segment device
-// recycling can NOT work around it (verified upstream 2026-07-15).
+// RE-DISABLED (2026-08-26): the 2026-08-23 experiment (re-enabling this on the 1.27
+// native WebGPU EP asyncify build, betting the crash was JSEP-specific) is now
+// DISPROVEN on real hardware. Real iPhone 17 Pro Max / Safari test confirmed the
+// crash-and-reload (WebKit bug #304810, Asyncify + JSC OMG-JIT pathology) still
+// fires on the 1.27 asyncify build, for BOTH SCNet_Tran AND htdemucs-core (the
+// model actually shipped) — i.e. every real iOS device's first on-device-GPU
+// attempt crashes the tab, guard or no guard. This almost certainly explains the
+// "no audio at all on iPhone" reports from the same session this was re-enabled in.
+// Only the JSPI build variant (needs iOS 27 / Safari 27, currently beta, GA ~Sept
+// 2026) removes the trigger by construction — revisit re-enabling THEN, not before.
 export function mobileGpuEligible(): boolean {
   return false;
 }

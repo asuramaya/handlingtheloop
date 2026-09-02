@@ -1,5 +1,5 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, localTempoDev, nearestBeat, piTrim, slaveFoldTarget, smartKeyShift } from "../analysis/analyze";
-import { trace } from "../debug/trace";
+import { trace, event } from "../debug/trace";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
@@ -101,6 +101,15 @@ export class AudioEngine {
 
   constructor() {
     this.ctx = new AudioContext({ latencyHint: "interactive" });
+    // CarPlay/BT skip diagnostic: log every state transition into the flight-recorder ring (see
+    // debug/trace.ts) — cheap, always-on, and it's exactly what a one-click bug report dumps. Lets a
+    // periodic-skip report be read back as a timeline instead of a single live glance, since nobody
+    // can safely stare at a phone screen while it's happening in a car.
+    let lastCtxState = this.ctx.state;
+    this.ctx.addEventListener("statechange", () => {
+      event("ctx-state", { from: lastCtxState, to: this.ctx.state });
+      lastCtxState = this.ctx.state;
+    });
 
     // master -> brick-wall-ish limiter -> destination. Two decks at full level
     // plus EQ boost can exceed 0 dBFS; the limiter catches the peaks so the mix
@@ -470,10 +479,14 @@ export class AudioEngine {
       }
       const delta = u - this.lastUnderruns; // node re-attach resets the counter → negative → clean
       this.lastUnderruns = u;
+      if (delta > 0) event("wireless-underrun", { delta, total: u, reserveMs: Math.round((this.adaptiveReserve / this.ctx.sampleRate) * 1000) });
       this.guardState = nextReserve(this.guardState, delta, cfg);
       if (this.guardState.reserve !== this.adaptiveReserve) {
+        const fromMs = Math.round((this.adaptiveReserve / this.ctx.sampleRate) * 1000);
+        const toMs = Math.round((this.guardState.reserve / this.ctx.sampleRate) * 1000);
         this.adaptiveReserve = this.guardState.reserve;
         this.applyReserve();
+        event("wireless-reserve", { fromMs, toMs, cappedAtCeiling: toMs >= Math.round((cfg.cap / this.ctx.sampleRate) * 1000) });
       }
     }, POLL_MS);
   }

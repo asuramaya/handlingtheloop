@@ -28,18 +28,18 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const dev = deck.fxDeviceAt(slot) as CrushFx | undefined;
-    if (!canvas || !dev) return;
+    const dev0 = deck.fxDeviceAt(slot) as CrushFx | undefined;
+    if (!canvas || !dev0) return;
     const ctx2d = canvas.getContext("2d");
     if (!ctx2d) return;
-    const actx = dev.output.context;
+    const actx = dev0.output.context;
     const wet = actx.createAnalyser();
     wet.fftSize = 1024;
-    dev.output.connect(wet); // tap only
+    dev0.output.connect(wet); // tap only
     const dryA = actx.createAnalyser();
     dryA.fftSize = 1024;
     try {
-      dev.input.connect(dryA); // the clean reference (MIX ghost)
+      dev0.input.connect(dryA); // the clean reference (MIX ghost)
     } catch {
       /* ignore */
     }
@@ -52,6 +52,11 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
 
     let raf = 0;
     const draw = () => {
+      // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
+      // loop (a chain edit, a preset load, a hot reload) leaves the old object still
+      // answering getParam() with whatever it held when it was replaced — so the picture
+      // simply freezes, with no error anywhere to explain it. Costs one map lookup a frame.
+      const dev = (deck.fxDeviceAt(slot) as CrushFx | undefined) ?? dev0;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -211,12 +216,12 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     return () => {
       cancelAnimationFrame(raf);
       try {
-        dev.output.disconnect(wet);
+        dev0.output.disconnect(wet);
       } catch {
         /* ignore */
       }
       try {
-        dev.input.disconnect(dryA);
+        dev0.input.disconnect(dryA);
       } catch {
         /* ignore */
       }
@@ -233,6 +238,23 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     set("rate", clamp01((e.clientX - r.left) / r.width));
     set("bits", clamp01((e.clientY - r.top - READOUT_H) / vizH));
   };
+  // ── RESET, the gesture the rest of the rack already has (ValueCell, Knob, ReverbViz's grips,
+  // EqCurve, CompViz): double-click or right-click puts this pad back to the device's OWN
+  // considered resting values — paramDefault(), never an invented number. A control you can dial
+  // but not undial is a control you try once.
+  const resetPad = (e: React.MouseEvent) => {
+    const dev = deck.fxDeviceAt(slot) as CrushFx | undefined;
+    if (!dev) return;
+    const r = canvasRef.current?.getBoundingClientRect();
+    if (r && e.clientY - r.top < READOUT_H) return; // the strip is not a control
+    for (const id of ["rate", "bits"]) set(id, dev.paramDefault(id));
+  };
+  const onDoubleClick = (e: React.MouseEvent) => resetPad(e);
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resetPad(e);
+  };
+
   const onDown = (e: React.PointerEvent) => {
     const r = canvasRef.current?.getBoundingClientRect();
     if (r && e.clientY - r.top < READOUT_H) return;
@@ -255,7 +277,7 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
   return (
     <div className="fx-viz-row">
       <div className="sat-viz">
-        <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+        <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
       </div>
     </div>
   );

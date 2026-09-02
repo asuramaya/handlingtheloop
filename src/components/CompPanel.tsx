@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import type { Deck, CompFx } from "@htl/audio";
 import { useEmit, useRefresh } from "../App/spine";
 import { COMP_MODES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
-import { MeterBar } from "./MeterBar";
-import { drawReadout, READOUT_H } from "./Readout";
+import { CompViz } from "./CompViz";
+import { CompArPad } from "./CompArPad";
+import { CompHead } from "./CompHead";
 import { usePulse } from "./usePulse";
+import { useFrameSync } from "./useFrameSync";
 
-// COMP surface — the gain-reduction METER, the cells, and a foot strip holding MODE / AUTO /
-// sidechain source.
+// COMP surface — a transfer curve you GRAB, the remaining cells, and a foot strip holding
+// MODE / AUTO / sidechain source.
 //
 // ★ THE LAST DEVICE TO JOIN THE RACK'S OWN LAWS. It was the odd one out on three counts:
 //   • Its mode row OPENED the panel, sitting directly under FxStrip's device tabs — the exact
@@ -21,11 +23,25 @@ import { usePulse } from "./usePulse";
 //   • It had no Readout strip, alone in a rack of eight devices that all wear one. LEFT says what
 //     the device IS (mode · auto), RIGHT carries the sidechain — the setting most responsible for
 //     how a buss compressor behaves and the one you cannot see from the knobs.
-// The meter is not decoration: a compressor you can't see is a compressor you can't set. Every
-// decision you make here — threshold, ratio, how fast it lets go — is a decision about a number
-// you can only read off the needle. MeterBar runs it on its own rAF rather than React state, so
-// a meter moving at 60 Hz never re-renders the panel (the WaveformViewport lesson).
-
+//
+// ★ THRESH/RATIO/KNEE/ATTACK/RELEASE/SC-HP/SC-LP used to be seven more ValueCells indistinguish-
+// able from MAKEUP or LOOK — a compressor you can't see is a compressor you can't set, and a flat
+// row of orange pills doesn't show you what any of them DO.
+//   • CompViz replaces THRESH/RATIO/KNEE with one instrument: a draggable transfer curve (bend =
+//     threshold+ratio, knee = knee) that breathes with live gain reduction, and a live dot that
+//     leaves the curve when SC:EXT is ducking it — the sidechain made visible, not just labelled.
+//   • CompArPad is ATTACK/RELEASE's own small XY pad, to the curve's LEFT — a compressor's
+//     transfer curve has one axis pair (input dB → output dB) and ballistics have none of their
+//     own, so they get a pad rather than crowding into the curve or sitting as two buttonoids.
+//   • SC-HP/SC-LP is the shared ribbon (drawFreqRibbon / hitFreqRibbon / dragHp / dragLp /
+//     dragBand), and it now sits where Delay's and Reverb's sit: on the READOUT's own canvas, at
+//     the top of the panel, spanning its FULL width — CompHead. Two earlier attempts put it in a
+//     box of its own beside the curve, then inside the curve's canvas; both failed the same test
+//     for the same reason. A frequency ribbon is a RULER (20 Hz .. 20 kHz across three log
+//     decades), and two rulers only read as one control when they measure the same span in the
+//     same pixels. Inside CompViz it inherited the middle column of a three-column row, so its
+//     20 Hz started ~70 px in and its 20 kHz stopped ~60 px short of Reverb's. Sharing a border
+//     bought local seamlessness at the price of the alignment that makes a shared widget shared.
 interface CompPanelProps {
   deck: Deck;
   id: "A" | "B";
@@ -33,53 +49,24 @@ interface CompPanelProps {
   accent: string;
 }
 
-const GR_FLOOR = 20; // dB of reduction at the far end of the meter
-
 export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
-  const getGr = useMemo(() => () => dev?.gainReduction ?? 0, [dev]);
-  const readoutRef = useRef<HTMLCanvasElement>(null);
   const [modePulse, pulseMode] = usePulse();
-
-  // The readout runs on its own rAF, like every other device's — it reads the LIVE device rather
-  // than React state, so a mode change or a knob drag shows up without a re-render.
-  useEffect(() => {
-    const d = deck.fxDeviceAt(slot) as CompFx | undefined;
-    if (!d) return;
-    let raf = 0;
-    const draw = () => {
-      const canvas = readoutRef.current;
-      const ctx = canvas?.getContext("2d");
-      if (canvas && ctx) {
-        const dpr = Math.min(2, window.devicePixelRatio || 1);
-        const w = canvas.clientWidth;
-        const h = canvas.clientHeight;
-        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-          canvas.width = Math.round(w * dpr);
-          canvas.height = Math.round(h * dpr);
-        }
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        const m = Math.round(d.getParam("mode"));
-        const hp = d.getParam("scHp");
-        const look = d.getParam("lookahead");
-        const gr = d.gainReduction;
-        drawReadout(ctx, w, accent, {
-          left: `${COMP_MODES[m] ?? "?"}${d.getParam("auto") >= 0.5 ? "  ·  AUTO" : ""}`,
-          // The needle says HOW MUCH; this says the comp is working at all, which at 0.2 dB of
-          // reduction on a busy meter is otherwise easy to miss.
-          mid: gr > 0.2 ? `−${gr.toFixed(1)} dB` : "",
-          midHot: gr > 3,
-          right: `SC ${d.getParam("scExt") >= 0.5 ? "EXT" : "INT"}${hp > 20 ? `  ·  HP ${Math.round(hp)}` : ""}${look > 0 ? `  ·  LOOK ${look.toFixed(1)}ms` : ""}`,
-        });
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [deck, slot, accent]);
+  // ONE channel for "what is being touched", shared by all three surfaces and read only by the
+  // readout's own rAF. A ref, not state: it changes every frame of a drag, and re-rendering the
+  // whole panel to move a caption would be the exact cost useFrameSync exists to avoid.
+  const hot = useRef<string | null>(null);
+  const setHot = useCallback((v: string | null) => {
+    hot.current = v;
+  }, []);
+  // CompViz drags continuously — see useFrameSync.
+  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const live = (param: string, value: number) => {
+    deck.setFxParam(slot, param, value);
+    pushFrame(param, value);
+  };
 
   if (!dev) return null;
   const get = (p: string) => dev.getParam(p);
@@ -89,32 +76,25 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
     refresh();
   };
   const mode = Math.round(get("mode"));
-  const isLimit = mode === 3;
   const auto = get("auto") >= 0.5;
   const ext = get("scExt") >= 0.5;
-  const scHp = get("scHp");
 
   return (
     <div className="fx-panel sat-panel comp-panel" style={{ ["--accent" as string]: accent }}>
-      <canvas ref={readoutRef} className="sat-readout" style={{ height: READOUT_H }} />
+      {/* Readout + the SC-HP/LP ribbon, one canvas, full panel width — Delay's and Reverb's
+          own head geometry (ribbon at y = READOUT_H, drawn at ribbonH − 4, hit at ribbonH). */}
+      <CompHead deck={deck} slot={slot} accent={accent} set={live} hot={hot} setHot={setHot} />
 
-      {/* Gain reduction — how hard it's actually working, right now. */}
-      <MeterBar getValue={getGr} toPercent={(gr) => (Math.min(1, gr / GR_FLOOR) * 100)} format={(gr) => (gr < 0.1 ? "0.0" : `−${gr.toFixed(1)}`)} unit="dB GR" label="Gain reduction (dB)" rtl />
-
-      <div className="sat-shared">
-        <ValueCell label={isLimit ? "CEIL" : "THRESH"} value={isLimit ? get("ceiling") : get("threshold")} min={isLimit ? -12 : -60} max={0} step={0.5} reset={isLimit ? -0.3 : -18} format={(v) => v.toFixed(1)} onChange={(v) => setParam(isLimit ? "ceiling" : "threshold", v)} />
-        {!isLimit && <ValueCell label="RATIO" value={get("ratio")} min={1} max={20} step={0.5} reset={4} format={(v) => `${v.toFixed(1)}:1`} onChange={(v) => setParam("ratio", v)} />}
-        <ValueCell label="ATTACK" value={get("attack")} min={0.02} max={100} step={0.02} reset={10} format={(v) => (v < 1 ? `${(v * 1000).toFixed(0)}µs` : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("attack", v)} />
-        <ValueCell label="RELEASE" value={get("release")} min={20} max={3000} step={10} reset={250} format={(v) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${v.toFixed(0)}ms`)} onChange={(v) => setParam("release", v)} />
-        {!isLimit && <ValueCell label="KNEE" value={get("knee")} min={0} max={24} step={0.5} reset={6} format={(v) => v.toFixed(1)} onChange={(v) => setParam("knee", v)} />}
-        <ValueCell label="MAKEUP" value={get("makeup")} min={-12} max={24} step={0.5} reset={0} format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`} onChange={(v) => setParam("makeup", v)} />
-        {/* THE sidechain high-pass. Without it a kick drum drives the reduction and pumps the whole
-            track — this one filter is most of why a buss compressor works. 20 = off. */}
-        <ValueCell label="SC-HP" value={scHp || 20} min={20} max={500} step={5} reset={20} format={(v) => (v <= 20 ? "OFF" : `${v.toFixed(0)}`)} onChange={(v) => setParam("scHp", v)} />
-        <ValueCell label="LOOK" value={get("lookahead")} min={0} max={10} step={0.1} reset={0} format={(v) => (v <= 0 ? "OFF" : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("lookahead", v)} />
-        {/* MIX below 100 is parallel compression — squash it hard, then blend the crushed copy back
-            under the untouched one. The New York drum trick, for free. */}
-      </div>
+      {/* THRESH/RATIO/KNEE live on the curve — drag the bend, drag the knee. SC-HP/SC-LP is the
+          full-width ribbon in the head above. ATTACK/RELEASE get their own small pad to the LEFT.
+          MAKEUP/LOOK are the two cells left with nothing to be dragged ON, so they keep a narrow
+          side column instead of a whole row below. */}
+      <CompViz deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} left={<CompArPad deck={deck} slot={slot} accent={accent} set={live} setHot={setHot} />}>
+        <div className="comp-side-cells">
+          <ValueCell label="MAKEUP" value={get("makeup")} min={-12} max={24} step={0.5} reset={0} format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`} onChange={(v) => setParam("makeup", v)} />
+          <ValueCell label="LOOK" value={get("lookahead")} min={0} max={10} step={0.1} reset={0} format={(v) => (v <= 0 ? "OFF" : `${v.toFixed(1)}ms`)} onChange={(v) => setParam("lookahead", v)} />
+        </div>
+      </CompViz>
 
       {/* The foot strip — same position and language as every other device. MODE is the
           instrument (each mode re-times the ballistics underneath), AUTO is a real toggle, and
@@ -141,11 +121,10 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
           AUTO
         </button>
         <span className="fx-sep" />
-        <button className={!ext ? "active" : ""} onClick={() => setParam("scExt", 0)} title="Detector listens to this channel">
-          SC: INT
-        </button>
-        <button className={ext ? "active" : ""} onClick={() => setParam("scExt", 1)} title={`Detector listens to deck ${id === "A" ? "B" : "A"} — the other track ducks this one`}>
-          SC: {id === "A" ? "B" : "A"}
+        {/* One toggle, not two mutually-exclusive buttons standing in for it — INT/EXT is a
+            single real state, same idiom as AUTO right next to it. */}
+        <button className={ext ? "active" : ""} onClick={() => setParam("scExt", ext ? 0 : 1)} title={ext ? "Detector listens to this channel — tap for the other deck" : `Detector listens to deck ${id === "A" ? "B" : "A"} — the other track ducks this one`}>
+          SC: {ext ? (id === "A" ? "B" : "A") : "INT"}
         </button>
       </div>
     </div>

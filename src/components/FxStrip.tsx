@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
-import { loadFxPresets, saveFxPreset, renameFxPreset, deleteFxPreset, factoryFxPresets } from "@htl/audio";
-import { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
+import { saveFxPreset, renameFxPreset, factoryFxPresets, loadFxPresets, loadFxBank } from "@htl/audio";
+import { saveChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
 import { DelayPanel } from "./DelayPanel";
 import { ReverbPanel } from "./ReverbPanel";
@@ -13,8 +13,9 @@ import { GatePanel } from "./GatePanel";
 import { NoisePanel } from "./NoisePanel";
 import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
-import { StemPicker, STEMS, ALL_STEM_BITS } from "./StemPicker";
+import { StemPicker, STEMS } from "./StemPicker";
 import { Menu, MenuFly } from "./ContextMenu";
+import { bankChainRows, chainOf, CHAIN_KIND, resolveFxRows, presetOf, isGroup, isRef, reorderTop, reorderInGroup, fileIntoGroup, moveOutOfGroup, moveBetweenGroups, addFxSection, deleteFxSection, deleteFxRow, revertFxRow, renameFxSection, materialiseFxRow, type FxRow, type FxLeaf, type FxPath } from "@htl/audio";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
 // the rack has always known, now offered per chain instead of once globally.
@@ -22,7 +23,8 @@ const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate",
 
 import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
-import { insertionToIndex, useReorderDrag } from "./useReorderDrag";
+import { DropLine, insertionToIndex, useReorderDrag } from "./useReorderDrag";
+import { useHoverDismiss } from "./useHoverDismiss";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
 // the EQ curve keeps its full height). EVERY device — the EQ included — is a first-class
@@ -67,10 +69,17 @@ export interface FxStripCtl {
  *  the menu the row lives in, so the two windows are the same object at two sizes rather than one
  *  box and a constant that used to be right. */
 type FlyAnchor = { left: number; right: number; top: number };
-function flyFrom(el: HTMLElement): { anchor: FlyAnchor; width: number } {
+function flyFrom(el: HTMLElement): { anchor: FlyAnchor } {
   const r = el.getBoundingClientRect();
-  const menu = el.closest<HTMLElement>(".fx-preset-menu");
-  return { anchor: { left: r.left, right: r.right, top: r.top }, width: menu?.getBoundingClientRect().width ?? r.width };
+  const menu = el.closest<HTMLElement>(".fx-preset-menu")?.getBoundingClientRect();
+  // ★ HORIZONTALLY IT HANGS OFF THE MENU, VERTICALLY OFF THE ROW. It used to take both from the
+  // row — but a row sits INSIDE the menu's 4px padding and its own border, so `row.right + gap`
+  // put the second window a few pixels inside the first one's edge: the two boxes overlapped, and
+  // on the flipped side the same error ran it back over the menu from the other direction. The
+  // row's TOP is still the right vertical anchor (the window should open beside the thing you
+  // pointed at); its left and right never were.
+  // Only the ANCHOR now — the window measures itself (see MenuFly).
+  return { anchor: { left: menu?.left ?? r.left, right: menu?.right ?? r.right, top: r.top } };
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, ctlRef }: FxStripProps) {
@@ -81,13 +90,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
   // Hardware preset browsing (FLX FX SELECT): a per-kind cursor (0 = Default, 1..N = factory bank)
   // + a brief on-screen flash of the applied preset name (so a hardware DJ sees what they landed on).
-  const presetIdxRef = useRef<Record<string, number>>({}); // per-kind cursor (0=Default, 1..N=factory) for hardware FX-SELECT + the menu's active-preset mark
+  const presetNameRef = useRef<Record<string, string>>({}); // per-kind cursor BY NAME ("" = Default)
   const menuTimerRef = useRef<number | null>(null); // safety-net auto-dismiss for a HARDWARE-summoned menu (a DJ never clicks the backdrop)
   const menuRef = useRef<HTMLDivElement>(null); // the open preset menu — to keep the active item scrolled into view
   const closeMenu = () => { if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; } setMenu(null); };
   useEffect(() => () => { if (menuTimerRef.current) clearTimeout(menuTimerRef.current); }, []);
   // Styled name prompt (replaces window.prompt) for saving / renaming a preset.
-  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: string } | { mode: "chainPreset"; name: string } | null>(null);
+  const [dialog, setDialog] = useState<{ mode: "save"; kind: FxKind; params: Record<string, number> } | { mode: "rename"; kind: FxKind; name: string } | { mode: "chain"; at: string } | { mode: "chainPreset"; name: string } | { mode: "section"; kind: string; at: number; name: string } | { mode: "newSection"; kind: string } | { mode: "renameRow"; kind: FxKind; path: FxPath; name: string } | null>(null);
 
   // ---- CHAINS ---------------------------------------------------------------------------------
   // A chain is a set of STEMS plus the devices that process them, and the set is a PARTITION: a
@@ -121,11 +130,50 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // (max-height + overflow-y), and an absolutely-positioned child of a scrolling box is CLIPPED by
   // it — which is why it appeared as a bare sliver against the menu's right edge. So it is
   // positioned `fixed`, measured from the row that opened it.
-  const [addHover, setAddHover] = useState<{ kind: FxKind; anchor: FlyAnchor; width: number } | null>(null);
-  // The CHAIN menu's second window: what a saved/factory chain actually contains. Recalling one
-  // REPLACES the chain's devices, so "what am I about to get, and what am I about to lose" is a
-  // question worth answering before the click rather than after it.
-  const [chainHover, setChainHover] = useState<{ key: string; preset: ChainPreset; anchor: FlyAnchor; width: number } | null>(null);
+  const [addHover, setAddHover] = useState<{ kind: FxKind; anchor: FlyAnchor } | null>(null);
+  // The THIRD window on the add path: a section's contents. The add picker's flyout shows the same
+  // arrangement the right-click menu does, so it shows sections, and a section has to open the same
+  // way there as it does there.
+  const [addFly, setAddFly] = useState<{ at: number; name: string; anchor: FlyAnchor } | null>(null);
+  // ★ THE CHAIN MENU GETS THE ROW MENU TOO. Its saved rows carried three inline glyphs — › preview,
+  // ✎ rename, ✕ remove — which is exactly the clutter the preset menu was cleared of, and the ✕ was
+  // a chain deleted by a bare 22px glyph one pixel from the rename. The acts live on a right-click
+  // (long-press on touch) now, the same gesture and the same third layer as the preset rows.
+  const [chainRowMenu, setChainRowMenu] = useState<{ x: number; y: number; preset: ChainPreset; path: FxPath; factory: boolean } | null>(null);
+  const longChain = useLongPress<{ preset: ChainPreset; path: FxPath; factory: boolean }>((d, x, y) => { setChainPeek(null); setChainRowMenu({ x, y, ...d }); });
+  // ★ THE CHAIN BANK IS A BANK — the same arrangement engine, so the same two drags and the same
+  // second window. `chainFly` is a SECTION's contents, exactly like `presetFly`; the old
+  // hover-a-row-to-preview-its-devices window is gone, and that manifest lives in the row menu now
+  // (see below). Three windows was already the ceiling; four would have been a stack, not a menu.
+  // ★ THE PEEK — a chain's CONTENTS, on hover of the row, as a third window. Recalling a chain
+  // REPLACES what the chain holds, so "what am I about to get, and what am I about to lose" is a
+  // question worth answering before the click. It briefly lived in the row menu instead; a manifest
+  // you have to right-click for is one you do not read.
+  const [chainPeek, setChainPeek] = useState<{ key: string; preset: ChainPreset; anchor: FlyAnchor } | null>(null);
+  // ★ A HOVER-OPENED WINDOW NEEDS A HOVER-OUT, AND THE ROW IS NOT IT. The peek closes on its OWN
+  // mouseleave — which never fires if you leave the ROW without ever reaching the window, so moving
+  // the pointer off the list left it stranded on screen over everything else. Leaving the row arms
+  // a short grace instead: entering the peek (or another row) cancels it, and anything else lets it
+  // close. The grace is what makes the gap between the row and the window crossable at all.
+  const peekTimer = useRef<number | undefined>(undefined);
+  const holdPeek = () => { if (peekTimer.current) clearTimeout(peekTimer.current); peekTimer.current = undefined; };
+  const dropPeek = (now = false) => {
+    holdPeek();
+    if (now) return setChainPeek(null);
+    peekTimer.current = window.setTimeout(() => setChainPeek(null), 140);
+  };
+  useEffect(() => () => holdPeek(), []);
+
+  const [chainFly, setChainFly] = useState<{ at: number; name: string; anchor: FlyAnchor } | null>(null);
+  const [chainTickBump, setChainTickBump] = useState(0);
+  const chainRows: FxRow[] = useMemo(() => (chainMenu ? bankChainRows() : []), [chainMenu, chainTick, chainTickBump]);
+  const bumpChains = () => { setChainTick((t) => t + 1); setChainTickBump((t) => t + 1); };
+  const chainDragged = useRef(false);
+  // The PRESET menu's second window: one section's contents. A user's bank outgrows a single list,
+  // and how it wants grouping is theirs to decide — so a section is a separator ROW in their own
+  // saved array (fxPresets.ts) and its presets live behind this window rather than inline. The
+  // first window then stops growing: adding thirty presets adds rows you do not see, not scroll.
+  const [presetFly, setPresetFly] = useState<{ at: number; name: string; anchor: FlyAnchor } | null>(null);
   const devices = deck.fxDevices; // every device this deck owns, in signal order
   // ★ NEVER PRESENT A HALF-BUILT RACK. The EQ is built in the Deck's constructor; the rest can
   // only be built once the worklets attach, so for a beat at every boot the rack is the EQ alone —
@@ -142,7 +190,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // so this is every kind the chain doesn't already hold — a chain can have its own EQ even while
   // the master has one.
   const others = !ready || !chain ? [] : (ALL_KINDS.filter((k) => !chain.devices.some((d) => d.kind === k)) as FxKind[]);
-  const savedChains = useMemo(() => loadChainPresets(), [chainTick]);
   const gi = (i: number) => devices.indexOf(tabs[i]); // shown index → the deck's flat slot index
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = ready ? devices[cur] : undefined;
@@ -251,10 +298,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   // Every edit below is an ENGINE call, then a refresh. There is no local copy of the chain list
   // to keep in step, which is the whole reason the list moved into the deck.
-  const toggleStem = (bit: number, id = selChainId) => {
+  /** The whole set at once — what StemPicker's paint/solo gestures produce. FxRack.setChainStems
+   *  takes stems from every other chain in the SAME act, so a sweep that claims all four is one
+   *  re-partition and one rebuild, not four. */
+  const setChainStems = (m: number, id = selChainId) => {
     const c = deck.fxChain(id);
-    if (!c || c.master) return; // the master takes the SUM of the chains, not stems
-    deck.setFxChainStems(id, c.stems & bit ? c.stems & ~bit : c.stems | bit);
+    if (!c || c.master) return;
+    deck.setFxChainStems(id, m);
     refresh();
   };
   const addChain = () => {
@@ -264,10 +314,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   /** Give a device to a chain. Kinds are unique WITHIN a chain, free ACROSS them — so this never
    *  takes anything from anyone: it BUILDS one here. */
-  const addDeviceToChain = (kind: FxKind, id = selChainId, preset?: { name: string; params: Record<string, number> }, presetIdx = 0) => {
+  const addDeviceToChain = (kind: FxKind, id = selChainId, preset?: { name: string; params: Record<string, number> }) => {
     const d = deck.addFxTo(id, kind);
     if (!d) return;
-    presetIdxRef.current[kind] = presetIdx;
+    // The picker's cursor is the preset's NAME now, like everywhere else — it used to hand down a
+    // factory INDEX, which stopped identifying anything once the list became arrangeable.
+    presetNameRef.current[kind] = preset?.name ?? "";
     const slot = deck.fxDevices.indexOf(d);
     if (slot >= 0) {
       select(slot);
@@ -412,11 +464,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const at = live.current.cur;
         const dev = deck.fxDeviceAt(at);
         if (!dev) return;
-        const bank = factoryFxPresets(dev.kind);
-        const n = bank.length + 1; // slot 0 = Default, 1..N = factory presets
-        let pi = presetIdxRef.current[dev.kind] ?? 0;
+        // ★ THE RESOLVED LIST, NOT THE FACTORY BANK. The browse used to index into
+        // factoryFxPresets() — which was fine while that list was fixed and read-only, and is
+        // wrong the moment the arrangement can be reordered, grouped and pruned: it would have
+        // stepped confidently onto a different preset than the one the menu marks. It walks what
+        // the menu shows now, addressed BY NAME, and separators are not stops (a hardware press
+        // that lands on a heading and applies nothing reads as a dead button).
+        const bank = loadFxPresets(dev.kind);
+        const n = bank.length + 1; // slot 0 = Default, then the arrangement in its own order
+        const cur = presetNameRef.current[dev.kind] ?? "";
+        const found = cur ? bank.findIndex((p) => p.name === cur) : -1;
+        let pi = cur === "" ? 0 : found >= 0 ? found + 1 : 0;
         pi = (((pi + dir) % n) + n) % n;
-        presetIdxRef.current[dev.kind] = pi;
+        presetNameRef.current[dev.kind] = pi === 0 ? "" : bank[pi - 1].name;
         // Wet/dry and bypass are live performance state — a preset browse never touches either.
         if (pi === 0) {
           deck.resetFxParamsAt(at);
@@ -450,20 +510,157 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
 
   // --- presets (right-click an effect tab) ---
   const menuDev = menu ? deck.fxDeviceAt(menu.slot) : null;
-  const menuPresets = useMemo(() => (menuDev ? loadFxPresets(menuDev.kind) : []), [menuDev, presetTick]);
-  const factoryPresets = useMemo(() => (menuDev ? factoryFxPresets(menuDev.kind) : []), [menuDev]); // built-in, read-only
-  const activePresetIdx = menuDev ? presetIdxRef.current[menuDev.kind] ?? 0 : 0; // 0 = Default, 1..N = factory (marks the applied one)
+  // ★ ONE LIST NOW. Factory presets are REFERENCES inside the same arrangement as your own, so
+  // there is no separate read-only bank pinned to the bottom of the menu any more — you group,
+  // reorder, edit and delete all of them together, and a factory preset added in a later release
+  // still arrives (resolveFxRows appends it under NEW). What "factory" still buys is the thing
+  // that matters: the shipped params stay in code, so every one of them can be reverted.
+  const menuRows: FxRow[] = useMemo(() => (menuDev ? resolveFxRows(menuDev.kind) : []), [menuDev, presetTick]);
+  const presetKind = menuDev?.kind ?? "";
+  const bumpPresets = () => setPresetTick((t) => t + 1);
+
+  // ★ THE ROW MENU. Every per-row glyph is in here instead — rename, revert, move out, delete, and
+  // for a heading rename/remove. Five things on a row is a toolbar, not a list, and the menu they
+  // sat in is 168px wide. Opened by right-click, or by a tap-and-hold on touch (useLongPress's
+  // 460ms, the same stand-in the rest of the app uses). The rows themselves are now nothing but
+  // their names, which is what a list of presets should look like.
+  // ★ A DRAG ENDS IN A CLICK, AND THAT CLICK IS NOT AN APPLY. The row is the drag handle and the
+  // name button sits inside it, so pointerup after a reorder fired the button too — you could not
+  // rearrange a bank without loading half of it into the deck on the way past. The tab and chain
+  // strips already carried a draggedRef for exactly this; the menu rows did not.
+  const presetDragged = useRef(false);
+  // ★ ONE ROW MENU, AND IT NAMES ITS BANK. It read `menuDev.kind` throughout and rendered only when
+  // a DEVICE menu was open — so right-clicking a section heading in the CHAIN menu set this state
+  // and then nothing appeared, and chain sections had no rename and no remove at all while every
+  // effect bank had both. A row menu belongs to the bank whose row was clicked, not to whichever
+  // menu happens to be open.
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; kind: string; path: FxPath; group: boolean; name: string; factory: boolean } | null>(null);
+  const openRowMenu = (kind: string, x: number, y: number, path: FxPath, group: boolean, name: string, factory: boolean) => setRowMenu({ x, y, kind, path, group, name, factory });
+  const longRow = useLongPress<{ kind: string; path: FxPath; group: boolean; name: string; factory: boolean }>((d, x, y) => openRowMenu(d.kind, x, y, d.path, d.group, d.name, d.factory));
+  // Which second window a bank's edits have to close, and which tick re-reads it.
+  const closeBankFly = (kind: string) => (kind === CHAIN_KIND ? setChainFly(null) : setPresetFly(null));
+  const bumpBank = (kind: string) => (kind === CHAIN_KIND ? bumpChains() : bumpPresets());
+
+  // ★ SHOW WHERE IT WENT. A cross-group drop moves a row into a list that is not on screen, so the
+  // only trace it left was one digit changing on two headings — from the operator's side that is
+  // indistinguishable from a drag that did nothing, which is exactly what "moving between groups
+  // doesn't work" turned out to be. So the drop OPENS THE TARGET, and the row is right there.
+  // After the next paint, because the index is only meaningful once the mutation has rendered.
+  const revealGroup = (at: number, name: string) =>
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-group="fxpreset:${id}"][data-row] [data-drag="${at}"]`);
+      if (el) setPresetFly({ at, name, ...flyFrom(el) });
+    });
+
+  // Reordering INSIDE a section — its own group id, or the two vertical lists hit-test into each
+  // other while both are on screen.
+  const sectionDrag = useReorderDrag({
+    group: `fxsection:${id}`,
+    axis: "y",
+    ghost: true,
+    // ★ THE WAY OUT OF A GROUP IS THE SAME GESTURE AS THE WAY IN. This drag accepts the FIRST
+    // window's targets too: a section heading (move straight into that group) and the list's own
+    // background (back to the top level). Without it the only exit was the row menu's "move out",
+    // which is fine as a fallback and hopeless as the primary gesture — you can drag a preset in
+    // and then not drag it out again.
+    accept: [`fxpreset:${id}`, `fxtop:${id}`],
+    onStart: () => { presetDragged.current = true; longRow.cancel(); setRowMenu(null); },
+    onReorder: (from, at) => {
+      if (presetFly) reorderInGroup(presetKind, presetFly.at, from, at);
+      bumpPresets();
+    },
+    onDropOn: (from, dropId, grp, at) => {
+      if (!presetFly) return;
+      setPresetFly(null); // the window it came from is about to be a different list
+      if (grp === `fxtop:${id}`) {
+        // `at` is where in the TOP-LEVEL list the pointer was — the wrapper is a drop-list, so a
+        // row leaving a group lands in the gap you aimed at rather than always beside its section.
+        // The pinned lane in the chin is the one target with no position of its own: it MEANS the
+        // end, which is the one gap a scrolling list can never show you.
+        moveOutOfGroup(presetKind, presetFly.at, from, dropId === "end" ? menuRows.length : at);
+      } else {
+        const toG = Number(dropId);
+        if (toG === presetFly.at) return bumpPresets(); // its own heading: nothing moves
+        moveBetweenGroups(presetKind, presetFly.at, from, toG);
+        const g = menuRows[toG];
+        if (g && isGroup(g)) revealGroup(toG, g.name);
+      }
+      bumpPresets();
+    },
+  });
+  // ★ ONE DRAG FOR THE WHOLE TOP LEVEL, presets and sections alike — which is the point of the
+  // nesting. The flat model could only ever render loose presets and THEN sections, because a row
+  // after a separator was IN that section by definition; there was no way to express a preset
+  // sitting between two groups. Now the top level is just a list of rows and this reorders it.
+  const presetDrag = useReorderDrag({
+    group: `fxpreset:${id}`,
+    axis: "y", // a menu is a column; the hook was x-only until this needed it
+    ghost: true, // the menu clips at 240px, and a row transformed in place can never leave it
+    // A SECTION cannot go inside a section — the arrangement is one level deep. Saying so here is
+    // what stops a heading from outlining itself as a target for a drag the model will refuse.
+    canDropOn: (from) => !isGroup(menuRows[from]),
+    onStart: () => { presetDragged.current = true; longRow.cancel(); setRowMenu(null); },
+    onReorder: (from, at) => {
+      reorderTop(presetKind, from, at);
+      bumpPresets();
+    },
+    onDropOn: (from, dropId) => {
+      const g = Number(dropId);
+      fileIntoGroup(presetKind, from, g);
+      // Filing REMOVES a top-level row, so every heading after the source shifts up one.
+      const toG = from < g ? g - 1 : g;
+      const grp = menuRows[g];
+      if (grp && isGroup(grp)) revealGroup(toG, grp.name);
+      bumpPresets();
+    },
+  });
+  // ★ THE SAME TWO DRAGS, ONE BANK OVER. Nothing here is chain-specific: the arrangement engine
+  // does not know what a leaf IS, so wiring a second bank to it is wiring, not a second design.
+  const chainSectionDrag = useReorderDrag({
+    group: `chainsection:${id}`,
+    axis: "y",
+    ghost: true,
+    accept: [`chainpreset:${id}`, `chaintop:${id}`],
+    onStart: () => { chainDragged.current = true; longChain.cancel(); setChainRowMenu(null); dropPeek(true); },
+    onReorder: (from, at) => { if (chainFly) reorderInGroup(CHAIN_KIND, chainFly.at, from, at); bumpChains(); },
+    onDropOn: (from, dropId, grp, at) => {
+      if (!chainFly) return;
+      const src = chainFly.at;
+      setChainFly(null);
+      if (grp === `chaintop:${id}`) moveOutOfGroup(CHAIN_KIND, src, from, dropId === "end" ? chainRows.length : at);
+      else {
+        const toG = Number(dropId);
+        if (toG === src) return bumpChains();
+        moveBetweenGroups(CHAIN_KIND, src, from, toG);
+      }
+      bumpChains();
+    },
+  });
+  const chainTopDrag = useReorderDrag({
+    group: `chainpreset:${id}`,
+    axis: "y",
+    ghost: true,
+    canDropOn: (from) => !isGroup(chainRows[from]),
+    onStart: () => { chainDragged.current = true; longChain.cancel(); setChainRowMenu(null); dropPeek(true); },
+    onReorder: (from, at) => { reorderTop(CHAIN_KIND, from, at); bumpChains(); },
+    onDropOn: (from, dropId) => { fileIntoGroup(CHAIN_KIND, from, Number(dropId)); bumpChains(); },
+  });
+
+  const activePresetName = menuDev ? presetNameRef.current[menuDev.kind] ?? "" : "";
+  const hiddenCount = useMemo(() => (menuDev ? loadFxBank(menuDev.kind).gone.length : 0), [menuDev, presetTick]);
+
   // Keep the active preset scrolled into view as the list is cycled (a hardware browse can walk past
   // the visible window). Scrolls ONLY the menu container — no page jump.
   useEffect(() => {
-    const cont = menuRef.current;
+    // The menu itself stopped being the scroller when it grew a chin — its body is.
+    const cont = menuRef.current?.querySelector<HTMLElement>(".fx-menu-body") ?? menuRef.current;
     const el = cont?.querySelector<HTMLElement>(".fx-palette-item.sel");
     if (!cont || !el) return;
     const top = el.offsetTop;
     const bottom = top + el.offsetHeight;
     if (top < cont.scrollTop) cont.scrollTop = top - 6;
     else if (bottom > cont.scrollTop + cont.clientHeight) cont.scrollTop = bottom - cont.clientHeight + 6;
-  }, [menu, activePresetIdx]);
+  }, [menu, activePresetName]);
   // Adjusting wet/dry (the FLX BEAT-FX knob or the on-screen MIX cell) dismisses the browse — it means
   // "I'm tuning this now", not still picking. Preset cycling PRESERVES mix, so this never false-fires;
   // EQ has no mix param, and the first observation is skipped.
@@ -546,7 +743,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const applyDefault = (slot: number) => {
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
-    presetIdxRef.current[d.kind] = 0; // keep the hardware FX-SELECT cursor in sync with a mouse apply
     deck.resetFxParamsAt(slot);
     armEq(d, "Default"); // the device is AT its defaults now → snapshot them as the armed curve
     syncDevice(d);
@@ -559,13 +755,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setMenu(null);
     setDialog({ mode: "save", kind: d.kind, params: d.snapshotParams() });
   };
-  const renamePreset = (kind: FxKind, name: string) => {
-    setMenu(null);
-    setDialog({ mode: "rename", kind, name });
-  };
-  const deletePreset = (kind: FxKind, name: string) => {
-    deleteFxPreset(kind, name);
-    setPresetTick((t) => t + 1); // keep the menu open, just drop the row
+  /** Apply a preset AND remember it by NAME. The cursor used to be the factory bank's INDEX, which
+   *  stopped meaning anything the moment the list became reorderable, groupable and deletable —
+   *  and would have silently browsed to the wrong preset rather than failing. */
+  const applyPresetNamed = (slot: number, p: { name: string; params: Record<string, number> }) => {
+    const d = deck.fxDeviceAt(slot);
+    if (d) presetNameRef.current[d.kind] = p.name;
+    applyPreset(slot, p);
   };
 
   // --- shared toolbar (acts on the selected device) ---
@@ -657,6 +853,118 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     }
     refresh();
   };
+
+  // ONE row renderer for both windows: a name, a drag handle, and a right-click. Every act that
+  // used to be a glyph on the row is in the row menu now.
+  const presetRow = (l: FxLeaf, path: FxPath, i: number, drag: ReturnType<typeof useReorderDrag>) => {
+    if (!menu || !menuDev) return null;
+    const p = presetOf(menuDev.kind, l);
+    if (!p) return null;
+    const factory = isRef(l);
+    return (
+      <div
+        key={`p:${path.join(":")}:${p.name}`}
+        className={`fx-preset-row ${chainPeek?.key === path.join(":") ? "hot" : ""} ${drag.from === i ? "reorder-source" : ""}`}
+        {...drag.bind(i)}
+        {...longRow.bind({ kind: menuDev.kind, path, group: false, name: p.name, factory })}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation(); // the menu backdrop's own right-click closes the whole menu
+          openRowMenu(menuDev.kind, e.clientX, e.clientY, path, false, p.name, factory);
+        }}
+      >
+        <button className={`fx-palette-item fx-preset-apply ${factory ? "is-factory" : ""}`} role="menuitem" title={`Apply ${p.name} — right-click for more, drag to reorder`} onClick={() => { if (presetDragged.current) return; applyPresetNamed(menu.slot, p); }}>
+          {p.name}
+        </button>
+      </div>
+    );
+  };
+
+  // ONE row for a chain preset, saved or factory — a name and a right-click, exactly like a preset
+  // row. The ✎ and ✕ that used to ride on the saved ones are row-menu items now: a chain is a
+  // bigger thing to lose than a preset, and losing it to a bare glyph beside the rename it is one
+  // pixel from was the worst destructive affordance left in the strip.
+  const chainRow = (l: FxLeaf, path: FxPath, i: number, drag: ReturnType<typeof useReorderDrag>) => {
+    const p = chainOf(l);
+    if (!p) return null;
+    const factory = isRef(l);
+    return (
+      <div
+        key={`c:${path.join(":")}:${p.name}`}
+        className={`fx-preset-row ${chainPeek?.key === path.join(":") ? "hot" : ""} ${drag.from === i ? "reorder-source" : ""}`}
+        {...drag.bind(i)}
+        data-peek-row={path.join(":")}
+        onMouseEnter={(e) => { holdPeek(); if (!chainRowMenu && drag.from == null) setChainPeek({ key: path.join(":"), preset: p, ...flyFrom(e.currentTarget) }); }}
+        onMouseLeave={() => dropPeek()}
+        {...longChain.bind({ preset: p, path, factory })}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation(); // the menu backdrop's own right-click closes the whole menu
+          dropPeek(true);
+          setChainRowMenu({ x: e.clientX, y: e.clientY, preset: p, path, factory });
+        }}
+      >
+        <button className={`fx-palette-item fx-preset-apply ${factory ? "is-factory" : ""}`} role="menuitem" title={`Recall ${p.name} — right-click for more`} onClick={() => { if (chainDragged.current) return; if (chainMenu) applyChainPreset(chainMenu.id, p); }}>
+          {p.name}
+        </button>
+      </div>
+    );
+  };
+
+  // The ADD picker reads the SAME arrangement the right-click menu does — see the flyout below.
+  const addRows: FxRow[] = useMemo(() => (addHover ? resolveFxRows(addHover.kind) : []), [addHover, presetTick]);
+  // Which kinds have anything to offer at all: the chevron, and the hover, are gated on it. Off the
+  // arrangement, not the factory bank — a kind whose presets you have all deleted has none.
+  const addHas = useMemo(() => {
+    const m: Record<string, boolean> = {};
+    if (addMenu) for (const k of others) m[k] = resolveFxRows(k).some((r) => (isGroup(r) ? r.items.length > 0 : true));
+    return m;
+  }, [addMenu, others.join(","), presetTick]);
+  const addGone = useMemo(() => (addHover ? loadFxBank(addHover.kind).gone.length : 0), [addHover, presetTick]);
+  // One row, both windows — the same markup the preset menu uses for a leaf, minus the editing.
+  const addLeaf = (l: FxLeaf, key: string) => {
+    if (!addHover) return null;
+    const p = presetOf(addHover.kind, l);
+    if (!p) return null;
+    return (
+      <button key={key} className={`fx-palette-item fx-preset-apply ${isRef(l) ? "is-factory" : ""}`} role="menuitem" title={p.name} onClick={() => { addDeviceToChain(addHover.kind, selChainId, p); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
+        {p.name}
+      </button>
+    );
+  };
+
+  // The five hover-opened windows in this strip all close by the same rule — see useHoverDismiss.
+  // Each names the window and the row that opened it; a null key turns the watch off entirely
+  // (a menu is open above it, or a drag is running, and neither is a hover).
+  useHoverDismiss(
+    chainPeek && !chainRowMenu ? `peek:${chainPeek.key}` : null,
+    [".fx-menu-fly.layer-3", `[data-peek-row="${chainPeek?.key ?? ""}"]`],
+    () => setChainPeek(null),
+  );
+  // A SECTION's window, in each of the three menus that has one. The heading is never "left" if you
+  // change your mind on the way to the flyout — nothing fires — so this is the only thing that
+  // closes them at all in that case. The peek is a KEEP for the chain one: it opens from a row
+  // inside that window, and closing its parent out from under it is the same bug inverted.
+  useHoverDismiss(
+    presetFly && !rowMenu && presetDrag.from == null && sectionDrag.from == null ? `pfly:${presetFly.at}` : null,
+    [".fx-menu-fly", `[data-fly-row="fx:${presetFly?.at ?? -1}"]`],
+    () => setPresetFly(null),
+  );
+  useHoverDismiss(
+    chainFly && !chainRowMenu && !rowMenu && chainTopDrag.from == null && chainSectionDrag.from == null ? `cfly:${chainFly.at}` : null,
+    [".fx-menu-fly", `[data-fly-row="chain:${chainFly?.at ?? -1}"]`],
+    () => setChainFly(null),
+  );
+  useHoverDismiss(
+    addHover && !addFly ? `add:${addHover.kind}` : null,
+    [".fx-menu-fly", `[data-add-row="${addHover?.kind ?? ""}"]`],
+    () => setAddHover(null),
+  );
+  useHoverDismiss(
+    addFly ? `addfly:${addFly.at}` : null,
+    [".fx-menu-fly", `[data-addfly-row="add:${addFly?.at ?? -1}"]`],
+    () => setAddFly(null),
+  );
 
   return (
     <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
@@ -825,6 +1133,26 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           y={menu.y}
           innerRef={menuRef}
           onClose={() => setMenu(null)}
+          // ★ THE CHIN. DEFAULT is not a preset — it is the device's own reset state, so it is not
+          // in the arrangement and cannot be grouped, reordered or deleted. It also cannot be at
+          // the BOTTOM OF THE SCROLL: a bank of twenty rows in a 240px window put the way OUT of
+          // the list twenty rows inside it. Pinned under the body, it is where it always was on
+          // screen and no longer where the list happens to end.
+          chin={
+            <>
+              <button className={`fx-palette-item ${activePresetName === "" ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
+                Default
+              </button>
+              {/* The factory bank used to be pinned here as a second, read-only list. It is merged
+                  into the arrangement above now — as references, so the shipped params still live
+                  in code and every one of them can be reverted or restored. What remains is a note
+                  that a deleted factory preset is DELETED, not lost: without it, a preset you
+                  dropped weeks ago just looks like the app mislaid it. Deliberately not actionable
+                  from the deck — the restore is three deliberate steps away, in Settings, where it
+                  cannot be hit mid-set. */}
+              {hiddenCount > 0 && <div className="fx-preset-note">{hiddenCount} hidden — Settings ▸ Audio</div>}
+            </>
+          }
           // ★ IDENTICAL EVERYWHERE — the master's devices get exactly the menu a stem chain's do.
           // Two menus that differ by context is what made right-clicking two tabs in a row flicker
           // between shapes; the fix is one shape, not a smarter guess about which to show.
@@ -838,6 +1166,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             // one act, on every surface. (The hardware SHIFT+BEAT knob still calls moveSelBy.)
             { glyph: "⇄", title: `Copy ${KIND_LABEL[menuDev.kind] ?? menuDev.kind.toUpperCase()} to deck ${otherId}`, onClick: () => { copyDeviceToOther(menu.slot); setMenu(null); } },
             { glyph: "＋", title: "Save the current settings as a preset", onClick: () => saveCurrent(menu.slot) },
+            // ▭ — a SECTION. Nothing hardcoded: the factory bank stays one flat read-only list,
+            // and how your OWN saved presets are grouped is yours to decide. It lands at the
+            // bottom; drag it where you want it, then drag presets onto it.
+            { glyph: "▭", title: "Add a section to your saved presets", onClick: () => setDialog({ mode: "newSection", kind: menuDev.kind }) },
             {
               glyph: "✕",
               // Named after the chain that actually HOLDS it, which is not always the selected one.
@@ -850,30 +1182,70 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           {/* ★ YOURS FIRST. The saved ones are what gets reached for mid-set; the factory bank is
               a place you go shopping, once. It used to run Default → factory → yours, which put
               the thing you actually use at the bottom of a scroll. */}
-          {menuPresets.map((p) => (
-            <div key={p.name} className="fx-preset-row">
-              <button className="fx-palette-item fx-preset-apply" role="menuitem" title={`Apply ${p.name}`} onClick={() => applyPreset(menu.slot, p)}>
-                {p.name}
-              </button>
-              <button className="fx-preset-mini" title="Rename" aria-label="Rename preset" onClick={() => renamePreset(menuDev.kind, p.name)}>
-                ✎
-              </button>
-              <button className="fx-preset-mini danger" title="Remove" aria-label="Remove preset" onClick={() => deletePreset(menuDev.kind, p.name)}>
-                ✕
-              </button>
+          {/* ★ ONE LIST, PRESETS AND SECTIONS INTERLEAVED — which is what nesting bought. While a
+              section was a separator in a flat array, membership fell out of order, so a row after
+              a heading WAS in that heading and the top level could only ever be "every loose
+              preset, then every section". A section is a container now, so this is just the rows
+              in the order you put them in. */}
+          {/* The wrapper is the "back to the top level" target, and it carries its OWN group id so
+              the first window's own drag never sees it — otherwise every drop that was not on a
+              heading would read as "move to top" and ordinary reordering would stop working. A
+              heading nested inside still wins, because closest() finds the innermost match. */}
+          {/* Absolutely positioned over the menu's own bottom edge (see .fx-end-strip): it costs
+              NO layout, so it can come and go with the drag without moving the list underneath —
+              which is what ruled out both the chin versions of it. */}
+          {sectionDrag.from != null && (
+            <div className={`fx-end-strip ${sectionDrag.onto === "end" ? "drop" : ""}`} data-drop="end" data-group={`fxtop:${id}`} aria-hidden="true">
+              TO THE END
             </div>
-          ))}
-          {menuPresets.length > 0 && <div className="fx-preset-sep" />}
-          <button className={`fx-palette-item ${activePresetIdx === 0 ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
-            Default
-          </button>
-          {/* Factory bank — built-in, read-only (apply only, no rename/remove). The applied one is marked. */}
-          {factoryPresets.length > 0 && <div className="fx-preset-sep" />}
-          {factoryPresets.map((p, i) => (
-            <button key={`f:${p.name}`} className={`fx-palette-item fx-preset-apply ${activePresetIdx === i + 1 ? "sel" : ""}`} role="menuitem" title="Apply factory preset" onClick={() => { presetIdxRef.current[menuDev.kind] = i + 1; applyPreset(menu.slot, p); }}>
-              {p.name}
-            </button>
-          ))}
+          )}
+          <div className={`fx-top-zone ${sectionDrag.onto === "top" ? "drop" : ""} ${presetDrag.from != null || sectionDrag.from != null ? "dragging" : ""}`} data-drop="top" data-group={`fxtop:${id}`}>
+          <div {...presetDrag.row} onPointerDownCapture={() => { presetDragged.current = false; }}>
+            {menuRows.map((r, i) => (
+              <Fragment key={`r:${i}`}>
+                <DropLine show={presetDrag.at === i || (sectionDrag.onto === "top" && sectionDrag.intoAt === i)} />
+                {
+              isGroup(r) ? (
+                <div
+                  key={`s:${i}:${r.name}`}
+                  data-fly-row={`fx:${i}`}
+                  className={`fx-preset-row fx-section-row ${presetFly?.at === i ? "hot" : ""} ${presetDrag.onto === String(i) || (sectionDrag.onto === String(i) && presetFly?.at !== i) ? "drop" : ""} ${presetDrag.from === i ? "reorder-source" : ""}`}
+                  // Not while a menu is open above (its backdrop would be the thing "entering"),
+                  // and NOT MID-DRAG: dragging a preset onto a heading made that heading open its
+                  // flyout over the very drop target you were aiming at. The `.drop` outline is
+                  // the feedback a drag needs; a window opening under your finger is not.
+                  // …and not while EITHER drag runs: a heading that re-targets the open flyout
+                  // mid-drag would also re-target the source group a flyout drop reads from, so
+                  // the row would be taken out of whichever section you last passed over.
+                  onMouseEnter={(e) => !rowMenu && presetDrag.from == null && sectionDrag.from == null && setPresetFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) })}
+                  {...presetDrag.bind(i)}
+                  {...presetDrag.foreign(String(i))}
+                  {...longRow.bind({ kind: menuDev.kind, path: [i] as FxPath, group: true, name: r.name, factory: false })}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openRowMenu(menuDev.kind, e.clientX, e.clientY, [i] as FxPath, true, r.name, false);
+                  }}
+                >
+                  {/* The COUNT LEADS, at a fixed width so every name starts on the same column —
+                      a count that re-indents each heading by its own number of digits reads as a
+                      ragged list. */}
+                  <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"} · right-click for more`} onClick={(e) => { if (presetDragged.current) return; setPresetFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
+                    <i className="fx-section-n">{r.items.length}</i>
+                    <span className="fx-section-label">{r.name}</span>
+                  </button>
+                </div>
+                ) : (
+                  presetRow(r, [i] as FxPath, i, presetDrag)
+                )}
+              </Fragment>
+            ))}
+            <DropLine show={presetDrag.at === menuRows.length || (sectionDrag.onto === "top" && sectionDrag.intoAt === menuRows.length)} />
+          </div>
+            {/* The in-list landing strip that used to live here is gone: it was the end of a list
+                that scrolls, so on any bank long enough to need it, it was past the fold. Its job
+                belongs to the pinned lane in the chin (see below), which never scrolls away. */}
+          </div>
         </Menu>
       )}
 
@@ -886,11 +1258,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           x={chainMenu.x}
           y={chainMenu.y}
           wide
-          onClose={() => { setChainMenu(null); setChainHover(null); }}
+          onClose={() => { setChainMenu(null); setChainFly(null); setChainRowMenu(null); dropPeek(true); }}
           acts={[
             // The whole chain, to the other deck — name, stems, devices, params, order.
             { glyph: "⇄", title: `Copy ${(deck.fxChain(chainMenu.id)?.name ?? "this chain")} to deck ${otherId}`, onClick: () => { copyChainToOther(chainMenu.id); setChainMenu(null); } },
             { glyph: "＋", title: "Save this chain as a preset", onClick: () => { setDialog({ mode: "chain", at: chainMenu.id }); setChainMenu(null); } },
+            // The same act every effect bank has. A bank you can rename and remove sections in but
+            // not ADD one to is a bank that can only ever shrink.
+            { glyph: "▭", title: "Add a section to your saved chains", onClick: () => setDialog({ mode: "newSection", kind: CHAIN_KIND }) },
             ...(!!deck.fxChain(chainMenu.id)?.master
               ? [] // the master is the channel; it cannot leave
               : [{ glyph: "✕", title: `Delete ${(deck.fxChain(chainMenu.id)?.name ?? "")}`, danger: true, onClick: () => { removeChain(chainMenu.id); setChainMenu(null); } }]),
@@ -906,46 +1281,51 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             <>
               <StemPicker
                 mask={deck.fxChain(chainMenu.id)?.stems ?? 0}
-                allOn={((deck.fxChain(chainMenu.id)?.stems ?? 0) & ALL_STEM_BITS) === ALL_STEM_BITS}
-                onAll={() => { deck.setFxChainStems(chainMenu.id, ALL_STEM_BITS); refresh(); }}
-                onToggle={(bit) => toggleStem(bit, chainMenu.id)}
+                onCommit={(m) => setChainStems(m, chainMenu.id)}
               />
               <div className="fx-preset-sep" />
             </>
           )}
           {/* ★ YOURS FIRST — the saved chains are what gets recalled mid-set; the factory bank
               below is a place you go shopping, once. */}
-          {savedChains.map((p) => (
-            <div key={`uc:${p.name}`} className="fx-preset-row" onMouseEnter={(e) => setChainHover({ key: `uc:${p.name}`, preset: p, ...flyFrom(e.currentTarget) })}>
-              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `uc:${p.name}` ? "hot" : ""}`} role="menuitem" title={`Recall ${p.name}`} onClick={() => applyChainPreset(chainMenu.id, p)}>
-                {p.name}
-              </button>
-              {/* ★ TOUCH PARITY, the same way the add picker got it: hover does not exist on a
-                  phone, so the preview needs its own tap target. */}
-              <button className="fx-preset-mini" title="What's in it" aria-label={`What is in ${p.name}`} onClick={(e) => { e.stopPropagation(); setChainHover({ key: `uc:${p.name}`, preset: p, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
-                ›
-              </button>
-              {/* Inline ✎ / ✕ on the SAVED chains only — the factory ones below are read-only,
-                  exactly as the factory effect presets are. */}
-              <button className="fx-preset-mini" title="Rename this saved chain" aria-label="Rename saved chain" onClick={() => setDialog({ mode: "chainPreset", name: p.name })}>
-                ✎
-              </button>
-              <button className="fx-preset-mini danger" title="Remove this saved chain" aria-label="Remove saved chain" onClick={() => { deleteChainPreset(p.name); setChainTick((t) => t + 1); }}>
-                ✕
-              </button>
+          {/* ONE INTERLEAVED LIST — yours and the shipped ones together, in the order you put them
+              in. The old shape was "yours, a rule, then a read-only factory block", which is the
+              two-lists model the effect banks abolished: it cannot express a chain of yours sitting
+              inside a shipped section, and nothing in it could be reordered at all. */}
+          {/* The same lane, one bank over (see .fx-end-strip). */}
+          {chainSectionDrag.from != null && (
+            <div className={`fx-end-strip ${chainSectionDrag.onto === "end" ? "drop" : ""}`} data-drop="end" data-group={`chaintop:${id}`} aria-hidden="true">
+              TO THE END
             </div>
-          ))}
-          {savedChains.length > 0 && <div className="fx-preset-sep" />}
-          {factoryChainPresets().map((p) => (
-            <div key={`fc:${p.name}`} className="fx-preset-row" onMouseEnter={(e) => setChainHover({ key: `fc:${p.name}`, preset: p, ...flyFrom(e.currentTarget) })}>
-              <button className={`fx-palette-item fx-preset-apply ${chainHover?.key === `fc:${p.name}` ? "hot" : ""}`} role="menuitem" onClick={() => applyChainPreset(chainMenu.id, p)}>
-                {p.name}
-              </button>
-              <button className="fx-preset-mini" title="What's in it" aria-label={`What is in ${p.name}`} onClick={(e) => { e.stopPropagation(); setChainHover({ key: `fc:${p.name}`, preset: p, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
-                ›
-              </button>
+          )}
+          <div className={`fx-top-zone ${chainSectionDrag.onto === "top" ? "drop" : ""} ${chainTopDrag.from != null || chainSectionDrag.from != null ? "dragging" : ""}`} data-drop="top" data-group={`chaintop:${id}`}>
+            <div {...chainTopDrag.row} onPointerDownCapture={() => { chainDragged.current = false; }}>
+              {chainRows.map((r, i) => (
+                <Fragment key={`cr:${i}`}>
+                  <DropLine show={chainTopDrag.at === i || (chainSectionDrag.onto === "top" && chainSectionDrag.intoAt === i)} />
+                  {isGroup(r) ? (
+                    <div
+                      data-fly-row={`chain:${i}`}
+                      className={`fx-preset-row fx-section-row ${chainFly?.at === i ? "hot" : ""} ${chainTopDrag.onto === String(i) || (chainSectionDrag.onto === String(i) && chainFly?.at !== i) ? "drop" : ""} ${chainTopDrag.from === i ? "reorder-source" : ""}`}
+                      onMouseEnter={(e) => { if (chainRowMenu || chainTopDrag.from != null || chainSectionDrag.from != null) return; dropPeek(true); setChainFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) }); }}
+                      {...chainTopDrag.bind(i)}
+                      {...chainTopDrag.foreign(String(i))}
+                      {...longRow.bind({ kind: CHAIN_KIND, path: [i] as FxPath, group: true, name: r.name, factory: false })}
+                      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); dropPeek(true); openRowMenu(CHAIN_KIND, e.clientX, e.clientY, [i] as FxPath, true, r.name, false); }}
+                    >
+                      <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} chain${r.items.length === 1 ? "" : "s"}`} onClick={(e) => { if (chainDragged.current) return; setChainFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
+                        <i className="fx-section-n">{r.items.length}</i>
+                        <span className="fx-section-label">{r.name}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    chainRow(r, [i] as FxPath, i, chainTopDrag)
+                  )}
+                </Fragment>
+              ))}
+              <DropLine show={chainTopDrag.at === chainRows.length || (chainSectionDrag.onto === "top" && chainSectionDrag.intoAt === chainRows.length)} />
             </div>
-          ))}
+          </div>
         </Menu>
       )}
 
@@ -953,32 +1333,150 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           which is a destructive act behind a one-word label — "Vocal Air" tells you nothing about
           what it is or what it costs. So the same flyout that shows an effect's presets shows a
           chain's CONTENTS: which stems it claims, and the devices it brings, in signal order. */}
-      {chainMenu && chainHover && (
-        <MenuFly
-          anchor={chainHover.anchor}
-          width={chainHover.width}
-          head={chainHover.preset.name}
-          onEnter={() => setChainHover(chainHover)}
-          onLeave={() => setChainHover(null)}
-        >
-          {/* The stems are shown ALWAYS, unlike the picker on the chip — this is a description,
-              not a control. A manifest may state a fact the deck cannot act on yet; an input may
-              not ask a question the deck cannot answer. */}
+      {/* ★ THE SECTION'S CONTENTS — the second window, same widget and the opening menu's own
+          MEASURED width, so the pair is one object at two sizes. This is what keeps the first
+          window short: a section's presets are rows you do not see until you ask for them, which
+          is also why they need no collapsed-state persisted anywhere. Closed by moving off it. */}
+      {/* ★ THE SECTION'S CONTENTS — the second window, at the opening menu's own MEASURED width and
+          hanging off the MENU's edge rather than the row's, so the two never overlap. Its rows are
+          bare names too; delete, rename, revert and move-out are all on the right-click. */}
+      {menu && menuDev && presetFly && (() => {
+        const g = menuRows[presetFly.at];
+        if (!g || !isGroup(g)) return null;
+        return (
+          <MenuFly
+            anchor={presetFly.anchor}
+            head={g.name}
+            inert={presetDrag.from != null || sectionDrag.from != null}
+            onEnter={() => setPresetFly(presetFly)}
+            // ★ NOT WHILE A MENU IS OPEN ABOVE IT. The row menu's backdrop is `position: fixed;
+            // inset: 0`, so the instant it mounts the pointer is over the backdrop and no longer
+            // over this window — which fires mouseleave and closes the very window the menu was
+            // opened FROM. A hover-dismissed panel cannot dismiss itself on a hover it never lost.
+            // ★ NOR WHILE A DRAG IS RUNNING. Dragging a row OUT of this window is the whole point
+            // of accepting the first window's targets — and the moment the pointer crosses the
+            // edge, mouseleave fires and this window unmounts, taking `presetFly` with it. The drop
+            // then has no source group to move FROM and silently does nothing, which is exactly
+            // what "dragging out of a group doesn't work" looked like.
+            onLeave={() => {
+              if (!rowMenu && sectionDrag.from == null && presetDrag.from == null) setPresetFly(null);
+            }}
+          >
+            {g.items.length === 0 ? null : (
+              <div {...sectionDrag.row} onPointerDownCapture={() => { presetDragged.current = false; }}>
+                {g.items.map((l, i) => (
+                  <Fragment key={`i:${i}`}>
+                    <DropLine show={sectionDrag.at === i} />
+                    {presetRow(l, [presetFly.at, i] as FxPath, i, sectionDrag)}
+                  </Fragment>
+                ))}
+                <DropLine show={sectionDrag.at === g.items.length} />
+              </div>
+            )}
+          </MenuFly>
+        );
+      })()}
+
+      {/* ★ THE ROW MENU — everything that used to be a glyph on a row. It is the third window, and
+          it needs its own layer: the preset menu sits at z-index 41 and its flyout at 43, so a menu
+          opened FROM the flyout has to sit above both or it opens underneath the thing that spawned
+          it. Closing it must not close the menu behind it, which is why the backdrop is its own. */}
+      {rowMenu && (
+        <Menu x={rowMenu.x} y={rowMenu.y} head={rowMenu.name} onClose={() => setRowMenu(null)} layer={rowMenu.kind === CHAIN_KIND ? 4 : 3}>
+          <button
+            className="fx-palette-item"
+            role="menuitem"
+            onClick={() => {
+              const r = rowMenu;
+              setRowMenu(null);
+              if (r.group) setDialog({ mode: "section", kind: r.kind, at: r.path[0], name: r.name });
+              else setDialog({ mode: "renameRow", kind: r.kind as FxKind, path: r.path, name: r.name });
+            }}
+          >
+            Rename
+          </button>
+          {/* Only a preset that HAS a factory original behind it can go back to one — an untouched
+              reference has nothing to revert, and something you wrote yourself never had a shipped
+              version to return to. */}
+          {!rowMenu.group && !rowMenu.factory && factoryFxPresets(rowMenu.kind).some((f) => f.name === rowMenu.name) && (
+            <button className="fx-palette-item" role="menuitem" onClick={() => { revertFxRow(rowMenu.kind, rowMenu.path); setRowMenu(null); bumpPresets(); }}>
+              Revert to factory
+            </button>
+          )}
+          {!rowMenu.group && rowMenu.path.length === 2 && (
+            <button className="fx-palette-item" role="menuitem" onClick={() => { moveOutOfGroup(rowMenu.kind, rowMenu.path[0], rowMenu.path[1] as number); setRowMenu(null); closeBankFly(rowMenu.kind); bumpBank(rowMenu.kind); }}>
+              Move out of section
+            </button>
+          )}
+          <div className="fx-preset-sep" />
+          <button
+            className="fx-palette-item danger"
+            role="menuitem"
+            title={rowMenu.group ? "The presets inside it are kept" : rowMenu.factory ? "Restore it from Settings ▸ Audio" : undefined}
+            onClick={() => {
+              const r = rowMenu;
+              setRowMenu(null);
+              if (r.group) {
+                deleteFxSection(r.kind, r.path[0]);
+                closeBankFly(r.kind);
+              } else deleteFxRow(r.kind, r.path);
+              bumpBank(r.kind);
+            }}
+          >
+            {rowMenu.group ? "Remove section" : "Delete"}
+          </button>
+        </Menu>
+      )}
+
+      {/* ★ THE SECTION'S CHAINS — the second window, exactly the preset menu's. The window that
+          used to live here showed one chain's CONTENTS on hover; that manifest is in the row menu
+          now (below). Three windows was already the ceiling, and a hover that could mean either
+          "show me this section" or "show me this chain's devices" is not a gesture, it is a guess. */}
+      {chainMenu && chainFly && (() => {
+        const g = chainRows[chainFly.at];
+        if (!g || !isGroup(g)) return null;
+        return (
+          <MenuFly
+            anchor={chainFly.anchor}
+            head={g.name}
+            inert={chainTopDrag.from != null || chainSectionDrag.from != null}
+            onEnter={() => setChainFly(chainFly)}
+            onLeave={() => { if (!chainRowMenu && !rowMenu && chainSectionDrag.from == null && chainTopDrag.from == null) { setChainFly(null); dropPeek(); } }}
+          >
+            {g.items.length === 0 ? null : (
+              <div {...chainSectionDrag.row} onPointerDownCapture={() => { chainDragged.current = false; }}>
+                {g.items.map((l, i) => (
+                  <Fragment key={`ci:${i}`}>
+                    <DropLine show={chainSectionDrag.at === i} />
+                    {chainRow(l, [chainFly.at, i] as FxPath, i, chainSectionDrag)}
+                  </Fragment>
+                ))}
+                <DropLine show={chainSectionDrag.at === g.items.length} />
+              </div>
+            )}
+          </MenuFly>
+        );
+      })()}
+
+      {/* ★ THE THIRD WINDOW — what is IN this chain, hanging off the row you are pointing at. The
+          stems are shown always, unlike the picker on the chip: this is a description, not a
+          control, and a manifest may state a fact the deck cannot act on yet. */}
+      {chainMenu && chainPeek && chainRowMenu == null && (
+        <MenuFly layer={3} anchor={chainPeek.anchor} head={chainPeek.preset.name} onEnter={() => { holdPeek(); setChainPeek(chainPeek); }} onLeave={() => dropPeek(true)}>
           <div className="fly-stems">
             <span className="fly-key">Stems</span>
             <span className="fx-chain-src">
               {LANES.map((l) => (
-                <i key={l.label} className={chainHover.preset.stems & l.bit ? "on" : ""} style={{ ["--lane" as string]: l.color }}>
+                <i key={l.label} className={chainPeek.preset.stems & l.bit ? "on" : ""} style={{ ["--lane" as string]: l.color }}>
                   {l.label[0]}
                 </i>
               ))}
             </span>
           </div>
-          <div className="fx-preset-sep" />
-          {chainHover.preset.kinds.length === 0 ? (
+          {chainPeek.preset.kinds.length === 0 ? (
             <div className="fly-empty">EMPTY</div>
           ) : (
-            chainHover.preset.kinds.map((k, i) => (
+            chainPeek.preset.kinds.map((k, i) => (
               <div key={`${k}${i}`} className="fly-line">
                 <span className="fly-num">{i + 1}</span>
                 <span className="fly-dev">{KIND_LABEL[k as FxKind] ?? k.toUpperCase()}</span>
@@ -988,34 +1486,58 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         </MenuFly>
       )}
 
+      {/* ★ THE CHAIN ROW MENU — the FOURTH tier now: the peek above is a window at 45, and a menu
+          opened from a row that can also be peeked has to clear it. */}
+      {chainMenu && chainRowMenu && (
+        <Menu x={chainRowMenu.x} y={chainRowMenu.y} head={chainRowMenu.preset.name} onClose={() => setChainRowMenu(null)} layer={4}>
+          <button className="fx-palette-item" role="menuitem" onClick={() => { applyChainPreset(chainMenu.id, chainRowMenu.preset); setChainRowMenu(null); setChainFly(null); }}>
+            Recall into this chain
+          </button>
+          <button className="fx-palette-item" role="menuitem" onClick={() => { setDialog({ mode: "chainPreset", name: chainRowMenu.preset.name }); setChainRowMenu(null); }}>
+            Rename
+          </button>
+          {/* A factory chain you have edited or renamed can go back to what shipped — the same
+              revert the effect presets have, from the same tombstone/ref machinery. */}
+          {!chainRowMenu.factory && factoryChainPresets().some((f) => f.name === chainRowMenu.preset.name) && (
+            <button className="fx-palette-item" role="menuitem" onClick={() => { revertFxRow(CHAIN_KIND, chainRowMenu.path); bumpChains(); setChainRowMenu(null); }}>
+              Revert to factory
+            </button>
+          )}
+          <button className="fx-palette-item danger" role="menuitem" onClick={() => { deleteFxRow(CHAIN_KIND, chainRowMenu.path); bumpChains(); setChainRowMenu(null); setChainFly(null); }}>
+            Delete
+          </button>
+        </Menu>
+      )}
+
       {/* The device picker — the preset menu's shape, one step earlier in the workflow. Step 1
           names the effect; step 2 names the sound it arrives with, so a device never lands in a
           chain in an unknown state. Both steps are the same list widget, so there is nothing new
           to learn and nothing new to style. */}
       {addMenu && chain && (
-        <Menu x={addMenu.x} y={addMenu.y} onClose={() => { setAddMenu(null); setAddHover(null); }}>
+        <Menu x={addMenu.x} y={addMenu.y} onClose={() => { setAddMenu(null); setAddHover(null); setAddFly(null); }}>
           {/* CLICK ADDS. The two-step version made you answer a question you usually don't have —
               most of the time you want the effect, not a particular preset of it. So the click is
               the whole gesture, and the presets live in a flyout that opens on HOVER beside the
               menu: there when you want them, never in the way when you don't. */}
           {others.map((k) => {
-            const bank = factoryFxPresets(k);
+            const has = addHas[k];
             // ★ TOUCH IS PERFORM *AND* CREATE. A phone has no keyboard and no controller, so
             // anything it cannot reach it cannot do at all — and the preset flyout opened on
             // HOVER, which does not exist on touch. So the chevron is its OWN tap target: tap the
             // name to add with Default, tap the › to choose what it lands on. Hover still opens it
             // for a mouse; the tap target is the parity, not a replacement.
-            const openFly = (el: HTMLElement) => setAddHover({ kind: k, ...flyFrom(el) });
+            const openFly = (el: HTMLElement) => { setAddFly(null); setAddHover({ kind: k, ...flyFrom(el) }); };
             return (
               <button
                 key={k}
+                data-add-row={k}
                 className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
                 role="menuitem"
-                onMouseEnter={(e) => { if (bank.length) openFly(e.currentTarget); }}
-                onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); }}
+                onMouseEnter={(e) => { if (has) openFly(e.currentTarget); }}
+                onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); setAddFly(null); }}
               >
                 {KIND_LABEL[k] ?? k.toUpperCase()}
-                {bank.length > 0 && (
+                {has && (
                   <span
                     className="fx-add-more"
                     role="button"
@@ -1032,31 +1554,70 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           })}
         </Menu>
       )}
+      {/* ★ ONE BANK, TWO DOORS. This window used to render factoryFxPresets() — the SHIPPED list,
+          flat and in code order — while the right-click menu renders the arrangement: your
+          sections, your order, your saved presets, minus the ones you deleted. So the same effect
+          offered two different lists depending on how you arrived at it, and the one on the ADD
+          path was the one that could not be curated. It reads the same source now, renders the
+          same rows with the same markup, and opens a section the same way. What it does NOT
+          inherit is the editing — drag, rename, delete and revert stay in the menu that owns the
+          bank. A picker that quietly rearranged your bank on the way past would be a worse
+          disparity than the one this fixes. */}
       {addMenu && addHover && (
         <MenuFly
           anchor={addHover.anchor}
-          width={addHover.width}
           head={KIND_LABEL[addHover.kind] ?? addHover.kind.toUpperCase()}
           onEnter={() => setAddHover(addHover)}
-          onLeave={() => setAddHover(null)}
+          // Not while the section window is open: the pointer leaves this one to reach that one.
+          onLeave={() => { if (!addFly) { setAddHover(null); setAddFly(null); } }}
+          // DEFAULT SITS WHERE IT SITS IN THE OTHER DOOR — a pinned chin under the list, behind the
+          // same rule: it is the device's own reset state, not a preset, so it is never IN the list
+          // and never scrolls with it. It used to lead here, which put the same two lists in two
+          // different orders.
+          chin={
+            <>
+              <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
+                Default
+              </button>
+              {addGone > 0 && <div className="fx-preset-note">{addGone} hidden — Settings ▸ Audio</div>}
+            </>
+          }
         >
-          <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); }}>
-            Default
-          </button>
-          {factoryFxPresets(addHover.kind).map((pr, i) => (
-            <button key={pr.name} className="fx-palette-item fx-preset-apply" role="menuitem" title={pr.name} onClick={() => { addDeviceToChain(addHover.kind, selChainId, pr, i + 1); setAddMenu(null); setAddHover(null); }}>
-              {pr.name}
-            </button>
-          ))}
+          {addRows.map((r, i) =>
+            isGroup(r) ? (
+              <div
+                key={`as:${i}:${r.name}`}
+                data-addfly-row={`add:${i}`}
+                className={`fx-preset-row fx-section-row ${addFly?.at === i ? "hot" : ""}`}
+                onMouseEnter={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) })}
+              >
+                <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"}`} onClick={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) })}>
+                  <i className="fx-section-n">{r.items.length}</i>
+                  <span className="fx-section-label">{r.name}</span>
+                </button>
+              </div>
+            ) : (
+              addLeaf(r, `al:${i}`)
+            ),
+          )}
         </MenuFly>
       )}
+      {addMenu && addHover && addFly && (() => {
+        const g = addRows[addFly.at];
+        if (!g || !isGroup(g)) return null;
+        return (
+          <MenuFly layer={3} anchor={addFly.anchor} head={g.name} onEnter={() => setAddFly(addFly)} onLeave={() => setAddFly(null)}>
+            {g.items.map((l, i) => addLeaf(l, `af:${i}`))}
+          </MenuFly>
+        );
+      })()}
 
       {dialog && (
         <PromptModal
-          title={dialog.mode === "chainPreset" ? "Rename saved chain" : dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
-          initial={dialog.mode === "rename" || dialog.mode === "chainPreset" ? dialog.name : dialog.mode === "chain" ? deck.fxChain(dialog.at)?.name ?? "" : ""}
-          placeholder={dialog.mode === "chain" || dialog.mode === "chainPreset" ? "Chain name" : "Preset name"}
-          submitLabel={dialog.mode === "rename" || dialog.mode === "chainPreset" ? "Rename" : "Save"}
+          title={dialog.mode === "newSection" ? "New section" : dialog.mode === "section" ? "Rename section" : dialog.mode === "renameRow" ? "Rename preset" : dialog.mode === "chainPreset" ? "Rename saved chain" : dialog.mode === "chain" ? "Save chain" : dialog.mode === "save" ? `Save ${KIND_LABEL[dialog.kind] ?? dialog.kind.toUpperCase()} preset` : "Rename preset"}
+          initial={dialog.mode === "rename" || dialog.mode === "chainPreset" || dialog.mode === "section" || dialog.mode === "renameRow" ? dialog.name : dialog.mode === "chain" ? deck.fxChain(dialog.at)?.name ?? "" : ""}
+          placeholder={dialog.mode === "chain" || dialog.mode === "chainPreset" ? "Chain name" : dialog.mode === "section" || dialog.mode === "newSection" ? "Section name" : "Preset name"}
+          submitLabel={dialog.mode === "rename" || dialog.mode === "chainPreset" || dialog.mode === "section" || dialog.mode === "renameRow" ? "Rename" : dialog.mode === "newSection" ? "Add" : "Save"}
           onSubmit={(v) => {
             if (dialog.mode === "chainPreset") {
               renameChainPreset(dialog.name, v);
@@ -1071,6 +1632,24 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 setChainTick((t) => t + 1);
                 refresh();
               }
+              return;
+            }
+            if (dialog.mode === "renameRow") {
+              // Renaming a factory preset MATERIALISES it — the name is part of what you changed,
+              // and the shipped one keeps its own so a revert still has something to point at.
+              materialiseFxRow(dialog.kind, dialog.path, { name: v });
+              setPresetTick((t) => t + 1);
+              return;
+            }
+            if (dialog.mode === "newSection") {
+              addFxSection(dialog.kind, v);
+              bumpBank(dialog.kind);
+              return;
+            }
+            if (dialog.mode === "section") {
+              renameFxSection(dialog.kind, dialog.at, v);
+              closeBankFly(dialog.kind); // its head would otherwise still say the old name
+              bumpBank(dialog.kind);
               return;
             }
             if (dialog.mode === "save") saveFxPreset(dialog.kind, v, dialog.params);

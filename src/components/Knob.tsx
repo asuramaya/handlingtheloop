@@ -85,6 +85,16 @@ export function Knob({ label, value, min, max, defaultValue, onChange, format }:
           drag.current = null;
           e.currentTarget.releasePointerCapture(e.pointerId);
         }}
+        // An interrupted touch delivers pointercancel INSTEAD of pointerup; without this the
+        // knob stays armed and the next stray move keeps turning it from the old anchor.
+        onPointerCancel={(e) => {
+          drag.current = null;
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          } catch {
+            /* ignore */
+          }
+        }}
         onDoubleClick={() => set(defaultValue)}
         onContextMenu={(e) => {
           e.preventDefault();

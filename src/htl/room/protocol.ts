@@ -151,6 +151,17 @@ export interface FxSlot {
   params: Record<string, number>;
 }
 
+/** ★ A STEM CHAIN, WHOLE. `FxSlot[]` has only ever described the MASTER chain — `fxSnapshot()`
+ *  serialises `rack.list`, which is `master.devices` — so every stem chain a DJ built (its name,
+ *  the stems it claims, the devices in it AND those devices' params) was outside the snapshot
+ *  entirely and did not survive a refresh. Additive and optional: an older snapshot omits it and
+ *  restores exactly as it did before. */
+export interface FxChainSlot {
+  name: string;
+  stems: number; // lane bitmask — which stems this chain claims
+  devices: FxSlot[]; // in signal order within the chain
+}
+
 // A track carried whole inside a queue-mutation intent, so the queue authority (the
 // host running the auto-mixer) can enqueue a remote's pick with full metadata
 // (thumbnail/bpm/key) and re-broadcast it 1:1 in the automix stream. Structurally a

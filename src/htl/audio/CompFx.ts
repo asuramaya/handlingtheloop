@@ -41,6 +41,7 @@ export class CompFx extends BaseFxDevice {
     makeupDb: 0,
     auto: 1,
     scHz: 0,
+    scLoHz: 20000,
     scExt: 0,
     lookMs: 0,
     ceilingDb: -0.3,
@@ -106,10 +107,38 @@ export class CompFx extends BaseFxDevice {
     return this.wp.mode;
   }
 
-  /** MODE presets its own ballistics — picking FET and leaving a 30 ms attack would be a lie. */
+  // ★ PER-MODE MEMORY. MODE must preset its ballistics — picking FET and leaving a 30 ms attack
+  // would be a lie — but it is a ONE-TAP CYCLER, so the same act that makes the modes honest also
+  // silently discarded whatever the operator had just dialled in. Both are true, and the way out
+  // is not to weaken the preset: each mode now remembers the settings you last used IN it, so the
+  // factory preset lands only the FIRST time you arrive somewhere. Cycle GLUE → FET → GLUE and
+  // your GLUE is exactly as you left it. This is how a real multi-mode device behaves, and it is
+  // what makes the cycler safe to explore rather than a thing you learn not to touch.
+  // ★ A TEMPLATE MUST STATE EVERY KEY IT OWNS. `scLoHz` — the sidechain LOW-pass — was not in this
+  // list and no template set it, so it was neither remembered per mode nor reset by one: whatever
+  // the last mode left there leaked into the next, and a mode you had never visited still arrived
+  // carrying someone else's detector. Same for `scHz`, which only GLUE set. A key that is half in
+  // the template is worse than one that is out of it, because it looks deliberate.
+  private static readonly MODE_KEYS = ["ratio", "attackMs", "releaseMs", "knee", "scHz", "scLoHz", "lookMs"] as const;
+  private readonly modeMem = new Map<number, Record<string, number>>();
+
+  private rememberMode(m: number) {
+    const snap: Record<string, number> = {};
+    for (const k of CompFx.MODE_KEYS) snap[k] = this.wp[k];
+    this.modeMem.set(m, snap);
+  }
+
   private setMode(v: number) {
     const m = clamp(Math.round(v), 0, COMP_MODES.length - 1);
+    const prev = clamp(Math.round(this.wp.mode), 0, COMP_MODES.length - 1);
+    if (m === prev) return;
+    this.rememberMode(prev);
     this.post("mode", m);
+    const seen = this.modeMem.get(m);
+    if (seen) {
+      for (const k of CompFx.MODE_KEYS) this.post(k, seen[k]);
+      return;
+    }
     if (m === 0) {
       // GLUE — the SSL buss comp: gentle ratio, slow-ish attack lets transients through, auto
       // release does the rest. The sidechain HP is ON by default because that's the whole point.
@@ -118,26 +147,36 @@ export class CompFx extends BaseFxDevice {
       this.post("releaseMs", 250);
       this.post("knee", 6);
       this.post("scHz", 80);
+      this.post("scLoHz", 20000);
       this.post("lookMs", 0);
     } else if (m === 1) {
-      // FET — an 1176: it grabs. Fast everything, hard knee.
+      // FET — an 1176: it grabs. Fast everything, hard knee. A gentle SC-HP so a kick does not
+      // trigger every grab; the detector still hears the whole top.
       this.post("ratio", 8);
       this.post("attackMs", 0.05);
       this.post("releaseMs", 120);
       this.post("knee", 2);
+      this.post("scHz", 60);
+      this.post("scLoHz", 20000);
       this.post("lookMs", 0);
     } else if (m === 2) {
-      // OPTO — the cell decides; attack and release are program-dependent in the worklet.
+      // OPTO — the cell decides; attack and release are program-dependent in the worklet. The
+      // detector is deliberately UNfiltered: an opto levels what it hears, all of it.
       this.post("ratio", 3);
       this.post("attackMs", 10);
       this.post("releaseMs", 600);
       this.post("knee", 10);
+      this.post("scHz", 0);
+      this.post("scLoHz", 20000);
       this.post("lookMs", 0);
     } else {
-      // LIMIT — a ceiling, not a suggestion. Lookahead makes it true.
+      // LIMIT — a ceiling, not a suggestion. Lookahead makes it true, and a limiter that cannot
+      // hear part of the signal is not a ceiling, so the sidechain runs wide open.
       this.post("knee", 1);
       this.post("attackMs", 0.2);
       this.post("releaseMs", 80);
+      this.post("scHz", 0);
+      this.post("scLoHz", 20000);
       this.post("lookMs", 1.5);
     }
   }
@@ -155,6 +194,9 @@ export class CompFx extends BaseFxDevice {
       // The sidechain high-pass. Without it the kick pumps the whole track — this one filter is
       // most of why a buss compressor works at all.
       { id: "scHp", def: 0, get: () => this.wp.scHz, set: (v) => this.post("scHz", v <= 20 ? 0 : clamp(v, 20, 500)) },
+      // Parked near the top by default (near-transparent) — same "no special off state"
+      // convention as Delay/Reverb's own LP cut, not a 0-sentinel that needs its own branch.
+      { id: "scLp", def: 20000, get: () => this.wp.scLoHz, set: (v) => this.post("scLoHz", clamp(v, 1000, 20000)) },
       { id: "scExt", def: 0, get: () => this.wp.scExt, set: (v) => this.post("scExt", v >= 0.5 ? 1 : 0) },
       { id: "lookahead", def: 0, get: () => this.wp.lookMs, set: (v) => this.post("lookMs", clamp(v, 0, 10)) },
       { id: "ceiling", def: -0.3, get: () => this.wp.ceilingDb, set: (v) => this.post("ceilingDb", clamp(v, -12, 0)) },

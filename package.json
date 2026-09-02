@@ -15,7 +15,8 @@
     "deploy": "vite build && wrangler deploy",
     "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
     "test": "vitest run",
-    "check": "tsc -b && tsc -p tsconfig.node.json && vitest run"
+    "check": "tsc -b && tsc -p tsconfig.node.json && vitest run",
+    "draglab": "node scripts/draglab/draglab.mjs"
   },
   "dependencies": {
     "qrcode-generator": "^2.0.4",

@@ -9,6 +9,7 @@ dist
 .claude/
 .idea/
 .vscode/
+.osiris
 *.log
 # Cloudflare local dev secrets (OAuth client overrides, etc.) — never publish
 .dev.vars
@@ -26,6 +27,9 @@ public/models/
 
 # Dev stem cache (stands in for R2 locally)
 .stem-cache/
+
+# Dev raw-audio cache (stands in for R2's a/${v} cache-first check locally)
+.audio-cache/
 
 # Dev account store (stands in for D1 locally — see server/devStore.ts)
 .dev-data/

@@ -732,6 +732,18 @@ export function ReverbViz({ size, decay, brightness, predelay, width, lowCut, hi
         }
         e.currentTarget.releasePointerCapture(e.pointerId);
       }}
+      // An interrupted touch (a system gesture, a call, the browser taking the pointer)
+      // delivers pointercancel INSTEAD of pointerup — without this the grip stays held.
+      onPointerCancel={(e) => {
+        drag.current = null;
+        hover.current = null;
+        try {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        redraw();
+      }}
       onContextMenu={(e) => {
         const pt = localPt(e);
         if (inRibbon(pt.y)) {

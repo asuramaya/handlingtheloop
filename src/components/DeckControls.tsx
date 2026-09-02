@@ -641,13 +641,12 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             {deck.hasStems && sampler.pads[smpMenu.i].route !== "master" && (
               <>
                 <div className="ctx-label">Stems</div>
+                {/* A filter, not a partition: empty means no filter at all — the full mix — which
+                    is what sweeping every cell OFF now says, and what the retired "A" used to. */}
                 <StemPicker
                   mask={stemsToMask(sampler.pads[smpMenu.i].stems)}
-                  allOn={!sampler.pads[smpMenu.i].stems?.length}
-                  onAll={() => { sampler.setStems(smpMenu.i, undefined); refresh(); }}
-                  onToggle={(bit) => {
-                    const next = stemsToMask(sampler.pads[smpMenu.i].stems) ^ bit;
-                    sampler.setStems(smpMenu.i, next === 0 ? undefined : maskToStems(next));
+                  onCommit={(m) => {
+                    sampler.setStems(smpMenu.i, m === 0 ? undefined : maskToStems(m));
                     refresh();
                   }}
                 />

@@ -154,12 +154,26 @@
    source, and the sampler drew the same idea as plain text buttons in a different language. */
 .stem-pick {
   display: flex;
-  flex-wrap: wrap;
+  /* NOWRAP, now that a horizontal sweep across the cells is a gesture: a row that wraps to a
+     second line breaks the drag halfway through it. Four cells at their 26px floor fit any menu
+     this widget appears in. */
+  flex-wrap: nowrap;
   gap: 4px;
   padding: 4px 6px 2px;
+  touch-action: none;
+}
+/* The gestures that replaced the "A" cell, said once, in the one place they apply. */
+.stem-hint {
+  padding: 0 6px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  color: color-mix(in srgb, var(--muted) 65%, transparent);
 }
 .stem-cell {
   flex: 1 1 0;
+  touch-action: none;
   min-width: 26px;
   aspect-ratio: 1;
   max-width: 34px;
@@ -173,11 +187,6 @@
   font-size: 11px;
   font-weight: 800;
   cursor: pointer;
-}
-/* "A" — everything. Same square as the four stems, in the deck accent rather than a stem colour,
-   because it is not a stem: it is the absence of a choice between them. */
-.stem-pick .stem-cell:first-child {
-  --lane: var(--accent);
 }
 .stem-cell:hover:not(:disabled) {
   border-color: var(--lane, var(--accent));
@@ -218,6 +227,16 @@
   display: inline-flex;
   gap: 3px;
   margin-left: auto;
+}
+/* ★ NO TITLE → CENTRED. The head is usually just the glyph row (see ContextMenu.tsx: naming an
+   "EQ PRESETS" list you opened by right-clicking EQ restates what you already know), and
+   margin-left:auto then parked three small buttons hard against the right edge with the whole
+   width empty beside them. With nothing to be pushed away FROM, centre is where they belong. */
+.fx-preset-head.no-title {
+  justify-content: center;
+}
+.fx-preset-head.no-title .fx-menu-acts {
+  margin-left: 0;
 }
 .fx-act {
   width: 20px;
@@ -277,6 +296,11 @@
 .fx-menu-fly {
   z-index: 43;
 }
+/* See MenuFly's own note: while a drag runs this window must not answer elementFromPoint, or a
+   flyout that flipped over its menu swallows every drop the menu was supposed to receive. */
+.fx-menu-fly.inert {
+  pointer-events: none;
+}
 /* A manifest row: a small key, then the thing. Not a control — nothing in here is clickable, so
    nothing in here is styled as if it were, and it is packed tighter than a row you have to hit. */
 .fly-stems,
@@ -321,26 +345,271 @@
   color: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
-/* The chain menu is the preset menu's twin — same widget, one rule wider so the factory chain
-   names ("Everything But Drums") do not wrap. */
+/* ★ THE CHAIN MENU HAS NO FLOOR ANY MORE. It carried min-width: 190px so the factory names
+   ("Everything But Drums") would not wrap — but a floor is not a wrap guard, it is a width, and it
+   made every chain menu the same 190px box whatever was in it, however short the names. That name
+   measures ~138px including the item's own padding, which fits inside what the stem row asks for
+   unaided. The row (now four cells, not five) is the widest thing in here and it sets the width by
+   itself; anything longer truncates to a tooltip, which was always the policy. */
 .fx-chain-menu {
-  min-width: 190px;
+  min-width: 0;
 }
 
-.fx-preset-back {
-  margin-right: 5px;
-  padding: 0 5px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: transparent;
+/* ── SECTIONS in a saved preset bank ──────────────────────────────────────────────────────
+   A section row is a preset row that opens a window instead of applying something, so it wears
+   the same chrome and differs only where it must: a count, and a drop state. */
+.fx-section-row .fx-section-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.3;
-  cursor: pointer;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.fx-preset-back:hover {
-  color: #fff;
+/* The name takes the width the count does not, and truncates rather than pushing ✕ off the row. */
+.fx-section-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-section-row.hot .fx-section-name,
+.fx-section-row:hover .fx-section-name {
+  color: var(--text);
+}
+/* LEADS the row now. Fixed width so the names all start on the same column — a count that
+   re-indents every heading by its own number of digits reads as a ragged list. */
+.fx-section-n {
+  flex: 0 0 auto;
+  min-width: 14px;
+  text-align: center;
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 3px;
+  border-radius: 3px;
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+/* ★ THE HEADING IS A DROP TARGET, and it has to SAY so under the finger — a drag that lands
+   somewhere with no acknowledgement reads as a drag that failed. useReorderDrag reports the
+   foreign target it is over; this is what that report looks like. */
+.fx-section-row.drop {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* ★ THE GHOST — the row you are actually dragging, a clone of it, `position: fixed` on the body so
+   it escapes the menu's own `overflow-y: auto`. A transformed child of a clipping box is still
+   CLIPPED BY IT: in a 240px-capped menu the dragged row was cut off at the edge and could never
+   visibly reach a target outside it, which reads as a drag that refuses to leave the window. */
+.reorder-ghost {
+  /* ★ TOP OF EVERYTHING. 60 put it level with six other rules and under the notification panel
+     (61), toasts (200) and, decisively, the very menu it was dragged out of — z-index only ranks
+     siblings within a stacking context, and a body-level 60 loses to any ancestor context that
+     ranks above it however small the menu's own 41 looks next to it. A drag preview is the one
+     thing on screen that must never be behind anything, and it exists for a few hundred
+     milliseconds, so it takes the top of the stack outright rather than joining the queue.
+     ★ The number that actually applies is set INLINE at creation (useReorderDrag) — the clone
+     keeps `is-dragging`, whose two-class rule outranks this one on specificity. This stays as the
+     declared intent; the inline copy is what wins. */
+  z-index: 2147483000;
+  pointer-events: none;
+  border-radius: 5px;
+  background: var(--panel-2);
+  box-shadow:
+    0 12px 22px -8px rgba(0, 0, 0, 0.8),
+    0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+/* …and where it came FROM stays in flow as a hole. In flow because the snapshotted centres assume
+   it: lifting it out would collapse the list under its own hit-test mid-drag.
+   ★ AND IT MUST NOT ANSWER THE POINTER. `is-dragging` carried `pointer-events: none` and said in
+   its own comment that this was load-bearing; when the source moved to its own class that rule did
+   not come with it, so the row you were dragging sat under the cursor eating every hit-test —
+   elementFromPoint returned the SOURCE, whose data-drop is itself, and the drag reported "drop onto
+   the thing you are holding" for the entire gesture. That is what "the landing zones are off" was,
+   underneath three rounds of correct arithmetic. */
+.reorder-source {
+  opacity: 0.28;
+  pointer-events: none;
+}
+.reorder-source > * {
+  visibility: hidden;
+}
+
+/* ★ THE LIFT — and `pointer-events: none` is LOAD-BEARING, not polish, exactly as it is on the tab
+   and chain pills: the floating row sits under the cursor, and the drop hit-test reads what is
+   UNDERNEATH it with elementFromPoint. Without it a row hit-tests against itself, so a section
+   dragged over its own heading reports itself as the drop target. The menu rows had only the
+   opacity — half a treatment copied from a rule that spelled out why the rest of it mattered. */
+.fx-preset-row.is-dragging {
+  position: relative;
+  z-index: 30;
+  cursor: grabbing;
+  pointer-events: none;
+  opacity: 0.92;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel-2) 92%, var(--accent));
+  box-shadow:
+    0 8px 16px -6px rgba(0, 0, 0, 0.75),
+    0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* WHERE IT WILL LAND. It occupies real height so the list opens a gap for it rather than the line
+   floating over two rows at once — the gap IS the answer to "where", and a hairline drawn between
+   two touching rows reads as a divider instead. */
+/* ★ IT TAKES NO SPACE. The first version gave it real height so the list would "open a gap" — and
+   that gap MOVES EVERY ROW BELOW IT, while the hit-test decides against centres snapshotted before
+   the gap existed. So the line and the boundary that produced it drifted apart by its own height,
+   which is precisely the class of thing that reads as "the landing zones are off". Zero-height, and
+   the visible bar is a pseudo-element hanging outside the flow. */
+.reorder-drop-line {
+  display: block;
+  position: relative;
+  flex: 0 0 auto;
+  height: 0;
+  margin: 0;
+}
+.reorder-drop-line::after {
+  content: "";
+  position: absolute;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+  animation: reorder-drop-in 90ms ease-out;
+}
+.reorder-drop-line.y::after {
+  left: 2px;
+  right: 2px;
+  top: -1.5px;
+  height: 3px;
+}
+.reorder-drop-line.x {
+  width: 0;
+  align-self: stretch;
+}
+.reorder-drop-line.x::after {
+  top: 2px;
+  bottom: 2px;
+  left: -1.5px;
+  width: 3px;
+}
+@keyframes reorder-drop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reorder-drop-line::after {
+    animation: none;
+  }
+}
+/* The empty-section line is longer than the one-word EMPTY the chain flyout shows, so it centres
+   and drops the wide tracking rather than running off the edge. */
+/* A whole sentence, not the chain flyout's one-word EMPTY — so it centres and drops the wide
+   tracking instead of running off the edge. Its own class: the chain flyout's EMPTY is still the
+   one-word version and must keep its own look. */
+.fly-empty.wide {
+  text-align: center;
+  letter-spacing: 0.06em;
+  font-size: 9px;
+  line-height: 1.4;
+  text-transform: none;
+}
+
+/* A factory preset reads slightly quieter than one you made — same row, same acts, but the ones
+   you saved yourself are the ones you reach for mid-set. */
+.fx-preset-apply.is-factory {
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+/* Deleted factory presets are DELETED, not lost — and the note says where they went WITHOUT being
+   a control. The restore is three deliberate steps away in Settings, which is the point. */
+/* ★ A THIRD LAYER. The preset menu is 41 and its flyout 43, so a row menu opened FROM either has
+   to clear both — otherwise it renders underneath the thing that spawned it. Its backdrop is its
+   own too: dismissing it must not dismiss the menu behind it. */
+.fx-menu-backdrop.layer-3 {
+  z-index: 44;
+}
+.fx-preset-menu.layer-3 {
+  z-index: 45;
+}
+/* ★ A FOURTH TIER, because the third is now taken by a WINDOW rather than a menu. Peeking at a
+   chain's contents is a hover on a row inside the section flyout (43), so that peek is the third
+   window (45) — which leaves the row MENU, opened from any of them, needing to clear all three. */
+.fx-menu-backdrop.layer-4 {
+  z-index: 46;
+}
+.fx-preset-menu.layer-4 {
+  z-index: 47;
+}
+.fx-preset-menu.layer-4 .fx-palette-item {
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* The row menu's items are verbs, not presets — left-aligned sentences, and the destructive one
+   reads as destructive without being red until you are on it. */
+.fx-preset-menu.layer-3:not(.fx-menu-fly) .fx-palette-item {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.fx-palette-item.danger:hover {
+  background: #ff5d73;
+  color: #08111a;
+}
+
+/* The ungrouped zone: the whole top-level list plus a strip below it, lit while a preset dragged
+   out of a section is over it. Without the lit state a drop here is a guess. */
+.fx-top-zone.drop {
+  border-radius: 6px;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* ★ THE END OF THE LIST, AND IT IS NOT IN THE LIST. "Drop it at the end of the top level" is a real
+   thing people try, and it used to be a 14px strip at the end of a list that SCROLLS — so on any
+   bank long enough to need it, it was past the fold: getBoundingClientRect still answers for a
+   clipped row while elementFromPoint returns whatever is painted there, and the drop landed on
+   nothing. Three fixes were tried and two were wrong: sticking it to the body's bottom edge covers
+   the last visible row and steals the heading you were aiming at; putting it in the CHIN made it a
+   permanent empty band under DEFAULT (and, gated on the drag, made the whole list jump 18px at the
+   exact moment someone was already aiming at a row). It is ABSOLUTELY POSITIONED OVER THE MENU's
+   own bottom edge now — no layout at all, so it can appear only while a drag is running without
+   moving anything, and it needs no chin to live in (which is why the chain menu, whose chin held
+   nothing else, has none). */
+.fx-end-strip {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  z-index: 1;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px dashed color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 5px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+.fx-end-strip.drop {
+  border-style: solid;
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.fx-preset-note {
+  padding: 4px 8px 2px;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  color: color-mix(in srgb, var(--muted) 65%, transparent);
 }
 
 /* The BEAT FX FX SELECT + ◀▶ highlight a row in the existing + palette (cand). */
@@ -513,19 +782,33 @@ body:not(.no-glow) .fx-chain.drop-after::after {
   color: #08111a;
   background: var(--accent);
 }
+/* ★ HOVER IS NOT A DROP TARGET, AND WHILE A DRAG RUNS IT LOOKS EXACTLY LIKE ONE. Passing a dragged
+   row over the list painted every row it crossed in full accent — the loudest thing on screen, on
+   rows that in most cases CANNOT accept the drop (a section cannot go inside a section). The real
+   answers are the `.drop` outline and the drop LINE, and both were being shouted over by a style
+   that only ever meant "the pointer is here". A drag suppresses it; nothing else changes. */
+.fx-top-zone.dragging .fx-palette-item:hover {
+  color: inherit;
+  background: transparent;
+}
+.fx-top-zone.dragging .fx-section-row:hover .fx-section-name {
+  color: var(--muted);
+}
 /* Preset menu — reuses the .fx-palette look, but fixed at the cursor (right-click a tab). */
 .fx-menu-backdrop {
   position: fixed;
   inset: 0;
   z-index: 40;
 }
-/* ★ THE MENU IS NEVER WIDER THAN ITS OWN STEM ROW. Five cells at 34 px, four 4 px gaps and the
-   row's padding come to ~198 — the widest thing a menu ever legitimately has to hold. Without the
-   cap a single long name sets the width for everything, and one preset called
-   "holyshitholyshitholyshit" made the whole menu (and the flyout beside it) span half a deck.
-   Names that do not fit are truncated to a tooltip, or wrapped where they are the title. */
+/* ★ THE MENU IS NEVER WIDER THAN ITS OWN STEM ROW — and the row lost a cell. FOUR cells at 34px,
+   three 4px gaps and the row's 12px of padding come to 160; 168 leaves the border and a hair of
+   slack. It was 200, derived the same way from the FIVE cells the picker used to have, and that
+   number then set the width of every context menu in the rack whatever was actually in it.
+   Without a cap a single long name sets the width for everything — one preset called
+   "holyshitholyshitholyshit" made the menu (and the flyout beside it) span half a deck. Names that
+   do not fit are truncated to a tooltip, or wrapped where they are the title. */
 :root {
-  --fx-menu-w: 200px;
+  --fx-menu-w: 168px;
 }
 .fx-preset-menu {
   position: fixed;
@@ -536,6 +819,43 @@ body:not(.no-glow) .fx-chain.drop-after::after {
   max-width: var(--fx-menu-w);
   overflow-y: auto;
   overflow-x: hidden;
+}
+/* ★ A MENU WITH A CHIN DOES NOT SCROLL — its BODY does. Otherwise the pinned row is pinned to the
+   content, which is exactly the thing that moves. `min-height: 0` is the whole trick: a flex child
+   defaults to min-content and refuses to shrink below its own list, so without it the body never
+   scrolls and the menu grows past its cap instead. */
+.fx-preset-menu:has(> .fx-menu-chin) {
+  overflow: hidden;
+}
+/* ★ SPECIFICITY, NOT ORDER. `.fx-preset-menu > *` two rules up pins every child to `flex: 0 0 auto`
+   and, at equal specificity, the LATER rule wins — so a bare `.fx-menu-body` was overridden, the
+   body refused to shrink below its own list, and the BOX scrolled instead. The child selector
+   outranks it. (draglab caught this: the chin looked pinned only because nothing was scrolling.) */
+/* Everything in the body keeps its own size, exactly as `.fx-preset-menu > *` guaranteed while the
+   menu WAS the scroller — a flex child defaults to `flex-shrink: 1`, so without this the top zone
+   squeezes and the 14px landing strip at the end of it collapses to nothing. */
+.fx-preset-menu > .fx-menu-body > * {
+  flex: 0 0 auto;
+}
+.fx-preset-menu > .fx-menu-body {
+  display: flex;
+  flex: 0 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* Separated by a rule, not by a gap: the chin is a different KIND of thing from the list above it,
+   and a gap alone reads as one more item that happens to sit low. */
+.fx-preset-menu > .fx-menu-chin {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 /* ★ A SCROLLING FLEX COLUMN MUST PIN ITS CHILDREN. .fx-palette is `flex-direction: column` and
    the menu caps its height, so every child was free to flex-SHRINK — with enough presets the rows
@@ -591,29 +911,18 @@ body:not(.no-glow) .fx-chain.drop-after::after {
   align-items: stretch;
   gap: 2px;
 }
-.fx-preset-row .fx-preset-apply {
+/* ★ THE ROW IS THE HIT TARGET, SO THE ROW IS THE HIGHLIGHT. This said `.fx-preset-apply` — a leaf
+   preset's button — so a SECTION's button (.fx-section-name) had no flex at all and shrank to its
+   own text: the hover lit a box that stopped after the label with dead menu either side of it, on
+   the one row you are most likely to be aiming at. Whatever the item is, it takes the row. */
+.fx-preset-row .fx-palette-item {
   flex: 1 1 auto;
   min-width: 0;
 }
-.fx-preset-mini {
-  flex: 0 0 auto;
-  width: 22px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 55%, transparent);
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-}
-.fx-preset-mini:hover {
-  color: #08111a;
-  background: var(--accent);
-}
-.fx-preset-mini.danger:hover {
-  color: #fff;
-  background: #ff5470;
-}
+/* `.fx-preset-mini` (the 22px inline glyph button) and `.fx-preset-back` are gone with the last of
+   the inline row acts. Every act on a row — preview, rename, delete, revert, move — is a named item
+   in that row's right-click menu now, on BOTH the preset menu and the chain menu. A row is a name
+   and a hit target; nothing else fits in 121px and nothing else should have to. */
 /* The currently-applied preset in the menu — accent-tinted (distinct from the full-accent hover),
    so the menu and the hardware FX-SELECT flash agree on "what's selected". */
 .fx-palette-item.sel {
@@ -2545,11 +2854,61 @@ button.room-tog:hover {
   letter-spacing: 0.5px;
   color: var(--muted);
 }
-/* COMP's foot holds a MODE cycler, AUTO, and the two sidechain-source buttons; the SC pair needs
-   room for "SC: INT" without wrapping. (.comp-sc is gone — the sidechain row was folded into the
-   one foot strip every other device has, see CompPanel.) */
+/* COMP's foot holds a MODE cycler, AUTO, and ONE sidechain-source toggle (INT/EXT is a single
+   state, same idiom as AUTO beside it — it used to be two mutually-exclusive buttons standing in
+   for one boolean). The wider min-width leaves room for "SC: INT" without wrapping. (.comp-sc is
+   gone — the sidechain row was folded into the one foot strip every other device has.) */
 .comp-panel .sat-styles button {
   min-width: 56px;
+}
+/* COMP's head — the readout AND the SC-HP/LP ribbon on one canvas, spanning the panel's FULL
+   width, which is the only width at which a frequency ruler lines up with Delay's and Reverb's.
+   (Inside CompViz it inherited the middle column of a three-column row and measured a different
+   Hz-per-pixel than every other ribbon in the rack — see CompHead.tsx.) Same surface treatment as
+   .sat-readout, which it replaces, but it keeps all four corners: the row beneath it is three
+   separate boxes, so there is nothing single below to merge a squared bottom edge into. */
+.comp-head {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  /* ★ .dly-viz's / .rv-viz's OWN surface and radius, not .sat-readout's. Measured off a
+     side-by-side screenshot: this strip's interior was rgb(11,11,12) against Delay's
+     rgb(15,15,16) — a panel-vs-surface token difference, small enough to be invisible on its own
+     and more than enough to make two adjacent widgets read as different materials. */
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 80%, #000 8%);
+  touch-action: none;
+  cursor: ew-resize;
+}
+/* ATTACK/RELEASE's own small pad, to the curve's LEFT — square-ish, same bordered-box language as
+   .fx-curve's preview panel but on the opposite side (the curve reads left-to-right in dB, so a
+   second control belongs at the start of that reading order, not competing at the end of it). */
+.comp-ar-pad {
+  display: block;
+  flex: 0 0 clamp(46px, 20%, 68px);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 70%, #000);
+  touch-action: none;
+  cursor: crosshair;
+}
+/* The side cells beside CompViz's canvas (MAKEUP/LOOK — the two params with nothing left to be
+   dragged ON) — narrower than a full .fx-curve-width column, since these are two thin pills, not a
+   preview canvas that needs room to be legible. No border/background of their own: each ValueCell
+   already draws its own box, and stacking those inside another bordered box would double the
+   frame. Cells keep their natural height and space out evenly rather than stretching to fill the
+   column — a ValueCell stretched tall to match the curve's height would just be a lot of dead
+   padding around a small centred number. */
+.comp-side-cells {
+  flex: 0 0 clamp(44px, 15%, 66px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* --- the device foot: RESET · the universal wet/dry · COPY --------------------------------
@@ -2851,14 +3210,29 @@ body:not(.no-glow) .fx-mix-fill::after {
   .sat-shared::-webkit-scrollbar {
     display: none;
   }
+  /* ★ NO flex override here — the desktop rule's `flex: 1 0 auto` is already correct at every
+     width and this used to replace it with `flex: 0 0 auto`, which switched GROW off. That was
+     aimed at Sat's six-style row (don't shrink, slide instead), but flex-grow only ever acts on
+     POSITIVE free space: with `1 0 auto` a long row still overflows and scrolls exactly the same,
+     while a short one — COMP's three buttons — fills its width instead of stopping two-thirds
+     across and leaving a dead strip beside the last button. */
   .sat-styles button {
-    flex: 0 0 auto;
     min-width: 44px;
   }
   .sat-bands .vcell,
   .sat-shared .vcell {
     flex: 0 0 auto;
     min-width: 52px;
+  }
+  /* COMP's viz row is three columns wide (A/R pad · curve · MAKEUP/LOOK) and its two side columns
+     were sized off desktop percentages — a fixed ~90px gone before the curve gets any, on the
+     width where the curve needs it most. The pad stays square-ish and the cells stay tappable;
+     everything else the row has goes to the instrument. */
+  .comp-ar-pad {
+    flex: 0 0 clamp(38px, 14%, 50px);
+  }
+  .comp-side-cells {
+    flex: 0 0 clamp(40px, 12%, 52px);
   }
 }
 
@@ -2872,4 +3246,17 @@ body:not(.no-glow) .fx-mix-fill::after {
   font-weight: 800;
   letter-spacing: 0.22em;
   color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+/* Whether the preset banks are actually reaching the account — see FxBankSettings. Quiet when all
+   is well, loud only when a push is failing, because that is the state nothing else can reveal. */
+.fx-bank-sync {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+.fx-bank-sync.bad {
+  color: #ff5d73;
 }

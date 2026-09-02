@@ -4,7 +4,7 @@
 // shape. A compressor's identity IS its detector topology and its ballistics, so it has to be a
 // worklet with a real single-sample loop.
 //
-//   sidechain (internal or EXTERNAL) → SC high-pass → detector (peak | RMS)
+//   sidechain (internal or EXTERNAL) → SC high-pass → SC low-pass → detector (peak | RMS)
 //        → gain computer (log domain, soft knee) → ballistics (attack / release, program-dependent)
 //        → gain, applied to the LOOKAHEAD-delayed audio → makeup
 //
@@ -18,6 +18,8 @@
 //
 // The SIDECHAIN HIGH-PASS is not a garnish — without it a kick drum pumps the entire track and the
 // whole thing sounds like a pumping mess. That single filter is most of why a buss comp works.
+// The LOW-PASS beside it is the same idea for the other end: a hi-hat wash or a sibilant vocal can
+// trigger the detector just as uselessly as a kick's boom — a real band, not a highpass alone.
 //
 // Params ride PORT MESSAGES, never AudioParams (iOS Safari kills worklets whose
 // parameterDescriptors fail to register — the project-wide rule). Gain reduction is posted BACK
@@ -37,6 +39,8 @@ class Comp extends AudioWorkletProcessor {
     this.makeupDb = 0;
     this.auto = 1;        // auto makeup + (GLUE/OPTO) program-dependent release
     this.scHz = 0;        // sidechain high-pass (0 = off)
+    this.scLoHz = 20000;  // sidechain low-pass — parked at the top (near-transparent), same
+                           // "no special off state" convention as Delay/Reverb's own LP cut
     this.scExt = 0;       // 1 = detect from the EXTERNAL sidechain input, not the audio
     this.lookMs = 0;      // lookahead (ms)
     this.ceilingDb = -0.3;// LIMIT: the brickwall
@@ -47,6 +51,7 @@ class Comp extends AudioWorkletProcessor {
     this.envDb = 0;       // the smoothed gain reduction, in dB (≤ 0)
     this.rms = 0;         // RMS detector state
     this.scHpZ = [0, 0];  // one-pole HP state, per channel
+    this.scLpZ = [0, 0];  // one-pole LP state, per channel — in series AFTER the HP
     this.optoSlow = 0;    // OPTO's second (slow) release stage
     // Lookahead ring — sized for the max lookahead we allow (10 ms at any sane rate).
     this.ringLen = Math.max(64, Math.ceil(sampleRate * 0.01) + 128);
@@ -57,7 +62,7 @@ class Comp extends AudioWorkletProcessor {
 
     this.port.onmessage = (e) => {
       const d = e.data;
-      for (const k of ["mode","threshold","ratio","attackMs","releaseMs","knee","makeupDb","auto","scHz","scExt","lookMs","ceilingDb"]) {
+      for (const k of ["mode","threshold","ratio","attackMs","releaseMs","knee","makeupDb","auto","scHz","scLoHz","scExt","lookMs","ceilingDb"]) {
         if (d[k] !== undefined) this[k] = d[k];
       }
     };
@@ -101,8 +106,10 @@ class Comp extends AudioWorkletProcessor {
     if (mode === 3) { atkMs = Math.min(atkMs, 0.5); }  // LIMIT — the lookahead covers the attack
     const atkC = Math.exp(-1 / (sr * Math.max(1e-5, atkMs / 1000)));
 
-    // SC high-pass coefficient (one-pole).
+    // SC high-pass + low-pass coefficients (one-pole each, in series — the sidechain gets an
+    // actual band, not a highpass alone).
     const hpC = this.scHz > 0 ? Math.exp((-2 * Math.PI * this.scHz) / sr) : 0;
+    const lpC = Math.exp((-2 * Math.PI * this.scLoHz) / sr);
 
     // Auto makeup: give back roughly the gain the threshold+ratio will take away at a typical
     // programme level, so switching the comp in doesn't just make everything quieter.
@@ -138,6 +145,12 @@ class Comp extends AudioWorkletProcessor {
           this.scHpZ[c] = lp;
           x = x - lp;
         }
+        // one-pole low-pass, in series after the high-pass — a hi-hat/cymbal wash stops
+        // triggering the detector the way an open kick's low end stops triggering it above.
+        const zl = this.scLpZ[c] || 0;
+        const lpx = x * (1 - lpC) + zl * lpC;
+        this.scLpZ[c] = lpx;
+        x = lpx;
         const a = Math.abs(x);
         if (a > d) d = a;
       }

@@ -43,20 +43,20 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
 
   useEffect(() => {
     const canvas = mainRef.current;
-    const dev = deck.fxDeviceAt(slot) as ModFx | undefined;
-    if (!canvas || !dev) return;
+    const dev0 = deck.fxDeviceAt(slot) as ModFx | undefined;
+    if (!canvas || !dev0) return;
     const ctx2d = canvas.getContext("2d");
     if (!ctx2d) return;
-    const actx = dev.output.context;
+    const actx = dev0.output.context;
     const an = actx.createAnalyser();
     an.fftSize = 4096;
     an.smoothingTimeConstant = 0.5;
-    dev.output.connect(an); // dim audio backdrop
+    dev0.output.connect(an); // dim audio backdrop
     const bins = new Uint8Array(an.frequencyBinCount);
     const modAn = actx.createAnalyser(); // the REAL modulation signal (LFO + envelope)
     modAn.fftSize = 256;
     try {
-      dev.modSignal.connect(modAn);
+      dev0.modSignal.connect(modAn);
     } catch {
       /* ignore */
     }
@@ -64,7 +64,7 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     const phaseAn = actx.createAnalyser(); // the tapped voice's LFO PHASE (worklet voices only)
     phaseAn.fftSize = 256;
     try {
-      dev.phaseSignal.connect(phaseAn);
+      dev0.phaseSignal.connect(phaseAn);
     } catch {
       /* ignore */
     }
@@ -72,7 +72,7 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     const lfoAn = actx.createAnalyser(); // the native LFO alone (PHASER's phase reference)
     lfoAn.fftSize = 256;
     try {
-      dev.lfoSignal.connect(lfoAn);
+      dev0.lfoSignal.connect(lfoAn);
     } catch {
       /* ignore */
     }
@@ -80,6 +80,11 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
 
     let raf = 0;
     const draw = () => {
+      // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
+      // loop (a chain edit, a preset load, a hot reload) leaves the old object still
+      // answering getParam() with whatever it held when it was replaced — so the picture
+      // simply freezes, with no error anywhere to explain it. Costs one map lookup a frame.
+      const dev = (deck.fxDeviceAt(slot) as ModFx | undefined) ?? dev0;
       const bpm = deck.effectiveBpm;
       if (bpm) dev.setSyncBpm(bpm);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -308,22 +313,22 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     return () => {
       cancelAnimationFrame(raf);
       try {
-        dev.output.disconnect(an);
+        dev0.output.disconnect(an);
       } catch {
         /* ignore */
       }
       try {
-        dev.modSignal.disconnect(modAn);
+        dev0.modSignal.disconnect(modAn);
       } catch {
         /* ignore */
       }
       try {
-        dev.phaseSignal.disconnect(phaseAn);
+        dev0.phaseSignal.disconnect(phaseAn);
       } catch {
         /* ignore */
       }
       try {
-        dev.lfoSignal.disconnect(lfoAn);
+        dev0.lfoSignal.disconnect(lfoAn);
       } catch {
         /* ignore */
       }
@@ -337,6 +342,21 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     set("rate", clamp01((e.clientX - r.left) / r.width));
     set("depth", clamp01(1 - (e.clientY - r.top) / r.height));
   };
+  // ── RESET, the gesture the rest of the rack already has (ValueCell, Knob, ReverbViz's grips,
+  // EqCurve, CompViz): double-click or right-click puts this pad back to the device's OWN
+  // considered resting values — paramDefault(), never an invented number. A control you can dial
+  // but not undial is a control you try once.
+  const resetPad = () => {
+    const dev = deck.fxDeviceAt(slot) as ModFx | undefined;
+    if (!dev) return;
+    for (const id of ["rate", "depth"]) set(id, dev.paramDefault(id));
+  };
+  const onDoubleClick = () => resetPad();
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resetPad();
+  };
+
   const onDown = (e: React.PointerEvent) => {
     dragging.current = true;
     mainRef.current?.setPointerCapture(e.pointerId);
@@ -369,7 +389,7 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
       <canvas ref={readoutRef} className="sat-readout" style={{ height: READOUT_H }} />
       <div className="fx-viz-row">
         <div className="sat-viz">
-          <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+          <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
         </div>
         <div className={`fx-curve mod-wave ${wavePulse}`} onClick={cycleWave} title="Click to cycle the LFO waveform (BARBER: the ramp shape)">
           <canvas ref={curveRef} className="fx-curve-canvas" />

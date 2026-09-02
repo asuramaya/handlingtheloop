@@ -55,6 +55,8 @@ import {
   setDemucsQuality,
   MIC_NONE,
   loadSettings,
+  hydrateFxBanks,
+  onFxBankChange,
   saveSettings,
   useSettingsSync,
   localTs,
@@ -225,6 +227,7 @@ function deckSnapshot(deck: Deck, meta: DeckMeta, videoId: string | null): DeckS
     eqOut: deck.eqOut,
     filter: deck.filterValue,
     fx: deck.fxSnapshot(), // post-EQ effect chain (delay/reverb…) — EQ stays in the eq* fields
+    fxChains: deck.fxChainSnapshot(), // the STEM chains — `fx` above is the master's alone
     keylock: deck.keylock,
     pitchSemis: deck.pitch,
     quantize: deck.quantizing,
@@ -273,10 +276,14 @@ function applyDeckStems(deck: Deck, s: DeckSnapshot) {
 }
 
 // Re-apply saved controls after the buffer is set (setBuffer resets them).
-function applyDeckControls(deck: Deck, s: DeckSnapshot) {
-  deck.setTempo(s.tempo);
-  deck.setTrim(s.trim);
-  deck.setLevel(s.level);
+/** ★ THE CHANNEL'S OWN SOUND — everything that belongs to the DECK rather than to the track on it:
+ *  the EQ, the colour filter, the FX rack and the stem chains. It was inlined in applyDeckControls,
+ *  which is only ever called from inside the track-load path — so a deck that booted with no track
+ *  restored NONE of it, and the chains a DJ had built came back gone. Every deck gets this at boot
+ *  now, track or no track; the load path still calls it (idempotent) so a restored deck is correct
+ *  whichever route it arrives by. Cue points, loops and the playhead deliberately stay OUT: those
+ *  are the TRACK's, and applying them to an empty deck would be a lie. */
+function applyDeckRack(deck: Deck, s: DeckSnapshot) {
   deck.setEqLow(s.eqLow);
   deck.setEqMid(s.eqMid);
   deck.setEqHigh(s.eqHigh);
@@ -300,6 +307,14 @@ function applyDeckControls(deck: Deck, s: DeckSnapshot) {
   if (s.eqMix != null) deck.setEqMix(s.eqMix);
   if (s.eqOut != null) deck.setEqOut(s.eqOut);
   deck.applyFxSnapshot(s.fx); // FX chain (undefined = old snapshot → keep default; [] = explicitly empty)
+  deck.applyFxChainSnapshot(s.fxChains); // the stem chains, which `fx` has never described
+}
+
+function applyDeckControls(deck: Deck, s: DeckSnapshot) {
+  deck.setTempo(s.tempo);
+  deck.setTrim(s.trim);
+  deck.setLevel(s.level);
+  applyDeckRack(deck, s); // the EQ, the filter, the rack and the chains — see above
   deck.setKeylock(s.keylock);
   deck.setPitch(s.pitchSemis ?? 0);
   deck.setQuantize(s.quantize);
@@ -405,6 +420,23 @@ function AppBody() {
   const [lyricStatus, setLyricStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
 
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  // ★ THE PRESET BANKS' SYNC BRIDGE, both legs. OUTBOUND: every bank write announces itself and is
+  // mirrored into settings.fxBanks, which is what syncs to the account. Installed once.
+  useEffect(() => {
+    onFxBankChange((kind, bank) => setSettings((s) => ({ ...s, fxBanks: { ...s.fxBanks, [kind]: bank } })));
+    return () => onFxBankChange(null);
+  }, []);
+  // ★ INBOUND, AND IT RUNS ON EVERY CHANGE — NOT ONCE ON MOUNT, WHICH IS WHAT IT USED TO DO AND WHY
+  // THE BANKS NEVER ARRIVED. The account blob lands ASYNCHRONOUSLY, always after mount: the sign-in
+  // reconcile, the 30s poll and the live account-room broadcast each call setSettings later. A
+  // one-shot hydrate therefore only ever saw this device's own localStorage, so a second device
+  // showed the factory arrangement — and then its first local edit announced THAT back over the
+  // account blob and took the first device's curation with it. Silent, cross-device, both ways.
+  // Depending on the object identity is the whole fix; hydrateFxBanks is dirty-checked, so the
+  // outbound leg's own setSettings re-runs this and writes nothing, which is why it cannot loop.
+  useEffect(() => {
+    hydrateFxBanks(settings.fxBanks);
+  }, [settings.fxBanks]);
   // Which right-dock panel was open last reload — restored DESKTOP-ONLY (like libOpen
   // below; on a phone the docks are full-screen modals that always start closed). The
   // three share one slot, so one string captures it.
@@ -1924,6 +1956,11 @@ function AppBody() {
     setZoom(snap.zoom);
     (["A", "B"] as DeckId[]).forEach((id) => {
       const d = snap.decks[id];
+      // ★ THE CHANNEL COMES BACK EVEN WITH NO TRACK ON IT. This restore only ever ran inside the
+      // track load below, behind `if (!d.videoId) return` — so an empty deck restored nothing, and
+      // the FX chains a DJ had built were silently gone on every refresh. The rack belongs to the
+      // DECK, not to whatever is playing through it.
+      applyDeckRack(engine.deck(id), d);
       if (!d.videoId) return;
       const track: TrackMeta = {
         videoId: d.videoId,

@@ -4,7 +4,7 @@
 // decks without re-downloading. Pure data + a Store — the app builds snapshots
 // from the engine and applies them back, so this module stays audio-agnostic.
 import { Store } from "../persistence";
-import type { FxSlot } from "../room/protocol";
+import type { FxSlot, FxChainSlot } from "../room/protocol";
 
 export interface LoopSnapshot {
   active: boolean;
@@ -48,7 +48,9 @@ export interface DeckSnapshot {
   filter: number; // -1..1 color filter
   // Channel-strip effects AFTER the EQ (delay/reverb/chorus…), in order. Optional so old
   // snapshots load fine (no effects). The EQ itself is the eq* fields above, not here.
-  fx?: FxSlot[];
+  fx?: FxSlot[]; // the MASTER chain
+  /** The stem chains. Optional: absent in every snapshot written before chains were persisted. */
+  fxChains?: FxChainSlot[];
   keylock: boolean;
   pitchSemis?: number; // musical key shift in semitones
   quantize: boolean;

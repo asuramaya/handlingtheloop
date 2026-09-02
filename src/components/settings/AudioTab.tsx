@@ -3,6 +3,7 @@
 // device-enumeration, per-model R2-cache, and WebGPU-probe state; it mounts only while
 // the Audio tab is open, so those probes run exactly when the UI that uses them is shown.
 import { useEffect, useState } from "react";
+import { FxBankSettings } from "./FxBankSettings";
 import {
   type Settings,
   type StretchQuality,
@@ -639,6 +640,8 @@ export function AudioTab({
           );
         })()}
       </div>
+
+      <FxBankSettings />
 
       <LyricsSettings settings={settings} onChange={onChange} decks={lyricDecks} onRetranscribe={onRetranscribe} />
     </>

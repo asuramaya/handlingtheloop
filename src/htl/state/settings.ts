@@ -6,6 +6,7 @@ import { getStemModel } from "../stems/models";
 import type { KeyBindings } from "./keybinds";
 import type { MidiLearnMap, MidiMap } from "../midi/types";
 import type { ColorProfile } from "./colorProfiles";
+import type { FxBank } from "../audio/fxPresets";
 import type { KeyProfile } from "./keyProfiles";
 
 /** `audioInputId` sentinel: no microphone at all. Distinct from "" (system default device), which
@@ -56,6 +57,14 @@ export interface Settings {
   midiMaps: MidiMap[]; // saved, shareable named maps (synced to account); load one → copies into midiBindings
   activeMidiMapId: string | null; // which saved map midiBindings was loaded from (null = ad-hoc / built-in only)
   colorProfiles: ColorProfile[]; // saved, shareable colour themes (synced to account, same as midiMaps)
+  // ★ THE FX PRESET BANKS — the fourth member of the shareable family, and the one that was
+  // missing. keyProfiles / midiMaps / colorProfiles all follow you to another machine and can be
+  // handed to someone else; a curated preset bank sat in raw localStorage, unsynced, and vanished
+  // with the site data. Tolerable while a bank was a handful of snapshots; not once it carries
+  // sections, an order, edits and deletions. Keyed by effect kind. The WORKING copy stays in
+  // localStorage (fxPresets.ts reads it synchronously, from render and from the hardware browse);
+  // this is the synced mirror, written on every bank change and hydrated back on load.
+  fxBanks: Record<string, FxBank>;
   activeColorProfileId: string | null; // which saved profile is loaded (null = ad-hoc / built-in)
   stretchEngine: StretchEngine; // time-stretch algorithm: time-domain WSOLA or phase-locked vocoder
   stretchQuality: StretchQuality; // tempo/pitch engine quality preset (grain/FFT size)
@@ -201,6 +210,7 @@ export const DEFAULT_SETTINGS: Settings = {
   midiMaps: [], // no saved maps yet
   activeMidiMapId: null,
   colorProfiles: [], // no saved colour themes yet
+  fxBanks: {}, // every effect bank as shipped
   activeColorProfileId: null,
   stretchEngine: "wsola", // proven default; PV is opt-in until ear-tested across devices
   stretchQuality: "balanced", // crisp + low-latency default

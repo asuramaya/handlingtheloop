@@ -97,7 +97,8 @@ import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
 import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot, type FxChain, type FxAddr } from "./Fx";
-import { FACTORY_PRESETS, type FxPreset } from "./fxPresets";
+import type { FxChainSlot } from "../room/protocol";
+import { factoryFxPresets, type FxPreset } from "./fxPresets";
 import { CompFx } from "./CompFx";
 import { DelayFx } from "./DelayFx";
 import { ReverbFx } from "./ReverbFx";
@@ -2117,7 +2118,7 @@ export class Deck {
   }
   /** What the pad would throw right now — the armed preset, else the first factory one. */
   get armedEqPreset(): FxPreset | null {
-    return this._armedEq ?? FACTORY_PRESETS.eq?.[0] ?? null;
+    return this._armedEq ?? factoryFxPresets("eq")[0] ?? null;
   }
   eqThrow(on: boolean): void {
     if (on) {
@@ -2548,6 +2549,43 @@ export class Deck {
     // Match the chain order to the snapshot (listed kinds first, in order; residents the snapshot
     // omits keep their relative tail position). No-op when the order already matches.
     this.rack.orderByKinds(known.map((s) => s.kind));
+  }
+
+  /** ★ THE STEM CHAINS, WHICH THE SNAPSHOT NEVER CARRIED. `fxSnapshot()` serialises `rack.list`,
+   *  and `rack.list` IS the master chain — so a DJ who built three stem chains, named them, gave
+   *  them stems and dialled the devices in them lost all of it on refresh, silently, because the
+   *  master came back and looked like a successful restore. The master still rides `fx`; this is
+   *  everything else. */
+  fxChainSnapshot(): FxChainSlot[] {
+    return this.rack.chainList
+      .filter((c) => !c.master)
+      .map((c) => ({
+        name: c.name,
+        stems: c.stems,
+        devices: c.devices.map((d) => ({ kind: d.kind, bypassed: d.bypassed, params: d.kind === "eq" ? {} : d.snapshotParams() })),
+      }));
+  }
+  /** Rebuild the stem chains from a snapshot. `undefined` = a snapshot written before chains were
+   *  persisted → leave whatever is there (never destroy on an OLD snapshot); `[]` = explicitly no
+   *  stem chains. Ids are NOT restored: they are per-deck sequence numbers that mean nothing across
+   *  a reload, and everything that addresses a chain (the strip's selection, the pads) re-reads the
+   *  live list. What a DJ recognises is the NAME, so that is what is preserved. */
+  applyFxChainSnapshot(chains: ReadonlyArray<FxChainSlot> | undefined) {
+    if (!chains) return;
+    for (const c of this.rack.chainList.filter((c) => !c.master).map((c) => c.id)) this.removeFxChain(c);
+    for (const c of chains) {
+      const made = this.addFxChain(c.name);
+      // Stems go through setFxChainStems so the one-owner partition is enforced by the same code
+      // path a live edit uses — a snapshot must not be able to write a state a gesture cannot.
+      if (c.stems) this.setFxChainStems(made.id, c.stems);
+      for (const s of c.devices) {
+        if (!Deck.FX_KINDS.has(s.kind)) continue;
+        const d = this.addFxTo(made.id, s.kind as FxKind);
+        if (!d || d.kind === "eq") continue;
+        for (const k in s.params) d.setParam(k, s.params[k]);
+        d.setBypass(s.bypassed, true); // restoring, not a live toggle — instant
+      }
+    }
   }
 
   /** Combined EQ magnitude (dB) at each frequency in `freqHz`, into `outDb` — the

@@ -51,21 +51,26 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const dev = deck.fxDeviceAt(slot) as SaturatorFx | undefined;
-    if (!canvas || !dev) return;
+    const dev0 = deck.fxDeviceAt(slot) as SaturatorFx | undefined;
+    if (!canvas || !dev0) return;
     const ctx2d = canvas.getContext("2d");
     if (!ctx2d) return;
-    const actx = dev.output.context;
+    const actx = dev0.output.context;
     const analyser = actx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.7;
-    dev.output.connect(analyser); // tap only (not forwarded) → no path change
+    dev0.output.connect(analyser); // tap only (not forwarded) → no path change
     const bins = new Uint8Array(analyser.frequencyBinCount);
     const timeBuf = new Float32Array(analyser.fftSize);
-    const BANDS = (dev.constructor as typeof SaturatorFx).BANDS;
+    const BANDS = (dev0.constructor as typeof SaturatorFx).BANDS;
 
     let raf = 0;
     const draw = () => {
+      // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
+      // loop (a chain edit, a preset load, a hot reload) leaves the old object still
+      // answering getParam() with whatever it held when it was replaced — so the picture
+      // simply freezes, with no error anywhere to explain it. Costs one map lookup a frame.
+      const dev = (deck.fxDeviceAt(slot) as SaturatorFx | undefined) ?? dev0;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -220,7 +225,7 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
     return () => {
       cancelAnimationFrame(raf);
       try {
-        dev.output.disconnect(analyser);
+        dev0.output.disconnect(analyser);
       } catch {
         /* already gone */
       }
@@ -229,6 +234,33 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
 
   // Hit-test on press: near a crossover line → drag it; inside a band → drag its drive AND
   // select that band (the parent shows its style/punish/bias subrow below).
+  // ── RESET. Unlike the rack's plain XY pads this canvas holds two different kinds of thing, so
+  // the gesture resets WHAT YOU ARE ON — the crossover you're near, or otherwise that band's own
+  // drive — using the device's registered defaults rather than an invented number. Same hit
+  // ordering as onDown, so what you reset is exactly what a drag there would have moved.
+  const resetAt = (e: React.MouseEvent) => {
+    const canvas = canvasRef.current;
+    const dev = deck.fxDeviceAt(slot) as SaturatorFx | undefined;
+    if (!canvas || !dev) return;
+    const r = canvas.getBoundingClientRect();
+    const w = r.width;
+    const x = e.clientX - r.left;
+    const BANDS = (dev.constructor as typeof SaturatorFx).BANDS;
+    for (let j = 0; j < BANDS - 1; j++) {
+      if (Math.abs(x - fx(dev.xoverHzOf(j), w)) < 8) return set(`xover${j}`, dev.paramDefault(`xover${j}`));
+    }
+    const xo: number[] = [];
+    for (let j = 0; j < BANDS - 1; j++) xo.push(fx(dev.xoverHzOf(j), w));
+    let band = 0;
+    while (band < xo.length && x > xo[band]) band++;
+    set(`drive${band}`, dev.paramDefault(`drive${band}`));
+  };
+  const onDoubleClick = (e: React.MouseEvent) => resetAt(e);
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resetAt(e);
+  };
+
   const onDown = (e: React.PointerEvent) => {
     const canvas = canvasRef.current;
     const dev = deck.fxDeviceAt(slot) as SaturatorFx | undefined;
@@ -286,7 +318,7 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
         <canvas ref={readoutRef} className="sat-readout" style={{ height: READOUT_H }} />
         <div className="fx-viz-row">
           <div className="sat-viz">
-            <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} />
+            <canvas ref={canvasRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
           </div>
           <div className="fx-curve">
             <canvas ref={curveRef} className="fx-curve-canvas" />

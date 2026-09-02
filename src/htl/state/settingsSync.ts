@@ -37,13 +37,51 @@ async function pullRemote(): Promise<{ data: Partial<Settings>; updatedAt: numbe
   }
 }
 
+// ★ THE PUSH REPORTS NOW. It was `void fetch(...).catch(() => {})` — every failure swallowed,
+// including the one the server actually returns on purpose: 413, the 256 KB per-user cap. A user
+// whose settings outgrow that cap simply stops syncing, on every device, with nothing anywhere to
+// say so; the preset banks are the biggest thing in the blob and the most likely to cross it. A
+// sync that can fail silently is a backup that can fail silently.
+export interface SettingsSyncState {
+  /** null until fetchMe() has answered — "unknown", not "signed out". */
+  signedIn: boolean | null;
+  lastPushAt: number;
+  /** Human-readable reason the last push failed, or null. */
+  error: string | null;
+  /** Serialized size of the last blob we tried to store, in bytes. */
+  bytes: number;
+}
+let syncState: SettingsSyncState = { signedIn: null, lastPushAt: 0, error: null, bytes: 0 };
+const syncSubs = new Set<() => void>();
+/** A STABLE reference between changes — useSyncExternalStore compares by identity. */
+export function settingsSyncState(): SettingsSyncState {
+  return syncState;
+}
+export function onSettingsSync(fn: () => void): () => void {
+  syncSubs.add(fn);
+  return () => syncSubs.delete(fn);
+}
+function setSyncState(patch: Partial<SettingsSyncState>) {
+  const next = { ...syncState, ...patch };
+  if (next.signedIn === syncState.signedIn && next.lastPushAt === syncState.lastPushAt && next.error === syncState.error && next.bytes === syncState.bytes) return;
+  syncState = next;
+  for (const fn of syncSubs) fn();
+}
+
 function pushRemote(data: Settings, updatedAt: number) {
+  const body = JSON.stringify({ data, updatedAt });
   void fetch("/api/me/settings", {
     method: "PUT",
     credentials: "include",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ data, updatedAt }),
-  }).catch(() => {});
+    body,
+  })
+    .then(async (r) => {
+      if (r.ok) return setSyncState({ lastPushAt: Date.now(), error: null, bytes: body.length });
+      const why = r.status === 413 ? "too large to sync" : r.status === 401 ? "signed out" : `server said ${r.status}`;
+      setSyncState({ error: why, bytes: body.length });
+    })
+    .catch(() => setSyncState({ error: "offline", bytes: body.length }));
 }
 
 // Wire the app's settings state to the account. Pulls + reconciles once the user is
@@ -59,7 +97,9 @@ export function useSettingsSync(settings: Settings, setSettings: (s: Settings) =
     let cancelled = false;
     fetchMe()
       .then(async (me) => {
-        if (cancelled || !me.user) return; // signed out → purely local, no sync
+        if (cancelled) return;
+        setSyncState({ signedIn: !!me.user });
+        if (!me.user) return; // signed out → purely local, no sync
         signedIn.current = true;
         const remote = await pullRemote();
         if (cancelled) return;

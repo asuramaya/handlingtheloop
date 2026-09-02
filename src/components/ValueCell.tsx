@@ -168,7 +168,11 @@ export function ValueCell({ label, value, min, max, step = 0.01, pivot, reset, o
           pulse(); // the tap's RESULT lives elsewhere (a tick scale, a mute) — flash the cell you hit
         }
       }}
-      onPointerCancel={() => { clearLong(); setPressing(false); }}
+      // ★ AND DROP THE DRAG. pointercancel arrives INSTEAD of pointerup when a touch is
+      // interrupted, so leaving drag.current set left the cell armed: the very next pointermove
+      // over it — no press involved — resumed changing the value from the old anchor. The
+      // handler existed; it just wasn't finishing the job pointerup does.
+      onPointerCancel={() => { clearLong(); setPressing(false); drag.current = null; }}
       onContextMenu={(e) => { e.preventDefault(); if (disabled) return; pulse(); if (onContextMenu) onContextMenu(e); else onChange(resetTo); }}
     >
       <KnobBorder value={value} min={min} max={max} pivot={pivot} />

@@ -492,7 +492,7 @@ export class Deck {
       spawnSource: (at) => this.spawnSource(at),
       stopSource: () => this.stopSource(),
       clearBend: () => this.clearBend(),
-      connectScratch: (node) => { node.connect(this.rack.input); },
+      connectScratch: (node) => { node.connect(this.rack.inject); }, // no stem tap carries a scratch — see FxRack.inject
       slipArm: () => this.slipArm(),
       slipArmForce: () => this.slipArmForce(),
       slipReleasePos: () => this.slipReleasePos(),

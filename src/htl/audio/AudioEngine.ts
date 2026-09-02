@@ -142,9 +142,9 @@ export class AudioEngine {
     this.deckB = new Deck(this.ctx);
     this.deckA.output.connect(this.xfadeA);
     this.deckB.output.connect(this.xfadeB);
-    // Sampler routes: region pads inject at each deck's channel input (rack.input → EQ →
+    // Sampler routes: region pads inject at each deck's channel INJECT node (→ the master chain →
     // fader → crossfader); global pads at master (pre-limiter, post-crossfade).
-    this.sampler = new Sampler(this.ctx, { A: this.deckA.rack.input, master: this.master, B: this.deckB.rack.input });
+    this.sampler = new Sampler(this.ctx, { A: this.deckA.rack.inject, master: this.master, B: this.deckB.rack.inject });
     // Cue bus: both decks' pre-fader sends mix into cueMaster (unity). Its downstream
     // (the second device sink) is built on demand in setCueSinkId — until then this is
     // a dangling sub-mix with no output, so it costs nothing and makes no sound.
@@ -155,7 +155,7 @@ export class AudioEngine {
     // as a record source. Recorder captures any node into an AudioBuffer for the sampler.
     // Mic routes to the PA (master, with auto-duck) or INTO a deck's channel input (the deck's FX
     // rack/EQ/fader then process the voice — no separate mic rack needed).
-    this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.input, B: this.deckB.rack.input }, this.musicBus.gain);
+    this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.inject, B: this.deckB.rack.inject }, this.musicBus.gain);
     this.mic.monitorOut.connect(this.cueMaster); // PFL — hear the mic in the headphone/cue device
     // Cue/master headphone blend. cueMaster (PFL) → cuePflGain, master → cueMasterSend, both
     // sum into cueOut (the headphone master level). cueOut is what setCueSinkId bridges to the

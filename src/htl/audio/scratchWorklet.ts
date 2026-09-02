@@ -28,6 +28,10 @@ export const SCRATCH_WORKLET_SRC = `
 // first. Replaces the old per-worklet PCM transfer + the mobile windowed-PCM-extraction
 // machinery entirely (see stretchWorklet.ts's loadPcm handler, the writer side).
 if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
+
+// One render quantum. Below this an update carries a newer position but no usable timing — the
+// worklet has not run in between, so nothing has actually elapsed that we could measure against.
+const MIN_INTERVAL = 128;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -39,7 +43,8 @@ class Scratch extends AudioWorkletProcessor {
     this.curStep = 0;    // lightly smoothed step → clean pitch across segments
     this.since = 0;      // output samples since the last 'move' (measures cadence)
     this.interval = 0;   // samples between the last two 'move's (segment length)
-    this.avgInterval = 0; // lightly EMA'd real-time interval (see the 'move' handler below)
+    this.accDt = 0;      // wall-clock banked since the last re-pace (see the 'move' handler)
+    this.repace = false; // did this update carry enough elapsed time to recompute the step?
     this.active = false;
     this.gain = 0;       // declick envelope
     this.gainTarget = 0;
@@ -92,7 +97,8 @@ class Scratch extends AudioWorkletProcessor {
         this.granular = false; this.curRaw = 0; // a fresh grab always starts continuous
         this.since = 0;
         this.interval = this.nominal;
-        this.avgInterval = 0; // a fresh grab must not inherit the previous gesture's cadence
+        this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
+        this.repace = false;
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -103,22 +109,44 @@ class Scratch extends AudioWorkletProcessor {
         // interval (not a guess) keeps the motion smooth and drift-free; computing
         // it from the POSITION delta (not the sent velocity) removes the jitter.
         //
-        // The interval itself prefers the caller's measured wall-clock gap (d.dtMs, from
-        // performance.now() on the main thread) over this.since: since only advances
-        // during process(), so several ticks delivered inside the SAME ~2.9ms render quantum
-        // (bursty hardware jog MIDI) read an identical since and fall back to nominal —
-        // a fixed ~16.7ms guess that measured ~4x too slow against a real DDJ-FLX4 capture's
-        // actual average tick rate. Lightly EMA'd (k=0.5) so one freak sub-ms pair doesn't
-        // spike the instantaneous speed or crash the pitch-smoothing tau below — still tracks
-        // the true recent cadence far closer than nominal ever could.
+        // ★ COALESCE, DON'T SMOOTH. The interval paces the chase from where the read head IS to
+        // the new platter position, so it has to be the real time between updates.
+        //
+        // Two ways to get that wrong, and this code has had both. Using the worklet's own "since"
+        // counter fails on BURSTY input: it only advances during process(), so several updates
+        // delivered inside one ~2.9ms render quantum all read since=0 and fall back to a fixed
+        // ~16.7ms guess — ~4x too slow (measured on a real DDJ-FLX4 capture, where a third of
+        // consecutive jog ticks land in the same quantum). Reading too slow drags the pitch down
+        // and pins the smoothing tau at its slowest.
+        //
+        // Replacing it with an EMA of the caller's wall-clock gap fixed the hardware jog and broke
+        // the pointer. Mouse and touch also burst — the browser can deliver several pointermoves
+        // in one frame — and there the EMA pulls the interval DOWN toward those sub-millisecond
+        // gaps while the position delta is still a whole frame's worth. Dividing a full delta by a
+        // fraction of its time reads too FAST. So the estimate now oscillates around the truth
+        // instead of sitting under it: same wrong-velocity fault, opposite sign, which is why the
+        // scratch changed character on mouse AND touch rather than going quiet.
+        //
+        // The fix is neither. Sub-quantum updates carry no new TIMING information, only a newer
+        // position — so take the position and bank the time, and recompute the step only once a
+        // real interval has actually elapsed. Numerator and denominator then always describe the
+        // same stretch of wall clock, which is the property both broken versions gave up.
         {
           const dtSamples = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
-          const raw = dtSamples > 0 ? dtSamples : (this.since > 0 ? this.since : this.nominal);
-          this.avgInterval = this.avgInterval > 0 ? this.avgInterval + (raw - this.avgInterval) * 0.5 : raw;
-          this.interval = Math.max(1, this.avgInterval);
+          this.accDt += dtSamples > 0 ? dtSamples : (this.since > 0 ? this.since : 0);
+          if (this.accDt >= MIN_INTERVAL || this.interval <= 0) {
+            this.interval = Math.max(1, this.accDt > 0 ? this.accDt : this.nominal);
+            this.accDt = 0;
+            this.repace = true;
+          } else {
+            this.repace = false; // same quantum: newer target, same pacing
+          }
         }
         this.since = 0;
         this.target = d.pos;
+        // A sub-quantum update moves the TARGET (the chase always aims at the latest position)
+        // but leaves the pacing alone — there is no new timing to pace with yet.
+        if (!this.repace) return; // keep the current step; the next re-pace will use the banked time
         this.stepRaw = (this.target - this.pos) / this.interval; // uncapped (granular tracks the finger)
         let s = this.stepRaw;
         if (s > 32) s = 32; else if (s < -32) s = -32; // continuous resampler clamp

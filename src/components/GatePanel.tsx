@@ -4,6 +4,7 @@ import { GATE_SHAPES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { GateViz } from "./GateViz";
 import { useFrameSync } from "./useFrameSync";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // Trance GATE surface — the sweeping gate-envelope WYSIWYG on top, the shared knobs below it,
 // SHAPE select at the bottom. Mirrors the Sat/Crush/Mod panel contract (Viz → knobs → mode row).
@@ -28,11 +29,11 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
   const get = (p: string) => dev.getParam(p);
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
     refresh();
   };
   // ★ The XY pad drags continuously — see useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);

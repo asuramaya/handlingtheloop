@@ -225,9 +225,22 @@ export type Intent =
   // Channel-strip effects (post-EQ). `slot` indexes the EFFECT list (0 = first effect
   // after the EQ), NOT the full rack. fxParam/fxBypass are the high-frequency live moves;
   // fxRack carries the whole effect list (add/remove/reorder + late-joiner catch-up).
-  | { kind: "fxParam"; deck: DeckId; slot: number; param: string; value: number }
-  | { kind: "fxBypass"; deck: DeckId; slot: number; value: boolean }
-  | { kind: "fxRack"; deck: DeckId; rack: FxSlot[] }
+  //
+  // ★ `slot` IS NOT AN ADDRESS ANY MORE, and the same law that caught the fxPad chain id caught
+  // this: an index only means something against the list it was computed from. Since stem chains
+  // landed, `slot` indexes `chains.flatMap(devices)` — stem chains FIRST, master last — so a DJ
+  // with one more chain than their phone sends "slot 5" for a reverb the phone resolves to a
+  // different device, or to none at all. `chain` (the chain's NAME, the key that survives a trip —
+  // ids are per-deck sequence numbers) plus `fx` (the device kind, unique within a chain) is the
+  // real address. Both are OPTIONAL so an older peer's slot-only message still applies the old
+  // way, and a newer peer fills in both.
+  | { kind: "fxParam"; deck: DeckId; slot: number; param: string; value: number; chain?: string; fx?: string }
+  | { kind: "fxBypass"; deck: DeckId; slot: number; value: boolean; chain?: string; fx?: string }
+  // `rack` is the MASTER chain, as it always was; `chains` carries the stem chains, which had no
+  // wire form at all — so adding a chain, renaming one, changing which stems it claims, or
+  // recalling a chain preset broadcast a message that described only the master, and the far side
+  // kept whatever it had. Optional for the same back-compat reason.
+  | { kind: "fxRack"; deck: DeckId; rack: FxSlot[]; chains?: FxChainSlot[] }
   // BOARD-AGNOSTIC gesture. The protocol deliberately does NOT enumerate specific buttons
   // (pad modes, FX-pad throws, future performance controls) — the board owns the semantics via
   // a registry (src/htl/board/boardActions.ts), so new pads/effects sync + replay by REGISTERING

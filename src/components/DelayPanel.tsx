@@ -5,6 +5,7 @@ import { DelayViz } from "./DelayViz";
 import { useFrameSync } from "./useFrameSync";
 import { snapIndex } from "@htl/audio";
 import { clamp } from "../util/math";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // The Delay surface. Its four big params — TIME, FEEDBACK, HP, LP — are not down here: they're
 // ON the viz, which already drew every one of them (see DelayViz). Grab a tap to set the time and
@@ -75,13 +76,13 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
   // Set one device param locally + broadcast it (emit is a no-op when solo).
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
   };
   // ★ LIVE path — see useFrameSync. The AUDIO moves on the pointer event (it must never wait),
   // but the React render and the session emit are folded into ONE pass per frame. Doing both on
   // every pointermove spent the frame budget re-rendering the deck instead of painting the thing
   // under your finger, and flooded the socket with intents no remote could use.
-  const sync = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const sync = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     sync(param, value);

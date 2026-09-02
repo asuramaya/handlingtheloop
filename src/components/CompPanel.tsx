@@ -8,6 +8,7 @@ import { CompArPad } from "./CompArPad";
 import { CompHead } from "./CompHead";
 import { usePulse } from "./usePulse";
 import { useFrameSync } from "./useFrameSync";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // COMP surface — a transfer curve you GRAB, the remaining cells, and a foot strip holding
 // MODE / AUTO / sidechain source.
@@ -62,7 +63,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
     hot.current = v;
   }, []);
   // CompViz drags continuously — see useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);
@@ -72,7 +73,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const get = (p: string) => dev.getParam(p);
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
     refresh();
   };
   const mode = Math.round(get("mode"));

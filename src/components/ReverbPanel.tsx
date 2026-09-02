@@ -3,6 +3,7 @@ import { useEmit, useRefresh } from "../App/spine";
 import { REVERB_STYLES } from "@htl/audio";
 import { ReverbViz } from "./ReverbViz";
 import { useFrameSync } from "./useFrameSync";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // The Reverb device surface (v5 layout): readout → tone ribbon (FreqRibbon.ts, same primitive the
 // delay's tap timeline uses) → an inverted dome hanging DOWN from the ribbon's baseline, tail
@@ -32,11 +33,11 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
 
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
   };
   // ★ The dome's grips drag continuously (and the wheel-nudge can burst just as fast) — see
   // useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);

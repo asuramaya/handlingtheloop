@@ -25,6 +25,7 @@ import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
 import { DropLine, insertionToIndex, useReorderDrag } from "./useReorderDrag";
 import { useHoverDismiss } from "./useHoverDismiss";
+import { fxBypassIntent, fxParamIntent, fxRackIntent } from "@htl/room/fxWire";
 
 // The deck's channel-strip device rack, as a TAB bar over one full-size device panel (so
 // the EQ curve keeps its full height). EVERY device — the EQ included — is a first-class
@@ -344,7 +345,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     }
   };
 
-  const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit({ kind: "fxRack", deck: which, rack: d.fxSnapshot() });
+  const broadcastRack = (which: "A" | "B" = id, d: Deck = deck) => emit(fxRackIntent(d, which));
 
   // ★ TWO DRAGS, ONE GESTURE. Devices reorder within a chain; chains reorder within the row. They
   // are the same act on two rows, so they are the same hook — and because it hit-tests by
@@ -777,7 +778,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       emit({ kind: "toggle", deck: id, param: "eqBypass", value: deck.eqBypassed });
     } else {
       deck.setFxBypass(cur, !selDev.bypassed, e.shiftKey);
-      emit({ kind: "fxBypass", deck: id, slot: cur, value: selDev.bypassed });
+      emit(fxBypassIntent(deck, id, cur, selDev.bypassed));
     }
     refresh();
   };
@@ -849,7 +850,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       emit({ kind: "control", deck: id, param: "eqMix", value: v });
     } else {
       deck.setFxParam(cur, "mix", v);
-      emit({ kind: "fxParam", deck: id, slot: cur, param: "mix", value: v });
+      emit(fxParamIntent(deck, id, cur, "mix", v));
     }
     refresh();
   };

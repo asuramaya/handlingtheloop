@@ -22,6 +22,7 @@
 
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
+import type { Intent } from "../room/protocol";
 import { foldTempoOctave } from "../analysis";
 import { trace } from "../debug/trace";
 import { clamp, clamp01, lerp } from "../../util/math";
@@ -49,7 +50,31 @@ export class SmartFader {
   private keylockSaved: Partial<Record<DeckId, boolean>> = {};
   private lastProgress = 0;
 
+  // ★ A TRANSITION THAT ONLY HAPPENS HERE IS A DIVERGENCE. Smart Fader drives the decks straight
+  // — tempo, EQ, play — and none of those setters touch the wire, so on a shared board the far
+  // side received the crossfader position and nothing else: it heard a plain crossfade while this
+  // device performed a tempo morph and a bass swap. (The AutoMixer has the same shape and solved
+  // it by re-publishing the whole snapshot at each transition boundary; a fader-driven transition
+  // has no boundaries to hang that on — it is continuous, under a hand.) So every move it makes
+  // goes out as the ordinary intent that move already had. No new protocol, no new apply path.
+  private emit: (intent: Intent) => void = () => {};
   constructor(private engine: AudioEngine) {}
+
+  /** Wire the transition to the session. Called once by App; a solo deck leaves it unset and the
+   *  emitter is a no-op, so nothing about offline behaviour changes. */
+  setEmitter(fn: (intent: Intent) => void): void {
+    this.emit = fn;
+  }
+  /** Move a deck's tempo AND say so. */
+  private tempo(id: DeckId, pct: number): void {
+    this.engine.deck(id).setTempo(pct);
+    this.emit({ kind: "control", deck: id, param: "tempo", value: pct });
+  }
+  /** Move a deck's low EQ AND say so — the bass swap is the most audible half of the throw. */
+  private eqLow(id: DeckId, db: number): void {
+    this.engine.deck(id).setEqLow(db);
+    this.emit({ kind: "control", deck: id, param: "eqLow", value: db });
+  }
 
   get isArmed(): boolean {
     return this.armed;
@@ -60,7 +85,7 @@ export class SmartFader {
 
   /** Arm at the current crossfade position `cf` (−1 = full A … +1 = full B). Returns false (→ plain
    *  crossfader) if a deck lacks a beatgrid to morph between. */
-  arm(cf: number): boolean {
+  arm(cf: number, announce = true): boolean {
     if (this.armed) return true;
     if (!this.setupDirection(cf)) return false;
     // The pitch glide is intentional — PIN key-lock off so the tempo morph pitches the decks
@@ -73,23 +98,32 @@ export class SmartFader {
     // feed-forward (it assumes grid-natural playback and fought the morph) and ride pure phase-lock.
     this.engine.setCommandedRamp(true);
     this.armed = true;
+    // The mode itself crosses: the far side pins key-lock the same way (or its decks will not
+    // glide with the morph) and its strip shows SMART instead of a plain crossfader.
+    // `announce` is false when we are arming BECAUSE a co-DJ armed — the mode is shared, and a
+    // re-announcement would bounce it straight back at them.
+    if (announce) for (const d of ["A", "B"] as DeckId[]) this.emit({ kind: "board", deck: d, id: "smartFader", arg: "arm" });
     this.apply(cf, false); // arm only — never auto-plays (so you can set the blend up while paused)
     return true;
   }
 
   /** Exit Smart mode: return both decks to neutral tempo / EQ / key-lock. (setTempo(0) on the slave
    *  also releases SYNC.) Leaves the crossfade where it is. */
-  disarm(): void {
+  disarm(announce = true): void {
     if (!this.armed) return;
     this.engine.setCommandedRamp(false); // back to normal beatmatch sync (feed-forward re-acquires)
     for (const id of ["A", "B"] as DeckId[]) {
       const d = this.engine.deck(id);
-      d.setTempo(0);
-      d.setEqLow(0);
+      this.tempo(id, 0);
+      this.eqLow(id, 0);
       d.setKeylockPinnedOff(false); // unpin first, then restore the user's saved key-lock
       const k = this.keylockSaved[id];
-      if (k != null) d.setKeylock(k);
+      if (k != null) {
+        d.setKeylock(k);
+        this.emit({ kind: "toggle", deck: id, param: "keylock", value: k });
+      }
     }
+    if (announce) for (const d of ["A", "B"] as DeckId[]) this.emit({ kind: "board", deck: d, id: "smartFader", arg: "disarm" });
     this.armed = false;
     this.fromId = this.toId = null;
   }
@@ -161,7 +195,10 @@ export class SmartFader {
 
     // The throw is bringing the incoming in (and it's a user fader move, not the arm) → start it
     // rolling under the fader. Deferred to here so arming during pause stays silent.
-    if (started && p > 0.001 && !toDeck.playing) toDeck.play();
+    if (started && p > 0.001 && !toDeck.playing) {
+      toDeck.play();
+      this.emit({ kind: "transport", deck: to, action: "play" });
+    }
 
     // Tempo morph: move ONLY the master (live) tempo; the SYNC slave (incoming) follows
     // automatically (half/double folded for big gaps). Common BPM migrates fromStart → incoming.
@@ -179,12 +216,12 @@ export class SmartFader {
     const targetBpm = lerp(this.fromStartBpm, foldedTarget, p);
     const tempoPct = (targetBpm / fromBase - 1) * 100;
     trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +foldedTarget.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +incNatural.toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
-    fromDeck.setTempo(tempoPct);
+    this.tempo(from, tempoPct);
 
     // Bass swap across the middle of the throw.
     const s = clamp01((p - BASS_LO) / (BASS_HI - BASS_LO));
-    fromDeck.setEqLow(lerp(0, EQ_KILL, s));
-    toDeck.setEqLow(lerp(EQ_KILL, 0, s));
+    this.eqLow(from, lerp(0, EQ_KILL, s));
+    this.eqLow(to, lerp(EQ_KILL, 0, s));
 
     // The crossfade itself just follows the fader (equal-power curve in the engine).
     this.engine.setCrossfade(clamp(cf, -1, 1));
@@ -197,8 +234,8 @@ export class SmartFader {
     // from the incoming's effectiveBpm). setTempo(0) on the ex-slave also drops the old sync
     // direction; setupDirection then re-locks with the roles swapped so the next throw blends back.
     if (p >= 0.999) {
-      fromDeck.setEqLow(0);
-      toDeck.setTempo(0);
+      this.eqLow(from, 0);
+      this.tempo(to, 0);
       this.setupDirection(cf);
     }
   }

@@ -13,6 +13,7 @@ import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type Sess
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
 import { decideFollowTick, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
 import type { Settings } from "@htl/state";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
@@ -277,175 +278,53 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     if (any) refresh();
   }, [engine, loaded, reconcileDeckState, refresh]);
 
-  // Apply ONE control intent to the local engine — used for both inbound remote
-  // intents and our own actions. Pure local effect, no network.
+  // Apply ONE control intent to the local engine — used for both inbound remote intents and our
+  // own actions. Pure local effect, no network. The SWITCH lives in src/htl/room/applyIntent.ts
+  // so a test can drive it: while it sat inline here, "does this gesture reach the other device
+  // intact?" was a question the suite could not ask. This is the wiring, that is the behaviour.
   const applyIntent = useCallback(
     (intent: Intent) => {
-      if (intent.kind === "automix") {
-        autoMixerControlRef.current(intent.action);
-        return;
-      }
-      // Board-agnostic gesture (pad mode, FX-pad throw, …) — the registry owns the semantics,
-      // so new board controls sync + replay without touching this switch. onRoomIntent refreshes.
-      if (intent.kind === "board") {
-        applyBoardAction(engine.deck(intent.deck), intent.id, intent.phase, intent.arg);
-        return;
-      }
-      if (intent.kind === "queue") {
-        // Only the queue AUTHORITY (the device running the auto-mixer + broadcasting the
-        // automix stream) mutates the canonical queue; it then re-streams so everyone
-        // converges 1:1. A mirroring remote ignores it — its local queue is unused, and
-        // applying here would fork a second copy. The seed/mode stay host-owned (radio
-        // engine); remotes only add/remove/move individual tracks.
-        const q = mixQueueRef.current;
-        if (autoIsRemoteRef.current || !q) return;
-        if (intent.action === "add") q.enqueue(intent.track as TrackMeta);
-        else if (intent.action === "addNext") q.enqueueNext(intent.track as TrackMeta);
-        else if (intent.action === "remove") q.remove(intent.videoId);
-        else if (intent.action === "move") q.moveById(intent.videoId, intent.to); // id-based: the right track even if from-index was stale
-        return;
-      }
-      if (intent.kind === "crossfade") {
-        setCrossfade(intent.value);
-        engine.setCrossfade(intent.value);
-        return;
-      }
-      if (intent.kind === "tempoRange") {
-        setSettings((s) => (s.tempoRange === intent.value ? s : { ...s, tempoRange: intent.value }));
-        return;
-      }
-      // SYNC / KEY role: mirror the button(s) only — the master's tempo/pitch already
-      // crosses as control intents, so we don't re-run the engine on the follower.
-      if (intent.kind === "sync") {
-        engine.mirrorSyncDisplay(intent.slave);
-        refresh();
-        return;
-      }
-      if (intent.kind === "key") {
-        engine.mirrorKeyDisplay(intent.slave);
-        refresh();
-        return;
-      }
-      // A co-DJ fired a sampler pad — reconstruct it locally (region off our own deck buffer,
-      // global by fetching the host's clip). Has no `deck` field, so handle before that lookup.
-      if (intent.kind === "sample") {
-        samplerApplyRef.current?.(intent);
-        return;
-      }
-      const deck = engine.deck(intent.deck);
-      switch (intent.kind) {
-        case "control":
-          if (intent.param === "tempo") deck.setTempo(intent.value);
-          else if (intent.param === "trim") deck.setTrim(intent.value);
-          else if (intent.param === "level") deck.setLevel(intent.value);
-          else if (intent.param === "eqLow") deck.setEqLow(intent.value);
-          else if (intent.param === "eqMid") deck.setEqMid(intent.value);
-          else if (intent.param === "eqHigh") deck.setEqHigh(intent.value);
-          else if (intent.param === "eqLowFreq") deck.setEqLowFreq(intent.value);
-          else if (intent.param === "eqMidFreq") deck.setEqMidFreq(intent.value);
-          else if (intent.param === "eqHighFreq") deck.setEqHighFreq(intent.value);
-          else if (intent.param === "eqMidQ") deck.setEqMidQ(intent.value);
-          else if (intent.param === "eqLowQ") deck.setEqLowQ(intent.value);
-          else if (intent.param === "eqHighQ") deck.setEqHighQ(intent.value);
-          else if (intent.param === "eqLowShape") deck.setEqLowShape(intent.value);
-          else if (intent.param === "eqMidShape") deck.setEqMidShape(intent.value);
-          else if (intent.param === "eqHighShape") deck.setEqHighShape(intent.value);
-          else if (intent.param === "eqHpFreq") deck.setEqHpFreq(intent.value);
-          else if (intent.param === "eqHpQ") deck.setEqHpQ(intent.value);
-          else if (intent.param === "eqLpFreq") deck.setEqLpFreq(intent.value);
-          else if (intent.param === "eqLpQ") deck.setEqLpQ(intent.value);
-          else if (intent.param === "eqMix") deck.setEqMix(intent.value);
-          else if (intent.param === "eqOut") deck.setEqOut(intent.value);
-          else if (intent.param === "filter") deck.setFilter(intent.value);
-          else if (intent.param === "pitch") deck.setPitch(Math.round(intent.value));
-          break;
-        case "toggle":
-          if (intent.param === "keylock") deck.setKeylock(intent.value);
-          else if (intent.param === "eqBypass") deck.setEqBypass(intent.value);
-          else if (intent.param === "quantize") deck.setQuantize(intent.value);
-          // (legacy "fx" filter-master toggle removed — ignored if an old peer sends it)
-          break;
-        case "fxParam":
-          // A post-EQ effect knob moved on a controller — high-frequency live sync.
-          deck.setFxParam(intent.slot, intent.param, intent.value);
-          refresh();
-          break;
-        case "fxBypass":
-          deck.setFxBypass(intent.slot, intent.value);
-          refresh();
-          break;
-        case "fxRack":
-          // Add/remove/reorder the effect chain (or a late joiner catching up): reconcile
-          // the whole list — kinds + order rebuild, params + bypass re-applied.
-          deck.applyFxSnapshot(intent.rack);
-          refresh();
-          break;
-        case "stemGain":
-          // Apply regardless of local stems — the deck holds gain/mute state buffer-
-          // free, so a mix-only remote stays in sync and reflects it on its cells.
-          deck.setStemGain(intent.stem, intent.value);
-          ensureGuestStemsRef.current(intent.deck); // phone guest: materialise stems if this diverged
-          break;
-        case "stem":
-          deck.setStemMute(intent.stem, !intent.on);
-          ensureGuestStemsRef.current(intent.deck);
-          break;
-        case "transport":
-          if (intent.action === "play") {
-            if (!deck.playing) {
-              engine.resume(); // a co-DJ's deck must advance (silently) to track the master
-              deck.play();
-            }
-          } else if (intent.action === "pause") {
-            if (deck.playing) deck.pause();
-          } else if (intent.action === "seek") deck.seek(intent.position ?? 0);
-          break;
-        case "cue":
-          deck.cuePoint = intent.position;
-          break;
-        case "jog":
-          // Drive the platter physics locally (audible scratch on the master, silent
-          // on co-DJs). Suppress tick-follow for this deck during the remote scrub.
-          if (intent.phase === "start") {
-            scrubbing.current[intent.deck] = true;
-            engine.resume();
-            deck.scrubBegin();
-          } else if (intent.phase === "move") {
-            deck.scrubMove(intent.delta ?? 0);
-          } else {
-            deck.scrubEnd();
-            setTimeout(() => (scrubbing.current[intent.deck] = false), 250);
+      applyIntentTo(intent, engine as unknown as IntentEngine, {
+        automix: (action) => autoMixerControlRef.current(action),
+        board: (deckId, id, phase, arg) => {
+          applyBoardAction(engine.deck(deckId), id, phase, arg);
+        },
+        queue: (q) => {
+          // Only the queue AUTHORITY (the device running the auto-mixer + broadcasting the
+          // automix stream) mutates the canonical queue; it then re-streams so everyone
+          // converges 1:1. A mirroring remote ignores it — its local queue is unused, and
+          // applying here would fork a second copy. The seed/mode stay host-owned (radio
+          // engine); remotes only add/remove/move individual tracks.
+          const queue = mixQueueRef.current;
+          if (autoIsRemoteRef.current || !queue) return;
+          if (q.action === "add") queue.enqueue(q.track as TrackMeta);
+          else if (q.action === "addNext") queue.enqueueNext(q.track as TrackMeta);
+          else if (q.action === "remove") queue.remove(q.videoId);
+          else if (q.action === "move") queue.moveById(q.videoId, q.to); // id-based: the right track even if from-index was stale
+        },
+        sample: (s) => samplerApplyRef.current?.(s),
+        crossfade: (v) => setCrossfade(v),
+        tempoRange: (v) => setSettings((st) => (st.tempoRange === v ? st : { ...st, tempoRange: v })),
+        load: (deckId, videoId, name, artist) => {
+          // A co-DJ handed us a track → WE load/decode/play it (the master is the real audio
+          // source). Minimal meta; loadTrackToDeck fetches + analyses by id. Dedupe vs the
+          // snapshot path so we don't load it twice.
+          if (videoId !== latest.current.loaded[deckId] && videoId !== roomLoadTarget.current[deckId]) {
+            runRoomLoad(deckId, videoId, { videoId, title: name ?? "", artist: artist ?? "", duration: 0, thumbnail: null, views: null, bpm: null });
           }
-          break;
-        case "loop":
-          if (intent.action === "in") deck.loopIn();
-          else if (intent.action === "out") deck.loopOut();
-          else if (intent.action === "exit") deck.exitLoop();
-          else if (intent.action === "reloop") deck.reloop();
-          else deck.setBeatLoop(intent.beats ?? 0.5);
-          break;
-        case "hotcue":
-          if (intent.action === "press") deck.hotCue(intent.slot);
-          else if (intent.action === "save") deck.saveLoop(intent.slot);
-          else deck.clearHotCue(intent.slot);
-          break;
-        case "skip":
-          deck.skipBeats = intent.beats; // jog / beat-jump resolution
-          break;
-        case "loopBounds":
-          deck.applyLoopRegion(intent.start, intent.end, intent.active); // fine-adjust / move
-          break;
-        case "load":
-          // A co-DJ handed us a track → WE load/decode/play it (the master is the
-          // real audio source). Minimal meta; loadTrackToDeck fetches + analyses by id.
-          // Dedupe vs the snapshot path so we don't load it twice.
-          if (intent.videoId !== latest.current.loaded[intent.deck] && intent.videoId !== roomLoadTarget.current[intent.deck]) {
-            runRoomLoad(intent.deck, intent.videoId, { videoId: intent.videoId, title: intent.name ?? "", artist: intent.artist ?? "", duration: 0, thumbnail: null, views: null, bpm: null });
-          }
-          break;
-      }
+        },
+        // The 250 ms tail lives here, with the ref it guards: tick-follow must stay suppressed
+        // just past the end of a remote scrub or the next tick yanks the platter back.
+        scrub: (deckId, active) => {
+          if (active) scrubbing.current[deckId] = true;
+          else setTimeout(() => (scrubbing.current[deckId] = false), 250);
+        },
+        ensureGuestStems: (deckId) => ensureGuestStemsRef.current(deckId),
+        refresh,
+      });
     },
-    [engine, runRoomLoad],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [engine, runRoomLoad, refresh],
   );
 
   // Inbound control intent from a co-DJ → apply locally + repaint. Never re-emit.

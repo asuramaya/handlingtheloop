@@ -11,6 +11,7 @@ import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 export interface MidiRoutingDeps {
   settings: Settings;
@@ -258,7 +259,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             const fid = ev.deck ?? focused;
             const slot = fxSelRef.current[fid];
             engine.deck(fid).setFxParam(slot, "mix", ev.value);
-            emitRef.current({ kind: "fxParam", deck: fid, slot, param: "mix", value: ev.value });
+            emitRef.current(fxParamIntent(engine.deck(fid), fid, slot, "mix", ev.value));
             refresh();
             break;
           }

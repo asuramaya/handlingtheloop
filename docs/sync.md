@@ -141,6 +141,56 @@ Full protocol, roles and lifecycle: **[shared-session.md](./shared-session.md)**
 whose *header* is stale (it says phases 2–3 are unwired; they shipped) but whose
 body is accurate.
 
+### ★ THE ADDRESSING LAW
+
+Every multi-device bug this app has had is the same bug: **a name that meant one
+thing on the sender and something else on the receiver.**
+
+- An `fxPad` gesture carried the chain's **id** — a per-deck sequence number (`c3`)
+  that never matches anywhere else, so the far side silently fired whatever its own
+  focus was aimed at.
+- An `fxParam` carried a **slot** — an index into `chains.flatMap(devices)`. That
+  list was the master chain alone until stem chains arrived; afterwards a DJ with
+  one more chain than their phone sent "slot 5" for a reverb the phone resolved to a
+  different device, or to nothing.
+- `fxRack` carried the **master chain only**, so adding a chain, renaming one,
+  changing its stems, or recalling a chain preset broadcast a message that could not
+  describe what had changed — and the far side kept what it had.
+
+So: **an address that crosses the wire is made of names, never of indices or ids.**
+Chain name + device kind. It is the same key `applyFxChainSnapshot` rebuilds on, for
+the same reason. `src/htl/room/fxWire.ts` builds every FX intent so fourteen call
+sites cannot each forget a field.
+
+And when an address resolves to nothing on the receiver, **the gesture is dropped,
+not guessed.** Falling back to the index would be exactly the original bug.
+
+### The other half: work that never reaches the wire
+
+An automated process that drives the decks directly bypasses all of the above,
+because the setters it calls do not emit. The AutoMixer hit this and papered over it
+by re-publishing a whole snapshot at each transition boundary. Smart Fader is
+continuous — a transition under a hand, with no boundaries to hang that on — so it
+emits its own moves as the ordinary `control` / `transport` intents those moves
+already had, and its arm/disarm crosses as a board action so the mode is *shared*
+rather than merely announced.
+
+### The harness
+
+`src/htl/room/roomSim.ts` runs two simulated devices over one wire and asks the only
+question that matters: *after this gesture, do both devices hold the same state?*
+
+What is **real**: the apply path (`applyIntent.ts`, the same function the app runs),
+the board-action registry, the intent builders, and — for the Smart Fader tests — the
+actual `SmartFader` class. What is **simulated**: the deck, and specifically its FX
+address space, modelled exactly as `FxRack` does it because that address space is the
+thing under test. No audio is simulated and none is claimed: green here means *both
+devices agree on which device the gesture named*, never *it sounded right*.
+
+`applyIntent` was lifted out of `useSessionSync` for this. While it sat inside a
+`useCallback`, "does this gesture reach the other device intact?" was a question the
+suite structurally could not ask — so nobody asked it, and the answer drifted.
+
 ---
 
 ## Testing either one, locally

@@ -5,6 +5,7 @@ import { ValueCell } from "./ValueCell";
 import { ModViz } from "./ModViz";
 import { useFrameSync } from "./useFrameSync";
 import { usePulse } from "./usePulse";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // Modulation surface — the ModViz WYSIWYG (sweeping notch/comb spectrum + LFO waveform inset)
 // on top, the shared knobs below it, MODE + SOURCE + THRU sharing one row at the bottom. Mirrors
@@ -57,11 +58,11 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
   const get = (p: string) => dev.getParam(p);
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
     refresh();
   };
   // ★ The XY pad drags continuously — see useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);

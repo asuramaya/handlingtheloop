@@ -2222,6 +2222,33 @@ export class Deck {
     const d = this.rack.allDevices[i];
     return d ? this.rack.addrOf(d) : undefined;
   }
+  /** ★ THE PORTABLE ADDRESS of a slot — the chain's NAME plus the device kind, which is what goes
+   *  on the wire. Not the id: chain ids are per-deck sequence numbers ("c3") that mean nothing on
+   *  another machine, the same reason applyFxChainSnapshot rebuilds chains by name. Undefined when
+   *  the slot names nothing. */
+  fxWireAddrAt(i: number): { chain: string; fx: string } | undefined {
+    const d = this.rack.allDevices[i];
+    if (!d) return undefined;
+    const c = this.rack.chainList.find((x) => x.devices.includes(d));
+    return c ? { chain: c.name, fx: d.kind } : undefined;
+  }
+  /** Resolve a portable address back to a slot HERE. -1 when this deck has no such chain or no
+   *  such device in it — the caller must then do NOTHING, because the alternative is moving a
+   *  device the sender never named. */
+  fxSlotOf(chain: string, fx: string): number {
+    const c = this.rack.chainList.find((x) => x.name === chain);
+    const d = c?.devices.find((x) => x.kind === fx);
+    return d ? this.rack.allDevices.indexOf(d) : -1;
+  }
+  /** The stem chains as they go on the wire, and back. `applyFxChainSnapshot` already rebuilds
+   *  them by name; this just names the pair so an intent can carry them. */
+  fxChainsForWire(): FxChainSlot[] {
+    return this.fxChainSnapshot();
+  }
+  applyFxChains(chains: ReadonlyArray<FxChainSlot> | undefined): void {
+    this.applyFxChainSnapshot(chains);
+  }
+
   /** This deck's signal BEFORE its own rack — what the other deck's compressor listens to when its
    *  sidechain is set to EXT. It has to be the pre-rack tap: patch a deck's OUTPUT into the other
    *  deck's comp and the two racks depend on each other, which is a genuine cycle in the audio graph
@@ -2575,6 +2602,22 @@ export class Deck {
    *  live list. What a DJ recognises is the NAME, so that is what is preserved. */
   applyFxChainSnapshot(chains: ReadonlyArray<FxChainSlot> | undefined) {
     if (!chains) return;
+    // ★ DON'T REBUILD WHAT ALREADY MATCHES. Tearing the chains down and re-adding them destroys
+    // live AudioNodes — a reverb tail, a delay's feedback, a gate mid-cycle — so doing it on every
+    // arriving rack message would make a co-DJ's preset pick audibly glitch someone else's stems.
+    // When the STRUCTURE is identical (same chains, same stems, same devices in the same order),
+    // the difference can only be params and bypass, so write those in place and keep the audio.
+    if (this.fxChainStructureMatches(chains)) {
+      const live = this.rack.chainList.filter((c) => !c.master);
+      chains.forEach((c, i) => {
+        live[i].devices.forEach((d, j) => {
+          const s = c.devices[j];
+          if (d.kind !== "eq") for (const k in s.params) d.setParam(k, s.params[k]);
+          d.setBypass(s.bypassed, true);
+        });
+      });
+      return;
+    }
     for (const c of this.rack.chainList.filter((c) => !c.master).map((c) => c.id)) this.removeFxChain(c);
     for (const c of chains) {
       const made = this.addFxChain(c.name);
@@ -2589,6 +2632,23 @@ export class Deck {
         d.setBypass(s.bypassed, true); // restoring, not a live toggle — instant
       }
     }
+  }
+
+  /** Is the incoming chain list the same SHAPE as what we hold — names, stems, device kinds and
+   *  their order? Params and bypass deliberately do not count: those are what gets written when
+   *  the shape matches. */
+  private fxChainStructureMatches(chains: ReadonlyArray<FxChainSlot>): boolean {
+    const live = this.rack.chainList.filter((c) => !c.master);
+    if (live.length !== chains.length) return false;
+    return live.every((c, i) => {
+      const s = chains[i];
+      return (
+        c.name === s.name &&
+        (c.stems ?? 0) === (s.stems ?? 0) &&
+        c.devices.length === s.devices.length &&
+        c.devices.every((d, j) => d.kind === s.devices[j].kind)
+      );
+    });
   }
 
   /** Combined EQ magnitude (dB) at each frequency in `freqHz`, into `outDb` — the

@@ -110,6 +110,8 @@ import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
 import { useMidiRouting } from "./App/useMidiRouting";
 import { SpineContext, useSpine, type Spine } from "./App/spine";
+import { fxBypassIntent } from "@htl/room/fxWire";
+import { registerBoardAction } from "@htl/board/boardActions";
 
 type DeckId = "A" | "B";
 
@@ -369,7 +371,28 @@ function AppBody() {
   const smartFaderRef = useRef<SmartFader | null>(null);
   if (smartFaderRef.current === null) smartFaderRef.current = new SmartFader(engine);
   const smartFader = smartFaderRef.current;
+  // ★ The transition speaks. Without this every move it makes — the tempo morph, the bass swap,
+  // starting the incoming deck — happens on this device only, and a co-DJ's board hears a plain
+  // crossfade while this one performs a transition. emitRef is stable, so this is wired once.
+  if (smartFaderRef.current) smartFader.setEmitter((intent) => emitRef.current(intent));
   const [smartFaderArmed, setSmartFaderArmed] = useState(false);
+  // ★ THE MODE IS SHARED, NOT JUST BROADCAST. A co-DJ arming Smart Fader has to arm it HERE too,
+  // or this board pins its key-lock and lights nothing while its own fader still performs a plain
+  // crossfade — a strip that lies. Registered from App because it needs the SmartFader instance
+  // and the strip's state, which the deck-scoped default in boardActions.ts cannot reach.
+  // `announce = false`: we are arming BECAUSE they armed, and echoing would bounce it back.
+  useEffect(() => {
+    registerBoardAction("smartFader", (deck, _phase, arg) => {
+      const on = arg === "arm";
+      deck.setKeylockPinnedOff(on);
+      if (deck !== engine.deckA) return; // emitted per deck; act on the board once
+      if (on) setSmartFaderArmed(smartFader.arm(crossfadeRef.current, false));
+      else {
+        smartFader.disarm(false);
+        setSmartFaderArmed(false);
+      }
+    });
+  }, [engine, smartFader]);
   // Crossfader enabled (FLX SMART FADER toggles it). Disabled = the crossfader is ignored and
   // parked at centre (both decks full). A ref mirrors it for the MIDI fader gate.
   const [xfaderEnabled, setXfaderEnabled] = useState(true);
@@ -1015,7 +1038,7 @@ function AppBody() {
         const dev = deck.fxDevices[i];
         const next = !dev.bypassed;
         deck.setFxBypass(i, next);
-        emitRef.current({ kind: "fxBypass", deck: id, slot: i, value: next });
+        emitRef.current(fxBypassIntent(deck, id, i, next));
         refresh();
       },
       // BEAT FX SMART CFX → reset the focused deck's SELECTED effect to its defaults (local).

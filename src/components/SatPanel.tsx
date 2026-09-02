@@ -5,6 +5,7 @@ import { SAT_STYLES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { SatViz } from "./SatViz";
 import { useFrameSync } from "./useFrameSync";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // Saturator surface — the SatViz WYSIWYG (frequency display + draggable crossovers +
 // transfer-curve inset) plus the per-band STYLE/PUNISH/HEAT/BIAS/OUT subrow for whichever band is
@@ -33,12 +34,12 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
 
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
     refresh();
   };
   // ★ Crossover/drive drags are continuous — a pointermove-rate emit+refresh spends the frame
   // budget re-rendering the deck instead of painting the drag, and floods the socket. See useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);

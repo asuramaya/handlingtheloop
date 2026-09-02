@@ -44,3 +44,21 @@ registerBoardAction("censor", (deck, phase) => {
   if (phase === "up") deck.censorEnd();
   else deck.censorBegin();
 });
+
+// SMART FADER's mode. The transition's audible moves cross as ordinary control intents (see
+// smartFader.ts), but the MODE has to cross too: an armed throw pins key-lock off so the tempo
+// morph pitches the decks turntable-style, and a far side that never pinned it would key-lock the
+// glide away — the one part of the transition its own decks have to opt into rather than be told.
+// It also lights the strip, so a co-DJ can see the fader is a transition and not a blend.
+//
+// The registry's unit is ONE deck and this mode is board-wide, so the sender emits it for both
+// decks rather than this reaching across — a board action that quietly touched its neighbour would
+// be a worse surprise than one extra message per arm.
+//
+// This is the FALLBACK registration: key-lock pinning only, which is the part that belongs to a
+// deck. App.tsx re-registers over it with a version that also arms the receiving device's own
+// SmartFader, so the mode is genuinely shared rather than half-applied — a strip that says SMART
+// while the local fader would perform a plain crossfade is worse than one that says nothing.
+registerBoardAction("smartFader", (deck, _phase, arg) => {
+  deck.setKeylockPinnedOff(arg === "arm");
+});

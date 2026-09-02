@@ -4,6 +4,7 @@ import { CRUSH_MODES } from "@htl/audio";
 import { ValueCell } from "./ValueCell";
 import { CrushViz } from "./CrushViz";
 import { useFrameSync } from "./useFrameSync";
+import { fxParamIntent } from "@htl/room/fxWire";
 
 // Minimal Bitcrusher surface (Phase 1) — MODE selector + the shared controls, mutated on the
 // deck's device and broadcast as fxParam. Phase 2 drops the CrushViz pixel scope in above the
@@ -24,11 +25,11 @@ export function CrushPanel({ deck, id, slot, accent }: CrushPanelProps) {
   const get = (p: string) => dev.getParam(p);
   const setParam = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
-    emit({ kind: "fxParam", deck: id, slot, param, value });
+    emit(fxParamIntent(deck, id, slot, param, value));
     refresh();
   };
   // ★ The XY pad drags continuously — see useFrameSync.
-  const pushFrame = useFrameSync((param, value) => emit({ kind: "fxParam", deck: id, slot, param, value }), refresh);
+  const pushFrame = useFrameSync((param, value) => emit(fxParamIntent(deck, id, slot, param, value)), refresh);
   const live = (param: string, value: number) => {
     deck.setFxParam(slot, param, value);
     pushFrame(param, value);

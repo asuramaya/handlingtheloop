@@ -9,7 +9,7 @@ Two Cloudflare Workers off one repo, sharing one D1 (`htl-db`) and one R2 (`htl-
 
 ## Public worker
 
-**Always deploy with `./deploy.sh`, never `pnpm deploy`.** Vite copies ~950 MB of model weights into `dist/models/`, and individual `.onnx` files exceed Cloudflare's 25 MiB asset cap. `deploy.sh` builds, then `rm -rf dist/models` (weights load from HuggingFace at runtime), then deploys.
+**Always deploy with `./deploy.sh`, never `pnpm deploy`.** Vite copies the stem model weights (~950 MB) into `dist/models/`, and individual weight files exceed Cloudflare's 25 MiB asset cap. `deploy.sh` runs the pre-deploy gate (worker typecheck + the full test suite — `SKIP_TESTS=1` exists and should stay unused), builds, `rm -rf dist/models` (weights load cross-origin from HuggingFace at runtime), then deploys.
 
 ```bash
 ./deploy.sh

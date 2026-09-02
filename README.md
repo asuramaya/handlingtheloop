@@ -18,8 +18,9 @@ Cloudflare Worker** plus the browser. No app to install, no backend to manage.
 pnpm install
 pnpm dev        # Vite dev server at http://localhost:5173 (no binaries needed)
 pnpm worker     # build + run the real Cloudflare Worker locally (workerd)
-pnpm deploy     # build + wrangler deploy
-pnpm typecheck  # tsc
+pnpm check      # both tsc projects + the test suite — the pre-commit gate
+pnpm draglab    # drive the real UI in headless Chromium (needs `pnpm dev` running)
+./deploy.sh     # build + gate + wrangler deploy  (NOT `pnpm deploy` — see DEPLOY.md)
 ```
 
 Search a track in the bottom bar, hit **A** or **B** to load it to a deck (or
@@ -36,14 +37,18 @@ the browser does the heavy compute.
 ```
                 Cloudflare Worker (pure JS, no binaries)
 browser ──────▶ /api/audio?v=  ──▶ R2 cache hit? serve it
-  │ decode/DSP        │            miss ─▶ ANDROID_VR player API ─▶ direct url
-  ◀── audio/mp4 ──────┘                 └─▶ 1 MB range chunks ─▶ stream + cache
+  │ decode/DSP        │            miss ─▶ VISIONOS player API ─▶ direct url
+  ◀── audio/mp4 ──────┘                 └─▶ capped range chunks ─▶ stream + cache
 ```
 
-- **Extraction** (`server/youtube.ts`): the **ANDROID_VR** Innertube client
-  (yt-dlp's `REQUIRE_JS_PLAYER:false` client) returns **direct stream URLs** — no
-  PoToken, no signature cipher, nothing to decipher. It only needs a cached
-  `visitorData` token. Pure `fetch`, so it runs in a Worker.
+- **Extraction** (`server/youtube.ts`): the **VISIONOS** Innertube client
+  (clientName 101, one of yt-dlp's `REQUIRE_JS_PLAYER:false` clients) returns
+  **direct stream URLs** — no PoToken, no signature cipher, nothing to decipher.
+  It only needs a cached `visitorData` token. Pure `fetch`, so it runs in a
+  Worker. It replaced ANDROID_VR on 2026-08-24: YouTube began requiring a GVS PO
+  token for android_vr range requests past ~1 MB, which 403s every track. That is
+  the arms race in one line — see the comment block above `VISIONOS_VERSION` for
+  the probe that established it.
 - **Throttle**: a naive GET of a googlevideo URL is capped to ~32 KB/s. We never
   solve the `n` param — we download in **1 MB range chunks**, which serve at full
   speed (~15 MB/s) and stay under the Worker subrequest limit.
@@ -51,7 +56,7 @@ browser ──────▶ /api/audio?v=  ──▶ R2 cache hit? serve it
   then served from the edge (no YouTube call, no egress cost) — keeps it on the
   free tier.
 - **Search / playlists**: `youtubei.js` (its `cf-worker` build) for the stable
-  browse endpoints; metadata comes from the ANDROID_VR `videoDetails`.
+  browse endpoints; metadata comes from the player client's `videoDetails`.
 
 Per deck the audio graph is:
 
@@ -84,8 +89,23 @@ remaps the jog, pads, and transport.
 center-detent knobs and dB/% readouts; a **master limiter** and anti-click
 envelopes keep it clean; equal-power crossfader.
 
-**Stays put** — full session (tracks, mixer, cues, loops, play state) **restores
-on refresh** via an IndexedDB audio cache; everything persists locally.
+**Effects** — a per-deck rack of 9 always-armed devices (EQ, COMP, DELAY, VERB,
+SAT, MOD, CRUSH, GATE, NOISE), plus **stem CHAINS**: a chain claims some of the
+separated stems and processes only those, so the four stems are a partition and
+nothing is heard twice.
+
+**Preset banks** — every device ships a bank you can actually curate: name your
+own **sections**, drag presets between them, edit or delete a factory preset and
+**revert** it later. Deleting a shipped preset writes a tombstone rather than a
+hole, so a preset added in a later release still reaches a bank you organised a
+year ago. The shipped arrangement is 124 presets in 50 sections across the ten
+banks (chains included, on the same engine). Restore is in Settings ▸ Audio,
+deliberately far from the deck.
+
+**Stays put** — full session (tracks, mixer, cues, loops, play state, the FX rack
+and your stem chains) **restores on refresh** via an IndexedDB audio cache.
+Signed in, your preset banks, MIDI maps, colour themes and keymaps follow you to
+another machine; signed out, everything stays local.
 
 **Stems** *(in progress)* — separate a track into vocals/drums/bass/other once on
 a capable device, cache to R2, and let phones just download them. See
@@ -149,7 +169,7 @@ One Worker serves the static app **and** the `/api/*` routes; an R2 bucket
 
 - **YouTube ToS** — this extracts YouTube audio. Intended for non-copyrighted /
   cleared material; keep a consent gate in front of any public deployment.
-- **Extraction is an arms race** — if YouTube tightens the ANDROID_VR client,
+- **Extraction is an arms race** — if YouTube tightens the current player client,
   bump `clientVersion` in `server/youtube.ts` to match yt-dlp's current value.
   That's the only moving part.
 - **Cloud-IP rate limits** — YouTube increasingly blocks Cloudflare's IPs with a
@@ -158,7 +178,9 @@ One Worker serves the static app **and** the `/api/*` routes; an R2 bucket
   their own cookie so the Worker can authenticate with *their* session. That
   cookie is stored only in the browser, sent only to this app's Worker, forwarded
   to YouTube, and **never stored server-side** (see the in-app privacy notice).
-- **No secrets in this repo** — the ANDROID_VR client is public config; there are
+- **No secrets in this repo** — the player client credentials are the well-known
+  public YouTube-on-TV values (the same ones in yt-dlp and youtubei.js), and are
+  overridable via Worker secrets; there are
   no API keys or tokens. Add a license before treating this as reusable.
 
 ## License

@@ -1,14 +1,23 @@
 # htl — Handling The Loop
 
 A browser-based, **serverless** DJ application that mixes public YouTube tracks,
-rekordbox / DDJ-FLX style. Two decks, a real Web Audio mixer, hot cues, beat
-loops, beat-sync, key-lock, and audible scrubbing — all running from **one
-Cloudflare Worker** plus the browser. No app to install, no backend to manage.
+rekordbox / DDJ-FLX style.
+
+Two decks with a real Web Audio mixer — hot cues, beat loops, beat-sync,
+key-lock, audible scrubbing and a vinyl-mode jog. On top of that: **stem
+separation** in the browser, a **9-device FX rack** per deck with stem chains and
+curatable preset banks, **auto-mix**, a **sampler**, **mic and headphone-cue
+I/O**, USB-MIDI controllers and a gamepad, accounts that sync your setup across
+machines, and **shared sessions** you can play in together or broadcast live.
+
+All of it runs from **one Cloudflare Worker** plus the browser. No app to install,
+no backend to manage — every heavy thing (decode, waveform, BPM, key, stems, every
+effect) happens on your own machine.
 
 **Live:** https://handlingtheloop.com
 
 > Intended for non-copyrighted / cleared material. YouTube audio extraction is
-> subject to YouTube's Terms of Service — see [Caveats](#caveats).
+> subject to YouTube's Terms of Service — see [Privacy & caveats](#privacy--caveats).
 
 ---
 
@@ -61,11 +70,17 @@ browser ──────▶ /api/audio?v=  ──▶ R2 cache hit? serve it
 Per deck the audio graph is:
 
 ```
-source → [key-lock pitch-shift worklet] → EQ3 → trim → level → crossfader → master
+                        ┌─ stem chain (drums)  → [devices] ─┐
+source → [stretch] ─────┼─ stem chain (vocals) → [devices] ─┼→ trim → level → crossfader → master
+  (or 4 stem sources)   └─ master chain        → [devices] ─┘                                  ↑
+                                                                              mic / line ─────┘
 ```
 
-Tempo is `playbackRate` (vinyl mode); **key-lock** inserts a pitch-shift
-AudioWorklet set to `1/rate` so the key holds when you pitch.
+Tempo is `playbackRate` (vinyl mode); **key-lock** routes through a time-stretch
+worklet (WSOLA by default, phase-vocoder opt-in) so the key holds when you pitch.
+With stems separated, the deck runs **four synced sources** instead of one, and a
+**chain** claims a subset of them — stems are a partition, so nothing is heard
+twice and the chains sum back to the track.
 
 ## Features
 
@@ -107,12 +122,58 @@ and your stem chains) **restores on refresh** via an IndexedDB audio cache.
 Signed in, your preset banks, MIDI maps, colour themes and keymaps follow you to
 another machine; signed out, everything stays local.
 
-**Stems** *(in progress)* — separate a track into vocals/drums/bass/other once on
-a capable device, cache to R2, and let phones just download them. See
-[ROADMAP](./ROADMAP.md).
+**Stems** — separate a track into drums / bass / vocals / instruments with
+HT-Demucs, in the browser. Separation runs once on a capable device and is cached
+to R2, so **phones download rather than compute**. Every device renders its own
+stems; a sliding-window OPFS pager keeps resident PCM under a byte budget so two
+stem decks fit on a phone. Per-stem volume/mute/solo, and stems drawn layered in
+the waveform. *(On-device GPU separation is disabled on iOS — see
+[ROADMAP](./ROADMAP.md).)*
 
-**Library** — Collection + Playlists persisted to localStorage; native YouTube
-search/Explorer, playlist import, rekordbox-style track table.
+**Sampler** — 24 pads: 8 that grab a slice of the loaded track (the active loop,
+else four beats from the playhead), 8 global file pads stored to your account, and
+per-pad mode (oneshot / gate / loop), gain and pitch.
+
+**Auto-mix** — a queue that beat-matches, key-matches and crossfades for you,
+with phrase-anchored mix points and eager preload of the next track. **Smart
+fader** does the same as a gesture: one crossfader move morphs tempo and swaps the
+bass. Both reuse the same DSP the manual controls do.
+
+**Controllers** — USB-MIDI on Chromium desktop (DDJ-FLX4 and Donner Starrypad
+mapped out of the box, plus **MIDI-Learn** for anything else), an **Xbox gamepad**
+as a DJ surface, and a full **keyboard map** — Tab switches deck focus and every
+binding is remappable. Maps, colour themes and keymaps save as shareable profiles
+and sync to your account.
+
+**Jog / scratch** — a rekordbox-style jog with vinyl-speed motor, spinback and
+Global SLIP.
+
+**Key + analysis** — native key detection (chromagram → Camelot), ±12 semitone
+pitch and key controls, SYNC with half/double-time, a dynamic beatgrid, and
+acoustic fingerprinting (Chromaprint → AcoustID → ISRC) to identify what you
+loaded.
+
+**I/O** — a **headphone cue** bus (second output via `setSinkId`, per-deck
+pre-fader PFL), **mic / line input** with talkover ducking and a sidechain tap,
+and **set recording**.
+
+**Lyrics** — a timestamped caption ribbon per deck, snapped to the playhead.
+
+**Accounts + sync** — sign in with Google (or connect Spotify / Tidal for
+catalogue). Your Collection, playlists, preset banks, MIDI maps, colour themes and
+keymaps follow you to any machine. Signed out, everything stays local and nothing
+leaves the browser.
+
+**Play together** — a **shared session** syncs one account's devices, or invites
+someone else in: control intents travel, the anchor holds authority, and a guest
+adopts the host's tempo, pitch and EQ. **Go live** turns it into a broadcast any
+listener can tune into, with a crowd tier for large rooms. Plus profiles,
+following, presence, notifications, invite links, and a recorded-set lifecycle.
+
+**Library** — Collection + Playlists, synced across devices and deduplicated by
+track key; native YouTube search / Explorer, playlist import, a sortable resizable
+rekordbox-style track table, and a **community pool** of tracks other people have
+already cached.
 
 ## Controls
 
@@ -136,53 +197,134 @@ search/Explorer, playlist import, rekordbox-style track table.
 The **SKIP** and **TEMPO ±** pills (center mixer) set the beat-jump size and the
 pitch-fader range.
 
+The eight pads have four modes, each with a SHIFT peer — `U` `I` `O` `P` switch
+between them, `1`–`8` fire them:
+
+| Mode | Pads do | + SHIFT |
+|---|---|---|
+| `CUE` | 8 hot cues | — |
+| `FX` | throw an effect while held | `FX2` — a latching second layer |
+| `LOOP` | beat loops | `ROLL` — momentary loop roll |
+| `SMP` | 8 slices of this track | `GLBL` — your uploaded one-shots |
+
+`Tab` moves deck focus; every binding above is remappable in Settings ▸ Controls,
+and the same actions are learnable to MIDI or a gamepad.
+
+## Docs
+
+Per-subsystem design notes live in [`docs/`](./docs) — written as the systems were
+built, so they carry the *why* and the dead ends, not just the shape:
+
+| | |
+|---|---|
+| [app-architecture](./docs/app-architecture.md) | how App.tsx is decomposed; where a new feature plugs in |
+| [fx-rack](./docs/fx-rack.md) | the device rack, stem chains, and the preset/chain bank engine |
+| [shared-session](./docs/shared-session.md) | rooms, anchors, intents, the attachment model |
+| [social-layer](./docs/social-layer.md) | profiles, follows, presence, notifications, the three surfaces |
+| [engine-stem-paging](./docs/engine-stem-paging.md) | the OPFS pager + SAB ring that make two stem decks fit on a phone |
+| [audio-io](./docs/audio-io.md) | headphone cue, mic/line capture, recording |
+| [smart-fader](./docs/smart-fader.md) | the one-gesture transition |
+| [ddj-flx4](./docs/ddj-flx4.md) | the authoritative controller map (and the hardware's traps) |
+| [youtube-relay](./docs/youtube-relay.md) | the residential relay, and what was rejected on the way |
+| [security-handoff](./docs/security-handoff.md) | the security review and what is still open |
+| [qa-session-smoke](./docs/qa-session-smoke.md) | the manual pass before a session ships |
+
+[DEV.md](./DEV.md) covers running it locally, the harnesses, and testing sessions
+across two tabs or a phone on your LAN. [DEPLOY.md](./DEPLOY.md) is the runbook.
+[ROADMAP.md](./ROADMAP.md) is what works, what is half-built, and what is next.
+
 ## Project structure
 
 ```
 src/htl/          the @htl internal library (path alias "@htl"):
-  audio/          AudioEngine, Deck, Eq3, decode, trackCache, pitchWorklet
-  analysis/       LOD pyramid + beatgrid
-  media/          youtube source/api + user-auth (cookie) headers
-  library/        Collection + Playlists store
+  audio/          AudioEngine, Deck, Eq3, the 9 FX devices + their worklets,
+                  fxPresets (the preset/chain BANK engine), stretch, decode,
+                  trackCache, Recorder, MicInput, Sampler
+  analysis/       LOD peak pyramid, beatgrid, key, colour palette
+  automix/        mixability scoring + the auto-DJ driver
+  fingerprint/    Chromaprint → AcoustID → ISRC
+  gamepad/ midi/  control surfaces (both feed one onMidiEvent path)
+  media/          youtube source/api + OAuth headers
+  library/        Collection + Playlists (account-synced)
   persistence/    Store (versioned localStorage) + IndexedDB audio cache
-  state/          settings + session snapshot
-  stems/          stem R2 cache + (pending) on-device separation
-src/components/   DeckLane, DeckControls, ChannelStrip, WaveformViewport,
-                  Knob, Fader, Explorer, TrackTable, LibraryPanel, SettingsPanel
-server/           youtube.ts (resolver), innertube.ts (search), api.ts (dev)
-worker/index.ts   Cloudflare Worker: static SPA + /api/*
-wrangler.jsonc    Worker + R2 + assets config
-
-See **[ROADMAP.md](./ROADMAP.md)** for status, known issues, and what's next.
+  room/           shared-session protocol + client
+  state/          settings, settingsSync (account LWW), session snapshot
+  stems/          stem cache, separator worker, model registry
+src/components/   the UI — DeckLane, DeckControls, FxStrip, WaveformViewport,
+                  Explorer, TrackTable, LibraryPanel, SettingsPanel, RoomBar,
+                  DiscoverScreen, ProfileScreen, SocialScreen, …
+server/           pure-JS, shared by dev and prod: youtube.ts (resolver),
+                  innertube.ts (search), oauth.ts, accounts.ts, api.ts
+worker/index.ts   Cloudflare Worker: the SPA + every /api/* route
+  ROOM / RELAY    Durable Objects: one per shared session, one crowd-shard tier
+migrations/       D1 schema (additive; wrangler tracks what's applied)
+scripts/draglab/  headless-Chromium UI harness (menus, drag, account sync)
+scripts/fxlab/    DSP measurement harness (real worklets, headless)
+docs/             per-subsystem design docs
 ```
 
 `server/*` is pure JS and runs identically in the Vite dev middleware and the
 Worker, so dev and prod share one resolver.
 
+## Testing
+
+```bash
+pnpm check      # both tsc projects + the vitest suite — the pre-commit gate
+pnpm draglab    # the UI, driven for real in headless Chromium (needs `pnpm dev`)
+```
+
+The unit suite is node-only and covers pure functions. **draglab** exists because
+the parts that break most are the parts jsdom cannot model — `elementFromPoint`
+over floating windows, stacking, clipping, hover-dismissal — so it drives the real
+app and asserts on what is *rendered*. It also carries a fake account
+(`page.route`) so cross-device settings sync is testable on one machine. See
+[DEV.md](./DEV.md).
+
 ## Deployment
 
-`pnpm deploy` builds the SPA and pushes everything to Cloudflare with `wrangler`.
-One Worker serves the static app **and** the `/api/*` routes; an R2 bucket
-(`htl-audio`) caches resolved audio. `nodejs_compat` is on for `youtubei.js`.
+```bash
+./deploy.sh          # public worker — NOT `pnpm deploy`
+pnpm deploy:admin    # the Access-gated moderation console
+```
 
-## Caveats
+`deploy.sh` runs a pre-deploy gate (worker typecheck + the full test suite), then
+builds, then drops `dist/models` — the stem weights are ~950 MB and load
+cross-origin from HuggingFace at runtime, and individual files exceed
+Cloudflare's 25 MiB asset cap. Two Workers share one D1 (`htl-db`) and one R2
+(`htl-audio`). Full runbook, D1 migrations and Cloudflare Access setup:
+**[DEPLOY.md](./DEPLOY.md)**.
+
+## Privacy & caveats
 
 - **YouTube ToS** — this extracts YouTube audio. Intended for non-copyrighted /
-  cleared material; keep a consent gate in front of any public deployment.
-- **Extraction is an arms race** — if YouTube tightens the current player client,
-  bump `clientVersion` in `server/youtube.ts` to match yt-dlp's current value.
-  That's the only moving part.
-- **Cloud-IP rate limits** — YouTube increasingly blocks Cloudflare's IPs with a
-  "confirm you're not a bot" wall. The R2 cache means popular tracks rarely hit
-  YouTube; for fresh tracks, **Settings → YouTube access** lets a user paste
-  their own cookie so the Worker can authenticate with *their* session. That
-  cookie is stored only in the browser, sent only to this app's Worker, forwarded
-  to YouTube, and **never stored server-side** (see the in-app privacy notice).
-- **No secrets in this repo** — the player client credentials are the well-known
-  public YouTube-on-TV values (the same ones in yt-dlp and youtubei.js), and are
-  overridable via Worker secrets; there are
-  no API keys or tokens. Add a license before treating this as reusable.
+  cleared material; keep the in-app consent/access flow honest in front of any
+  public deployment.
+- **Extraction is an arms race.** The player client is the only moving part. It
+  moved on 2026-08-24, when YouTube began requiring a GVS PO token for
+  `android_vr` range requests past ~1 MB — every track 403'd. VISIONOS
+  (clientName 101) replaced it. If it tightens again, the fix is a different
+  `REQUIRE_JS_PLAYER:false` client and a `clientVersion` bump in
+  `server/youtube.ts`; track yt-dlp's client table.
+- **Cloud-IP bot wall** — YouTube blocks Cloudflare's IPs with a "confirm you're
+  not a bot" wall for fresh (un-cached) tracks. The R2 cache means popular tracks
+  rarely hit YouTube at all; for the rest there is an optional **residential
+  relay** (a small Go service on a home connection, reached over a Cloudflare
+  tunnel with an Access service token) as the cold-load fallback.
+- **The cookie-paste path is gone.** An earlier version let you paste a
+  youtube.com cookie so the Worker could use your session. It was **removed
+  end-to-end** in 2026-06 — client store, Worker header, and server use — so a
+  full Google session never transits the Worker. Signed-in features are
+  OAuth-only, and those tokens live in your browser and are forwarded per
+  request, never stored server-side.
+- **What leaves your browser.** Audio decode, waveform, BPM, key, stems and every
+  effect run locally. Signed out, nothing syncs. Signed in, the things listed
+  under *Accounts + sync* go to D1 as a last-write-wins blob, and separated stems
+  go to R2 so other devices (and other people) can skip the compute.
+- **No secrets in this repo** — the player-client credentials are the well-known
+  public YouTube-on-TV values (the same ones in yt-dlp and youtubei.js) and are
+  overridable via `wrangler secret put`; there are no API keys or tokens here.
 
 ## License
 
-No license yet — all rights reserved by the author until one is added.
+No license yet — all rights reserved by the author until one is added. The repo is
+public to be read, not yet to be reused; open an issue if you want that to change.

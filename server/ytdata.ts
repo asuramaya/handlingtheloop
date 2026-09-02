@@ -17,7 +17,15 @@ import type { TrackMeta } from "./youtube";
 
 const API = "https://www.googleapis.com/youtube/v3";
 const TIMEOUT_MS = 8000;
-const MAX_ITEM_PAGES = 4; // cap a playlist import at ~200 items (quota + wall-clock)
+// ★ THE PAGE BUDGET, and the arithmetic behind it. Reading a playlist costs 1 subrequest for the
+// title, one per 50-item page, and one more per 50 items to enrich with duration/views — so P
+// pages cost 1 + 2P subrequests, and a Worker request gets 50 on the free plan. P = 12 costs 25,
+// half the allowance, and reads ~600 items where the old P = 4 read ~200. The clock is the other
+// half of the budget: a slow day must not spend the whole request on one playlist. Whichever runs
+// out first stops the read, and a read that stopped early reports `truncated` — which is what
+// keeps the re-sync from pruning against a partial list (749454e).
+const MAX_ITEM_PAGES = 12; // ~600 items
+const ITEM_PAGE_BUDGET_MS = 9000;
 
 // Data API thumbnail set; pick the largest present.
 interface Thumbs {
@@ -149,7 +157,9 @@ export async function fetchPlaylistData(
   const order: string[] = [];
   const snippetById = new Map<string, ItemsItem["snippet"]>();
   let pageToken = "";
+  const pagingStarted = Date.now();
   for (let page = 0; page < MAX_ITEM_PAGES; page++) {
+    if (page > 0 && Date.now() - pagingStarted > ITEM_PAGE_BUDGET_MS) break; // out of clock, not of pages
     const q = `playlistItems?part=snippet&playlistId=${encodeURIComponent(playlistId)}&maxResults=50${pageToken ? `&pageToken=${pageToken}` : ""}`;
     const j = await get(q, token);
     for (const it of (j.items as ItemsItem[]) ?? []) {
@@ -162,7 +172,7 @@ export async function fetchPlaylistData(
     pageToken = (j.nextPageToken as string) || "";
     if (!pageToken) break;
   }
-  // A page token still in hand = we stopped at MAX_ITEM_PAGES, not at the end of the playlist.
+  // A page token still in hand = we stopped at a budget, not at the end of the playlist.
   const truncated = !!pageToken;
 
   // Enrich with duration + views via videos.list (batched by 50).

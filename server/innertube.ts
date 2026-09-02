@@ -295,21 +295,60 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
     throw lastErr;
   }
 
+  // How far the public path will page a playlist, and how long it may spend doing it. Each
+  // continuation is one Worker subrequest and one round trip to YouTube, so both budgets are
+  // real: the page cap keeps a pathological list from eating the subrequest allowance, the clock
+  // keeps a slow day from eating the request. Whichever runs out first stops the read — and a
+  // read that stops early still says `truncated`, which is what keeps a partial read from being
+  // mistaken for the whole list by anything that prunes.
+  const PLAYLIST_MAX_PAGES = 12; // ~100 items a page → ~1200 tracks
+  const PLAYLIST_BUDGET_MS = 8000;
+
   async function readPlaylist(yt: InnertubeInstance, listId: string) {
-    const pl = await yt.getPlaylist(listId);
+    const started = Date.now();
+    let pl = await yt.getPlaylist(listId);
+    const first = pl;
     const tracks: TrackMeta[] = [];
-    for (const v of pl.videos ?? []) {
-      const t = normalize(v as AnyNode);
-      if (t) tracks.push(t);
+    const seen = new Set<string>();
+    const take = (feed: { videos?: unknown[] }) => {
+      for (const v of feed.videos ?? []) {
+        const t = normalize(v as AnyNode);
+        if (t && !seen.has(t.videoId)) {
+          seen.add(t.videoId);
+          tracks.push(t);
+        }
+      }
+    };
+    take(pl as unknown as { videos?: unknown[] });
+
+    // ★ FOLLOW THE CONTINUATIONS. This path used to read ONE page and stop, so an unauthed user's
+    // 400-track playlist imported as its first hundred — forever, on every re-read. Bounded by the
+    // budgets above, and every failure is swallowed: a continuation that errors leaves us with the
+    // pages we already have and the truncated flag set, which is exactly the old behaviour.
+    let pages = 1;
+    try {
+      let node = pl as unknown as { has_continuation?: boolean; getContinuation?: () => Promise<unknown> };
+      while (node.has_continuation === true && pages < PLAYLIST_MAX_PAGES && Date.now() - started < PLAYLIST_BUDGET_MS) {
+        const next = (await node.getContinuation?.()) as typeof pl | undefined;
+        if (!next) break;
+        pl = next;
+        take(pl as unknown as { videos?: unknown[] });
+        pages++;
+        node = pl as unknown as { has_continuation?: boolean; getContinuation?: () => Promise<unknown> };
+      }
+    } catch {
+      /* a failed continuation is a short read, not a failed read — report it as truncated below */
     }
-    // This public path reads ONE page and never follows continuations, so a long playlist comes back
-    // SHORT. Report that — a destructive consumer (re-sync prunes whatever it doesn't see) must never
-    // mistake a partial read for the whole list. Evidence of more: a pending continuation, or a
-    // declared item count above what we actually got.
-    const node = pl as unknown as { has_continuation?: boolean; info?: { total_items?: number } };
-    const total = node.info?.total_items;
-    const truncated = node.has_continuation === true || (typeof total === "number" && tracks.length < total);
-    return { title: pl.info?.title ?? "Playlist", tracks, truncated };
+
+    // Evidence there is more than we got: a continuation still pending on the last page we read,
+    // or a declared item count above what we actually collected. ⚠ `total_items` is a STRING here
+    // ("1,204 videos"), so the old `typeof total === "number"` test could never fire and this
+    // rested entirely on the continuation flag. Parse the digits instead.
+    const tail = pl as unknown as { has_continuation?: boolean };
+    const info = first.info as unknown as { title?: string; total_items?: string | number } | undefined;
+    const declared = Number(String(info?.total_items ?? "").replace(/[^\d]/g, ""));
+    const truncated = tail.has_continuation === true || (Number.isFinite(declared) && declared > tracks.length);
+    return { title: info?.title ?? "Playlist", tracks, truncated };
   }
 
   return {

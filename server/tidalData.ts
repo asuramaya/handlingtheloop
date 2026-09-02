@@ -149,6 +149,9 @@ export async function getMyTidalPlaylists(token: string, userId: string): Promis
   const out: MyPlaylist[] = [];
   const seen = new Set<string>();
   let url: string | null = `/userCollections/${encodeURIComponent(userId)}/relationships/playlists?include=playlists&countryCode=${COUNTRY}`;
+  // A SAFETY guard, not a budget: 30 pages of playlist RESOURCES is far past any real collection
+  // (a page carries tens of them), and its job is to stop a cursor that loops rather than to cap
+  // what a user may own. The item-level guard below is the one that trades completeness for time.
   let guard = 0;
   while (url && guard++ < 30) {
     const j = await tget(url, token);

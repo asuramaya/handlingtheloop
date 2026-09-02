@@ -86,6 +86,36 @@ the announce.
 
 ---
 
+## 1b. Reading a provider playlist — the third pipe
+
+Importing or re-syncing a Spotify / TIDAL / YouTube playlist is not account sync, but it
+shares its hazard: a read that comes back SHORT must never be mistaken for the truth.
+
+**Every provider read is budgeted, and every budgeted read reports `truncated`.**
+
+| Path | Budget | Reaches |
+| --- | --- | --- |
+| YouTube, signed in (`server/ytdata.ts`) | 12 pages **or** 9 s | ~600 items |
+| YouTube, public (`server/innertube.ts`) | 12 continuations **or** 8 s | ~1200 items |
+| TIDAL playlist items (`server/tidalData.ts`) | 60 pages | ~1200+ items |
+| TIDAL playlist list | 30 pages (a loop guard, not a cap) | every real collection |
+
+The page budget is subrequest arithmetic, not superstition: a YouTube page costs one
+subrequest and its enrichment costs another, so P pages cost `1 + 2P` of a Worker
+request's 50.
+
+**What `truncated` buys.** A short read adds and never prunes (`749454e`): the re-sync
+reconciler takes it as an input and returns `removeIds: []`, because a track missing from
+a partial read is not evidence the user removed it. Getting this wrong destroyed real
+playlists once — see `htl-library-sync-dedupe`.
+
+**What is still disclosed rather than solved.** A playlist past the budget imports
+partially, forever, and says so in the toast. Matched (Spotify/TIDAL) re-syncs also report
+the songs they could not find a video for — silence there meant a playlist that reported
+"+3" was really "+3, and two are missing".
+
+---
+
 ## 2. Session sync — playing together
 
 Not a shared state blob: a stream of **intents** (28 kinds — control, load, seek,

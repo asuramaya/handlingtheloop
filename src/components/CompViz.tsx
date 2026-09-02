@@ -82,6 +82,36 @@ function padOf(w: number, h: number) {
  *  folded in (outputDb) — the height of that end IS the makeup. */
 const KNEE_MIN_SEP = 16;
 
+// ★ THE HANDLES GET A LANE, AND THE PLOT KEEPS ITS MARGINS.
+//
+// The threshold could be dragged to within 1 dB of either end of the plot, which is what kept
+// pushing it into the corners where the other two handles live — and then every rule about
+// separation is fighting a gesture that is trying to stack them. Every fix so far has been
+// downstream of that: park the knee, hide the knee, step makeup aside.
+//
+// So the DRAG stops short of the ends instead. What it costs is the last few dB at either
+// extreme, where a compressor is barely doing anything anyway (a threshold at −1 dB is a no-op,
+// at −60 it is crushing everything); what it buys is that the bend can NEVER reach the corners,
+// so the knee always has room to its right and makeup always has room to its left. The plot still
+// DRAWS the full −60…0 transfer — only the handle has a lane.
+//
+// The parameter itself is not capped: a preset, a MIDI map or a synced session can still put the
+// threshold anywhere, and the curve renders it correctly. This is a limit on the gesture.
+// The margins are sized in dB but the constraint is in PIXELS: at a 340px panel the plot is ~187px
+// over 60 dB, so ~3.1 px/dB. 8 dB of margin is ~25px each side — comfortably past KNEE_MIN_SEP, so
+// neither the knee's parking nor makeup's yield-guard ever has to fire in normal use. (First cut
+// used 4 and 6 dB. Both measured under 16px, and both fired.)
+const THRESH_DRAG_MIN = DB_MIN + 10; // −50
+const THRESH_DRAG_MAX = -8;
+
+// ★ MAKEUP LIVES ON THE CURVE'S LEFT END, and it is not only about staying clear of the bend.
+// The right end runs out of ROOM: the compressed output at full-scale input already sits near the
+// top of the plot, so a +24 dB makeup drives the handle off the ceiling and the ring stops moving
+// with the gesture — the control goes numb at exactly the values you reached for it. At the left
+// end the curve sits near the floor, so the whole plot height is available to travel through.
+// Makeup shifts the ENTIRE curve, so this end reads it just as truly as the other did.
+const MAKEUP_AT = DB_MIN + 2; // −58
+
 interface Handles {
   bend: { x: number; y: number };
   /** `shown` false = there is genuinely no room for it between the bend and the plot's edge
@@ -101,15 +131,11 @@ function handleGeometry(w: number, h: number, cp: CurveParams): Handles {
 
   const bendX = dbToX(cp.thresh);
   const plotRight = PAD.l + span;
-  // ★ MAKEUP YIELDS TO THE BEND. Its home is the curve's output end, but the threshold can be
-  // dragged to within a couple of dB of it — and then the two rings sit on top of each other with
-  // the knee piled in as well, which is the third handle collision this panel has produced.
-  // The bend owns its position (it IS the threshold, it cannot lie); everything else moves out of
-  // its way. The knee parks to the RIGHT, so makeup steps to the LEFT and they stay separated by
-  // the bend between them. It is still on the curve and still true: makeup shifts the WHOLE curve,
-  // so its height reads the same wherever along it the ring sits.
-  const makeupHome = dbToX(DB_MAX - 1.5);
-  const makeupX = makeupHome - bendX < KNEE_MIN_SEP ? bendX - KNEE_MIN_SEP : makeupHome;
+  // Makeup sits at the curve's LEFT end (see MAKEUP_AT). With the threshold's lane keeping the
+  // bend off the ends, the two cannot meet — the guard below is a belt-and-braces for a threshold
+  // set from OUTSIDE the drag (a preset, a MIDI map, a synced session), which has no such lane.
+  const makeupHome = dbToX(MAKEUP_AT);
+  const makeupX = bendX - makeupHome < KNEE_MIN_SEP ? bendX + KNEE_MIN_SEP : makeupHome;
   // Between its own bend and the plot's edge, and always ON the curve wherever it lands. Push the
   // threshold to the top of its range and that gap closes completely — the knee lives at a HIGHER
   // input dB than the threshold by definition, so there is nowhere left for it to be.
@@ -470,9 +496,10 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
         ctx.lineWidth = mkOn ? 1.8 : 1.2;
         ctx.stroke();
         if (mkOn) {
+          // Named to its RIGHT now that it lives at the left end — the side with the plot on it.
           ctx.fillStyle = "rgba(255,255,255,0.85)";
-          ctx.textAlign = "right";
-          ctx.fillText("MAKEUP", clamp(mp.x - 9, PAD.l + 26, w - PAD.r), labelY(mp.y, 6, PAD.t, plotBottom, "above"));
+          ctx.textAlign = "left";
+          ctx.fillText("MAKEUP", clamp(mp.x + 9, PAD.l, w - PAD.r - 46), labelY(mp.y, 6, PAD.t, plotBottom, "above"));
           ctx.textAlign = "center";
         }
       }
@@ -619,7 +646,7 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
         set("ceiling", clamp(xToDb(x), -12, 0));
         return;
       }
-      set("threshold", clamp(xToDb(x), DB_MIN + 4, -1));
+      set("threshold", clamp(xToDb(x), THRESH_DRAG_MIN, THRESH_DRAG_MAX));
       // RELATIVE, not absolute — see the RATIO_DRAG_PX comment: the bend handle's own position
       // never stands for ratio (it always sits on the diagonal), so the only law that can work
       // here is "up = more, down = less", from wherever the gesture started.

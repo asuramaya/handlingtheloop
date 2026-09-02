@@ -30,15 +30,23 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const dev0 = deck.fxDeviceAt(slot) as CompFx | undefined;
-    if (!canvas || !dev0) return;
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // ★ THE LOOP DOES NOT GATE ON THE DEVICE. It used to bail here when the COMP was not resolvable
+    // yet — and since none of this effect's deps change when it later appears, the pad would stay
+    // blank for the life of the panel. Same family as the worklet-built-too-early bug: something
+    // that gives up on a dependency it was merely EARLY for, with nothing to retry it. The device
+    // is re-fetched inside draw() every frame anyway, so the loop can simply skip a frame instead.
 
     let raf = 0;
     const draw = () => {
       // Re-fetched every frame, never captured once — see CompViz's own comment on this.
-      const dev = (deck.fxDeviceAt(slot) as CompFx | undefined) ?? dev0;
+      const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
+      if (!dev) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = canvas.clientWidth;
@@ -58,13 +66,18 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       // independent axes instead of one dot floating in a box.
       const dx = logFrac(attack, ATTACK_MIN, ATTACK_MAX) * w;
       const dy = (1 - logFrac(release, RELEASE_MIN, RELEASE_MAX)) * h;
+      // Half-pixel snap for the 1px guides ONLY (the dot keeps its true position). A 1px stroke
+      // centred on an integer coordinate straddles two device pixels and renders as a soft 2px
+      // band — which at this size does not read as a thin line, it reads as a smudge.
+      const gx = Math.round(dx) + 0.5;
+      const gy = Math.round(dy) + 0.5;
       ctx.strokeStyle = `color-mix(in srgb, ${accent} ${hot ? 30 : 16}%, transparent)`;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(dx, 0);
-      ctx.lineTo(dx, h);
-      ctx.moveTo(0, dy);
-      ctx.lineTo(w, dy);
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, h);
+      ctx.moveTo(0, gy);
+      ctx.lineTo(w, gy);
       ctx.stroke();
 
       ctx.beginPath();

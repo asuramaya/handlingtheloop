@@ -2872,12 +2872,26 @@ button.room-tog:hover {
   touch-action: none;
   cursor: ew-resize;
 }
-/* ATTACK/RELEASE's own small pad, to the curve's LEFT — square-ish, same bordered-box language as
+/* ATTACK/RELEASE's own pad, to the curve's LEFT — square-ish, same bordered-box language as
    .fx-curve's preview panel but on the opposite side (the curve reads left-to-right in dB, so a
-   second control belongs at the start of that reading order, not competing at the end of it). */
+   second control belongs at the start of that reading order, not competing at the end of it).
+
+   ★ SQUARE OFF THE ROW'S HEIGHT, AT EVERY WIDTH. It used to be sized as a percentage of the row,
+   which made it a portrait sliver on a phone and — because the row is taller than that percentage
+   is wide — a portrait rectangle on a desktop too. It was never square anywhere. An XY surface
+   whose axes are wildly different lengths makes one of them feel coarser than the other, which is
+   exactly wrong for two controls that deserve equal weight.
+   So: as wide as the row is tall, which is square by construction and needs no breakpoint. The
+   max-width cap is the only concession — on a genuinely narrow panel a full square would starve
+   the curve, so the pad goes as square as the width allows and no squarer. Taller than it is
+   wide, but in proportion, rather than a strip. */
 .comp-ar-pad {
   display: block;
-  flex: 0 0 clamp(46px, 20%, 68px);
+  flex: 0 0 auto;
+  height: 100%;
+  width: auto;
+  aspect-ratio: 1 / 1;
+  max-width: 38%;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -3197,22 +3211,6 @@ body:not(.no-glow) .fx-mix-fill::after {
   .sat-shared .vcell {
     flex: 0 0 auto;
     min-width: 52px;
-  }
-  /* ★ THE A/R PAD SQUARES OFF THE ROW'S HEIGHT, and the width comes out of the curve.
-     Three columns across a phone gave the XY pad ~40px: a vertical strip with ATK/REL down it in
-     7px type and no X axis worth gesturing on. Two wrong ways to fix that, both tried:
-       · narrowing the side columns to feed the curve — only made the sliver thinner;
-       · wrapping onto more lines — the panel body is a FIXED height, so every line added is
-         SCROLL, and a control you have to scroll to reach is not on the panel at all. (Measured:
-         it also flattened the curve to 277×57, trading the instrument for the accessory.)
-     So the row keeps its shape and the pad takes WIDTH. Measured at a 340px panel: pad 102×102,
-     curve 178×113 — full height, and still the widest thing in the row. */
-  .comp-ar-pad {
-    flex: 0 0 auto;
-    width: clamp(76px, 30%, 112px);
-    height: auto;
-    aspect-ratio: 1 / 1; /* square by construction, at whatever width the clamp lands on */
-    align-self: center;
   }
 }
 

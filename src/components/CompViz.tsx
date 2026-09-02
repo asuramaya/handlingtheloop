@@ -100,8 +100,16 @@ function handleGeometry(w: number, h: number, cp: CurveParams): Handles {
   const yOf = (db: number) => PAD.t + ((DB_MAX - clamp(outputDb(db, cp), DB_MIN, DB_MAX)) / (DB_MAX - DB_MIN)) * (plotBottom - PAD.t);
 
   const bendX = dbToX(cp.thresh);
-  const makeupX = dbToX(DB_MAX - 1.5);
   const plotRight = PAD.l + span;
+  // ★ MAKEUP YIELDS TO THE BEND. Its home is the curve's output end, but the threshold can be
+  // dragged to within a couple of dB of it — and then the two rings sit on top of each other with
+  // the knee piled in as well, which is the third handle collision this panel has produced.
+  // The bend owns its position (it IS the threshold, it cannot lie); everything else moves out of
+  // its way. The knee parks to the RIGHT, so makeup steps to the LEFT and they stay separated by
+  // the bend between them. It is still on the curve and still true: makeup shifts the WHOLE curve,
+  // so its height reads the same wherever along it the ring sits.
+  const makeupHome = dbToX(DB_MAX - 1.5);
+  const makeupX = makeupHome - bendX < KNEE_MIN_SEP ? bendX - KNEE_MIN_SEP : makeupHome;
   // Between its own bend and the plot's edge, and always ON the curve wherever it lands. Push the
   // threshold to the top of its range and that gap closes completely — the knee lives at a HIGHER
   // input dB than the threshold by definition, so there is nowhere left for it to be.
@@ -109,7 +117,7 @@ function handleGeometry(w: number, h: number, cp: CurveParams): Handles {
   return {
     bend: { x: bendX, y: yOf(cp.thresh) },
     knee: { x: kneeX, y: yOf(xToDb(kneeX)), shown: kneeX - bendX >= KNEE_MIN_SEP - 1 },
-    makeup: { x: makeupX, y: yOf(DB_MAX - 1.5) },
+    makeup: { x: makeupX, y: yOf(xToDb(makeupX)) },
   };
 }
 

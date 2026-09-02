@@ -3215,42 +3215,24 @@ body:not(.no-glow) .fx-mix-fill::after {
     flex: 0 0 auto;
     min-width: 52px;
   }
-  /* ★ COMP'S VIZ ROW STOPS BEING A ROW. Three columns (A/R pad · curve · MAKEUP/LOOK) across a
-     phone gave each of them a sliver: the A/R pad was squeezed to ~40px, which is not a pad — it
-     is a vertical strip with ATK/REL written down it in 7px type that nobody can read, and an XY
-     gesture with no X worth speaking of. Narrowing the side columns to give the curve room (what
-     this rule used to do) only made the sliver thinner.
-
-     Wrapping is the answer, not tuning. The curve takes the full width on its own line, and the
-     pad and the cells share the line under it — where the pad can finally be SQUARE, which is the
-     shape an attack/release XY surface has to be to mean anything. */
-  .comp-panel .fx-viz-row {
-    flex-wrap: wrap;
-  }
-  .comp-panel .fx-viz-row > .sat-viz {
-    order: 1;
-    flex: 1 1 100%;
-    min-height: 128px;
-  }
+  /* ★ THE A/R PAD SQUARES OFF THE ROW'S HEIGHT, and the width comes out of the curve.
+     Three columns across a phone gave the XY pad ~40px: a vertical strip with ATK/REL down it in
+     7px type and no X axis worth gesturing on. Two wrong ways to fix that, both tried:
+       · narrowing the side columns to feed the curve — only made the sliver thinner;
+       · wrapping onto more lines — the panel body is a FIXED height, so every line added is
+         SCROLL, and a control you have to scroll to reach is not on the panel at all. (Measured:
+         it also flattened the curve to 277×57, trading the instrument for the accessory.)
+     So the row keeps its shape and the pad takes WIDTH. Measured at a 340px panel: pad 102×102,
+     curve 178×113 — full height, and still the widest thing in the row. */
   .comp-ar-pad {
-    order: 2;
-    flex: 1 1 0;
-    /* Square, and big enough for its own labels — the reason the row wraps at all. */
-    aspect-ratio: 1 / 1;
-    min-width: 108px;
-    max-width: 168px;
+    flex: 0 0 auto;
+    width: clamp(76px, 30%, 112px);
+    height: auto;
+    aspect-ratio: 1 / 1; /* square by construction, at whatever width the clamp lands on */
+    align-self: center;
   }
   .comp-side-cells {
-    order: 3;
-    flex: 1 1 0;
-    /* Side by side now that they have a whole line, instead of stacked in a 40px gutter. */
-    flex-direction: row;
-    align-items: stretch;
-    min-width: 0;
-  }
-  .comp-side-cells .vcell {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 0 0 clamp(44px, 14%, 58px);
   }
 }
 

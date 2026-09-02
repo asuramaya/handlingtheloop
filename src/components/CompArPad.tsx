@@ -80,10 +80,15 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       // the phone layout lets it square out to 108px+, fixed 7px would just be small for no reason.
       const axisPx = Math.max(7, Math.min(11, Math.round(w / 13)));
       ctx.font = `${axisPx}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.textAlign = "left";
-      ctx.fillText("ATK", 3, h - 3);
+      // ★ ONE LABEL PER EDGE, EACH ON ITS OWN AXIS. Both used to anchor to the bottom-LEFT corner
+      // at fixed 3px/9px offsets — so ATK and the rotated REL sat on top of each other there at
+      // every size, which at the old ~40px width read as one smudge of letters. ATK belongs along
+      // the bottom (it IS the x axis) and REL up the left (the y axis); centred on their own edges
+      // they cannot collide however the pad is sized.
+      ctx.textAlign = "center";
+      ctx.fillText("ATK", w / 2, h - 3);
       ctx.save();
-      ctx.translate(9, h - 3);
+      ctx.translate(axisPx + 1, h / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText("REL", 0, 0);
       ctx.restore();

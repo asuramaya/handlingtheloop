@@ -809,48 +809,12 @@ th.col-thumb {
   inset: 0;
   z-index: 60;
 }
-.ctx-menu {
-  position: fixed;
-  z-index: 61;
-  min-width: 190px;
-  max-height: 320px;
-  overflow-y: auto;
-  background: var(--panel-2);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
-}
-/* Keep every row at its natural height: with a long playlist list past max-height, a flex
-   column will otherwise SHRINK each child below its line-height (rows overlap) instead of
-   scrolling. flex-shrink:0 forces the overflow to scroll, which is what we want. */
-.ctx-menu > * {
-  flex-shrink: 0;
-}
-.ctx-menu button {
-  text-align: left;
-  background: transparent;
-  border: none;
-  color: var(--text);
-  font-size: 13px;
-  padding: 8px 10px;
-  border-radius: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ctx-menu button:hover {
-  background: var(--panel-2);
-}
-.ctx-count {
-  font-size: 11px;
-  color: var(--muted);
-  padding: 4px 10px 6px;
-}
+/* The right-click menu itself is ContextMenu.tsx's shared Menu now — one widget, one placement
+   pass (measure, flip, clamp), for every surface that opens at a cursor. What is left here are
+   the ROW ORNAMENTS the library's menus still use inside it: a section label, a separator, and
+   the two colour modifiers. `.ctx-backdrop` stays because the shortcuts popover uses it. */
+/* Doubled on purpose: inside a preset menu, `.fx-preset-menu > *` sets its own flex + padding
+   on every child, and a bare `.ctx-label` loses to it on specificity. */
 .fx-preset-menu .ctx-label,
 .ctx-label {
   font-size: 10px;

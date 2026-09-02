@@ -935,8 +935,9 @@
   line-height: 1;
 }
 
-/* Keyboard-shortcuts popover — the ⓘ/? launcher's content. Wider than .ctx-menu (which is
-   sized for a narrow list of buttons, not a full reference table), anchored below the chin. */
+/* Keyboard-shortcuts popover — the ⓘ/? launcher's content. Not a cursor menu: it is anchored
+   below the chin at a fixed corner and is a full reference table, so it is sized for itself
+   rather than borrowing the narrow menu width. It shares only `.ctx-backdrop`. */
 .help-panel {
   position: fixed;
   top: 52px;

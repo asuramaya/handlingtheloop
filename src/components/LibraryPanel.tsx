@@ -14,6 +14,7 @@ import { MixQueuePanel } from "./MixQueuePanel";
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
+import { Menu } from "./ContextMenu";
 import { ConfirmModal, PromptModal } from "./Dialog";
 import { DockResizer } from "./DockResizer";
 import { cleanPlaylistName, withCached } from "./lib/libraryUtils";
@@ -920,33 +921,37 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         </div>
       )}
 
+      {/* The playlist menu speaks the fleet-wide glyph grammar: the head NAMES what you
+          right-clicked and the acts are the same two verbs they are everywhere else — ✎ rename,
+          ✕ delete. Spelled out as rows they were wider than the menu holding them. */}
       {plMenu && (
-        <>
-          <div className="ctx-backdrop" onClick={() => setPlMenu(null)} onContextMenu={(e) => e.preventDefault()} />
-          <div
-            className="ctx-menu"
-            style={{ left: Math.min(plMenu.x, window.innerWidth - 200), top: Math.min(plMenu.y, window.innerHeight - 120) }}
-          >
-            <button
-              onClick={() => {
+        <Menu
+          x={plMenu.x}
+          y={plMenu.y}
+          head={plMenu.name}
+          onClose={() => setPlMenu(null)}
+          acts={[
+            {
+              glyph: "✎",
+              title: "Rename playlist",
+              onClick: () => {
                 renamePlaylist(plMenu.id, plMenu.name);
                 setPlMenu(null);
-              }}
-            >
-              ✎ Rename
-            </button>
-            <div className="ctx-sep" />
-            <button
-              className="ctx-danger"
-              onClick={() => {
+              },
+            },
+            {
+              glyph: "✕",
+              title: "Delete playlist",
+              danger: true,
+              onClick: () => {
                 deletePlaylist(plMenu.id, plMenu.name);
                 setPlMenu(null);
-              }}
-            >
-              ✕ Delete playlist
-            </button>
-          </div>
-        </>
+              },
+            },
+          ]}
+        >
+          {null}
+        </Menu>
       )}
       {dialog?.kind === "prompt" && (
         <PromptModal

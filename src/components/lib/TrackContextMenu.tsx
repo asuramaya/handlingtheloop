@@ -1,4 +1,5 @@
 import type { TrackMeta } from "@htl/library";
+import { Menu } from "../ContextMenu";
 import type { MenuState } from "./trackTable";
 
 interface TrackContextMenuProps {
@@ -21,6 +22,11 @@ interface TrackContextMenuProps {
 
 // The track table's context menu. LEFT-click opens the "load" variant (pick a deck);
 // RIGHT-click / long-press opens the "add" variant (file to playlist / collection, remove).
+//
+// It is the SHARED Menu now, not a second implementation. It used to carry its own backdrop and
+// its own `Math.min(x, innerWidth - 210)` placement guess — the same guess ContextMenu was built
+// to replace, and one that cannot know how tall this menu is: a right-click near the bottom of a
+// long collection opened a menu whose "Remove" sat below the fold. Menu measures, flips and clamps.
 export function TrackContextMenu({
   menu,
   onClose,
@@ -41,18 +47,14 @@ export function TrackContextMenu({
   const tracksOf = (ids: string[]) => ids.map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
 
   return (
-    <>
-      <div className="ctx-backdrop" onClick={onClose} onContextMenu={(e) => e.preventDefault()} />
-      <div
-        className="ctx-menu"
-        style={{ left: Math.min(menu.x, window.innerWidth - 210), top: Math.min(menu.y, window.innerHeight - 320) }}
-      >
-        {menu.ids.length > 1 && <div className="ctx-count">{menu.ids.length} tracks</div>}
+    <Menu x={menu.x} y={menu.y} onClose={onClose} head={menu.ids.length > 1 ? `${menu.ids.length} tracks` : undefined}>
 
         {/* LEFT-click menu: just pick a deck. */}
         {menu.kind === "load" && (
           <>
             <button
+              className="fx-palette-item"
+              role="menuitem"
               onClick={() => {
                 const t = byId.get(menu.ids[0]);
                 if (t) onLoad("A", t);
@@ -62,6 +64,8 @@ export function TrackContextMenu({
               ▶ Load to Deck A
             </button>
             <button
+              className="fx-palette-item"
+              role="menuitem"
               onClick={() => {
                 const t = byId.get(menu.ids[0]);
                 if (t) onLoad("B", t);
@@ -74,6 +78,8 @@ export function TrackContextMenu({
             {(onQueue || onQueueNext) && <div className="ctx-sep" />}
             {onQueueNext && (
               <button
+                className="fx-palette-item"
+                role="menuitem"
                 onClick={() => {
                   tracksOf(menu.ids).forEach((t) => onQueueNext(t));
                   onClose();
@@ -84,6 +90,8 @@ export function TrackContextMenu({
             )}
             {onQueue && (
               <button
+                className="fx-palette-item"
+                role="menuitem"
                 onClick={() => {
                   tracksOf(menu.ids).forEach((t) => onQueue(t));
                   onClose();
@@ -104,6 +112,8 @@ export function TrackContextMenu({
                 if (!targets.length) return <div className="ctx-label">✓ In collection</div>;
                 return (
                   <button
+                    className="fx-palette-item"
+                    role="menuitem"
                     onClick={() => {
                       targets.forEach((t) => onAddToCollection(t));
                       onClose();
@@ -119,6 +129,8 @@ export function TrackContextMenu({
                 {(playlists ?? []).map((p) => (
                   <button
                     key={p.id}
+                    className="fx-palette-item"
+                    role="menuitem"
                     onClick={() => {
                       tracksOf(menu.ids).forEach((t) => onAddToPlaylist?.(p.id, t));
                       onClose();
@@ -129,7 +141,7 @@ export function TrackContextMenu({
                 ))}
                 {onCreatePlaylistWith && (
                   <button
-                    className="ctx-new"
+                    className="fx-palette-item ctx-new" role="menuitem"
                     onClick={() => {
                       onCreatePlaylistWith(tracksOf(menu.ids));
                       onClose();
@@ -144,7 +156,7 @@ export function TrackContextMenu({
               <>
                 <div className="ctx-sep" />
                 <button
-                  className="ctx-danger"
+                  className="fx-palette-item danger" role="menuitem"
                   onClick={() => {
                     menu.ids.forEach((id) => onRemove(id));
                     onClearSelection();
@@ -157,7 +169,6 @@ export function TrackContextMenu({
             )}
           </>
         )}
-      </div>
-    </>
+    </Menu>
   );
 }

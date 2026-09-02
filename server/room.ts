@@ -828,9 +828,13 @@ export class DjRoom {
   // close timestamp, so an account that reconnected on another DO can't be stomped offline.
   async alarm(): Promise<void> {
     await this.load();
+    // Guard BEFORE the delete. Unreachable today (schedulePresenceOffline bails on the same
+    // condition before it ever writes the key), but deleting a queue and then discovering you
+    // cannot drain it loses it silently — and the only thing keeping that safe is a check in a
+    // different method. Order it so the code is correct on its own terms.
+    if (!this.notifySecret || !this.origin) return;
     const pending = (await this.state.storage.get<Record<string, number>>("presenceOff")) ?? {};
     await this.state.storage.delete("presenceOff");
-    if (!this.notifySecret || !this.origin) return;
     for (const [acct, closedAt] of Object.entries(pending)) {
       if (this.acctHasLiveSocket(acct)) continue; // reconnected here → still online, skip
       void fetch(`${this.origin}/internal/presence`, {

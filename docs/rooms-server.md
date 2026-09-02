@@ -72,12 +72,13 @@ the Worker, which owns D1. The Worker's write is **LWW-guarded on the close
 timestamp**, so an account that reconnected on a *different* DO cannot be stomped
 offline.
 
-> **Noted while documenting, not a live bug:** `alarm()` deletes `presenceOff`
-> *before* the `if (!this.notifySecret || !this.origin) return` guard, so a config
-> change between scheduling and firing would drop the queue silently. It is
-> unreachable today because `schedulePresenceOffline` bails on the same condition
-> before ever writing the key. Still the wrong order — delete after you know you
-> can act — and worth a test if that guard ever moves.
+> **Found while documenting, and fixed (2026-09-01):** `alarm()` used to delete
+> `presenceOff` *before* the `if (!notifySecret || !origin) return` guard, so a
+> config change between scheduling and firing would have dropped the queue
+> silently. It was unreachable — `schedulePresenceOffline` bails on the same
+> condition before ever writing the key — but the only thing keeping it safe was a
+> check in a different method. The guard runs first now. **Delete after you know
+> you can act.**
 
 ## Where to read
 

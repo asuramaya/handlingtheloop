@@ -193,3 +193,59 @@ across the bank (an omitted param INHERITS, so a partial preset is nondeterminis
 not smaller); no key shipped at a single value; and no two presets identical under two
 names. Writing these found four devices' worth of controls that had shipped and been
 demonstrated by nothing.
+
+
+---
+
+## Measuring a bank (fxlab)
+
+```bash
+node scripts/fxlab/fxlab.mjs --kind eq --bank --signal pink --seconds 2
+```
+
+**Pink, not white.** White noise is flat per-Hz, so half its energy sits in the top
+two octaves — under white, killing the bass looks free and killing the highs looks
+catastrophic, which is the opposite of what happens to music. Pink is equal energy
+per octave, roughly what a mixed track looks like, so a level delta against it
+means something.
+
+**Read the `input` line first.** fxlab reports its own stimulus now; if it says
+`NO INPUT`, nothing below it is a measurement. That assertion exists because an
+estimator with nothing to estimate estimates noise, confidently, to four decimals.
+
+### The EQ bank, measured 2026-09-01
+
+Output RMS relative to the stimulus, pink, 2 s:
+
+| | Δ | | Δ |
+|---|---|---|---|
+| Air Lift | **+1.0 dB** | Mid Scoop | −2.5 dB |
+| Tilt Warm | +0.5 | High Kill | −2.8 |
+| Sub Drop | −0.9 | Deep Notch | −2.9 |
+| Mud Cut | −1.0 | Split Low | −3.0 |
+| Rumble Guard | −1.5 | Riser | −3.1 |
+| Tame Harsh | −1.5 | Telephone | −3.3 |
+| De-Cymbal | −1.3 | Vocal Focus | −3.4 |
+| Kick Notch | −1.8 | Sub Bump | −3.5 |
+| Tilt Bright | −2.2 | Split High | −3.9 |
+| Bass Kill | −2.4 | Radio | **−4.5 dB** |
+
+A 5.5 dB spread. Most of it is honest — RADIO and TELEPHONE band-limit hard,
+SPLIT HIGH removes the lows on purpose, and a KILL *should* read quieter (the
+band is gone; compensating back to unity would make a bass kill louder in the
+mids than the track it replaced).
+
+**Two worth an ear, not a formula:**
+
+- **SUB BUMP** reads −3.5 dB on pink despite being a +12 dB low bell. Pink has
+  little sub energy, so the boost has little to grab and only its `out: -3` trim
+  shows. On real material with actual sub content it will be much louder. This is
+  the case where the measurement and the intent disagree and **the intent is
+  probably right** — do not "fix" it from this number alone.
+- **TILT WARM (+0.5) vs TILT BRIGHT (−2.2)** are meant to be mirror images and are
+  2.7 dB apart, because a low shelf at 250 Hz covers more octaves of pink than a
+  high shelf at 4 kHz does. Making them symmetric is a real (small) improvement.
+
+> These numbers are a **floor, not a verdict**. They say no preset is broken or
+> wildly out of line. They cannot say whether one sounds good, and the whole bank
+> is still un-ear-tested — see ROADMAP.

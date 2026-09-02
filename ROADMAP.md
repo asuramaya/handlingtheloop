@@ -115,9 +115,9 @@ Everything the old version of this section listed under "near term" has shipped 
 stems, FX, key detection, WSOLA time-stretch, recording. What is actually left:
 
 **Near term**
-- **Ear-test and measure the 2026-09-01 preset banks.** 47 new presets went in
-  unheard; the fxlab harness can measure them, but it does not yet assert
-  anything about its own input, so a green number there is not yet worth much.
+- **Ear-test the 2026-09-01 preset banks.** 47 new presets went in unheard. They
+  have now been MEASURED (the EQ bank's level spread is in docs/fx-rack.md and no
+  preset is broken), but a measurement cannot say whether one sounds good.
 - **MediaSession** — lock-screen controls and better background audio on mobile.
 - **Touch coverage in draglab.** The suite drives a mouse; the 180 ms drag arm
   racing the 460 ms long-press menu is untested, and touch is where the menus are

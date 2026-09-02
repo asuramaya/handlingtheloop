@@ -183,6 +183,18 @@ function printReport(r, spec) {
   console.log(`  FXLAB · ${r.kind.toUpperCase()} · signal=${r.signal} · ${r.seconds}s @ ${r.sampleRate}Hz`);
   if (spec.preset) console.log(`  preset: "${spec.preset}"`);
   console.log(`  params: ${JSON.stringify(r.applied)}`);
+  // ★ THE INPUT, FIRST AND UNMISSABLE. Everything below characterises the OUTPUT; if nothing went
+  // in, every one of those numbers is float dust reported to four decimals. This line is the
+  // difference between a measurement and a confident guess.
+  if (r.inputOk === false) {
+    console.log("");
+    console.log(`  ⚠⚠ NO INPUT — stimulus peak ${r.inputPeak} (signal=${r.signal}). Nothing below is a`);
+    console.log(`     measurement: an estimator with nothing to estimate estimates NOISE. Check`);
+    console.log(`     --signal / --tone-amp / --seconds before reading a single number.`);
+    process.exitCode = 2;
+  } else {
+    console.log(`  input  ${f(r.inputPeak, 3)} pk / ${f(r.inputRms, 4)} rms   ← the stimulus actually rendered`);
+  }
   console.log("");
   console.log(`  peak   ${f(r.peak, 3)}  (${f(r.peakDb, 1)} dB)${r.clipped ? "   ⚠ CLIPPED (>0 dBFS)" : ""}`);
   console.log(`  rms    ${f(r.rms, 4)}  (${f(r.rmsDb, 1)} dB)`);

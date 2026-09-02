@@ -64,9 +64,9 @@ the current state; what is left undocumented is deliberate:
 - **`src/htl/lyrics`** — the caption ribbon works; Whisper transcription is ON
   HOLD after eleven attempts. Documenting a parked subsystem would mostly record
   what failed, and that is already in the file headers and the decision graph.
-- **`scripts/fxlab`** — ⚠ carries a known trap: *it asserts nothing about its own
-  input*, so a green measurement is not a green feature. Fix that before trusting
-  a number out of it.
+- **`scripts/fxlab`** — the trap is fixed (2026-09-01): it reports its own
+  stimulus and refuses to present a measurement over a dead one. How to run a bank
+  audit, and the EQ bank's measured levels, are in [fx-rack](./fx-rack.md).
 - **Individual components** — 77 files. The ones worth reading are named in
   [map.md](./map.md).
 

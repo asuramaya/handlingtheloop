@@ -125,8 +125,20 @@ function makeSignal(ctx: Ctx, signal: string, sr: number, toneHz = 1000, toneAmp
         b3 = 0.8665 * b3 + w * 0.3104856;
         b4 = 0.55 * b4 + w * 0.5329522;
         b5 = -0.7616 * b5 - w * 0.016898;
-        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11 * 3.2;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
         b6 = w * 0.115926;
+      }
+      // ★ NORMALISE, because a fixed gain on a random process is a guess. This carried `* 3.2`,
+      // which put pink at ~2.4 PEAK — so every render through it tripped the `peak > 1` check and
+      // printed "⚠ CLIPPED" no matter what the device did. A whole bank measured that way reads as
+      // twenty broken presets and is really one bad stimulus. Scaling to a known peak makes the
+      // clip warning mean the DEVICE clipped, which is the only reason to have it.
+      // (Found the day fxlab started reporting its own input — see the inputPeak assertion.)
+      let pk = 0;
+      for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i]));
+      if (pk > 0) {
+        const g = 0.7 / pk; // same headroom as the noise/burst stimuli
+        for (let i = 0; i < d.length; i++) d[i] *= g;
       }
     } else if (signal === "noise") {
       for (let i = 0; i < d.length; i++) d[i] = (rnd() * 2 - 1) * 0.7;
@@ -145,6 +157,14 @@ const dbOf = (lin: number) => (lin <= 1e-9 ? -180 : 20 * Math.log10(lin));
 
 interface Report {
   ok: true;
+  /** ★ THE INPUT ASSERTION. An estimator with nothing to estimate estimates NOISE, confidently:
+   *  a render whose STIMULUS was silent still produces a peak, an RMS, a THD and an echo ladder,
+   *  and every one of them is float dust reported to four decimals. The harness measured its
+   *  OUTPUT and never once asked whether anything went IN. These carry the answer, and `fxlab`
+   *  refuses to print a measurement when `inputOk` is false. */
+  inputPeak: number;
+  inputRms: number;
+  inputOk: boolean;
   kind: string;
   signal: string;
   seconds: number;
@@ -512,6 +532,31 @@ export interface Coverage {
 
   const rendered = await ctx.startRendering();
   const report = measure(rendered, { kind, signal, seconds, applied: actual });
+
+  // ★ MEASURE THE STIMULUS TOO, in its own context, with the device out of the way. This is the
+  // question the harness never asked: did anything actually go IN? A typo'd --signal, a tone-amp
+  // of 0, a buffer builder that returned an empty array, a source that was never started — all of
+  // them render a perfectly quiet output that every estimator downstream happily characterises.
+  // `silence` is the one signal for which quiet is CORRECT, so it is exempt.
+  {
+    const probe = new OfflineAudioContext(2, len, sr);
+    const s2 = makeSignal(probe, signal, sr, spec.toneHz ?? 1000, spec.toneAmp ?? 1);
+    s2.connect(probe.destination);
+    s2.start(0);
+    const inBuf = await probe.startRendering();
+    const ch = inBuf.getChannelData(0);
+    let pk = 0;
+    let sum = 0;
+    for (let i = 0; i < ch.length; i++) {
+      const v = Math.abs(ch[i]);
+      if (v > pk) pk = v;
+      sum += ch[i] * ch[i];
+    }
+    report.inputPeak = Math.round(pk * 1e6) / 1e6;
+    report.inputRms = Math.round(Math.sqrt(sum / ch.length) * 1e6) / 1e6;
+    // A real stimulus clears -60 dBFS peak comfortably; anything under it is dust, not signal.
+    report.inputOk = signal === "silence" || pk > 1e-3;
+  }
   // The EQ's response is free (no render needed) and is the whole point of an EQ, so always read
   // it back — this is the curve the preset ACTUALLY produces, not the one its numbers imply.
   if (dev instanceof Eq3) {

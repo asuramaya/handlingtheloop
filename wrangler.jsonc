@@ -9,6 +9,21 @@
   // proxies/streams (I/O) and ALL heavy DSP runs in the browser — so 1 s is a generous runaway
   // backstop a normal request can never trip, but it caps a pathological loop's CPU-ms bill.
   "limits": { "cpu_ms": 1000 },
+  // Non-secret config. Secrets live in `wrangler secret put`, never here — this file is public.
+  //
+  // PUBLIC_ORIGIN — where the room Durable Object POSTs its internal bridge calls
+  // (/internal/notify, /internal/presence). Set it to whichever origin serves /api. Without it the
+  // DO captures the base from the first connect URL and PINS it in durable storage forever, which
+  // with two routed hostnames means "whichever one connected first". See server/room.ts.
+  //
+  // APP_HOST — the split. UNSET (the default) = one origin serves everything, exactly as it always
+  // has. Set it to the app's hostname and the apex/www become a landing site: the SPA, the
+  // isolation headers and the app's deep links live on APP_HOST, share links keep their card at
+  // the marketing host and hand off. See server/hosts.ts for the whole decision, and its test for
+  // the shape of it. Cutover checklist is in DEPLOY.md.
+  "vars": {
+    "PUBLIC_ORIGIN": "https://handlingtheloop.com"
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

@@ -27,6 +27,7 @@ const RELEASE_MIN = 20,
 export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragging = useRef(false);
+  const lastTap = useRef(0); // double-tap / double-click reset — see onDown
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -143,6 +144,18 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
   };
 
   const onDown = (e: React.PointerEvent) => {
+    // ★ DOUBLE-TAP / DOUBLE-CLICK RESETS, caught on POINTERDOWN — the 320ms rule ValueCell and the
+    // reverb dome use. It hung off onDoubleClick before, which is a MOUSE event, so the gesture
+    // did not exist on touch at all. Right-click resets too, which this pad never had: it is the
+    // only draggable surface in the rack that offered no way back except by hand.
+    if (e.timeStamp - lastTap.current < 320) {
+      lastTap.current = 0;
+      dragging.current = false;
+      reset();
+      report();
+      return;
+    }
+    lastTap.current = e.timeStamp;
     dragging.current = true;
     canvasRef.current?.setPointerCapture(e.pointerId);
     apply(e);
@@ -161,10 +174,20 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       /* ignore */
     }
   };
-  const onDoubleClick = () => {
-    set("attack", 10);
-    set("release", 250);
+  // The defaults are the DEVICE's, not numbers restated here — see CompViz's own note. They were
+  // literals (10, 250) that matched CompFx's registered defs, which is the kind of agreement that
+  // quietly rots the first time the device is retuned.
+  const reset = () => {
+    const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
+    if (!dev) return;
+    set("attack", dev.paramDefault("attack"));
+    set("release", dev.paramDefault("release"));
+  };
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    reset();
+    report();
   };
 
-  return <canvas ref={canvasRef} className="comp-ar-pad" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} />;
+  return <canvas ref={canvasRef} className="comp-ar-pad" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onContextMenu={onContextMenu} />;
 }

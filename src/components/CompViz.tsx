@@ -223,6 +223,7 @@ type DragState = { kind: "bend"; startY: number; startRatio: number } | { kind: 
 export function CompViz({ deck, slot, accent, set, setHot, left, children }: CompVizProps) {
   const mainRef = useRef<HTMLCanvasElement>(null);
   const drag = useRef<DragState | null>(null);
+  const lastTap = useRef(0); // double-tap / double-click reset — see onDown
   const hover = useRef<"bend" | "knee" | "makeup" | null>(null);
 
   useEffect(() => {
@@ -721,6 +722,18 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
   const onDown = (e: React.PointerEvent) => {
     const d = hitTest(e);
     if (!d) return;
+    // ★ DOUBLE-TAP RESETS, AND IT IS DETECTED HERE — on POINTERDOWN, the same 320ms rule ValueCell
+    // and the reverb dome already use. It used to hang off onDoubleClick, which is a MOUSE event:
+    // a phone never sends one, so reset simply did not exist on touch. Right-click still resets
+    // too, for the desktop hand that reaches for it.
+    if (e.timeStamp - lastTap.current < 320) {
+      lastTap.current = 0;
+      drag.current = null;
+      resetAt(e);
+      report();
+      return;
+    }
+    lastTap.current = e.timeStamp;
     drag.current = d;
     mainRef.current?.setPointerCapture(e.pointerId);
     applyDrag(e);
@@ -731,21 +744,26 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     else hover.current = near(e);
     report();
   };
-  // ── RESET, the gesture every other control in this rack has and this one lost when the ribbon
-  // moved out of this canvas: double-click (or right-click, matching ReverbViz's own grips) puts
-  // the handle you're on back to its default. Away from both handles it resets the whole curve.
-  // A control you can dial but not undial is a control you experiment with once.
+  // ── RESET, the gesture every other control in this rack has: put the handle you are ON back to
+  // its default. Away from all of them it resets the whole curve. A control you can dial but not
+  // undial is a control you experiment with once.
+  //
+  // ★ THE DEFAULTS COME FROM THE DEVICE, not from numbers restated here. They were spelled out as
+  // literals (-18, 4, 6) that happened to match CompFx's registered defs — the kind of agreement
+  // that holds until someone retunes the device and never thinks to look in a canvas for a second
+  // copy. paramDefault IS the device's own considered resting value.
   const resetAt = (e: React.MouseEvent) => {
     const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
     if (!dev) return;
-    if (Math.round(dev.getParam("mode")) === 3) return set("ceiling", -0.3);
+    const def = (id: string) => dev.paramDefault(id);
+    if (Math.round(dev.getParam("mode")) === 3) return set("ceiling", def("ceiling"));
     const which = near(e as unknown as React.PointerEvent);
-    if (which === "knee") return set("knee", 6);
-    if (which !== "bend") set("knee", 6);
-    set("threshold", -18);
-    set("ratio", 4);
+    if (which === "makeup") return set("makeup", def("makeup"));
+    if (which === "knee") return set("knee", def("knee"));
+    if (which !== "bend") set("knee", def("knee"));
+    set("threshold", def("threshold"));
+    set("ratio", def("ratio"));
   };
-  const onDoubleClick = (e: React.MouseEvent) => resetAt(e);
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     resetAt(e);
@@ -765,7 +783,7 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     <div className="fx-viz-row">
       {left}
       <div className="sat-viz">
-        <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
+        <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onContextMenu={onContextMenu} />
       </div>
       {children}
     </div>

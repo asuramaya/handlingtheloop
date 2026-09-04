@@ -6,6 +6,7 @@ import { CachePips, useCacheStatus } from "./CachePips";
 import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
 import { useColumnLayout } from "./lib/useColumnLayout";
+import { startTouchDrag, moveTouchDrag, endTouchDrag, cancelTouchDrag, type TouchDragPayload } from "../htl/state/touchDrag";
 import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
@@ -112,6 +113,16 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   const anchor = useRef<number | null>(null);
   const longPress = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false); // a long-press opened the menu → swallow the trailing click
+  // Touch drag-out state (see htl/state/touchDrag — native HTML5 dataTransfer drag has no touch
+  // equivalent in any mobile browser). `armed` = the long-press held long enough that a SUBSEQUENT
+  // move starts a drag instead of being read as a scroll; `dragging` = a touch drag is actually
+  // in flight. The existing long-press-opens-the-file-menu gesture shares the same press: armed
+  // + lifted-without-moving still opens the menu (unchanged feel), armed + moved starts a drag
+  // instead — the same "hold, then either release or move" split iOS's own icon long-press uses.
+  const touchArmed = useRef(false);
+  const touchDragging = useRef(false);
+  const touchStart = useRef({ x: 0, y: 0 });
+  const touchPayload = useRef<TouchDragPayload | null>(null);
   const byId = useMemo(() => new Map(tracks.map((t) => [t.videoId, t])), [tracks]);
   const canFile = !!onAddToPlaylist || !!onCreatePlaylistWith;
 
@@ -503,14 +514,58 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                 }}
                 onTouchStart={(e) => {
                   const touch = e.touches[0];
-                  // Long-press = the file menu (the touch stand-in for right-click).
+                  if (!touch) return;
+                  touchStart.current = { x: touch.clientX, y: touch.clientY };
+                  touchArmed.current = false;
+                  touchDragging.current = false;
+                  // Hold 480ms and the press is ARMED — same threshold the file menu always
+                  // used, just decided a beat later than before: a lift right after arming (no
+                  // move) still opens the file menu exactly as it always did; a MOVE after
+                  // arming redirects into a touch drag instead. See htl/state/touchDrag.
                   longPress.current = window.setTimeout(() => {
-                    suppressClick.current = true;
-                    openMenu("add", touch.clientX, touch.clientY, i, t.videoId);
+                    touchArmed.current = true;
+                    navigator.vibrate?.(8);
                   }, 480);
                 }}
-                onTouchEnd={() => clearTimeout(longPress.current)}
-                onTouchMove={() => clearTimeout(longPress.current)}
+                onTouchEnd={(e) => {
+                  clearTimeout(longPress.current);
+                  if (touchDragging.current) {
+                    touchDragging.current = false;
+                    const touch = e.changedTouches[0];
+                    if (touchPayload.current) endTouchDrag(touchPayload.current, touch?.clientX ?? touchStart.current.x, touch?.clientY ?? touchStart.current.y);
+                    return;
+                  }
+                  if (touchArmed.current) {
+                    // Armed but never moved — the original long-press behaviour: open the file menu.
+                    touchArmed.current = false;
+                    suppressClick.current = true;
+                    const touch = e.changedTouches[0];
+                    openMenu("add", touch?.clientX ?? touchStart.current.x, touch?.clientY ?? touchStart.current.y, i, t.videoId);
+                  }
+                }}
+                onTouchCancel={() => {
+                  clearTimeout(longPress.current);
+                  if (touchDragging.current) cancelTouchDrag();
+                  touchArmed.current = false;
+                  touchDragging.current = false;
+                }}
+                onTouchMove={(e) => {
+                  const touch = e.touches[0];
+                  if (!touch) return;
+                  if (!touchArmed.current) {
+                    clearTimeout(longPress.current); // pre-arm movement = a scroll, not a hold
+                    return;
+                  }
+                  if (!touchDragging.current) {
+                    touchDragging.current = true;
+                    const metas = tracksOf(targetIds(i, t.videoId));
+                    touchPayload.current = { tracks: metas, label: metas.length > 1 ? `${metas.length} tracks` : t.title, thumbnail: t.thumbnail };
+                    startTouchDrag(touchPayload.current, touch.clientX, touch.clientY);
+                  } else if (touchPayload.current) {
+                    moveTouchDrag(touchPayload.current, touch.clientX, touch.clientY);
+                  }
+                  e.preventDefault(); // committed to a drag — stop the list from also scrolling
+                }}
                 onDragStart={(e) => {
                   // Carry the FULL track metas (not just ids) so a dragged Community /
                   // search track — which isn't in the collection map yet — can still be

@@ -24,6 +24,7 @@
 //      sensible bpm/firstBeat/interval.
 import { FFT, hannPeriodic } from "../stems/fft";
 import type { AudioLike, Beatgrid } from "./analyze";
+import { buildSSM, l2normalize, labelSegments, multiScaleNovelty, pickBoundaries } from "./structure";
 
 const FFT_SIZE = 1024;
 const HOP = 512;
@@ -75,10 +76,40 @@ function decimateMono(buffer: AudioLike): { sig: Float32Array; sr: number } {
   return { sig, sr: buffer.sampleRate / DECIM };
 }
 
+const CHROMA_BINS = 12;
+// Musical range gate for the chroma bin→pitch-class map: below here is sub-bass with no clear
+// pitch, above here is mostly cymbal/hat noise — both would just dilute the chroma with content
+// that doesn't carry harmonic identity.
+const CHROMA_F_LO = 60;
+const CHROMA_F_HI = 5000;
+
+/** Precompute, once per FFT_SIZE/sr, which pitch class (0=C..11=B) each FFT bin votes for, or -1
+ *  to skip it (outside the musical range). A linear-frequency STFT bin maps only APPROXIMATELY
+ *  to a pitch class — low bins span much more than a semitone each — but this is the standard
+ *  lightweight "chroma from STFT bins" approach (vs. a full constant-Q transform, far more
+ *  expensive to run client-side): plenty of harmonic discriminating power for section-level
+ *  self-similarity, which only needs "sounds like a similar chord/key region", not exact pitch. */
+function buildChromaBinMap(fftSize: number, sr: number): Int8Array {
+  const bins = fftSize >> 1;
+  const map = new Int8Array(bins).fill(-1);
+  for (let k = 1; k < bins; k++) {
+    const f = (k * sr) / fftSize;
+    if (f < CHROMA_F_LO || f > CHROMA_F_HI) continue;
+    const midi = 69 + 12 * Math.log2(f / 440);
+    map[k] = ((Math.round(midi) % 12) + 12) % 12;
+  }
+  return map;
+}
+
 /** Spectral-flux onset strength. Returns the full-band (high-passed, unit-std)
  *  onset envelope used for tempo + beats, plus a LOW-BAND flux envelope (sub-~150
- *  Hz, raw) used for downbeat detection — kicks land on the "1". */
-function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32Array; loudEnv: Float32Array; envRate: number } | null {
+ *  Hz, raw) used for downbeat detection — kicks land on the "1" — plus a per-frame
+ *  12-bin chroma (pitch-class energy profile), for structure detection (see structure.ts).
+ *  Chroma rides the SAME per-frame magnitude spectrum already computed for onset flux — no
+ *  second FFT pass, just one more accumulation per bin using a precomputed bin→pitch-class map. */
+function onsetEnvelope(
+  buffer: AudioLike,
+): { env: Float32Array; lowEnv: Float32Array; loudEnv: Float32Array; chroma: Float32Array; envRate: number } | null {
   const { sig, sr } = decimateMono(buffer);
   const n = sig.length;
   if (n < FFT_SIZE * 4) return null;
@@ -94,12 +125,14 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
   const lowCut = Math.max(2, Math.min(bins - 1, Math.round((150 * FFT_SIZE) / sr)));
   // EMA coefficient for the sustained-level tracker (~HARM_TAU_SEC at this frame rate).
   const harmA = 1 - Math.exp(-1 / (HARM_TAU_SEC * (sr / HOP)));
+  const chromaMap = buildChromaBinMap(FFT_SIZE, sr);
 
   const frames = Math.floor((n - FFT_SIZE) / HOP) + 1;
   if (frames < 8) return null;
   const flux = new Float32Array(frames);
   const lowEnv = new Float32Array(frames);
   const loudEnv = new Float32Array(frames); // broadband loudness → phrase structure
+  const chroma = new Float32Array(frames * CHROMA_BINS); // per-frame pitch-class energy → structure
 
   for (let f = 0; f < frames; f++) {
     const start = f * HOP;
@@ -111,9 +144,12 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
     let sum = 0;
     let lowSum = 0;
     let loud = 0;
+    const chromaBase = f * CHROMA_BINS;
     for (let k = 1; k < bins; k++) {
       const raw = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
       loud += raw; // sustained spectral magnitude ≈ loudness (drops/breakdowns) — stays RAW
+      const pc = chromaMap[k];
+      if (pc >= 0) chroma[chromaBase + pc] += raw; // same magnitude, no extra FFT — see buildChromaBinMap
       // Transient-emphasised magnitude: measure the excess over this bin's sustained level (the
       // PRE-transient background — update the EMA after), so pads/vibrato/held tones don't drive
       // the flux. log-magnitude still tames the loud-vs-quiet dynamic range. See percussiveMag.
@@ -156,7 +192,7 @@ function onsetEnvelope(buffer: AudioLike): { env: Float32Array; lowEnv: Float32A
   const std = Math.sqrt(varSum / frames) || 1;
   for (let f = 0; f < frames; f++) env[f] /= std;
 
-  return { env, lowEnv, loudEnv, envRate };
+  return { env, lowEnv, loudEnv, chroma, envRate };
 }
 
 /** Estimate the 4/4 downbeat phase: the beat offset (0..beatsPerBar-1) whose beats
@@ -195,74 +231,101 @@ function detectDownbeat(lowEnv: Float32Array, beatFrames: number[], beatsPerBar:
   return bestPhase;
 }
 
-/** Phrase (section) detection. DJ tracks are built from 8/16/32-bar phrases —
- *  intro, build, drop, breakdown — whose boundaries land on bar lines where the
- *  energy changes. Build a per-bar broadband-loudness curve, take its bar-to-bar
- *  novelty (rises = builds/drops, falls = breakdowns both count), then find the
- *  phrase period P∈{8,16,32} and phase that best lines boundaries up with the big
- *  novelty spikes. Returns the boundary times (s) + detected phrase length. */
-function detectPhrases(
+// Checkerboard-novelty radii to try, in BARS (see structure.ts's multiScaleNovelty) — spans the
+// range DJ phrases actually come in (a short fill through a whole 32-bar section). Filtered down
+// to whatever fits the track's actual bar count at call time.
+const NOVELTY_RADII_BARS = [4, 8, 16, 32];
+// Minimum bars between two accepted section boundaries — short enough not to miss a real 8-bar
+// phrase, long enough that the checkerboard novelty's own local-maximum picking (already
+// spacing-aware) isn't fighting a second, redundant constraint at odds with it.
+const MIN_BOUNDARY_SPACING_BARS = 8;
+// Blend weight for the chroma (content) novelty vs. the loudness (energy) novelty — see
+// detectStructure. Chroma gets the larger share: it catches transitions loudness alone misses
+// (a verse→chorus at similar volume), which is the entire reason this replaced a loudness-only
+// detector. Loudness stays in the mix because a pure energy build/drop can happen with almost no
+// harmonic change (a filter sweep into a drop on the same chord), which chroma alone would miss.
+const CHROMA_NOVELTY_WEIGHT = 0.6;
+
+/** Structure (section) detection — Phase 2 + 3 from the design: a per-bar chroma self-similarity
+ *  matrix + multi-scale checkerboard novelty finds VARIABLE-length section boundaries (replacing
+ *  the old single-uniform-period comb fit, which could only ever describe a track as one fixed
+ *  8/16/32-bar grid), blended with the loudness-novelty the old detector already used. The SAME
+ *  matrix is then block-averaged between boundaries and greedily clustered (structure.ts's
+ *  labelSegments) so a REPEATED section reuses its first letter — the rekordbox-style A/B/C/D
+ *  labelling. Returns boundary times (s), their letters, and a representative bars-per-phrase
+ *  (median segment length) for legacy consumers that jump by a fixed bar count when `phrases` is
+ *  empty (Deck.phraseJump's fallback). Null on a track too short to assert any structure. */
+function detectStructure(
   loudEnv: Float32Array,
+  chroma: Float32Array,
   beatFrames: number[],
   beats: Float32Array,
   downbeat: number,
   beatsPerBar: number,
-): { phrases: Float32Array; phraseBars: number } | null {
+): { phrases: Float32Array; phraseLabels: string[]; phraseBars: number } | null {
   const m = beats.length;
   const bpb = beatsPerBar;
   // Bar start beat indices (downbeats).
   const barStart: number[] = [];
   for (let i = downbeat; i < m; i += bpb) barStart.push(i);
   const numBars = barStart.length;
-  if (numBars < 16) return null; // too short to assert phrase structure
+  if (numBars < 16) return null; // too short to assert section structure
 
-  // Per-bar mean loudness over the bar's frame span.
+  // Per-bar mean loudness AND mean chroma over the bar's frame span — the same bar spans, two
+  // different features, so both novelty curves talk about exactly the same points in time.
   const barEnergy = new Float64Array(numBars);
+  const barChroma: Float32Array[] = [];
   for (let b = 0; b < numBars; b++) {
     const startFrame = beatFrames[barStart[b]];
     const endBeat = b + 1 < numBars ? barStart[b + 1] : Math.min(m - 1, barStart[b] + bpb);
     const endFrame = beatFrames[endBeat];
     let s = 0;
     let c = 0;
+    const chromaVec = new Float32Array(CHROMA_BINS);
     for (let f = startFrame; f < endFrame && f < loudEnv.length; f++) {
       s += loudEnv[f];
       c++;
+      const base = f * CHROMA_BINS;
+      for (let p = 0; p < CHROMA_BINS; p++) chromaVec[p] += chroma[base + p];
     }
     barEnergy[b] = c ? s / c : 0;
+    barChroma.push(l2normalize(chromaVec));
   }
 
-  // Bar-to-bar novelty (absolute change), normalised to its peak.
-  const novelty = new Float64Array(numBars);
-  let mx = 1e-9;
+  // Loudness novelty (bar-to-bar absolute change, normalised to its own peak) — the old
+  // detector's whole signal, kept as one component of the blend (see CHROMA_NOVELTY_WEIGHT).
+  const loudNovelty = new Float32Array(numBars);
+  let loudPeak = 1e-9;
   for (let b = 1; b < numBars; b++) {
-    novelty[b] = Math.abs(barEnergy[b] - barEnergy[b - 1]);
-    if (novelty[b] > mx) mx = novelty[b];
+    loudNovelty[b] = Math.abs(barEnergy[b] - barEnergy[b - 1]);
+    if (loudNovelty[b] > loudPeak) loudPeak = loudNovelty[b];
   }
-  for (let b = 0; b < numBars; b++) novelty[b] /= mx;
+  for (let b = 0; b < numBars; b++) loudNovelty[b] /= loudPeak;
 
-  // Search phrase period + phase. Average boundary novelty (counts differ across
-  // P), nudged by a prior favouring 16-bar phrases (the dance-music default).
-  const priors: Record<number, number> = { 8: 0.9, 16: 1, 32: 0.8 };
-  let best = { score: -Infinity, P: 16, phi: 0 };
-  for (const P of [8, 16, 32]) {
-    if (numBars < P * 1.5) continue; // need a couple of phrases to trust period P
-    for (let phi = 0; phi < P; phi++) {
-      let sum = 0;
-      let cnt = 0;
-      for (let b = phi; b < numBars; b += P) {
-        sum += novelty[b];
-        cnt++;
-      }
-      if (cnt < 2) continue;
-      const score = (sum / cnt) * priors[P];
-      if (score > best.score) best = { score, P, phi };
-    }
+  const ssm = buildSSM(barChroma);
+  const radii = NOVELTY_RADII_BARS.filter((L) => numBars >= 2 * L + 1);
+  const chromaNovelty = radii.length ? multiScaleNovelty(ssm, numBars, radii) : new Float32Array(numBars);
+
+  const combined = new Float32Array(numBars);
+  for (let b = 0; b < numBars; b++) {
+    combined[b] = CHROMA_NOVELTY_WEIGHT * chromaNovelty[b] + (1 - CHROMA_NOVELTY_WEIGHT) * loudNovelty[b];
   }
-  if (best.score <= 0) return null;
 
-  const out: number[] = [];
-  for (let b = best.phi; b < numBars; b += best.P) out.push(beats[barStart[b]]);
-  return { phrases: Float32Array.from(out), phraseBars: best.P };
+  const boundaries = pickBoundaries(combined, numBars, MIN_BOUNDARY_SPACING_BARS);
+  if (boundaries.length < 2) return null; // nothing distinguishable found beyond "the track starts"
+
+  const phraseLabels = labelSegments(ssm, numBars, boundaries);
+  const phrases = Float32Array.from(boundaries.map((b) => beats[barStart[b]]));
+
+  // Representative bars-per-phrase (median segment length) for Deck.phraseJump's fallback jump
+  // when `phrases` runs out — a diagnostic/legacy number now that sections are variable-length,
+  // not the single defining period the old detector produced.
+  const lens = boundaries.slice(1).map((b, i) => b - boundaries[i]);
+  lens.push(numBars - boundaries[boundaries.length - 1]);
+  lens.sort((a, b) => a - b);
+  const phraseBars = lens.length ? lens[lens.length >> 1] : 16;
+
+  return { phrases, phraseLabels, phraseBars };
 }
 
 /** Tempo (BPM) from the onset envelope via prior-weighted autocorrelation. */
@@ -449,7 +512,7 @@ export function detectBeats(buffer: AudioLike): Beatgrid | null {
   const bpm = Math.round((60 / safeInterval) * 100) / 100;
   const beatsPerBar = 4;
   const downbeat = detectDownbeat(onset.lowEnv, frameBeats, beatsPerBar);
-  const phrase = detectPhrases(onset.loudEnv, frameBeats, beats, downbeat, beatsPerBar);
+  const structure = detectStructure(onset.loudEnv, onset.chroma, frameBeats, beats, downbeat, beatsPerBar);
   const bounds = contentBounds(onset.loudEnv, onset.envRate);
   return {
     bpm,
@@ -458,8 +521,9 @@ export function detectBeats(buffer: AudioLike): Beatgrid | null {
     beats,
     downbeat,
     beatsPerBar,
-    phrases: phrase?.phrases,
-    phraseBars: phrase?.phraseBars,
+    phrases: structure?.phrases,
+    phraseLabels: structure?.phraseLabels,
+    phraseBars: structure?.phraseBars,
     firstSound: bounds?.firstSound,
     lastSound: bounds?.lastSound,
   };

@@ -35,10 +35,16 @@ export interface Beatgrid {
   // real bar lines and lets sync align bars, not just beats. Assumes 4/4.
   downbeat?: number;
   beatsPerBar?: number;
-  // Phrase (section) boundaries: times (s) of the downbeats that start an 8/16/32-
-  // bar phrase, with the detected phrase length in bars. Drives phrase markers on
-  // the grid and phrase-jump. Absent on short/structureless tracks.
+  // Section (phrase) boundaries: times (s) of variable-length section starts, found via a
+  // chroma self-similarity matrix + checkerboard novelty (structure.ts) — NOT a fixed 8/16/32-
+  // bar period; sections can be any length, matching how a real track's structure actually
+  // repeats. Drives phrase markers on the grid and phrase-jump. Absent on short/structureless
+  // tracks. `phraseLabels` is the SAME length, parallel array: rekordbox-style repeat-section
+  // letters (A/B/C/D…) — a segment similar enough to an earlier one reuses that letter instead
+  // of minting a new one. `phraseBars` is now a diagnostic (median segment length in bars),
+  // kept only as Deck.phraseJump's fallback jump distance once `phrases` runs out.
   phrases?: Float32Array;
+  phraseLabels?: string[];
   phraseBars?: number;
   // Loudness-trimmed CONTENT bounds (seconds): where real energy starts after a quiet
   // intro and ends before a fade/dead tail — derived from the broadband loudness envelope.
@@ -518,8 +524,12 @@ export const GRID_FORMAT_EPOCH = 1;
  *  upgrades eventually") instead of a messy mix — see the don't-downgrade guard in upsertAnalysis.
  *    1 = Ellis-2007 DP on the plain spectral-flux envelope.
  *    2 = + percussive-emphasis onset front-end (beats.ts percussiveMag): strips sustained/modulated
- *        harmonic wash so the tracker locks the drum backbone cleaner — universal, stem-free. */
-export const ANALYSIS_VERSION = 2;
+ *        harmonic wash so the tracker locks the drum backbone cleaner — universal, stem-free.
+ *    3 = + chroma self-similarity structure detection (structure.ts): section boundaries are now
+ *        VARIABLE-length (a real chroma SSM + checkerboard novelty), replacing the old single
+ *        fixed 8/16/32-bar period comb fit, and repeated sections get a rekordbox-style A/B/C/D
+ *        label (Phase 3 — segment-similarity block clustering off the same SSM). */
+export const ANALYSIS_VERSION = 3;
 
 /** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
  *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —
@@ -535,6 +545,7 @@ export function serializeGrid(g: Beatgrid): string {
     downbeat: g.downbeat,
     beatsPerBar: g.beatsPerBar,
     phrases: g.phrases ? Array.from(g.phrases) : undefined,
+    phraseLabels: g.phraseLabels,
     phraseBars: g.phraseBars,
     firstSound: g.firstSound,
     lastSound: g.lastSound,
@@ -562,6 +573,9 @@ export function deserializeGrid(s: string | null | undefined): Beatgrid | null {
     if (num(o.downbeat) != null) g.downbeat = o.downbeat as number;
     if (num(o.beatsPerBar) != null) g.beatsPerBar = o.beatsPerBar as number;
     if (Array.isArray(o.phrases)) g.phrases = Float32Array.from(o.phrases as number[]);
+    if (Array.isArray(o.phraseLabels) && o.phraseLabels.every((v) => typeof v === "string")) {
+      g.phraseLabels = o.phraseLabels as string[];
+    }
     if (num(o.phraseBars) != null) g.phraseBars = o.phraseBars as number;
     if (num(o.firstSound) != null) g.firstSound = o.firstSound as number;
     if (num(o.lastSound) != null) g.lastSound = o.lastSound as number;

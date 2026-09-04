@@ -840,7 +840,7 @@ export class AudioEngine {
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
   private syncFF = 0; // smoothed rubato feed-forward (master local-tempo dev − slave's); reset with the integral
   private commandedRamp = false; // a Smart Fader throw / AutoMixer transition is actively driving a deck's tempo OFF its grid → suppress the grid-rubato feed-forward (which assumes the master follows its own grid; a commanded ramp doesn't, so the two fought and the pair couldn't settle)
-  private syncFoldFactor: number | null = null; // octave factor (target/masterEff, a power of 2) LOCKED for the duration of a commanded ramp so a masterEff sweep across slaveBpm/√2 can't flip the slave an octave mid-morph (the 87→174 jump); captured on the throw's first matchSlaveTempo, reset at every ramp/align boundary
+  private syncFoldFactor: number | null = null; // octave factor (target/masterEff, a power of 2) LOCKED for the WHOLE sync session (any driver — a commanded ramp OR a plain manual tempo-fader drag) so a masterEff sweep across slaveBpm/√2 can't flip the slave an octave mid-move (the 87→174 jump); captured on the session's first matchSlaveTempo, reset at every engage/re-align/ramp boundary
   // Live phase-lock telemetry (Settings ▸ Debug). `fold` is the grid-beat-frequency ratio
   // slave/master: ~1 = locked; ~2 or ~0.5 = the half/double DENSITY chase (err can never settle).
   // `saturated` = the requested trim exceeded the ±clamp (rubato the loop can't follow).
@@ -1006,19 +1006,22 @@ export class AudioEngine {
     const sg = slave.beatgrid;
     const mg = master.beatgrid;
     if (!sg || !mg) return;
-    // Fold the master's BPM into the slave's tempo octave. During a COMMANDED ramp (Smart Fader
-    // throw / auto-mix glide) the master's tempo is being morphed across up to a √2 span; re-folding
-    // fresh each step flips the fold an octave the instant masterEff crosses slaveBpm/√2 — that's the
-    // mid-throw "jumps up" (target 174→348 / 87→174), the slave's tempo doubling in one step. So the
-    // octave factor is captured on the throw's FIRST step and held for its duration (syncFoldFactor),
-    // making the slave sweep continuously with the master (still an exact octave apart → phase holds).
-    // Off a ramp it folds fresh each call. slaveFoldTarget returns null on a degenerate 0/NaN grid
-    // (the raw while-loop here used to hang the thread).
+    // Fold the master's BPM into the slave's tempo octave. Re-folding fresh on every call flips the
+    // fold an octave the instant masterEff crosses slaveBpm/√2 — that's the "jumps up" bug (target
+    // 174→348 / 87→174, the slave's tempo doubling in one step). This was originally only guarded
+    // during a COMMANDED ramp (Smart Fader / auto-mix), but the same crossing can happen from a
+    // perfectly ordinary manual tempo-fader drag on the master while SYNC is engaged — nothing about
+    // a plain drag makes it immune to walking across the boundary, and un-gated it hit the exact same
+    // octave-jump discontinuity (reported as "desync when a tempo shift is at play"). So the octave
+    // factor is now held for the WHOLE sync session, not just a ramp: captured on the first
+    // matchSlaveTempo after each engage/re-align/ramp-boundary (syncFoldFactor reset to null there)
+    // and reused after, so the slave sweeps continuously with the master (still an exact octave apart
+    // → phase holds) regardless of what's driving the master's tempo. slaveFoldTarget returns null on
+    // a degenerate 0/NaN grid (the raw while-loop here used to hang the thread).
     const masterEff = master.effectiveBpm ?? mg.bpm;
-    const held = this.commandedRamp ? this.syncFoldFactor : null;
-    const fold = slaveFoldTarget(masterEff, sg.bpm, held);
+    const fold = slaveFoldTarget(masterEff, sg.bpm, this.syncFoldFactor);
     if (fold == null) return;
-    if (this.commandedRamp) this.syncFoldFactor = fold.factor; // lock the octave for the rest of the throw
+    this.syncFoldFactor = fold.factor; // lock/refresh the held octave for the rest of the session
     const target = fold.target;
     const slavePct = (target / sg.bpm - 1) * 100;
     trace("sync.match", { slave: sid, mEff: +masterEff.toFixed(1), sBpm: +sg.bpm.toFixed(1), fold: +target.toFixed(1), fac: +fold.factor.toFixed(3), sPct: +slavePct.toFixed(2), cmd: this.commandedRamp });

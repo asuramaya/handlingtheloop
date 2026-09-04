@@ -644,6 +644,7 @@ describe("grid codec (serialize/deserialize)", () => {
     downbeat: 0,
     beatsPerBar: 4,
     phrases: new Float32Array([0.123, 30.5]),
+    phraseLabels: ["A", "B"],
     phraseBars: 16,
     firstSound: 0.1,
     lastSound: 200.4,
@@ -659,9 +660,24 @@ describe("grid codec (serialize/deserialize)", () => {
     expect(g.downbeat).toBe(0);
     expect(g.beatsPerBar).toBe(4);
     expect(g.phrases).toBeInstanceOf(Float32Array);
+    expect(g.phraseLabels).toEqual(["A", "B"]);
     expect(g.phraseBars).toBe(16);
     expect(g.firstSound).toBeCloseTo(0.1, 6);
     expect(g.lastSound).toBeCloseTo(200.4, 4);
+  });
+
+  it("round-trips a grid with no phraseLabels (older-format cache entry, field stays absent)", () => {
+    const noLabels: Beatgrid = { ...full, phraseLabels: undefined };
+    const g = deserializeGrid(serializeGrid(noLabels))!;
+    expect(g.phrases).toBeInstanceOf(Float32Array);
+    expect(g.phraseLabels).toBeUndefined();
+  });
+
+  it("ignores a malformed phraseLabels (not an array of strings) rather than trusting it", () => {
+    const raw = JSON.parse(serializeGrid(full));
+    raw.phraseLabels = [1, 2]; // corrupt: numbers, not letters
+    const g = deserializeGrid(JSON.stringify(raw))!;
+    expect(g.phraseLabels).toBeUndefined();
   });
 
   it("round-trips a uniform grid with no beats[]/phrases (optional fields stay absent)", () => {

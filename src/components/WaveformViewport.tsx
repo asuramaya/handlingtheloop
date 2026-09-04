@@ -934,7 +934,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
       //   • SUB  — faint, the sub-beat snap divisions (only when gridSize < 1). These were
       //            missing before: the loop only walked whole beats, so anything finer
       //            than a beat never drew at all.
-      const gs = p.gridSize;
+      // gridSize is the JOG-SKIP grid (⊞ control) — a setting completely independent of the
+      // active LOOP's length. Loops go down to 1/16 beat, but skipBeats can sit anywhere
+      // (1 beat by default) regardless of what loop is running, so a 1/16 loop zoomed in had
+      // no sub-beat line anywhere near fine enough to sit ON — the loop's own IN/OUT bars are
+      // exact, but the grid around them stayed coarse, reading as a ghost/mismatched grid at
+      // deep zoom. Floor the effective resolution to the loop's own length when it's finer than
+      // the skip-grid, so the sub-lines always resolve down to whatever loop is actually running.
+      const gs = loop?.active && loop.beats > 0 ? Math.min(p.gridSize, loop.beats) : p.gridSize;
       const subs = gs < 1 ? Math.max(2, Math.round(1 / gs)) : 1; // divisions per beat
       const pxPerBar = pxPerBeat * beatsPerBar;
       // Adaptive bar LOD: coarsen the bold grid 1→2→4→8→16→32… BARS as you zoom out,

@@ -307,10 +307,17 @@ class Stretch extends AudioWorkletProcessor {
   }
   // Produce one grain: search, overlap-add (stem-mixed), emit HS samples to FIFO.
   grain(Ha) {
-    // loop wrap on the clock + continuation reference
-    if (this.loopActive && this.loopEnd > this.loopStart && this.idealPos >= this.loopEnd) {
+    // loop wrap on the clock + continuation reference. A WHILE, not an IF: a loop shorter
+    // than one grain's advance (Ha) — an almost-zero-length loop — needs MULTIPLE wraps to
+    // land back inside [loopStart, loopEnd); a single subtraction still left idealPos past
+    // loopEnd, so it kept accumulating past the loop every grain and escaped into real track
+    // audio beyond the loop (or ran off the end of the track) — the "ghost playback where
+    // audio resumes instead of shortening to 0" bug on a near-zero-length loop.
+    if (this.loopActive && this.loopEnd > this.loopStart) {
       const len = this.loopEnd - this.loopStart;
-      this.idealPos -= len; this.naturalNext -= len; this.refreshTarget();
+      let total = 0;
+      while (this.idealPos - total >= this.loopEnd) total += len;
+      if (total > 0) { this.idealPos -= total; this.naturalNext -= total; this.refreshTarget(); }
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
 
@@ -518,9 +525,12 @@ class Stretch extends AudioWorkletProcessor {
   // One PV synthesis frame: emit Rs stretched samples to the FIFO, advance the
   // drift-free clock by Ra (= Rs·speed/pitch). Mirrors grain() in the transport.
   pvFrame(Ra) {
+    // WHILE, not IF — see grain()'s identical comment: a loop shorter than one PV frame's
+    // advance (Ra) needs multiple wraps to land back inside the loop.
     if (this.loopActive && this.loopEnd > this.loopStart && this.idealPos >= this.loopEnd) {
       const len = this.loopEnd - this.loopStart;
-      this.idealPos -= len; this.pvInit = false; // phase-reset across the loop seam
+      while (this.idealPos >= this.loopEnd) this.idealPos -= len;
+      this.pvInit = false; // phase-reset across the loop seam
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
     const N = this.pvN, Rs = this.Rs, bins = (N >> 1) + 1;

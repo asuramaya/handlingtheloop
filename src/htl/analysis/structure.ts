@@ -181,24 +181,34 @@ export function labelSegments(ssm: Float32Array, n: number, boundaries: number[]
     }
   }
 
-  // Adaptive match threshold from this track's own NON-ADJACENT segment-pair similarities.
-  // Picked from the DEDUPED, rounded distribution rather than the raw percentile rank: a
-  // percentile of the raw array can land EXACTLY on one of the very values being compared
-  // against it (a real repeat pair's own score, or — with zero real structure — every pair
-  // tied at the same baseline), so a straight `>=`/`>` against that exact value is a coin
-  // flip on floating-point jitter either way. Rounding to dedupe near-ties, then splitting the
-  // gap BETWEEN two distinct clusters of values, gives a threshold that actually sits between
-  // "these are the same section" and "these aren't" instead of on top of one of them. Only one
-  // distinct value in the whole pool (everything's equally similar — no discriminating signal
-  // at all, degenerate but includes the literal "no repeats" case) → threshold stays Infinity,
-  // i.e. never merge: with nothing to tell a real repeat apart from coincidence, don't guess.
+  // Adaptive match threshold from this track's own NON-ADJACENT segment-pair similarities,
+  // floored by an ABSOLUTE match bar. Picked from the DEDUPED, rounded distribution rather than
+  // the raw percentile rank: a percentile of the raw array can land EXACTLY on one of the very
+  // values being compared against it (a real repeat pair's own score, or — with zero real
+  // structure — every pair tied at the same baseline), so a straight `>=`/`>` against that exact
+  // value is a coin flip on floating-point jitter either way. Rounding to dedupe near-ties, then
+  // splitting the gap BETWEEN two distinct clusters of values, gives a threshold that actually
+  // sits between "these are the same section" and "these aren't" instead of on top of one of
+  // them — but that only works when there are ENOUGH non-adjacent pairs to form a real
+  // distribution. A short track (segs=3 has exactly ONE non-adjacent pair: 0-vs-2) has nothing
+  // to build a percentile FROM — `uniq.length` is 0 or 1 either way, whether that lone pair is a
+  // perfect match or a total mismatch, so a percentile-only threshold can't tell those apart and
+  // (confirmed via a real A-B-A synthetic track: boundaries landed exactly right, but the third
+  // segment came back a fresh "C" instead of reusing "A" despite scoring a PERFECT 1.0 against
+  // it) defaulting to "never merge" there is a straight false negative, not caution. The absolute
+  // floor is what actually judges a lone pair (or any pair, even in a rich distribution): a
+  // cosine similarity this high on real musical chroma IS the same section on its own merits,
+  // full stop, regardless of how many other segments exist to rank it against. The adaptive
+  // percentile still applies its own (potentially higher/stricter) bar on top when there's
+  // enough data to trust one — Math.max keeps whichever is more conservative.
+  const ABSOLUTE_MATCH_FLOOR = 0.75;
   const vals: number[] = [];
   for (let i = 0; i < segs; i++) for (let j = i + 2; j < segs; j++) vals.push(segSim[i * segs + j]);
   const uniq = Array.from(new Set(vals.map((v) => Math.round(v * 1e4) / 1e4))).sort((a, b) => a - b);
-  let thresh = Infinity;
+  let thresh = ABSOLUTE_MATCH_FLOOR;
   if (uniq.length > 1) {
     const idx = Math.max(1, Math.floor(uniq.length * 0.75));
-    thresh = (uniq[idx - 1] + uniq[idx]) / 2;
+    thresh = Math.max(thresh, (uniq[idx - 1] + uniq[idx]) / 2);
   }
 
   const clusterRep: number[] = []; // first-occurrence segment index of each cluster, index = letter

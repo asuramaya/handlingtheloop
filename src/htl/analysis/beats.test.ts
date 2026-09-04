@@ -96,4 +96,66 @@ describe("detectBeats — structure detection integration (real FFT→chroma pat
     const grid = detectBeats(buffer);
     expect(grid).not.toBeNull();
   }, 20000);
+
+  // ABA: a NON-adjacent repeat, the case labelSegments exists for. If A reappears after B, the
+  // repeat-back-to-the-intro's-chord pattern real tracks actually use, it should reuse A's
+  // letter — not a fresh one — end to end through the real FFT→chroma path, not just the pure
+  // structure.ts unit test's hand-built vectors.
+  it("labels a real A-B-A chord pattern with the third section reusing A's letter", () => {
+    const bpm = 132;
+    const beatsPerBar = 4;
+    const beatSec = 60 / bpm;
+    const barSec = beatsPerBar * beatSec;
+    const barsPerSection = 20;
+    const sr = 44100;
+    const chordA = [246, 310, 369]; // B minor-ish
+    const chordB = [196, 233, 294]; // G-ish
+    const totalBars = barsPerSection * 3;
+    const durSec = totalBars * beatsPerBar * beatSec + 1;
+    const n = Math.floor(durSec * sr);
+    const data = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      const bar = Math.floor(t / barSec);
+      const section = Math.floor(bar / barsPerSection) % 3; // 0=A,1=B,2=A again
+      const freqs = section === 1 ? chordB : chordA;
+      let tone = 0;
+      for (const f of freqs) tone += Math.sin(2 * Math.PI * f * t);
+      data[i] = (tone * 0.15) / freqs.length;
+    }
+    const clickLen = Math.floor(sr * 0.02);
+    for (let beatIdx = 0; beatIdx * beatSec < durSec; beatIdx++) {
+      const start = Math.floor(beatIdx * beatSec * sr);
+      for (let k = 0; k < clickLen && start + k < n; k++) {
+        const env = Math.exp(-k / (sr * 0.004));
+        data[start + k] += env * 0.6 * Math.sin(2 * Math.PI * 2200 * (k / sr));
+        data[start + k] += env * 0.4 * Math.sin(2 * Math.PI * 3700 * (k / sr));
+      }
+    }
+    const buffer: AudioLike = { sampleRate: sr, length: n, numberOfChannels: 1, getChannelData: () => data };
+
+    const grid = detectBeats(buffer);
+    expect(grid).not.toBeNull();
+    if (!grid || !grid.phrases || !grid.phraseLabels) return;
+    // At minimum, the first and last detected boundary segment should carry the SAME letter —
+    // the whole point of Phase 3. (A middle boundary or two either side of the true section
+    // seams is tolerated; exact bar-accuracy isn't what this test is checking.)
+    if (grid.phraseLabels.length >= 2) {
+      expect(grid.phraseLabels[0]).toBe(grid.phraseLabels[grid.phraseLabels.length - 1]);
+    }
+  }, 20000);
+
+  it("doesn't crash and stays within the letter cap on a dense many-near-identical-loop track", () => {
+    // A techno-style stress case: 12 short, nearly-identical 4-bar loops back to back — the
+    // scenario labelSegments' maxLetters guard exists for (a long, extremely repetitive track
+    // must not spawn a fresh letter per loop, and must not hang building the SSM/novelty).
+    const bpm = 140;
+    const beatsPerBar = 4;
+    const bars = 12 * 4;
+    const buffer = synthTrack({ bpm, beatsPerBar, barsA: bars, barsB: 0, freqsA: [110, 165, 220], freqsB: [110, 165, 220] });
+    const grid = detectBeats(buffer);
+    expect(grid).not.toBeNull();
+    if (!grid || !grid.phraseLabels) return;
+    expect(new Set(grid.phraseLabels).size).toBeLessThanOrEqual(8);
+  }, 20000);
 });

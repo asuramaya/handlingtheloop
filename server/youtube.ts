@@ -317,15 +317,32 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
   return { http: res.status, body: parsed };
 }
 
-// Priority order for the anonymous streaming path: try VISIONOS first (current
-// best client — see the big comment above VISIONOS_VERSION), fall through to
-// ANDROID_VR if it ever stops resolving outright. Does NOT protect against the
-// specific "resolves fine but the byte-range fetch is walled anyway" failure
-// ANDROID_VR has RIGHT NOW (that needs a genuinely different client, not a retry
-// on the same one) — but it does mean a future VISIONOS lockdown degrades to a
-// slower client instead of breaking outright, and costs nothing when VISIONOS
-// (the common case) just works.
-const CLIENT_CASCADE: PlayerClient[] = [CLIENTS.VISIONOS, CLIENTS.ANDROID_VR];
+// Client order for the anonymous streaming path. ONE ENTRY, and that is the honest state of
+// things rather than an omission.
+//
+// ★ ANDROID_VR WAS REMOVED FROM HERE (2026-09-05) BECAUSE IT WAS NOT A FALLBACK. This list used
+// to read [VISIONOS, ANDROID_VR] under a comment promising that "a future VISIONOS lockdown
+// degrades to a slower client instead of breaking outright" — which the big comment above
+// VISIONOS_VERSION, in this same file, already contradicted: since 2026-08-17 ANDROID_VR 403s
+// EVERY format past ~1.1 MB, confirmed by direct range-probing and corroborated by yt-dlp's own
+// client table. Falling through to it does not degrade anything; it resolves a URL that then
+// refuses to serve bytes, so the only thing the second rung bought was a slower path to the same
+// failure and a comment that told the next reader they were covered when they were not.
+//
+// So the retry budget now goes entirely to VISIONOS with a rotated visitorData each attempt,
+// which is the part that actually recovers anything (a burned token, not a burned client).
+//
+// ★ AND THERE IS CURRENTLY NO SECOND CLIENT TO ADD. xxit needs a client that is BOTH
+// `REQUIRE_JS_PLAYER: False` (formats carry direct, non-ciphered URLs — we never download or
+// parse base.js) AND free of a `GVS_PO_TOKEN_POLICY`. Against yt-dlp master those sets are:
+//     REQUIRE_JS_PLAYER: False  →  android, android_vr, ios, visionos
+//     no GVS_PO_TOKEN_POLICY    →  visionos, tv, tv_downgraded, web_embedded
+// VISIONOS is the only member of both — the last unwalled JS-free client in the table. When it
+// goes, the answer is not another entry in this array: it is a real PO-token provider (already
+// known NOT to unlock ANDROID_VR, which likely wants Play Integrity hardware attestation) or
+// accepting a signature-cipher path. Both are architectural. Tracked as osiris thread 6c430b35,
+// which watches yt-dlp's visionos entry for a GVS_PO_TOKEN_POLICY appearing as the early warning.
+const CLIENT_CASCADE: PlayerClient[] = [CLIENTS.VISIONOS];
 
 // Thin wrapper preserving the original throw-on-error contract used by the
 // anonymous path.
@@ -354,9 +371,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // rides out the bursts). So retry generously with jittered backoff. The latency cost is
 // paid only on the rare fully-walled video; most resolve on attempt 0-1.
 //
-// Attempts are also split across CLIENT_CASCADE (most of them on the primary client,
-// the tail on the fallback) — so a future primary-client lockdown degrades to trying
-// the fallback instead of exhausting all attempts on a client that's stopped resolving.
+// Attempts are split across CLIENT_CASCADE (most on the primary, the tail on whatever follows).
+// That list is a single client today — see the note above it — so in practice every attempt goes
+// to VISIONOS with a freshly rotated visitorData, which is the part that actually recovers a
+// walled attempt. The split is kept because it costs nothing and is the seam a second client
+// would slot into if one ever becomes available again.
 async function playerWithRetry(videoId: string, attempts = 6, auth?: YtAuth, fx: Fetcher = directFetch): Promise<PlayerResponse> {
   let lastErr: unknown;
   const perClient = Math.ceil(attempts / CLIENT_CASCADE.length);

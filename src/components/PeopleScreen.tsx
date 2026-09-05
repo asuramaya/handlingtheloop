@@ -9,8 +9,8 @@ import {
   paneOf,
   viewForPane,
 } from "@htl/account";
-import { CenterResizeHandles, DockPlacementResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
-import type { DockMode, PanelKey } from "@htl";
+import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
+import type { PanelKey, PanelPlacement } from "@htl";
 import { DiscoverScreen } from "./DiscoverScreen";
 import { ProfileScreen } from "./ProfileScreen";
 import { ActivityFeed } from "./social/ActivityFeed";
@@ -91,7 +91,7 @@ export function PeopleScreen({
   live?: boolean;
   listeners?: number;
   onGoToSession?: () => void;
-  dockMode?: DockMode; // desktop placement (Settings ▸ Controls); mobile ignores this and stays full-screen
+  dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
   panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
 }) {
   const [seenOnce, setSeenOnce] = useState(false);
@@ -157,7 +157,7 @@ export function PeopleScreen({
   const faces: { key: PeoplePane; label: string }[] = tab === "explore" ? EXPLORE_FACES : YOU_FACES;
   // Conditionally mounted by App (only exists while open) — mount itself IS "just opened".
   const centerZ = useCenterZIndex(dockMode, true);
-  const zIndex = dockMode === "center" ? centerZ : edgeZIndex("people", panelOrder);
+  const zIndex = panelZIndex(dockMode, "people", panelOrder, centerZ);
 
   return (
     <div className={`modal-backdrop dock-${dockMode}`} style={{ zIndex }} onPointerDown={onClose}>

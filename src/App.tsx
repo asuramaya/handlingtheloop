@@ -10,6 +10,7 @@ import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
@@ -70,7 +71,9 @@ import {
   PITCH_RANGES,
   nextSkip,
   type Settings,
-  type DockMode,
+  useOnePanel,
+  placementsFor,
+  panelsToClose,
   type PanelKey,
   type DeckSnapshot,
   type SessionSnapshot,
@@ -588,47 +591,54 @@ function AppBody() {
       /* ignore */
     }
   }, [libOpen]);
-  // Chin launchers. Each of Library/Settings/People/Session floats independently now
-  // (Settings ▸ Controls ▸ Panel placement) — left/right/bottom coexist fine even when two
-  // share an edge (edgeZIndex/panelOrder already resolve which one's on top; that's supported
-  // stacking, not a bug). "center" is the one placement that's ALWAYS a full-viewport modal —
-  // two of those open together would just double up (dim-over-dim, one hiding the other), so
-  // it's the one case that stays genuinely exclusive: opening a panel in "center" closes
-  // whichever OTHER panel currently holds the center slot. On a phone every panel is
-  // full-screen regardless of its desktop dockMode setting, so phones keep their own
-  // unconditional exclusivity below, same as before.
-  const onPhone = () => window.matchMedia("(max-width: 768px)").matches;
-  const closeRightDock = () => {
-    setSocialOpen(false);
-    setProfileOpen(false);
-    setSettingsOpen(false);
-    setDiscoverOpen(false);
-  };
-  const CENTER_PANEL_CLOSERS: Record<PanelKey, () => void> = {
+  // Chin launchers. On a DESKTOP each of Library/Settings/People/Session floats independently
+  // (Settings ▸ Controls ▸ Panel placement): left/right/bottom coexist fine even when two share
+  // an edge, since panelOrder already resolves who is on top — that is supported stacking, not
+  // a collision. "center" is the exception that evicts other centers, because two full-viewport
+  // modals are just dim-over-dim with one hiding the other.
+  //
+  // ★ A PHONE IS NOT A SMALL DESKTOP. It has ONE slot, every panel fills it, and none of the
+  // desktop liberties — placement, stack order, resize, backdrop dim — mean anything there.
+  // That is not expressed as "the same system, with mobile overrides"; it is a fifth placement
+  // ("sheet") that every configuration resolves to, decided ONCE below.
+  // ★ ONE READ OF THE DEVICE, ONE RESOLVED PLACEMENT PER PANEL, THREADED DOWN.
+  //
+  // This used to be four inline `window.matchMedia("(max-width: 768px)")` calls and four
+  // hand-written lists of which panels to close — "is this a phone" answered four times, and
+  // "what does opening this evict" answered four times, each list written separately and each
+  // one a place to forget the panel added most recently. (`closeRightDock` was still closing a
+  // "discover" dock that had stopped existing.) Now the device is read once, the four
+  // placements are derived from it, and the eviction rule is a pure function with a suite.
+  const onePanel = useOnePanel();
+  // The chin's real height, published as --chin-h for the phone sheet to start below. Measured,
+  // not assumed — see useChinHeight for what the assumed 36px was actually costing.
+  const [chinEl, setChinEl] = useState<HTMLElement | null>(null);
+  useChinHeight(chinEl);
+  const placements = placementsFor(
+    {
+      library: settings.libraryDock,
+      settings: settings.settingsDock,
+      people: settings.peopleDock,
+      session: settings.sessionDock,
+    },
+    onePanel,
+  );
+  const PANEL_CLOSERS: Record<PanelKey, () => void> = {
     library: () => setLibOpen(false),
     settings: () => setSettingsOpen(false),
     people: () => setProfileOpen(false),
     session: () => setSocialOpen(false),
   };
-  const closeOtherCenterPanels = (except: PanelKey) => {
-    const docks: Record<PanelKey, DockMode> = {
-      library: settings.libraryDock,
-      settings: settings.settingsDock,
-      people: settings.peopleDock,
-      session: settings.sessionDock,
-    };
-    (Object.keys(CENTER_PANEL_CLOSERS) as PanelKey[]).forEach((key) => {
-      if (key !== except && docks[key] === "center") CENTER_PANEL_CLOSERS[key]();
-    });
-  };
+  /** Everything a panel's own placement says it evicts. On a phone that is every other panel —
+   *  there is one slot. On a desktop it is only the other CENTER panels, and edge docks close
+   *  nothing at all. See htl/state/panelPlacement.ts. */
+  const evictFor = (opening: PanelKey) =>
+    panelsToClose(opening, placements).forEach((k) => PANEL_CLOSERS[k]());
   const toggleLib = () => {
     // Functional update so the keyboard (Alt) and chin button never read a stale libOpen.
     setLibOpen((v) => {
       const next = !v;
-      if (next) {
-        if (onPhone()) closeRightDock();
-        else if (settings.libraryDock === "center") closeOtherCenterPanels("library");
-      }
+      if (next) evictFor("library");
       return next;
     });
   };
@@ -636,16 +646,7 @@ function AppBody() {
   const toggleSocial = () => {
     setSocialOpen((v) => {
       const next = !v;
-      if (next) {
-        if (onPhone()) {
-          setProfileOpen(false);
-          setSettingsOpen(false);
-          setDiscoverOpen(false);
-          setLibOpen(false);
-        } else if (settings.sessionDock === "center") {
-          closeOtherCenterPanels("session");
-        }
-      }
+      if (next) evictFor("session");
       return next;
     });
   };
@@ -654,13 +655,7 @@ function AppBody() {
   const openPeople = (pane: PeoplePane) => {
     patchPeopleView(viewForPane(pane));
     setProfileOpen(true);
-    if (onPhone()) {
-      setSocialOpen(false);
-      setSettingsOpen(false);
-      setLibOpen(false);
-    } else if (settings.peopleDock === "center") {
-      closeOtherCenterPanels("people");
-    }
+    evictFor("people");
   };
   // Compatibility shim for the callers that used to open/close a standalone Discover dock — a
   // deep-link handler, a room hand-off, an invite accept. Every one of them means "show Discover"
@@ -671,28 +666,13 @@ function AppBody() {
     // ★ REOPEN WHERE YOU LEFT. This used to hardcode `openPeople("profile")`, so although the tab was
     // remembered, every press of the chin button overwrote it — you could never come back to the
     // list you were reading.
-    if (onPhone()) {
-      setSocialOpen(false);
-      setSettingsOpen(false);
-      setLibOpen(false);
-    } else if (settings.peopleDock === "center") {
-      closeOtherCenterPanels("people");
-    }
+    evictFor("people");
     setProfileOpen(true);
   };
   const toggleSettings = () => {
     setSettingsOpen((v) => {
       const next = !v;
-      if (next) {
-        if (onPhone()) {
-          setSocialOpen(false);
-          setProfileOpen(false);
-          setDiscoverOpen(false);
-          setLibOpen(false);
-        } else if (settings.settingsDock === "center") {
-          closeOtherCenterPanels("settings");
-        }
-      }
+      if (next) evictFor("settings");
       return next;
     });
   };
@@ -3437,7 +3417,7 @@ function AppBody() {
           overlap the board. No more ⇄ swap button — each floating dock (Library/
           Settings/Profile/Session) picks its own edge independently now instead of one
           global left↔right flip; Library's is in Settings ▸ Controls ▸ Library placement. */}
-      <nav className="chin">
+      <nav className="chin" ref={setChinEl}>
         <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
           <span className="chin-label">Library</span>
         </button>
@@ -3726,7 +3706,7 @@ function AppBody() {
         deckColors={ACCENT}
         open={libOpen}
         onOpenChange={setLibOpen}
-        dockMode={settings.libraryDock}
+        dockMode={placements.library}
         panelOrder={settings.panelOrder}
         auto={{
           status: autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus,
@@ -3750,6 +3730,8 @@ function AppBody() {
           under the chin (no floating pane). */}
       {settingsOpen && (
         <SettingsPanel
+          dockMode={placements.settings}
+          onePanel={onePanel}
           settings={settings}
           onChange={setSettings}
           onClose={() => setSettingsOpen(false)}
@@ -3789,7 +3771,7 @@ function AppBody() {
           onClose={() => setSocialOpen(false)}
           onActivate={() => engine.unlock()}
           onQueueRequest={queueRequest}
-          dockMode={settings.sessionDock}
+          dockMode={placements.session}
           panelOrder={settings.panelOrder}
         />
       )}
@@ -3798,7 +3780,7 @@ function AppBody() {
           view={peopleView}
           setView={patchPeopleView}
           onClose={() => setProfileOpen(false)}
-          dockMode={settings.peopleDock}
+          dockMode={placements.people}
           panelOrder={settings.panelOrder}
           self={room.user?.handle ?? null}
           tunedTo={room.listeningTo}

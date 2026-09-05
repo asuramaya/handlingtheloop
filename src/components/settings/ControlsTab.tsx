@@ -92,7 +92,17 @@ function PlacementRow({
   );
 }
 
-export function ControlsTab({ settings, set }: { settings: Settings; set: (patch: Partial<Settings>) => void }) {
+export function ControlsTab({
+  settings,
+  set,
+  onePanel = false,
+}: {
+  settings: Settings;
+  set: (patch: Partial<Settings>) => void;
+  /** This viewport has ONE panel slot (see htl/state/usePhone ▸ ONE_PANEL_QUERY). The panel
+   *  placement controls are hidden rather than shown-and-inert — see the block below. */
+  onePanel?: boolean;
+}) {
   return (
     <>
       <div className="settings-section">
@@ -252,24 +262,40 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
           one Color, MIDI and Audio use, which is the point: a keymap and a colour theme are the
           same KIND of thing, and three tabs each drawing their own save bar said they were not. */}
 
-      {/* Desktop only: where each floating panel sits. Every option is an overlay — none of
-          them push or resize the board, unlike the old single left/right docks (which used to
-          squeeze the stage, flipped by a chin ⇄ button that's gone now that each panel picks
-          its own placement here instead of one global swap). Left/Right are resizable-width
-          edge docks; Bottom is a resizable-height sheet across the full width (Library only
-          really wants this — the pick for reading a wide track table over the deck-controls
-          strip — but it's available to Settings/People too, for whoever prefers it). Center is
-          a plain centered modal, sized to content. Mobile always renders full-screen, so none
-          of this has a mobile effect. */}
+      {/* Where each floating panel sits. Every option is an overlay — none of them push or
+          resize the board, unlike the old single left/right docks (which used to squeeze the
+          stage, flipped by a chin ⇄ button that's gone now that each panel picks its own
+          placement here instead of one global swap). Left/Right are resizable-width edge docks;
+          Bottom is a resizable-height sheet across the full width (Library really wants this —
+          the pick for reading a wide track table over the deck-controls strip — but it's
+          available to the others too). Center is a plain centered modal, sized to content.
+
+          ★ AND ON A PHONE IT IS NOT SHOWN AT ALL, because there is nothing here it could mean.
+          A phone has one panel slot; every panel fills it; placement, stack order and dim are
+          all answers to questions that only exist when two panels can be on screen at once.
+          The old copy handled this by writing "Desktop only" in the label and rendering the
+          full working control anyway — four live segmented pickers, a stack order you could
+          reorder, and a dim slider, all of which appeared to do something and did nothing. A
+          control that is present but inert teaches people to stop trusting the panel it's in.
+          A sentence saying why is smaller AND more honest than a control that lies. */}
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">Panel placement</span>
           <InfoDot
-            text="Desktop only. Every option floats over the board rather than squeezing it. Left/Right: a resizable-width dock pinned to that edge. Bottom: a resizable-height sheet across the full width, over the deck controls. Center: a plain centered window, sized to content. The ▲▼ on each row sets the STACK order for when two panels share an edge — the top row always renders above the ones below it. Center panels ignore that order: whichever one you opened most recently is on top, like any other stack of modals."
+            text="Every option floats over the board rather than squeezing it. Left/Right: a resizable-width dock pinned to that edge. Bottom: a resizable-height sheet across the full width, over the deck controls. Center: a plain centered window, sized to content. The ▲▼ on each row sets the STACK order for when two panels share an edge — the top row always renders above the ones below it. Center panels ignore that order: whichever one you opened most recently is on top, like any other stack of modals."
             label="Panel placement"
           />
         </div>
-        {settings.panelOrder.map((key, i) => (
+        {onePanel && (
+          <p className="settings-hint">
+            This screen shows one panel at a time, full-screen — Library, Settings, People and
+            Session each take the whole view and the chin switches between them. Placement,
+            stack order and dimming are desktop settings; open Handling The Loop on a larger
+            screen to change them. A tablet counts as a larger screen.
+          </p>
+        )}
+        {!onePanel &&
+          settings.panelOrder.map((key, i) => (
           <PlacementRow
             key={key}
             label={PANEL_LABEL[key]}
@@ -294,14 +320,16 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
                 : undefined
             }
           />
-        ))}
-        <Slider
-          label="Dimming"
-          hint={`${Math.round(settings.panelDim * 100)}%`}
-          value={settings.panelDim}
-          onChange={(v) => set({ panelDim: v })}
-          info="How much the backdrop dims (and blurs) behind a Center-placed panel — the two are tied to one control, so 0% is genuinely no effect rather than just no colour tint. Also applies to every panel on mobile, which is always this centered treatment. Doesn't affect Left/Right/Bottom docks — there's nothing exposed behind their footprint to dim."
-        />
+          ))}
+        {!onePanel && (
+          <Slider
+            label="Dimming"
+            hint={`${Math.round(settings.panelDim * 100)}%`}
+            value={settings.panelDim}
+            onChange={(v) => set({ panelDim: v })}
+            info="How much the backdrop dims (and blurs) behind a Center-placed panel — the two are tied to one control, so 0% is genuinely no effect rather than just no colour tint. Doesn't affect Left/Right/Bottom docks (there's nothing exposed behind their footprint to dim), and doesn't affect a phone either: a full-screen panel IS the screen, so it is opaque rather than dimmed by however much you set here."
+          />
+        )}
       </div>
 
       {/* THE key map, and now the only one. The chin's "?" button opened a modal whose whole

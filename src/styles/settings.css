@@ -31,43 +31,55 @@
   pointer-events: none;
   transition: opacity 0.12s ease-out;
 }
-/* MOBILE: keep the top chin (Library / Search / Settings launchers) in the
-   FOREGROUND when a panel is open — float it above the backdrop and start the dim
-   below it, so the header is always visible + tappable (switch panels without
-   closing). The 36px chin height is stable across phone widths. Desktop docks share
-   the row in-flow (min-width:769 above), so this only affects the mobile modals. */
-@media (max-width: 768px) {
-  .chin {
-    position: relative;
-    z-index: 60; /* above the modal backdrop (50) */
-  }
-  .modal-backdrop {
-    top: 36px; /* clear the chin so it isn't covered/dimmed */
-  }
-  /* Library + Search on a phone are no longer floating centered cards — they fill the
-     WHOLE screen below the chin (like the desktop docks, just full-width instead of a
-     slice). No dim, no rounded card: a real screen you switch between via the chin. */
-  .modal-backdrop.dock-left,
-  .modal-backdrop.dock-right {
-    inset: 36px 0 0 0;
-    padding: 0;
-    background: var(--bg);
-    backdrop-filter: none;
-    align-items: stretch;
-    justify-content: stretch;
-  }
-  .modal-backdrop.dock-left > .panel,
-  .modal-backdrop.dock-right > .panel {
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    border: none;
-    border-radius: 0;
-    box-shadow: none;
-  }
-  /* The close ✕ is redundant (the chin button toggles the screen), but harmless; the
-     ☰ hamburger gives the sidebar back when you need it. */
+/* ============================ THE PHONE SHEET ============================ */
+/* ★ NO MEDIA QUERY, ON PURPOSE — THIS IS THE FIX, NOT AN OVERSIGHT.
+ *
+ * This block used to be `@media (max-width: 768px)`, and it only ever named `.dock-left` and
+ * `.dock-right`. So the stylesheet was deciding, on its own, both WHEN the phone treatment
+ * applies and WHICH placements get it — while App.tsx was separately running its own
+ * matchMedia to decide exclusivity. Two answers to one question, and they disagreed on both
+ * halves: a panel configured "center" or "bottom" got phone exclusivity from the JS and the
+ * generic floating-card look from the CSS. Three of the four panels default to "center", so
+ * for most users this was the normal case, not an edge case: a 16px-padded card floating over
+ * a live board, dimmed by --panel-dim (which is 0 for anyone who turned it off).
+ *
+ * Now JS resolves the placement once (htl/state/panelPlacement.ts) and writes `.dock-sheet`.
+ * The class IS the answer. There is no breakpoint here to drift out of step with the one in
+ * the script, because there is no breakpoint here at all. */
+.modal-backdrop.dock-sheet {
+  /* Full-bleed BELOW the chin. The chin is how you switch panels and how you close one, so it
+     is the one thing a sheet must never cover — and because the sheet starts under it rather
+     than being painted over it, no z-index fight is possible either. 36px is the chin height,
+     stable across phone widths. */
+  /* --chin-h is MEASURED from the real element (see useChinHeight); the 36px fallback only
+     covers the frame before the first measurement lands. This used to be a bare `36px`, and the
+     chin is content-sized — 40.8px on the machine this was written on — so the sheet's first
+     ~5px, its panel header, sat under the chin. */
+  inset: var(--chin-h, 36px) 0 0 0;
+  padding: 0;
+  /* Opaque, and NOT --panel-dim. A dim says "the board is still there, behind this". On a phone
+     it is not: the panel is the screen. Honouring the dim setting here would be honouring an
+     answer to a question this device never asks. */
+  background: var(--bg);
+  backdrop-filter: none;
+  align-items: stretch;
+  justify-content: stretch;
+  animation: none; /* a full-screen view switch, not a modal opening over something */
 }
+.modal-backdrop.dock-sheet > .panel {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* (A `@media (max-width: 768px) { .chin { z-index: 60 } }` rule lived here, to float the chin
+   above a panel backdrop. It is deleted rather than ported: `.chin` now carries z-index 5000
+   unconditionally — see its own rule in board.css for the click-landing-on-the-backdrop bug
+   that earned that number — so a mobile-only 60 could only ever LOWER it, back under the very
+   center modals (61 and climbing) it was there to sit above.) */
 @keyframes backdrop-in {
   from {
     opacity: 0;

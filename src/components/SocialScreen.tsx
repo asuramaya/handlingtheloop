@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { heroState, type RoomState } from "@htl/room";
 import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
-import type { DockMode, PanelKey } from "@htl";
+import type { PanelKey, PanelPlacement } from "@htl";
 import { QRCode } from "./QRCode";
-import { CenterResizeHandles, DockPlacementResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
+import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { StageBar } from "./social/StageBar";
 import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
@@ -49,7 +49,7 @@ export function SocialScreen({
   onClose: () => void;
   onActivate?: () => void;
   onQueueRequest?: (text: string, reqId: string) => void; // F1→queue: action a song request onto the auto-mix queue
-  dockMode?: DockMode; // desktop placement (Settings ▸ Controls); mobile ignores this and stays full-screen
+  dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
   panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
 }) {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -128,7 +128,7 @@ export function SocialScreen({
 
   // Conditionally mounted by App (only exists while open) — mount itself IS "just opened".
   const centerZ = useCenterZIndex(dockMode, true);
-  const zIndex = dockMode === "center" ? centerZ : edgeZIndex("session", panelOrder);
+  const zIndex = panelZIndex(dockMode, "session", panelOrder, centerZ);
 
   return (
     <div className={`modal-backdrop dock-${dockMode}`} style={{ zIndex }} onPointerDown={onClose}>

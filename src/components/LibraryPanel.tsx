@@ -9,14 +9,14 @@ import {
   type Me,
   type ServicePlaylist,
 } from "@htl/account";
-import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type DockMode, type MixQueue, type PanelKey } from "@htl";
+import { isMobileDevice, isResizable, type AutoMixStatus, type AutoMixMirror, type MixQueue, type PanelKey, type PanelPlacement } from "@htl";
 import { MixQueuePanel } from "./MixQueuePanel";
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import { Menu } from "./ContextMenu";
 import { ConfirmModal, PromptModal } from "./Dialog";
-import { CenterResizeHandles, DockPlacementResizer, DockResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
+import { CenterResizeHandles, DockPlacementResizer, DockResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { useDragOutside } from "./lib/useDragOutside";
 import { cleanPlaylistName, withCached } from "./lib/libraryUtils";
 import { useCommunityPool } from "./lib/useCommunityPool";
@@ -36,7 +36,7 @@ interface LibraryPanelProps {
   deckColors: { A: string; B: string }; // deck accent colours for the chips
   open?: boolean; // the floating library panel is shown (defaults to visible)
   onOpenChange?: (open: boolean) => void;
-  dockMode?: DockMode; // desktop placement (Settings ▸ Controls); mobile ignores this and stays full-screen
+  dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
   panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
   // Auto-mix (auto-DJ) controls, surfaced in the library header; the queue view
   // takes over the song-list area (like Sync) rather than floating.
@@ -86,7 +86,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   auto,
 }: LibraryPanelProps, ref) {
   const centerZ = useCenterZIndex(dockMode, open);
-  const zIndex = dockMode === "center" ? centerZ : edgeZIndex("library", panelOrder);
+  const zIndex = panelZIndex(dockMode, "library", panelOrder, centerZ);
   // "center" fully covers the board (dimmed backdrop, full viewport) — including the decks
   // you'd be dragging a track ONTO. Fade the panel out and let clicks/drops pass straight
   // through once a track drag actually moves PAST this panel's own edge, so the decks
@@ -817,7 +817,14 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         {importMsg && <div className="lib-import-msg">{importMsg}</div>}
       </aside>
 
-      <DockResizer varName="--lib-side-w" measure="prev" min={150} max={340} rangeVars={["--lib-side-min", "--lib-side-max"]} />
+      {/* The Library's OWN sidebar splitter, which is not the dock handle and so was not covered
+          by DockPlacementResizer returning null for a sheet. Measured inside a rendered sheet it
+          was a 5px-wide, 987px-tall strip sitting in the middle of the screen — an invisible
+          full-height touch target on a device with no cursor to see it with. On a phone the
+          sidebar is a drawer you open with ☰, not a split you drag. */}
+      {isResizable(dockMode) && (
+        <DockResizer varName="--lib-side-w" measure="prev" min={150} max={340} rangeVars={["--lib-side-min", "--lib-side-max"]} />
+      )}
       </>
       )}
 

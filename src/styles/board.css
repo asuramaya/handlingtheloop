@@ -1451,13 +1451,11 @@
   }
 }
 
-/* Mobile: docks are centered modals, not resizable — hide every handle. (A
-   non-overlapping max-width query so it never fights the desktop rules above.) */
-@media (max-width: 768px) {
-  .dock-resizer {
-    display: none;
-  }
-}
+/* (A phone's resize handles used to be hidden here with `display: none` at 768px. They are no
+   longer BUILT — DockPlacementResizer returns null for the "sheet" placement — so this rule had
+   nothing left to hide, and keeping it would have been a third place deciding what a phone is.
+   Hiding was also weaker than not building: an invisible 10px strip at the panel edge still
+   took the touch.) */
 @keyframes dock-in-left {
   from {
     opacity: 0.4;

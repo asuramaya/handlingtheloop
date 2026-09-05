@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { type Settings } from "@htl";
+import { type PanelPlacement, type Settings } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { type UseMidi } from "@htl/midi";
 import { MidiPanel } from "./MidiPanel";
-import { CenterResizeHandles, DockPlacementResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
+import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { ProfileBar } from "./ProfileBar";
 import { profilesForTab } from "./settings/profileAdapters";
 import { AboutTab } from "./settings/AboutTab";
@@ -28,6 +28,8 @@ interface SettingsPanelProps {
   outputSupported?: boolean; // browser can route to a chosen output device (AudioContext.setSinkId)
   debug?: () => DebugSection[]; // live engine/session/device diagnostics (Debug tab)
   midi?: UseMidi; // USB-MIDI controller status + learn (MIDI tab)
+  dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
+  onePanel?: boolean; // this viewport has ONE panel slot, so Controls hides what it cannot honour
 }
 
 
@@ -57,6 +59,8 @@ export function SettingsPanel({
   outputSupported = false,
   debug,
   midi,
+  dockMode = "right",
+  onePanel = false,
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [tab, setTab] = useState<Tab>("color");
@@ -68,14 +72,14 @@ export function SettingsPanel({
   const tabProfiles = profilesForTab(tab, settings, onChange, midi);
   // This component only exists in the DOM while open (App conditionally mounts it), so mount
   // itself IS "just opened" — no separate open/close transition to track like Library's.
-  const centerZ = useCenterZIndex(settings.settingsDock, true);
-  const zIndex = settings.settingsDock === "center" ? centerZ : edgeZIndex("settings", settings.panelOrder);
+  const centerZ = useCenterZIndex(dockMode, true);
+  const zIndex = panelZIndex(dockMode, "settings", settings.panelOrder, centerZ);
 
   return (
-    <div className={`modal-backdrop dock-${settings.settingsDock}`} style={{ zIndex }} onPointerDown={onClose}>
-      <DockPlacementResizer mode={settings.settingsDock} />
+    <div className={`modal-backdrop dock-${dockMode}`} style={{ zIndex }} onPointerDown={onClose}>
+      <DockPlacementResizer mode={dockMode} />
       <div className="panel settings-panel" onPointerDown={(e) => e.stopPropagation()}>
-        {settings.settingsDock === "center" && <CenterResizeHandles panelKey="settings" />}
+        {dockMode === "center" && <CenterResizeHandles panelKey="settings" />}
         <div className="settings-head">
           <h2>Settings</h2>
           {/* Absent on Debug / About, which have nothing to save. A control that is present but
@@ -96,7 +100,7 @@ export function SettingsPanel({
         <div className="settings-body">
           {tab === "color" && <ColorTab settings={settings} set={set} />}
 
-          {tab === "controls" && <ControlsTab settings={settings} set={set} />}
+          {tab === "controls" && <ControlsTab settings={settings} set={set} onePanel={onePanel} />}
 
           {tab === "midi" && midi && <MidiPanel midi={midi} settings={settings} onChange={onChange} />}
 

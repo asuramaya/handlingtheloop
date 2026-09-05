@@ -98,3 +98,15 @@ export {
   audioSetupCount,
 } from "./audioProfiles";
 export { uid, exportEnvelope, parseEnvelope } from "./profiles";
+export {
+  type PanelPlacement,
+  SHEET_Z,
+  placementFor,
+  placementsFor,
+  panelsToClose,
+  isResizable,
+  placementDim,
+  edgeZIndex,
+  panelZIndex,
+} from "./panelPlacement";
+export { PHONE_QUERY, ONE_PANEL_QUERY, usePhone, useOnePanel, isOnePanelViewport } from "./usePhone";

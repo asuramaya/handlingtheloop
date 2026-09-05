@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { DockMode, PanelKey } from "@htl";
+import type { PanelKey } from "@htl";
+import { type PanelPlacement, isResizable } from "@htl";
 
 // Restore any persisted dock / sidebar / center widths before the panels first paint, so a
 // resized panel comes back at its chosen size on reload (no flash of the default). Each
@@ -145,7 +146,12 @@ export function DockResizer({ varName, measure, min = 300, max = 560, rangeVars 
 // its own comment for why). The width/height vars here are shared across whichever panel
 // currently occupies that EDGE ("the left dock's remembered width", not "Library's remembered
 // width"), matching how only one panel can occupy an edge's screen space at once anyway.
-export function DockPlacementResizer({ mode }: { mode: "left" | "right" | "center" | "bottom" }) {
+export function DockPlacementResizer({ mode }: { mode: PanelPlacement }) {
+  // A "sheet" fills its screen — there is no edge to pull and no size a drag could mean. This
+  // returning null is what makes that structural rather than a stylesheet's `display: none`:
+  // the handle is not hidden on a phone, it is never built. (It used to be built and hidden,
+  // which is why a touch could still land on a 10px invisible strip at the panel's edge.)
+  if (!isResizable(mode)) return null;
   if (mode === "left") return <DockResizer varName="--dock-w-left" measure="parent" />;
   if (mode === "right") return <DockResizer varName="--dock-w-right" measure="parent" />;
   if (mode === "bottom") {
@@ -202,12 +208,10 @@ export function CenterResizeHandles({ panelKey }: { panelKey: PanelKey }) {
 // recently. Base 40 matches the z-index the desktop dock CSS already used before any of this
 // existed, so an unranked/unknown key (a future panel key nobody's added to the list yet)
 // still renders above the board.
-const EDGE_Z_BASE = 40;
-export function edgeZIndex(key: PanelKey, order: readonly PanelKey[]): number {
-  const idx = order.indexOf(key);
-  const rank = idx === -1 ? order.length : idx; // not in the list → treated as lowest priority
-  return EDGE_Z_BASE + (order.length - rank);
-}
+// The ranking itself moved to htl/state/panelPlacement.ts, where it sits beside the sheet rule
+// that overrides it and can be tested without a DOM. Re-exported here because this is where
+// every panel already imports its stacking from.
+export { edgeZIndex, panelZIndex } from "@htl";
 
 // "center" is the deliberate EXCEPTION to that fixed order (see PanelKey's own doc comment on
 // `panelOrder`): it's always a full-viewport modal, so the only thing that reads as normal is
@@ -218,7 +222,7 @@ export function edgeZIndex(key: PanelKey, order: readonly PanelKey[]): number {
 // (set on the base `.modal-backdrop` rule) already handles the single-panel case fine, and
 // `edgeZIndex` above owns left/right/bottom instead.
 let centerZCounter = 60; // starts above both the dock base (40) and the base modal (50)
-export function useCenterZIndex(mode: DockMode, open: boolean): number | undefined {
+export function useCenterZIndex(mode: PanelPlacement, open: boolean): number | undefined {
   const [z, setZ] = useState<number>();
   useEffect(() => {
     if (mode === "center" && open) setZ(++centerZCounter);

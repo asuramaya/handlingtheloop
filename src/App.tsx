@@ -95,7 +95,6 @@ import {
   type MixQueue,
   useQueuePrefetch,
   AutoMixer,
-  radioSeedSet,
   SmartFader,
   PAD_MODE_RESERVED,
   type PadMode,
@@ -1879,6 +1878,8 @@ function AppBody() {
                   duration: Math.round(derived.buffer.duration),
                   grid: derived.analysis.beatgrid ? serializeGrid(derived.analysis.beatgrid) : null,
                   palette: paletteStr,
+                  energy: derived.analysis.energy, // the auto-mix arc's input — see trackEnergy
+
                   version: ANALYSIS_VERSION, // stamps the algorithm → drives the convergence guard
                 });
               }
@@ -2718,10 +2719,11 @@ function AppBody() {
 
   // Latest callbacks behind a ref so the (stably-constructed) AutoMixer never holds
   // a stale closure.
-  const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack });
+  const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack, settings });
   autoDeps.current.autoLoad = autoLoad;
   autoDeps.current.applyCrossfade = applyCrossfade;
   autoDeps.current.deckTrack = deckTrack;
+  autoDeps.current.settings = settings; // read per-transition — a taste change lands on the next mix
   const mixerRef = useRef<AutoMixer | null>(null);
   if (mixerRef.current === null) {
     mixerRef.current = new AutoMixer({
@@ -2733,6 +2735,7 @@ function AppBody() {
       getCrossfade: () => crossfadeRef.current,
       now: () => performance.now(),
       stemsPending: (id) => stemLoading(statusRef.current[id]),
+      performance: () => autoDeps.current.settings.autoPerformance,
       onChange: (s) => setAutoStatus(s),
     });
   }
@@ -2922,25 +2925,12 @@ function AppBody() {
     const a = deckTrack("A");
     const b = deckTrack("B");
     const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
-    const other = live === a ? b : a;
     mixQueue.setCurrent(live);
-    // Seed primary = the LIVE deck (what's playing / loaded), so suggestions follow it. Route through
-    // the SAME fedBack guard the in-mixer callers use (radioSeedSet) — this was the LAST ensureNext
-    // caller still seeding RAW. DROP the idle deck as a seed when it merely holds the queue's OWN next
-    // track: seeding from the queue head feeds the queue back into itself, and off-AUTO a seed change
-    // bypasses the fill cooldown to REPLACE the tail — the visible "queue freak-out" (the
-    // preload→seed→refetch spiral). When the idle deck holds a genuinely different track it's still a
-    // seed, so both decks contribute as before.
-    if (live) {
-      const seeds = radioSeedSet({
-        live,
-        anchor: null,
-        idleTrack: other,
-        preloadedIsIdle: false,
-        queueNextId: mixQueue.peekNext()?.videoId ?? null,
-      });
-      void mixQueue.ensureNext(seeds);
-    }
+    // AUTO IS OFF, but the Queue tab is still showing suggestions, so the radio still runs — seeded
+    // from whatever the user has on the decks. There is no vibe anchor here: off-AUTO, every track
+    // change IS the user's own choice, so the live deck is both the anchor and the current track,
+    // and `anchorAge` is permanently 0.
+    if (live) void mixQueue.ensureNext({ anchor: live, current: live, anchorAge: 0, played: 0, arc: mixQueue.arc });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, autoIsRemote, mixQueue.mode]);
 

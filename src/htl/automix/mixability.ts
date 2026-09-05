@@ -1,5 +1,5 @@
 import type { TrackMeta } from "../library/types";
-import type { TransitionPlan } from "./types";
+import type { StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 
 // How well does track B mix after track A? Pure functions over the metadata the
 // app already stores on a TrackMeta (Camelot `key` + analyzed `bpm`). Used to
@@ -92,14 +92,37 @@ export function planTier(p: TransitionPlan): MixabilityTier | "unknown" {
  *  markers so different uploads of the SAME song collapse to one key. Used to stop the
  *  queue from suggesting "Danza Kuduro → Danza Kuduro (Original Mix) → Danza Kuduro x …".
  *  This is song-level DEDUP (matching the song name in the title), not slop filtering. */
+// Cut a title at the first remix/version/feature/mashup marker and reduce it to bare words.
+function coreOf(s: string): string {
+  return s
+    .replace(/\b(feat\.?|ft\.?|featuring|vs\.?|remix|mix|cover|version|mashup|edit|bootleg|live|acoustic|remaster(?:ed)?|official|lyrics?|audio|video)\b.*$/i, " ")
+    .replace(/\s+x\s+.*$/i, " ") // "Song x Other" mashup → keep the first song
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function songCore(title: string): string {
   let s = (title || "").toLowerCase();
   s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " "); // drop (…) and […]
-  // Cut at the first remix/version/feature/mashup marker.
-  s = s.replace(/\b(feat\.?|ft\.?|featuring|vs\.?|remix|mix|cover|version|mashup|edit|bootleg|live|acoustic|remaster(?:ed)?|official|lyrics?|audio|video)\b.*$/i, " ");
-  s = s.replace(/\s+x\s+.*$/i, " "); // "Song x Other" mashup → keep the first song
-  s = s.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-  return s;
+
+  // ★ SEE THROUGH A LEADING "ARTIST - " PREFIX. Without this the dedup failed on the single most
+  // embarrassing case there is: the seed track coming straight back. YouTube is wildly
+  // inconsistent about the prefix — a "- Topic" channel uploads "Teardrop (Remastered 2019)" while
+  // every other upload of the same recording is "Massive Attack - Teardrop (Live in Berlin)".
+  // Different keys, so the radio followed Teardrop with Teardrop, then with a Teardrop cover.
+  //
+  // But "X - Y" is genuinely ambiguous: "Massive Attack - Teardrop" is artist-then-song, while
+  // "Danza Kuduro - Official Video" is song-then-junk. Guessing wrong either way loses the song
+  // name. So take the half that SURVIVES the marker cut: in the first case the tail is a real
+  // title ("teardrop"), in the second it is pure junk and reduces to nothing, which is the signal
+  // that the song name was on the left all along.
+  const dash = s.match(/^\s*[^-–—]{1,40}\s[-–—]\s(.+)$/);
+  if (dash) {
+    const tail = coreOf(dash[1]);
+    if (tail.length >= 3) return tail;
+  }
+  return coreOf(s);
 }
 
 /** Average mixability of a candidate against several seed tracks (both loaded
@@ -136,8 +159,80 @@ export function transitionLabel(p: TransitionPlan): string {
   // (it spilled the cell). The full mixability % rides the badge's title tooltip.
   if (p.style === "stemswap") return `Stems ${p.bars}`;
   if (p.style === "cut") return "Cut";
+  if (p.style === "spinOut") return "Spin";
+  if (p.style === "echoOut") return `Echo ${p.bars}`;
+  if (p.style === "washOut") return `Wash ${p.bars}`;
+  if (p.style === "gateChop") return "Gate";
+  if (p.style === "loopChop") return "Chop";
+  if (p.style === "dropSwap") return "Drop";
   if (p.style === "filter") return `Filter ${p.bars}${p.confident ? "" : "?"}`;
   return `${p.keyKnown && p.keyMatch ? "Harmonic" : "Blend"} ${p.bars}`;
+}
+
+// ── the transition vocabulary ───────────────────────────────────────────────────────────────────
+// `pickTransition` above answers "how well do these two meet", and proposes a style from that
+// alone. `resolveStyle` answers the different question the mixer actually faces at mix time:
+// GIVEN what this pair needs, what the decks can currently do, and what I did LAST time — what
+// should this transition be?
+//
+// The last-style memory is the point. A DJ who has three good options does not pick the same one
+// four times running, and the previous mixer had no way to express that because it had only one
+// gesture to begin with. Variety is only taken when it is nearly free: an alternative has to be
+// genuinely suitable for this pair, never merely different.
+
+/** Styles that suit a given compatibility score, best first. Not filtered by capability yet. */
+function stylePreference(score: number, confident: boolean): TransitionStyle[] {
+  // Each row is ordered best-first for that compatibility band, and each is DEEP — the
+  // anti-repetition rule below can only avoid repeating itself if there is somewhere to go, and a
+  // two-entry row means every other transition is the same one.
+  if (!confident) return ["filter", "washOut", "echoOut", "blend"]; // unproven — mask it, don't commit
+  if (score >= 0.75) return ["stemswap", "blend", "echoOut", "washOut", "loopChop"]; // they fit — go long
+  if (score >= 0.55) return ["blend", "echoOut", "loopChop", "washOut", "filter"];
+  if (score >= 0.38) return ["filter", "washOut", "loopChop", "gateChop", "echoOut"];
+  // A clash. Don't blend it — make the change deliberate and let the effects carry it.
+  return ["gateChop", "loopChop", "dropSwap", "spinOut", "cut"];
+}
+
+/** Is this style possible right now? */
+function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
+  switch (style) {
+    case "stemswap":
+      return caps.stems; // the only gesture that needs separation
+    case "echoOut":
+    case "washOut":
+      return caps.fx;
+    case "gateChop":
+      return caps.fx && caps.grid; // a gate off the grid is noise, not a rhythm
+    case "loopChop":
+      return caps.grid; // pure loop + filter — no FX device at all
+    case "dropSwap":
+      return caps.incomingBody && caps.grid;
+    case "spinOut":
+      return caps.grid;
+    default:
+      return true; // blend / filter / cut need nothing beyond two decks
+  }
+}
+
+/** Pick the style this transition will actually use.
+ *
+ *  Preference order, then availability, then anti-repetition: among the styles that are BOTH
+ *  suitable and possible, skip the one used last time if there is another equally-suitable
+ *  candidate. "Equally suitable" means within `tolerance` positions in the preference list — so a
+ *  clearly-better option is never sacrificed just to be different. */
+export function resolveStyle(
+  plan: TransitionPlan,
+  caps: StyleCapabilities,
+  lastStyle: TransitionStyle | null,
+  tolerance = 1,
+): TransitionStyle {
+  const prefs = stylePreference(plan.score, plan.confident).filter((s) => styleAvailable(s, caps));
+  if (!prefs.length) return "cut"; // always possible, and an honest answer for a hopeless pair
+  const first = prefs[0];
+  if (first !== lastStyle) return first;
+  // The best option is what we just did — take the next one, but only if it is close behind.
+  const alt = prefs.find((s, i) => s !== lastStyle && i <= tolerance);
+  return alt ?? first;
 }
 
 /** Rank candidate tracks by how well each mixes after `seed` (best first). Stable

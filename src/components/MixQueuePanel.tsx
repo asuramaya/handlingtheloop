@@ -2,6 +2,7 @@ import { useMemo, useState, type DragEvent } from "react";
 import type { Library } from "@htl";
 import {
   type AutoMixStatus,
+  type EnergyArc,
   type AutoMixMirror,
   type MixQueue,
   type TrackMeta,
@@ -127,14 +128,29 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, o
             }}
           >
             <option value="" disabled>
-              {mode === "playlist" ? "Playlist loaded — switch…" : "Radio (auto) — or load a playlist…"}
+              {mode === "playlist" ? "Playlist loaded — switch…" : "Radio — suggesting from what you play"}
             </option>
-            <option value="__radio__">↺ Radio — auto-suggest from decks</option>
+            <option value="__radio__">↺ Radio — auto-suggest from what you play</option>
             {library.playlists.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name} ({p.trackIds.length})
               </option>
             ))}
+          </select>
+          {/* THE ARC — the difference between a sequence of compatible tracks and a set that goes
+              somewhere. It re-scores the pool rather than re-fetching it, so switching is instant;
+              the queued tail is dropped so the new shape starts on the NEXT track rather than after
+              the four already-chosen ones have played out. */}
+          <select
+            className="mixq-arc"
+            value={queue.arc}
+            onChange={(e) => queue.setArc(e.target.value as EnergyArc)}
+            title="Energy arc — how the set's intensity moves over time"
+            aria-label="Energy arc"
+          >
+            <option value="ride">↔ Ride</option>
+            <option value="build">↗ Build</option>
+            <option value="journey">∿ Journey</option>
           </select>
         </div>
       )}

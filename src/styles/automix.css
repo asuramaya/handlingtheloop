@@ -247,3 +247,16 @@
   color: var(--accent);
 }
 
+
+/* The energy-arc picker sits beside the seed dropdown — a narrow fixed control, because it has
+   three short options and should never steal width from the playlist names next to it. */
+.mixq-arc {
+  flex: 0 0 auto;
+  width: 104px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+}

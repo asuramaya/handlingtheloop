@@ -55,11 +55,11 @@ export async function fetchMeta(videoId: string, signal?: AbortSignal): Promise<
 export async function fetchAnalysisBatch(
   ids: string[],
   signal?: AbortSignal,
-): Promise<Record<string, { bpm: number | null; key: string | null }>> {
+): Promise<Record<string, { bpm: number | null; key: string | null; energy?: number | null }>> {
   const clean = ids.filter((id) => /^[\w-]{11}$/.test(id));
   if (!clean.length) return {};
   try {
-    const { analysis } = await getJson<{ analysis: Record<string, { bpm: number | null; key: string | null }> }>(
+    const { analysis } = await getJson<{ analysis: Record<string, { bpm: number | null; key: string | null; energy?: number | null }> }>(
       `/api/analysis?ids=${clean.map(encodeURIComponent).join(",")}`,
       signal,
     );
@@ -166,6 +166,7 @@ export async function postAnalysis(a: {
   duration?: number | null;
   grid?: string | null; // full serialized beatgrid (serializeGrid) — the cache-first/re-derivation seam
   palette?: string | null; // serialized art colour palette (serializePalette) — deterministic per art
+  energy?: number | null; // perceptual energy 0..1 (trackEnergy) — the auto-mix arc's input
   version?: number; // ANALYSIS_VERSION — omit to accept the server default (1)
 }): Promise<void> {
   if (postedAnalysis.has(a.videoId)) return; // already contributed this session

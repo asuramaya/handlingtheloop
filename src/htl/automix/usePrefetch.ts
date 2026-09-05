@@ -86,7 +86,7 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
         const analysis = await analyzeTrackAsync(buffer);
         if (cancelled) return;
         setCachedTrack(videoId, { buffer, analysis });
-        queueRef.current.patchAnalysis(videoId, { bpm: analysis.bpm, key: analysis.key?.camelot ?? null, isrc });
+        queueRef.current.patchAnalysis(videoId, { bpm: analysis.bpm, key: analysis.key?.camelot ?? null, energy: analysis.energy, isrc });
         void postAnalysis({
           videoId,
           bpm: analysis.bpm,
@@ -94,6 +94,7 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
           keyName: analysis.key?.name ?? null,
           beatOffset: analysis.beatgrid?.firstBeat ?? null,
           duration: Math.round(buffer.duration),
+          energy: analysis.energy,
           // Contribute the full grid + version too, uniform with the deck-load poster (Metadata B) —
           // so a prefetch primes the shared cache the same way and the convergence guard applies.
           grid: analysis.beatgrid ? serializeGrid(analysis.beatgrid) : null,

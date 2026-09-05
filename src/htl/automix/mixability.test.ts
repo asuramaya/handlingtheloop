@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import type { TrackMeta } from "../library/types";
+import type { StyleCapabilities, TransitionPlan } from "./types";
 import {
   avgMixability,
   bpmRatioFolded,
@@ -11,6 +12,7 @@ import {
   smartSortChain,
   songCore,
   transitionLabel,
+  resolveStyle,
 } from "./mixability";
 
 function track(p: Partial<TrackMeta>): TrackMeta {
@@ -113,5 +115,135 @@ describe("smartSortChain", () => {
     expect(sorted[0]).toBe(a); // anchor preserved
     expect(sorted[1]).toBe(b); // best follow-on next
     expect(sorted).toHaveLength(3);
+  });
+});
+
+// ── the transition vocabulary ───────────────────────────────────────────────────────────────────
+// resolveStyle is where "AUTO has one gesture" got fixed. Three properties matter: it never picks
+// something the decks cannot do, it stays musically appropriate, and it declines to repeat itself
+// when — and only when — it has a genuinely comparable alternative.
+describe("resolveStyle", () => {
+  const plan = (score: number, confident = true): TransitionPlan => ({
+    style: "blend",
+    bars: 16,
+    bassSwapBar: 6,
+    keyMatch: true,
+    score,
+    keyKnown: true,
+    confident,
+  });
+  const caps = (over: Partial<StyleCapabilities> = {}): StyleCapabilities => ({
+    stems: false,
+    fx: true, // the pad-FX bank is permanently resident on every deck
+    incomingBody: false,
+    grid: true,
+    ...over,
+  });
+
+  test("a well-matched pair with stems available gets the stem swap", () => {
+    expect(resolveStyle(plan(0.9), caps({ stems: true }), null)).toBe("stemswap");
+  });
+
+  test("the same pair WITHOUT stems falls to a blend, not to nothing", () => {
+    expect(resolveStyle(plan(0.9), caps(), null)).toBe("blend");
+  });
+
+  test("an unproven pair is masked rather than committed to", () => {
+    expect(resolveStyle(plan(0.5, false), caps(), null)).toBe("filter");
+  });
+
+  test("a clashing pair gets a deliberate change, never a blend", () => {
+    const style = resolveStyle(plan(0.2), caps({ incomingBody: true }), null);
+    expect(["gateChop", "loopChop", "dropSwap", "spinOut", "cut"]).toContain(style);
+    expect(["blend", "stemswap"]).not.toContain(style); // the point: a clash is never blended
+  });
+
+  // Availability gates, one per capability.
+  // ★ Stems are OPTIONAL, so the gestures that carry the character must not need them. Only
+  // stemswap does; everything else runs off the channel FX and the loop engine.
+  test("a deck with no stems still gets an effect-driven gesture, not a bare blend", () => {
+    for (const score of [0.2, 0.45, 0.6, 0.9]) {
+      const style = resolveStyle(plan(score), caps({ stems: false }), "blend");
+      expect(style).not.toBe("stemswap");
+      expect(["echoOut", "washOut", "gateChop", "loopChop", "filter", "dropSwap", "spinOut", "cut"]).toContain(style);
+    }
+  });
+
+  test("echoOut and washOut need the FX rack; without it they are off the table", () => {
+    const style = resolveStyle(plan(0.6), caps({ fx: false }), null);
+    expect(["echoOut", "washOut", "gateChop"]).not.toContain(style);
+  });
+
+  test("loopChop needs only a grid — no FX device, no stems", () => {
+    expect(resolveStyle(plan(0.45), caps({ fx: false, grid: true }), "filter")).toBe("loopChop");
+  });
+
+  test("gateChop needs the grid too — a gate off the beat is noise", () => {
+    expect(resolveStyle(plan(0.2), caps({ grid: false }), null)).toBe("cut");
+  });
+
+  test("dropSwap requires a detected body section on the incoming", () => {
+    expect(resolveStyle(plan(0.2), caps({ incomingBody: false }), null)).not.toBe("dropSwap");
+  });
+
+  test("without a beatgrid the rhythmic gestures are off the table", () => {
+    const style = resolveStyle(plan(0.2), caps({ grid: false, incomingBody: true }), null);
+    expect(style).toBe("cut");
+  });
+
+  // The anti-repetition rule, and its limit.
+  test("does not repeat the last gesture when a comparable alternative exists", () => {
+    expect(resolveStyle(plan(0.9), caps({ stems: true }), "stemswap")).toBe("blend");
+  });
+
+  test("but DOES repeat rather than pick something clearly worse", () => {
+    // A clashing pair with no grid and no FX has exactly one legal option; variety must not
+    // invent one.
+    expect(resolveStyle(plan(0.2), caps({ grid: false, fx: false }), "cut")).toBe("cut");
+  });
+
+  test("always returns a style that is actually available", () => {
+    for (const score of [0.1, 0.3, 0.5, 0.7, 0.95]) {
+      for (const c of [caps(), caps({ stems: true }), caps({ fx: false }), caps({ incomingBody: true }), caps({ grid: false })]) {
+        for (const last of [null, "blend", "cut", "stemswap"] as const) {
+          const style = resolveStyle(plan(score), c, last);
+          if (style === "stemswap") expect(c.stems).toBe(true);
+          if (style === "echoOut" || style === "washOut") expect(c.fx).toBe(true);
+          if (style === "gateChop") expect(c.fx && c.grid).toBe(true);
+          if (style === "loopChop") expect(c.grid).toBe(true);
+          if (style === "dropSwap") expect(c.incomingBody && c.grid).toBe(true);
+          if (style === "spinOut") expect(c.grid).toBe(true);
+        }
+      }
+    }
+  });
+});
+
+// ★ Regression: the seed track coming straight back. Observed live — the radio followed
+// "Teardrop (Remastered 2019)" with "Massive Attack - Teardrop (Live in Berlin)" because the two
+// titles produced different songCore keys. YouTube is wildly inconsistent about the "Artist - "
+// prefix, so the dedup has to see through it.
+describe("songCore — the artist-prefix gap", () => {
+  it("collapses a prefixed and an unprefixed upload of the same song", () => {
+    expect(songCore("Massive Attack - Teardrop (Live in Berlin)")).toBe(songCore("Teardrop (Remastered 2019)"));
+  });
+
+  it("still collapses the version markers it always did", () => {
+    const core = songCore("Danza Kuduro");
+    expect(songCore("Danza Kuduro (Original Mix)")).toBe(core);
+    expect(songCore("Don Omar - Danza Kuduro (Official Video)")).toBe(core);
+  });
+
+  it("keeps genuinely different songs by the same artist apart", () => {
+    expect(songCore("Massive Attack - Teardrop")).not.toBe(songCore("Massive Attack - Angel"));
+  });
+
+  it("does not eat a title that merely contains a dash mid-phrase", () => {
+    expect(songCore("Sunset")).toBe(songCore("Sunset"));
+    expect(songCore("Nine Inch Nails - Closer")).toBe("closer");
+  });
+
+  it("leaves a title with no prefix alone", () => {
+    expect(songCore("Archangel")).toBe("archangel");
   });
 });

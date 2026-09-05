@@ -11,6 +11,11 @@ export interface TrackMeta {
   views: number | null;
   bpm?: number | null; // filled in once analyzed on load
   key?: string | null; // Camelot code (e.g. "8B"), filled in once analyzed
+  // Perceptual ENERGY, 0..1 — how hard the track hits, not how loud the file is. Derived in
+  // analyze.ts from integrated loudness, high-band share and tempo, and cached in D1 alongside
+  // bpm/key. This is what lets the auto-mix radio hold or shape an energy arc across a set
+  // instead of walking greedily from one nearest-neighbour to the next. Absent = unanalyzed.
+  energy?: number | null;
   addedAt?: number; // epoch ms, set when added to the collection
   // Cross-service anchors (present on tracks sourced from another catalog).
   isrc?: string | null; // universal recording id, used to match across services

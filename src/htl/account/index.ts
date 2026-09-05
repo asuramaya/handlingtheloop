@@ -210,8 +210,14 @@ export interface LiveRoom {
   npTitle: string | null;
   npArtist: string | null;
   startedAt: number | null;
+  /** VIEWER-RELATIVE, resolved SERVER-SIDE: 0 stranger · 1 you follow them · 2 mutual (a
+   *  "friend"). Absent when signed out. Discover ranks and labels rows from this instead of
+   *  intersecting the room list against a client-side copy of the follow graph — which it used
+   *  to do with ONE PAGE of that graph, so past 50 follows it started quietly mislabelling. */
+  rel?: 0 | 1 | 2;
 }
-/** The live public-room directory ("on now"), busiest first. Public — no auth needed. */
+/** The live public-room directory ("on now"). Signed in, it is ordered relationship-first and
+ *  each room carries `rel`; signed out, busiest-first. */
 export async function fetchLiveRooms(signal?: AbortSignal): Promise<LiveRoom[]> {
   const res = await fetch("/api/rooms/live", { signal, credentials: "same-origin" });
   if (!res.ok) return [];
@@ -620,3 +626,19 @@ export const syncAdd = (dest: Service, playlistId: string, ids: string[]) =>
   postJson<{ added: number }>("/api/sync/add", { dest, playlistId, ids }).then((r) => r.added);
 
 export { usePlaylistSource, type PlaylistSource } from "./usePlaylistSource";
+export { rankRooms, filterRooms, reasonFor, REASON_LABEL, FRESH_MS, type Reason, type RankedRoom } from "./discoverRank";
+export { groupActivity, isActionable, dayKey, dayLabel, ROLLUP_MIN, type Activity, type DayGroup } from "./activityGroups";
+export { readGraph, writeGraph, clearGraphCache, type GraphPage } from "./peopleCache";
+export {
+  INITIAL_PEOPLE_VIEW,
+  PANE_TAB,
+  paneOf,
+  viewForPane,
+  type PeopleView,
+  type PeopleTab,
+  type PeoplePane,
+  type ExploreFace,
+  type YouFace,
+  type ListenFace,
+  type GraphMode,
+} from "./peopleView";

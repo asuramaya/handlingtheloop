@@ -48,12 +48,12 @@ export function RequestList({
             <span className="req-text">{r.text}</span>
             {host && <span className="req-who">{revealed ? r.name : maskName(r.name)}</span>}
             {host && onQueue && (
-              <button className="req-queue" onClick={() => onQueue(r.text, r.id)} title="Find it + add to the queue" aria-label="Add to queue">
+              <button className="req-queue" onClick={() => onQueue(r.text, r.id)} aria-label="Add to queue">
                 ＋ Queue
               </button>
             )}
             {host && (
-              <button className="req-dismiss" onClick={() => room.dismissRequest(r.id)} title="Dismiss" aria-label="Dismiss request">
+              <button className="req-dismiss" onClick={() => room.dismissRequest(r.id)} aria-label="Dismiss request">
                 ✕
               </button>
             )}

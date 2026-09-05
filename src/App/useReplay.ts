@@ -19,7 +19,10 @@ export interface ReplayDeps {
   onRoomTick: (decks: TickDecks) => void;
   setRemoteAutomix: Dispatch<SetStateAction<AutoMixMirror | null>>;
   setProfileOpen: Dispatch<SetStateAction<boolean>>;
-  setDiscoverOpen: Dispatch<SetStateAction<boolean>>;
+  // Plain (v: boolean) => void, not a state setter: the People dock replaced the standalone
+  // Discover dock, so "close Discover" is now a call into the host's own open/close logic
+  // rather than a raw setState. Only ever called with a literal here.
+  setDiscoverOpen: (v: boolean) => void;
   setPublicHandle: Dispatch<SetStateAction<string | null>>;
   playSetRef: MutableRefObject<(id: string) => void>;
 }

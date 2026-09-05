@@ -1,3 +1,4 @@
+import { REASON_LABEL, type Reason } from "@htl/account";
 import type { LiveRoom } from "@htl/account";
 
 // One live-room row — shared by Discover's "live now" lists and the notification bell's
@@ -9,11 +10,15 @@ export function LiveRoomRow({
   self,
   tunedTo,
   onTap,
+  reason,
 }: {
   room: LiveRoom;
   self: string | null;
   tunedTo: string | null;
   onTap: (handle: string) => void;
+  // WHY this row is where it is. One ranked list only reads as ranked if each row can say what
+  // put it there; without this the order is invisible and the list looks arbitrary.
+  reason?: Reason;
 }) {
   return (
     <li className={`live-room ${r.handle === tunedTo ? "tuned" : ""}`} onClick={() => onTap(r.handle)}>
@@ -30,10 +35,13 @@ export function LiveRoomRow({
           {r.handle === self && <span className="live-room-you"> (you)</span>}
         </span>
         <span className="live-room-np">
-          {r.npTitle ? `${r.npArtist ? `${r.npArtist} — ` : ""}${r.npTitle}` : `@${r.handle}`}
+          {r.npTitle ? `${r.npArtist ? `${r.npArtist} · ` : ""}${r.npTitle}` : `@${r.handle}`}
         </span>
       </span>
-      <span className="live-room-count">{r.listeners} 🎧</span>
+      <span className="live-room-meta">
+        {reason && <span className={`live-room-why ${reason}`}>{REASON_LABEL[reason]}</span>}
+        <span className="live-room-count">{r.listeners} 🎧</span>
+      </span>
     </li>
   );
 }

@@ -47,7 +47,7 @@ export function SetSavedPrompt({ setsRev }: { setsRev: number }) {
         <button className="set-saved-discard" disabled={busy} onClick={() => run(() => discardSet(set.id))}>
           Discard
         </button>
-        <button className="set-saved-x" title="Keep it — manage your sets in Profile" onClick={() => setSet(null)}>
+        <button className="set-saved-x" onClick={() => setSet(null)}>
           ✕
         </button>
       </div>

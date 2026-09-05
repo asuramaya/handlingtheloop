@@ -33,12 +33,17 @@ export function PublicProfileScreen({
   onListen,
   onJam,
   onPlaySet,
+  embedded = false,
 }: {
   handle: string;
   onClose: () => void;
   onListen?: (handle: string) => void;
   onJam?: (handle: string) => void; // mutual-friend co-play (knock / step-up)
   onPlaySet?: (id: string) => void; // G1d: replay one of this DJ's published sets
+  // PUSHED INSIDE THE PEOPLE DOCK rather than being the dock. Arriving at /@handle from outside
+  // is a landing page and keeps the full-screen form; tapping a person from a list you are
+  // already reading is a PUSH, and must not evict the list you were reading.
+  embedded?: boolean;
 }) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,14 +82,8 @@ export function PublicProfileScreen({
     if (r) setProfile({ ...profile, relationship: r.relationship, counts: r.counts });
   };
 
-  return (
-    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
-      <DockResizer varName="--dock-w-right" measure="parent" />
-      <div className="panel profile-screen" onPointerDown={(e) => e.stopPropagation()}>
-        <div className="profile-head">
-          <span className="profile-head-title">Profile</span>
-        </div>
-
+  const body = (
+      <>
         {loading ? (
           <p className="settings-hint">Loading…</p>
         ) : !profile ? (
@@ -125,7 +124,7 @@ export function PublicProfileScreen({
                 !profile.isSelf && rel ? (
                   <>
                     {rel.requested ? (
-                      <button className="follow-btn on requested" onClick={() => void onWithdraw()} title="Tap to cancel your request">
+                      <button className="follow-btn on requested" onClick={() => void onWithdraw()}>
                         Requested ✕
                       </button>
                     ) : (
@@ -155,6 +154,18 @@ export function PublicProfileScreen({
             )}
           </div>
         )}
+      </>
+  );
+
+  if (embedded) return body;
+  return (
+    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
+      <DockResizer varName="--dock-w-right" measure="parent" />
+      <div className="panel profile-screen" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="profile-head">
+          <span className="profile-head-title">Profile</span>
+        </div>
+        {body}
       </div>
     </div>
   );

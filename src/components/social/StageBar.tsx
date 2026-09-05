@@ -10,7 +10,7 @@ export function StageBar({ room }: { room: RoomState }) {
         <span className="stage-bar-what">
           🎛️ You're on the decks{room.myDeck ? <> · <b>Deck {room.myDeck}</b></> : null}
         </span>
-        <button className="stage-down" onClick={room.stepDown} title="Step back down to the floor">
+        <button className="stage-down" onClick={room.stepDown}>
           Step down
         </button>
       </div>
@@ -29,7 +29,7 @@ export function StageBar({ room }: { room: RoomState }) {
     return (
       <div className="stage-bar pending">
         <span className="stage-bar-what">✋ Requested <b>deck {room.myStageDeck}</b> — waiting for the host…</span>
-        <button className="stage-down" onClick={room.stepDown} title="Cancel the request">
+        <button className="stage-down" onClick={room.stepDown}>
           Cancel
         </button>
       </div>

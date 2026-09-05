@@ -30,11 +30,11 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
                   {fmtTime(Math.round(s.duration / 1000))} · {s.tracks} track{s.tracks === 1 ? "" : "s"} · {expanded ? "▾" : "▸"}
                 </span>
               </button>
-              <button className="set-share-btn" title="Copy share link" onClick={() => shareSet(s.id)}>
+              <button className="set-share-btn" onClick={() => shareSet(s.id)}>
                 ⤴
               </button>
               {onPlay && (
-                <button className="set-play-btn" title="Replay this set" onClick={() => onPlay(s.id, trimRange(s))}>
+                <button className="set-play-btn" onClick={() => onPlay(s.id, trimRange(s))}>
                   ▶
                 </button>
               )}
@@ -49,7 +49,7 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
                       <span className="set-track-at">{fmtTime(Math.round(t.at / 1000))}</span>
                       <span className="set-track-name">
                         {t.title || t.videoId}
-                        {t.artist && <span className="set-track-artist"> — {t.artist}</span>}
+                        {t.artist && <span className="set-track-artist"> · {t.artist}</span>}
                       </span>
                     </li>
                   ))

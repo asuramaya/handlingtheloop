@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { type PersonCard, fetchSuggested, searchUsers } from "@htl/account";
 import { PersonRow } from "./PersonRow";
 
-// The directory door at the top of Discover — find ANYONE by @handle or name, even when nobody's
-// live. Debounced global search with paginated results (Load more); each row is an actionable
-// PersonRow (Follow / Knock / Invite / Listen). When the box is empty it shows "People you may
-// know" (friends-of-friends, or popular accounts cold-start) so discovery isn't a blank prompt.
+// The directory door: find ANYONE by @handle or name, even when nobody is live. Debounced global
+// search with paginated results (Load more); each row is an actionable PersonRow (Follow / Knock /
+// Invite / Listen). When the box is empty it shows "People you may know" (friends-of-friends, or
+// popular accounts cold-start) so discovery is not a blank prompt.
 export function PersonSearch({
   onJam,
   onListen,
@@ -92,7 +92,7 @@ export function PersonSearch({
       <input
         className="person-search-input"
         type="search"
-        placeholder="Search people — @handle or name"
+        placeholder="Search people"
         aria-label="Search people by handle or name"
         maxLength={40}
         value={q}
@@ -117,9 +117,7 @@ export function PersonSearch({
             </li>
           )}
         </ul>
-      ) : idle ? (
-        suggested !== null && <p className="person-search-empty">Search by name or @handle to find people.</p>
-      ) : loading ? null : (
+      ) : idle ? null : loading ? null : (
         <p className="person-search-empty">No one matches "{q.trim()}".</p>
       )}
     </div>

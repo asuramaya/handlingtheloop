@@ -1,20 +1,13 @@
 /* ============================================================================
-   Notification bell (chin popover) — Epic I
+   Activity feed (was the notification bell's popover) — Epic I
+   ----------------------------------------------------------------------------
+   The bell's own chin chrome (.notif-wrap, .chin-notif, .chin-bell) and its
+   popover shell (.notif-pop, .notif-section, .notif-head, .notif-empty,
+   .notif-seeall) are GONE with the popover: the feed is a tab of the People dock
+   now, so the panel around it belongs to that dock. What remains below is the
+   ROW language — badge, list, item, follow-back — which is the same whether it is
+   read in a bubble or on a page, and is what ActivityFeed still renders.
    ============================================================================ */
-.notif-wrap {
-  flex: 0 0 auto;
-  position: relative;
-  display: flex;
-}
-.chin-btn.chin-notif {
-  flex: 0 0 auto;
-  width: 44px;
-  position: relative;
-}
-.chin-bell {
-  font-size: 16px;
-  line-height: 1;
-}
 .notif-badge {
   position: absolute;
   top: 5px;
@@ -31,38 +24,6 @@
   font-weight: 800;
   line-height: 1;
   border-radius: 999px;
-}
-.notif-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 60;
-  width: min(320px, 92vw);
-  max-height: min(70vh, 460px);
-  overflow-y: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-  padding: 6px;
-}
-.notif-section {
-  padding: 2px 0 6px;
-}
-.notif-head {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--muted);
-  padding: 4px 6px;
-}
-.notif-empty {
-  padding: 14px 10px;
-  margin: 0;
-  font-size: 12px;
-  color: var(--muted);
-  text-align: center;
 }
 .notif-list {
   list-style: none;
@@ -131,22 +92,6 @@
 .notif-join:hover {
   filter: brightness(1.08);
 }
-.notif-seeall {
-  width: 100%;
-  margin-top: 2px;
-  padding: 8px;
-  background: transparent;
-  border: none;
-  border-top: 1px solid var(--line);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: center;
-}
-.notif-seeall:hover {
-  color: var(--text);
-}
 
 /* ============================================================================
    Profile + Social screens (the account home + the expanded session surface)
@@ -158,7 +103,12 @@
 .discover-screen {
   position: relative;
   width: min(560px, 94vw);
-  max-height: min(86dvh, 860px);
+  /* FIXED, not max-height: switching People/Session panes (Explore ↔ You, On air ↔ Sets) with
+     wildly different content lengths used to visibly resize the whole window each time — a
+     max-height only caps growth, it doesn't stop shrinking to whatever's shorter. A firm
+     height means the window itself never moves; the body inside it (its own flex:1 +
+     overflow-y) scrolls or leaves empty space instead. */
+  height: min(86dvh, 860px);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -169,6 +119,14 @@
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
   overflow: hidden auto;
   animation: panel-in 0.16s ease-out;
+}
+/* --center-w-session (CenterResizeHandles) — .social-screen ONLY: it's the one of these three
+   actually wired to a dockMode/CenterResizeHandles of its own (the Session top-level dock).
+   .profile-screen/.discover-screen also render standalone (PublicProfileScreen from a shared
+   link, e.g. App.tsx's `publicHandle` route) and must NOT pick up Session's remembered width —
+   they're unrelated windows that happen to share this shell's shape, not the same panel. */
+.social-screen {
+  width: clamp(var(--center-w-min, 360px), var(--center-w-session, min(560px, 94vw)), var(--center-w-max, 1200px));
 }
 .profile-head,
 .social-head,
@@ -361,28 +319,6 @@
 .person-more-btn:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-/* People-you-follow entry in Discover → opens the shared PeopleList */
-.people-following-link {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 9px 6px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  border-radius: 9px;
-}
-.people-following-link:hover {
-  background: var(--panel-2, rgba(255, 255, 255, 0.05));
-}
-.people-following-link .person-go {
-  margin-left: auto;
 }
 
 /* The shared PeopleList surface (profile counts + Discover roster land here) */
@@ -944,6 +880,32 @@ span.profile-handle:hover {
 .room-hero.live {
   border-color: #c8506a;
   background: color-mix(in srgb, #c8506a 12%, var(--panel));
+}
+/* OFFLINE and PENDING moved INTO the hero (they were `.social-offline` / `.social-waiting`,
+   two loose banners above it), so they bring their looks with them — a transient state must
+   not wear the same confident frame as "LIVE". Offline recedes to grey: nothing you can read
+   is current, so the panel should not look authoritative. Pending takes the accent, because
+   somebody is about to act on you and that is worth watching. */
+.room-hero.offline {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-style: dashed;
+}
+.room-hero.offline .hero-title {
+  color: var(--muted);
+  font-weight: 600;
+}
+.room-hero.pending {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* IDLE is the resting state — the one you see most, and the one that should shout least. */
+.room-hero.idle {
+  background: var(--panel-2);
+}
+/* A guest with no session has nothing to say; the hero collapses rather than drawing an empty
+   frame around the absence of news. */
+.room-hero.none {
+  display: none;
 }
 .hero-row {
   display: flex;
@@ -2560,27 +2522,9 @@ span.profile-handle:hover {
   }
 }
 
-/* Profile = a small globe icon button, sitting just left of the session (⇅) icon. */
-.chin-btn.chin-profile {
-  order: 9;
-  flex: 0 0 auto;
-  width: 42px;
-}
-.chin-globe {
-  font-size: 16px;
-  line-height: 1;
-}
-/* Discover = the 🧭 directory button, between Profile (9) and the session bar (10);
-   the order-9 tie resolves to DOM order, so it lands just right of Profile. */
-.chin-btn.chin-discover {
-  order: 9;
-  flex: 0 0 auto;
-  width: 42px;
-}
-.chin-discover-i {
-  font-size: 16px;
-  line-height: 1;
-}
+/* The 🌐 Profile and 🧭 Discover chin buttons lived here. Both are gone: one PEOPLE button
+   (`.chin-people`, defined at the foot of this file) opens the dock that holds Discover,
+   Activity and You. Two chin slots and a bell reclaimed. */
 
 /* Sync embedded as a Library subsection — fill the main content area, drop the
    modal chrome (border/shadow/rounded) since it's no longer a floating panel. */
@@ -2730,3 +2674,359 @@ span.profile-handle:hover {
   margin-top: 10px;
 }
 
+
+
+/* ============================ THE PEOPLE DOCK ==============================================
+   One panel for Discover / Activity / You, replacing three chin buttons. It borrows Settings'
+   own head + tab strip (`.settings-head`, `.settings-tabs`, `.settings-body`) rather than
+   inventing a second way to switch between surfaces in a dock — the app had four segmented
+   languages by the time this landed, and adding a fifth for the same job would have been the
+   thing this whole redesign is against. Only the parts that differ live here. */
+.panel.people-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 18px;
+  /* Only actually applies in "center" placement — left/right/bottom override width/height to
+     100% of their dock. Never had its own size before because it only ever rendered inside a
+     dock-right whose flex-basis sized it; centered, it needs a size of its own. Wider than
+     Settings' 460px (card grids and set lists want the room), same footprint as Library/Search.
+     FIXED height (not max-height): switching Explore/You panes with different content lengths
+     must not visibly resize the window each time — `.people-body`'s own flex:1 + overflow-y
+     scrolls or leaves empty space instead. */
+  /* --center-w-people (CenterResizeHandles) — only consumed in "center" mode; edge/bottom
+     dock overrides force width:100% regardless. */
+  width: clamp(var(--center-w-min, 360px), var(--center-w-people, min(640px, 94vw)), var(--center-w-max, 1200px));
+  height: min(86dvh, 820px);
+}
+.people-body {
+  /* Discover and Profile were each a scrolling PANEL; embedded they are page content, so the
+     scroll belongs to the body that hosts all three. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* THE FOLD. Two tabs choose between everyone else and you; this row is the faces inside the
+   open one. Pills rather than a second underline strip, so the two levels never read as peers:
+   the strip is a place, the pills are a lens on it. It scrolls horizontally instead of shrinking,
+   because a pill that has been squeezed to fit is a pill you cannot read at a narrow dock. */
+.people-faces {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.people-faces::-webkit-scrollbar {
+  display: none;
+}
+.face-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.face-pill:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+.face-pill.on {
+  background: var(--neon-purple);
+  border-color: var(--neon-purple);
+  color: #fff;
+}
+/* One level in again: the two sides of the graph inside the People face. Same shape, quieter
+   fill, so it cannot be mistaken for the row above it. */
+.people-subfaces {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.face-pill.sub {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.face-pill.sub.on {
+  background: var(--panel-2, rgba(255, 255, 255, 0.09));
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+/* Unread count on the You tab and the Activity pill — the same badge language as the chin button
+   it came from, so the number you saw outside is the number you see inside. */
+.settings-tab .tab-badge,
+.face-pill .tab-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--neon-pink, #f0f);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+}
+/* The person glyph. An SVG, not an emoji: every other chin glyph is a character whose shape is
+   the font's opinion, and a PERSON rendered by the platform is a different person on every OS.
+   `currentColor` also makes it inherit the button's active/idle state for free, which 🌐 never
+   did — the old globe stayed full-colour whether the panel was open or not. */
+.chin-people-i {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: currentColor;
+}
+.chin-btn.chin-people {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+}
+.activity-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 0;
+}
+
+
+/* ============================ THE SESSION SCREEN (redesign) ================================
+   The panel is now head + scrolling body, like Settings and People — one scroller, not two.
+   `.social-screen` carried `overflow: hidden auto` AND `.social-body` carried `overflow-y:
+   auto`, so a tall room had a scroller inside a scroller: the inner one moved first, and once
+   it bottomed out the outer took over and dragged the sticky head off the top of the panel.
+   The head is a fixed row now and the body is the only thing that moves. */
+.panel.social-screen {
+  overflow: hidden;
+}
+.social-screen > .settings-head {
+  flex: 0 0 auto;
+}
+
+/* WAITING ON YOU — people BLOCKED on the host, promoted out of two separate sections into one
+   block under the hero. It is the only card on this surface that is about someone ELSE being
+   stuck, so it is the only one that gets the accent edge: everything else here can wait, and
+   this cannot. */
+.settings-section.waiting-section {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.settings-section.waiting-section .settings-head-note {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #08121a;
+  font-size: 10px;
+  font-weight: 800;
+}
+.social-knock-ico {
+  margin-right: 6px;
+}
+
+/* A card head that is itself the disclosure control (Invite). It has to look like every other
+   head, so it resets the button chrome rather than introducing a third header style. */
+.settings-section-head.as-toggle {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.settings-section-head.as-toggle:hover .settings-label {
+  color: var(--text);
+}
+
+/* The roster sits inside a card now, so it drops its own outer spacing. */
+.social-roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+
+/* ============================ DISCOVER AT SCALE ===========================================
+   The row's REASON chip. One ranked list is only legible if each row says what put it there —
+   without it the order is invisible and the list reads as arbitrary, which is exactly how the
+   old busiest-first directory read. Colour carries the rank: a friend is the accent, someone you
+   follow is quieter, "just started" is the newcomer slot that keeps the list from being a pure
+   popularity ratchet, and "popular" says the least because it is the default. */
+.live-room-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+.live-room-why {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.live-room-why.friend {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--text);
+}
+.live-room-why.following {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+.live-room-why.fresh {
+  background: color-mix(in srgb, #6ee7a8 16%, transparent);
+  border-color: color-mix(in srgb, #6ee7a8 40%, transparent);
+  color: #6ee7a8;
+}
+/* "Popular" is the default state, so it whispers — a label on every row that says nothing new
+   is noise, and this one only earns its place by contrast with the three above it. */
+.live-room-why.popular {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+/* The live-room filter. Sits under the people search: same job, different corpus. */
+.discover-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.discover-query {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+/* "Show all N" — the escape hatch that makes a cap honest. A capped section that does not say
+   how much it is hiding is just a section that lost your data. */
+.discover-more {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+
+/* ---- Activity: roll-ups ------------------------------------------------------------------
+   One line standing in for a day's worth of identical news. It has to look like a ROW you can
+   open, not like a heading, because the count is the point and the detail is optional. */
+.notif-rollup {
+  list-style: none;
+}
+.notif-rollup-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 6px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.notif-rollup-head:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.notif-rollup-count {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  font-size: 11px;
+  font-weight: 800;
+}
+.notif-rollup-caret {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+/* The expanded rows indent under their roll-up so the grouping survives being opened. */
+.notif-list.nested {
+  margin: 2px 0 4px 34px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.notif-list.nested .notif-item {
+  padding-left: 8px;
+}
+
+
+/* ---- Anchoring: the sticky range head ----------------------------------------------------
+   Pinned to the top of the dock body while its rows pass under. It reports POSITION, not just
+   identity: a pinned "Following" tells you which list you are in, which you already knew — what
+   makes a long column stop feeling endless is "87–150 of 2000", which is a place.
+   `top: -1px` closes the sub-pixel gap browsers leave under a sticky element, through which the
+   rows behind it show as a flickering hairline while you scroll. */
+.social-section-head.sticky-range {
+  position: sticky;
+  top: -1px;
+  z-index: 4;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  /* Opaque: the rows scroll BEHIND this, so any transparency turns it into a smear. */
+  background: var(--panel);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.sticky-range-label {
+  font-weight: 800;
+}
+
+/* ---- The dock's back control (the nav stack's pop) ---------------------------------------
+   It names the destination. "‹ People" is an instruction; a bare "‹" is a guess. */
+.people-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+}
+.people-back:hover {
+  color: var(--accent);
+}
+.people-back > span[aria-hidden] {
+  font-size: 19px;
+  line-height: 1;
+}

@@ -25,8 +25,20 @@ export function PeopleList({
   const [list, setList] = useState<PersonCard[] | null>(null); // null = loading
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  // ★ RESET ON MOUNT, not just on unmount. `useRef(true)` + a cleanup that sets it false is the
+  // classic broken form: under StrictMode React mounts, unmounts and REMOUNTS the same instance,
+  // and a ref survives that — so the cleanup latched `false` permanently and every later
+  // `if (!mounted.current) return` bailed. The visible symptom was "Load more" sticking on
+  // "Loading…" forever and issuing no further request, because setLoading(false) was the thing
+  // being skipped. Found by paging a 2,000-row graph fixture; it had been latent in this
+  // component's original form the whole time.
   const mounted = useRef(true);
-  useEffect(() => () => void (mounted.current = false), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;

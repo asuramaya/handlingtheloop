@@ -88,7 +88,6 @@ export function RecordingsPanel({
                 ) : (
                   <button
                     className="rec-name"
-                    title="Rename"
                     onClick={() => {
                       setEditing(s.id);
                       setTitle(s.title ?? "");
@@ -107,12 +106,12 @@ export function RecordingsPanel({
               </div>
               <div className="rec-acts">
                 {onPlay && (
-                  <button className="rec-play" title="Replay this set on the decks" onClick={() => onPlay(s.id, trimRange(s))}>
+                  <button className="rec-play" onClick={() => onPlay(s.id, trimRange(s))}>
                     ▶
                   </button>
                 )}
                 {onTrim && (
-                  <button className="rec-trim" title="Trim the performance in/out" onClick={() => onTrim(s)}>
+                  <button className="rec-trim" onClick={() => onTrim(s)}>
                     ✂
                   </button>
                 )}
@@ -126,11 +125,11 @@ export function RecordingsPanel({
                   </button>
                 )}
                 {confirmDel === s.id ? (
-                  <button className="rec-discard confirm" disabled={busy === s.id} onClick={() => act(s.id, () => discardSet(s.id))} title="Confirm discard">
+                  <button className="rec-discard confirm" disabled={busy === s.id} onClick={() => act(s.id, () => discardSet(s.id))}>
                     Delete?
                   </button>
                 ) : (
-                  <button className="rec-discard" title="Discard recording" onClick={() => setConfirmDel(s.id)}>
+                  <button className="rec-discard" onClick={() => setConfirmDel(s.id)}>
                     🗑
                   </button>
                 )}

@@ -20,6 +20,7 @@ import { maskEmail, maskName, toggleRevealed, usePrivacyRevealed } from "@htl/pr
 import { DockResizer } from "./DockResizer";
 import { PromptModal } from "./Dialog";
 import { ProfilePublicView } from "./ProfilePublicView";
+import { InfoDot } from "./settings/InfoDot";
 import { FollowRequests } from "./social/FollowRequests";
 import { RecordingsPanel } from "./social/RecordingsPanel";
 
@@ -37,6 +38,7 @@ export function ProfileScreen({
   onGoToSession,
   onPlaySet,
   onTrimSet,
+  embedded = false,
 }: {
   onClose: () => void;
   live?: boolean; // you're broadcasting a public lobby right now (B3 own-live badge)
@@ -44,6 +46,7 @@ export function ProfileScreen({
   onGoToSession?: () => void; // tapping the live badge opens the Session dock
   onPlaySet?: (id: string, range?: { start: number; end: number }) => void; // G1c: replay (curated range)
   onTrimSet?: (s: { id: string; trimStart?: number | null; trimEnd?: number | null; duration: number }) => void; // trim in/out
+  embedded?: boolean; // rendered inside the People panel's tab strip — skip our own dock chrome
 }) {
   const [me, setMe] = useState<Me | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -102,13 +105,10 @@ export function ProfileScreen({
     load();
   };
 
-  return (
-    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
-      <DockResizer varName="--dock-w-right" measure="parent" />
-      <div className="panel profile-screen" onPointerDown={(e) => e.stopPropagation()}>
-        <div className="profile-head">
-          <span className="profile-head-title">Profile</span>
-        </div>
+  // ★ EMBEDDED MODE — see the note in DiscoverScreen. Profile is the "You" tab of the People
+  // panel now; the dock chrome belongs to the host.
+  const body = (
+    <>
 
         {loading ? (
           <p className="settings-hint">Loading…</p>
@@ -140,9 +140,9 @@ export function ProfileScreen({
               memberSince={memberSince}
               counts={profile?.counts ?? null}
               topTracks={top}
-              emptyTopMsg="No plays yet — load tracks onto the decks and your most-played show up here."
+              emptyTopMsg="No plays yet."
               shareTitle="Handling The Loop"
-              shareText={live ? "🔴 I'm live on Handling The Loop — come listen" : "Catch my sets on Handling The Loop"}
+              shareText={live ? "🔴 I'm live on Handling The Loop, come listen" : "Catch my sets on Handling The Loop"}
               shareNote={
                 user?.handle ? (
                   <>
@@ -157,7 +157,7 @@ export function ProfileScreen({
               }
               live={
                 live ? (
-                  <button className="profile-live-badge" onClick={onGoToSession} title="Open the session">
+                  <button className="profile-live-badge" onClick={onGoToSession}>
                     ● Live now{listeners ? ` · ${listeners} listening` : ""}
                   </button>
                 ) : null
@@ -270,7 +270,6 @@ export function ProfileScreen({
             </div>
           </div>
         )}
-      </div>
       {confirmDelete && (
         <PromptModal
           title={`Type ${user?.handle ? `@${user.handle}` : "DELETE"} to permanently delete your account`}
@@ -280,6 +279,19 @@ export function ProfileScreen({
           onClose={() => setConfirmDelete(false)}
         />
       )}
+    </>
+  );
+
+  if (embedded) return body;
+  return (
+    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
+      <DockResizer varName="--dock-w-right" measure="parent" />
+      <div className="panel profile-screen" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="profile-head">
+          <span className="profile-head-title">Profile</span>
+        </div>
+        {body}
+      </div>
     </div>
   );
 }
@@ -444,16 +456,21 @@ function ProfileEditor({
           onChange={(e) => setBioText(e.target.value)}
         />
       </label>
+      {/* The two privacy switches, in the settings panel's own grammar: the label states the
+          setting, the ⓘ carries the consequence. They used to spell the consequence out inline,
+          which put two lines of muted prose between you and the control you came for. */}
       <label className="profile-toggle">
         <input type="checkbox" checked={priv} onChange={(e) => setPriv(e.target.checked)} />
         <span>
-          <b>Private account</b> — unlisted from search; new followers need your approval; your sets are follower-only.
+          <b>Private account</b>
+          <InfoDot text="Unlisted from search. New followers need your approval, and your sets stay follower-only." />
         </span>
       </label>
       <label className="profile-toggle">
         <input type="checkbox" checked={hidePres} onChange={(e) => setHidePres(e.target.checked)} />
         <span>
-          <b>Hide my activity</b> — never show when you're online, even to friends.
+          <b>Hide my activity</b>
+          <InfoDot text="Never show when you are online, even to friends." />
         </span>
       </label>
       <div className="handle-editor-actions">

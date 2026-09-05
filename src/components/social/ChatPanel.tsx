@@ -105,7 +105,7 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
         💬 Chat
         {/* A listener sees WHY the room may refuse them; the host gets the toggle. */}
         {!room.host && room.chatFollowers && (
-          <span className="chat-mode-badge" title="Only the host's followers can chat right now">
+          <span className="chat-mode-badge">
             👥 Followers only
           </span>
         )}
@@ -114,7 +114,6 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
             <button
               className={`chat-slow-opt chat-followers-opt ${room.chatFollowers ? "on" : ""}`}
               onClick={() => room.setChatFollowers(!room.chatFollowers)}
-              title="Followers-only chat — only people who follow you can post"
               aria-pressed={room.chatFollowers}
             >
               👥
@@ -144,11 +143,11 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
               {room.host && !self && (
                 <span className="chat-mod">
                   {room.mutedDevices.has(m.dev) ? (
-                    <button className="chat-mute on" onClick={() => room.muteDevice(m.dev, false)} title="Unmute this person" aria-label="Unmute">🔊</button>
+                    <button className="chat-mute on" onClick={() => room.muteDevice(m.dev, false)} aria-label="Unmute">🔊</button>
                   ) : (
-                    <button className="chat-mute" onClick={() => room.muteDevice(m.dev, true)} title="Mute this person" aria-label="Mute">🔇</button>
+                    <button className="chat-mute" onClick={() => room.muteDevice(m.dev, true)} aria-label="Mute">🔇</button>
                   )}
-                  <button className="chat-ban" onClick={() => room.banDevice(m.dev)} title="Remove from the room" aria-label="Remove">⛔</button>
+                  <button className="chat-ban" onClick={() => room.banDevice(m.dev)} aria-label="Remove">⛔</button>
                 </span>
               )}
               {/* Non-hosts can report a message to moderation (the host moderates directly). */}

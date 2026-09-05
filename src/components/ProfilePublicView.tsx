@@ -85,7 +85,6 @@ export function ProfilePublicView({
               @{handle}
               <button
                 className="profile-share-btn"
-                title="Copy share link"
                 onClick={() => {
                   const url = `${location.origin}/@${handle}`;
                   const nav = navigator as Navigator & {

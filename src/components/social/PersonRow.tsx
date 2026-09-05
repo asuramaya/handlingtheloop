@@ -15,10 +15,15 @@ export function PersonRow({
   card,
   onJam,
   onListen,
+  onOpen,
 }: {
   card: PersonCard;
   onJam?: (handle: string) => void; // knock / join a friend's session (needs the room)
   onListen?: (handle: string) => void; // tune into a public live set
+  // PUSH this person inside the dock instead of routing to /@handle. Falls back to the route
+  // when absent (a profile-counts list outside the dock has nowhere to push to) — but inside the
+  // People dock the route is exactly what we are avoiding: it evicts the list you were reading.
+  onOpen?: (handle: string) => void;
 }) {
   const [following, setFollowing] = useState(card.following);
   const [requested, setRequested] = useState(false); // pending request to a private account
@@ -66,7 +71,7 @@ export function PersonRow({
   };
 
   return (
-    <li className={`person-row ${card.live ? "live" : ""}`} onClick={() => h && goToHandle(h)}>
+    <li className={`person-row ${card.live ? "live" : ""}`} onClick={() => h && (onOpen ? onOpen(h) : goToHandle(h))}>
       <span className="person-avatar-wrap">
         {card.avatar ? (
           <img className="live-room-avatar" src={card.avatar} alt="" loading="lazy" />
@@ -115,7 +120,7 @@ export function PersonRow({
               </button>
             )}
             {requested ? (
-              <button className="follow-btn on requested" onClick={withdraw} title="Tap to cancel">
+              <button className="follow-btn on requested" onClick={withdraw}>
                 Requested ✕
               </button>
             ) : (

@@ -69,7 +69,7 @@ export function SocialCard({
             <button
               className={`room-tog ${p.listening ? "on" : ""}`}
               onClick={toggleSelfSound}
-              title={p.listening ? "Mute this device" : "Hear the mix"}
+              aria-label={p.listening ? "Mute this device" : "Hear the mix"}
             >
               {p.listening ? "🔊" : "🔇"}
             </button>
@@ -80,7 +80,7 @@ export function SocialCard({
             {/* A stepped-up listener gets a gentle "send to the floor" (keeps them listening);
                 an invited guest gets the usual grant + kick. */}
             {p.stage ? (
-              <button className="social-floor" onClick={() => room.denyStage(p.id)} title="Send back to the floor (stays listening)">
+              <button className="social-floor" onClick={() => room.denyStage(p.id)}>
                 ⬇ floor
               </button>
             ) : (
@@ -94,7 +94,7 @@ export function SocialCard({
                 </button>
               )
             )}
-            <button className="social-kick" onClick={() => room.kick(p.id)} title="Remove from session">
+            <button className="social-kick" onClick={() => room.kick(p.id)}>
               ⛔
             </button>
           </>

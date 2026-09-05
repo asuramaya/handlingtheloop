@@ -6,6 +6,7 @@ import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./u
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
 import { Menu } from "./ContextMenu";
+import { useDeckStackHeight } from "./lib/useDeckStackHeight";
 import type { StemName } from "@htl/stems";
 import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl/state";
 import { ValueCell } from "./ValueCell";
@@ -126,6 +127,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // wired to the FLX4's hardware bank buttons, so folding the page into it would mean a
   // controller press — or another device in the session — silently re-laying-out your phone.
   const [page, setPage] = useState<"perform" | "fx">("perform");
+  // The control surface's own height, measured on the MIX page and held across the turn to the
+  // FX page — see useDeckStackHeight for why this cannot be a CSS number.
+  const [stackEl, setStackEl] = useState<HTMLDivElement | null>(null);
+  useDeckStackHeight(stackEl, page === "perform");
   const PAD_MODE_KEY = `htl:padMode:${id}`;
   const padRestored = useRef(false);
   if (!padRestored.current) {
@@ -304,7 +309,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
 
   return (
     <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
-      <div className="bank-main">
+      <div className="bank-main" ref={setStackEl}>
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
         <div className="jog">

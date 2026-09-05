@@ -61,22 +61,34 @@ const BOARD = phoneBlocks(css("board.css"));
 const FX = phoneBlocks(css("fx.css"));
 
 describe("the phone board's vertical split never depends on control-stack content", () => {
-  it("gives the waveform flank a FIXED basis, not a share of the leftovers", () => {
+  it("lets the waveform GROW into whatever the controls do not need", () => {
     const d = declarationsFor(BOARD, ".stage .lanes-flank");
     expect(d, ".stage .lanes-flank has no phone rule at all").not.toBeNull();
-    const basis = flexBasis(d!);
-    expect(basis).toBe("min(290px, 34vh)");
+    // Pinning this to a fixed basis was the first attempt, and it stopped the jiggle by giving
+    // every spare pixel to a deck that did not want them: 317px of dead space at 768x1023, which
+    // is waveform height sitting empty inside the controls. It grows now, with the old figure
+    // demoted to a floor.
+    expect(flexBasis(d!)).toBe("0");
+    expect(d!).toMatch(/min-height:\s*min\(290px,\s*34vh\)/);
   });
 
-  it("gives the control third the REMAINDER, never its own content height", () => {
+  it("sizes the control third to its CONTENT, so there is no dead space to reclaim", () => {
     const d = declarationsFor(BOARD, ".stage .decks-third");
     expect(d).not.toBeNull();
-    // ★ THE CASE THAT PROVES THE BUG. `flex: 0 1 auto` — the value this shipped with — is a
-    // content-derived basis, and it is precisely what let eight hidden rows move the waveform.
-    // A test written against the old code would have to assert `auto` here, and that assertion
-    // IS the defect.
-    expect(flexBasis(d!)).not.toBe("auto");
-    expect(flexBasis(d!)).toBe("0");
+    expect(flexBasis(d!)).toBe("auto");
+  });
+
+  it("floors the bank at the MIX page's own measured height, which is what makes content-sizing safe", () => {
+    // ★ THE CASE THAT PROVES THE BUG, and it is the PAIR that matters, not either half.
+    // `decks-third: auto` alone is the original defect — the FX page's content is a different
+    // height, so the deck resized and the waveform moved. It is only safe because the bank
+    // carries a floor measured on the MIX page (useDeckStackHeight) that the FX page inherits.
+    // Assert the floor exists and is not the `min-height: 0` this rule shipped with; with that
+    // 0 restored, the deck moves 69px on the page turn (measured at 768x1023).
+    const d = declarationsFor(BOARD, ".stage .decks-row .bank-main");
+    expect(d, "the bank-main phone rule is gone").not.toBeNull();
+    expect(d!).toMatch(/min-height:\s*min\(var\(--deck-stack-h/);
+    expect(d!).not.toMatch(/min-height:\s*0\s*;/);
   });
 
   it("does not let .lanes fight the flank for the height — the flank owns it", () => {

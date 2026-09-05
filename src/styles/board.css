@@ -685,8 +685,14 @@
    * page turn from un-binding it. `min()` keeps it a floor and not a takeover: on a SHORT
    * viewport (a phone in landscape) 34vh yields first, so the controls are never squeezed off. */
   .stage .lanes-flank {
-    flex: 0 0 min(290px, 34vh);
-    min-height: 0;
+    /* THE WAVEFORM TAKES THE SLACK. It used to be pinned to `min(290px, 34vh)` while the deck
+       took everything left — and the deck did not want it: measured at 768x1023 the control
+       stack needs 321px and was handed 638px, so 317px sat dead above the FX bar. That is the
+       waveform's height, sitting empty inside the controls. Now the deck asks for what it
+       needs (below) and this grows into whatever is left, with the old figure kept as a FLOOR
+       so a tall control stack can still never crush the signal to a sliver. */
+    flex: 1 1 0;
+    min-height: min(290px, 34vh);
   }
   .stage .lanes {
     flex: 1 1 0; /* WIDTH between the two overview rails — see above */
@@ -694,9 +700,24 @@
     overflow: hidden;
   }
   .stage .decks-third {
-    flex: 1 1 0; /* the remainder, always — never its own content height */
+    flex: 0 1 auto; /* exactly as tall as the control surface — never more */
     min-height: 0;
   }
+  /* ★ AND THE FLOOR THAT MAKES "AS TALL AS THE CONTROLS" PAGE-INDEPENDENT.
+   *
+   * Content-sizing the deck is what kills the dead space, and on its own it is also what caused
+   * the original jiggle: the FX page's content is a different height, so the deck resized and
+   * the waveform moved. Only the MIX page defines what the control surface needs, so that is
+   * the page that gets measured (useDeckStackHeight), and the FX page inherits the number as a
+   * floor and fills it. Both pages are then exactly the same height AND exactly full.
+   *
+   * The cap is a guard, not a layout: if a control stack ever wants more than 62vh it goes back
+   * to scrolling inside the deck (`.bank-main` overflow-y) rather than pushing the waveform
+   * under its own floor and starting a fight between two minimums. */
+  /* (The floor itself is set on the EXISTING `.stage .decks-row .bank-main` rule further down,
+     not here. Written as a second rule it lost silently: same specificity (0,3,0), and that one
+     comes later in the file, so its `min-height: 0` won and the floor computed to 0px while
+     every var read correctly. One selector, one answer.) */
   .stage .decks-row {
     flex: 1 1 auto;
     min-height: 0;
@@ -755,7 +776,14 @@
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    min-height: 0;
+    /* ★ THE FLOOR THAT MAKES A CONTENT-SIZED DECK PAGE-INDEPENDENT.
+     * `--deck-stack-h` is the MIX page's own measured control-surface height (useDeckStackHeight);
+     * the FX page inherits it and fills it, so both pages are exactly as tall as the controls
+     * need and exactly the same height as each other. Was `min-height: 0`.
+     * The cap is a guard, not a layout: a control stack wanting more than 62vh goes back to
+     * scrolling inside the deck rather than pushing the waveform under its own floor and starting
+     * a fight between two minimums. */
+    min-height: min(var(--deck-stack-h, 0px), 62vh);
   }
   /* Every row keeps its NATURAL height — nothing grows to fill, so the transport /
      jog / loop rows can't balloon into giant buttons. The block stacks from the top;

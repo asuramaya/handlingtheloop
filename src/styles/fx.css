@@ -3131,6 +3131,24 @@ button.room-tog:hover {
     flex: 1 1 auto;
     min-height: 0;
   }
+  /* ★ AND THE PANEL FILLS THE STAGE IT WAS GIVEN.
+   *
+   * The three rules above already grew the STAGE to the height the FX page has spare. The panel
+   * inside it did not follow: `.fx-panel` takes `height: var(--fx-body-h)` as its one height
+   * authority, so it stayed at the phone's flat 192px inside a 261px stage — 69px of dead space
+   * INSIDE the effect, which is the gap visible under the EQ's knob row and under COMP's mode row.
+   *
+   * Overriding the VARIABLE rather than the panel's height is what makes this work for every
+   * device instead of just the EQ: `--comp-canvas-h` is `calc(var(--fx-body-h) - 28px)`, the
+   * delay's ribbon is derived from it too, and each of those would otherwise keep sizing itself
+   * from 192 while the box around it grew — a panel that fills its stage and is hollow inside it.
+   * One authority, so they all scale together.
+   *
+   * Only on the FX PAGE: on the MIX page the strip is a one-row bar with no panel showing, and
+   * `--fx-body-h` still has to mean the desktop's shared device height everywhere else. */
+  .bank.page-fx .fx-strip {
+    --fx-body-h: 100%;
+  }
 }
 /* Main WYSIWYG display — the canvas absolutely fills it (the .dly-viz pattern, no aspect fight). */
 .sat-viz {

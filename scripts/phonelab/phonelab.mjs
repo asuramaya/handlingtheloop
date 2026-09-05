@@ -16,6 +16,7 @@
 //   node scripts/phonelab/phonelab.mjs --w 844 --h 390     # landscape
 //   node scripts/phonelab/phonelab.mjs --url http://localhost:5173/
 //   node scripts/phonelab/phonelab.mjs --shot out.png      # also save a screenshot of each page
+//   node scripts/phonelab/phonelab.mjs --device COMP       # open a named effect rather than the first
 //
 // Needs: playwright-core + a Chromium, and a dev server already running.
 
@@ -42,6 +43,7 @@ const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > -1 
 const W = +arg("w", 390), H = +arg("h", 844);
 const URL_ = arg("url", "http://localhost:5173/");
 const SHOT = arg("shot", null);
+const DEVICE = arg("device", null); // which device tab to open (default: the first)
 
 // Everything whose height must not change when the page turns, plus the strip whose POSITION
 // must not change. Measured from the same element set on both pages so the diff is meaningful.
@@ -87,7 +89,9 @@ if (SHOT) await page.screenshot({ path: SHOT.replace(/\.png$/, "") + "-perform.p
 // Turn to the FX page the way a finger does: tap a device tab in the rack bar.
 const tapped = await page.evaluate(`(() => {
   const bank = document.querySelector('.bank.focused') || document.querySelector('.bank');
-  const tab = bank && bank.querySelector('.fx-rack-bar .fx-tab:not(.fx-page-close)');
+  const tabs = bank ? [...bank.querySelectorAll('.fx-rack-bar .fx-tab:not(.fx-page-close)')] : [];
+  const want = ${JSON.stringify(DEVICE)};
+  const tab = want ? tabs.find((t) => (t.textContent || '').trim().toUpperCase().startsWith(want.toUpperCase())) : tabs[0];
   if (!tab) return null;
   tab.click();
   return (tab.textContent || '').trim().slice(0, 12);

@@ -33,6 +33,12 @@
      0.16s on `ease`, which is 20ms of one container still moving after the other has stopped. */
   --fx-fold-ms: 180ms;
   --fx-fold-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  /* The phone's ✕ exit is the tallest thing that can appear in the rack bar, and it appears on
+     ONE of the two pages. Naming its height here lets the BAR reserve it on both — see
+     `.fx-rack-bar { min-height }` in the phone block — so the row does not grow by 2px the
+     moment you open an effect. One definition, two readers: the control and the space kept for
+     it. Written as a literal in each place, they drifted the instant either moved. */
+  --fx-exit-h: 30px;
   --fx-reclaimed: 33px;
   --fx-body-h: clamp(
     calc(132px + var(--fx-reclaimed)),
@@ -459,9 +465,12 @@
   margin-inline-start: auto;
   /* A real touch target on BOTH axes. The tabs beside it run at the head row's 21px, which is
      fine for a thing you pick among many; this is the single way back out of the page, so it
-     gets the platform minimum and the row grows to hold it. */
+     gets the platform minimum. The row no longer GROWS to hold it — it reserves the same height
+     on both pages (--fx-exit-h), because a bar that gets 2px taller when you open an effect
+     moves every tab in it under the thumb that just tapped one. Measured at 390x844: bar 28px
+     on MIX, 30px on FX. */
   min-width: 44px;
-  min-height: 30px;
+  min-height: var(--fx-exit-h);
   /* RED, not the deck accent. Every other lit control on this surface is the deck's colour, and
      this is the one control that does not act on the audio at all — it leaves. Making it the odd
      one out is the point: you look for it when you want out, and nothing else on the page
@@ -2874,6 +2883,12 @@ button.room-tog:hover {
    * desktop-correct (bar on top, panel beneath it), which is right for a mouse. */
   .fx-strip > .fx-rack-bar {
     order: 1;
+    /* Reserve the exit's height on BOTH pages. The ✕ only exists on the FX page and is the
+       tallest child the bar ever holds, so without this the bar is 28px on MIX and 30px on FX —
+       and since the bar is bottom-anchored, that 2px comes off its TOP, shifting every chain
+       pill and device tab upward exactly as you tap one. Measured, not guessed: phonelab
+       reported `fx strip top -2` with everything else already pixel-identical. */
+    min-height: var(--fx-exit-h);
   }
   /* Phone EQ/effects height = the SAME as desktop (no half-height squash at the
      breakpoint). The control stack now gives way and scrolls (`.decks-third` is

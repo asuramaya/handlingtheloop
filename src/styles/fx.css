@@ -2849,10 +2849,31 @@ button.room-tog:hover {
   .stage .decks-row .bank-main {
     gap: 6px;
   }
-  /* EQ strip keeps its place in the now-consistent stack; it scrolls with the rest. */
+  /* ★ THE FX STRIP IS ANCHORED TO THE BOTTOM OF THE DECK, ON BOTH PAGES.
+   *
+   * It used to sit wherever the stack happened to end. On the MIX page that was near the
+   * bottom of the screen (eight control rows above it); on the FX page those eight rows are
+   * `display: none`, so the strip jumped up to sit directly under the level fader — the whole
+   * rack travelling half the screen as the reward for tapping an effect, and then travelling
+   * back when you closed it. The thing you are aiming at should not move because you hit it.
+   *
+   * `margin-top: auto` pins it to the bottom of `.bank-main`'s free space, so it lands in the
+   * same place whichever page is showing. When the stack is tall enough to overflow there is no
+   * free space, the auto margin resolves to 0, and the strip simply scrolls with everything
+   * else exactly as before. */
   .decks-row .bank-main > .eq-row {
     flex: 0 1 auto;
     min-height: 0;
+    margin-top: auto;
+  }
+  /* ...AND THE PANEL OPENS UPWARD, ABOVE THE BAR IT CAME FROM.
+   * `.fx-body` is `display: contents`, so the panel's own children are flex items of
+   * `.fx-strip` alongside `.fx-rack-bar`. Sending the BAR last (order: 1) puts the chain pills
+   * and device tabs at the very bottom of the deck — under the thumb, where they were when you
+   * reached for them — and grows the effect's panel into the space above. Source order stays
+   * desktop-correct (bar on top, panel beneath it), which is right for a mouse. */
+  .fx-strip > .fx-rack-bar {
+    order: 1;
   }
   /* Phone EQ/effects height = the SAME as desktop (no half-height squash at the
      breakpoint). The control stack now gives way and scrolls (`.decks-third` is

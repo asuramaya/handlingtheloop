@@ -658,30 +658,43 @@
      selector here loses the cascade to them. The extra class (0,2,0 > 0,1,0) wins
      regardless of source order — without it `.decks-third` kept `flex:0 1 auto`,
      collapsed to just the crossfader, and left the bottom half an empty void. */
-  /* AUDIO VIEWPORT STAYS PUT ACROSS THE BREAKPOINT. The deck A/B waveforms must NOT
-     jump size when the window crosses 768px. The earlier "controls win" rule did exactly
-     that: it made `.decks-third` rigid (flex 0 0 auto) and dropped the lanes' min-height
-     to 0, so the instant you hit mobile the control stack stopped giving way and ate the
-     waveform height — a visible collapse at the threshold. Instead, mirror the DESKTOP
-     allocation exactly (same flex + same 140px lane floor) so the lanes get an identical
-     share on both sides of the line. The control stack gives way and SCROLLS internally
-     (`.bank-main { overflow-y:auto }` below) when it doesn't fit — controls scroll, the
-     audio viewport holds its size. */
+  /* ★ THE PHONE BOARD'S VERTICAL SPLIT IS FIXED, AND MUST NOT BE CONTENT-DERIVED.
+   *
+   * The waveform used to resize whenever the control stack's height changed, because
+   * `.decks-third` was `flex: 0 1 auto` — basis AUTO, i.e. "as tall as my content" — while the
+   * lanes were `flex: 1 1 0` and absorbed whatever was left. That is fine until something
+   * changes the content height, and turning a deck to its FX page hides EIGHT rows at once
+   * (jog, loops, loop-sizes, pad-mode, hotcues, bank-load, pitch-row, stems-row). So opening an
+   * effect moved the waveform: the reported jiggle, and not a rendering artefact — it was the
+   * layout faithfully recomputing a share that should never have been a share.
+   *
+   * Both terms are now content-independent: the flank takes a fixed height, the controls take
+   * the remainder, and the bank SCROLLS inside whatever it is given (`.bank-main` overflow-y).
+   * Nothing the deck does to its own rows can move the audio viewport by a pixel.
+   *
+   * ★ AND IT IS THE FLANK, NOT `.lanes`, THAT OWNS THE HEIGHT NOW. `.lanes` was wrapped in
+   * `.lanes-flank` when the SongOverview rails landed, so `.lanes` is no longer a child of the
+   * column `.stage` — it is a child of a ROW (rail | lanes | rail). Its `flex` there governs
+   * WIDTH, and this rule had been silently sizing the wrong axis ever since; the old
+   * min-height was the only thing still holding the waveform up. One owner: the flank sets the
+   * height, `.lanes` sets its width inside it and takes min-height: 0 so it cannot fight back.
+   *
+   * The 290px/34vh figure is unchanged and deliberately so — it is what the lanes ALREADY
+   * resolved to in practice (measured 390x844: the control stack wants 583px, so the floor was
+   * always the binding constraint). Making it the basis does not resize anything; it stops a
+   * page turn from un-binding it. `min()` keeps it a floor and not a takeover: on a SHORT
+   * viewport (a phone in landscape) 34vh yields first, so the controls are never squeezed off. */
+  .stage .lanes-flank {
+    flex: 0 0 min(290px, 34vh);
+    min-height: 0;
+  }
   .stage .lanes {
-    flex: 1 1 0;
-    /* The waveform is the only region on a phone with no natural height: `.decks-row` below
-       it sizes to its CONTENT (flex-basis auto) and scrolls when that overflows, so against a
-       basis-0 lanes row it wins every contested pixel. Measured at 390x844 the lanes got 178px
-       total — a 40px waveform under a 48px header, the metadata taller than the signal it
-       labels — while the scrolling board held 583px (69% of the screen). The floor below buys
-       the signal back from the one region that loses nothing by scrolling a little sooner.
-       `min()` keeps it a floor and not a takeover: on a SHORT viewport (phone in landscape,
-       small window) 34vh yields first, so the controls never get squeezed off the screen. */
-    min-height: min(290px, 34vh);
+    flex: 1 1 0; /* WIDTH between the two overview rails — see above */
+    min-height: 0;
     overflow: hidden;
   }
   .stage .decks-third {
-    flex: 0 1 auto; /* shrinkable like desktop → controls scroll, lanes keep their share */
+    flex: 1 1 0; /* the remainder, always — never its own content height */
     min-height: 0;
   }
   .stage .decks-row {

@@ -2,3 +2,4 @@
 export * from "./protocol";
 export * from "./client";
 export * from "./useRoom";
+export { heroState, type HeroState, type HeroInputs } from "./heroState";

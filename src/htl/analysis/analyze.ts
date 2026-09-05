@@ -19,6 +19,17 @@ export interface Pyramid {
   sampleRate: number;
   length: number; // samples
   levels: PyramidLevel[]; // level 0 = finest
+  /** ★ THE BALANCE THE NORMALISATION THREW AWAY. `low/mid/high` are each divided by their OWN
+   *  peak, which is right for DYNAMICS — a track with quiet highs still shows their contour
+   *  instead of a flat line — but it erases the fact that real music carries far more energy
+   *  low than high. Every band ends up peaking at exactly 1.0, so anything that COMPARES bands
+   *  (the layered renderer picks the loudest per column) sees a tie that the physics never had,
+   *  and the high band wins constantly: a bass-heavy track paints as a wall of the high colour.
+   *  One number cannot carry both facts, so the peaks ride along and the renderer decides how
+   *  much balance to restore. Ratios relative to the loudest band, so it is scale-free and
+   *  always [x, y, z] with at least one 1. Optional: a pyramid built before this (or a remote
+   *  stem view, which has no band data at all) simply leaves it undefined and reads as today. */
+  bandPeaks?: [number, number, number];
 }
 
 export interface Beatgrid {
@@ -156,6 +167,10 @@ export function computePyramidFromChannels(ch0: Float32Array, ch1: Float32Array 
     mid[i] /= maxMid;
     high[i] /= maxHigh;
   }
+  // The pre-normalisation peaks, as ratios of the loudest band — the only surviving record of
+  // how the track's energy was ACTUALLY distributed. See Pyramid.bandPeaks.
+  const peakMax = Math.max(maxLow, maxMid, maxHigh) || 1;
+  const bandPeaks: [number, number, number] = [maxLow / peakMax, maxMid / peakMax, maxHigh / peakMax];
 
   const levels: PyramidLevel[] = [{ bucket: BASE_BUCKET, min, max, low, mid, high }];
   while (levels[levels.length - 1].min.length > 1) {
@@ -182,7 +197,7 @@ export function computePyramidFromChannels(ch0: Float32Array, ch1: Float32Array 
     levels.push(lvl);
   }
 
-  return { sampleRate: sr, length: n, levels };
+  return { sampleRate: sr, length: n, levels, bandPeaks };
 }
 
 /** Lightweight min/max-only LOD pyramid for stem waveforms. Stems are coloured

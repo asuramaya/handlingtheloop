@@ -10,15 +10,14 @@ import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { RoomBar } from "./components/RoomBar";
-import { ProfileScreen } from "./components/ProfileScreen";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { SocialScreen } from "./components/SocialScreen";
-import { DiscoverScreen } from "./components/DiscoverScreen";
-import { NotificationsBell } from "./components/social/NotificationsBell";
+import { PeopleScreen } from "./components/PeopleScreen";
+import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
+import { useNotifications } from "./components/social/useNotifications";
 import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
 import { ReplayBar } from "./components/ReplayBar";
-import { KeyMap } from "./components/KeyHelp";
 import { useMidi, type DeckFeedback } from "@htl/midi";
 import { useGamepad } from "@htl/gamepad";
 import {
@@ -70,6 +69,8 @@ import {
   PITCH_RANGES,
   nextSkip,
   type Settings,
+  type DockMode,
+  type PanelKey,
   type DeckSnapshot,
   type SessionSnapshot,
   loadSession,
@@ -465,20 +466,35 @@ function AppBody() {
   // three share one slot, so one string captures it.
   const initRightDock = window.innerWidth >= 769 ? localStorage.getItem("htl:rightDock") : null;
   const [settingsOpen, setSettingsOpen] = useState(initRightDock === "settings");
-  const [profileOpen, setProfileOpen] = useState(initRightDock === "profile");
+  // ONE People dock replaces Profile + Discover + the notification bell; `peopleTab` says which
+  // face of it is showing. The old per-surface open flags are gone — three booleans that had to
+  // be mutually exclusive by hand were three chances to leave two docks open at once.
+  const [profileOpen, setProfileOpen] = useState(initRightDock === "profile" || initRightDock === "discover");
+  // ★ THE DOCK'S POSITION LIVES HERE, not inside it. PeopleScreen unmounts every time the dock
+  // closes, so anything it owned — tab, pushed person, filters, scroll — died with it: measured
+  // at 151 rows + scrollTop 1200 becoming 0/0 on a close. Held here, an excursion costs nothing.
+  const [peopleView, setPeopleView] = useState<PeopleView>(() => ({
+    ...INITIAL_PEOPLE_VIEW,
+    ...viewForPane(initRightDock === "discover" ? "air" : "profile"),
+  }));
+  const peopleTab = peopleView.tab;
+  const patchPeopleView = useCallback(
+    (patch: Partial<PeopleView> | ((v: PeopleView) => PeopleView)) =>
+      setPeopleView((v) => (typeof patch === "function" ? patch(v) : { ...v, ...patch })),
+    [],
+  );
   const [socialOpen, setSocialOpen] = useState(initRightDock === "social");
-  const [discoverOpen, setDiscoverOpen] = useState(initRightDock === "discover");
+
   // Keyboard-help popover — a lightweight, ephemeral overlay (not one of the persisted
   // right-docks above): pops near the chin, closes on click-away or Escape.
-  const [helpOpen, setHelpOpen] = useState(false);
   useEffect(() => {
-    const v = settingsOpen ? "settings" : profileOpen ? "profile" : socialOpen ? "social" : discoverOpen ? "discover" : "";
+    const v = settingsOpen ? "settings" : profileOpen ? (peopleTab === "explore" ? "discover" : "profile") : socialOpen ? "social" : "";
     try {
       localStorage.setItem("htl:rightDock", v);
     } catch {
       /* ignore */
     }
-  }, [settingsOpen, profileOpen, socialOpen, discoverOpen]);
+  }, [settingsOpen, profileOpen, socialOpen, peopleTab]);
   // The public profile (/@handle) shares the right dock — mutually exclusive with the
   // three above. URL-driven (not persisted): the path opens it, popstate follows it.
   const [publicHandle, setPublicHandle] = useState<string | null>(handleFromPath);
@@ -512,8 +528,8 @@ function AppBody() {
   }, [publicHandle]);
   useEffect(() => {
     // …and opening any own-account dock leaves the public profile.
-    if (settingsOpen || profileOpen || socialOpen || discoverOpen) setPublicHandle(null);
-  }, [settingsOpen, profileOpen, socialOpen, discoverOpen]);
+    if (settingsOpen || profileOpen || socialOpen) setPublicHandle(null);
+  }, [settingsOpen, profileOpen, socialOpen]);
   const closePublic = () => {
     window.history.pushState(null, "", "/");
     setPublicHandle(null);
@@ -572,10 +588,15 @@ function AppBody() {
       /* ignore */
     }
   }, [libOpen]);
-  // Chin launchers. Library is the LEFT dock; Settings / Profile / Session SHARE the
-  // RIGHT dock (one at a time — the old Search slot). On desktop the left + right docks
-  // can both be open; on a phone they're full-screen panels, so opening one closes the
-  // others (else they overlap — the mobile bug).
+  // Chin launchers. Each of Library/Settings/People/Session floats independently now
+  // (Settings ▸ Controls ▸ Panel placement) — left/right/bottom coexist fine even when two
+  // share an edge (edgeZIndex/panelOrder already resolve which one's on top; that's supported
+  // stacking, not a bug). "center" is the one placement that's ALWAYS a full-viewport modal —
+  // two of those open together would just double up (dim-over-dim, one hiding the other), so
+  // it's the one case that stays genuinely exclusive: opening a panel in "center" closes
+  // whichever OTHER panel currently holds the center slot. On a phone every panel is
+  // full-screen regardless of its desktop dockMode setting, so phones keep their own
+  // unconditional exclusivity below, same as before.
   const onPhone = () => window.matchMedia("(max-width: 768px)").matches;
   const closeRightDock = () => {
     setSocialOpen(false);
@@ -583,66 +604,98 @@ function AppBody() {
     setSettingsOpen(false);
     setDiscoverOpen(false);
   };
+  const CENTER_PANEL_CLOSERS: Record<PanelKey, () => void> = {
+    library: () => setLibOpen(false),
+    settings: () => setSettingsOpen(false),
+    people: () => setProfileOpen(false),
+    session: () => setSocialOpen(false),
+  };
+  const closeOtherCenterPanels = (except: PanelKey) => {
+    const docks: Record<PanelKey, DockMode> = {
+      library: settings.libraryDock,
+      settings: settings.settingsDock,
+      people: settings.peopleDock,
+      session: settings.sessionDock,
+    };
+    (Object.keys(CENTER_PANEL_CLOSERS) as PanelKey[]).forEach((key) => {
+      if (key !== except && docks[key] === "center") CENTER_PANEL_CLOSERS[key]();
+    });
+  };
   const toggleLib = () => {
     // Functional update so the keyboard (Alt) and chin button never read a stale libOpen.
     setLibOpen((v) => {
       const next = !v;
-      if (next && onPhone()) closeRightDock();
+      if (next) {
+        if (onPhone()) closeRightDock();
+        else if (settings.libraryDock === "center") closeOtherCenterPanels("library");
+      }
       return next;
     });
   };
-  // The right-dock launchers TOGGLE (press the chin button again to close — no explicit
-  // ✕). Opening one closes the other two; on a phone it also closes the full-screen
-  // Library. Settings / Profile / Session are the same panel, swapped by which you press.
+  // The right-dock launchers TOGGLE (press the chin button again to close — no explicit ✕).
   const toggleSocial = () => {
     setSocialOpen((v) => {
       const next = !v;
       if (next) {
-        setProfileOpen(false);
-        setSettingsOpen(false);
-        setDiscoverOpen(false);
-        if (onPhone()) setLibOpen(false);
+        if (onPhone()) {
+          setProfileOpen(false);
+          setSettingsOpen(false);
+          setDiscoverOpen(false);
+          setLibOpen(false);
+        } else if (settings.sessionDock === "center") {
+          closeOtherCenterPanels("session");
+        }
       }
       return next;
     });
   };
-  const toggleDiscover = () => {
-    setDiscoverOpen((v) => {
-      const next = !v;
-      if (next) {
-        setSocialOpen(false);
-        setProfileOpen(false);
-        setSettingsOpen(false);
-        if (onPhone()) setLibOpen(false);
-      }
-      return next;
-    });
+  // Open the People dock on a named tab. `toggleDiscover` used to open a whole separate panel;
+  // it is now "open People, on Discover", which is what every caller actually meant.
+  const openPeople = (pane: PeoplePane) => {
+    patchPeopleView(viewForPane(pane));
+    setProfileOpen(true);
+    if (onPhone()) {
+      setSocialOpen(false);
+      setSettingsOpen(false);
+      setLibOpen(false);
+    } else if (settings.peopleDock === "center") {
+      closeOtherCenterPanels("people");
+    }
   };
+  // Compatibility shim for the callers that used to open/close a standalone Discover dock — a
+  // deep-link handler, a room hand-off, an invite accept. Every one of them means "show Discover"
+  // or "get out of the way", and both still have an exact meaning here.
+  const setDiscoverOpen = (v: boolean) => (v ? openPeople("air") : setProfileOpen(false));
   const toggleProfile = () => {
-    setProfileOpen((v) => {
-      const next = !v;
-      if (next) {
-        setSocialOpen(false);
-        setSettingsOpen(false);
-        setDiscoverOpen(false);
-        if (onPhone()) setLibOpen(false);
-      }
-      return next;
-    });
+    if (profileOpen) return setProfileOpen(false);
+    // ★ REOPEN WHERE YOU LEFT. This used to hardcode `openPeople("profile")`, so although the tab was
+    // remembered, every press of the chin button overwrote it — you could never come back to the
+    // list you were reading.
+    if (onPhone()) {
+      setSocialOpen(false);
+      setSettingsOpen(false);
+      setLibOpen(false);
+    } else if (settings.peopleDock === "center") {
+      closeOtherCenterPanels("people");
+    }
+    setProfileOpen(true);
   };
   const toggleSettings = () => {
     setSettingsOpen((v) => {
       const next = !v;
       if (next) {
-        setSocialOpen(false);
-        setProfileOpen(false);
-        setDiscoverOpen(false);
-        if (onPhone()) setLibOpen(false);
+        if (onPhone()) {
+          setSocialOpen(false);
+          setProfileOpen(false);
+          setDiscoverOpen(false);
+          setLibOpen(false);
+        } else if (settings.settingsDock === "center") {
+          closeOtherCenterPanels("settings");
+        }
       }
       return next;
     });
   };
-  const [dockSwapped, setDockSwapped] = useState(false); // desktop: swap which side each dock sits on
   const [shiftLatched, setShiftLatched] = useState(false);
   const [shiftHeld, setShiftHeld] = useState(false);
   // A controller SHIFT button is held, per deck (the FLX4 has one SHIFT per side).
@@ -1319,6 +1372,18 @@ function AppBody() {
 
   useEffect(() => {
     applySettings(settings);
+    // ★ THE RESOLVED ACCENT HAS TO REACH THE CSS, NOT JUST THE PROPS — and it has to land AFTER
+    // applySettings, which is why it lives inside this effect rather than its own.
+    // `ACCENT` is artwork-aware and every component taking an `accent` PROP followed it correctly.
+    // But applySettings writes `--neon-cyan` / `--neon-pink` straight from `settings.accentA/B`,
+    // and most of the app's chrome (buttons, faders, meters) is coloured off those variables. So
+    // with Deck artwork on, the waveform wore the cover's colour while everything around it wore
+    // the stored setting, and rolling a palette visibly repainted the app "over" the artwork. Two
+    // sources of truth for one colour, and only one of them knew about album art.
+    // Written to :root; the shared-session vibe paints on <body> and still wins, so the precedence
+    // stays room > artwork > your picked colour.
+    document.documentElement.style.setProperty("--neon-cyan", ACCENT.A);
+    document.documentElement.style.setProperty("--neon-pink", ACCENT.B);
     saveSettings(settings);
     engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
     engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
@@ -1337,7 +1402,9 @@ function AppBody() {
       tThresh: settings.stretchTThresh,
     });
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
-  }, [settings, engine]);
+    // ACCENT is in the deps so a track change (new cover art) repaints the chrome too, not just
+    // the waveform that happens to take it as a prop.
+  }, [settings, engine, ACCENT.A, ACCENT.B]);
 
   // Route the mix to the chosen output device (only re-applies when it changes, so a
   // theme tweak never re-routes audio). "" = system default.
@@ -2124,6 +2191,25 @@ function AppBody() {
     settings.accentA, // our account accent → synced so the room can take the host's vibe
     nowPlaying,
   );
+
+  // The unread badge has to tick while the People dock is CLOSED — that is the whole job of a
+  // badge — so the poll lives out here beside friendsOnline, for exactly the reason stated there.
+  // The old bell owned both the count and the popover and could only count while mounted.
+  const notifications = useNotifications(!!room.user);
+
+  // ★ THE GRAPH CACHE IS VIEWER-RELATIVE, so a change of identity is the one event that truly
+  // invalidates it — every row carries `following` / `followsYou` computed against whoever was
+  // signed in. Without this, signing out and back in as someone else would serve the previous
+  // account's graph, with the previous account's relationships, out of a session-lifetime cache.
+  const seenUserId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const id = room.user?.id ?? null;
+    if (seenUserId.current !== undefined && seenUserId.current !== id) {
+      clearGraphCache();
+      setPeopleView((v) => ({ ...v, people: { ...v.people, query: "" }, scroll: { ...v.scroll, people: 0 } }));
+    }
+    seenUserId.current = id;
+  }, [room.user?.id]);
 
   // The Profile dock is where a handle gets claimed; on its close, refresh the room's
   // account view so "Go live" un-gates (room.user.handle) without a page reload.
@@ -3351,19 +3437,12 @@ function AppBody() {
   };
 
   return (
-    <div className={`app ${dockSwapped ? "dock-swapped" : ""}`}>
+    <div className="app">
       {/* Top chin: panel launchers, reserving their own row at the top so they never
-          overlap the board. The ⇄ swap sits top-LEFT; it flips which side the Library
-          dock and the Settings/Profile/Session dock sit on (and mirrors the chin). */}
+          overlap the board. No more ⇄ swap button — each floating dock (Library/
+          Settings/Profile/Session) picks its own edge independently now instead of one
+          global left↔right flip; Library's is in Settings ▸ Controls ▸ Library placement. */}
       <nav className="chin">
-        <button
-          className="chin-btn chin-swap"
-          onClick={() => setDockSwapped((v) => !v)}
-          aria-label="Swap panel sides"
-          title="Swap panel sides"
-        >
-          <span className="chin-swap-i" aria-hidden="true">⇄</span>
-        </button>
         <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
           <span className="chin-label">Library</span>
         </button>
@@ -3371,64 +3450,47 @@ function AppBody() {
           className={`chin-btn chin-settings ${settingsOpen ? "active" : ""}`}
           onClick={toggleSettings}
           aria-label="Settings"
-          title="Settings"
         >
           <span className="chin-gear" aria-hidden="true">⚙</span>
           <span className="chin-label">Settings</span>
         </button>
+        {/* ONE PEOPLE BUTTON. It replaced 🌐 Profile, 🧭 Discover and the 🔔 bell — three chin
+            slots for one subject, two of which polled the same live-rooms query and one of
+            which ended in a link to another. A PERSON glyph, because that is the subject; a
+            globe said "the internet" and a compass said "navigation", neither of which is what
+            is behind it. The badge is unread activity; the dot is friends online — two different
+            facts, so two different marks rather than one number that means either. */}
         <button
-          className={`chin-btn chin-profile ${profileOpen ? "active" : ""}`}
+          className={`chin-btn chin-people ${profileOpen ? "active" : ""}`}
           onClick={toggleProfile}
-          aria-label="Profile"
-          title="Your profile"
+          aria-label={
+            notifications.unread > 0
+              ? `People, ${notifications.unread} new`
+              : friendsOnline.length > 0
+                ? `People — ${friendsOnline.length} friends online`
+                : "People"
+          }
         >
-          <span className="chin-globe" aria-hidden="true">🌐</span>
+          <span className="chin-people-i" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 21c0-4.418 3.582-8 8-8s8 3.582 8 8v1H4v-1z" />
+            </svg>
+          </span>
+          {notifications.unread > 0 && (
+            <span className="notif-badge">{notifications.unread > 9 ? "9+" : notifications.unread}</span>
+          )}
+          {notifications.unread === 0 && friendsOnline.length > 0 && (
+            <span className="chin-presence-dot" aria-hidden="true" />
+          )}
         </button>
-        <button
-          className={`chin-btn chin-discover ${discoverOpen ? "active" : ""}`}
-          onClick={toggleDiscover}
-          aria-label={friendsOnline.length > 0 ? `Discover — ${friendsOnline.length} friends online` : "Discover"}
-          title={friendsOnline.length > 0 ? `${friendsOnline.length} friends online` : "Discover — who's live now"}
-        >
-          <span className="chin-discover-i" aria-hidden="true">🧭</span>
-          {friendsOnline.length > 0 && <span className="chin-presence-dot" aria-hidden="true" />}
-        </button>
-        <NotificationsBell
-          signedIn={!!room.user}
-          self={room.user?.handle ?? null}
-          tunedTo={room.listeningTo}
-          onListen={(h) => {
-            setDiscoverOpen(false);
-            room.tuneIn(h);
-          }}
-          onJam={(h) => {
-            setDiscoverOpen(false);
-            room.jam(h);
-          }}
-          onSeeAll={toggleDiscover}
-        />
         <RoomBar room={room} onExpand={toggleSocial} />
-        <button
-          className={`chin-btn chin-info ${helpOpen ? "active" : ""}`}
-          onClick={() => setHelpOpen((v) => !v)}
-          aria-label="Keyboard shortcuts"
-          title="Keyboard shortcuts"
-        >
-          <span className="chin-info-i" aria-hidden="true">?</span>
-        </button>
       </nav>
-      {helpOpen && (
-        <>
-          <div className="ctx-backdrop" onClick={() => setHelpOpen(false)} />
-          <div className="help-panel">
-            <div className="help-panel-head">
-              <span>Keyboard shortcuts</span>
-              <button className="help-panel-close" onClick={() => setHelpOpen(false)} aria-label="Close">✕</button>
-            </div>
-            <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => setSettings((s) => ({ ...s, keyBindings }))} />
-          </div>
-        </>
-      )}
+      {/* The chin's "?" button is GONE. It opened a modal whose entire content was the same
+          <KeyMap> that Settings ▸ Controls already renders — the identical editable map, from
+          the identical `settings.keyBindings`, reachable one click away. A second door to one
+          room is not a feature; it is a second thing to keep current, and the one that gets
+          forgotten is always the one nobody owns. Keys live in Controls. */}
 
       {/* Workspace: on desktop a flex ROW so the Library/Search docks SHARE the
           width with the board (push it, don't overlay). On mobile a column with the
@@ -3459,6 +3521,9 @@ function AppBody() {
               freqMid={settings.freqMidColor || FREQ_MID_DEFAULT}
               freqHigh={settings.freqHighColor || FREQ_HIGH_DEFAULT}
               vividness={settings.freqVividness}
+              bandLayers={settings.bandLayers}
+              bandFromDeck={settings.bandFromDeck}
+              stemsFollowDeck={settings.stemsFollowDeck}
               debrick={settings.waveformDebrick}
               glow={settings.glow}
               markerThickness={settings.markerThickness}
@@ -3611,6 +3676,8 @@ function AppBody() {
         deckColors={ACCENT}
         open={libOpen}
         onOpenChange={setLibOpen}
+        dockMode={settings.libraryDock}
+        panelOrder={settings.panelOrder}
         auto={{
           status: autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus,
           queue: mixQueue,
@@ -3667,35 +3734,41 @@ function AppBody() {
         />
       )}
       {socialOpen && (
-        <SocialScreen room={room} onClose={() => setSocialOpen(false)} onActivate={() => engine.unlock()} onQueueRequest={queueRequest} />
+        <SocialScreen
+          room={room}
+          onClose={() => setSocialOpen(false)}
+          onActivate={() => engine.unlock()}
+          onQueueRequest={queueRequest}
+          dockMode={settings.sessionDock}
+          panelOrder={settings.panelOrder}
+        />
       )}
-      {discoverOpen && (
-        <DiscoverScreen
+      {profileOpen && (
+        <PeopleScreen
+          view={peopleView}
+          setView={patchPeopleView}
+          onClose={() => setProfileOpen(false)}
+          dockMode={settings.peopleDock}
+          panelOrder={settings.panelOrder}
           self={room.user?.handle ?? null}
           tunedTo={room.listeningTo}
           friends={friendsOnline}
-          onClose={() => setDiscoverOpen(false)}
+          notifications={notifications}
           onListen={(h) => {
             engine.unlock(); // tune-in is a user gesture → prime iOS audio
             room.tuneIn(h);
-            setDiscoverOpen(false); // hand off to the Session dock's "Listening to @X" banner
+            setProfileOpen(false); // hand off to the Session dock's "Listening to @X" banner
           }}
           onJam={(h) => {
             engine.unlock(); // jamming is a user gesture → prime iOS audio
             room.jam(h);
-            setDiscoverOpen(false);
+            setProfileOpen(false);
           }}
           onPlaySet={playRecordedSet}
-        />
-      )}
-      {profileOpen && (
-        <ProfileScreen
-          onClose={() => setProfileOpen(false)}
+          onTrimSet={editTrim}
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
-          onPlaySet={playRecordedSet}
-          onTrimSet={editTrim}
         />
       )}
       <ReplayBar

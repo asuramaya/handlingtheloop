@@ -2737,6 +2737,7 @@ function AppBody() {
       now: () => performance.now(),
       stemsPending: (id) => stemLoading(statusRef.current[id]),
       performance: () => autoDeps.current.settings.autoPerformance,
+      autoFx: () => autoDeps.current.settings.autoFx,
       onChange: (s) => setAutoStatus(s),
     });
   }

@@ -5,7 +5,7 @@ import { pickTransition, resolveStyle } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
 import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
-import type { AutoPerformance } from "../state/settings";
+import type { AutoFxPreset, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
 import { clamp, lerp } from "../../util/math";
 import { event } from "../debug/trace";
@@ -83,6 +83,8 @@ export interface AutoMixerDeps {
   // How much flourish is allowed (Settings ▸ Controls). Read per-transition rather than captured,
   // so changing it takes effect on the very next mix instead of the next AUTO session.
   performance?: () => AutoPerformance;
+  /** The user's AUTO FX recipe, read fresh at each transition so an edit lands on the next mix. */
+  autoFx?: () => AutoFxPreset;
   onChange: (s: AutoMixStatus) => void;
 }
 
@@ -975,14 +977,25 @@ export class AutoMixer {
   // OUTGOING VOCAL STEM ALONE fixes it: the vocal dissolves into its own tail while drums and bass
   // carry on dry. Only sayable because the rack has per-stem chains — on a summed channel that same
   // reverb washes the whole track, which is what `washOut` is for.
-  private static readonly STEM_VOICE = 0b0100; // 1=DRUM 2=BASS 4=VOICE 8=INST
+  // 1=DRUM 2=BASS 4=VOICE 8=INST — the rack's own mask, mapped from the recipe's stem name.
+  private static readonly STEM_BIT: Record<AutoFxPreset["stem"], number> = {
+    drums: 0b0001,
+    bass: 0b0010,
+    vocals: 0b0100,
+    other: 0b1000,
+  };
 
   private beginVocalTail(id: DeckId): void {
     if (this.autoFx || this.perf() === "subtle") return;
+    // ★ STAMPED FROM THE USER'S RECIPE, READ FRESH EVERY TRANSITION. This is what lets the chain be
+    // visible without being editable and adaptive without arbitration: the user edits the preset,
+    // AUTO instantiates it, and the next mix reflects the change. See AutoFxPreset.
+    const recipe = this.deps.autoFx?.() ?? { enabled: true, kind: "reverb" as const, mix: 0.6, stem: "vocals" as const };
+    if (!recipe.enabled) return;
     const deck = this.deps.engine.deck(id);
     if (!deck.hasStems) return;
     try {
-      const V = AutoMixer.STEM_VOICE;
+      const V = AutoMixer.STEM_BIT[recipe.stem] ?? 0b0100;
       const restore = deck.rack.chainList
         .filter((c) => !c.master && !c.ephemeral && (c.stems & V) !== 0)
         .map((c) => ({ id: c.id, stems: c.stems }));
@@ -991,17 +1004,22 @@ export class AutoMixer {
       // VOICE at construction leaves the user's chain still holding it, and the rack feeds that tap
       // to EVERY chain claiming the bit: the vocal plays twice, once dry and once through the
       // reverb. Build empty, then claim.
-      const chain = deck.addFxChain("AUTO TAIL", 0, true);
+      const chain = deck.addFxChain("AUTO", 0, true);
       deck.setFxChainStems(chain.id, V);
-      const rev = deck.addFxTo(chain.id, "reverb");
-      if (!rev) {
+      const dev = deck.addFxTo(chain.id, recipe.kind);
+      if (!dev) {
         deck.removeFxChain(chain.id);
         return;
       }
-      rev.setBypass(false);
-      rev.setParam("mix", 0.6);
+      dev.setBypass(false);
+      dev.setParam("mix", clamp(recipe.mix, 0, 1));
+      if (recipe.kind === "delay") {
+        dev.setParam("sync", 1); // a tail that drifts off the grid is a mistake, not an effect
+        dev.setParam("div", 2);
+        dev.setParam("feedback", 0.5);
+      }
       this.autoFx = { deckId: id, chainId: chain.id, restore };
-      event("automix.tail", { deck: id, at: "begin" });
+      event("automix.tail", { deck: id, at: "begin", kind: recipe.kind, stem: recipe.stem });
     } catch {
       this.autoFx = null; // unexpected rack shape — the blend is fine without the flourish
     }

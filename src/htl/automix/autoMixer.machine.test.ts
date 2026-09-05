@@ -263,6 +263,7 @@ class FakeQueue {
 class Rig {
   engine = new FakeEngine();
   perf: "subtle" | "standard" | "showy";
+  autoFx = { enabled: true, kind: "reverb" as "reverb" | "delay", mix: 0.6, stem: "vocals" as "vocals" | "other" | "drums" | "bass" };
   queue = new FakeQueue();
   mixer: AutoMixer;
   nowMs = 0;
@@ -295,6 +296,7 @@ class Rig {
       now: () => this.nowMs,
       stemsPending: (id) => this.stemsPending.has(id),
       performance: () => this.perf,
+      autoFx: () => this.autoFx,
       onChange: () => {},
     };
     this.mixer = new AutoMixer(deps);
@@ -900,5 +902,82 @@ describe("AutoMixer machine — effects carry a stem-free transition", () => {
     expect(await run(r)).toBe(true);
     for (const d of r.engine.A.rack.chain("master")!.devices) expect(d.bypassed).toBe(true);
     expect(r.engine.A.loopBeats).toBe(0);
+  });
+});
+
+// ── THE AUTO FX RECIPE ──────────────────────────────────────────────────────────────────────────
+// AUTO's per-stem chain is visible in the strip but not editable there — it lasts seconds and is
+// destroyed at settle, so an edit would be gone before it took, and making it stick would mean
+// arbitrating every param against AUTO's own ramps mid-blend. The RECIPE is the editable thing,
+// and it is read fresh at the start of each transition so a change lands on the next mix.
+describe("AutoMixer machine — the AUTO FX recipe", () => {
+  function rig(): Rig {
+    const r = new Rig("standard");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: true });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: true });
+    r.setup("t3", { duration: 60, bpm: 120, hasStems: true });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2"), mkTrack("t3")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    return r;
+  }
+
+  // Capture the ephemeral chain while it exists — it is gone by the time the transition settles.
+  async function captureChain(r: Rig): Promise<{ kind?: string; mix?: number; stems?: number } | null> {
+    let seen: { kind?: string; mix?: number; stems?: number } | null = null;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      for (const id of ["A", "B"] as const) {
+        const c = r.engine[id].rack.chains.find((x) => x.ephemeral);
+        if (c && c.devices[0]) seen = { kind: c.devices[0].kind, mix: c.devices[0].params.mix, stems: c.stems };
+      }
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+    return seen;
+  }
+
+  test("the chain is stamped from the recipe, not from a hardcoded reverb", async () => {
+    const r = rig();
+    r.autoFx = { enabled: true, kind: "delay", mix: 0.35, stem: "drums" };
+    const got = await captureChain(r);
+    expect(got?.kind).toBe("delay");
+    expect(got?.mix).toBeCloseTo(0.35, 6);
+    expect(got?.stems).toBe(0b0001); // drums
+  });
+
+  test("the default recipe puts a reverb on the vocal", async () => {
+    const got = await captureChain(rig());
+    expect(got?.kind).toBe("reverb");
+    expect(got?.stems).toBe(0b0100); // vocals
+  });
+
+  test("disabling it skips the chain entirely — AUTO still completes the mix", async () => {
+    const r = rig();
+    r.autoFx = { ...r.autoFx, enabled: false };
+    let everSpawned = false;
+    let done = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.engine.A.rack.chains.some((c) => c.ephemeral) || r.engine.B.rack.chains.some((c) => c.ephemeral)) everSpawned = true;
+      if (r.live === "B" && r.phase === "armed") {
+        done = true;
+        break;
+      }
+    }
+    expect(everSpawned).toBe(false);
+    expect(done).toBe(true); // the transition still happened, just without the tail
+  });
+
+  // ★ The whole point of a recipe: no arbitration, edits land on the NEXT transition.
+  test("an edit mid-set applies to the following transition", async () => {
+    const r = rig();
+    const first = await captureChain(r);
+    expect(first?.kind).toBe("reverb");
+
+    r.autoFx = { enabled: true, kind: "delay", mix: 0.5, stem: "other" };
+    const second = await captureChain(r);
+    expect(second?.kind).toBe("delay");
+    expect(second?.stems).toBe(0b1000); // melody
   });
 });

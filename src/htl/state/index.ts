@@ -1,5 +1,6 @@
 export {
   type Settings,
+  type AutoFxPreset,
   type AutoPerformance,
   type DockMode,
   type PanelKey,

@@ -165,6 +165,26 @@ but excluded from `fxChainSnapshot()`, so it can never be saved into a profile o
 mirrored to a session. It also *survives* `applyFxChainSnapshot` — a remote's
 routine rack update must not rip out the chain a live blend is running through.
 
+### Visible, but not yours to edit
+
+That chain shows up in the FX strip while a transition runs, badged and marked as
+AUTO's. It is deliberately **read-only**: no reorder, no stem re-routing, no
+presets. Not to lock you out — because there is nothing durable there to edit. It
+exists for twenty to forty seconds and is destroyed at settle, so a change would
+be gone before you finished making it, and making it *stick* would mean AUTO
+diffing your input against its own ramps every tick and arbitrating each param
+mid-blend. That is real complexity for a window that closes almost immediately,
+and its failure mode is you and the machine fighting over a knob during a mix.
+
+So the recipe is the editable thing: **Settings ▸ Controls ▸ Auto-DJ FX tail**
+(`settings.autoFx` — effect, stem, wetness). AUTO stamps a fresh instance from it
+at the start of every transition, so an edit lands on the next mix with nothing to
+reconcile. You own the recipe; AUTO owns the twenty seconds.
+
+And "I want to intervene *right now*" already has a better answer than editing a
+doomed chain: grab the crossfader, and the mixer enters `manual` and hands
+everything it borrowed straight back.
+
 ★ Anything claiming a stem must go through `setChainStems`, **not** `addChain`'s
 mask argument: only the former enforces one-owner-per-stem, and two chains holding
 the same bit makes the rack play that stem twice.

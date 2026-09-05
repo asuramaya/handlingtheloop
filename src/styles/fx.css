@@ -3668,3 +3668,21 @@ body:not(.no-glow) .fx-mix-fill::after {
 .fx-bank-sync.bad {
   color: #ff5d73;
 }
+
+/* ★ AUTO'S OWN CHAIN. It appears only while the auto-mixer is performing a transition and is torn
+   down at settle, so it is marked as visibly NOT YOURS: you can see exactly what is in the signal
+   path, and the affordances that would silently do nothing (reorder, stem re-routing, presets) are
+   absent rather than dead. The editable thing is the recipe it is stamped from — Settings ▸
+   Controls ▸ Auto-DJ FX — which is read fresh on every transition. */
+.fx-group.auto {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  cursor: default;
+}
+.fx-group.auto .fx-chain-name::before {
+  content: "◆ ";
+  opacity: 0.8;
+}
+.fx-group.auto .fx-chain {
+  cursor: default;
+}

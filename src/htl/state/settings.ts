@@ -104,6 +104,8 @@ export interface Settings {
   // gestures whenever they fit. This is deliberately NOT a quality setting — none of these makes
   // the mix better, they make it more present.
   autoPerformance: AutoPerformance;
+  /** The recipe AUTO stamps its per-stem transition chain from — see AutoFxPreset. */
+  autoFx: AutoFxPreset;
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
   bandLayers: boolean; // band colouring style: true = rekordbox-style LAYERED lobes (needs lane height), false = flat per-column tint
@@ -131,6 +133,37 @@ export interface Settings {
 
 /** How much flourish the auto-mixer is allowed on top of the structural mix. */
 export type AutoPerformance = "subtle" | "standard" | "showy";
+
+/** ★ THE AUTO FX RECIPE, AND WHY IT IS A RECIPE RATHER THAN A CHAIN YOU EDIT.
+ *
+ *  When AUTO performs a stem transition it spawns a real per-stem FX chain — a reverb on the
+ *  outgoing vocal so it dissolves instead of stopping dead. That chain is visible in the strip,
+ *  which raises an obvious question: can the user change it?
+ *
+ *  Editing the live chain is incoherent. It exists for one twenty-to-forty second transition and is
+ *  destroyed at settle, so an edit is gone before you finish turning the knob — and making it stick
+ *  would mean AUTO diffing your input against its own ramps every tick and arbitrating each param
+ *  mid-blend. That is real complexity for a window that closes almost immediately, and its failure
+ *  mode is the two of you fighting over a knob during a mix.
+ *
+ *  So the live chain is not the thing to edit: THIS is. AUTO stamps a fresh instance from this
+ *  recipe at the start of every transition, which means your changes take effect on the next mix
+ *  with no arbitration, no locking, and nothing to reconcile. You own the recipe; AUTO owns the
+ *  twenty seconds.
+ *
+ *  (And "I want to intervene RIGHT NOW" already has a better answer than editing a doomed chain:
+ *  grab the crossfader and the mixer enters its `manual` phase, standing back and handing
+ *  everything it borrowed straight back.) */
+export interface AutoFxPreset {
+  /** Spawn the per-stem chain at all. Off = AUTO still mixes, just without the tail. */
+  enabled: boolean;
+  /** What the tail is made of. Reverb dissolves; delay repeats. */
+  kind: "reverb" | "delay";
+  /** Wetness, 0..1. */
+  mix: number;
+  /** Which stem it is aimed at. Vocals is the default because that is the one that stops dead. */
+  stem: "vocals" | "other" | "drums" | "bass";
+}
 
 export type PanelKey = "library" | "settings" | "people" | "session";
 
@@ -272,6 +305,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
+  autoFx: { enabled: true, kind: "reverb", mix: 0.6, stem: "vocals" },
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
   bandLayers: true, // layered lobes where there's room; auto-falls back to the flat tint on a short lane

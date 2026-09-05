@@ -9,14 +9,15 @@ import {
   type Me,
   type ServicePlaylist,
 } from "@htl/account";
-import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type MixQueue } from "@htl";
+import { isMobileDevice, type AutoMixStatus, type AutoMixMirror, type DockMode, type MixQueue, type PanelKey } from "@htl";
 import { MixQueuePanel } from "./MixQueuePanel";
 import { Explorer } from "./Explorer";
 import { SyncPanel } from "./SyncPanel";
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import { Menu } from "./ContextMenu";
 import { ConfirmModal, PromptModal } from "./Dialog";
-import { DockResizer } from "./DockResizer";
+import { CenterResizeHandles, DockPlacementResizer, DockResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
+import { useDragOutside } from "./lib/useDragOutside";
 import { cleanPlaylistName, withCached } from "./lib/libraryUtils";
 import { useCommunityPool } from "./lib/useCommunityPool";
 import { useLibraryImport } from "./lib/useLibraryImport";
@@ -35,6 +36,8 @@ interface LibraryPanelProps {
   deckColors: { A: string; B: string }; // deck accent colours for the chips
   open?: boolean; // the floating library panel is shown (defaults to visible)
   onOpenChange?: (open: boolean) => void;
+  dockMode?: DockMode; // desktop placement (Settings ▸ Controls); mobile ignores this and stays full-screen
+  panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
   // Auto-mix (auto-DJ) controls, surfaced in the library header; the queue view
   // takes over the song-list area (like Sync) rather than floating.
   auto?: {
@@ -78,8 +81,25 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   deckColors,
   open = true,
   onOpenChange = () => {},
+  dockMode = "left",
+  panelOrder = ["library", "settings", "people", "session"],
   auto,
 }: LibraryPanelProps, ref) {
+  const centerZ = useCenterZIndex(dockMode, open);
+  const zIndex = dockMode === "center" ? centerZ : edgeZIndex("library", panelOrder);
+  // "center" fully covers the board (dimmed backdrop, full viewport) — including the decks
+  // you'd be dragging a track ONTO. Fade the panel out and let clicks/drops pass straight
+  // through once a track drag actually moves PAST this panel's own edge, so the decks
+  // underneath become reachable — but NOT the instant a drag starts: a drag from Collection
+  // onto a Playlist, or reordering a Playlist, never leaves this panel's bounds and must stay
+  // fully interactive the whole time, since the panel itself is where the drop target lives.
+  // Measures the PANEL card, not the backdrop wrapper: in "center" mode the backdrop is a
+  // full-viewport dim layer (the card just floats centered inside it), so bounds-checking
+  // against the backdrop would never read "outside" at all — every drag position on screen is
+  // inside a full-viewport element by definition.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragOutside = useDragOutside(panelRef);
+  const passthrough = dockMode === "center" && dragOutside;
   // The TrackTable that's the active main view (Collection / Community / a playlist) — a
   // single ref because they're mutually exclusive, so only the mounted one holds it. The
   // Explorer/Queue views don't forward a cursor yet, so the wheel no-ops there.
@@ -522,7 +542,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         role="button"
         tabIndex={0}
         aria-label={`Delete playlist ${p.name}`}
-        title="Delete playlist"
         onClick={(e) => {
           e.stopPropagation();
           deletePlaylist(p.id, p.name);
@@ -569,9 +588,14 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   return (
     <>
       {open && (
-        <div className="modal-backdrop dock-left" onPointerDown={() => onOpenChange(false)}>
-          <DockResizer varName="--dock-w-left" measure="parent" />
-          <div className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
+        <div
+          className={`modal-backdrop dock-${dockMode} ${passthrough ? "drag-passthrough" : ""}`}
+          style={{ zIndex }}
+          onPointerDown={() => onOpenChange(false)}
+        >
+          <DockPlacementResizer mode={dockMode} />
+          <div ref={panelRef} className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
+            {dockMode === "center" && <CenterResizeHandles panelKey="library" />}
             <div className="settings-head">
               {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
                   the sections menu. A caret marks it as a disclosure. */}
@@ -594,7 +618,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                     className={`automix-toggle ${auto.status.enabled ? "on" : ""}`}
                     onClick={auto.onToggle}
                     aria-pressed={auto.status.enabled}
-                    title="Auto-mix: beatmatch and blend each track into the next"
                   >
                     AUTO
                     {auto.status.enabled && auto.status.countdownSec != null && auto.status.phase !== "idle" && (
@@ -626,7 +649,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               auto.onToggleQueue();
             }}
             aria-pressed={auto.queueOpen}
-            title="Auto-mix queue — up-next suggestions and playlist"
           >
             <span className="lib-nav-ico">☰</span> Queue
             {auto.queueCount ? <span className="lib-count">{auto.queueCount}</span> : null}
@@ -639,7 +661,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             setSyncOpen(false);
             setSearchView(true);
           }}
-          title="Search YouTube and add tracks to your library"
         >
           <span className="lib-nav-ico">🔍</span> Search
         </button>
@@ -667,7 +688,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             closeQueue();
             setView("community");
           }}
-          title="Tracks already cached on htl — load instantly, no download"
         >
           <span className="lib-nav-ico">🌐</span> Community
           {community.length > 0 && <span className="lib-count">{community.length}</span>}
@@ -679,7 +699,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               closeQueue();
               setSyncOpen(true);
             }}
-            title="Sync &amp; import playlists — pull a service playlist into your Library, or push between services"
           >
             <span className="lib-nav-ico">⇄</span> Sync
           </button>
@@ -688,7 +707,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         {sectionHead(
           "local",
           "PLAYLISTS",
-          <button className="lib-add" title="New playlist" onClick={createPlaylist}>
+          <button className="lib-add" onClick={createPlaylist} aria-label="New playlist">
             +
           </button>,
         )}
@@ -708,7 +727,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               "youtube",
               "MY YOUTUBE",
               ytConnected && (
-                <button className="lib-add" title="Refresh" onClick={loadMine} disabled={mineState === "loading"}>
+                <button className="lib-add" onClick={loadMine} disabled={mineState === "loading"}>
                   ⟳
                 </button>
               ),
@@ -756,7 +775,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               "spotify",
               "MY SPOTIFY",
               spotifyConnected && (
-                <button className="lib-add" title="Refresh" onClick={loadSpotify} disabled={spotState === "loading"}>
+                <button className="lib-add" onClick={loadSpotify} disabled={spotState === "loading"}>
                   ⟳
                 </button>
               ),
@@ -780,7 +799,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               "tidal",
               "MY TIDAL",
               tidalConnected && (
-                <button className="lib-add" title="Refresh" onClick={loadTidal} disabled={tidalState === "loading"}>
+                <button className="lib-add" onClick={loadTidal} disabled={tidalState === "loading"}>
                   ⟳
                 </button>
               ),
@@ -798,7 +817,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         {importMsg && <div className="lib-import-msg">{importMsg}</div>}
       </aside>
 
-      <DockResizer varName="--lib-side-w" measure="prev" />
+      <DockResizer varName="--lib-side-w" measure="prev" min={150} max={340} rangeVars={["--lib-side-min", "--lib-side-max"]} />
       </>
       )}
 

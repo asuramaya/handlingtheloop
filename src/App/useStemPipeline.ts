@@ -179,14 +179,14 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       // touch). An idle "just listening" guest — the common case — stays mix-only and skips
       // the ~370 MB resident + ~352 MB transition-transient DSP set that was jetsam-killing
       // phones. `ensureGuestStems` re-invokes deriveStems the instant a value diverges, and
-      // this gate then falls through to the on-device DSP derive below. Desktop is unchanged
+      // this gate then falls through to the mobile FETCH branch below. Desktop is unchanged
       // (sessionWantsStems is mobile-only, so the second clause never fires there).
       const stemDiverged = STEM_KEYS.some(
         (n) => engine.deck(id).stemLevel(n) !== 1 || !engine.deck(id).stemActive(n),
       );
-      // Mobile wants stems when the global toggle is on (Settings ▸ Stems) OR AUTO is running
-      // (a stem transition needs both decks) → fall through to the on-device DSP / cached-neural
-      // path regardless of the mix-only gate.
+      // Mobile wants stems when the global toggle is on (Settings ▸ Audio ▸ "Use shared stems")
+      // OR AUTO is running (a stem transition needs both decks) → fall through to the mobile
+      // cached-download path regardless of the mix-only gate. It never separates; see below.
       const mobileWantStems = isMobileDevice() && (mobileStemsRef.current || autoEnabledRef.current);
       if (model.id === "off" && !mobileWantStems && (!sessionWantsStems || (isMobileDevice() && !stemDiverged))) {
         if (!isMobileDevice() && autoEnhanceRef.current) {
@@ -222,14 +222,12 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       }
       stemTrace(`derive ${id}`, `${model.id}${mobile ? " mobile" : ""}`);
 
-      // MOBILE BASELINE = the on-device DSP split. Phones can't run neural separation (OOM /
-      // mobile-WebGPU crash), so they used to fall back to a dead mix — the stem mixer lit up
-      // but nothing drove it, and a session guest couldn't HEAR the host's stem moves. The
-      // engine now holds stems as int16 with ONE shared-offset WSOLA (no per-stem stretch
-      // duplication), so four stems fit in a phone's budget. Derive them locally with the
-      // lightweight DSP separator (pure Web Audio, deterministic, sums back to the mix exactly):
-      // the per-stem mixer works and its mute/gain INTENTS sync per device, zero extra bandwidth.
-      // Neural stays a desktop/upgrade quality tier that swaps in seamlessly via setStems().
+      // ★ HISTORY, so nobody re-adds it: mobile USED to derive stems locally with a lightweight
+      // Web Audio DSP separator, and the comment describing that survived here long after the
+      // code stopped doing it — directly above the block that says the opposite. It was removed
+      // because the offline render competes with the audio thread and, once it packs int16 and
+      // frees the mix, can leave the deck SILENT if anything in the pack path hiccups. There is
+      // no on-device split on a phone, of any kind, neural or DSP.
       if (mobile) {
         // MOBILE = FETCH + RENDER ONLY. Phones NEVER run on-device separation (neural or the
         // DSP split): that heavy offline render competes with the audio thread and — once it

@@ -88,7 +88,6 @@ export function KeyMap({ bindings, onChange }: KeyMapProps) {
         {code && !armed && (
           <span
             className="bind-clear"
-            title="Clear"
             onClick={(e) => {
               e.stopPropagation();
               clearBind(id, slot);
@@ -106,7 +105,7 @@ export function KeyMap({ bindings, onChange }: KeyMapProps) {
       <div className="keybinds-head">
         <span className="keybinds-col-label">Action</span>
         <span className="keybinds-col-label">Primary · Secondary</span>
-        <button className="keybinds-reset" onClick={() => onChange({})} title="Reset every shortcut to its default">
+        <button className="keybinds-reset" onClick={() => onChange({})}>
           Reset all
         </button>
       </div>

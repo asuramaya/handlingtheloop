@@ -394,7 +394,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
               }}
             />
             {query && !searchMode && (
-              <button className="tt-filter-clear" title="Clear filter" onClick={() => setQuery("")} aria-label="Clear filter">
+              <button className="tt-filter-clear" onClick={() => setQuery("")} aria-label="Clear filter">
                 ✕
               </button>
             )}
@@ -406,7 +406,6 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             <button
               className={`tt-chip ${cacheOnly ? "on" : ""}`}
               aria-pressed={cacheOnly}
-              title="Show only tracks already cached (load instantly)"
               onClick={() => setCacheOnly((v) => !v)}
             >
               <span className="pip pip-song" /> Cached
@@ -414,7 +413,6 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             <button
               className={`tt-chip ${stemOnly ? "on" : ""}`}
               aria-pressed={stemOnly}
-              title="Show only tracks whose stems are cached"
               onClick={() => setStemOnly((v) => !v)}
             >
               <span className="pip pip-stems" /> Stemmed
@@ -430,10 +428,10 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             loose toolbar children, so space-between flung them to opposite ends). */}
         <div className="tt-rows">
           <span className="tt-rows-label">Rows</span>
-          <button className="tt-step" title="Smaller rows" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
+          <button className="tt-step" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
             −
           </button>
-          <button className="tt-step" title="Larger rows" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
+          <button className="tt-step" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
             ＋
           </button>
         </div>

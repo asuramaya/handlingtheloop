@@ -502,7 +502,6 @@ export function SyncPanel({
                       type="checkbox"
                       checked={pick.include}
                       onChange={(e) => setPick(row.index, { include: e.target.checked })}
-                      title="Include in transfer"
                     />
                     <div className="sync-src">
                       <div className="sync-tt" title={row.source.title}>

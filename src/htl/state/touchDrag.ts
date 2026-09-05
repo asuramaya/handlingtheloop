@@ -27,10 +27,17 @@ interface TouchDragDetail {
   y: number;
 }
 
-const START_EVT = "htl:touchdrag-start";
-const MOVE_EVT = "htl:touchdrag-move";
-const END_EVT = "htl:touchdrag-end";
-const CANCEL_EVT = "htl:touchdrag-cancel";
+// Exported so components outside this module (e.g. a "something's being dragged right now"
+// hook that also needs the native HTML5 drag events, which don't belong in this file) can
+// subscribe without duplicating the event-name strings.
+export const TOUCHDRAG_START_EVT = "htl:touchdrag-start";
+export const TOUCHDRAG_MOVE_EVT = "htl:touchdrag-move";
+export const TOUCHDRAG_END_EVT = "htl:touchdrag-end";
+export const TOUCHDRAG_CANCEL_EVT = "htl:touchdrag-cancel";
+const START_EVT = TOUCHDRAG_START_EVT;
+const MOVE_EVT = TOUCHDRAG_MOVE_EVT;
+const END_EVT = TOUCHDRAG_END_EVT;
+const CANCEL_EVT = TOUCHDRAG_CANCEL_EVT;
 
 let ghost: HTMLDivElement | null = null;
 let active = false;

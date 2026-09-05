@@ -95,7 +95,9 @@ export const KEY_ACTIONS: KeyAction[] = [
   // The 8 pads (1-8): act as hot cues / beat loops / sampler per the deck's pad mode.
   ...Array.from({ length: 8 }, (_, i) => ({
     id: `hotcue${i + 1}`,
-    label: `Pad ${i + 1} (cue / loop)`,
+    // The label cannot name one behaviour: the pad row follows the deck's PAD MODE, and it
+    // has four (Hot Cue / FX / Loop / Sampler), not the two this used to claim.
+    label: `Pad ${i + 1} (by pad mode)`,
     group: "Pads",
     defaultKey: `Digit${i + 1}`,
     shiftLabel: "Save loop / clear (cue mode)",

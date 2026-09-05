@@ -39,7 +39,7 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: s
   return (
     <div className="toasts" role="status" aria-live="polite">
       {items.map((t) => (
-        <button key={t.id} className={`toast toast-${t.kind}`} onClick={() => onDismiss(t.id)} title="Dismiss">
+        <button key={t.id} className={`toast toast-${t.kind}`} onClick={() => onDismiss(t.id)}>
           <span className="toast-text">{t.text}</span>
           <span className="toast-x" aria-hidden="true">✕</span>
         </button>

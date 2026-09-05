@@ -16,8 +16,16 @@
   border-top: 1px solid var(--line);
 }
 
+/* The inner sidebar's usable range, in the same shape as the docks' --dock-min/--dock-max:
+   declared here and READ by its DockResizer, so the drag and the layout can't disagree.
+   Its own numbers, not the dock's — a 200px playlist rail and a 330px settings dock have
+   nothing to do with each other beyond sharing a drag handle component. */
+:root {
+  --lib-side-min: 150px;
+  --lib-side-max: 340px;
+}
 .lib-sidebar {
-  width: var(--lib-side-w, 200px);
+  width: clamp(var(--lib-side-min), var(--lib-side-w, 200px), var(--lib-side-max));
   flex: none;
   border-right: 1px solid var(--line);
   background: var(--panel);
@@ -391,13 +399,23 @@
   z-index: 1;
 }
 /* Row-size stepper bar, pinned above the (also-sticky) header. Its box-sized height
-   is fixed so the header's sticky offset (--tt-toolbar-h) lines up to the pixel. */
+   is fixed so the header's sticky offset (--tt-toolbar-h) lines up to the pixel — the
+   header's `top` and this bar's `height` read the SAME variable specifically so they can
+   never drift apart. `min-height` + `flex-shrink: 0` alongside `height` because this is a
+   flex ITEM of `.lib-main` (display:flex, column): a bare `height` on a flex child is only
+   its flex-basis suggestion, not a floor — under real content it was measurably rendering a
+   few px shorter than the declared 36px, opening exactly that gap between this bar's real
+   bottom edge and the header's sticky offset (which still assumed the full 36px), through
+   which a scrolled-past row peeked. `flex-shrink: 0` + a matching `min-height` is what
+   actually pins it, not `height` alone. */
 .tt-toolbar {
   position: sticky;
   top: 0;
   z-index: 3;
   box-sizing: border-box;
   height: var(--tt-toolbar-h, 36px);
+  min-height: var(--tt-toolbar-h, 36px);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;

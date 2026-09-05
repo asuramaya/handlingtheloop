@@ -60,9 +60,30 @@ export function event(ch: string, data: Record<string, unknown>): void {
   trace(ch, data); // also stream to the dev file when DEV
 }
 
-/** Snapshot the flight-recorder ring (a shallow copy) — dumped into a bug report. */
+/** Snapshot the flight-recorder ring (a shallow copy) — dumped into a bug report, and shown
+ *  live in Settings ▸ Debug. It was invisible for a long time: the ring existed, recorded
+ *  faithfully, and could only be read by SENDING a bug report and asking someone to look at the
+ *  other end. On a phone, where there is no console, that made the most useful thing in the app
+ *  the least reachable. */
 export function dumpRing(): Array<Record<string, unknown>> {
   return ring.slice();
+}
+
+/** Empty the ring — so you can clear the decks, reproduce a bug, and read only what it did. */
+export function clearRing(): void {
+  ring.length = 0;
+}
+
+/** One event → a single readable line, shared by the on-screen recorder and the clipboard dump
+ *  so what you copy is exactly what you were looking at. */
+export function formatEvent(e: Record<string, unknown>): string {
+  const { t, ch, ...rest } = e;
+  const ms = typeof t === "number" ? t : 0;
+  const stamp = `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+  const body = Object.entries(rest)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" ");
+  return `${stamp}  ${String(ch)}${body ? `  ${body}` : ""}`;
 }
 
 // Auto-capture uncaught errors + rejections into the ring the moment this module loads (it's imported
@@ -74,4 +95,40 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
     const r = (e as PromiseRejectionEvent).reason;
     event("reject", { reason: String(r instanceof Error ? r.message : r).slice(0, 300) });
   });
+  // ★ AND THE ONES THE APP REPORTS ABOUT ITSELF. The two listeners above only see what nobody
+  // caught. Every failure this codebase HANDLES — a stem fetch that fell back to the mix, a
+  // YouTube client retry, a WebGPU adapter that never arrived — is a `console.warn` inside a
+  // catch, which means it was invisible to the flight recorder and therefore to every bug
+  // report: the ring recorded a clean run right up to a problem the app had already diagnosed
+  // in a string. A caught error is usually the MORE informative one, because the code that
+  // caught it knew what it was doing at the time.
+  //
+  // The wrapper calls through first and can never throw into the caller: a debug facility that
+  // can break logging is worse than no debug facility.
+  for (const level of ["error", "warn"] as const) {
+    const orig = console[level]?.bind(console);
+    if (!orig) continue;
+    console[level] = (...args: unknown[]) => {
+      orig(...args);
+      try {
+        const msg = args
+          .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === "string" ? a : safeJson(a)))
+          .join(" ")
+          .slice(0, 300);
+        if (msg) event(`console.${level}`, { msg });
+      } catch {
+        /* never let recording break a log call */
+      }
+    };
+  }
+}
+
+// Stringify a console argument without throwing on a cycle or a huge object.
+function safeJson(v: unknown): string {
+  try {
+    const s = JSON.stringify(v);
+    return s == null ? String(v) : s.slice(0, 300);
+  } catch {
+    return String(v);
+  }
 }

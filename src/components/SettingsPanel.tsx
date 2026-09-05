@@ -3,7 +3,9 @@ import { type Settings } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { type UseMidi } from "@htl/midi";
 import { MidiPanel } from "./MidiPanel";
-import { DockResizer } from "./DockResizer";
+import { CenterResizeHandles, DockPlacementResizer, edgeZIndex, useCenterZIndex } from "./DockResizer";
+import { ProfileBar } from "./ProfileBar";
+import { profilesForTab } from "./settings/profileAdapters";
 import { AboutTab } from "./settings/AboutTab";
 import { AudioTab } from "./settings/AudioTab";
 import type { LyricDeck } from "./LyricsSettings";
@@ -58,13 +60,29 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [tab, setTab] = useState<Tab>("color");
+  // ★ ONE SAVE/SHARE/MANAGE CONTROL, IN THE HEADER, FOR THE WHOLE PANEL. It used to be an
+  // inline bar per tab — Color, Controls and MIDI each grew their own, and Audio, the tab whose
+  // setup most wants carrying between machines, had none. Three copies of one idea plus a hole.
+  // Now it lives on the title line and simply changes what it operates on with the tab, which is
+  // also what made Audio's missing profiles a two-line fix instead of a fourth bar.
+  const tabProfiles = profilesForTab(tab, settings, onChange, midi);
+  // This component only exists in the DOM while open (App conditionally mounts it), so mount
+  // itself IS "just opened" — no separate open/close transition to track like Library's.
+  const centerZ = useCenterZIndex(settings.settingsDock, true);
+  const zIndex = settings.settingsDock === "center" ? centerZ : edgeZIndex("settings", settings.panelOrder);
 
   return (
-    <div className="modal-backdrop dock-right" onPointerDown={onClose}>
-      <DockResizer varName="--dock-w-right" measure="parent" />
+    <div className={`modal-backdrop dock-${settings.settingsDock}`} style={{ zIndex }} onPointerDown={onClose}>
+      <DockPlacementResizer mode={settings.settingsDock} />
       <div className="panel settings-panel" onPointerDown={(e) => e.stopPropagation()}>
+        {settings.settingsDock === "center" && <CenterResizeHandles panelKey="settings" />}
         <div className="settings-head">
           <h2>Settings</h2>
+          {/* Absent on Debug / About, which have nothing to save. A control that is present but
+              inert on a third of the tabs teaches people to stop looking at it. */}
+          {tabProfiles && (
+            <ProfileBar key={tab} adapter={tabProfiles.adapter} compact />
+          )}
         </div>
 
         <div className="settings-tabs">
@@ -76,7 +94,7 @@ export function SettingsPanel({
         </div>
 
         <div className="settings-body">
-          {tab === "color" && <ColorTab settings={settings} set={set} onChange={onChange} />}
+          {tab === "color" && <ColorTab settings={settings} set={set} />}
 
           {tab === "controls" && <ControlsTab settings={settings} set={set} />}
 

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 // ONE MENU, for every surface that opens one at a cursor. The FX preset menu, the chain menu, the
 // add-a-device picker and the SAMPLER pad menu are the same widget with different contents: a head
@@ -28,6 +28,36 @@ export function Menu({ x, y, head, acts, onClose, wide, innerRef, layer, chin, c
   // after layout, flip to the other side of the cursor if that side has room, and clamp to the
   // viewport either way. Position is applied in one pass before paint (useLayoutEffect), so the
   // menu never appears in the wrong place first.
+  // ★ THE PRESS THAT OPENED THE MENU MUST NOT ALSO ACT ON IT.
+  // A touch long-press opens this menu at 460ms with the finger STILL DOWN, so the menu and its
+  // full-screen backdrop mount underneath a live press. Everything that press emits afterwards
+  // then lands on a target that did not exist when it started:
+  //   · finger up -> a synthesised `click` on the backdrop -> onClose. The menu flickers and dies.
+  //   · Android also fires its OWN `contextmenu` at ~500ms — either onto the backdrop (the same
+  //     instant close) or back onto the opener, which re-opens the menu at a new position.
+  // A timer would only guess at how long to stay deaf. The precise test is CAUSAL, not temporal:
+  // the opening press went down before this menu existed, so anything it emits arrives with no
+  // pointerdown seen since mount. One real pointerdown — a fresh tap, on an item or outside —
+  // disarms the guard for good, so a fast right-click-then-click on desktop is never eaten (its
+  // click is preceded by its own pointerdown) and dismissal is not delayed by a millisecond.
+  const settled = useRef(false);
+  useEffect(() => {
+    const onDown = () => { settled.current = true; };
+    const swallow = (e: Event) => {
+      if (settled.current) return;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("click", swallow, true);
+    window.addEventListener("contextmenu", swallow, true);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("click", swallow, true);
+      window.removeEventListener("contextmenu", swallow, true);
+    };
+  }, []);
+
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;

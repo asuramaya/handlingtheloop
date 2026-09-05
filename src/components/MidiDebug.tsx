@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import type { UseMidi, MonMsg, OutMsg, MidiCapture } from "@htl/midi";
+import { InfoDot } from "./settings/InfoDot";
 
 const hex2 = (n: number) => n.toString(16).toUpperCase().padStart(2, "0");
 
@@ -87,9 +88,10 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">Jog scratch cadence</span>
-          <span className="settings-hint" style={{ margin: 0 }}>
-            scratch the jog to measure
-          </span>
+          <InfoDot
+            text="Scratch the jog wheel to measure it. A steady mouse reads about 1 to 8 ms per tick with almost no burst; a bursty or sparse hardware jog shows a high burst percentage, meaning clusters under a millisecond, and a big maximum gap. That second shape is what the smoothing filter exists to fix, so these numbers say whether it is needed."
+            label="Jog scratch cadence"
+          />
         </div>
         <div className="midi-monitor-row" style={{ flexWrap: "wrap", gap: "10px 16px" }}>
           <span className="midi-monitor-meta">{jog.rate.toFixed(0)} ticks/s</span>
@@ -111,14 +113,14 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
           <button
             className="link-btn"
             onClick={toggleCapture}
-            title="Record every incoming byte to a JSON fixture — replay it in MidiEngine.test.ts to re-ground the byte map without the controller"
             style={capturing ? { color: "var(--accent, #e66)", borderColor: "var(--accent, #e66)" } : undefined}
           >
             {capturing ? "■ Stop & download" : "● Capture"}
           </button>
-          <span className="settings-hint" style={{ margin: 0 }}>
-            press a control to read its bytes
-          </span>
+          <InfoDot
+            text="Press any control on the controller and its raw bytes appear below, so you can build a map by hand or work out what an unknown control sends. Capture records every incoming byte to a JSON fixture you can replay in the test suite, which re-grounds a byte map without needing the hardware present."
+            label="MIDI input monitor"
+          />
         </div>
         <div className="midi-monitor">
           {inMon.length === 0 ? (
@@ -144,9 +146,9 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">MIDI output</span>
-          <span className="settings-hint" style={{ margin: 0 }}>
-            {outs.length ? `→ ${outs.join(", ")}` : "no output port"}
-          </span>
+          {/* STATUS, not explanation — it reports which ports exist right now, so it stays
+              visible rather than going behind an ⓘ. */}
+          <span className="settings-head-note">{outs.length ? `→ ${outs.join(", ")}` : "no output port"}</span>
         </div>
         <div className="midi-dbg-row">
           <input

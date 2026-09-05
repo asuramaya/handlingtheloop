@@ -25,7 +25,6 @@ export function RoomBar({ room, onExpand }: { room: RoomState; onExpand?: () => 
         className="chin-btn chin-room"
         onClick={() => onExpand?.()}
         aria-label="Shared session and devices"
-        title="Shared DJ session"
       >
         <span className={`chin-room-i ${dot}`} aria-hidden="true">⇅</span>
         {knocks.length > 0 ? (

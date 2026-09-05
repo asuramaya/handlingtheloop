@@ -1,5 +1,8 @@
 export {
   type Settings,
+  type AutoPerformance,
+  type DockMode,
+  type PanelKey,
   DEFAULT_SETTINGS,
   TEMPO_RANGES,
   PITCH_RANGES,
@@ -82,4 +85,15 @@ export {
   parseKeyProfile,
   keyBindingCount,
 } from "./keyProfiles";
+export {
+  type AudioProfile,
+  type AudioSetup,
+  AUDIO_SETUP_KEYS,
+  snapshotAudio,
+  createAudioProfile,
+  duplicateAudioProfile,
+  exportAudioProfile,
+  parseAudioProfile,
+  audioSetupCount,
+} from "./audioProfiles";
 export { uid, exportEnvelope, parseEnvelope } from "./profiles";

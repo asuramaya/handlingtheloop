@@ -50,7 +50,6 @@ export function LyricsSettings({
           onClick={() => set({ lyricsAuto: !settings.lyricsAuto })}
           role="switch"
           aria-checked={settings.lyricsAuto}
-          title="Look up the real lyrics and time them to this track"
         >
           <span className="toggle-knob" />
         </button>

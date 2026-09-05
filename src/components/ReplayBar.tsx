@@ -40,21 +40,21 @@ export function ReplayBar({ replay, trim }: { replay: ReplayState; trim?: TrimEd
       <div className="replay-row">
         <span className="replay-tag">{trim ? "✂ Trim your set" : "▶ Replaying a set"}</span>
         {replay.engineStale && (
-          <span className="replay-stale" title="This set was recorded on a different engine version — the rebuild may differ.">
+          <span className="replay-stale">
             ⚠ different version
           </span>
         )}
         {trim ? (
           <>
-            <button className="replay-trim-save" disabled={tout <= tin} onClick={() => trim.onSave(Math.round(tin), Math.round(tout))} title="Save the trimmed performance">
+            <button className="replay-trim-save" disabled={tout <= tin} onClick={() => trim.onSave(Math.round(tin), Math.round(tout))}>
               Save {fmtTime(Math.round((tout - tin) / 1000))}
             </button>
-            <button className="replay-stop" onClick={trim.onClear} title="Cancel trimming">
+            <button className="replay-stop" onClick={trim.onClear} aria-label="Cancel trimming">
               ✕
             </button>
           </>
         ) : (
-          <button className="replay-stop" onClick={replay.stop} title="Stop replay (release the decks)">
+          <button className="replay-stop" onClick={replay.stop} aria-label="Discard recording">
             ✕
           </button>
         )}

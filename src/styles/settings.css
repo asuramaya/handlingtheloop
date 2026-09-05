@@ -5,14 +5,31 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(3px);
+  /* --panel-dim (Settings ▸ Controls, applySettings) — the amount every "center"-placed
+     panel and every mobile panel (always this same centered treatment) dims what's behind
+     it. Falls back to the shipped default if the var hasn't been applied yet. The blur is
+     tied to the SAME control (scaled 0..3px) rather than a separate hardcoded 3px: a blur
+     with no colour tint still reads as "dimmed", so 0% dimming has to mean neither, not just
+     the tint half of it. */
+  background: rgba(0, 0, 0, var(--panel-dim, 0.55));
+  backdrop-filter: blur(calc(var(--panel-dim, 0.55) * 3px));
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
   padding: 16px;
   animation: backdrop-in 0.16s ease-out;
+}
+/* Library ▸ "center" placement fully covers the board, decks included — once a track drag
+   moves PAST the panel's own edge (see useDragOutside) it fades out and stops intercepting
+   pointer events, so the decks underneath are visible and reachable to drop onto. Stays fully
+   interactive for a drag that never leaves the panel (Collection → a Playlist inside Library
+   itself). The drag itself is unaffected either way: HTML5 drag/drop and the touch-drag bus
+   both track the gesture independent of whether its source element is visible. */
+.modal-backdrop.drag-passthrough {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease-out;
 }
 /* MOBILE: keep the top chin (Library / Search / Settings launchers) in the
    FOREGROUND when a panel is open — float it above the backdrop and start the dim
@@ -60,6 +77,7 @@
   }
 }
 .panel {
+  position: relative; /* anchors CenterResizeHandles' two edge handles when this panel floats centered */
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -80,48 +98,17 @@
   }
 }
 .settings-panel {
-  width: min(460px, 94vw);
-  max-height: 50dvh; /* half-height modal; the body scrolls when a tab is taller */
+  /* --center-w-settings (CenterResizeHandles) — only actually consumed in "center" mode; the
+     edge/bottom dock overrides below force width:100% regardless, same as before. */
+  width: clamp(var(--center-w-min, 360px), var(--center-w-settings, min(460px, 94vw)), var(--center-w-max, 1200px));
+  /* FIXED, not max-height: a max-height still SHRINKS to whatever a shorter tab's content
+     needs, so switching Color (tall) → Debug (short) → MIDI (tall again) visibly resized the
+     whole window every tab change — disorienting on a "center" placement, where nothing else
+     on screen anchors it. A firm height means the window never moves; a short tab just leaves
+     empty space below it, and a tall one scrolls inside `.settings-body` (flex:1, its own
+     overflow-y) same as before. */
+  height: 50dvh;
   padding: 16px 18px;
-}
-/* Keyboard cheat-sheet overlay. */
-.help-panel {
-  width: min(540px, 94vw);
-  max-height: 88dvh;
-  padding: 16px 18px;
-}
-.help-intro {
-  margin: 6px 0 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-.help-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-}
-.help-row {
-  display: grid;
-  grid-template-columns: 132px 1fr;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 4px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
-}
-.help-keys {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.help-desc {
-  font-size: 12px;
-  color: var(--text);
-}
-.help-shift {
-  color: var(--muted);
-  font-size: 11px;
 }
 /* A keycap chip used in the help overlay + intro text. */
 .kbd-chip {
@@ -373,9 +360,14 @@
 }
 /* Search + Library windows — same footprint, bigger than Settings since they
    hold scrolling lists. */
-.search-panel,
-.lib-panel {
+.search-panel {
   width: min(900px, 96vw);
+  height: min(86dvh, 820px);
+}
+.lib-panel {
+  /* --center-w-library (CenterResizeHandles) — only consumed in "center" mode; edge/bottom
+     dock overrides force width:100% regardless. */
+  width: clamp(var(--center-w-min, 360px), var(--center-w-library, min(900px, 96vw)), var(--center-w-max, 1200px));
   height: min(86dvh, 820px);
 }
 .search-panel {
@@ -586,10 +578,28 @@
   font-size: 13px;
   color: var(--text);
 }
+/* The ▲▼ stack-order pair on a Panel placement row (ControlsTab's PlacementRow) — sits
+   before the label, same inline slot InfoDot uses after it. Smaller than the shared 26px
+   .mini so a pair of them doesn't read heavier than the label they're attached to. */
+.mini-stack {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.mini-stack .mini {
+  width: 18px;
+  height: 13px;
+  font-size: 8px;
+  line-height: 1;
+  padding: 0;
+}
 .slider-row .settings-slider,
 .settings-row .settings-slider {
-  flex: 1;
-  max-width: 160px;
+  flex: none;
+  width: 148px;
+  max-width: 100%;
   accent-color: var(--neon-cyan);
   cursor: pointer;
 }
@@ -629,12 +639,21 @@
   flex-direction: column;
   gap: 16px;
 }
-/* Intro line + the one-shot Random/Mono rolls. */
-.color-intro {
-  display: flex;
-  align-items: flex-start;
+/* The one-shot Palette/Mono rolls. A card like every other section, laid out as a single
+   ROW (`label ......... control`) rather than the loose uppercase label + floating buttons
+   it was — that shape had no counterpart anywhere else in the panel, so it read as a
+   leftover header instead of as the control it is. */
+.settings-section.color-intro {
+  flex-direction: row;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 8px 13px;
+}
+.settings-section.color-intro > .settings-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
 }
 .color-intro-text {
   font-size: 12px;
@@ -642,43 +661,54 @@
   color: var(--muted);
   max-width: 60%;
 }
+/* A segmented pair, not two loose buttons: one border around both, a hairline between them, so
+   they read as two options of one thing. Matches `.bank-switch .seg` on the board. */
 .color-rolls {
   display: flex;
-  gap: 6px;
   flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
 }
 .color-roll {
   background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  color: var(--text);
-  font-size: 12px;
+  border: none;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
   font-weight: 700;
-  padding: 7px 11px;
+  letter-spacing: 0.4px;
+  padding: 7px 14px;
   cursor: pointer;
   white-space: nowrap;
-  transition: border-color 0.12s, transform 0.05s;
+  transition: color 0.12s, background 0.12s;
+}
+.color-roll:first-child {
+  border-left: none;
 }
 .color-roll:hover {
-  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
 }
 .color-roll:active {
-  transform: translateY(1px);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
 }
-/* Each titled section: heading + one-line "what it changes", then its swatches. */
+/* `.color-group` / `.color-group-head` are ALIASES of the promoted `.settings-section` /
+   `.settings-section-head` above — kept so the Color tab's own selectors below still read,
+   not because the Color tab is special any more. Its card IS the shared card now. */
 .color-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 13px;
+  gap: 8px;
+  padding: 12px 13px 6px;
   background: color-mix(in srgb, var(--panel) 55%, transparent);
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   border-radius: 10px;
 }
 .color-group-head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 7px;
 }
 .color-group-title {
   font-size: 12px;
@@ -687,37 +717,212 @@
   text-transform: uppercase;
   color: var(--text);
 }
-.color-group-desc {
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--muted);
+/* ★ THE EXPLANATIONS MOVED BEHIND `InfoDot`. A settings panel is a control surface, and this one
+   had three simultaneous ways of describing itself — a paragraph per section, a "· like this"
+   clause per control, and a `title=` repeating one of them — so the controls you came to change
+   were a minority of the pixels. The text still exists; it is one press away instead of always on.
+   Kept: value readouts (`200%`), which are state, not explanation. */
+.info-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
 }
-/* Inside a group the rows/sliders sit flush (the group is the frame). */
+.info-dot {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--muted) 55%, transparent);
+  background: transparent;
+  color: var(--muted);
+  font: 700 10px/1 ui-serif, Georgia, serif;
+  font-style: italic;
+  display: grid;
+  place-items: center;
+  cursor: help;
+  padding: 0;
+  transition: color 0.12s, border-color 0.12s;
+}
+.info-dot:hover,
+.info-dot:focus-visible,
+.info-dot.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.info-pop {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: -6px;
+  z-index: 20;
+  width: max-content;
+  max-width: min(300px, 74vw);
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  white-space: normal;
+}
+/* HORIZONTALLY the bubble is nudged into its panel by an exact measured offset (see InfoDot),
+   never flipped — a flip moves it away from the control it describes, and a shift does not.
+   VERTICALLY it must flip: there is no "shift" that rescues a bubble opening off the bottom of
+   a scrolling panel, which is how they used to vanish. `.above` is set by InfoDot only when
+   down does not fit and up does. */
+.info-pop.above {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
+/* ---- THE ROW ---------------------------------------------------------------------------
+   `label (+ⓘ) ......... [value] [control]`, the SAME height whatever the control is. Rows
+   used to vary in height because some carried a second line of prose and some did not,
+   which is most of what read as sloppy: a list whose rows do not line up looks unfinished
+   no matter how good each row is on its own.
+   Card-scoped (not `.color-group`-scoped as it first shipped) so EVERY tab gets it. */
+.settings-section .settings-row,
 .color-group .settings-row {
-  padding: 8px 0;
+  min-height: 38px;
+  padding: 4px 0;
   border-top: 1px solid color-mix(in srgb, var(--line) 50%, transparent);
 }
-.color-group .settings-row:first-of-type {
+.settings-section .settings-label,
+.color-group .settings-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+/* The card's border is the top edge; a hairline immediately under the title would double it.
+   `:first-of-type` is wrong here — a card whose first row follows a head or a hint still
+   wants no rule, and one whose rows follow a swatch block still wants rules between them —
+   so the seam is stated by what PRECEDES a row, not by its index. */
+.settings-section .settings-row:first-child,
+.color-group .settings-row:first-child,
+.settings-section-head + .settings-row,
+.settings-hint + .settings-row,
+.color-group-head + .settings-row {
   border-top: none;
 }
+/* The VALUE SLOT: a control's current reading, right before the control itself. Fixed width
+   and tabular figures so `4px`, `105%` and `#ff5d73` all stop on the same column instead of
+   pushing their controls around as the number changes width. */
+.settings-value {
+  flex: none;
+  min-width: 58px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+/* Label takes the slack; the control block hugs the right edge. This is what puts every
+   control on one vertical line. */
+.settings-section .settings-row > .settings-label,
+.color-group .settings-row > .settings-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
 
-.color-targets {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
-  gap: 8px;
+/* ---- THE COLOUR SWATCH, as a control in the row grammar ---------------------------------
+   A colour is a setting like any other, so it gets a ROW: its name on the left, its hex in
+   the value slot, and a chip on the right sized EXACTLY like a `.toggle` (44x24) so a card
+   mixing colours and switches still lands every control on one column.
+   It used to be a wrapping grid of bordered chips — a second layout language inside the
+   same card, which is what made the Color tab read as two lists pasted together; and being
+   a grid it left an orphan on its own line whenever a group held an odd count (Waveform's
+   five hues wrapped 2 / 2 / 1). A chip inside a bordered pill inside a bordered card was
+   also three nested boxes of near-identical weight, so nothing read as dominant. */
+.color-swatch {
+  position: relative;
+  overflow: hidden;
+  width: 44px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+  border-radius: 7px;
+  cursor: pointer;
+  /* A near-black or near-white value still has to read against this panel: an inset hairline
+     gives it an edge from the inside regardless of which way it goes. */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  transition: border-color 0.12s, transform 0.05s;
+}
+.color-swatch:hover {
+  border-color: var(--text);
+}
+.color-swatch:active {
+  transform: translateY(1px);
+}
+/* ---- WHERE THE NATIVE PICKER OPENS -----------------------------------------------------
+   Chrome anchors its colour popup to the <input>'s own box — LEFT edge, below — and nothing
+   else about it is ours to place. So the input is positioned for the ANCHOR, and the anchor
+   alone. Two failures bracket the right answer:
+
+     input = the 44px chip   → the anchor sits hard against the right edge of a right-hand
+                               dock at the right edge of the screen, and the popup opens off
+                               the side and is cut off.
+     input = the whole row   → contained, but on a wide dock the anchor is the row's LEFT
+                               edge, so the popup springs open a long way from the swatch
+                               that was actually clicked.
+
+   So: RIGHT-ALIGNED, one popup wide. The popup (~246px on desktop Chrome) opens at the
+   input's left edge and therefore lands INSIDE the row's right edge — guaranteed on-screen,
+   because the row is inside the panel — while hugging the control instead of the far margin.
+   `min(..., 100%)` collapses it to the row on a dock too narrow for the full width.
+
+   The row stays a <label>, so a press anywhere on it still activates the input and opens the
+   wheel: label activation forwards the CLICK, it does not move the ANCHOR. Hit area and
+   anchor are two different questions, and this is what lets each have its own answer. */
+.settings-row.color-row {
+  position: relative;
+  cursor: pointer;
+}
+.settings-row.color-row > input[type="color"] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: min(280px, 100%);
+  height: 100%;
+  opacity: 0;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+/* The chip is now pure display — the input behind the row does the work. */
+.color-swatch {
+  pointer-events: none;
+}
+/* The hex readout. Monospace because it is a code, not a word. */
+.settings-value.is-hex {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
 }
 .color-target {
   position: relative;
   overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 11px;
+  border-radius: 7px;
+  padding: 8px 10px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
   transition: border-color 0.12s, transform 0.05s;
@@ -788,15 +993,22 @@
   opacity: 0;
   cursor: pointer;
 }
+/* The switch. 44x24 — the footprint every other right-hand control matches.
+   ★ OFF has to READ as off. It used to differ from ON only in the track tint and the knob
+   position, both of which are easy to miss at 24px: a bright knob on a dark track looks
+   "lit" whichever end it sits at, and on a themed accent (a deck running its artwork colour)
+   the ON track can be darker than the OFF knob. So the knob carries the state too — dim and
+   muted when off, bright when on — which survives any accent hue the theme throws at it. */
 .toggle {
   width: 44px;
   height: 24px;
   border-radius: 12px;
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--bg) 60%, var(--panel));
   position: relative;
   cursor: pointer;
   flex: none;
+  transition: background 0.12s, border-color 0.12s;
 }
 .toggle.on {
   background: color-mix(in srgb, var(--neon-cyan) 35%, var(--panel));
@@ -809,11 +1021,19 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #d7dbe6;
-  transition: left 0.12s;
+  background: color-mix(in srgb, var(--muted) 65%, transparent);
+  transition: left 0.12s, background 0.12s, box-shadow 0.12s;
 }
 .toggle.on .toggle-knob {
   left: 22px;
+  background: #f2f5fa;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--neon-cyan) 55%, transparent);
+}
+.toggle:hover .toggle-knob {
+  background: color-mix(in srgb, var(--muted) 90%, transparent);
+}
+.toggle.on:hover .toggle-knob {
+  background: #fff;
 }
 .seg {
   display: flex;
@@ -835,16 +1055,98 @@
   color: var(--neon-cyan);
 }
 
-/* YouTube access + privacy */
+/* ============================ THE SETTINGS DESIGN LANGUAGE ==========================
+   ★ ONE vocabulary for every tab. There used to be two card languages in this panel —
+   `.settings-section` (a bare top rule, used by Audio / Controls / Debug / FX bank) and
+   `.color-group` (a bordered card, used only by Color) — so the tabs did not look like
+   parts of the same panel. The Color tab's card won on merit; this promotes it onto
+   `.settings-section`, which every other tab ALREADY emits, so they inherit the language
+   without a line of JSX changing. `.color-group` is now an alias of this.
+
+   The vocabulary is three things, and nothing else:
+
+     CARD   `.settings-section`      a titled group. The border is the frame; controls
+                                     inside it sit flush and need no boxes of their own.
+     HEAD   `.settings-section-head` the title (+ an optional ⓘ, + an optional right-side
+                                     action link like "reset").
+     ROW    `.settings-row`          `label (+ⓘ) ......... [value] [control]` — the SAME
+                                     height whatever the control is, hairline-separated.
+
+   The row is the part that matters. Every control lands on one right-hand edge and every
+   label on one left-hand edge, so a card scans as a list instead of as an arrangement.
+   A colour is a control like any other (see `.color-swatch`) — it gets a row, its hex in
+   the value slot, and a chip the exact size of a toggle. It used to live in a separate
+   wrapping chip grid, which is what made the Color tab read as two lists pasted together
+   and left a dangling orphan chip whenever a group's count was odd.
+
+   Prose (`.settings-hint`) is the one thing NOT in the vocabulary. It is a holdover: the
+   Color tab already moved its explanations behind `InfoDot` and the other tabs have not
+   yet. Styled quiet here so it recedes until each tab is migrated. */
 .settings-section {
-  padding: 12px 0 2px;
-  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 13px 6px;
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 10px;
 }
+/* Tabs lay their sections out as a plain stack; the gap is the card separation now that
+   there is no top rule to do it. `.color-tab` sets its own (16px) and wins by order. */
+.settings-body > .settings-section,
+.settings-body > * > .settings-section {
+  margin-bottom: 12px;
+}
+/* Title, then an optional ⓘ right beside it, and only a real ACTION (a "reset" link, a
+   status chip) pushed to the far edge. `justify-content: space-between` did that flinging
+   unconditionally, so a card whose head held just a title and an ⓘ put the dot on the
+   opposite side of the panel from the words it explains. */
 .settings-section-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 7px;
+  min-height: 20px;
+}
+.settings-section-head > .link-btn,
+.settings-section-head > .yt-status,
+.settings-section-head > .seg,
+.settings-section-head > button:last-child:not(.info-dot) {
+  margin-left: auto;
+}
+/* The card title. Quiet on purpose: the border already says "this is a group", so the
+   title does not also need to shout. Row labels are the loudest text in a card, because
+   they are what you are actually looking for. Applies to the `.settings-label` the other
+   tabs put in their head, and to the Color tab's `.color-group-title`. */
+.settings-section-head > .settings-label,
+.color-group-title {
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* A short STATUS beside a card title — which ports exist, what is connected. It reports a fact
+   about right now, so unlike an explanation it stays on screen rather than moving behind an ⓘ.
+   `margin-left: auto` is inherited from the head's action rule when it is the last child. */
+.settings-head-note {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.settings-section-head > .settings-head-note {
+  margin-left: auto;
+}
+
+/* Leftover prose, pending each tab's migration to InfoDot. Small, muted, and given real
+   line-height so it reads as a footnote to the card rather than as content. */
+.settings-hint {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 .yt-status {
   margin-left: 8px;
@@ -887,28 +1189,45 @@
   color: var(--muted);
   margin: 6px 0 2px;
 }
-.midi-learn-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 13px;
-  border-bottom: 1px solid var(--line);
-}
+/* The learn row IS a `.settings-row` now — its own 4-column grid, its own label colour and its
+   own right-aligned monospace address are all gone, because the shared row, `.settings-label`
+   and `.settings-value.is-hex` already say exactly those three things. Only the ARMED state is
+   particular to MIDI: it is the one row in the panel that is waiting on the physical world. */
 .midi-learn-row.learning {
   background: color-mix(in srgb, var(--shift) 18%, transparent);
 }
-.midi-learn-label {
-  color: var(--text);
-}
-.midi-learn-addr {
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
+/* ---- A STATUS NOTE ---------------------------------------------------------------------
+   Not every line in a card is a control. Some are a report on the outside world: what is
+   plugged in, what this browser cannot do, where a tool moved to. Those were inline hex
+   colours in JSX (`style={{ color: "#6ee7a8" }}`) — invisible to the theme, invisible to any
+   contrast pass, and one of them a green used nowhere else in the app. A note is a token now,
+   in three severities, so a reader learns the colour once. Prose that EXPLAINS a control still
+   belongs behind an ⓘ; this is for prose that reports a FACT. */
+.settings-note {
+  margin: 0 0 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--muted);
-  min-width: 44px;
-  text-align: right;
 }
+.settings-note strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.settings-note.good {
+  color: #6ee7a8;
+}
+.settings-note.warn {
+  color: #ffd250;
+}
+.settings-note.bad {
+  color: #ff5d73;
+}
+.settings-note.good strong,
+.settings-note.warn strong,
+.settings-note.bad strong {
+  color: inherit;
+}
+
 /* Detected-hardware + tested-device chips */
 .midi-device-list {
   display: flex;
@@ -930,31 +1249,173 @@
   background: color-mix(in srgb, #6ee7a8 14%, transparent);
 }
 /* Shared profile manager (colour themes / keyboard profiles / MIDI maps) — ProfileBar */
+/* ---- ProfileBar: saved themes / keyboard profiles / MIDI maps -------------------------
+   One control, three tabs, and now one grammar with everything around it. `.profilebar` is a
+   plain stack because its children ARE `.settings-row`s — it adds no layout of its own, which
+   is the point: a shared control that invents a third way to lay out a label and a button is
+   how a panel ends up with three of everything. `.profilebar-row` / `-tools` / `-badge` are
+   gone with the flat nine-button wrap they described. */
 .profilebar {
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
-.profilebar-row {
+/* ---- HEADER MODE ----------------------------------------------------------------------
+   The whole save/share/manage control on the panel's title line: a shrunk selector plus one
+   ⋯ that opens the verbs. It replaced an inline bar in THREE tabs (and a missing one in a
+   fourth), which is the real win — the same control in the same place whatever you are
+   looking at, instead of each tab teaching you where its own version lives.
+   `min-width: 0` on the flex child + `min-width: 0` on the select is what lets the selector
+   ellipsise a long theme name instead of shoving the ⋯ off the panel. */
+.profilebar.compact {
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+}
+.profilebar.compact .profilebar-select {
+  width: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 190px;
+  margin: 0;
+  padding: 4px 6px;
+  font-size: 11.5px;
+}
+.profilebar.compact .profilebar-swatch {
+  width: 26px;
+  height: 20px;
+}
+.profilebar-menu-wrap {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+}
+.profilebar-menu-btn {
+  width: 28px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.profilebar-menu-btn:hover,
+.profilebar-menu-btn.on {
+  color: var(--text);
+  border-color: var(--neon-cyan);
+}
+/* The verb menu. It keeps the Save / Share / Manage headings from the expanded bar — collapsing
+   nine verbs behind a glyph hides them, it does not organise them, so the grouping that made
+   them readable has to survive the collapse or the menu is just the old flat wall in a box. */
+.profilebar-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 148px;
+  padding: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+}
+.profilebar-menu-group + .profilebar-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.profilebar-menu-title {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 3px 7px 2px;
+}
+.profilebar-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.profilebar-menu-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--neon-cyan) 14%, transparent);
+}
+.profilebar-menu-item:disabled {
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: default;
+}
+.profilebar-menu-item.danger:not(:disabled) {
+  color: #ff5d73;
+}
+.profilebar-menu-item.danger.armed:not(:disabled) {
+  background: color-mix(in srgb, #ff5d73 24%, transparent);
+  color: #fff;
+}
+/* The namer, when the header control is the one asking. It drops below the row rather than
+   squeezing into it — a text field the width of what is left beside a ⋯ is not a text field. */
+.profilebar.compact .profilebar-namer {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  padding: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--neon-cyan);
+  border-radius: 9px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
 }
+.profilebar-note.compact {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 29;
+  margin: 0;
+  padding: 5px 9px;
+  white-space: nowrap;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 11px;
+}
+/* The title line now carries a control, so it needs to behave like a row rather than a heading:
+   the h2 keeps its size and the control takes the slack. */
+.settings-head h2 {
+  flex: none;
+}
+/* The selector takes the full card width: a profile NAME is long, user-supplied and often
+   carries a device suffix, so it is the same case as a device picker (see `.settings-select`). */
 .profilebar-select {
-  flex: 1;
+  width: 100%;
   min-width: 0;
+  margin-bottom: 2px;
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   font-size: 13px;
 }
-.profilebar-badge {
-  flex: none;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
+.profilebar-select:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
 }
 .profilebar-swatch {
   flex: none;
@@ -963,11 +1424,55 @@
   border-radius: 5px;
   border: 1px solid var(--line);
 }
-.profilebar-tools {
+/* A verb CLUSTER: buttons that belong to one job, framed once, hairline-separated — the same
+   segmented language as `.color-rolls` and the phone deck switch. Grouping is the whole fix:
+   nine peers in a row have no hierarchy, three groups of two-to-four read at a glance. */
+.seg-group {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.seg-group > .hw-btn.small {
+  border: none;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  white-space: nowrap;
+}
+.seg-group > .hw-btn.small:first-child {
+  border-left: none;
+}
+/* A cluster whose buttons are CHOICES (the Deck A / B / Global switch) rather than verbs needs
+   a selected state. `.hw-btn` had none of its own — on the board it is always a momentary
+   action — so without this the MIDI Learn switch showed which deck you were on nowhere at all. */
+.seg-group > .hw-btn.small.on {
+  background: color-mix(in srgb, var(--neon-cyan) 16%, transparent);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--neon-cyan);
+}
+/* The in-panel namer that replaced window.prompt. */
+.profilebar-namer {
   gap: 6px;
-  margin-top: 8px;
+}
+.profilebar-name-input {
+  width: 132px;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--neon-cyan);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.profilebar-name-input:focus {
+  outline: none;
+}
+/* Delete ARMS before it fires, so the destructive verb states its own second step rather than
+   handing the question to an OS dialog the design language cannot reach. */
+.hw-btn.small.danger.armed:not(:disabled) {
+  background: color-mix(in srgb, #ff5d73 26%, transparent);
+  color: #fff;
 }
 .profilebar-note {
   margin: 6px 0 0;
@@ -978,27 +1483,9 @@
   color: #ff5d73;
   border-color: color-mix(in srgb, #ff5d73 50%, var(--line));
 }
-/* A / B / Global sub-tabs in the learn grid */
-.midi-subtabs {
-  display: flex;
-  gap: 4px;
-  margin: 6px 0 4px;
-}
-.midi-subtab {
-  flex: 1;
-  background: var(--surface);
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 0;
-  font-size: 12px;
-  cursor: pointer;
-}
-.midi-subtab.on {
-  color: var(--text);
-  border-color: var(--neon-cyan);
-  background: color-mix(in srgb, var(--neon-cyan) 12%, transparent);
-}
+/* `.midi-subtabs` / `.midi-subtab` are gone: the A / B / Global switch is a `.seg-group` in a
+   row, like every other cluster of related verbs in this panel. It was a fourth way to draw a
+   segmented control, in a panel that already had one. */
 /* Live MIDI monitor */
 .midi-monitor {
   margin-top: 6px;
@@ -1077,9 +1564,17 @@
   font-variant-numeric: tabular-nums;
 }
 /* output-device dropdown (Settings ▸ Audio) */
+/* ---- THE SECOND ROW SHAPE: full-width -------------------------------------------------
+   Most controls are small enough to sit on the right of their label (the inline row above).
+   A few are not: a device picker's VALUE is a sentence ("MacBook Pro Speakers (Built-in)"),
+   and squeezing that into a right-hand column either truncates the one piece of information
+   the control exists to show, or lets it push the label off the left edge.
+   So a select gets the whole card width, under its title. This is a declared variant of the
+   language, not an exception to it — the rule is "the control gets the room its VALUE needs",
+   and both shapes still put every label on the same left edge. */
 .settings-select {
   width: 100%;
-  margin-top: 8px;
+  margin: 0;
   padding: 8px 10px;
   background: var(--bg);
   border: 1px solid var(--line);

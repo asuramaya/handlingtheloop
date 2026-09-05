@@ -6,19 +6,20 @@ import {
   LEARN_GROUPS,
   PROFILES,
   matchProfile,
-  createMap,
-  duplicateMap,
-  exportMap,
-  parseMap,
-  bindingCount,
   type UseMidi,
 } from "@htl/midi";
-import { ProfileBar } from "./ProfileBar";
+import { InfoDot } from "./settings/InfoDot";
 
 // The full MIDI settings surface: device detection, the tested-controller list,
 // a save/share/manage map library (synced to the account via Settings), and the
 // per-deck (A / B / Global) MIDI-Learn grid. Split out of SettingsPanel so it can
 // own its own state without bloating the modal.
+//
+// ★ Written in the shared settings grammar (see the block comment atop settings.css), because
+// Controls and MIDI sit next to each other in one tab strip and a reader crossing between them
+// must not feel a seam. It had six `.settings-hint` paragraphs, four inline `style={{color}}`
+// status colours, and a bespoke four-column `.midi-learn-row` that lined up with nothing —
+// three private conventions where the panel already had public ones.
 export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; settings: Settings; onChange: (s: Settings) => void }) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [deckTab, setDeckTab] = useState<"A" | "B" | "global">("A");
@@ -31,10 +32,16 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
 
   return (
     <>
-      {/* Enable + status */}
       <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">USB-MIDI</span>
+          <InfoDot
+            text="Plug a DJ controller in over USB and the board follows it. Desktop Chrome and Edge only: Safari and iOS have no Web MIDI at all, so the switch stays off there whatever you do."
+            label="USB-MIDI"
+          />
+        </div>
         <div className="settings-row">
-          <span className="settings-label">USB-MIDI controllers</span>
+          <span className="settings-label">Enable controllers</span>
           <button
             className={`toggle ${settings.midiEnabled ? "on" : ""}`}
             onClick={() => {
@@ -44,13 +51,15 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
             }}
             role="switch"
             aria-checked={settings.midiEnabled}
+            aria-label="Enable controllers"
             disabled={!midi.supported}
           >
             <span className="toggle-knob" />
           </button>
         </div>
-        <p className="settings-hint">Plug in a DJ controller over USB. Desktop Chrome / Edge only — Safari and iOS don't support Web MIDI.</p>
-        {!isChromium() && <p className="settings-hint" style={{ color: "#ff5d73" }}>This browser can't do Web MIDI — use desktop Chrome or Edge.</p>}
+        {!isChromium() && (
+          <p className="settings-note bad">This browser has no Web MIDI. Use desktop Chrome or Edge.</p>
+        )}
         {settings.midiEnabled && <StatusLine midi={midi} />}
       </div>
 
@@ -59,22 +68,30 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">Detected hardware</span>
+            <InfoDot
+              text="What is plugged in right now, and whether we already know it. A tested controller works the moment you connect it. Anything else needs its controls learned below, or a shared map imported, after which it behaves the same."
+              label="Detected hardware"
+            />
           </div>
+          {/* Status as a CLASS, not an inline colour. Four hex literals sat here in `style={{}}`,
+              invisible to the theme and to every contrast pass — and one of them was a green that
+              appears nowhere else in the app. */}
           {device ? (
             matched ? (
-              <p className="settings-hint" style={{ color: "#6ee7a8" }}>
-                ✓ <strong>{device}</strong> — tested controller. The <strong>{matched.name}</strong> map is plug-and-play; no setup needed.
+              <p className="settings-note good">
+                <strong>{device}</strong> is a tested controller. The <strong>{matched.name}</strong> map is already
+                loaded, nothing to set up.
               </p>
             ) : (
-              <p className="settings-hint" style={{ color: "#ffd250" }}>
-                <strong>{device}</strong> isn't in the tested list yet. Learn its controls below (or import a shared map), then Save — it syncs to your account.
+              <p className="settings-note warn">
+                <strong>{device}</strong> is not in the tested list. Learn its controls below or import a shared map,
+                then save it.
               </p>
             )
           ) : (
-            <p className="settings-hint">No controller connected. Plug one in and it'll be detected automatically.</p>
+            <p className="settings-note">No controller connected. Plug one in and it is picked up automatically.</p>
           )}
           <div className="midi-device-list">
-            <span className="settings-hint" style={{ margin: 0 }}>Tested &amp; plug-and-play:</span>
             {PROFILES.map((p) => (
               <span key={p.id} className={`midi-device-chip ${matched?.id === p.id ? "on" : ""}`}>
                 {p.name}
@@ -84,49 +101,31 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
         </div>
       )}
 
-      {/* Map manager — the shared save/share/sync control */}
-      {settings.midiEnabled && (
-        <div className="settings-section">
-          <div className="settings-section-head">
-            <span className="settings-label">MIDI maps</span>
-          </div>
-          <ProfileBar
-            adapter={{
-              profiles: settings.midiMaps,
-              activeId: settings.activeMidiMapId,
-              zeroLabel: matched ? `${matched.name} (built-in)` : "Built-in / none",
-              zeroPayload: () => ({}),
-              snapshotCurrent: () => ({ ...settings.midiBindings }),
-              payloadOf: (m) => ({ ...m.bindings }),
-              buildNew: (name, b) => createMap(name, { device, basedOn: matched?.id ?? null, bindings: b }),
-              duplicate: duplicateMap,
-              updateProfile: (m, b) => ({ ...m, bindings: b, updatedAt: Date.now() }),
-              parseText: parseMap,
-              exportText: exportMap,
-              describe: (m) => `${bindingCount(m)} custom`,
-              optionSuffix: (m) => (m.device ? ` · ${m.device}` : ""),
-              fileExt: "htlmidi.json",
-              noun: "map",
-              onCommit: ({ profiles, activeId, payload }) =>
-                set({ midiMaps: profiles, activeMidiMapId: activeId, ...(payload ? { midiBindings: payload } : {}) }),
-            }}
-          />
-        </div>
-      )}
+      {/* The "MIDI maps" card was here. Same control, panel header, every tab. */}
 
       {/* Learn grid, split by deck */}
       {settings.midiEnabled && (
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">MIDI Learn</span>
-            <span className="settings-hint" style={{ margin: 0 }}>Click a control, then move it on the board</span>
+            <InfoDot
+              text="Teach the app one control at a time. Press Learn on a row, then move the knob, pad or fader you want it on, and the row shows the bytes it caught. Remap replaces one; the ✕ clears it. Deck A and Deck B are separate, and Global is everything that is not on a deck."
+              label="MIDI Learn"
+            />
           </div>
-          <div className="midi-subtabs">
-            {(["A", "B", "global"] as const).map((t) => (
-              <button key={t} className={`midi-subtab ${deckTab === t ? "on" : ""}`} onClick={() => setDeckTab(t)}>
-                {t === "global" ? "Global" : `Deck ${t}`}
-              </button>
-            ))}
+          {/* The deck switch is a ROW with a segmented cluster, the same shape ProfileBar's verbs
+              and the Color tab's rolls use — `.midi-subtabs` was a fourth way to draw one. */}
+          <div className="settings-row">
+            <span className="settings-label">Learning</span>
+            <span className="settings-control">
+              <span className="seg-group">
+                {(["A", "B", "global"] as const).map((t) => (
+                  <button key={t} className={`hw-btn small ${deckTab === t ? "on" : ""}`} onClick={() => setDeckTab(t)}>
+                    {t === "global" ? "Global" : `Deck ${t}`}
+                  </button>
+                ))}
+              </span>
+            </span>
           </div>
           {LEARN_GROUPS.map((group) => {
             const rows = visible.filter((c) => c.group === group);
@@ -139,18 +138,25 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
                   const learning = midi.learningId === c.id;
                   // Strip the "— Deck X" suffix since the sub-tab already says the deck.
                   const label = c.label.replace(/ — Deck [AB]$/, "");
+                  // THE ROW GRAMMAR, exactly: name left, the caught bytes in the shared value
+                  // slot (they are this control's VALUE, the same as a hex or a "4px"), actions
+                  // right. The old bespoke 4-column grid lined up with nothing else in the panel.
                   return (
-                    <div key={c.id} className={`midi-learn-row ${learning ? "learning" : ""}`}>
-                      <span className="midi-learn-label">{label}</span>
-                      <span className="midi-learn-addr">{b ? `${b.status.toString(16).toUpperCase().padStart(2, "0")}·${b.data}` : "—"}</span>
-                      <button className="link-btn" onClick={() => midi.armLearn(learning ? null : c.id)}>
-                        {learning ? "Press…" : b ? "Remap" : "Learn"}
-                      </button>
-                      {b && (
-                        <button className="link-btn danger" title="Clear mapping" onClick={() => midi.clearLearn(c.id)}>
-                          ✕
+                    <div key={c.id} className={`settings-row midi-learn-row ${learning ? "learning" : ""}`}>
+                      <span className="settings-label">{label}</span>
+                      <span className="settings-control">
+                        <span className="settings-value is-hex">
+                          {b ? `${b.status.toString(16).toUpperCase().padStart(2, "0")}·${b.data}` : "—"}
+                        </span>
+                        <button className="hw-btn small" onClick={() => midi.armLearn(learning ? null : c.id)}>
+                          {learning ? "Press…" : b ? "Remap" : "Learn"}
                         </button>
-                      )}
+                        {b && (
+                          <button className="hw-btn small danger" aria-label={`Clear ${label}`} onClick={() => midi.clearLearn(c.id)}>
+                            ✕
+                          </button>
+                        )}
+                      </span>
                     </div>
                   );
                 })}
@@ -163,9 +169,9 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
       {/* The live MIDI monitor + feedback prober now live in Settings ▸ Debug (always
           on, both directions) — point users there to read bytes / reverse-engineer LEDs. */}
       {settings.midiEnabled && (
-        <p className="settings-hint">
-          Live MIDI monitor &amp; LED/RGB feedback prober are in <strong>Settings ▸ Debug</strong> — read any control's
-          bytes there and confirm a mapping live.
+        <p className="settings-note">
+          The live MIDI monitor and the LED feedback prober are in <strong>Settings ▸ Debug</strong>. Read any
+          control's bytes there and confirm a mapping as it happens.
         </p>
       )}
     </>

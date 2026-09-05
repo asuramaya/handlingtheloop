@@ -8,6 +8,7 @@ import type { MidiLearnMap, MidiMap } from "../midi/types";
 import type { ColorProfile } from "./colorProfiles";
 import type { FxBank } from "../audio/fxPresets";
 import type { KeyProfile } from "./keyProfiles";
+import type { AudioProfile } from "./audioProfiles";
 
 /** `audioInputId` sentinel: no microphone at all. Distinct from "" (system default device), which
  *  is what every pre-existing install has stored — so this can be the new default without a
@@ -52,6 +53,11 @@ export interface Settings {
   keyBindings: KeyBindings; // the LIVE working keymap overlay (id → primary/secondary code); {} = defaults
   keyProfiles: KeyProfile[]; // saved, shareable keyboard profiles (synced to account, same as midiMaps)
   activeKeyProfileId: string | null; // which saved profile keyBindings was loaded from (null = ad-hoc / default)
+  // The fourth profile family. Audio was the only settings tab with nothing to save: engine
+  // setup was re-tuned by hand per machine. Devices are deliberately NOT in it — see
+  // audioProfiles.ts for why a synced device id is a bug you chase in the sound.
+  audioProfiles: AudioProfile[];
+  activeAudioProfileId: string | null;
   midiEnabled: boolean; // enable USB-MIDI controller support (Web MIDI; desktop Chromium only)
   midiBindings: MidiLearnMap; // the LIVE working overlay layered over the matched profile; {} = profile only
   midiMaps: MidiMap[]; // saved, shareable named maps (synced to account); load one → copies into midiBindings
@@ -84,9 +90,25 @@ export interface Settings {
   audioInputId: string;
   wirelessOutput: boolean; // force the wireless (Bluetooth/CarPlay) pre-roll buffer to stop skips when the browser under-reports outputLatency (iOS reads 0) — #14
   autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
-  mobileStems: boolean; // MOBILE only: split every loaded deck into on-device stems (off = plain mix). AUTO forces it on.
+  // MOBILE only. NOT a separation switch — a phone never separates (canSeparate() is false for
+  // every mobile UA, and useStemPipeline's mobile branch is fetch-and-render only). This asks a
+  // loaded deck to DOWNLOAD a stem set someone's desktop already shared; with nothing cached it
+  // stays on the plain mix. Off = plain mix always. AUTO forces it on (a stem transition needs
+  // both decks). The name is kept for the stored key; the UI calls it "Use shared stems".
+  mobileStems: boolean;
+  // ★ HOW MUCH PERSONALITY AUTO IS ALLOWED. The auto-mixer's transitions are a spectrum: the
+  // structural work (beatmatch, bass swap, gain staging, mix points) is never optional, but the
+  // flourishes on top — an echo throw, a gate stutter, a spinback, an EQ lift as the incoming
+  // takes the lead — are taste, and taste has to be the user's. "subtle" does the mix and gets out
+  // of the way; "standard" adds the small human touches; "showy" lets it reach for the dramatic
+  // gestures whenever they fit. This is deliberately NOT a quality setting — none of these makes
+  // the mix better, they make it more present.
+  autoPerformance: AutoPerformance;
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
+  bandLayers: boolean; // band colouring style: true = rekordbox-style LAYERED lobes (needs lane height), false = flat per-column tint
+  bandFromDeck: boolean; // derive the three band colours as SHADES of the deck's own accent instead of three independent hues
+  stemsFollowDeck: boolean; // stem LANES take shades of the deck's accent too, so a whole deck reads as one colour
   waveformDebrick: boolean; // re-expand local contrast on brick-walled (limited) masters so the waveform shows contour
   markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars on the waveform (1–6)
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
@@ -94,7 +116,30 @@ export interface Settings {
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
   lyricsAuto: boolean; // fetch lyrics automatically (LRCLIB words, timed against the vocal stem when one exists); pooled + shared
   lyricsModel: string; // lyrics engine: "lrclib" (database words + vocal-stem times) or "youtube" (captions)
+  libraryDock: DockMode; // desktop only: where the Library floats — left/right edge, centered, or a bottom sheet. Mobile always renders full-screen regardless.
+  settingsDock: DockMode; // desktop only: where the Settings panel floats. Mobile always renders full-screen regardless.
+  peopleDock: DockMode; // desktop only: where the People panel floats. Mobile always renders full-screen regardless.
+  sessionDock: DockMode; // desktop only: where the Session panel floats. Mobile always renders full-screen regardless.
+  // STACK ORDER — which panel wins when two edge/bottom docks would otherwise overlap (e.g.
+  // both set to "left"). Read top-to-bottom: index 0 renders above everything after it. Only
+  // meaningful for left/right/bottom; "center" panels ignore this entirely and stack by open
+  // order instead (whichever centered modal you opened MOST RECENTLY is on top — the normal
+  // modal expectation, and the only sane one for a mode that's always full-viewport anyway).
+  panelOrder: PanelKey[];
+  panelDim: number; // 0..1 — the backdrop dim behind a "center" placement (and every mobile panel, which is always this same centered treatment). Doesn't affect left/right/bottom: their backdrop is exactly the panel's own footprint, opaque already, nothing behind it left to dim.
 }
+
+/** How much flourish the auto-mixer is allowed on top of the structural mix. */
+export type AutoPerformance = "subtle" | "standard" | "showy";
+
+export type PanelKey = "library" | "settings" | "people" | "session";
+
+// Desktop panel placement (Library / Settings / People / Session all share this) — all four
+// are floating overlays (none push/resize the board): "left"/"right" pin to that edge
+// (resizable width), "center" is a centered modal (Settings' own original look), "bottom"
+// is a fixed-height sheet over the deck-controls strip (resizable height) — wider than a
+// side dock ever gets, which is why it's the pick for reading Library's wide track table.
+export type DockMode = "left" | "right" | "center" | "bottom";
 
 // Time-stretch algorithm. WSOLA = time-domain overlap-add (crisp transients, but
 // metallic on dense polyphony — aligns one grain). PV = phase-LOCKED phase vocoder
@@ -205,6 +250,8 @@ export const DEFAULT_SETTINGS: Settings = {
   keyBindings: {}, // empty → every action uses its default key (see @htl keybinds)
   keyProfiles: [], // no saved keyboard profiles yet
   activeKeyProfileId: null,
+  audioProfiles: [], // no saved audio setups yet
+  activeAudioProfileId: null,
   midiEnabled: false, // off until the user opts in (Web MIDI shows a permission prompt)
   midiBindings: {}, // empty → rely on the auto-matched built-in controller profile
   midiMaps: [], // no saved maps yet
@@ -224,8 +271,12 @@ export const DEFAULT_SETTINGS: Settings = {
   wirelessOutput: false, // auto-detect by default; the user forces it on for a Bluetooth/CarPlay output that skips
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
+  autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
+  bandLayers: true, // layered lobes where there's room; auto-falls back to the flat tint on a short lane
+  bandFromDeck: false, // opt-in: the picked Lows/Mids/Highs stay authoritative until you ask for deck shades
+  stemsFollowDeck: false, // opt-in: the four picked stem colours stay authoritative until you ask for deck shades
   waveformDebrick: false, // OFF by default: raw amplitude shows true contour. On normal-dynamics
   // content the de-brick remap normalises every section to a uniform height band, which reads AS a
   // brick wall — so it's opt-in, for genuinely limited masters that flat-top into a solid block.
@@ -238,6 +289,12 @@ export const DEFAULT_SETTINGS: Settings = {
   // simply better than YouTube's captions, so there is no longer any reason for the good path to be
   // opt-in. (A neural vocal stem upgrades these from line-level to word-level; it is not required.)
   lyricsModel: "lrclib",
+  libraryDock: "left", // matches the old default dock side
+  settingsDock: "right", // matches the old default (unchanged behaviour until a user opts into something else)
+  peopleDock: "right", // matches the old default
+  sessionDock: "right", // matches the old default
+  panelOrder: ["library", "settings", "people", "session"], // Library on top by default — it's the one you drag FROM
+  panelDim: 0.55, // matches the old hardcoded rgba(0,0,0,0.55)
 };
 
 // Dark base-colour presets for the background picker (varied dark hues).
@@ -422,4 +479,9 @@ export function applySettings(s: Settings) {
   else root.style.removeProperty("--wv-strip");
   document.body.classList.toggle("no-glow", !s.glow);
   document.body.classList.toggle("show-keys", s.keyHints);
+  // Backdrop dim behind a "center"-placed panel (and every mobile panel — always this same
+  // centered treatment). Left/right/bottom docks don't read this: their backdrop is exactly
+  // the panel's own opaque footprint, nothing left behind it to dim.
+  const dim = Math.max(0, Math.min(1, Number.isFinite(s.panelDim) ? s.panelDim : 0.55));
+  root.style.setProperty("--panel-dim", String(dim));
 }

@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { fxBankStats, restoreFxFactory, resetFxArrangement } from "@htl/audio";
 import { onSettingsSync, settingsSyncState } from "../../htl/state/settingsSync";
+import { InfoDot } from "./InfoDot";
 
 // Settings ▸ Audio ▸ Effect presets — the RESTORE side of the preset banks.
 //
@@ -49,53 +50,61 @@ export function FxBankSettings() {
     <div className="settings-section">
       <div className="settings-section-head">
         <span className="settings-label">Effect presets</span>
-        <span className={`fx-bank-sync ${sync.error ? "bad" : ""}`}>
-          {sync.signedIn === false
-            ? "this device only — sign in to sync"
-            : sync.error
-              ? `not synced: ${sync.error}${kb ? ` (${kb})` : ""}`
-              : sync.lastPushAt
-                ? `synced to your account${kb ? ` · ${kb}` : ""}`
-                : ""}
-        </span>
+        <InfoDot
+          text="The undo side of the preset banks. You group, reorder, edit and delete presets by right-clicking an effect tab on the board; this is where you put any of that back. Restore returns the deleted factory presets and undoes your edits to them. Reset goes further and also drops your sections and ordering. Neither one touches a preset you saved yourself — deleting those stays one at a time, in the menu, where you can see what you are deleting."
+          label="Effect presets"
+        />
+        {sync.signedIn === false || sync.error || sync.lastPushAt ? (
+          <span className={`fx-bank-sync ${sync.error ? "bad" : ""}`}>
+            {sync.signedIn === false
+              ? "this device only"
+              : sync.error
+                ? `not synced${kb ? ` · ${kb}` : ""}`
+                : `synced${kb ? ` · ${kb}` : ""}`}
+          </span>
+        ) : null}
       </div>
       {touched.length === 0 ? (
-        <p className="settings-hint muted">Every bank is as shipped. Group, reorder, edit or delete presets by right-clicking an effect tab — this is where you undo it.</p>
+        <p className="settings-note">Every bank is as it ships, so there is nothing to undo.</p>
       ) : (
-        <>
-          {touched.map((r) => (
-            <div key={r.kind} className="settings-row fx-bank-row">
-              <span className="settings-label">{r.label}</span>
-              <span className="fx-bank-stats">
-                {[r.s.own && `${r.s.own} yours`, r.s.sections && `${r.s.sections} section${r.s.sections === 1 ? "" : "s"}`, r.s.edited && `${r.s.edited} edited`, r.s.hidden && `${r.s.hidden} hidden`].filter(Boolean).join(" · ")}
+        /* ★ ONE ROW PER TOUCHED BANK, in the shared grammar. It was a four-column bespoke row
+           carrying a name, a stats string and TWO full-width word buttons — the widest row in
+           the whole panel, and the two verbs read as equals when one of them is strictly bigger
+           than the other. They are a `.seg-group` now, in the order they escalate, and the
+           counts sit in the shared value slot like every other reading. */
+        touched.map((r) => (
+          <div key={r.kind} className="settings-row fx-bank-row">
+            <span className="settings-label">{r.label}</span>
+            <span className="settings-control">
+              <span className="settings-value">
+                {[r.s.own && `${r.s.own} yours`, r.s.sections && `${r.s.sections} sec`, r.s.edited && `${r.s.edited} edited`, r.s.hidden && `${r.s.hidden} hidden`].filter(Boolean).join(" · ")}
               </span>
-              <button
-                className="btn"
-                title="Put back every deleted factory preset and undo every edit to one. Your own presets, sections and order are kept."
-                onClick={() => {
-                  restoreFxFactory(r.kind);
-                  setTick((t) => t + 1);
-                }}
-              >
-                Restore factory
-              </button>
-              <button
-                className={`btn ${confirm === r.kind ? "danger" : ""}`}
-                title="Also throw away the sections and the order — back to the bank as it ships. Presets you saved yourself are kept."
-                onClick={() => {
-                  if (confirm !== r.kind) return setConfirm(r.kind);
-                  resetFxArrangement(r.kind);
-                  setConfirm(null);
-                  setTick((t) => t + 1);
-                }}
-                onBlur={() => setConfirm((c) => (c === r.kind ? null : c))}
-              >
-                {confirm === r.kind ? "Sure?" : "Reset arrangement"}
-              </button>
-            </div>
-          ))}
-          <p className="settings-hint muted">Restore puts back deleted factory presets and undoes edits to them. Reset also drops your sections and ordering. Neither deletes presets you saved yourself.</p>
-        </>
+              <span className="seg-group">
+                <button
+                  className="hw-btn small"
+                  onClick={() => {
+                    restoreFxFactory(r.kind);
+                    setTick((t) => t + 1);
+                  }}
+                >
+                  Restore
+                </button>
+                <button
+                  className={`hw-btn small danger ${confirm === r.kind ? "armed" : ""}`}
+                  onClick={() => {
+                    if (confirm !== r.kind) return setConfirm(r.kind);
+                    resetFxArrangement(r.kind);
+                    setConfirm(null);
+                    setTick((t) => t + 1);
+                  }}
+                  onBlur={() => setConfirm((c) => (c === r.kind ? null : c))}
+                >
+                  {confirm === r.kind ? "Sure?" : "Reset all"}
+                </button>
+              </span>
+            </span>
+          </div>
+        ))
       )}
     </div>
   );

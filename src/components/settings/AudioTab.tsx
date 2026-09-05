@@ -4,6 +4,7 @@
 // the Audio tab is open, so those probes run exactly when the UI that uses them is shown.
 import { useEffect, useState } from "react";
 import { FxBankSettings } from "./FxBankSettings";
+import { InfoDot } from "./InfoDot";
 import {
   type Settings,
   type StretchQuality,
@@ -208,6 +209,10 @@ export function AudioTab({
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">Output device (PA)</span>
+          <InfoDot
+            text="Your PA or house output: the speakers the room hears. It carries the main mix and the microphone. Headphones are chosen separately under Cue, so you can pre-listen to one deck while the room hears another."
+            label="Output device"
+          />
         </div>
         {outputSupported ? (
           <>
@@ -215,6 +220,7 @@ export function AudioTab({
               className="settings-select"
               value={settings.audioOutputId}
               onChange={(e) => set({ audioOutputId: e.target.value })}
+              aria-label="Output device"
             >
               <option value="">System default</option>
               {outputs.map((d, i) => (
@@ -223,20 +229,19 @@ export function AudioTab({
                 </option>
               ))}
             </select>
-            <p className="settings-hint muted">Your PA / house output. Carries the main mix and the mic. Headphone cue is set separately below.</p>
             {outputNeedsPerm && (
-              <p className="settings-hint muted">
-                Device names are hidden until you grant audio permission once.{" "}
+              <p className="settings-note">
+                Device names stay hidden until you grant audio permission once.{" "}
                 <button className="link-btn" onClick={revealOutputNames}>
                   Show device names
                 </button>
               </p>
             )}
-            {outputPermErr && <p className="settings-hint" style={{ color: "#ffd250" }}>{outputPermErr}</p>}
+            {outputPermErr && <p className="settings-note warn">{outputPermErr}</p>}
           </>
         ) : (
-          <p className="settings-hint muted">
-            This browser can’t switch outputs. Choose a speaker in your system sound settings, or use Chrome or Edge.
+          <p className="settings-note warn">
+            This browser cannot switch outputs. Pick a speaker in your system sound settings, or use Chrome or Edge.
           </p>
         )}
       </div>
@@ -244,21 +249,23 @@ export function AudioTab({
       {isMobileDevice() && (
         <div className="settings-section">
           <div className="settings-row">
-            <span className="settings-label">Force wireless buffering</span>
+            <span className="settings-label">
+              Force wireless buffering
+              <InfoDot
+                text="Bluetooth and car-stereo skips are already handled on their own: dropouts are detected, buffering goes up, and it backs off once playback is clean. This pins the full buffer, about 120 milliseconds, from the start instead of waiting for the first skip. It costs a little latency on a wired output."
+                label="Force wireless buffering"
+              />
+            </span>
             <button
               className={`toggle ${settings.wirelessOutput ? "on" : ""}`}
               onClick={() => set({ wirelessOutput: !settings.wirelessOutput })}
               role="switch"
               aria-checked={settings.wirelessOutput}
+              aria-label="Force wireless buffering"
             >
               <span className="toggle-knob" />
             </button>
           </div>
-          <p className="settings-hint muted">
-            Bluetooth and car-stereo skips are already fixed <strong>automatically</strong>: dropouts are detected,
-            buffering goes up, and it backs off once playback is clean. Turn this on to pin the full ~120&nbsp;ms buffer
-            from the start. Costs a little latency on wired output.
-          </p>
         </div>
       )}
 
@@ -266,11 +273,16 @@ export function AudioTab({
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">Cue / Headphone</span>
+            <InfoDot
+              text="Headphones for pre-listening a deck before the room hears it, like a DJ board. The deck's CUE button becomes a fader: tap to set or jump to the cue point, drag or scroll to set its headphone level. It taps before the channel fader, so a deck faded all the way out can still be cued."
+              label="Cue / Headphone"
+            />
           </div>
           <select
             className="settings-select"
             value={settings.audioCueOutputId}
             onChange={(e) => set({ audioCueOutputId: e.target.value })}
+            aria-label="Cue output device"
           >
             <option value="">None — single output</option>
             {/* Exclude the main PA device — cueing to the SAME physical output double-plays the
@@ -289,20 +301,15 @@ export function AudioTab({
           {(() => {
             const cueLabel = outputs.find((d) => d.deviceId === settings.audioCueOutputId)?.label ?? "";
             return /\b(bluetooth|airpods?|wireless|bt|beats|buds|jabra)\b/i.test(cueLabel) ? (
-              <p className="settings-hint" style={{ color: "#ffd250" }}>
-                ⚠ “{cueLabel}” looks like a Bluetooth output. Wireless adds ~150–300&nbsp;ms of latency and can shift
-                the cue’s pitch. Use a <strong>wired / USB</strong> output to cue accurately.
+              <p className="settings-note warn">
+                <strong>{cueLabel}</strong> looks like a Bluetooth output. Wireless adds 150 to 300 milliseconds of
+                latency and can shift the cue's pitch. Use a wired or USB output to cue accurately.
               </p>
             ) : null;
           })()}
-          <p className="settings-hint muted">
-            Pick headphones to pre-listen each deck like a DJ board. The deck’s <strong>CUE</strong> button becomes a
-            fader: tap sets or jumps the cue point, drag or scroll sets its headphone level. It taps pre-fader, so a
-            deck that’s faded out can still be cued.
-          </p>
           {outputNeedsPerm && (
-            <p className="settings-hint muted">
-              Device names are hidden until you grant audio permission once.{" "}
+            <p className="settings-note">
+              Device names stay hidden until you grant audio permission once.{" "}
               <button className="link-btn" onClick={revealOutputNames}>
                 Show device names
               </button>
@@ -315,12 +322,16 @@ export function AudioTab({
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">Microphone</span>
+            <InfoDot
+              text="A microphone for talkover and sampling. None is a real choice and the default: with None picked, the MIC, DUCK and MON controls are absent from the board entirely rather than sitting there unused. Switching device while the mic is live re-acquires it."
+              label="Microphone"
+            />
           </div>
           {/* ★ SAME SHAPE AS THE CUE OUTPUT ABOVE: "None" is a real, default choice, and choosing a
               device is what turns the feature on. The mic section of the board follows this select —
               pick None and MIC / DUCK / MON are gone from the board entirely, rather than sitting
               there forever for the (many) people who never use a microphone. */}
-          <select className="settings-select" value={settings.audioInputId} onChange={(e) => set({ audioInputId: e.target.value })}>
+          <select className="settings-select" value={settings.audioInputId} onChange={(e) => set({ audioInputId: e.target.value })} aria-label="Microphone device">
             <option value={MIC_NONE}>None — no microphone</option>
             <option value="">System default mic</option>
             {inputs.map((d, i) => (
@@ -329,67 +340,86 @@ export function AudioTab({
               </option>
             ))}
           </select>
-          <p className="settings-hint muted">
-            {settings.audioInputId === MIC_NONE
-              ? "No microphone. Pick one to put talkover, ducking and mic monitoring on the board."
-              : "Input for talkover and sampling. Switching while the mic is live re-acquires it."}
-            {inputs.length > 0 && inputs.every((d) => !d.label) && (
-              <>
-                {" "}Names are hidden until you grant audio access once.{" "}
-                <button className="link-btn" onClick={revealOutputNames}>
-                  Show device names
-                </button>
-              </>
-            )}
-          </p>
+          {/* A REPORT on the current state, not an explanation of the control — the explanation
+              is behind the head's ⓘ. That is the whole split: `.settings-note` states a fact
+              about right now, InfoDot answers "what is this". */}
+          {settings.audioInputId === MIC_NONE && (
+            <p className="settings-note">No microphone selected, so talkover, ducking and monitoring are off the board.</p>
+          )}
+          {inputs.length > 0 && inputs.every((d) => !d.label) && (
+            <p className="settings-note">
+              Device names stay hidden until you grant audio access once.{" "}
+              <button className="link-btn" onClick={revealOutputNames}>
+                Show device names
+              </button>
+            </p>
+          )}
         </div>
       )}
 
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">Stretch engine</span>
+          <InfoDot
+            text="How a track is sped up or slowed down without changing its pitch. WSOLA works in the time domain: lightest on CPU and crispest on drums, but it can sound metallic on a dense mix. The phase-locked vocoder works in the frequency domain: cleanest on full mixes with no metallic edge, at more CPU. Quality trades latency for grain size, and the number beside it is the real latency you are choosing."
+            label="Stretch engine"
+          />
         </div>
-        <div className="seg">
-          {([
-            ["wsola", "WSOLA"],
-            ["pv", "Phase-locked"],
-          ] as [StretchEngine, string][]).map(([e, label]) => (
-            <button
-              key={e}
-              className={`seg-btn ${settings.stretchEngine === e ? "on" : ""}`}
-              onClick={() => set({ stretchEngine: e })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="settings-hint muted">
-          {settings.stretchEngine === "pv"
-            ? "Phase-locked vocoder. Cleanest on full mixes, no metallic edge. More CPU."
-            : "Time-domain WSOLA. Lightest CPU, crisp transients. Can sound metallic on dense mixes."}
-        </p>
-        <div className="seg">
-          {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
-            <button
-              key={q}
-              className={`seg-btn ${settings.stretchQuality === q ? "on" : ""}`}
-              onClick={() => set({ stretchQuality: q })}
-            >
-              {STRETCH_PRESETS[q].label}
-            </button>
-          ))}
-        </div>
-        <p className="settings-hint muted">
-          ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms latency · grain{" "}
-          {STRETCH_PRESETS[settings.stretchQuality].frame}
-        </p>
+        {/* Both of these were a bare `.seg` floating with a paragraph under it — a control with no
+            label, explained afterwards. They are rows now: the question on the left, the answer on
+            the right, and the reading (latency, grain) in the shared value slot. */}
         <div className="settings-row">
-          <span className="settings-label">Transient preservation</span>
+          <span className="settings-label">Algorithm</span>
+          <span className="settings-control">
+            <span className="seg-group">
+              {([
+                ["wsola", "WSOLA"],
+                ["pv", "Phase-locked"],
+              ] as [StretchEngine, string][]).map(([e, label]) => (
+                <button
+                  key={e}
+                  className={`hw-btn small ${settings.stretchEngine === e ? "on" : ""}`}
+                  onClick={() => set({ stretchEngine: e })}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">Quality</span>
+          <span className="settings-control">
+            <span className="settings-value">
+              ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms
+            </span>
+            <span className="seg-group">
+              {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
+                <button
+                  key={q}
+                  className={`hw-btn small ${settings.stretchQuality === q ? "on" : ""}`}
+                  onClick={() => set({ stretchQuality: q })}
+                >
+                  {STRETCH_PRESETS[q].label}
+                </button>
+              ))}
+            </span>
+          </span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-label">
+            Transient preservation
+            <InfoDot
+              text="Copy attacks through intact instead of stretching them with everything else, so kicks and snares keep their edge at a changed tempo. WSOLA copies the grain 1:1; the vocoder resets phase at the hit."
+              label="Transient preservation"
+            />
+          </span>
           <button
             className={`toggle ${settings.stretchTransient ? "on" : ""}`}
             onClick={() => set({ stretchTransient: !settings.stretchTransient })}
             role="switch"
             aria-checked={settings.stretchTransient}
+            aria-label="Transient preservation"
           >
             <span className="toggle-knob" />
           </button>
@@ -397,6 +427,7 @@ export function AudioTab({
         {settings.stretchTransient && (
           <Slider
             label="Transient threshold"
+            info="How eager the attack detector is. Sensitive catches soft hits but can mistake a busy passage for one; strict only fires on a clear transient."
             hint={settings.stretchTThresh <= 1.7 ? "sensitive" : settings.stretchTThresh >= 3 ? "strict" : "balanced"}
             value={settings.stretchTThresh}
             onChange={(v) => set({ stretchTThresh: v })}
@@ -406,19 +437,23 @@ export function AudioTab({
           />
         )}
         <div className="settings-row">
-          <span className="settings-label">Anti-alias pitch-up</span>
+          <span className="settings-label">
+            Anti-alias pitch-up
+            <InfoDot
+              text="Resample with a windowed-sinc filter when pitching up, instead of the cheap interpolation. It keeps attacks crisp under a big tempo stretch and removes the fizz you otherwise hear on a key-up. WSOLA only."
+              label="Anti-alias pitch-up"
+            />
+          </span>
           <button
             className={`toggle ${settings.stretchAa ? "on" : ""}`}
             onClick={() => set({ stretchAa: !settings.stretchAa })}
             role="switch"
             aria-checked={settings.stretchAa}
+            aria-label="Anti-alias pitch-up"
           >
             <span className="toggle-knob" />
           </button>
         </div>
-        <p className="settings-hint muted">
-          Keeps attacks crisp under big tempo stretch and removes fizz on key-ups.
-        </p>
       </div>
 
       {isGpuBlocked() && (
@@ -460,47 +495,59 @@ export function AudioTab({
         </div>
         {isMobileDevice() ? (
           <>
+          {/* ★ A PHONE NEVER SEPARATES. `canSeparate()` returns false for every mobile UA before
+              it looks at anything else, and the pipeline's own mobile branch is labelled FETCH +
+              RENDER ONLY: it probes the shared cache and, finding nothing, stays on the plain mix.
+              This control was nevertheless called "Split tracks into stems · on-device", which
+              promised the one thing the device cannot do — and when a phone then sat on the mix,
+              nothing in the wording could explain why. It is a DOWNLOAD switch, so it says so. */}
           <div className="settings-row">
             <span className="settings-label">
-              Split tracks into stems
-              <span className="settings-sub muted"> · on-device · per-stem mixer + colours</span>
+              Use shared stems
+              <InfoDot
+                text="Phones never separate a track themselves: the neural model needs a desktop GPU, and loading it here would crash the tab. What a phone can do is download a set someone's desktop already made and shared. On, a loaded deck checks the shared cache and takes the stems if they are there. Off, it stays on the plain mix, which is the lightest thing to play. Auto-DJ turns this on while it runs, because a stem transition needs both decks."
+                label="Use shared stems"
+              />
             </span>
             <button
               className={`toggle ${settings.mobileStems ? "on" : ""}`}
               onClick={() => set({ mobileStems: !settings.mobileStems })}
               role="switch"
               aria-checked={settings.mobileStems}
+              aria-label="Use shared stems"
             >
               <span className="toggle-knob" />
             </button>
           </div>
-          <div className="stem-mobile-note">
-            Off keeps the lightest plain mix. On splits every loaded deck on-device (or adopts the shared
-            cache when a desktop already made them). Auto-DJ turns this on while it runs.
-            {stemFailLevel() > 0 && (
-              <>
-                {" "}
-                Downgraded after a crash —{" "}
-                <button
-                  className="link-btn"
-                  onClick={() => {
-                    resetStemGuard();
-                    location.reload();
-                  }}
-                >
-                  retry full quality
-                </button>
-                .
-              </>
-            )}
-          </div>
+          {/* The dependency, stated once and up front. A phone that silently plays the mix looks
+              broken; a phone that told you a desktop has to go first does not. */}
+          {settings.mobileStems && (
+            <p className="settings-note">
+              A track only has stems once someone has separated it on a desktop with Demucs. Until then this
+              deck plays the mix.
+            </p>
+          )}
+          {stemFailLevel() > 0 && (
+            <p className="settings-note warn">
+              Downgraded after a crash.{" "}
+              <button
+                className="link-btn"
+                onClick={() => {
+                  resetStemGuard();
+                  location.reload();
+                }}
+              >
+                Retry full quality
+              </button>
+            </p>
+          )}
           </>
         ) : (
           <div className="stem-models">
+            {/* No mobile filter here: this whole branch is the `!isMobileDevice()` side. A phone
+                never reaches the model picker at all — it gets the "Use shared stems" switch and
+                nothing else. The filter that used to sit here implied otherwise. */}
             {STEM_MODELS
-              // GPU/demucs is hidden on phones (WebGPU OOM-crashes Safari); phones are
-              // cache-only consumers, so the picker shows just Single there.
-              .filter((m) => !(isMobileDevice() && m.tier === "gpu"))
               .map((m) => {
                 const sup = modelSupport(m);
                 const badge = supportBadge(m);
@@ -529,14 +576,17 @@ export function AudioTab({
           <div className="settings-row stem-autoenhance">
             <span className="settings-label">
               Auto-enhance
-              <span className="settings-sub muted"> · use cached neural stems when a track has them</span>
+              <InfoDot
+                text="When a track already has a neural stem set in the shared cache, use it instead of separating again. Costs a download rather than a GPU run, and the result is identical because it is the same model. Turn it off to stay on whatever model you picked above."
+                label="Auto-enhance"
+              />
             </span>
             <button
               className={`toggle ${settings.autoEnhance ? "on" : ""}`}
               onClick={() => set({ autoEnhance: !settings.autoEnhance })}
               role="switch"
               aria-checked={settings.autoEnhance}
-              title="When a track already has cached neural stems, use them automatically instead of the plain mix"
+              aria-label="Auto-enhance"
             >
               <span className="toggle-knob" />
             </button>
@@ -544,24 +594,36 @@ export function AudioTab({
         )}
 
         {!isMobileDevice() && getStemModel(settings.stemModel).tier === "gpu" && (
-          <div className="stem-quality">
-            <div className="settings-section-head">
-              <span className="settings-label">Separation quality</span>
-              <span className="settings-sub muted">{STEM_PRESETS[settings.stemQuality].mult} compute</span>
-            </div>
-            <div className="seg">
-              {(Object.keys(STEM_PRESETS) as StemQuality[]).map((q) => (
-                <button
-                  key={q}
-                  className={`seg-btn ${settings.stemQuality === q ? "on" : ""}`}
-                  onClick={() => set({ stemQuality: q })}
-                >
-                  {STEM_PRESETS[q].label}
-                </button>
-              ))}
-            </div>
-            <p className="settings-hint muted">{STEM_PRESETS[settings.stemQuality].blurb}</p>
+          <>
+          {/* The chosen preset's blurb is the ONE piece of prose kept as prose on this tab, and
+              deliberately: it changes with the control, so it is a readout of the current choice
+              rather than an explanation of the control. Explanation goes behind the ⓘ; state
+              stays visible. */}
+          <div className="stem-quality settings-row">
+            <span className="settings-label">
+              Separation quality
+              <InfoDot
+                text="How hard the GPU works on each split. Higher settings run the model more times over the track and overlap the windows further, which cleans up bleed between stems at a proportional cost in time. The compute figure is the multiplier against the fastest setting."
+                label="Separation quality"
+              />
+            </span>
+            <span className="settings-control">
+              <span className="settings-value">{STEM_PRESETS[settings.stemQuality].mult}</span>
+              <span className="seg-group">
+                {(Object.keys(STEM_PRESETS) as StemQuality[]).map((q) => (
+                  <button
+                    key={q}
+                    className={`hw-btn small ${settings.stemQuality === q ? "on" : ""}`}
+                    onClick={() => set({ stemQuality: q })}
+                  >
+                    {STEM_PRESETS[q].label}
+                  </button>
+                ))}
+              </span>
+            </span>
           </div>
+          <p className="settings-note">{STEM_PRESETS[settings.stemQuality].blurb}</p>
+        </>
         )}
 
         {(() => {

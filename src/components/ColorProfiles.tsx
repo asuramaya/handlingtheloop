@@ -7,6 +7,7 @@ import {
   exportColorProfile,
   parseColorProfile,
 } from "@htl";
+import { InfoDot } from "./settings/InfoDot";
 import { ProfileBar } from "./ProfileBar";
 
 // The colour "play" controls in ONE self-contained component so the (co-edited) SettingsPanel
@@ -33,34 +34,14 @@ export function ColorProfiles({ settings, onChange }: { settings: Settings; onCh
 
   return (
     <>
-      {settings.freqColors && (
-        <div className="color-group">
-          <div className="color-group-head">
-            <span className="color-group-title">Band vividness</span>
-            <span className="color-group-desc">Saturation of the frequency-coloured waveform — grey at 0%, as-picked at 100%, neon past it.</span>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">
-              Vividness <span className="settings-sub muted">· {Math.round(settings.freqVividness * 100)}%</span>
-            </span>
-            <input
-              type="range"
-              className="settings-slider"
-              min={0}
-              max={2}
-              step={0.05}
-              value={settings.freqVividness}
-              onChange={(e) => set({ freqVividness: Number(e.target.value) })}
-              title="Band-colour saturation: 0% grey, 100% as-picked, 200% neon"
-            />
-          </div>
-        </div>
-      )}
+      {/* Band vividness used to live here as a section of its own, holding one slider. It is a
+          property of the band colours, so it now sits WITH them, under Frequency colour in the
+          Colour tab — a control's home is the thing it modifies. */}
 
       <div className="color-group">
         <div className="color-group-head">
           <span className="color-group-title">Saved themes</span>
-          <span className="color-group-desc">Snapshot the whole palette as a named theme — synced to your account, shareable by code.</span>
+          <InfoDot text="Save the whole palette as a named theme. Themes sync to your account, and you can share one with a code." label="Saved themes" />
         </div>
         <ProfileBar
           adapter={{

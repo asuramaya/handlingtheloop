@@ -43,6 +43,26 @@ function tooLong(durationSec: number): boolean {
   return durationSec > MAX_TRACK_SECONDS;
 }
 
+// A deliberately TIGHT list of "this is not a track" markers. Every parser runs it, because both
+// the watch-next sidebar and the YouTube Music radio queue leak the same handful of shapes into an
+// auto-mix pool — observed live: a "(fan-voted) top 100 most recognizable songs of all-time"
+// compilation and a "Legends never die | Technoblade never die" memorial montage, neither of which
+// is something to beatmatch into.
+//
+// It is short on purpose. A title regex that tries to be clever about what music IS will throw
+// away real records — plenty of legitimate tracks have "live", "remix" or "mix" in the title, and
+// none of those words appear here. These are only phrases that describe a COLLECTION of songs or a
+// video that isn't primarily music at all.
+const NON_SONG = /\b(top\s*\d{2,}|best\s+of\s+\d{4}|full\s+album|greatest\s+hits|compilation|megamix|playlist|non[\s-]?stop|reaction|reacts?\s+to|tutorial|interview|documentary|trailer|explained|reviews?|unboxing)\b/i;
+const MIN_TRACK_SECONDS = 45; // shorter than this is a clip, a sting or a Short — not a record
+
+/** Reject obvious non-songs before they reach an auto-mix queue. `duration` 0 means unknown, which
+ *  is kept: an unparsed length is not evidence of anything. */
+export function isNonSong(title: string, durationSec: number): boolean {
+  if (durationSec > 0 && durationSec < MIN_TRACK_SECONDS) return true;
+  return NON_SONG.test(title || "");
+}
+
 export function parseDuration(text?: string): number {
   if (!text) return 0;
   const parts = text.split(":").map(Number);
@@ -144,6 +164,9 @@ export interface InnertubeApi {
   // YouTube watch-next / autoplay graph for a video — the universal "what plays
   // after this" feed. auth is optional (personalizes the feed when present).
   getWatchNext(videoId: string, auth?: BrowseAuth): Promise<TrackMeta[]>;
+  // YouTube MUSIC's own track radio (the RDAMVM mix) — a curated all-music sequence rather than
+  // the general-purpose related-videos sidebar. Empty when the video has no music radio.
+  getMusicRadio(videoId: string, auth?: BrowseAuth): Promise<TrackMeta[]>;
 }
 
 
@@ -175,9 +198,11 @@ export function fromCompact(r: CompactRenderer): TrackMeta | null {
   if (!id || !/^[\w-]{11}$/.test(id)) return null;
   const duration = parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs));
   if (tooLong(duration)) return null;
+  const compactTitle = r.title?.simpleText ?? runsText(r.title?.runs) ?? id;
+  if (isNonSong(compactTitle, duration)) return null;
   return {
     videoId: id,
-    title: r.title?.simpleText ?? runsText(r.title?.runs) ?? id,
+    title: compactTitle,
     artist: runsText(r.longBylineText?.runs) ?? runsText(r.shortBylineText?.runs) ?? "",
     duration,
     thumbnail: `/api/art/${id}`,
@@ -235,10 +260,42 @@ export function fromLockup(l: LockupVM): TrackMeta | null {
   }
   const duration = parseDuration(durText);
   if (tooLong(duration)) return null; // drop hour-long mixes / livestreams
+  if (isNonSong(title, duration)) return null; // compilations / non-music that carried a MUSIC badge
   return {
     videoId: id,
     title,
     artist,
+    duration,
+    thumbnail: `/api/art/${id}`,
+    views: null,
+  };
+}
+
+// A row of a WATCH PLAYLIST (the RDAMVM music-radio queue). Shaped almost exactly like the old
+// compactVideoRenderer, but it arrives inside `playlist.playlist.contents` rather than the
+// related-videos sidebar — and everything in it is, by construction, music: YouTube Music built
+// the sequence. No MUSIC-badge test is needed or possible here.
+interface PlaylistPanelRenderer {
+  videoId?: string;
+  title?: { simpleText?: string; runs?: unknown };
+  lengthText?: { simpleText?: string; runs?: unknown };
+  longBylineText?: { runs?: unknown };
+  shortBylineText?: { runs?: unknown };
+}
+
+export function fromPlaylistPanel(r: PlaylistPanelRenderer): TrackMeta | null {
+  const id = r.videoId;
+  if (!id || !/^[\w-]{11}$/.test(id)) return null;
+  const title = r.title?.simpleText ?? runsText(r.title?.runs);
+  if (!title) return null;
+  const duration = parseDuration(r.lengthText?.simpleText ?? runsText(r.lengthText?.runs));
+  if (tooLong(duration)) return null;
+  // Even a curated YouTube Music radio queue seeds in the occasional compilation.
+  if (isNonSong(title, duration)) return null;
+  return {
+    videoId: id,
+    title,
+    artist: runsText(r.longBylineText?.runs) ?? runsText(r.shortBylineText?.runs) ?? "",
     duration,
     thumbnail: `/api/art/${id}`,
     views: null,
@@ -261,8 +318,12 @@ export function collectVideos(node: unknown, push: (t: TrackMeta) => void, depth
     const t = fromLockup(obj.lockupViewModel as LockupVM);
     if (t) push(t);
   }
+  if (obj.playlistPanelVideoRenderer) {
+    const t = fromPlaylistPanel(obj.playlistPanelVideoRenderer as PlaylistPanelRenderer);
+    if (t) push(t);
+  }
   for (const k in obj) {
-    if (k === "compactVideoRenderer" || k === "lockupViewModel") continue;
+    if (k === "compactVideoRenderer" || k === "lockupViewModel" || k === "playlistPanelVideoRenderer") continue;
     collectVideos(obj[k], push, depth + 1);
   }
 }
@@ -421,6 +482,35 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
       }
       const out: TrackMeta[] = [];
       const seen = new Set<string>([videoId]); // never suggest the seed itself
+      collectVideos(data, (t) => {
+        if (seen.has(t.videoId)) return;
+        seen.add(t.videoId);
+        out.push(t);
+      });
+      return out;
+    },
+    async getMusicRadio(videoId, auth) {
+      // YouTube MUSIC's own radio for this track. The generic watch-next sidebar is a
+      // RECOMMENDATION surface — it optimises for what you might click, so it mixes in the
+      // uploader's other uploads, reaction videos and whatever is trending, and we have to filter
+      // it back down with a MUSIC badge test. `RDAMVM<videoId>` is a different thing entirely: a
+      // SEQUENCE, built by YouTube Music, of tracks meant to play one after another. Everything in
+      // it is music, it is ordered by musical fit rather than clickability, and it is exactly the
+      // question the auto-mix radio is asking.
+      void auth; // the anonymous mix is fine — a personalised one would drift toward watch history
+      const exec = async (yt: InnertubeInstance): Promise<unknown> => {
+        if (!yt.actions?.execute) throw new Error("watch-next unavailable in this youtubei build");
+        const res = await yt.actions.execute("/next", { videoId, playlistId: `RDAMVM${videoId}`, parse: false });
+        return res?.data ?? res;
+      };
+      let data: unknown;
+      try {
+        data = await withRetry(exec);
+      } catch {
+        return []; // no music radio for this video (or YouTube said no) — the caller has a floor
+      }
+      const out: TrackMeta[] = [];
+      const seen = new Set<string>([videoId]);
       collectVideos(data, (t) => {
         if (seen.has(t.videoId)) return;
         seen.add(t.videoId);

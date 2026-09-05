@@ -134,6 +134,29 @@ export interface TrackMeta {
   duration: number;
   thumbnail: string | null;
   views: number | null;
+  // Cross-catalogue anchors, present on tracks that reached us through a provider tier (TIDAL
+  // radio) rather than YouTube directly. The client's TrackMeta carries the same two fields; the
+  // recommend route has always emitted them and used to reach the wire through an `as TrackMeta`
+  // cast that hid their absence from this type.
+  isrc?: string | null;
+  provider?: string;
+}
+
+// Strip the noise YouTube uploaders cram into titles (resolution/format/"official video" tags)
+// so the leftover "Artist - Song" matches a music catalogue. Duration — not the title — is what
+// we trust for length; this is only for NAME matching. Lives here rather than in worker/shared.ts
+// because the shared provider-radio tier (server/providerRadio.ts) matches seeds by name and runs
+// in BOTH the worker and the dev server.
+const TITLE_JUNK = /\b(official|video|audio|lyrics?|hd|hq|4k|uhd|1080p|720p|480p|full\s*hd|visualizer|remaster(?:ed)?|explicit|m\/?v)\b/i;
+export function cleanVideoTitle(s: string): string {
+  return s
+    .replace(/\([^)]*\)/g, (m) => (TITLE_JUNK.test(m) ? " " : m))
+    .replace(/\[[^\]]*\]/g, (m) => (TITLE_JUNK.test(m) ? " " : m))
+    .replace(/\|\|?\s*(hd|hq|4k|1080p|720p|full\s*hd)\b.*$/gi, " ")
+    .replace(/\b(official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|music\s+video)\b/gi, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*[-\u2013\u2014]\s*$/, "")
+    .trim();
 }
 
 interface RawFormat {

@@ -9,6 +9,7 @@ export interface TrackAnalysisRow {
   key_name: string | null;
   beat_offset: number | null;
   duration: number | null;
+  energy?: number | null;
 }
 
 /** Contribute/refresh a track's analysis (BPM/key/grid). Idempotent per video.
@@ -18,7 +19,7 @@ export interface TrackAnalysisRow {
  *  newest algorithm in circulation — see the htl-metadata-convergence design note. */
 export async function upsertAnalysis(
   db: D1Database,
-  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; palette?: string | null; version?: number },
+  a: { videoId: string; bpm?: number | null; key?: string | null; keyName?: string | null; beatOffset?: number | null; duration?: number | null; grid?: string | null; palette?: string | null; energy?: number | null; version?: number },
 ): Promise<void> {
   const version = a.version ?? 1;
   // The BPM/key summary write — unchanged shape, so it can NEVER be broken by the grid column.
@@ -62,6 +63,17 @@ export async function upsertAnalysis(
       /* palette column not migrated yet — lands after 0024 */
     }
   }
+  // Perceptual energy — same pattern again (0029).
+  if (a.energy != null && Number.isFinite(a.energy)) {
+    try {
+      await db
+        .prepare(`UPDATE track_analysis SET energy=? WHERE video_id=? AND ? >= version`)
+        .bind(a.energy, a.videoId, version)
+        .run();
+    } catch {
+      /* energy column not migrated yet — lands after 0029 */
+    }
+  }
 }
 
 export interface TrackAnalysisFull {
@@ -97,11 +109,24 @@ export async function getAnalysisByIds(db: D1Database, ids: string[]): Promise<T
   const clean = Array.from(new Set(ids.filter((id) => /^[\w-]{11}$/.test(id)))).slice(0, 100);
   if (!clean.length) return [];
   const ph = clean.map(() => "?").join(",");
-  const r = await db
-    .prepare(`SELECT video_id, bpm, music_key, key_name, beat_offset, duration FROM track_analysis WHERE video_id IN (${ph})`)
-    .bind(...clean)
-    .all<TrackAnalysisRow>();
-  return r.results ?? [];
+  const base = "video_id, bpm, music_key, key_name, beat_offset, duration";
+  // `energy` is a late column (0029). Naming it in the SELECT would throw the WHOLE batch on a
+  // deployment whose code is ahead of its migrations — and this endpoint feeds the auto-mix pool,
+  // so failing it closed would silently un-analyse every candidate. Ask for energy, fall back to
+  // the columns that have always existed.
+  try {
+    const r = await db
+      .prepare(`SELECT ${base}, energy FROM track_analysis WHERE video_id IN (${ph})`)
+      .bind(...clean)
+      .all<TrackAnalysisRow>();
+    return r.results ?? [];
+  } catch {
+    const r = await db
+      .prepare(`SELECT ${base} FROM track_analysis WHERE video_id IN (${ph})`)
+      .bind(...clean)
+      .all<TrackAnalysisRow>();
+    return r.results ?? [];
+  }
 }
 
 export interface TrackIdentityRow {
@@ -163,4 +188,49 @@ export async function listAnalysis(db: D1Database, limit = 1000, offset = 0): Pr
     .bind(Math.max(1, Math.min(limit, 5000)), Math.max(0, offset))
     .all<TrackAnalysisRow>();
   return r.results ?? [];
+}
+
+// ── ISRC → videoId resolution memo (auto-mix provider radio) ────────────────────────────────────
+// See migrations/0028_isrc_video.sql. A recording's ISRC is permanent, so this mapping never
+// expires: it exists purely to keep the TIDAL radio tier from spending a YouTube search per
+// result per fill, which is what made that tier too expensive to actually run.
+
+export interface IsrcVideoRow {
+  isrc: string;
+  video_id: string;
+  title: string | null;
+  artist: string | null;
+}
+
+/** Look up a batch of ISRCs. Caps at 100 bindings, matching getIdentitiesByIds. */
+export async function getIsrcVideos(db: D1Database, isrcs: string[]): Promise<IsrcVideoRow[]> {
+  const clean = Array.from(new Set(isrcs.filter((s) => typeof s === "string" && s.length > 0 && s.length <= 32))).slice(0, 100);
+  if (!clean.length) return [];
+  const ph = clean.map(() => "?").join(",");
+  const r = await db
+    .prepare(`SELECT isrc, video_id, title, artist FROM isrc_video WHERE isrc IN (${ph})`)
+    .bind(...clean)
+    .all<IsrcVideoRow>();
+  return r.results ?? [];
+}
+
+/** Record resolutions. Last write wins — a re-resolution means the earlier videoId went away. */
+export async function putIsrcVideos(
+  db: D1Database,
+  rows: { isrc: string; videoId: string; title?: string | null; artist?: string | null }[],
+): Promise<void> {
+  const clean = rows.filter((r) => r.isrc && /^[\w-]{11}$/.test(r.videoId)).slice(0, 50);
+  if (!clean.length) return;
+  const t = now();
+  const stmt = db.prepare(
+    `INSERT INTO isrc_video (isrc, video_id, title, artist, updated_at) VALUES (?,?,?,?,?)
+     ON CONFLICT(isrc) DO UPDATE SET
+       video_id=excluded.video_id, title=excluded.title, artist=excluded.artist, updated_at=excluded.updated_at`,
+  );
+  // Sequential rather than batched: the shared D1 shim in core.ts deliberately exposes only
+  // prepare/bind/first/all/run, and this is a write-behind path off the request's critical path,
+  // so a handful of round trips costs the caller nothing.
+  for (const r of clean) {
+    await stmt.bind(r.isrc, r.videoId, r.title ?? null, r.artist ?? null, t).run();
+  }
 }

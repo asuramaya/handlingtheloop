@@ -119,7 +119,7 @@ export const MAX_CACHE_BYTES = 60 * 1024 * 1024;
 export const NO_CACHE = { "cache-control": "no-store" };
 
 // ---- innertube API singletons (created once per isolate) ---------------------
-export const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext } = createInnertubeApi(Innertube as never);
+export const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext, getMusicRadio } = createInnertubeApi(Innertube as never);
 
 // ---- helpers -----------------------------------------------------------------
 export function json(status: number, body: unknown, headers?: Record<string, string>): Response {
@@ -141,20 +141,9 @@ export function readAuth(req: Request): YtAuth | undefined {
   return visitorData || poToken || accessToken ? { visitorData, poToken, accessToken } : undefined;
 }
 
-// Strip the noise YouTube uploaders cram into titles (resolution/format/"official
-// video" tags) so the leftover "Artist - Song" matches a music catalog. Duration —
-// not the title — is what we trust for length; this is only for NAME matching.
-const TITLE_JUNK = /\b(official|video|audio|lyrics?|hd|hq|4k|uhd|1080p|720p|480p|full\s*hd|visualizer|remaster(?:ed)?|explicit|m\/?v)\b/i;
-export function cleanVideoTitle(s: string): string {
-  return s
-    .replace(/\([^)]*\)/g, (m) => (TITLE_JUNK.test(m) ? " " : m))
-    .replace(/\[[^\]]*\]/g, (m) => (TITLE_JUNK.test(m) ? " " : m))
-    .replace(/\|\|?\s*(hd|hq|4k|1080p|720p|full\s*hd)\b.*$/gi, " ")
-    .replace(/\b(official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|music\s+video)\b/gi, " ")
-    .replace(/\s{2,}/g, " ")
-    .replace(/\s*[-–—]\s*$/, "")
-    .trim();
-}
+// cleanVideoTitle now lives in server/youtube.ts — the shared provider-radio tier needs it and
+// cannot import from worker/. Re-exported here so existing worker callers are unaffected.
+export { cleanVideoTitle } from "../server/youtube";
 
 // The set of videoIds with cached stems, derived from a delimited walk of the stem
 // keyspace (`s/<model>/<videoId>/<stem>`). Per-isolate memo so back-to-back Library/Search

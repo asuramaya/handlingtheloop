@@ -5,6 +5,8 @@ import { Innertube } from "youtubei.js";
 import { streamAudio } from "./audioProxy";
 import { createInnertubeApi } from "./innertube";
 import { recommendNext } from "./recommend";
+import { makeProviderRadio } from "./providerRadio";
+import { tidalClientToken, tidalCreds } from "./tidalAuth";
 import { featuresByIsrc, isrcForMbid } from "./features";
 import { acoustidLookup } from "./acoustid";
 import { oauthCreds, pollDeviceAuth, refreshAccessToken, startDeviceAuth } from "./oauth";
@@ -198,7 +200,7 @@ async function handleStems(req: IncomingMessage, res: ServerResponse, url: URL):
   sendJson(res, 200, { stems: present, complete: present.length === STEM_NAMES.length });
 }
 
-const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext } = createInnertubeApi(Innertube as never);
+const { searchYouTube, fetchPlaylist, getMyPlaylists, getWatchNext, getMusicRadio } = createInnertubeApi(Innertube as never);
 
 function readAuth(req: IncomingMessage): YtAuth | undefined {
   const h = (n: string) => {
@@ -444,7 +446,19 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         const limit = Number(url.searchParams.get("limit")) || 30;
         const provider = url.searchParams.get("provider");
         const a = readAuth(req);
-        const candidates = await recommendNext({ getWatchNext }, v, { provider, limit }, { token: a?.accessToken });
+        // FULL TIER PARITY WITH THE WORKER. This route used to read only `v`, `limit` and
+        // `provider` and silently drop the `isrc`/`title`/`artist` the client sends — so `pnpm dev`
+        // ran the YouTube floor alone while production ran three tiers, and any radio tuning done
+        // locally was tuning the fallback. The TIDAL closure is the same shared one the worker
+        // uses; only the ISRC cache differs (dev has no D1, so resolutions aren't memoised).
+        const providerRadio = makeProviderRadio(
+          { isrc: url.searchParams.get("isrc"), title: url.searchParams.get("title"), artist: url.searchParams.get("artist") },
+          {
+            token: async () => (await tidalClientToken(tidalCreds(process.env as Record<string, string | undefined>))) ?? null,
+            searchYouTube: (q, n) => searchYouTube(q, n),
+          },
+        );
+        const candidates = await recommendNext({ getWatchNext, getMusicRadio }, v, { provider, limit, providerRadio }, { token: a?.accessToken });
         sendJson(res, 200, { candidates });
         return true;
       }

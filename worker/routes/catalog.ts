@@ -3,24 +3,24 @@
 import {
   type Env,
   type ExecutionContext,
-  cleanVideoTitle,
   fetchPlaylist,
   getMyPlaylists,
   getWatchNext,
+  getMusicRadio,
   isVideoId,
   json,
   readAuth,
   searchYouTube,
   sessionUser,
 } from "../shared";
-import { type TrackMeta } from "../../server/youtube";
 import { recommendNext } from "../../server/recommend";
 import { featuresByIsrc, isrcForMbid } from "../../server/features";
 import { acoustidLookup } from "../../server/acoustid";
 import { getValidToken } from "../../server/connections";
-import { getTidalTrackRadio, tidalTrackIdByIsrc, searchTidalTracks, tidalProbe } from "../../server/tidalData";
+import { tidalProbe } from "../../server/tidalData";
+import { makeProviderRadio } from "../../server/providerRadio";
 import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../../server/tidalAuth";
-import { upsertAnalysis, getIdentity, upsertIdentity } from "../../server/db";
+import { upsertAnalysis, getIdentity, upsertIdentity, getIsrcVideos, putIsrcVideos } from "../../server/db";
 import { allow } from "../../server/security";
 
 export async function handleCatalogRoutes(url: URL, req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
@@ -32,50 +32,38 @@ export async function handleCatalogRoutes(url: URL, req: Request, env: Env, ctx:
       return json(200, { results: await searchYouTube(q, limit) });
     }
     case "/api/recommend": {
-      // "What plays after this track" — the auto-mix / radio suggestion feed.
+      // "What plays after this track" — the auto-mix / radio suggestion feed. Three tiers, best
+      // first, each allowed to fail: TIDAL track radio → YouTube Music radio → watch-next spine.
+      // See server/recommend.ts for why they are in that order.
       const v = url.searchParams.get("v");
       if (!isVideoId(v)) return json(400, { error: "missing or invalid ?v=" });
       const limit = Number(url.searchParams.get("limit")) || 30;
       const provider = url.searchParams.get("provider");
       const a = readAuth(req);
-      const seedIsrc = url.searchParams.get("isrc");
-      const seedTitle = url.searchParams.get("title");
-      // Tier A — TIDAL track radio (music-aware). Find the seed on TIDAL (by ISRC if
-      // we have one, else by name — a YouTube seed has no ISRC), pull its similar
-      // tracks, and resolve each back to a videoId via search. Uses the app
-      // (client-credentials) token, so no user login needed. Fail-soft → YouTube floor.
-      let providerRadio: (() => Promise<TrackMeta[]>) | undefined;
-      if (seedIsrc || seedTitle) {
-        providerRadio = async () => {
-          const user = env.DB ? await sessionUser(req, env) : null;
-          const token = (user ? await getValidToken(env, user.id, "tidal") : null) ?? (await tidalClientToken(tidalCreds(env)));
-          if (!token) return [];
-          let tid = seedIsrc ? await tidalTrackIdByIsrc(token, seedIsrc) : null;
-          if (!tid && seedTitle) {
-            // Match by NAME, but strip the YouTube-title junk first ("(1080p) || HD",
-            // "Official Video", …) — the raw uploader title never matches a catalog.
-            const q = cleanVideoTitle(seedTitle) || seedTitle;
-            const hits = await searchTidalTracks(token, q, 1);
-            tid = hits[0]?.id ?? null;
-          }
-          if (!tid) return [];
-          const radio = await getTidalTrackRadio(token, tid, 12);
-          const resolved = await Promise.all(
-            radio.slice(0, 8).map(async (t) => {
-              try {
-                const hits = await searchYouTube(`${t.artist} ${t.title}`.trim(), 1);
-                const hit = hits[0];
-                if (!hit?.videoId) return null;
-                return { ...hit, title: t.title || hit.title, artist: t.artist || hit.artist, isrc: t.isrc, provider: "tidal" } as TrackMeta;
-              } catch {
-                return null;
+      // Tier A. A user's linked TIDAL token if there is one, else the app (client-credentials)
+      // token — catalogue reads need no login. Resolutions are memoised in D1 permanently: an
+      // ISRC names a specific recording forever, and the search-per-result this replaces was
+      // costing up to two dozen subrequests on a single fill.
+      const providerRadio = makeProviderRadio(
+        { isrc: url.searchParams.get("isrc"), title: url.searchParams.get("title"), artist: url.searchParams.get("artist") },
+        {
+          token: async () => {
+            const user = env.DB ? await sessionUser(req, env) : null;
+            return (user ? await getValidToken(env, user.id, "tidal") : null) ?? (await tidalClientToken(tidalCreds(env)));
+          },
+          searchYouTube: (q, n) => searchYouTube(q, n),
+          cache: env.DB
+            ? {
+                get: async (isrcs) =>
+                  new Map(
+                    (await getIsrcVideos(env.DB, isrcs)).map((r) => [r.isrc, { videoId: r.video_id, title: r.title ?? "", artist: r.artist ?? "" }]),
+                  ),
+                put: (rows) => putIsrcVideos(env.DB, rows),
               }
-            }),
-          );
-          return resolved.filter((x): x is TrackMeta => !!x);
-        };
-      }
-      const candidates = await recommendNext({ getWatchNext }, v, { provider, limit, providerRadio }, { token: a?.accessToken });
+            : undefined,
+        },
+      );
+      const candidates = await recommendNext({ getWatchNext, getMusicRadio }, v, { provider, limit, providerRadio }, { token: a?.accessToken });
       return json(200, { candidates });
     }
     case "/api/tidal-probe": {

@@ -163,8 +163,8 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
         if (!ids.length) return json(400, { error: "missing ?ids=" });
         if (!env.DB) return json(200, { analysis: {} });
         const rows = await getAnalysisByIds(env.DB, ids);
-        const analysis: Record<string, { bpm: number | null; key: string | null }> = {};
-        for (const r of rows) analysis[r.video_id] = { bpm: r.bpm, key: r.music_key };
+        const analysis: Record<string, { bpm: number | null; key: string | null; energy: number | null }> = {};
+        for (const r of rows) analysis[r.video_id] = { bpm: r.bpm, key: r.music_key, energy: r.energy ?? null };
         return json(200, { analysis });
       }
       // Crowdsourced analysis contribution (BPM/key/grid — facts about the
@@ -181,6 +181,7 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
         duration?: number;
         grid?: string;
         palette?: string;
+        energy?: number;
         version?: number;
       };
       if (!isVideoId(b.videoId ?? null)) return json(400, { error: "bad videoId" });
@@ -201,6 +202,8 @@ export async function handleCommunityRoutes(url: URL, req: Request, env: Env, ct
             grid: typeof b.grid === "string" && b.grid.length > 0 && b.grid.length <= 262_144 ? b.grid : null,
             // Album-art colour palette (4 hex colours as compact JSON, ~tens of bytes) — bounded to 4 KB.
             palette: typeof b.palette === "string" && b.palette.length > 0 && b.palette.length <= 4096 ? b.palette : null,
+            // Perceptual energy — a bare 0..1 scalar, clamped like every other numeric here.
+            energy: clampNum(b.energy, 0, 1),
             // Algorithm version — drives the don't-downgrade convergence guard in upsertAnalysis.
             // Clamp to a sane integer; absent/garbage falls to the DB default (1).
             version: Number.isInteger(b.version) && b.version! >= 1 && b.version! <= 1_000_000 ? b.version : undefined,

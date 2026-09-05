@@ -157,33 +157,31 @@ is torn down on **every** exit path (settle, cancel, hand-off to manual, disable
 |---|---|
 | channel trim | restored to unity — unless the user moved it, which wins permanently |
 | any device from the permanent FX bank | every param and its bypass state |
-| an **ephemeral** per-stem chain (the vocal tail) | chain removed, the claimed stem returned to its previous owner |
+| a stem, routed into the deck's own `AUTO` chain | the stem released, and returned to whoever held it |
 | a beat loop (`loopExtend`, the drop-swap roll) | `exitLoop` — a deck left looping never ends |
 
-`FxChain.ephemeral` is the mechanism for the third: the chain is real and audible,
-but excluded from `fxChainSnapshot()`, so it can never be saved into a profile or
-mirrored to a session. It also *survives* `applyFxChainSnapshot` — a remote's
-routine rack update must not rip out the chain a live blend is running through.
+### The AUTO chain is yours
 
-### Visible, but not yours to edit
+The per-stem effect is **not** the auto-mixer's. It lives in a real, persistent
+chain named `AUTO` in each deck's rack, which you edit exactly like any other —
+put a reverb in it, or a delay, or three things, and dial them however you like.
+Between transitions it claims **no stems**, so it is silent and reads as `deaf`
+in the strip. AUTO's entire involvement is to route the target stem into it for
+the length of a mix and release it at settle.
 
-That chain shows up in the FX strip while a transition runs, badged and marked as
-AUTO's. It is deliberately **read-only**: no reorder, no stem re-routing, no
-presets. Not to lock you out — because there is nothing durable there to edit. It
-exists for twenty to forty seconds and is destroyed at settle, so a change would
-be gone before you finished making it, and making it *stick* would mean AUTO
-diffing your input against its own ramps every tick and arbitrating each param
-mid-blend. That is real complexity for a window that closes almost immediately,
-and its failure mode is you and the machine fighting over a knob during a mix.
+That dissolves a tension that took two attempts to get right. An earlier design
+had AUTO stamp a throwaway chain from a recipe in Settings, which raised the
+question of whether the user could edit the live instance — and neither answer
+was good: editing something destroyed in twenty seconds is futile, and making the
+edit stick would mean AUTO arbitrating every param against its own ramps
+mid-blend. Both disappear once the chain simply *persists*. **AUTO never writes a
+device param**, so whatever you have dialled is what plays, editing it
+mid-transition is coherent, and there is nothing to reconcile. Only the stem claim
+is transient.
 
-So the recipe is the editable thing: **Settings ▸ Controls ▸ Auto-DJ FX tail**
-(`settings.autoFx` — effect, stem, wetness). AUTO stamps a fresh instance from it
-at the start of every transition, so an edit lands on the next mix with nothing to
-reconcile. You own the recipe; AUTO owns the twenty seconds.
-
-And "I want to intervene *right now*" already has a better answer than editing a
-doomed chain: grab the crossfader, and the mixer enters `manual` and hands
-everything it borrowed straight back.
+It is seeded once, the first time AUTO runs on a device, with a reverb as a
+starting point. Delete it and it stays deleted — that is how you turn the tail
+off, and a mixer that kept putting it back would be arguing with you.
 
 ★ Anything claiming a stem must go through `setChainStems`, **not** `addChain`'s
 mask argument: only the former enforces one-owner-per-stem, and two chains holding

@@ -1077,30 +1077,22 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               onPointerDown={(e) => {
                 if ((e.target as HTMLElement).closest(".fx-tabs, .fx-tab")) return;
                 if (c.master) return; // the master is pinned to the signal; it does not reorder
-                if (c.ephemeral) return; // AUTO's chain is gone in seconds — there is nothing to arrange
                 cd.onPointerDown(e);
               }}
-              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.ephemeral ? "auto" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.name === "AUTO" ? "auto" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
             >
               <button
                 className="fx-chain"
                 title={
-                  c.ephemeral
-                    ? "AUTO is performing this transition. It lasts seconds and is then torn down, so there is nothing here to edit — change what it builds in Settings ▸ Controls ▸ Auto-DJ FX, and it applies to the next mix."
+                  c.name === "AUTO"
+                    ? "The auto-DJ routes a stem through this chain during a transition, then releases it. Yours to build: put a reverb or a delay in it and dial it however you like — AUTO never changes what is in here. Delete it and the auto-DJ mixes without a tail."
                     : c.master
                       ? `${c.name}: the master channel, every chain sums here · right-click for presets`
                       : `${chainTitle(c)} · drag to reorder · right-click for stems and presets`
                 }
                 onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (!chainLong.fired.current) setSelChainId(c.id); }}
-                {...(c.ephemeral ? {} : chainLong.bind(c.id))}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  // ★ NO STEM/PRESET MENU ON AUTO'S CHAIN. Re-routing a stem or stamping a preset
-                  // onto a chain that is destroyed at settle silently does nothing, which is worse
-                  // than the control being absent. The recipe it is built from is the editable
-                  // thing; see AutoFxPreset.
-                  if (!c.ephemeral) openChainMenu(c.id, e.clientX, e.clientY);
-                }}
+                {...chainLong.bind(c.id)}
+                onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
               >
                 <span className="fx-chain-name">{c.name}</span>
                 {/* The stem letters are a PREVIEW of what this chain hears. With nothing separated

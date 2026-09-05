@@ -5,7 +5,7 @@ import { pickTransition, resolveStyle } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
 import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
-import type { AutoFxPreset, AutoPerformance } from "../state/settings";
+import type { AutoFxSettings, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
 import { clamp, lerp } from "../../util/math";
 import { event } from "../debug/trace";
@@ -83,8 +83,10 @@ export interface AutoMixerDeps {
   // How much flourish is allowed (Settings ▸ Controls). Read per-transition rather than captured,
   // so changing it takes effect on the very next mix instead of the next AUTO session.
   performance?: () => AutoPerformance;
-  /** The user's AUTO FX recipe, read fresh at each transition so an edit lands on the next mix. */
-  autoFx?: () => AutoFxPreset;
+  /** Where AUTO routes a stem during a transition. The effect itself is the user's AUTO chain. */
+  autoFx?: () => AutoFxSettings;
+  /** Called once, when AUTO seeds the AUTO chain, so the app can remember not to offer it again. */
+  onAutoFxSeeded?: () => void;
   onChange: (s: AutoMixStatus) => void;
 }
 
@@ -210,9 +212,9 @@ export class AutoMixer {
   // hand back. See borrowFx.
   private borrowedFx: { saved: { device: FxDevice; params: Record<string, number>; bypassed: boolean }[] } | null = null;
   private spinFired = false; // spinOut fires once per transition, not once per tick
-  // The AUTO-owned ephemeral FX chain for stem-targeted moves (the vocal tail), and the stem
-  // ownership we took to build it — a stem has exactly one owner, so claiming VOICE takes it off
-  // whichever of the user's chains held it, and teardown has to give it back.
+  // The stem routing we set up for this transition: which deck's AUTO chain is currently hearing a
+  // stem, and who held that stem before. A stem has exactly one owner, so claiming it takes it off
+  // whichever of the user's chains had it, and settle has to give it back.
   private autoFx: { deckId: DeckId; chainId: string; restore: { id: string; stems: number }[] } | null = null;
   private rollBeats = 0; // current loop-roll length during a dropSwap build (0 = not rolling)
   private holdLoop: DeckId | null = null; // deck currently held in a loop-extend, if any
@@ -970,74 +972,78 @@ export class AutoMixer {
     }
   }
 
-  // ── per-stem FX: the vocal tail ───────────────────────────────────────────────────────────────
+  // ── per-stem FX: routing a stem through the deck's own AUTO chain ─────────────────────────────
   // The stem swap already hands the vocal over with a GAP — the outgoing ducks out by mid-blend,
   // the incoming drops in late, so two leads never sit on top of each other. But the outgoing vocal
-  // just STOPS, which is the one moment left that sounds like an automation curve. A reverb on the
-  // OUTGOING VOCAL STEM ALONE fixes it: the vocal dissolves into its own tail while drums and bass
-  // carry on dry. Only sayable because the rack has per-stem chains — on a summed channel that same
-  // reverb washes the whole track, which is what `washOut` is for.
-  // 1=DRUM 2=BASS 4=VOICE 8=INST — the rack's own mask, mapped from the recipe's stem name.
-  private static readonly STEM_BIT: Record<AutoFxPreset["stem"], number> = {
+  // just STOPS, which is the one moment left that sounds like an automation curve rather than a
+  // person. An effect on that stem ALONE fixes it: the vocal dissolves into a tail while drums and
+  // bass carry on dry. Only sayable because the rack supports per-stem chains — on a summed channel
+  // the same reverb washes the whole track, which is what `washOut` is for.
+  //
+  // ★ THE EFFECT IS THE USER'S, NOT OURS. It lives in a REAL, PERSISTENT chain in their rack named
+  // AUTO, which they edit like any other chain. AUTO's entire involvement is to claim the target
+  // stem into it for the length of the transition and release it at settle. We never create a
+  // device, never write a param, never touch what is in there. So whatever they have dialled is
+  // what plays, editing it mid-transition is coherent (the chain outlives the mix), and there is
+  // nothing to arbitrate — the earlier design, which stamped a throwaway chain from a Settings
+  // recipe, existed only because the chain used to be ours.
+  private static readonly STEM_BIT: Record<AutoFxSettings["stem"], number> = {
     drums: 0b0001,
     bass: 0b0010,
     vocals: 0b0100,
     other: 0b1000,
   };
+  static readonly AUTO_CHAIN = "AUTO";
+
+  /** The deck's AUTO chain, seeded ONCE if it has never existed on this device. A user who deletes
+   *  it has deleted it — that is how the tail is turned off — so `seeded` is sticky. */
+  private autoChainOf(deck: Deck): { id: string } | null {
+    const existing = deck.rack.chainList.find((c) => !c.master && c.name === AutoMixer.AUTO_CHAIN);
+    if (existing) return { id: existing.id };
+    if (this.deps.autoFx?.().seeded) return null; // offered once already, and they removed it
+    const chain = deck.addFxChain(AutoMixer.AUTO_CHAIN, 0); // claims nothing → silent until routed
+    deck.addFxTo(chain.id, "reverb"); // a starting point they can replace; we never touch it again
+    this.deps.onAutoFxSeeded?.();
+    event("automix.tail", { at: "seed" });
+    return { id: chain.id };
+  }
 
   private beginVocalTail(id: DeckId): void {
     if (this.autoFx || this.perf() === "subtle") return;
-    // ★ STAMPED FROM THE USER'S RECIPE, READ FRESH EVERY TRANSITION. This is what lets the chain be
-    // visible without being editable and adaptive without arbitration: the user edits the preset,
-    // AUTO instantiates it, and the next mix reflects the change. See AutoFxPreset.
-    const recipe = this.deps.autoFx?.() ?? { enabled: true, kind: "reverb" as const, mix: 0.6, stem: "vocals" as const };
-    if (!recipe.enabled) return;
     const deck = this.deps.engine.deck(id);
-    if (!deck.hasStems) return;
+    if (!deck.hasStems) return; // no stems → no per-stem routing → nothing to say
     try {
-      const V = AutoMixer.STEM_BIT[recipe.stem] ?? 0b0100;
+      const chain = this.autoChainOf(deck);
+      if (!chain) return;
+      const stem = this.deps.autoFx?.().stem ?? "vocals";
+      const bit = AutoMixer.STEM_BIT[stem] ?? 0b0100;
+      // Whoever holds that stem loses it for the duration — the rack enforces one owner — so record
+      // the previous ownership to hand back. setFxChainStems, never addFxChain's mask: only the
+      // former enforces the partition, and two chains holding a bit makes the rack play it twice.
       const restore = deck.rack.chainList
-        .filter((c) => !c.master && !c.ephemeral && (c.stems & V) !== 0)
+        .filter((c) => !c.master && c.id !== chain.id && (c.stems & bit) !== 0)
         .map((c) => ({ id: c.id, stems: c.stems }));
-      // ★ CLAIM THE STEM THROUGH setFxChainStems, NOT addFxChain's mask. The constructor takes one
-      // but does NOT enforce the one-owner-per-stem partition — only setChainStems does. Claiming
-      // VOICE at construction leaves the user's chain still holding it, and the rack feeds that tap
-      // to EVERY chain claiming the bit: the vocal plays twice, once dry and once through the
-      // reverb. Build empty, then claim.
-      const chain = deck.addFxChain("AUTO", 0, true);
-      deck.setFxChainStems(chain.id, V);
-      const dev = deck.addFxTo(chain.id, recipe.kind);
-      if (!dev) {
-        deck.removeFxChain(chain.id);
-        return;
-      }
-      dev.setBypass(false);
-      dev.setParam("mix", clamp(recipe.mix, 0, 1));
-      if (recipe.kind === "delay") {
-        dev.setParam("sync", 1); // a tail that drifts off the grid is a mistake, not an effect
-        dev.setParam("div", 2);
-        dev.setParam("feedback", 0.5);
-      }
+      deck.setFxChainStems(chain.id, bit);
       this.autoFx = { deckId: id, chainId: chain.id, restore };
-      event("automix.tail", { deck: id, at: "begin", kind: recipe.kind, stem: recipe.stem });
+      event("automix.tail", { deck: id, at: "route", stem });
     } catch {
       this.autoFx = null; // unexpected rack shape — the blend is fine without the flourish
     }
   }
 
-  // Give the chain and the stem back. Tolerant of the chain having gone under us (a remote rack
-  // snapshot, a deck reload): the goal is that nothing of ours is left behind.
+  // Release the stem. The chain STAYS — it is the user's, and it is silent again the moment it
+  // claims nothing. Tolerant of it having gone under us (they deleted it mid-mix, a deck reload).
   private endVocalTail(): void {
     const fx = this.autoFx;
     if (!fx) return;
     this.autoFx = null;
     try {
       const deck = this.deps.engine.deck(fx.deckId);
-      deck.removeFxChain(fx.chainId);
+      if (deck.rack.chain(fx.chainId)) deck.setFxChainStems(fx.chainId, 0);
       for (const r of fx.restore) if (deck.rack.chain(r.id)) deck.setFxChainStems(r.id, r.stems);
-      event("automix.tail", { deck: fx.deckId, at: "end" });
+      event("automix.tail", { deck: fx.deckId, at: "release" });
     } catch {
-      /* the deck moved on — the chain went with it */
+      /* the deck moved on — the routing went with it */
     }
   }
 

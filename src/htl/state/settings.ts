@@ -104,8 +104,9 @@ export interface Settings {
   // gestures whenever they fit. This is deliberately NOT a quality setting — none of these makes
   // the mix better, they make it more present.
   autoPerformance: AutoPerformance;
-  /** The recipe AUTO stamps its per-stem transition chain from — see AutoFxPreset. */
-  autoFx: AutoFxPreset;
+  /** Where AUTO routes a stem during a transition — see AutoFxSettings. The EFFECT itself lives
+   *  in the deck's rack, in a chain named AUTO, not here. */
+  autoFx: AutoFxSettings;
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
   bandLayers: boolean; // band colouring style: true = rekordbox-style LAYERED lobes (needs lane height), false = flat per-column tint
@@ -134,35 +135,35 @@ export interface Settings {
 /** How much flourish the auto-mixer is allowed on top of the structural mix. */
 export type AutoPerformance = "subtle" | "standard" | "showy";
 
-/** ★ THE AUTO FX RECIPE, AND WHY IT IS A RECIPE RATHER THAN A CHAIN YOU EDIT.
+/** ★ WHERE AUTO'S TRANSITION EFFECT LIVES, AND WHY IT IS NOT A SETTING.
  *
- *  When AUTO performs a stem transition it spawns a real per-stem FX chain — a reverb on the
- *  outgoing vocal so it dissolves instead of stopping dead. That chain is visible in the strip,
- *  which raises an obvious question: can the user change it?
+ *  When AUTO performs a stem transition it puts an effect on the OUTGOING track's chosen stem
+ *  alone — so the vocal dissolves into a tail instead of stopping dead while drums and bass carry
+ *  on dry. The question was where the user gets to shape that.
  *
- *  Editing the live chain is incoherent. It exists for one twenty-to-forty second transition and is
- *  destroyed at settle, so an edit is gone before you finish turning the knob — and making it stick
- *  would mean AUTO diffing your input against its own ramps every tick and arbitrating each param
- *  mid-blend. That is real complexity for a window that closes almost immediately, and its failure
- *  mode is the two of you fighting over a knob during a mix.
+ *  The first answer was a recipe in Settings that AUTO stamped a throwaway chain from. It worked,
+ *  and it was in the wrong place: every other effect in this app is dialled in the deck's own rack,
+ *  so editing this one in a settings tab meant leaving the instrument to adjust the instrument.
  *
- *  So the live chain is not the thing to edit: THIS is. AUTO stamps a fresh instance from this
- *  recipe at the start of every transition, which means your changes take effect on the next mix
- *  with no arbitration, no locking, and nothing to reconcile. You own the recipe; AUTO owns the
- *  twenty seconds.
+ *  So there is no recipe. There is a REAL, PERSISTENT chain in each deck's rack, named AUTO, which
+ *  you edit exactly like any other chain — put a reverb in it, or a delay, or three things, and
+ *  dial them however you like. While idle it claims NO stems, so it is silent and reads as `deaf`
+ *  in the strip. AUTO's entire involvement is to ROUTE the target stem into it for the length of a
+ *  transition and release it at settle.
  *
- *  (And "I want to intervene RIGHT NOW" already has a better answer than editing a doomed chain:
- *  grab the crossfader and the mixer enters its `manual` phase, standing back and handing
- *  everything it borrowed straight back.) */
-export interface AutoFxPreset {
-  /** Spawn the per-stem chain at all. Off = AUTO still mixes, just without the tail. */
-  enabled: boolean;
-  /** What the tail is made of. Reverb dissolves; delay repeats. */
-  kind: "reverb" | "delay";
-  /** Wetness, 0..1. */
-  mix: number;
-  /** Which stem it is aimed at. Vocals is the default because that is the one that stops dead. */
+ *  That dissolves the tension that made this hard. AUTO never writes a device param, so there is
+ *  nothing to arbitrate and nothing to lock: whatever you have dialled is what plays, and editing
+ *  it MID-TRANSITION is perfectly coherent because the chain outlives the transition. The only
+ *  transient thing is the stem claim.
+ *
+ *  What is left here is the little that genuinely is not a rack property. */
+export interface AutoFxSettings {
+  /** Which stem AUTO routes into the AUTO chain during a transition. */
   stem: "vocals" | "other" | "drums" | "bass";
+  /** Has AUTO already offered the chain on this device? It creates one the FIRST time AUTO runs
+   *  and never again — so a user who deletes it has deleted it, rather than fighting a mixer that
+   *  keeps putting it back. Deleting the AUTO chain IS how you turn the tail off. */
+  seeded: boolean;
 }
 
 export type PanelKey = "library" | "settings" | "people" | "session";
@@ -305,7 +306,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
-  autoFx: { enabled: true, kind: "reverb", mix: 0.6, stem: "vocals" },
+  autoFx: { stem: "vocals", seeded: false }, // vocals: the stem that otherwise stops dead
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
   bandLayers: true, // layered lobes where there's room; auto-falls back to the flat tint on a short lane

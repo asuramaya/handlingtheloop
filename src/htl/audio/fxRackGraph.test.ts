@@ -177,53 +177,48 @@ describe("FxRack.rebuildDegraded — repairing a device that lost the worklet ra
   });
 });
 
-// ── EPHEMERAL CHAINS ────────────────────────────────────────────────────────────────────────────
-// The auto-mixer builds a per-stem chain for the length of ONE transition (a reverb on the
-// outgoing vocal so it dissolves rather than vanishing). It is a real chain and you can hear it,
-// but it is not something the user arranged — so it must be audible and invisible at the same
-// time: connected in the graph, absent from every snapshot. Getting that wrong would save a
-// twenty-second chain into someone's profile, or make a remote's rack UI sprout and drop a row on
-// every mix.
-describe("ephemeral chains", () => {
-  it("is a normal chain in the graph — the stem it claims still reaches the output", () => {
+// ── STEM OWNERSHIP, WHICH IS WHAT THE AUTO-MIXER BORROWS ────────────────────────────────────────
+// The auto-mixer routes a stem into the user's AUTO chain for the length of a transition and hands
+// it back at settle. Both halves of that lean on the rack's one-owner-per-stem partition, and on
+// WHERE it is enforced — which is not where you would guess.
+describe("stem ownership", () => {
+  it("a chain claiming a stem still reaches the output", () => {
     const { rack, taps, out } = rackWith(4);
-    rack.addChain("auto", "AUTO TAIL", 0b0100, true); // VOICE
+    rack.addChain("auto", "AUTO", 0);
+    rack.setChainStems("auto", 0b0100); // VOICE
     expect(reaches(taps[2], out)).toBe(true);
   });
 
   // ★ THE PARTITION IS ENFORCED BY setChainStems, NOT BY addChain. addChain is a raw constructor
   // and takes the mask verbatim, so a caller that claims a stem there leaves the previous owner
-  // still claiming it — and rebuild() connects that tap to EVERY chain holding the bit, which
-  // plays the stem twice. Anything claiming a stem must go through setChainStems.
+  // still claiming it — and rebuild() connects that tap to EVERY chain holding the bit, which plays
+  // the stem twice. Anything claiming a stem must go through setChainStems.
   it("claiming a stem through addChain does NOT displace the previous owner (why callers must not)", () => {
     const { rack } = rackWith(4);
     rack.addChain("mine", "MY VOX", 0b1100);
-    rack.addChain("auto", "AUTO TAIL", 0b0100, true);
+    rack.addChain("auto", "AUTO", 0b0100);
     expect(rack.chain("mine")?.stems).toBe(0b1100); // still claimed — two owners, vocal doubled
   });
 
-  it("claiming it through setChainStems takes it off the user's chain, and it can be given back", () => {
+  it("claiming it through setChainStems moves it, and it can be handed back", () => {
     const { rack } = rackWith(4);
     rack.addChain("mine", "MY VOX", 0b1100); // the user owns VOICE + INST
-    rack.addChain("auto", "AUTO TAIL", 0, true);
+    rack.addChain("auto", "AUTO", 0);
     rack.setChainStems("auto", 0b0100); // the auto-mixer's actual path
     expect(rack.chain("mine")?.stems).toBe(0b1000); // VOICE moved; INST untouched
-    rack.removeChain("auto");
-    rack.setChainStems("mine", 0b1100); // what the auto-mixer's teardown restores
+    rack.setChainStems("auto", 0); // settle: release, chain stays
+    rack.setChainStems("mine", 0b1100);
     expect(rack.chain("mine")?.stems).toBe(0b1100);
   });
 
-  it("is flagged, so a snapshot can tell it from a chain the user built", () => {
-    const { rack } = rackWith(4);
-    rack.addChain("mine", "MY VOX", 0b1000);
-    rack.addChain("auto", "AUTO TAIL", 0b0100, true);
-    const persisted = rack.chainList.filter((c) => !c.master && !c.ephemeral);
-    expect(persisted.map((c) => c.name)).toEqual(["MY VOX"]);
-  });
-
-  it("defaults to NOT ephemeral — a chain is the user's unless said otherwise", () => {
-    const { rack } = rackWith(4);
-    rack.addChain("mine", "MY VOX", 0b1000);
-    expect(rack.chain("mine")?.ephemeral).toBeUndefined();
+  // Between transitions the AUTO chain claims nothing, which is what makes it silent rather than
+  // permanently in the signal path.
+  it("a chain claiming no stems hears nothing", () => {
+    const { rack, taps, out } = rackWith(4);
+    rack.addChain("auto", "AUTO", 0);
+    const deaf = rack.chain("auto");
+    expect(deaf?.stems).toBe(0);
+    // …while the stem itself still reaches the output, routed dry through the master.
+    expect(reaches(taps[2], out)).toBe(true);
   });
 });

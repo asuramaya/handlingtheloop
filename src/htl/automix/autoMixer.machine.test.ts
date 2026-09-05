@@ -109,10 +109,10 @@ class FakeDeck {
     this.cues.add(i);
   }
 
-  // ── a minimal FX rack: enough to build, find and tear down an ephemeral stem chain ──
+  // ── a minimal FX rack: enough to build, find and route a stem chain ──
   rack = new FakeRack();
-  addFxChain(name: string, stems = 0, ephemeral = false) {
-    return this.rack.addChain(`c${this.rack.seq++}`, name, stems, ephemeral);
+  addFxChain(name: string, stems = 0) {
+    return this.rack.addChain(`c${this.rack.seq++}`, name, stems);
   }
   removeFxChain(id: string): boolean {
     return this.rack.removeChain(id);
@@ -159,7 +159,7 @@ function mkDev(kind: string): FakeDev {
   return d;
 }
 
-interface FakeChain { id: string; name: string; stems: number; devices: FakeDev[]; master?: boolean; ephemeral?: boolean }
+interface FakeChain { id: string; name: string; stems: number; devices: FakeDev[]; master?: boolean }
 
 class FakeRack {
   seq = 0;
@@ -185,8 +185,8 @@ class FakeRack {
   chain(id: string): FakeChain | undefined {
     return this.chains.find((c) => c.id === id);
   }
-  addChain(id: string, name: string, stems: number, ephemeral: boolean): FakeChain {
-    const c: FakeChain = { id, name, stems, devices: [], ...(ephemeral ? { ephemeral: true } : {}) };
+  addChain(id: string, name: string, stems: number): FakeChain {
+    const c: FakeChain = { id, name, stems, devices: [] };
     // Same one-owner partition the real rack enforces.
     for (const o of this.chains) if (!o.master) o.stems &= ~stems;
     this.chains.splice(this.chains.length - 1, 0, c);
@@ -263,7 +263,7 @@ class FakeQueue {
 class Rig {
   engine = new FakeEngine();
   perf: "subtle" | "standard" | "showy";
-  autoFx = { enabled: true, kind: "reverb" as "reverb" | "delay", mix: 0.6, stem: "vocals" as "vocals" | "other" | "drums" | "bass" };
+  autoFx = { stem: "vocals" as "vocals" | "other" | "drums" | "bass", seeded: false };
   queue = new FakeQueue();
   mixer: AutoMixer;
   nowMs = 0;
@@ -297,6 +297,9 @@ class Rig {
       stemsPending: (id) => this.stemsPending.has(id),
       performance: () => this.perf,
       autoFx: () => this.autoFx,
+      onAutoFxSeeded: () => {
+        this.autoFx = { ...this.autoFx, seeded: true };
+      },
       onChange: () => {},
     };
     this.mixer = new AutoMixer(deps);
@@ -721,18 +724,23 @@ describe("AutoMixer machine — nothing is left behind", () => {
     return r;
   }
 
-  test("the ephemeral vocal-tail chain is built during a stem swap and gone after it", async () => {
+  // The AUTO chain is NOT torn down — it is the user's and it persists. What must not survive is
+  // the stem CLAIM: a chain still holding a stem after settle would keep the effect in the signal
+  // path over the next track.
+  test("the AUTO chain keeps hearing nothing once the transition is over", async () => {
     const r = rig(true);
-    let builtDuringMix = false;
+    let routedDuringMix = false;
     for (let i = 0; i < 600; i++) {
       await r.tick(500);
-      if (r.phase === "mixing" && r.engine.A.rack.chains.some((c) => c.ephemeral)) builtDuringMix = true;
+      const c = r.engine.A.rack.chains.find((x) => x.name === "AUTO");
+      if (r.phase === "mixing" && (c?.stems ?? 0) !== 0) routedDuringMix = true;
       if (r.live === "B" && r.phase === "armed") break;
     }
-    expect(builtDuringMix).toBe(true);
-    // Settle tore it down — on BOTH decks, whichever way the transition went.
-    expect(r.engine.A.rack.chains.some((c) => c.ephemeral)).toBe(false);
-    expect(r.engine.B.rack.chains.some((c) => c.ephemeral)).toBe(false);
+    expect(routedDuringMix).toBe(true);
+    for (const id of ["A", "B"] as const) {
+      const c = r.engine[id].rack.chains.find((x) => x.name === "AUTO");
+      if (c) expect(c.stems).toBe(0);
+    }
   });
 
   test("claiming the VOICE stem gives it back to the user's chain afterwards", async () => {
@@ -771,7 +779,11 @@ describe("AutoMixer machine — nothing is left behind", () => {
     }
     expect(trimmedDuring).toBe(true); // AUTO did level the channels
     r.mixer.disable();
-    expect(r.engine.A.rack.chains.some((c) => c.ephemeral)).toBe(false);
+    // The AUTO chain stays — it is the user's — but it must not be left hearing a stem.
+    for (const id of ["A", "B"] as const) {
+      const c = r.engine[id].rack.chains.find((x) => x.name === "AUTO");
+      if (c) expect(c.stems).toBe(0);
+    }
     expect(r.engine.A.loopBeats).toBe(0);
     expect(r.engine.A.trim).toBe(1); // …and handed them back at unity
     expect(r.engine.B.trim).toBe(1);
@@ -905,17 +917,15 @@ describe("AutoMixer machine — effects carry a stem-free transition", () => {
   });
 });
 
-// ── THE AUTO FX RECIPE ──────────────────────────────────────────────────────────────────────────
-// AUTO's per-stem chain is visible in the strip but not editable there — it lasts seconds and is
-// destroyed at settle, so an edit would be gone before it took, and making it stick would mean
-// arbitrating every param against AUTO's own ramps mid-blend. The RECIPE is the editable thing,
-// and it is read fresh at the start of each transition so a change lands on the next mix.
-describe("AutoMixer machine — the AUTO FX recipe", () => {
+// ── THE AUTO CHAIN ─────────────────────────────────────────────────────────────────────────────
+// AUTO's transition effect is not AUTO's. It is a real, persistent chain in the user's rack named
+// AUTO, which they edit like any other; AUTO only ROUTES a stem into it for the length of a
+// transition and releases it at settle. So there is nothing to arbitrate — whatever they dialled is
+// what plays — and the chain, and their edits, outlive the mix.
+describe("AutoMixer machine — the AUTO chain is the user's", () => {
   function rig(): Rig {
     const r = new Rig("standard");
-    r.setup("t1", { duration: 60, bpm: 120, hasStems: true });
-    r.setup("t2", { duration: 60, bpm: 120, hasStems: true });
-    r.setup("t3", { duration: 60, bpm: 120, hasStems: true });
+    for (const t of ["t1", "t2", "t3"]) r.setup(t, { duration: 60, bpm: 120, hasStems: true });
     r.loadAndPlay("A", mkTrack("t1"));
     r.queue.upcoming = [mkTrack("t2"), mkTrack("t3")];
     r.autoAdvance = true;
@@ -923,61 +933,78 @@ describe("AutoMixer machine — the AUTO FX recipe", () => {
     return r;
   }
 
-  // Capture the ephemeral chain while it exists — it is gone by the time the transition settles.
-  async function captureChain(r: Rig): Promise<{ kind?: string; mix?: number; stems?: number } | null> {
-    let seen: { kind?: string; mix?: number; stems?: number } | null = null;
+  const autoChain = (r: Rig, id: "A" | "B") => r.engine[id].rack.chains.find((c) => c.name === "AUTO");
+
+  // Direction-agnostic: a set alternates A→B→A, so waiting for "B is live" only ever catches the
+  // first transition. Wait for the live deck to CHANGE and settle.
+  async function transition(r: Rig, during: (r: Rig) => void = () => {}): Promise<boolean> {
+    const from = r.live;
     for (let i = 0; i < 600; i++) {
       await r.tick(500);
-      for (const id of ["A", "B"] as const) {
-        const c = r.engine[id].rack.chains.find((x) => x.ephemeral);
-        if (c && c.devices[0]) seen = { kind: c.devices[0].kind, mix: c.devices[0].params.mix, stems: c.stems };
-      }
-      if (r.live === "B" && r.phase === "armed") break;
+      if (r.phase === "mixing") during(r);
+      if (r.live !== from && r.phase === "armed") return true;
     }
-    return seen;
+    return false;
   }
 
-  test("the chain is stamped from the recipe, not from a hardcoded reverb", async () => {
+  test("seeds ONE chain named AUTO, with a starting device, and reports it so it is never re-offered", async () => {
     const r = rig();
-    r.autoFx = { enabled: true, kind: "delay", mix: 0.35, stem: "drums" };
-    const got = await captureChain(r);
-    expect(got?.kind).toBe("delay");
-    expect(got?.mix).toBeCloseTo(0.35, 6);
-    expect(got?.stems).toBe(0b0001); // drums
+    await transition(r);
+    const c = autoChain(r, "A");
+    expect(c).toBeDefined();
+    expect(c!.devices.length).toBeGreaterThan(0);
+    expect(r.autoFx.seeded).toBe(true);
   });
 
-  test("the default recipe puts a reverb on the vocal", async () => {
-    const got = await captureChain(rig());
-    expect(got?.kind).toBe("reverb");
-    expect(got?.stems).toBe(0b0100); // vocals
+  // ★ The chain PERSISTS. That is the whole point: it outlives the transition, so the user's edits
+  // to it stick and editing it mid-mix is coherent.
+  test("the chain survives the transition — only the stem routing is transient", async () => {
+    const r = rig();
+    let routedDuring = false;
+    await transition(r, (rr) => {
+      if ((autoChain(rr, "A")?.stems ?? 0) !== 0) routedDuring = true;
+    });
+    expect(routedDuring).toBe(true); // it heard the stem while the mix ran
+    expect(autoChain(r, "A")).toBeDefined(); // …and it is still there afterwards
+    expect(autoChain(r, "A")!.stems).toBe(0); // …silent again, claiming nothing
   });
 
-  test("disabling it skips the chain entirely — AUTO still completes the mix", async () => {
+  test("routes the stem the settings name", async () => {
     const r = rig();
-    r.autoFx = { ...r.autoFx, enabled: false };
-    let everSpawned = false;
-    let done = false;
-    for (let i = 0; i < 600; i++) {
-      await r.tick(500);
-      if (r.engine.A.rack.chains.some((c) => c.ephemeral) || r.engine.B.rack.chains.some((c) => c.ephemeral)) everSpawned = true;
-      if (r.live === "B" && r.phase === "armed") {
-        done = true;
-        break;
-      }
-    }
-    expect(everSpawned).toBe(false);
-    expect(done).toBe(true); // the transition still happened, just without the tail
+    r.autoFx = { stem: "drums", seeded: false };
+    let sawBit = 0;
+    await transition(r, (rr) => {
+      sawBit |= autoChain(rr, "A")?.stems ?? 0;
+    });
+    expect(sawBit).toBe(0b0001);
   });
 
-  // ★ The whole point of a recipe: no arbitration, edits land on the NEXT transition.
-  test("an edit mid-set applies to the following transition", async () => {
+  // AUTO must never write a device param — the user's dial is the truth.
+  test("never touches what is in the chain", async () => {
     const r = rig();
-    const first = await captureChain(r);
-    expect(first?.kind).toBe("reverb");
+    await transition(r); // seeds it
+    const dev = autoChain(r, "A")!.devices[0];
+    dev.setParam("mix", 0.17);
+    dev.setBypass(false);
+    await transition(r); // a second transition routes through it again
+    expect(dev.params.mix).toBeCloseTo(0.17, 6);
+  });
 
-    r.autoFx = { enabled: true, kind: "delay", mix: 0.5, stem: "other" };
-    const second = await captureChain(r);
-    expect(second?.kind).toBe("delay");
-    expect(second?.stems).toBe(0b1000); // melody
+  // Deleting the chain IS how the tail is turned off — a mixer that put it back would be arguing.
+  test("a deleted AUTO chain is not recreated, and the mix still completes", async () => {
+    const r = rig();
+    await transition(r);
+    const c = autoChain(r, "A")!;
+    r.engine.A.removeFxChain(c.id);
+    r.autoFx = { ...r.autoFx, seeded: true };
+    expect(await transition(r)).toBe(true);
+    expect(autoChain(r, "A")).toBeUndefined();
+  });
+
+  test("a stem it borrows is handed back to whoever held it", async () => {
+    const r = rig();
+    const user = r.engine.A.addFxChain("MY VOX", 0b1100); // VOICE + INST
+    await transition(r);
+    expect(r.engine.A.rack.chain(user.id)?.stems).toBe(0b1100);
   });
 });

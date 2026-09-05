@@ -2738,6 +2738,9 @@ function AppBody() {
       stemsPending: (id) => stemLoading(statusRef.current[id]),
       performance: () => autoDeps.current.settings.autoPerformance,
       autoFx: () => autoDeps.current.settings.autoFx,
+      // Sticky: the AUTO chain is offered ONCE. Deleting it is how the tail is turned off, and a
+      // mixer that keeps putting it back would be arguing with the user.
+      onAutoFxSeeded: () => setSettings((cur) => ({ ...cur, autoFx: { ...cur.autoFx, seeded: true } })),
       onChange: (s) => setAutoStatus(s),
     });
   }

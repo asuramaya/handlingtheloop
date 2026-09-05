@@ -164,63 +164,11 @@ export function ControlsTab({ settings, set }: { settings: Settings; set: (patch
           </span>
         </div>
 
-        {/* ★ THE RECIPE, NOT THE CHAIN. While AUTO performs a stem transition it spawns a real
-            per-stem FX chain — you can see it in the strip, marked as its own. It lasts seconds and
-            is then destroyed, so editing it there would be editing something already on its way
-            out, and making an edit stick would mean AUTO arbitrating every param against its own
-            ramps mid-blend. This is what it builds FROM instead: read fresh at the start of every
-            transition, so a change here lands on the next mix with nothing to reconcile. */}
-        <ToggleRow
-          label="Auto-DJ FX tail"
-          info="During a stem transition AUTO puts an effect on the OUTGOING track's chosen stem alone, so it dissolves instead of stopping dead — the rest of the track carries on dry. This is the recipe it builds from; the chain itself appears in the FX strip while it plays and is torn down after. Off means AUTO still mixes, just without the tail."
-          on={settings.autoFx.enabled}
-          onToggle={() => set({ autoFx: { ...settings.autoFx, enabled: !settings.autoFx.enabled } })}
-        />
-        {settings.autoFx.enabled && (
-          <>
-            <div className="settings-row">
-              <span className="settings-label">Tail effect</span>
-              <span className="settings-control">
-                <span className="seg-group">
-                  {(["reverb", "delay"] as const).map((k) => (
-                    <button
-                      key={k}
-                      className={`hw-btn small ${settings.autoFx.kind === k ? "on" : ""}`}
-                      onClick={() => set({ autoFx: { ...settings.autoFx, kind: k } })}
-                      aria-pressed={settings.autoFx.kind === k}
-                    >
-                      {k === "reverb" ? "Reverb" : "Delay"}
-                    </button>
-                  ))}
-                </span>
-              </span>
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">On which stem</span>
-              <span className="settings-control">
-                <span className="seg-group">
-                  {(["vocals", "other", "drums", "bass"] as const).map((st) => (
-                    <button
-                      key={st}
-                      className={`hw-btn small ${settings.autoFx.stem === st ? "on" : ""}`}
-                      onClick={() => set({ autoFx: { ...settings.autoFx, stem: st } })}
-                      aria-pressed={settings.autoFx.stem === st}
-                    >
-                      {st === "other" ? "Melody" : st[0].toUpperCase() + st.slice(1)}
-                    </button>
-                  ))}
-                </span>
-              </span>
-            </div>
-            <Slider
-              label="Tail amount"
-              hint={settings.autoFx.mix < 0.25 ? "a hint" : settings.autoFx.mix > 0.75 ? "drenched" : "balanced"}
-              value={settings.autoFx.mix}
-              onChange={(v) => set({ autoFx: { ...settings.autoFx, mix: v } })}
-              info="How wet the tail is. At zero the effect is present but inaudible; at one the stem is almost entirely its own reflection."
-            />
-          </>
-        )}
+        {/* The auto-DJ's transition EFFECT is deliberately not here. It lives in a chain named
+            AUTO in each deck's own rack, where every other effect in this app is dialled — put a
+            reverb in it, or a delay, or three things, and set them however you like. AUTO only
+            routes a stem into it for the length of a transition. Editing an effect from a settings
+            tab meant leaving the instrument to adjust the instrument. */}
       </div>
 
       {/* Its own card, not a paragraph in the middle of the one above. These two sliders apply

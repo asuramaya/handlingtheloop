@@ -122,7 +122,6 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
             setParam("dir", (dir + 1) % NOISE_DIRS.length);
             pulseDir();
           }}
-          title="Sweep direction — UP: a riser into the drop. DOWN: a downlifter out of it."
         >
           {NOISE_DIRS[dir] ?? "?"}
           <span className="cyc-pips" aria-hidden="true">
@@ -139,7 +138,6 @@ export function NoisePanel({ deck, id, slot, accent }: NoisePanelProps) {
             setParam("snap", snap ? 0 : 1);
             pulseSnap();
           }}
-          title="SNAP: land the build's end on the bar grid (the drop), stretching it up to half a bar to fit."
         >
           SNAP
         </button>

@@ -46,15 +46,18 @@ const SC_RANGE: RibbonRange = { loMin: 20, loMax: 500, hiMin: 1000, hiMax: 20000
 const NARROW_PX = 260;
 const GRIP_PX = 10; // Delay's own grip radius, and Reverb's
 
-// ★ 33, not "whatever the strip happens to be". Measured off a screenshot of the two panels side
-// by side (column scan for the ribbon's own top/bottom edges): Delay's ribbon renders 28.6 CSS px
-// tall, COMP's rendered 24 — a sixth shorter, which is exactly the kind of difference that reads
-// as "not the same control" without being nameable. Delay's is max(20, .2 × .dly-viz height) and
-// that canvas measures ~163px in a --fx-body-h: 192 panel, so 33 is the number its formula
-// actually produces. drawFreqRibbon draws its plateau at y=2 and its baseline at y=h, so the
-// visible ribbon is the rect's own height: 33 − 4 = 29 ≈ Delay's 28.6.
-const RIBBON_H = 33;
-export const COMP_HEAD_H = READOUT_H + RIBBON_H;
+// ★ THE HEIGHT IS THE ELEMENT'S, NOT A CONSTANT'S. The ribbon used to be a hardcoded 33px, and
+// the reasoning for 33 was sound but time-limited: Delay's ribbon is max(20, .2 × .dly-viz
+// height), that canvas measured ~163px in a `--fx-body-h: 192` panel, and 33 is what the formula
+// produced THERE. --fx-body-h then became viewport-relative (clamp(148px, 16vh + 16px, 216px)),
+// so Delay's ribbon started shrinking with the rack and COMP's did not — the two matched only at
+// the top of the range, and everywhere else COMP wore a band a third taller than its sibling's.
+// A constant computed from a value that later became variable stops being the same number and
+// goes on looking like one.
+//
+// So .comp-head owns the height in CSS (Delay's own formula, against COMP's canvas budget) and
+// this reads the box back. drawFreqRibbon draws its plateau at y=2 and its baseline at y=h, so
+// the ribbon rect IS the space under the readout: one authority, nothing to drift.
 
 type Drag = { kind: "hp" | "lp" } | { kind: "band"; lastX: number };
 
@@ -64,9 +67,12 @@ export function CompHead({ deck, slot, accent, set, hot, setHot }: CompHeadProps
 
   // Same geometry for the draw loop and the hit-tests — one definition, so the picture and the
   // grip can't drift apart.
-  const geom = (w: number, h: number) => {
-    void h;
-    return { ribY: READOUT_H, ribbonH: w < NARROW_PX ? Math.max(26, RIBBON_H) : RIBBON_H };
+  const geom = (_w: number, h: number) => {
+    // The BOX is the answer, with no second opinion: .comp-head's CSS height already carries the
+    // proportion and every floor (including the coarse-pointer one). A `Math.max` here would be a
+    // second authority that can only ever disagree by drawing a ribbon taller than the canvas it
+    // is drawn into.
+    return { ribY: READOUT_H, ribbonH: Math.max(1, h - READOUT_H) };
   };
 
   useEffect(() => {
@@ -195,5 +201,5 @@ export function CompHead({ deck, slot, accent, set, hot, setHot }: CompHeadProps
     set("scLp", 20000); // parked at the top — near-transparent, no 0-sentinel
   };
 
-  return <canvas ref={canvasRef} className="comp-head" onPointerOut={() => !drag.current && setHot(null)} style={{ height: COMP_HEAD_H }} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} />;
+  return <canvas ref={canvasRef} className="comp-head" onPointerOut={() => !drag.current && setHot(null)} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} />;
 }

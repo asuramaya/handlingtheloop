@@ -217,7 +217,7 @@ export function DelayPanel({ deck, id, slot, accent }: DelayPanelProps) {
       <div className="fx-foot">
         {/* FREEZE is a performance move, not a setting. It gets the weight of one — and the first
             slot, because a control you can't reach in a hurry isn't a performance control. */}
-        <button className={`fx-chip dly-freeze ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")} title="Freeze — infinite hold of the current tail">
+        <button className={`fx-chip dly-freeze ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")}>
           ❄ FREEZE
         </button>
         <button className={`fx-chip ${synced ? "on" : ""}`} onClick={() => toggle("sync")} title={synced ? "Beat-locked — tap for free ms" : "Free time — tap to beat-lock"}>

@@ -57,10 +57,10 @@ export function ReverbPanel({ deck, id, slot, accent }: ReverbPanelProps) {
         <ReverbViz size={get("size")} decay={get("decay")} brightness={get("brightness")} predelay={get("predelay")} width={get("width")} lowCut={get("lowCut")} highCut={get("highCut")} lowCutRes={get("lowCutRes")} highCutRes={get("highCutRes")} mix={get("mix")} drive={get("drive")} duck={get("duck")} character={get("character")} modRate={get("modRate")} style={styleIdx} frozen={frozen} accent={accent} onParam={live} deck={deck} slot={slot} />
       </div>
       <div className="fx-foot">
-        <button className="fx-chip fx-chip-mode" onClick={cycleStyle} title="Algorithm voicing — Hall / Room / Plate / Ambient">
+        <button className="fx-chip fx-chip-mode" onClick={cycleStyle}>
           {REVERB_STYLES[styleIdx] ?? "HALL"}
         </button>
-        <button className={`fx-chip ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")} title="Freeze — hold the current tail (near-infinite)">
+        <button className={`fx-chip ${frozen ? "on" : ""}`} onClick={() => toggle("freeze")}>
           ❄ FRZ
         </button>
       </div>

@@ -177,7 +177,6 @@ export function CaptionBar({
         <span className="caption-reprocess">
           <button
             className="caption-redo"
-            title="Wrong lyrics? Look them up again and re-align to the vocal stem"
             aria-label="Re-fetch and re-align lyrics"
             onClick={() => onReprocess("lrclib")}
           >
@@ -185,7 +184,6 @@ export function CaptionBar({
           </button>
           <button
             className="caption-redo"
-            title="Wrong lyrics? Reload YouTube captions instead"
             aria-label="Reload YouTube captions"
             onClick={() => onReprocess("youtube")}
           >

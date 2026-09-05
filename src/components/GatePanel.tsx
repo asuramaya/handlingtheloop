@@ -91,7 +91,7 @@ export function GatePanel({ deck, id, slot, accent }: GatePanelProps) {
       {/* Mode select, bottom — same foot-strip position as every other device's mode row. */}
       <div className="sat-styles">
         {GATE_SHAPES.map((s, i) => (
-          <button key={s} className={shape === i ? "active" : ""} onClick={() => setParam("shape", i)} title="Gate shape">
+          <button key={s} className={shape === i ? "active" : ""} onClick={() => setParam("shape", i)}>
             {s}
           </button>
         ))}

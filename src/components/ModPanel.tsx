@@ -149,7 +149,7 @@ export function ModPanel({ deck, id, slot, accent }: ModPanelProps) {
         </button>
         <span className="fx-sep" />
         {MOD_SOURCES.map((s, i) => (
-          <button key={s} className={src === i ? "active" : ""} onClick={() => setParam("src", i)} title="Modulation source: LFO, envelope follower, or both">
+          <button key={s} className={src === i ? "active" : ""} onClick={() => setParam("src", i)}>
             {s}
           </button>
         ))}

@@ -71,7 +71,7 @@ export function SatPanel({ deck, id, slot, accent }: SatPanelProps) {
             {s}
           </button>
         ))}
-        <button className={`sat-punish ${punish ? "active" : ""}`} onClick={() => setParam(`punish${sel}`, punish ? 0 : 1)} title="Push this band into its hot region (HEAT sets how hot)">
+        <button className={`sat-punish ${punish ? "active" : ""}`} onClick={() => setParam(`punish${sel}`, punish ? 0 : 1)}>
           PUNISH
         </button>
       </div>

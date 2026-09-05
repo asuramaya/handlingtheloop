@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { usePhone } from "../htl/state/usePhone";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
 import { saveFxPreset, renameFxPreset, factoryFxPresets, loadFxPresets, loadFxBank } from "@htl/audio";
@@ -51,6 +52,9 @@ interface FxStripProps {
   otherAccent: string;
   emitControls: (id: "A" | "B") => void;
   onSelect?: (i: number) => void; // report the selected rack index up (so the gamepad can bypass it)
+  onOpenFx?: () => void; // PHONE: a tab tap also turns the bank to its FX page (see DeckControls)
+  fxPageOpen?: boolean; // PHONE: the bank is currently ON its FX page (so the panel needs a way out)
+  onCloseFx?: () => void; // PHONE: leave the FX page, back to the control surface
   ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
 }
 
@@ -83,10 +87,15 @@ function flyFrom(el: HTMLElement): { anchor: FlyAnchor } {
   return { anchor: { left: menu?.left ?? r.left, right: menu?.right ?? r.right, top: r.top } };
 }
 
-export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, ctlRef }: FxStripProps) {
+export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, onOpenFx, fxPageOpen, onCloseFx, ctlRef }: FxStripProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   const [sel, setSel] = useState(0); // selected rack index
+  // PHONE: the device panel lives on the bank's FX PAGE, not in the row. Measured, it wants
+  // 192px of a 463px board while every other row already sums to exactly the space available —
+  // so inline it cannot fit, and floating it over the board only hides the controls underneath.
+  // Picking a tab is therefore also the gesture that TURNS THE PAGE.
+  const phone = usePhone();
   const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu (right-click summon)
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
   // Hardware preset browsing (FLX FX SELECT): a per-kind cursor (0 = Default, 1..N = factory bank)
@@ -195,6 +204,45 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const cur = Math.max(0, Math.min(sel, devices.length - 1));
   const selDev = ready ? devices[cur] : undefined;
   const tabsRef = useRef<HTMLDivElement>(null);
+  // The single scroller. It used to be the tab row; now it is the chain row, because the tabs live
+  // INSIDE a chain container and a group sizes to its content rather than scrolling on its own.
+  const chainsRef = useRef<HTMLDivElement>(null);
+  // What the bar draws. `chains` is the deck's list; before the rack has built its first chain the
+  // strip still has a master to show, so fall back to it rather than drawing an empty row where
+  // the devices should be.
+  const groups = chains.length > 0 ? chains : chain ? [chain] : [];
+  // ★ THE MASTER IS PINNED OUTSIDE THE SCROLLER, not sticky inside it. It was `position: sticky;
+  // right: 0` for one round, which is the clever answer and the wrong one — at a full rack it was
+  // measurably NOT at the right edge (`master=false` at scrollLeft 0 on a 13-chain row), and this
+  // file's own ＋ ruling had already said why: "a pinned control inside its own scroller is a
+  // fight (sticky + a hidden scrollbar + a drag row that hit-tests by coordinate); a sibling that
+  // simply never scrolls is not." A fixed third column of the bar is guaranteed at every chain
+  // count and every scroll offset, and rightmost is where the master is in the SIGNAL.
+  // ★ THE CHAIN YOU JUST LEFT, HELD FOR THE LENGTH OF ITS EXIT. Folding unmounts a chain's tabs,
+  // so without this the container you clicked away from collapsed in a single frame while the one
+  // you opened grew in over 180ms — and that ASYMMETRY is what reads as flicker, more than either
+  // animation on its own. The closing copy is inert (no drag bindings, no ＋, pointer-events:none),
+  // so it can never be a second live tab row claiming the same drag group.
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const prevChainId = useRef(selChainId);
+  useEffect(() => {
+    if (prevChainId.current === selChainId) return;
+    const leaving = prevChainId.current;
+    prevChainId.current = selChainId;
+    setClosingId(leaving);
+    // Matched to --fx-fold-ms (180) plus a frame, so the inert copy is not held past its own
+    // animation — the 20ms of dead time it used to sit through was the gap the count popped into.
+    const t = window.setTimeout(() => setClosingId((c) => (c === leaving ? null : c)), 195);
+    return () => clearTimeout(t);
+  }, [selChainId]);
+
+  const masterGroup = groups.find((c) => c.master) ?? null;
+  const flow = groups.filter((c) => !c.master);
+  // ★ THE TAB ROW HOLDS THE CHAIN'S DEVICES, NOT THE DECK'S. `cur` and the hardware's `at` are flat
+  // indices into `deck.fxDevices`; `.fx-tabs` children are this chain's. They coincide only while
+  // one chain holds the whole rack, so indexing the row by a flat slot scrolled to (and anchored a
+  // menu under) the wrong tab the moment a second chain existed.
+  const tabAt = (slot: number) => tabs.indexOf(devices[slot]);
   // The rack fills in from a promise callback (ensureWorklets → ensurePadFx), somewhere React can't
   // see. Ask the deck to say when. The `ready` dep drops the hook once it has fired, and the
   // re-check covers the rack landing between this render and this effect.
@@ -230,14 +278,35 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   }, [chain, devices, cur]);
   // Bring the selected tab into view in the scrollable row — so revealing an off-screen effect
   // (right-click its FX pad → selectKind) actually surfaces its tab. block:nearest = no page jump.
+  // ★ NOT `[cur, tabAt]`. `tabAt` is rebuilt every render, so listing it would run a
+  // scrollIntoView on EVERY render — a scroller that yanks itself back while you are dragging
+  // across it, which is the same feedback loop the People dock's scroll memory had to be pulled
+  // out of state to escape. The chain id covers the only other thing the index depends on.
   useEffect(() => {
-    (tabsRef.current?.children[cur] as HTMLElement | undefined)?.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [cur]);
+    const i = tabs.indexOf(devices[cur]);
+    if (i >= 0) (tabsRef.current?.children[i] as HTMLElement | undefined)?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur, chain?.id]);
+  // ★ AND BRING THE OPEN CONTAINER INTO VIEW. Selecting a chain UNFOLDS it, which changes its
+  // width — so on a full rack the thing you just opened can land partly or wholly off the right
+  // edge of the one scroller. Runs on the chain, not on the device, so it never fights the effect
+  // above (that one moves within an already-visible group).
+  // ★ AFTER THE FOLD, NOT DURING IT. `inline: "nearest"` scrolls the minimum distance to bring
+  // the element in — but at the instant this fires the group is at 0fr and 180ms from its real
+  // width, so a SMOOTH scroll was gliding toward a target that was still growing underneath it.
+  // Two eased motions racing on the same axis is a wobble, not a transition. Waiting one fold lets
+  // it aim at settled geometry, and "nearest" still means an already-visible group never moves.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      chainsRef.current?.querySelector<HTMLElement>(".fx-group.open")?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    }, 195);
+    return () => clearTimeout(t);
+  }, [selChainId]);
   // Mouse wheel → horizontal slide on the (scrollbar-less) tab row. Touch drags natively; this
   // just lets a vertical wheel push the row sideways. Non-passive listener so preventDefault can
   // stop the page from scrolling while the cursor's over the row and there's overflow to consume.
   useEffect(() => {
-    const el = tabsRef.current;
+    const el = chainsRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (el.scrollWidth <= el.clientWidth) return; // nothing to slide
@@ -332,10 +401,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   /** Take a device out of a chain. It is that chain's instance, so this DESTROYS it — there is no
    *  homeless-device state to represent, and nothing left running that nothing can reach. */
+  /** True iff the device actually left. The rack REFUSES some removals — see Fx.ts: the master's
+   *  EQ is the channel EQ that every eq* ControlParam, the session sync and the EQ throw address,
+   *  so pulling it out would leave the whole deck's EQ driving something nothing can hear. */
   const removeDeviceFromChain = (kind: FxKind, id = selChainId) => {
-    deck.removeFxFrom({ chain: id, kind });
+    const gone = deck.removeFxFrom({ chain: id, kind });
     broadcastRack();
     refresh();
+    return gone;
   };
   const removeChain = (id: string) => {
     if (deck.removeFxChain(id)) {
@@ -367,9 +440,28 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     onDropOn: (from, chainId) => {
       const k = tabs[from]?.kind;
       if (!k || chainId === chain?.id) return;
+      // ★ REMOVE FIRST, AND ONLY ADD IF IT ACTUALLY LEFT. This was add-then-remove with the
+      // remove's answer thrown away — so the one removal the rack legitimately refuses (the
+      // master's EQ, which IS the channel EQ) turned the drag into a silent COPY: a second EQ
+      // appeared in the target chain while the master kept its own. Pre-existing, and invisible
+      // to anything that only checked the target; caught by counting devices across EVERY
+      // container before and after, where a move must leave the total unchanged and this went
+      // 5 → 6. A refused move must be a no-op, not half of one.
+      if (!removeDeviceFromChain(k, chain?.id ?? "master")) return;
       addDeviceToChain(k, chainId);
-      removeDeviceFromChain(k, chain?.id ?? "master");
     },
+    // ★ THE OPEN CONTAINER MUST BE TRANSPARENT TO ITS OWN DEVICES. This landed the moment the tabs
+    // moved INSIDE the chain container: the group carries the `foreign` drop target, so a device
+    // dragged anywhere along its own row is now permanently inside a drop-into target, and the hit
+    // test returned `onto` for every pixel of the gesture. Reordering within a chain simply stopped
+    // producing an insertion point — the drag lifted, followed the pointer, and dropped nowhere.
+    // Caught by watching for the drop marker mid-drag rather than only checking the order after:
+    // the pill lifted and `dragging` was set, so anything that only asserted "did the drag start"
+    // would have passed while the feature was dead.
+    // Refusing our own chain is also just true — you cannot move a device into the chain it is in —
+    // and `canDropOn` returning false is exactly the hook's designed fall-through to an ordinary
+    // insertion, not a special case bolted on.
+    canDropOn: (_from, id) => id !== chain?.id,
   });
   const chainDrag = useReorderDrag({
     group: `fx-chains-${id}`,
@@ -491,7 +583,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         else broadcastRack();
         // Pop the SAME floaty preset menu a tab right-click opens, anchored under the selected tab, so
         // the hardware browse is VISIBLE — repeated presses walk the highlight down the list.
-        const tabEl = tabsRef.current?.children[at] as HTMLElement | undefined;
+        const tabEl = tabsRef.current?.children[tabAt(at)] as HTMLElement | undefined;
         const r = tabEl?.getBoundingClientRect();
         if (r) {
           setMenu({ slot: at, x: r.left, y: r.bottom + 4 });
@@ -967,108 +1059,185 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     () => setAddFly(null),
   );
 
-  return (
-    <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
-      {/* ★ THE CHAIN ROW — the master of a master/detail pair whose detail is the device row below
-          it. One line, the same chip language, and it SCROLLS rather than compresses, so it costs
-          a deck column nothing in width at any size. A chip carries the chain's name and, as a
-          left edge, the colour of the stems it owns; the selected chip opens the four-lane picker
-          when tapped again. Drag a device tab onto a chip to move that device into that chain, and
-          drag a chip itself to reorder the row. */}
-      {ready && chains.length > 0 && (
-        <div className="fx-chain-bar">
-          {/* ★ ＋ DOES NOT SCROLL. It used to ride at the end of the row, which meant the way to
-              make a chain disappeared the moment you had enough chains to need one. It is a fixed
-              first column now, outside the scroller — the row slides underneath it. */}
-          <button className="fx-chain add" title="New chain" onClick={addChain}>
-            ＋
-          </button>
-        <div className={`fx-chains ${chainDrag.from != null || tabDrag.from != null ? "dragging" : ""}`} {...chainDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
-          {chains.map((c) =>
-            c.master ? (
-              <span key="master-wrap" className="fx-chain-tail">
-              {/* ★ THE MASTER, pinned rightmost at a constant place — because that is where it
-                  is in the SIGNAL, not a layout preference. It has no stem selector: it does not
-                  take stems, it takes the SUM of the chains, after them. */}
+  // ★ ONE RENDERER, TWO PLACES. The master is drawn by the same function as every other chain and
+  // then PINNED OUTSIDE the scroller, so nothing about how a container looks or behaves can drift
+  // between "a chain" and "the master".
+  const renderGroup = (c: (typeof chains)[number]) => {
+          const open = c.id === chain?.id;
+          const ci = chains.indexOf(c);
+          const cd = chainDrag.bind(ci);
+          return (
+            <div
+              key={c.id}
+              {...cd}
+              {...tabDrag.foreign(c.id)}
+              // ★ A PRESS THAT STARTED ON A DEVICE BELONGS TO THE DEVICE ROW. React events bubble,
+              // so without this the group's own reorder drag arms on every grab of a tab inside it
+              // and two drags fight over one gesture.
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest(".fx-tabs, .fx-tab")) return;
+                if (c.master) return; // the master is pinned to the signal; it does not reorder
+                cd.onPointerDown(e);
+              }}
+              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+            >
               <button
-                className={`fx-chain master ${c.id === chain?.id ? "sel" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
-                title={`${c.name}: the master channel — every chain sums here · right-click for presets`}
-                // It DOES get a menu. It was refused one on the grounds that it takes no stems and
-                // cannot be deleted — but those are two rows of a menu whose main body is the
-                // saved-chain list, and "recall a rack I built" is exactly as sensible on the
-                // master as anywhere else. The menu already hides what does not apply.
-                onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } setSelChainId(c.id); }}
-                {...chainLong.bind(c.id)}
-                {...tabDrag.foreign(c.id)}
-                onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
-              >
-                <span className="fx-chain-name">{c.name}</span>
-              </button>
-              </span>
-            ) : (
-              <button
-                key={c.id}
-                className={`fx-chain ${c.id === chain?.id ? "sel" : ""} ${c.stems === 0 ? "deaf" : ""} ${chainDrag.from === chains.indexOf(c) ? "is-dragging" : ""} ${chainDrag.at === chains.indexOf(c) ? "drop-before" : ""} ${chainDrag.at === chains.indexOf(c) + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
-                title={`${chainTitle(c)} · drag to reorder · right-click for stems and presets`}
+                className="fx-chain"
+                title={c.master ? `${c.name}: the master channel, every chain sums here · right-click for presets` : `${chainTitle(c)} · drag to reorder · right-click for stems and presets`}
                 onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (!chainLong.fired.current) setSelChainId(c.id); }}
                 {...chainLong.bind(c.id)}
-                {...chainDrag.bind(chains.indexOf(c))}
-                {...tabDrag.foreign(c.id)}
                 onContextMenu={(e) => { e.preventDefault(); openChainMenu(c.id, e.clientX, e.clientY); }}
               >
                 <span className="fx-chain-name">{c.name}</span>
                 {/* The stem letters are a PREVIEW of what this chain hears. With nothing separated
                     there is nothing to preview — four dead letters on every chip is noise that
-                    looks like state. Same rule as the picker in the menu: absent, not dimmed. */}
-                {deck.hasStems && (
-                <span className="fx-chain-src">
-                  {chainInitials(c).map((x) => (
-                    <i key={x.ch} className={x.on ? "on" : ""} style={{ ["--lane" as string]: x.color }}>
-                      {x.ch}
-                    </i>
-                  ))}
-                </span>
+                    looks like state. Same rule as the picker in the menu: absent, not dimmed.
+                    The master takes no stems at all: it takes the SUM, after them. */}
+                {!c.master && deck.hasStems && (
+                  <span className="fx-chain-src">
+                    {chainInitials(c).map((x) => (
+                      <i key={x.ch} className={x.on ? "on" : ""} style={{ ["--lane" as string]: x.color }}>
+                        {x.ch}
+                      </i>
+                    ))}
+                  </span>
                 )}
+                {/* ★ A FOLDED CONTAINER SAYS HOW MUCH IT IS HOLDING. A count is the difference
+                    between "this chain is empty" and "this chain is built but shut", which the
+                    two rows told you for free by showing the devices and now nobody would. */}
+                {!open && c.devices.length > 0 && <span className="fx-group-count">·{c.devices.length}</span>}
               </button>
-            ),
-          )}
-        </div>
-        </div>
-      )}
-      <div className="fx-head">
-      {/* ★ SAME RULE AS THE CHAIN ROW's ＋: the way to add a device cannot be the thing that
-          scrolls out of sight once you have added a few. Fixed first column, row slides under. */}
-      {others.length > 0 && (
-        <button
-          className="fx-tab fx-tab-add"
-          title="Add an effect to this chain"
-          onClick={(e) => { cancelMenuTimer(); setMenu(null); setAddMenu({ x: e.clientX, y: e.clientY }); }}
-        >
-          ＋
-        </button>
-      )}
-      <div className={`fx-tabs ${tabDrag.from != null ? "dragging" : ""}`} role="tablist" ref={tabsRef} {...tabDrag.row} onPointerDownCapture={() => { draggedRef.current = false; }}>
-        {tabs.map((d, i) => (
-          <button
-            key={d.kind}
-            className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
-            onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); }}
-            onContextMenu={(e) => openPresetMenu(e, gi(i))}
-            {...tabLong.bind(gi(i))}
-            {...tabDrag.bind(i)}
-            role="tab"
-            aria-selected={cur === i}
-            title="Drag to reorder, or onto a chain chip to move it there · right-click for presets"
-          >
-            {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
+              {open && (
+                <div className="fx-group-body">
+                 <div className="fx-group-body-inner">
+                  <div
+                    className={`fx-tabs ${tabDrag.from != null ? "dragging" : ""}`}
+                    role="tablist"
+                    ref={tabsRef}
+                    {...tabDrag.row}
+                  >
+                    {tabs.map((d, i) => (
+                      <button
+                        key={d.kind}
+                        className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
+                        onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); if (phone) onOpenFx?.(); }}
+                        onContextMenu={(e) => { e.stopPropagation(); openPresetMenu(e, gi(i)); }}
+                        {...tabLong.bind(gi(i))}
+                        {...tabDrag.bind(i)}
+                        role="tab"
+                        aria-selected={cur === gi(i)}
+                      >
+                        {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                  {/* ★ THE DEVICE ＋ MOVED INSIDE THE CONTAINER, which is the one behavioural win
+                      that falls out of nesting for free. It calls addDeviceToChain(kind,
+                      selChainId) — it has always added to "whatever is selected", a target you
+                      had to hold in your head from a row above. Sitting at the end of this
+                      chain's own device list, the target is the thing you are looking at. */}
+                  {others.length > 0 && (
+                    <button
+                      className="fx-tab fx-tab-add"
+                      onClick={(e) => { cancelMenuTimer(); setMenu(null); setAddMenu({ x: e.clientX, y: e.clientY }); }}
+                      aria-label="Add an effect to this chain"
+                    >
+                      ＋
+                    </button>
+                  )}
+                 </div>
+                </div>
+              )}
+              {!open && c.id === closingId && c.devices.length > 0 && (
+                <div className="fx-group-body closing" aria-hidden="true">
+                  <div className="fx-group-body-inner">
+                    <div className="fx-tabs">
+                      {c.devices.map((d) => (
+                        <span key={d.kind} className="fx-tab">
+                          {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+  };
+
+  return (
+    <div className="fx-strip" style={{ ["--accent" as string]: accent }}>
+      {/* ★ THE RACK BAR — ONE ROW, WITH THE DEVICES NESTED INSIDE THE CHAIN THAT OWNS THEM.
+          It was two stacked rows, a master/detail pair: chains above, the selected chain's devices
+          below. That cost 19 + 4 + 22 = 45px of a ~253px strip to say a thing containment says for
+          free, and the operator's screenshot caught the degenerate case — a deck with no chains
+          still drew `＋  MASTER`, a selector with exactly one option, above its device row.
+
+          Ableton's Group/Rack is the reference: a chain is a CONTAINER, and its devices sit inside
+          its own frame. Folded, a chain is the chip it always was plus a device count. Unfolded, it
+          opens in place and its tabs render within it.
+
+          ★ OPEN == SELECTED, and there is no fold triangle. Selecting a chain is already what
+          reveals its devices, so a separate fold control would be a second control answering one
+          question, and would invent states ("selected but folded") that mean nothing.
+
+          ★ ONE SCROLLER, NOT TWO NESTED ONES. `.fx-chains` is the only thing that scrolls; a group
+          sizes to its content and never scrolls inside itself. Nested horizontal scrollers on one
+          row are a coin-toss over which one eats the wheel. The ＋ stays a fixed sibling outside it
+          (a pinned control inside its own scroller is a fight), and the master is `sticky: right`
+          while folded so it stays reachable at any chain count without taking width from the row.
+
+          Drag survives and reads better: a device dragged out of one container and into another is
+          now literally that gesture, and dropping onto an OPEN group asks where among its tabs. */}
+      {ready && (
+      <div
+        className="fx-rack-bar"
+        // ★ THE CLICK-AFTER-DRAG GUARD BELONGS TO THE WHOLE BAR. `draggedRef` is what stops the
+        // click that ends a drag from also counting as a selection, and it was reset by a capture
+        // handler on `.fx-chains`. The moment the master moved OUT of that scroller to be pinned,
+        // nothing reset the flag before a press on the master — so the first tap on it after any
+        // drag anywhere in the rack was silently swallowed. Caught by clicking master and finding
+        // it did not open. On the bar it covers both the scrolling chains and the pinned ends.
+        onPointerDownCapture={() => { draggedRef.current = false; }}
+      >
+          {/* ★ ＋ DOES NOT SCROLL. It used to ride at the end of the row, which meant the way to
+              make a chain disappeared the moment you had enough chains to need one. It is a fixed
+              first column, outside the scroller — the row slides underneath it. */}
+          <button className="fx-chain add" onClick={addChain} aria-label="Add a chain">
+            ＋
           </button>
-        ))}
-      </div>
+        <div
+          className={`fx-chains ${chainDrag.from != null || tabDrag.from != null ? "dragging" : ""}`}
+          ref={chainsRef}
+          {...chainDrag.row}
+        >
+          {flow.map(renderGroup)}
+        </div>
+        {masterGroup && renderGroup(masterGroup)}
+        {/* PHONE: the way OUT of the FX page. Pinned at the end of the row, opposite the pinned ＋,
+            so the scrolling rack slides between two fixed ends and the exit can never scroll out of
+            reach. Costs no height: it sits in the row that was already there. */}
+        {fxPageOpen && (
+          <button
+            className="fx-tab fx-page-close"
+            onClick={onCloseFx}
+            aria-label="Close the effect panel"
+          >
+            ✕
+          </button>
+        )}
         {/* COPY used to live here, as a permanent header button for a thing touched about once a
             session. It is in the menus now — on the device, and on the chain — where the rest of
             "what can I do to this?" already is, and where it can say WHICH thing it copies. */}
       </div>
+      )}
 
+      {/* The device panel and the controls that PERFORM it (reset / mix / power) are one thing —
+          the desktop stack already implies it by putting them back to back. Naming that group is
+          what lets a phone show or withhold the whole of it as a unit, with neither half
+          stranded. On desktop `display: contents` dissolves the wrapper, so the strip's flex
+          layout is byte-for-byte what it was. */}
+      <div className="fx-body">
       <div className="fx-stage">
         {chain && chain.devices.length === 0 ? (
           // The ＋ is right there, one row up and pinned. A sentence explaining it is a sentence
@@ -1109,7 +1278,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               fader keeps the whole middle at any width. The panel narrows a LOT (two decks
               side by side on a laptop, and again on a phone) and a 6-letter label is the first
               thing that stops fitting. */}
-          <button className="eq-tool fx-reset" title="Reset this device to its defaults" aria-label="Reset this device" onClick={reset}>
+          <button className="eq-tool fx-reset" aria-label="Reset this device" onClick={reset}>
             ↺
           </button>
           <MixFader value={selDev.getParam("mix")} reset={selDev.paramDefault("mix")} onChange={setMix} disabled={bypassed} />
@@ -1125,6 +1294,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           </button>
         </div>
       )}
+      </div>
 
       {/* Preset menu — right-click an effect tab. Same FxMenu as the chain menu and the picker:
           one widget, one place to change it. */}
@@ -1544,7 +1714,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     role="button"
                     tabIndex={-1}
                     aria-label={`${KIND_LABEL[k] ?? k} presets`}
-                    title="Choose what it lands on"
                     onClick={(e) => { e.stopPropagation(); openFly(e.currentTarget.parentElement as HTMLElement); }}
                   >
                     ›

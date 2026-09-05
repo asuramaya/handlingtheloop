@@ -391,7 +391,7 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
         <div className="sat-viz">
           <canvas ref={mainRef} className="sat-canvas" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu} />
         </div>
-        <div className={`fx-curve mod-wave ${wavePulse}`} onClick={cycleWave} title="Click to cycle the LFO waveform (BARBER: the ramp shape)">
+        <div className={`fx-curve mod-wave ${wavePulse}`} onClick={cycleWave}>
           <canvas ref={curveRef} className="fx-curve-canvas" />
         </div>
       </div>

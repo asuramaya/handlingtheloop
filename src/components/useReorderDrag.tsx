@@ -44,6 +44,20 @@ function scrollerOf(el: HTMLElement | undefined, vert: boolean): HTMLElement | n
 }
 const scrollOf = (el: HTMLElement | null, vert: boolean) => (el ? (vert ? el.scrollTop : el.scrollLeft) : 0);
 
+/** The row's OWN draggable items: the ones whose nearest enclosing row is THIS one.
+ *
+ *  ★ A ROW CAN CONTAIN ANOTHER ROW. The FX rack nests each chain's device tabs INSIDE the chain
+ *  container they belong to, so both rows are now ancestors of the same DOM subtree. A plain
+ *  `querySelectorAll("[data-drag]")` on the chain row therefore also collects every device tab and
+ *  snapshots THEIR centres — chain reordering would hit-test against the wrong items and drop a
+ *  chain into a gap that belongs to a different list. Ownership is "the first [data-row] strictly
+ *  above me", which was silently true of every caller before nesting existed and is now stated. */
+function itemsOf(row: HTMLElement): HTMLElement[] {
+  return [...row.querySelectorAll<HTMLElement>("[data-drag]")].filter(
+    (n) => n.parentElement?.closest<HTMLElement>("[data-row]") === row,
+  );
+}
+
 export interface ReorderDrag {
   /** Index currently being dragged, or null. */
   from: number | null;
@@ -272,7 +286,7 @@ export function useReorderDrag(opts: {
         const scroller = scrollerOf(row ?? el, vert);
         const s0 = scrollOf(scroller, vert);
         const centers = row
-          ? [...row.querySelectorAll<HTMLElement>("[data-drag]")].map((n) => {
+          ? itemsOf(row).map((n) => {
               const r = n.getBoundingClientRect();
               return (vert ? r.top + r.height / 2 : r.left + r.width / 2) + s0;
             })
@@ -351,7 +365,7 @@ function hitTest(
       const list = drop.matches("[data-drop-list]") ? drop : drop.querySelector<HTMLElement>("[data-drop-list]");
       let intoAt: number | null = null;
       if (list) {
-        const cs = [...list.querySelectorAll<HTMLElement>("[data-drag]")].map((n) => {
+        const cs = itemsOf(list).map((n) => {
           const r = n.getBoundingClientRect();
           return g.vert ? r.top + r.height / 2 : r.left + r.width / 2;
         });

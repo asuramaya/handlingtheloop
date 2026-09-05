@@ -52,6 +52,9 @@ const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballisti
 // brighter), so position (handle), blend (gradient) and level (glow) never fight for the same pixels.
 export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossfade, locked, smart, enabled = true, canControl = true, onToggleSmart, onToggleEnabled }: CrossfaderProps) {
   const frac = (crossfade + 1) / 2; // 0 = full A (left) … 100 = full B (right)
+  // A hair of tolerance: the slider's step is 0.01, and a fader sitting at 0.004 is centred as far
+  // as anyone looking at it is concerned.
+  const centred = Math.abs(crossfade) < 0.02;
   const trackRef = useRef<HTMLDivElement>(null);
   // ★ THE MODE LIVES ON THE FADER. Smart Fader used to be a chip in the I/O strip that meant three
   // unrelated things at once — drag it for MASTER VOLUME, tap it to arm smart, hold it to disable
@@ -159,10 +162,15 @@ export function Crossfader({ deckA, deckB, accentA, accentB, crossfade, onCrossf
           // the enable/disable, which otherwise has no home now the SMART chip is gone.
           onContextMenu={(e) => { e.preventDefault(); toggleEnabled(); }}
         />
-        {/* A↔B position (0 = full A, 50 = centre, 100 = full B). The pill IS the handle now; --xpct
-            snaps its colour to the side it landed on (matches the old thumb). */}
+        {/* A↔B position (0 = full A, 50 = centre, 100 = full B). The pill IS the handle, and its
+            colour says which deck it is favouring.
+            ★ DEAD CENTRE FAVOURS NEITHER. `crossfade > 0 ? B : A` has no third answer, so exact
+            centre — the one position that means "both equally" — fell through to A and the handle
+            quietly claimed a side it was not on. At centre it takes the PLAYHEAD colour instead,
+            which is the app's existing neutral: the one marker that belongs to no deck. The
+            snap-to-a-side behaviour is unchanged the moment you move off centre. */}
         <div
-          className="lfader-val xbar-val"
+          className={`lfader-val xbar-val ${centred ? "at-centre" : ""}`}
           style={{
             left: `calc(${frac} * (100% - 38px) + 19px)`,
             ["--xpct" as string]: crossfade > 0 ? "100%" : "0%",

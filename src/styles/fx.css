@@ -7,16 +7,38 @@
   min-height: 0;
   /* The shared device-body height: the EQ curve AND the effect body (viz + knobs + chips)
      both use it, so every tab renders at the SAME height and the two decks' strips stay
-     aligned. Tall enough for the delay's viz-over-knobs-over-chips stack. */
-  --fx-body-h: 192px;
-}
-/* The header: the scrolling tab row + the POWER glyph, which must NOT scroll with it. */
-.fx-head {
-  display: flex;
-  gap: 5px;
-  align-items: stretch;
-  flex: 0 0 auto;
-  min-width: 0;
+     aligned. Tall enough for the delay's viz-over-knobs-over-chips stack.
+
+     VIEWPORT-RELATIVE on purpose. This is the ONLY part of the desk that isn't a
+     natural-height control row, so it is the desk's whole height budget in one number —
+     and the waveform lanes are the remainder (`.lanes { flex: 1 1 0 }`), so every pixel
+     spent here is a pixel taken off the waveform. A flat 192px meant a 1080p screen gave
+     the desk ~70% of the stage and each lane barely 100px. 16vh keeps the rack generous on
+     a tall monitor (clamped at 200, slightly MORE than the old constant) and hands the
+     slack back to the waveform on a 1080p/laptop window. The floor keeps the curve
+     draggable. Phones override this outright (see the max-width:768px block).
+
+     ★ EVERY TERM IS SHIFTED BY WHAT THE DESK GAVE BACK, and by nothing else. Each trim to a
+     control row is added here, so the desk's total height is identical at EVERY viewport size:
+     the waveform lanes keep every pixel the height-budget ruling gave them, and the reclaimed
+     space lands where it was taken FOR. Naming the sum beats folding another literal into the
+     clamp each time — this is the second reclaim, and a third would be one more addend.
+       16px — the key/tempo and stems cells, 50 → 42 (see the .pitch-row .vcell block below).
+       17px — folding the chain row and the device row into one nested rack bar (45 → 28).
+     To hand a reclaim to the WAVEFORM instead of the rack, take it out of this sum: the desk
+     then shrinks by that much and `.lanes` (flex: 1 1 0) absorbs it. */
+  /* ONE CLOCK FOR THE FOLD. Enter and exit run SIMULTANEOUSLY when you swap chains — one
+     container collapses while another expands — so they must share a duration and a curve or the
+     row's total width changes non-monotonically and the whole rack wobbles. They were 0.18s and
+     0.16s on `ease`, which is 20ms of one container still moving after the other has stopped. */
+  --fx-fold-ms: 180ms;
+  --fx-fold-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --fx-reclaimed: 33px;
+  --fx-body-h: clamp(
+    calc(132px + var(--fx-reclaimed)),
+    calc(16vh + var(--fx-reclaimed)),
+    calc(200px + var(--fx-reclaimed))
+  );
 }
 /* ---- THE CHAIN ROW ---------------------------------------------------------------------------
    Master/detail, laid on its side. One 22 px row above the device tabs: the chains. It uses the
@@ -25,15 +47,17 @@
    horizontal and the row has to survive 320 px without a second design.
    The colour is a 3 px LEFT EDGE, not a fill: routing is state you glance at. A wall of saturated
    blocks was the first two rejected prototypes, and the lesson stuck. */
-/* The chain BAR: a fixed ＋ column, then the scrolling row. Two boxes rather than one, because a
-   pinned control inside its own scroller is a fight (sticky + a hidden scrollbar + a drag row that
-   hit-tests by coordinate); a sibling that simply never scrolls is not. */
-.fx-chain-bar {
+/* The RACK BAR: a fixed ＋ column, then the one scrolling row, then (on the phone page) the fixed
+   ✕. Three boxes rather than one, because a pinned control inside its own scroller is a fight
+   (sticky + a hidden scrollbar + a drag row that hit-tests by coordinate); a sibling that simply
+   never scrolls is not. This replaced .fx-chain-bar STACKED ON .fx-head: 19 + 4 + 22 = 45px to say
+   what containment says for free. */
+.fx-rack-bar {
   display: flex;
   gap: 4px;
   align-items: stretch;
   min-width: 0;
-  margin-bottom: 4px;
+  flex: 0 0 auto;
 }
 .fx-chains {
   display: flex;
@@ -41,6 +65,12 @@
   align-items: stretch;
   min-width: 0;
   flex: 1 1 auto;
+  /* ★ THE AUTO-SCROLL GLIDES. Selecting a chain unfolds it and can pull the row sideways by a few
+     hundred px; jumping there was the single biggest part of what read as "flickery", because the
+     whole rack teleported under a pointer that had not moved. */
+  scroll-behavior: smooth;
+  /* THE ONLY SCROLLER ON THE ROW. A group sizes to its content and never scrolls inside itself:
+     two nested horizontal scrollers on one line is a coin-toss over which one eats the wheel. */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -135,17 +165,229 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--panel));
 }
-/* The MASTER rides at the END of the row, and `margin-left: auto` pushes it to the right edge
-   whenever there is spare width — so it sits at a CONSTANT place, which is where it is in the
-   signal. The row still scrolls when there isn't spare width; it simply stays last. */
-.fx-chain-tail {
-  display: inline-flex;
-  gap: 4px;
-  margin-left: auto;
-  padding-left: 8px;
+/* ---- THE GROUP: A CHAIN THAT CONTAINS ITS DEVICES ---------------------------------------------
+   Ableton's Group/Rack, at chip scale. Folded it is the chip it always was plus a count; open it
+   holds its own device tabs inside its frame.
+
+   ★ ONE OUTLINE PER GROUP. This is the detail that decides whether it reads as designed or as
+   mush: the GROUP owns the border and the recessed ground, and the pills inside it keep only
+   their fill. A bordered pill inside a bordered pill is two competing rectangles at 9px, which is
+   where every pill-in-pill pattern goes wrong. */
+.fx-group {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--panel));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 78%, #000 10%);
+  transition: border-color 0.18s ease, background 0.18s ease;
 }
-/* The master carries no stem letters and no edge — it is named, and that is enough. */
+/* ★ THE OPENING CONTAINER GROWS INTO ITS DEVICES rather than snapping to width. `width: auto` is
+   not animatable, so the tab row rides a grid track going 0fr → 1fr, which IS: the container's
+   own width follows the track, and everything to its right slides instead of jumping.
+   HONEST LIMIT: this animates the OPEN only. React unmounts a folded chain's tabs, so the chain
+   you just left still collapses in one frame — the eye is on the one you opened, and keeping every
+   chain's tabs mounted to win the other half would put N tab rows on screen all claiming the same
+   drag group. */
+/* ★ AND AN EXIT, NOT JUST AN ENTRANCE. A pill that grows open over 180ms and then vanishes in one
+   frame reads as a glitch precisely BECAUSE half of it is animated — the asymmetry is the flicker.
+   React unmounts the folded chain's tabs, so the closing container renders a static, inert copy of
+   what it held for exactly as long as the animation runs (see FxStrip's `closingId`). */
+.fx-group-body.closing {
+  animation: fx-group-close var(--fx-fold-ms) var(--fx-fold-ease) both;
+  pointer-events: none;
+}
+/* ★ THE CONTENT LEAVES BEFORE THE BOX DOES. Fading opacity linearly across the whole collapse
+   means you watch the labels get clipped from the right as the track narrows, for the entire
+   animation — the box is doing one thing and the text another. Out by 38% and what collapses
+   after that is an empty box, which is the part that can shrink cleanly. */
+@keyframes fx-group-close {
+  from {
+    grid-template-columns: 1fr;
+    opacity: 1;
+    margin-inline-start: 0;
+  }
+  38% {
+    opacity: 0;
+  }
+  to {
+    grid-template-columns: 0fr;
+    opacity: 0;
+    /* ★ AND THE GAP GOES WITH IT. `.fx-group` sets `gap: 4px`, and a flex gap is reserved between
+       children even when one of them has collapsed to zero width — so the animation finished at
+       header + 4 + 0 and then dropped another 4px the instant the inert copy unmounted. A 4px
+       step is small, but it is a STEP at the exact moment the eye is watching the container come
+       to rest, which is the whole reason a fold-in reads as jarring. Cancelling the gap over the
+       same clock makes the last animated width equal the settled one. */
+    margin-inline-start: -4px;
+  }
+}
+.fx-group-body {
+  /* ONE grid track holding ONE child. That is the whole trick and it only works in that shape:
+     the animation shrinks the FIRST column, so the collapsing content has to be a single item
+     (hence -inner) rather than the tab row itself. */
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+  animation: fx-group-open var(--fx-fold-ms) var(--fx-fold-ease) both;
+}
+.fx-group-body-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The mirror: the box opens first, the content arrives into the room it made. */
+@keyframes fx-group-open {
+  from {
+    grid-template-columns: 0fr;
+    opacity: 0;
+    margin-inline-start: -4px;
+  }
+  38% {
+    opacity: 0;
+  }
+  to {
+    grid-template-columns: 1fr;
+    opacity: 1;
+    margin-inline-start: 0;
+  }
+}
+/* The ＋ inside a container arrives with the devices rather than popping in at full size. */
+.fx-group.open .fx-tab-add {
+  animation: fx-fade-in var(--fx-fold-ms) var(--fx-fold-ease) both;
+}
+@keyframes fx-fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx-chains {
+    scroll-behavior: auto;
+  }
+  .fx-group,
+  .fx-group-body,
+  .fx-group-body.closing,
+  .fx-group.open .fx-tab-add,
+  .fx-group-count {
+    transition: none;
+    animation: none;
+    max-width: none;
+  }
+}
+.fx-group.open {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+/* A chain with no stems hears nothing. A legitimate half-built state (you make the chain, then
+   give it a source) but it must never look like a working one. */
+.fx-group.deaf {
+  border-style: dashed;
+  opacity: 0.72;
+}
+/* A DEVICE hovering over a group — a different act (move it INTO this chain), so a different
+   mark: the whole container lights rather than one edge. */
+.fx-group.drop-in {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface));
+}
+/* ★ THE MASTER IS A FIXED COLUMN OF THE BAR, NOT AN ITEM IN THE SCROLLER. It spent one round as
+   `position: sticky; right: 0` inside the row, which is the clever answer and the wrong one:
+   measured on a 13-chain row it was NOT at the right edge at scrollLeft 0. The ＋ rule three
+   blocks up had already said why — "a pinned control inside its own scroller is a fight; a sibling
+   that simply never scrolls is not" — and the master is the same kind of control. Rightmost is
+   where it is in the SIGNAL, so it gets the same treatment as the ＋ at the other end and the row
+   slides between two fixed ends.
+   It may shrink (unlike the ＋) because an OPEN master carries devices: capped so a big master can
+   never starve the chain row, and its own tabs slide inside it if it hits the cap. That inner
+   scroller is not the nested-scroller trap — it lives outside .fx-chains entirely, so no two
+   scrollers ever share a pointer. */
+.fx-rack-bar > .fx-group.master {
+  /* ★ NEVER SHRINK BELOW ITS CONTENT. This was `flex: 0 1 auto; min-width: 0`, which let the row
+     take the shrink out of the MASTER instead of out of the scroller beside it: measured at
+     clientWidth 31px around a scrollWidth of 74, i.e. the pill squeezed to under half its label
+     and its right border pushed outside itself. It reads as a clipped chip, which is how the
+     operator found it — and the position check I ran before ("is its right edge flush with the
+     bar's?") was true the whole time, because a crushed box is still flush. Check the size, not
+     only the place.
+     `max-width` still bounds an OPEN master so it can never starve the chain row; the cap is
+     absorbed by the body's inner scroller, so the name and the border always survive. */
+  flex: 0 0 auto;
+  max-width: 58%;
+}
+.fx-rack-bar > .fx-group.master.open .fx-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.fx-rack-bar > .fx-group.master.open .fx-tabs::-webkit-scrollbar {
+  display: none;
+}
+/* Folded, a container says how much it is holding — the difference between an empty chain and a
+   built one, which the two-row layout told you for free by showing the devices. */
+/* ★ THE COUNT GROWS WITH THE COLLAPSE, IT DOES NOT ARRIVE AFTER IT. It used to render only once
+   `closingId` cleared, so the sequence was: collapse for 160ms, 40ms of nothing, then the header
+   jumps ~11px wider as the count pops in. That tail is what the eye is watching when the
+   container settles, and it was the loudest part of "fold in is jarring" — an animation that
+   ends in a discrete jump reads as broken however smooth the middle was. Now it is mounted for
+   the whole exit and takes its width over the same clock, so the header's width changes once,
+   continuously, and is monotonic apart from this element's own 11px. */
+.fx-group-count {
+  opacity: 0.62;
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  animation: fx-count-in var(--fx-fold-ms) var(--fx-fold-ease) both;
+}
+@keyframes fx-count-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+  }
+  to {
+    max-width: 4ch;
+    opacity: 0.62;
+  }
+}
+/* Inside a group the pills lose their outline; the group carries it. */
+.fx-group > .fx-chain {
+  border-color: transparent;
+  background: transparent;
+}
+.fx-group.open > .fx-chain {
+  color: #fff;
+}
+.fx-group .fx-tabs {
+  /* Sizes to its devices: the row's scroller is the ancestor, not this. */
+  flex: 0 0 auto;
+  overflow: visible;
+}
+.fx-group .fx-tabs > .fx-tab {
+  border-color: transparent;
+}
+.fx-group .fx-tabs > .fx-tab.sel,
+.fx-group .fx-tabs > .fx-tab:hover {
+  border-color: transparent;
+}
+/* The separator between the chain's name and the devices it holds — a hairline, not a gap, so the
+   two halves read as one container rather than as two chips that happen to touch. */
+.fx-group .fx-group-body .fx-tabs::before {
+  content: "";
+  align-self: stretch;
+  width: 1px;
+  margin-inline-end: 2px;
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
 
 /* THE STEM PICKER — one control, two menus (the FX chain menu and the sampler pad menu). Four
    fixed cells in the stem colours, always all four, lit where the set includes them; the sampler
@@ -205,6 +447,36 @@
   flex: 0 0 auto;
   align-self: center;
   cursor: pointer; /* it is not draggable — nothing to reorder */
+}
+/* The exit from the FX page. Pinned like the ＋ at the other end, so the scrolling tab list
+   slides BETWEEN two fixed ends and the way out can never scroll out of reach — the same rule
+   the ＋ follows, for the same reason. Phone-only: it is rendered only while the bank is on its
+   FX page, which only happens below 768px. */
+.fx-tab.fx-page-close {
+  flex: 0 0 auto;
+  align-self: center;
+  order: 9; /* last in the head row regardless of source position */
+  margin-inline-start: auto;
+  /* A real touch target on BOTH axes. The tabs beside it run at the head row's 21px, which is
+     fine for a thing you pick among many; this is the single way back out of the page, so it
+     gets the platform minimum and the row grows to hold it. */
+  min-width: 44px;
+  min-height: 30px;
+  /* RED, not the deck accent. Every other lit control on this surface is the deck's colour, and
+     this is the one control that does not act on the audio at all — it leaves. Making it the odd
+     one out is the point: you look for it when you want out, and nothing else on the page
+     competes for that glance. */
+  color: #ff3b30;
+  background: color-mix(in srgb, #ff3b30 14%, transparent);
+  border-color: color-mix(in srgb, #ff3b30 60%, transparent);
+  font-weight: 700;
+  cursor: pointer;
+}
+.fx-tab.fx-page-close:hover,
+.fx-tab.fx-page-close:active {
+  color: #fff;
+  background: #ff3b30;
+  border-color: #ff3b30;
 }
 .fx-tab.fx-tab-add:hover {
   color: var(--accent);
@@ -1237,12 +1509,28 @@ body:not(.no-glow) .fx-chip.on {
   width: calc(var(--eq-dot, 22px) - 2px);
   height: calc(var(--eq-dot, 22px) - 2px);
 }
-/* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match). */
+/* Desktop: give the foot-row tiles ~2/3-up height (the ∓ steppers stretch to match).
+   ★ THROUGH A VARIABLE, NOT A LITERAL. These were a flat 50px, and the coarse-pointer tablet
+   block in board.css tried to shrink them with `.vcell { height: 34px }` — which never applied,
+   because `.pitch-row .vcell` (0,2,0) outranks `.vcell` (0,1,0) and a media query adds no
+   specificity. The rule had been sitting there doing nothing. A custom property set on an
+   ancestor is INHERITED rather than matched, so an override wins without having to out-specify
+   anything.
+
+   ★ AND 42, NOT 50, FOR THE KEY/TEMPO AND STEMS ROWS. A vcell's content is an 8px label over a
+   13px value (plus the 8px key hint when `show-keys` is on) = 38px including padding, so 50 was
+   12px of air per row, twice, on the two rows that carry the least. Those 16px go straight into
+   --fx-body-h below, which is shifted by exactly the same amount: the desk's total height does
+   not move, the waveform lanes are untouched, and the FX rack is what gets the space. The EQ's
+   own band cells keep 50 — they sit INSIDE the rack, so trimming them would just hand the rack's
+   height back with one hand after taking it with the other. */
 @media (min-width: 769px) {
   .pitch-row .vcell,
-  .stems-row .vcell,
+  .stems-row .vcell {
+    height: var(--deck-cell-h, 42px);
+  }
   .eq-row .vcell {
-    height: 50px;
+    height: var(--eq-cell-h, 50px);
   }
 }
 /* Re-order the bank: volume slider on top, then CUE/PLAY/SHIFT as the first button
@@ -1493,6 +1781,60 @@ body.no-glow .stem-btn.on {
   -webkit-overflow-scrolling: touch;
 }
 
+/* ---- Debug tab: the event log + the inspector's own controls -----------------------------
+   The flight recorder rendered as text, monospace and pre-wrapped, because it IS text: an
+   event is a timestamp, a channel and a bag of fields, and any attempt to table that would
+   have to pick columns for events that do not share any. Taller than the separation trace
+   because it is the thing you actually read through. */
+.debug-log {
+  max-height: 260px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--text);
+  -webkit-overflow-scrolling: touch;
+}
+.debug-filter {
+  width: 148px;
+  min-width: 0;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.debug-filter:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+/* The report box was six inline style properties on the element. Same look, in the stylesheet
+   where the theme can reach it. */
+.debug-report-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--panel-2, var(--panel));
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.debug-report-input:focus {
+  outline: none;
+  border-color: var(--neon-cyan);
+}
+
 /* Live diagnostics (Debug tab): a responsive grid of labelled key/value blocks. */
 .debug-grid {
   display: grid;
@@ -1507,12 +1849,19 @@ body.no-glow .stem-btn.on {
   padding: 7px 9px;
 }
 .debug-block-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--accent);
   margin-bottom: 4px;
+}
+.debug-block-title .link-btn {
+  font-size: 0.8em;
 }
 .debug-row {
   display: flex;
@@ -2708,6 +3057,45 @@ button.room-tog:hover {
   display: flex;
   gap: 6px;
 }
+
+/* PHONE: give the FX visualiser a floor, and let the stage grow to hold it.
+   `.fx-stage` and `.fx-viz-row` are both `flex: 1 1 0` + `min-height: 0` — a region with no
+   floor, which on a desktop is fine because there is always spare height to share out. On a
+   phone the bank's content exceeds the viewport, so every basis-0 region collapses to zero
+   while its content-sized siblings keep their size: measured at 390x844 the FX stage came out
+   24px tall and `.fx-viz-row` 360x0, which is why the compressor's ATK/REL pad and transfer
+   curve were MISSING rather than merely small (`.comp-ar-pad` resolved to 2x2 — `height:100%`
+   of nothing). Desktop gives the same row 609x113.
+   So on a phone the stage sizes to its CONTENT instead of to a share of leftover space, and
+   the visualiser carries a definite floor tall enough to be a touch target. `bank-main` is
+   already the scroll container, so the extra height costs a little scroll, not a clip. */
+/* NOTE: an earlier revision gave `.fx-stage` a content basis and `.fx-viz-row` a 132px floor on
+   phones, back when the panel sat INLINE in the control surface and would otherwise collapse to
+   nothing. Both are gone: on a phone the panel now renders only on the bank's FX page, which
+   supplies real height, and the floor actively fought it — 132 + the panel's head and footer
+   overflowed the stage by 19px. The row sizes itself from the space the page gives it. */
+
+/* `.fx-body` groups the device panel with the controls that PERFORM it (reset / mix / power).
+   On desktop `display: contents` dissolves the wrapper — the strip's flex flow is exactly what
+   it was. On a phone it is the unit the FX page shows and the MIX page withholds, so neither
+   half is ever stranded without the other. */
+.fx-body {
+  display: contents;
+}
+
+@media (max-width: 768px) {
+  /* The FX page gives the visualiser a SHORT, WIDE strip (measured 364x113), which is the shape
+     side-by-side was designed for — the pad comes out square at 113x113, exactly as on desktop.
+     An earlier revision stacked this row; that was written for a tall narrow sheet and is wrong
+     here: the pad took its 200px and crushed the curve beside it to 2px. The axis has to follow
+     the shape of the space, and on this page the space is wide, not tall. */
+  .bank.page-fx .fx-strip,
+  .bank.page-fx .eq-row,
+  .bank.page-fx .fx-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
 /* Main WYSIWYG display — the canvas absolutely fills it (the .dly-viz pattern, no aspect fight). */
 .sat-viz {
   flex: 1 1 0;
@@ -2852,16 +3240,58 @@ button.room-tog:hover {
 .comp-panel .sat-styles button {
   min-width: 56px;
 }
+/* ★ AND NO GAP UNDER THE HEAD. Every other device draws its readout and ribbon INSIDE the viz
+   canvas, so they cost it nothing but pixels of its own. COMP's are a separate element (they
+   have to be — a frequency ruler only aligns with Delay's and Reverb's at the panel's full
+   width), which means it alone also paid .fx-panel's 5px row gap for them. Flush is both the
+   5px back and how the other devices already look: one continuous surface from readout to
+   ribbon to plot. */
+.comp-panel .comp-head + .fx-viz-row {
+  margin-top: -5px;
+}
 /* COMP's head — the readout AND the SC-HP/LP ribbon on one canvas, spanning the panel's FULL
    width, which is the only width at which a frequency ruler lines up with Delay's and Reverb's.
    (Inside CompViz it inherited the middle column of a three-column row and measured a different
    Hz-per-pixel than every other ribbon in the rack — see CompHead.tsx.) Same surface treatment as
    .sat-readout, which it replaces, but it keeps all four corners: the row beneath it is three
    separate boxes, so there is nothing single below to merge a squared bottom edge into. */
+.comp-panel {
+  /* What the two canvases actually get to share: the panel, minus the foot strip (.sat-styles,
+     23px) and the one row gap left above it (the gap under the head is cancelled below). Named
+     once so the head's proportion is measured against the right quantity rather than against the
+     whole panel — Reverb's ribbon is 20% of `.rv-viz`, which is likewise the panel minus ITS
+     foot and gap, so the two only agree if both subtract their own overhead first. */
+  --comp-canvas-h: calc(var(--fx-body-h, 178px) - 28px);
+}
 .comp-head {
   display: block;
   width: 100%;
   flex: 0 0 auto;
+  /* ★ THE HEIGHT LIVES HERE NOW, AND IT TRACKS THE PANEL.
+     It used to be an inline `style={{ height: COMP_HEAD_H }}` = READOUT_H + a hardcoded
+     RIBBON_H of 33 — and 33 was, by its own comment, "the number Delay's formula actually
+     produces" measured in a panel of `--fx-body-h: 192`. Delay's ribbon is
+     `max(20, 0.2 × its viz height)`, so it SHRINKS with the rack; COMP's stayed at the one
+     value it was copied at. The moment --fx-body-h became viewport-relative the two stopped
+     agreeing everywhere except the top of the range, and COMP wore a fat constant band while
+     every other device's got shorter — a number derived from a value that later became
+     variable. Now it is Delay's own formula against COMP's own budget: 13px of readout plus a
+     ribbon that is 20% of what the canvases have, over Reverb's own floor of 20.
+
+     Two floors/ceilings that looked reasonable and were not, both caught by sweeping the clamp
+     range against a live Reverb rather than reading the formula:
+       • A floor of 26, lifted from CompHead's `w < NARROW_PX` branch. That is a rule about a
+         narrow DECK — a width — and using it as a height floor made COMP's band up to 6px taller
+         than Reverb's on every short window: the original complaint again, in disguise. 20 is
+         Reverb's floor, and coarse pointers raise it in board.css where a thumb needs it.
+       • A ceiling of 33, kept on the theory that the old constant was at least a sane maximum.
+         It is not a maximum, it is just the number the formula produced in one 192px panel, and
+         at the top of the range it made COMP 5px SHORTER than Reverb (51 vs 46 at a 216px
+         panel). Reverb has no cap either. A stale constant demoted to a ceiling is still stale.
+
+     CompHead's `geom` reads the measured box, so this is the single height authority. Measured
+     against Reverb across the whole clamp range: 37/37, 41/40.6, 45/45.2, 51/50.6. */
+  height: calc(13px + max(var(--comp-ribbon-min, 20px), 0.2 * var(--comp-canvas-h)));
   border: 1px solid var(--line);
   /* ★ .dly-viz's / .rv-viz's OWN surface and radius, not .sat-readout's. Measured off a
      side-by-side screenshot: this strip's interior was rgb(11,11,12) against Delay's

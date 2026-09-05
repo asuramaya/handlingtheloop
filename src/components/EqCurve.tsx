@@ -568,7 +568,6 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         <div
           ref={outRef}
           className="eq-out"
-          title="Output trim — drag the baseline (double-click to reset)"
           onPointerDown={(e) => {
             if (e.button !== 0) return;
             e.preventDefault();

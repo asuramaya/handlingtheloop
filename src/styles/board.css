@@ -1,9 +1,22 @@
 /* ============================ DDJ-FLX board ================================ */
 /* Section 1 (top third): stacked waveform lanes — grids line up vertically and
    the canvases fill the available height (redrawn via ResizeObserver). */
-.lanes {
-  flex: 1 1 0; /* waveforms FILL the space the natural-height controls leave (basis 0 so they don't squeeze the EQ) */
+/* Houses the two SongOverview rails + the stacked lanes between them: Deck A's rail on
+   the left, Deck B's on the right, each spanning the FULL height of the pair (not just
+   its own deck's box) — a tall bookend on each outer edge of the whole board, like a
+   mixer's floor-to-ceiling channel meter. Each rail still shows only its OWN deck's
+   track; the shared full-board height is a bolder canvas for it, not a data merge. */
+.lanes-flank {
+  flex: 1 1 0;
   min-height: 140px;
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  background: var(--line);
+}
+.lanes {
+  flex: 1 1 0;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -127,6 +140,62 @@
   box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 26%, transparent);
   pointer-events: none;
   z-index: 6;
+}
+/* The "gestalt of the song" rail: rekordbox's overview strip, rotated vertical, full
+   board height, pinned to the OUTER edge (Deck A left, Deck B right) so the pair
+   bookends the mixer instead of colliding with it. Wide enough for the waveform inside
+   to actually read as a waveform, not a smudge. Click/drag anywhere to jump. */
+.song-overview {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 100%;
+  display: block;
+  cursor: pointer;
+  touch-action: none;
+}
+.song-overview-left {
+  border-right: 1px solid var(--line);
+}
+.song-overview-right {
+  border-left: 1px solid var(--line);
+}
+/* Drop target + keyboard focus — the SAME "cute little dotted square" cue .lane.drop-target
+   shows, just via `outline` instead of that rule's `::after` + `border`: a <canvas> is a
+   replaced element, so pseudo-content doesn't paint on it, and `border` would resize the
+   element's box (triggering the ResizeObserver → backing-store rebuild → a visible judder each
+   time a drag enters/leaves). `outline` paints outside the box with zero layout effect either
+   way, and DOES support `dashed` — same look, canvas-safe. */
+.song-overview.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -3px;
+  box-shadow: inset 0 0 24px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.song-overview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Double the width once there's real desktop room (same >768px break every other
+   desktop-only layout choice in this file uses) — a wider rail has the pixels to spare for
+   the layered rekordbox-style band lobes and doesn't need to fight the deck controls for
+   space the way it would on a phone. */
+@media (min-width: 769px) {
+  .song-overview {
+    flex-basis: 128px;
+    width: 128px;
+  }
+}
+/* Narrower on mobile (same ≤768px break as the rest of the file's mobile rules): a phone's deck
+   area is already tight, and this view's job (jump-anywhere gestalt) survives a narrow rail — the
+   main waveform, jog wheels and pads need the horizontal space more.
+   ★ 40, NOT 32. The rail carries TWO tick lanes now, and 32px made each of them 16px — narrow
+   enough that a marker's tick had almost no length to read as a line. 40 gives each lane 20px,
+   which is a mark you can see, while the LABELS drop to a single shared column at this width
+   (labelsShareColumn) rather than trying to fit a glyph into half a rail. */
+@media (max-width: 768px) {
+  .song-overview {
+    flex-basis: 40px;
+    width: 40px;
+  }
 }
 /* The wrapper takes the lane's spare height via flex; the canvas is absolutely
    pinned to fill it exactly. Absolute inset (not height:100%) avoids the iOS
@@ -600,7 +669,15 @@
      audio viewport holds its size. */
   .stage .lanes {
     flex: 1 1 0;
-    min-height: 140px; /* identical to the desktop base — no jump at 768px */
+    /* The waveform is the only region on a phone with no natural height: `.decks-row` below
+       it sizes to its CONTENT (flex-basis auto) and scrolls when that overflows, so against a
+       basis-0 lanes row it wins every contested pixel. Measured at 390x844 the lanes got 178px
+       total — a 40px waveform under a 48px header, the metadata taller than the signal it
+       labels — while the scrolling board held 583px (69% of the screen). The floor below buys
+       the signal back from the one region that loses nothing by scrolling a little sooner.
+       `min()` keeps it a floor and not a takeover: on a SHORT viewport (phone in landscape,
+       small window) 34vh yields first, so the controls never get squeezed off the screen. */
+    min-height: min(290px, 34vh);
     overflow: hidden;
   }
   .stage .decks-third {
@@ -612,6 +689,44 @@
     min-height: 0;
     overflow: hidden;
   }
+  /* THE PAGES. Everything the two share (the switch row, the FX chain bar + tabs, the level
+     fader) stays put across the turn, so the page changes without the frame moving. */
+  .bank.page-fx .jog,
+  .bank.page-fx .loops,
+  .bank.page-fx .loop-sizes,
+  .bank.page-fx .pad-mode,
+  .bank.page-fx .hotcues,
+  .bank.page-fx .bank-load,
+  .bank.page-fx .pitch-row,
+  .bank.page-fx .stems-row {
+    display: none;
+  }
+  /* MIX keeps the chain bar and the device TABS — you can still see and pick which effect is
+     live, and picking one turns the page to it. Only the panel itself is withheld. */
+  .bank.page-perform .fx-body {
+    display: none;
+  }
+
+  /* SOLO CONTROLS ON A PHONE. Two deck columns cannot meet a touch target here: at 390x844
+     each `.bank` measures 193px, so the five-button transport row lands at 34px per pad
+     (against the 44px platform minimum) and `bank-main` silently clips 8px behind its own
+     `overflow-x: hidden` — which is why SYNC reads "SYN" and the FX row loses three slots.
+     Measured at full width the same rows give 72px pads, and every clip clears except the
+     FX bank's own deliberate `overflow-x:auto` scroller: overflowing elements 14 -> 1,
+     buttons under 44px 15/36 -> 4/36. So the FOCUSED deck owns the control surface and the
+     other's is put away — tap its lane (or its DECK header) to bring it up. Both WAVEFORMS
+     and the crossfader stay visible above, which is the comparison you actually need two of;
+     the controls are operated one deck at a time anyway.
+     Two guards: `:has(.bank.focused)` means nothing is hidden until something IS focused (no
+     blank surface), and `:not(:has(.bank.expanded))` yields completely to an EXPLICIT expand,
+     so the existing solo toggle keeps behaving exactly as it does today. */
+  .stage .decks-row:has(> .bank.focused):not(:has(> .bank.expanded)) > .bank.focused {
+    flex: 1 1 100%;
+  }
+  .stage .decks-row:has(> .bank.focused):not(:has(> .bank.expanded)) > .bank:not(.focused) {
+    display: none;
+  }
+
   /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
      (not the base `center`) makes `.bank-main` fill the bank height and align to the
      TOP — without it the overflow is centered, which clips both ends and can't be
@@ -651,6 +766,43 @@
   display: flex;
   flex-direction: column;
 }
+
+/* ===== DESKTOP HEIGHT BUDGET — the waveform is the point, not the remainder =====
+   The stage is `lanes (flex 1 1 0) + decks-third (natural height)`, so the desk takes what
+   it wants and the WAVEFORM gets the leftovers. At 1080p that arithmetic ran backwards:
+   the desk came to ~70% of the stage and each lane was ~100px — unreadable for the one
+   surface a DJ actually reads. Two levers, both here rather than shrinking any control:
+
+   1. DENSITY. The desk is ~9 stacked rows per deck; a 6px gap and 12px bank padding cost
+      ~60px per deck for air nobody asked for. 4/8 keeps the rows visually separate and
+      hands the difference to the lanes.
+   2. THE FLOOR (below). A guarantee rather than an allocation: the lanes stop being pure
+      leftovers and the desk becomes the thing that yields. It binds whenever the desk
+      outgrows its budget, which on a 1080p window is as soon as BOTH decks carry a stems
+      row (+50px each, straight off the waveform before this rule existed) — measured
+      there it holds each lane at 140px and costs the EQ curve ~12px. When it binds,
+      `.eq-row` is the only row with min-height:0, so it is the one that gives, and the
+      curve rides its own 48px floor. Kept at 30vh so it never crushes the rack: at 36vh
+      the same window drove the curve to 69px, which is too short to drag a node in.
+
+   The third lever is `--fx-body-h` in fx.css — the desk's only non-natural-height element,
+   and the biggest single number in this budget. Read that comment alongside this one.
+   Phone-scoped rules live in the max-width:768px blocks and are untouched by all of this. */
+@media (min-width: 769px) {
+  .stage .lanes {
+    min-height: min(30vh, 380px);
+  }
+  .decks-row .bank {
+    padding: 8px 14px;
+  }
+  .decks-row .bank-main {
+    gap: 4px;
+  }
+  .decks-row .fx-strip {
+    gap: 4px;
+  }
+}
+
 /* The A↔B crossfader as a HORIZONTAL bar at the top of the middle section — the
    track spans the full width (no side gaps) and sits flush at the bottom. The SMART
    chip is overlaid centred ON this row (same line as the handle). */
@@ -873,6 +1025,12 @@
   background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
 }
+/* Dead centre belongs to neither deck, so the handle wears the PLAYHEAD colour there — the
+   marker that already means "neither side" everywhere else in the app. */
+.xbar-val.at-centre {
+  background: var(--wv-selector, #fff);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--wv-selector, #fff) 75%, transparent);
+}
 /* The SMART chip's styling lived here. It is gone with the chip: the smart fader is a property of
    the FADER, so it is toggled on the fader's handle and shown by the track's own state. What is left in the I/O strip is MASTER, one control with one meaning. */
 
@@ -885,7 +1043,16 @@
   gap: 1px;
   background: var(--line);
   border-bottom: 1px solid var(--line);
-  z-index: 45;
+  /* ABOVE every dock/backdrop, on desktop too, not just the mobile override below. Every
+     dock — including left/right, which are `inset: 0 auto 0 0`/`0 0 0 auto`, i.e. full HEIGHT
+     from y:0 — and every "center" backdrop (full-viewport, z-index 50+, going higher still
+     per open via useCenterZIndex) physically covers this same top row. At the old z-index:45
+     that meant a click on a chin button while any dock/panel was open actually landed on the
+     BACKDROP underneath it, not the button: it closed the open panel via the backdrop's own
+     click-to-close, and the intended switch (e.g. People → Session) took two separate clicks
+     instead of one. A z-index comfortably above centerZCounter's realistic ceiling fixes every
+     dock mode at once, not just center. */
+  z-index: 5000;
 }
 .chin-btn {
   flex: 1;
@@ -915,66 +1082,10 @@
   font-size: 17px;
   line-height: 1;
 }
-/* The ⓘ keyboard-help launcher — a fixed-width square at the right end of the
-   chin (doesn't flex like the three main launchers). */
-.chin-btn.chin-info {
-  flex: 0 0 auto;
-  width: 42px;
-}
-.chin-info-i {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 800;
-  font-style: italic;
-  font-family: Georgia, "Times New Roman", serif;
-  line-height: 1;
-}
-
-/* Keyboard-shortcuts popover — the ⓘ/? launcher's content. Not a cursor menu: it is anchored
-   below the chin at a fixed corner and is a full reference table, so it is sized for itself
-   rather than borrowing the narrow menu width. It shares only `.ctx-backdrop`. */
-.help-panel {
-  position: fixed;
-  top: 52px;
-  right: 12px;
-  z-index: 61;
-  width: min(480px, calc(100vw - 24px));
-  max-height: min(640px, calc(100vh - 72px));
-  overflow-y: auto;
-  background: var(--panel-2);
-  border: 1px solid var(--accent);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
-}
-.help-panel-head {
-  position: sticky;
-  top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: var(--panel-2);
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-  font-weight: 700;
-  z-index: 1;
-}
-.help-panel-close {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-}
-.help-panel-close:hover {
-  color: var(--text);
-}
+/* The chin's "?" keyboard-help launcher and its popover shell lived here. Both are gone:
+   the popover's entire content was the <KeyMap> that Settings ▸ Controls already renders, over
+   the same `settings.keyBindings`. Removed with the JSX rather than left as orphan rules —
+   dead CSS is not free, it is the next reader's false lead. */
 
 /* Settings launcher: a text chin button on mobile, a compact gear SQUARE pinned to
    the top-left corner on desktop (CSS `order:-1` moves it ahead of Library/Search). */
@@ -992,63 +1103,101 @@
   display: none;
 }
 
-/* Dock width: a bit NARROWER than a third so the middle board keeps more width
-   (stays closer to a desktop layout), and CAPPED so a 4K/ultrawide screen doesn't
-   give the list panels an absurd width. Floored so they stay usable on small laptops. */
+/* Dock width: a bit NARROWER than a third so the middle board keeps more width by default
+   (stays closer to a desktop layout), floored so they stay usable on small laptops.
+
+   ★ --dock-min / --dock-max ARE THE SINGLE SOURCE OF TRUTH for a dock's usable range,
+   and DockResizer.tsx READS THEM off :root rather than carrying its own numbers. It used
+   to carry `min = 220, max = 920` while this file clamped 280..520 — one question with two
+   disagreeing answers, and the drag handle won both ends: you could pull a panel down to
+   220px (below anything its content lays out at) or out past what CSS would otherwise cap it
+   to. The floor is what the narrowest dock content (the settings label→control row, the
+   search result's 92px thumb + text) still reads at.
+   The ceiling used to sit at 560px specifically because a wide dock SQUEEZED the board — a
+   4K/ultrawide screen giving a list panel "an absurd width" cost real board space. Left/right
+   docks are floating overlays now (see the desktop dock block below), not flex children
+   sharing the row, so a wide one no longer costs the board anything — it just covers more of
+   whatever's directly behind it. Raised the ceiling accordingly; the `calc(100vw - 160px)`
+   guard below still stops it from running off a narrow window regardless. */
 :root {
-  --dock-w: clamp(280px, 28vw, 520px);
+  --dock-min: 300px;
+  --dock-max: 1100px;
+  --dock-w: clamp(300px, 28vw, 560px);
+  /* Library ▸ bottom mode's own vertical range — a separate pair from --dock-min/--dock-max
+     (those are widths; this is a height, and a much lower ceiling: past ~70vh the sheet is
+     eating the waveforms above it, not just the deck-controls strip it's meant to cover). */
+  /* Plain px, not vh: DockResizer's drag handle reads these back via
+     getComputedStyle(...).getPropertyValue() to clamp the drag, which returns a custom
+     property's literal AUTHORED text — "70vh" parses to the number 70, not 70% of the
+     viewport height, since vh is only resolved when a real CSS property consumes the var,
+     not when JS reads the token back. --dock-min/--dock-max hit this same constraint
+     already, which is why they're px too. */
+  --dock-h-min: 220px;
+  --dock-h-max: 820px;
+  --dock-h: clamp(280px, 45vh, 480px);
+  /* "center" placement's own resizable width range — a centered window isn't an edge dock (no
+     --dock-w-left/right to share), and each panel remembers its OWN width here rather than one
+     shared value: Library wants a wide table, Settings doesn't, and there's no single "the
+     center dock's width" the way there's "the left dock's" (only one panel can ever occupy an
+     edge at a time; any number of panels can independently be centered). Same plain-px
+     constraint as --dock-h-min/max above (DockResizer reads these back as raw text). */
+  --center-w-min: 360px;
+  --center-w-max: 1200px;
 }
 
-/* DESKTOP: the Library/Search docks SHARE the row with the board — they're in-flow
-   flex children of `.workspace` that take `--dock-w` and SQUEEZE `.stage`, rather
-   than overlaying it. `order` puts Library left + Search right (flipped by the swap
-   button). Below 769px these rules don't apply: the docks stay centered modals. */
+/* DESKTOP: every dock (Library/Search/Settings/Profile/Session) is a FLOATING OVERLAY —
+   `position: fixed`, never in-flow, never squeezing `.stage`. This used to be true only of
+   `dock-bottom`; left/right/center used to be in-flow flex children of `.workspace` that
+   pushed the board out of the way (`flex-basis` + `order`, flipped by a global ⇄ swap
+   button). That model meant the board's usable width depended on how many docks were open
+   and how wide the user had dragged them — the "board keeps getting resized" complaint. Now
+   NOTHING resizes the board: a dock just floats on top of whatever it covers. The swap
+   button is gone too — each panel picks its own edge (Library via Settings ▸ Controls;
+   Search/Settings/Profile/Session are hardcoded dock-right, unchanged from before). Below
+   769px these rules don't apply: every dock stays a centered full-screen modal (mobile). */
 @media (min-width: 769px) {
-  .workspace {
-    flex-direction: row;
-    position: relative; /* anchors the centered swap button */
-  }
   .modal-backdrop.dock-left,
-  .modal-backdrop.dock-right {
-    position: relative; /* in the flow, not a fixed overlay; also anchors the resizer */
-    inset: auto;
-    z-index: auto;
-    flex: 0 0 auto;
-    min-height: 0;
+  .modal-backdrop.dock-right,
+  .modal-backdrop.dock-bottom {
+    position: fixed;
+    z-index: 40;
     padding: 0;
     background: transparent;
     backdrop-filter: none;
     animation: none;
+    align-items: stretch;
+    justify-content: stretch;
   }
   /* Per-side resizable width (drag handle writes these on <html>); falls back to the
-     shared default until the user resizes that side. min-width:0 + max-width PIN the
-     dock to exactly that width: otherwise a panel with wide, hard-to-shrink content
-     (e.g. Profile's long song titles) raises the flex item's automatic minimum size
-     above the basis and the dock balloons. The panel clips/ellipsises inside. */
+     shared default until the user resizes that side. The width var belongs to the EDGE,
+     not the panel — Library-left and a future left-docked panel would share "the left
+     dock's remembered width", same as Search/Settings already share "the right dock's". */
   .modal-backdrop.dock-left {
-    flex-basis: var(--dock-w-left, var(--dock-w));
-    /* Cap at the stored width OR whatever leaves the board ≥160px, whichever is SMALLER —
-       so a dock resized wide on a big screen doesn't run off the right edge (cutting its
-       own content) when the window is later narrower. */
-    max-width: min(var(--dock-w-left, var(--dock-w)), calc(100vw - 160px));
-    min-width: 0;
+    inset: 0 auto 0 0;
+    width: clamp(var(--dock-min), var(--dock-w-left, var(--dock-w)), var(--dock-max));
+    max-width: min(var(--dock-max), calc(100vw - 160px));
   }
   .modal-backdrop.dock-right {
-    flex-basis: var(--dock-w-right, var(--dock-w));
-    max-width: min(var(--dock-w-right, var(--dock-w)), calc(100vw - 160px));
-    min-width: 0;
+    inset: 0 0 0 auto;
+    width: clamp(var(--dock-min), var(--dock-w-right, var(--dock-w)), var(--dock-max));
+    max-width: min(var(--dock-max), calc(100vw - 160px));
   }
-  .modal-backdrop.dock-left {
-    order: -1;
-  } /* Library on the left… */
-  .modal-backdrop.dock-right {
-    order: 1;
-  } /* …Search on the right */
-  .app.dock-swapped .modal-backdrop.dock-left {
-    order: 1;
-  } /* swap flips both panels… */
-  .app.dock-swapped .modal-backdrop.dock-right {
-    order: -1;
+  /* Library ▸ Settings ▸ Controls: "bottom" placement. A fixed-height overlay pinned to the
+     viewport's bottom edge, over the deck-controls strip, at a WIDTH a side dock never gives
+     the track table (full viewport width fixes the "hard to read song info" cramped-columns
+     problem). Resizable height (drag its top edge), not width. */
+  .modal-backdrop.dock-bottom {
+    inset: auto 0 0 0;
+    height: clamp(var(--dock-h-min), var(--dock-h-bottom, var(--dock-h)), var(--dock-h-max));
+  }
+  .modal-backdrop.dock-bottom > .panel {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    max-height: none;
+    border-radius: 10px 10px 0 0;
+    border-bottom: none;
+    animation: dock-in-bottom 0.16s ease-out;
   }
   .modal-backdrop.dock-left > .panel,
   .modal-backdrop.dock-right > .panel {
@@ -1057,19 +1206,25 @@
     height: 100%;
     max-height: none;
     border-radius: 0;
-    border-top: none;
-    border-bottom: none;
-    box-shadow: none; /* in-flow dock, not a floater — no drop-shadow band on the board edge */
   }
   .modal-backdrop.dock-left > .panel {
+    border-right: 1px solid var(--line);
     animation: dock-in-left 0.16s ease-out;
   }
   .modal-backdrop.dock-right > .panel {
+    border-left: 1px solid var(--line);
     animation: dock-in-right 0.16s ease-out;
   }
-  /* No dedicated close button on desktop — pressing the chin button again closes. */
-  .lib-panel .settings-head .mini.x,
-  .search-panel .settings-head .mini.x {
+  /* "center" gets NO override here — it keeps the base `.modal-backdrop` rule (centered
+     flex, dimmed/blurred backdrop) that used to only apply on mobile. That's the whole
+     definition: a desktop dock simply opts OUT of the left/right/bottom overrides above. */
+
+  /* No dedicated close button on an edge-pinned dock — pressing the chin button again
+     closes it. "center" is a true dimmed modal (click-off-to-close already works via its
+     backdrop) so it keeps its ✕, same as it always has on mobile. */
+  .modal-backdrop.dock-left .settings-head .mini.x,
+  .modal-backdrop.dock-right .settings-head .mini.x,
+  .modal-backdrop.dock-bottom .settings-head .mini.x {
     display: none;
   }
 
@@ -1094,31 +1249,19 @@
     left: -3px;
     right: auto;
   }
-  /* After a side-swap the docks trade places, so each one's INNER edge (the one
-     facing the board) flips. Move the grab handle to that inner edge; the resizer
-     itself derives the grow direction from the handle's geometry, so this is all it
-     takes to keep resize working when swapped. */
-  .app.dock-swapped .modal-backdrop.dock-left .dock-resizer-edge {
-    right: auto;
-    left: -3px;
-  }
-  .app.dock-swapped .modal-backdrop.dock-right .dock-resizer-edge {
-    left: auto;
-    right: -3px;
-  }
-  /* A side-swap moves the Library (.dock-left) to the screen's RIGHT edge. Mirror its
-     internals so the sidebar — and the ☰ that toggles it — sit against the outer edge,
-     like a natural right-docked panel; otherwise the nav/hamburger read as "on the
-     wrong side". The inner sidebar resizer derives its grow direction from geometry,
-     so reversing the row keeps sidebar-resize working with no other change. */
-  .app.dock-swapped .modal-backdrop.dock-left .library {
+  /* Library picks its own edge directly now (no global swap to key off) — when it's the
+     one in "right" mode, mirror its internals so the sidebar — and the ☰ that toggles it —
+     sit against the outer edge, like a natural right-docked panel; otherwise the
+     nav/hamburger read as "on the wrong side". `.library`/`.lib-sidebar`/`.lib-burger` are
+     Library-only class names, so this doesn't touch Search/Settings sharing `.dock-right`. */
+  .modal-backdrop.dock-right .library {
     flex-direction: row-reverse;
   }
-  .app.dock-swapped .modal-backdrop.dock-left .lib-sidebar {
+  .modal-backdrop.dock-right .lib-sidebar {
     border-right: none;
     border-left: 1px solid var(--line);
   }
-  .app.dock-swapped .modal-backdrop.dock-left .lib-burger {
+  .modal-backdrop.dock-right .lib-burger {
     order: 1; /* move ☰ to the head's right end, above the now-right-side sidebar */
     margin-right: 0;
     margin-left: 8px;
@@ -1138,6 +1281,32 @@
   .dock-resizer-edge:hover::after {
     background: var(--accent, #36c2ff);
   }
+  /* The bottom sheet's own handle: a horizontal bar across its TOP edge (its only free
+     edge — left/right/bottom are pinned to the viewport), dragged up to grow it. Not an
+     `.dock-resizer-edge` variant because that one is vertical (top:0;bottom:0) by nature;
+     this is its 90°-rotated twin. */
+  .dock-resizer-edge-y {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -3px;
+    height: 9px;
+    cursor: row-resize;
+  }
+  .dock-resizer-edge-y::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 2px;
+    transform: translateY(-50%);
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .dock-resizer-edge-y:hover::after {
+    background: var(--accent, #36c2ff);
+  }
   .dock-resizer-inline {
     flex: 0 0 5px;
     align-self: stretch;
@@ -1150,51 +1319,50 @@
   .dock-resizer-inline:hover {
     background: var(--accent, #36c2ff);
   }
+  /* "center" placement's symmetric resize handles (CenterResizeHandles). These render as
+     CHILDREN of `.panel`, not siblings beside it like the edge-dock handles above — a
+     centered panel's backdrop is a full-viewport dim layer, not something a resize could
+     measure. `.panel` clips overflow (for its own rounded corners), so — unlike the edge-dock
+     handles, which sit just outside their target on the backdrop's own unclipped canvas —
+     these sit flush INSIDE the panel's edge instead of straddling it, or `.panel`'s
+     `overflow: hidden` would clip away the outer half of the hit target along with it. */
+  .dock-resizer-edge-center-left,
+  .dock-resizer-edge-center-right {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    cursor: col-resize;
+    z-index: 1;
+  }
+  .dock-resizer-edge-center-left {
+    left: 0;
+  }
+  .dock-resizer-edge-center-right {
+    right: 0;
+  }
+  .dock-resizer-edge-center-left::after,
+  .dock-resizer-edge-center-right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    background: transparent;
+    transition: background 0.12s;
+  }
+  .dock-resizer-edge-center-left:hover::after,
+  .dock-resizer-edge-center-right:hover::after {
+    background: var(--accent, #36c2ff);
+  }
 }
 
-/* TABLET PORTRAIT (iPad &c.) edge case — desktop layout, but too narrow for both
-   list docks AND a usable board. The docks floor at 280px each (560px), so below
-   ~980px the stage is squeezed under ~420px: two decks side-by-side become unusable
-   ("too small to open"). When BOTH docks are open in that band, drop the board and
-   let Library + Search split the width 50/50 — the user's intended fallback. Tightly
-   gated so it CANNOT regress: needs desktop layout (≥769px), a genuinely cramped
-   width (≤980px), and — via :has() — both docks actually open. One dock open keeps
-   the board (W−280 ≥ 489px, still fine). The decks stay mounted (display:none, audio
-   uninterrupted); closing either dock restores the board instantly. */
-@media (min-width: 769px) and (max-width: 980px) {
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
-    display: none;
-  }
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
-    flex: 1 1 50%;
-    min-width: 0;
-  }
-  /* The board's gone, so the drag-to-resize handle on each dock's inner edge has
-     nothing to push against — hide it; the 50/50 split owns the width here. */
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .dock-resizer-edge {
-    display: none;
-  }
-}
-
-/* TABLET LANDSCAPE (iPad &c., above the collapse band) — there's room for the board,
-   but two 28vw docks (~56% together) squeeze it to ~44%, reading like a third. On a
-   touch tablet rebalance to a desktop-like split: the BOARD keeps ~half and the two
-   docks share the other half (≈25% each, still ≥270px — wide enough for the list).
-   Coarse-pointer + width-banded so laptops/desktops keep the default 28vw docks. The
-   ratio only re-flows when BOTH docks are open; one open keeps the board-heavy default
-   (board already gets ~72%). flex-basis here overrides the per-side --dock-w. */
-@media (min-width: 981px) and (max-width: 1366px) and (pointer: coarse) {
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .stage {
-    flex: 1 1 50%;
-    min-width: 0;
-  }
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-left,
-  .workspace:has(.modal-backdrop.dock-left):has(.modal-backdrop.dock-right) .modal-backdrop.dock-right {
-    flex: 1 1 25%;
-    min-width: 0;
-  }
-}
+/* The old TABLET PORTRAIT / TABLET LANDSCAPE bands that lived here rescued the board's
+   width when two flex-pushed docks squeezed it down on a narrow tablet. Now that every
+   dock is a floating overlay (see the desktop dock block above), no dock ever takes board
+   width in the first place — there's nothing left to rescue, so both bands are gone. */
 
 /* Touch tablets in the desktop layout render the dock content a touch large for the
    physical panel (retina iPad). Tighten the search-result density a notch — scoped to
@@ -1246,6 +1414,18 @@
   .stems-row {
     gap: 4px;
   }
+  /* ★ THROUGH THE VARIABLES, NOT `.vcell`. This block used to say `.vcell { height: 34px }`
+     and it never once applied to the rows it was written for: `.pitch-row .vcell` in fx.css is
+     (0,2,0) and this is (0,1,0), and a media query contributes no specificity, so the desktop
+     height won on every tablet. Setting the inherited properties on the ancestor sidesteps the
+     contest entirely. `.vcell` stays for the cells that live outside those three rows. */
+  .decks-row .bank-main {
+    --deck-cell-h: 34px;
+    --eq-cell-h: 34px;
+    /* COMP's SC ribbon is dragged, so a thumb needs more of it than the 20px Reverb's formula
+       yields on this block's short 100px panel. The ONLY place that floor binds. */
+    --comp-ribbon-min: 26px;
+  }
   .vcell {
     height: 34px;
   }
@@ -1278,30 +1458,6 @@
     display: none;
   }
 }
-/* Swap-sides launcher: a persistent square in the chin, just right of the gear. It
-   flips which side the Library dock and the Profile/Session dock sit on. Desktop
-   only — on mobile the docks are full-screen panels with no left/right. Placement is
-   plain DOM order now (Library · ⚙ · ⇄ · 🌐 · ⇅), no flex-order juggling. */
-.chin-btn.chin-swap {
-  display: none; /* swap shown on DESKTOP only (mobile docks are full-screen) */
-}
-.chin-swap-i {
-  font-size: 16px;
-  line-height: 1;
-}
-@media (min-width: 769px) {
-  .chin-btn.chin-swap {
-    display: flex;
-    flex: 0 0 auto;
-    width: 42px;
-  }
-  /* Swapping the dock sides mirrors the whole chin: the ⇄ moves to the right, the
-     Library launcher follows the left dock, and the Settings/Profile/Session cluster
-     follows the right dock — a left-to-right flip via row-reverse. */
-  .app.dock-swapped .chin {
-    flex-direction: row-reverse;
-  }
-}
 @keyframes dock-in-left {
   from {
     opacity: 0.4;
@@ -1315,6 +1471,15 @@
   from {
     opacity: 0.4;
     transform: translateX(12px);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes dock-in-bottom {
+  from {
+    opacity: 0.4;
+    transform: translateY(16px);
   }
   to {
     transform: none;

@@ -192,8 +192,14 @@ export class AudioEngine {
       this.deckB.ensurePadFx();
       // …and repair anything built BEFORE the modules landed — a rack restored from a snapshot at
       // boot races this, and a device that lost that race is a silent pass-through for good.
-      this.deckA.rebuildDegradedFx();
-      this.deckB.rebuildDegradedFx();
+      //
+      // ★ AND SAY SO IN THE RING. The degrade warns loudly ("comp worklet unavailable, degrading
+      // to a pass-through") and the REPAIR said nothing at all, so the flight recorder showed a
+      // scary line and no resolution — you could not tell a compressor that came back from one
+      // that is still passing audio through untouched. Surfaced the moment the Debug tab started
+      // showing the ring: the first thing it printed was two of those warnings and no answer.
+      const repaired = this.deckA.rebuildDegradedFx() + this.deckB.rebuildDegradedFx();
+      if (repaired) event("fx-repaired", { n: repaired });
       this.installMasterLimiter();
       this.patchSidechains();
     });
@@ -273,7 +279,10 @@ export class AudioEngine {
       this.modulesAdded.add(name);
       return true;
     } catch (e) {
+      // Warn AND record: an addModule failure is why every device of that kind will degrade, so
+      // it is the cause line a reader needs next to the effect lines.
       console.warn(`[htl] ${name} worklet addModule failed:`, e);
+      event("worklet-fail", { name });
       return false;
     }
   }

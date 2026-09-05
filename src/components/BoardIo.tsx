@@ -307,7 +307,6 @@ export function BoardIo({
           className="dev-btn dev-cue"
           onClick={tapped(() => setPop({ kind: "cue", x: 0, y: 0 }))}
           aria-label="Headphone cue"
-          title="Headphone cue — blend and level"
           {...holdBind("cue")}
         >
           <span className="dev-mark" aria-hidden="true">🎧</span>

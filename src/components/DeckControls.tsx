@@ -116,6 +116,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
   // Performance-pad mode lives on the DECK (so the keymap/MIDI route 1-8 by it); this is
   // just the UI mirror + persistence. Restore the saved mode onto the deck once on mount.
+  // PHONE PAGE. The bank shows PERFORM or FX, never both — measured, the two together want
+  // 656px of a 517px board, so on a phone one of them is always the other's cost.
+  // It carries NO switch of its own: picking an effect is already the gesture that opens it,
+  // and the deck's own lane header is already the deck selector. A dedicated control for
+  // either would be a second way to say something the interface can already say — so the only
+  // thing the page owes is a way OUT, which lives on the FX page itself (see FxStrip).
+  // Deliberately LOCAL state, and deliberately NOT deck.padMode: pad mode is room-synced and
+  // wired to the FLX4's hardware bank buttons, so folding the page into it would mean a
+  // controller press — or another device in the session — silently re-laying-out your phone.
+  const [page, setPage] = useState<"perform" | "fx">("perform");
   const PAD_MODE_KEY = `htl:padMode:${id}`;
   const padRestored = useRef(false);
   if (!padRestored.current) {
@@ -293,7 +303,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main">
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
@@ -315,7 +325,6 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           ) : (
             <button
               className={`jog-btn mag ${deck.quantizing ? "on" : ""}`}
-              title="Snap to grid"
               onClick={act(() => {
                 deck.setQuantize(!deck.quantizing);
                 emit({ kind: "toggle", deck: id, param: "quantize", value: deck.quantizing });
@@ -746,7 +755,6 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           <button
             className={`hw-btn shift ${shift ? "on" : ""}`}
             onClick={onToggleShift}
-            title="SHIFT — hold the Shift key or latch this to remap the jog (move loop / skip size) and pads (save loop)"
           >
             SHIFT
             <span className="kbd">⇧</span>
@@ -923,7 +931,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             up/down = gain; mid wheel = bell width; right-click / double-click = reset).
             Further tabs are stacked effects (delay…); + adds one. */}
         <div className="eq-row">
-          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emitControls={emitControls} onSelect={(i) => onFxSelect?.(id, i)} ctlRef={fxCtlRef} />
+          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emitControls={emitControls} onSelect={(i) => onFxSelect?.(id, i)} onOpenFx={() => setPage("fx")} fxPageOpen={page === "fx"} onCloseFx={() => setPage("perform")} ctlRef={fxCtlRef} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via

@@ -118,7 +118,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
           </span>
         </button>
         <span className="fx-sep" />
-        <button className={auto ? "active" : ""} onClick={() => setParam("auto", auto ? 0 : 1)} title="Auto makeup + program-dependent release">
+        <button className={auto ? "active" : ""} onClick={() => setParam("auto", auto ? 0 : 1)}>
           AUTO
         </button>
         <span className="fx-sep" />
@@ -136,7 +136,6 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
         <button
           className={`cyc ${look > 0 ? "active" : ""}`}
           onClick={() => setParam("lookahead", LOOK_STOPS[(LOOK_STOPS.indexOf(look) + 1) % LOOK_STOPS.length] ?? 0)}
-          title="Lookahead — the detector sees the peak before it lands. Costs that much latency."
         >
           {look > 0 ? `LOOK ${look}ms` : "LOOK OFF"}
           <span className="cyc-pips" aria-hidden="true">

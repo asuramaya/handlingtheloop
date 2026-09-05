@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
+import { SongOverview } from "./components/SongOverview";
 import { DeckControls } from "./components/DeckControls";
 import type { FxStripCtl } from "./components/FxStrip";
 import { crossfadeGainsDb } from "./components/Crossfader";
@@ -3490,8 +3491,38 @@ function AppBody() {
         {/* Locked out (joined but not driving): the deck stays fully visible, we just
             swallow pointer input. The "listening" marker lives in the session menu. */}
         {room.enabled && !room.controlling && (
-          <div className="stage-lock" aria-hidden="true" title="Listening — controls are with the host (open the session menu to take control)" />
+          <div className="stage-lock" aria-hidden="true" />
         )}
+        <div className="lanes-flank">
+        {/* The "gestalt of the song" rail — rekordbox's overview strip, rotated vertical, one
+            per deck, spanning the FULL height of the stacked pair (not just its own deck's
+            waveform box) so the two bookend the whole board like a mixer's tall meter columns.
+            Deck A's on the left, Deck B's on the right — each still shows only its OWN track;
+            the shared full-board height is purely a bolder canvas for it, not a data merge. */}
+        <SongOverview
+          deck={engine.deckA}
+          pyramid={meta.A.pyramid}
+          accent={ACCENT.A}
+          background={surfaceColor(settings.bgColor, settings.uiContrast)}
+          selectorColor={settings.selectorColor}
+          markerColor={settings.markerColor}
+          loopColor={settings.loopColor}
+          freqColors={settings.freqColors}
+          freqLow={settings.freqLowColor || FREQ_LOW_DEFAULT}
+          freqMid={settings.freqMidColor || FREQ_MID_DEFAULT}
+          freqHigh={settings.freqHighColor || FREQ_HIGH_DEFAULT}
+          vividness={settings.freqVividness}
+          bandLayers={settings.bandLayers}
+          bandFromDeck={settings.bandFromDeck}
+          side="left"
+          windowSec={zoom.A}
+          locked={deckLocked("A")}
+          onSeek={(pos) => emitSeekTo("A", pos)}
+          refresh={refresh}
+          onLoadFile={(f) => onLoadFile("A", f)}
+          onLoadTrack={(track) => loadAndShare("A", track)}
+          onFocus={() => setFocused("A")}
+        />
         <div className="lanes">
           {(["A", "B"] as DeckId[]).map((id) => (
             <DeckLane
@@ -3547,6 +3578,31 @@ function AppBody() {
               onReprocessLyrics={(eng) => reprocessLyrics(id, eng)}
             />
           ))}
+        </div>
+        <SongOverview
+          deck={engine.deckB}
+          pyramid={meta.B.pyramid}
+          accent={ACCENT.B}
+          background={surfaceColor(settings.bgColor, settings.uiContrast)}
+          selectorColor={settings.selectorColor}
+          markerColor={settings.markerColor}
+          loopColor={settings.loopColor}
+          freqColors={settings.freqColors}
+          freqLow={settings.freqLowColor || FREQ_LOW_DEFAULT}
+          freqMid={settings.freqMidColor || FREQ_MID_DEFAULT}
+          freqHigh={settings.freqHighColor || FREQ_HIGH_DEFAULT}
+          vividness={settings.freqVividness}
+          bandLayers={settings.bandLayers}
+          bandFromDeck={settings.bandFromDeck}
+          side="right"
+          windowSec={zoom.B}
+          locked={deckLocked("B")}
+          onSeek={(pos) => emitSeekTo("B", pos)}
+          refresh={refresh}
+          onLoadFile={(f) => onLoadFile("B", f)}
+          onLoadTrack={(track) => loadAndShare("B", track)}
+          onFocus={() => setFocused("B")}
+        />
         </div>
 
         {/* Middle third: the A↔B crossfader across the top, then the two decks'

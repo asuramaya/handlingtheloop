@@ -595,7 +595,11 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     case "/api/rooms/live": {
       if (!env.DB) return json(200, { rooms: [] });
       await ensureRoomsTable(env.DB);
-      return json(200, { rooms: await liveRooms(env.DB) });
+      // Signed in → the query also resolves each room's relationship to THIS viewer, so the
+      // client never has to fetch (a page of) the follow graph to work it out. See liveRooms().
+      const viewer = await currentUser(env, req).catch(() => null);
+      if (viewer) await ensureGraphTables(env.DB);
+      return json(200, { rooms: await liveRooms(env.DB, 100, 90_000, viewer?.id ?? null) });
     }
 
     // HOST announces / heartbeats their live room into the directory (E1). Requires a

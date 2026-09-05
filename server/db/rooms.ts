@@ -76,21 +76,59 @@ export interface LiveRoom {
   npTitle: string | null;
   npArtist: string | null;
   startedAt: number | null;
+  /** VIEWER-RELATIVE, resolved server-side. 1 = the viewer follows this host; 2 = they follow
+   *  each other. Absent for a signed-out viewer, who has no relationships to report. */
+  rel?: 0 | 1 | 2;
 }
 
-/** The live public-room directory: rooms broadcasting + heartbeating within `freshMs`,
- *  busiest first. Stale rooms (host vanished) age out by the freshness filter (E11). */
-export async function liveRooms(db: D1Database, limit = 100, freshMs = 90_000): Promise<LiveRoom[]> {
+/** The live public-room directory: rooms broadcasting + heartbeating within `freshMs`.
+ *  Stale rooms (host vanished) age out by the freshness filter (E11).
+ *
+ *  ★ THE RELATIONSHIP IS RESOLVED HERE, NOT ON THE CLIENT. Discover used to fetch the viewer's
+ *  ENTIRE following list and intersect it with the room list in the browser — and it fetched
+ *  ONE PAGE of it, which is 50. Past 50 follows, a room hosted by someone you follow but who
+ *  happened to sit on page 2 was silently filed under strangers: the personalisation degraded
+ *  as the user's graph grew, quietly, with no error. Two LEFT JOINs on a table already keyed
+ *  (follower_id, followee_id) answer it exactly, for any graph size, in the query that was
+ *  already running.
+ *
+ *  `rel` is 2 for a MUTUAL follow (a "friend" — the co-play relationship the UI ranks highest),
+ *  1 for one-way, 0 for a stranger. Ordering puts relationship first and listeners second:
+ *  busiest-first alone is a popularity ratchet, where the rooms at the top get the taps that
+ *  keep them at the top and nobody else is ever reachable. */
+export async function liveRooms(
+  db: D1Database,
+  limit = 100,
+  freshMs = 90_000,
+  viewerId?: string | null,
+): Promise<LiveRoom[]> {
   const cutoff = now() - freshMs;
+  if (!viewerId) {
+    const r = await db
+      .prepare(
+        `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
+                r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
+         FROM rooms r JOIN users u ON u.id = r.host_id
+         WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
+         ORDER BY r.listeners DESC, r.started_at DESC LIMIT ?`,
+      )
+      .bind(cutoff, limit)
+      .all<LiveRoom>();
+    return r.results ?? [];
+  }
   const r = await db
     .prepare(
       `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
-              r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
-       FROM rooms r JOIN users u ON u.id = r.host_id
+              r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt,
+              (CASE WHEN f.followee_id IS NULL THEN 0 WHEN b.follower_id IS NULL THEN 1 ELSE 2 END) AS rel
+       FROM rooms r
+       JOIN users u ON u.id = r.host_id
+       LEFT JOIN follows f ON f.follower_id = ? AND f.followee_id = r.host_id
+       LEFT JOIN follows b ON b.follower_id = r.host_id AND b.followee_id = ?
        WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
-       ORDER BY r.listeners DESC, r.started_at DESC LIMIT ?`,
+       ORDER BY rel DESC, r.listeners DESC, r.started_at DESC LIMIT ?`,
     )
-    .bind(cutoff, limit)
+    .bind(viewerId, viewerId, cutoff, limit)
     .all<LiveRoom>();
   return r.results ?? [];
 }

@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { Deck } from "@htl/audio";
 import type { Pyramid, PyramidLevel } from "@htl/analysis";
+import { hexRGB, bandRamp, tiltLuma, debrick, sampleBands } from "@htl/analysis";
+import { deckShades } from "../htl/state/randomPalette";
+import { GRID_ALPHA, GRID_W, gridLod } from "./gridLod";
 
 interface WaveformViewportProps {
   // The deck is read LIVE inside an imperative rAF (position, beatgrid, loop,
@@ -20,6 +23,9 @@ interface WaveformViewportProps {
   freqMid: string;
   freqHigh: string;
   vividness: number; // band-colour saturation (0 grey … 1 as-picked … 2 neon)
+  bandLayers: boolean; // band style: layered rekordbox-style lobes where the lane is tall enough (see LAYER_MIN_LANE), else the flat per-column tint
+  bandFromDeck: boolean; // bands as SHADES of this deck's accent rather than three independent hues
+  stemsFollowDeck: boolean; // the four stem LANES take shades of this deck's accent instead of their own colours
   debrick: boolean; // re-expand local contrast on brick-walled masters (see debrick())
   glow: boolean; // neon bloom halo behind the waveform
   markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars
@@ -43,10 +49,63 @@ interface WaveformViewportProps {
   onCensorToggle: () => void; // two-finger tap (no pinch) — tap again (or the keyboard L key) to return
 }
 
-const CUE_COLORS = ["#ff5d73", "#ffb13c", "#ffe24a", "#6ee7a8", "#36c2ff", "#7b9cff", "#c77bff", "#ff7bd0"];
+export const CUE_COLORS = ["#ff5d73", "#ffb13c", "#ffe24a", "#6ee7a8", "#36c2ff", "#7b9cff", "#c77bff", "#ff7bd0"];
 
 // Per-stem waveform colours, stacked centre-out in this order (drums innermost).
 const STEM_ORDER = ["drums", "bass", "vocals", "other"] as const;
+// Layered bands encode each band's magnitude as its own lobe HEIGHT, so they need vertical
+// room: three nested lobes in a lane shorter than this (CSS px) mush into one stripe, and the
+// flat per-column tint — which encodes in HUE and costs no height — reads better there. The
+// switch is on the MEASURED lane, never the device: a phone in single-deck view gives a stem
+// lane ~54px and a 2560px desktop ~65px, while that same phone showing BOTH decks gives ~5px.
+const LAYER_MIN_LANE = 28;
+
+/** The track's loudest ENERGY, for debrick's reference — the same role trackPeak plays for the
+ *  peak envelope. Scanned from a mid-resolution level (capped, so a long track costs the same as
+ *  a short one) rather than the coarsest, which is averaged so far down that it reports the
+ *  track's MEAN and would make every section look equally loud. Bands are weighted back toward
+ *  true energy by bandPeaks before summing, since each was normalised to its own peak. */
+export function trackEnergyPeak(py: Pyramid | null): number {
+  if (!py || !py.levels.length) return 0;
+  const bp = py.bandPeaks ?? [1, 1, 1];
+  let lvl = py.levels[py.levels.length - 1];
+  for (let i = py.levels.length - 1; i >= 0; i--) {
+    lvl = py.levels[i];
+    if (lvl.low.length >= 2048) break;
+  }
+  let peak = 0;
+  for (let i = 0; i < lvl.low.length; i++) {
+    const e = lvl.low[i] * bp[0] + lvl.mid[i] * bp[1] + lvl.high[i] * bp[2];
+    if (e > peak) peak = e;
+  }
+  return peak;
+}
+
+/** The whole track's peak magnitude, in O(1): `max`/`min` reduce by Math.max/Math.min all the way
+ *  up, so the coarsest pyramid level is a single bucket holding the track's extremes. Returns 0
+ *  when there is no pyramid to ask, which callers read as "no track reference available". */
+export function trackPeak(py: Pyramid | null): number {
+  if (!py || !py.levels.length) return 0;
+  const top = py.levels[py.levels.length - 1];
+  let p = 0;
+  for (let i = 0; i < top.max.length; i++) {
+    if (top.max[i] > p) p = top.max[i];
+    if (-top.min[i] > p) p = -top.min[i];
+  }
+  return p;
+}
+
+// ★ HOW MUCH OF THE TRUE BAND BALANCE TO SHOW. The pyramid normalises each band to its own peak
+// (good for dynamics, see Pyramid.bandPeaks) and carries the discarded ratios alongside. This
+// exponent picks a point on the line between the two readings:
+//   0 = fully normalised — every band peaks at 1, so the loudest-per-column comparison is a
+//       coin-toss the physics never had, and the high band paints over everything.
+//   1 = literal energy — truthful, but music's highs sit tens of dB down, so they shrink to a
+//       hairline and the picture becomes one colour for a different reason.
+// A half-power tilt keeps the low band the body it really is while leaving the mid and high
+// enough height to read as structure. It is a DISPLAY law, deliberately not a physical one.
+export const BAND_TILT = 0.5;
+
 const STEM_COLORS: Record<string, string> = {
   drums: "#ff5d73",
   bass: "#b06bff",
@@ -211,44 +270,6 @@ function envelope(
 // the rekordbox/Serato frequency-coloured waveform. Max over the buckets a column spans
 // (mirrors the min/max envelope). The caller passes the finest level even when zoomed into
 // raw PCM, so colour holds at every zoom.
-function sampleBands(
-  lod: PyramidLevel,
-  chSr: number,
-  rLeft: number,
-  secPerPx: number,
-  ow: number,
-  lowOut: Float32Array,
-  midOut: Float32Array,
-  highOut: Float32Array,
-): void {
-  const B = lod.bucket;
-  const n = lod.low.length;
-  const spp = secPerPx * chSr;
-  for (let x = 0; x < ow; x++) {
-    const s0 = (rLeft + x * secPerPx) * chSr;
-    let b0 = Math.floor(s0 / B);
-    let b1 = Math.floor((s0 + spp) / B);
-    if (b1 < 0 || b0 >= n) {
-      lowOut[x] = 0;
-      midOut[x] = 0;
-      highOut[x] = 0;
-      continue;
-    }
-    if (b0 < 0) b0 = 0;
-    if (b1 >= n) b1 = n - 1;
-    let l = 0;
-    let m = 0;
-    let hgh = 0;
-    for (let b = b0; b <= b1; b++) {
-      if (lod.low[b] > l) l = lod.low[b];
-      if (lod.mid[b] > m) m = lod.mid[b];
-      if (lod.high[b] > hgh) hgh = lod.high[b];
-    }
-    lowOut[x] = l;
-    midOut[x] = m;
-    highOut[x] = hgh;
-  }
-}
 
 // Rekordbox-style band colour anchors: blue(bass) / amber(mid) / white(high). The per-
 // column blend (weighted by each band's energy) is computed inline in paintBanded so the
@@ -256,13 +277,6 @@ function sampleBands(
 // #rrggbb → [r,g,b]. The frequency-colour band hues come from settings (resolved to a real
 // hex), parsed once per rasterise; the per-column blend is computed inline in paintBanded so
 // the rgb() string is rebuilt only on a colour change, not per pixel.
-function hexRGB(hex: string): [number, number, number] {
-  let h = hex.replace("#", "");
-  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-  const n = parseInt(h, 16);
-  return Number.isNaN(n) || h.length !== 6 ? [255, 255, 255] : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
 // Perceptual amplitude curve: music peaks well below full scale, so a linear map leaves
 // every waveform a thin sliver in a sea of black. A gentle gain + soft knee lifts quiet
 // passages so they have body, while loud peaks ease into the lane edge instead of clipping
@@ -283,72 +297,13 @@ const SHAPE_LUT = (() => {
   }
   return t;
 })();
-function shape(v: number): number {
+export function shape(v: number): number {
   let a = v < 0 ? -v : v;
   a *= 1.7;
   const y = a >= SHAPE_LUT_MAX ? 1 : SHAPE_LUT[((a / SHAPE_LUT_MAX) * SHAPE_LUT_N) | 0];
   return v < 0 ? -y : y;
 }
 
-// De-brickwall. A heavily limited ("brick wall") master peaks near full-scale in nearly
-// every column, so the min/max envelope flat-tops into a solid block and shape()'s lift
-// pins it to the rail. This re-expands LOCAL contrast: a slow bidirectional peak/valley
-// follower finds each section's loud ceiling + notch floor, and every column is remapped so
-// the local floor→`BASE` and local peak→`TOP·loudness` — stretching whatever micro-dynamics
-// exist (transient gaps, kicks) into visible contour, while the ceiling tracks the section's
-// macro loudness (×gPeak) so drops/breakdowns still dip. `ABS` mixes back a flat macro
-// pedestal so loud passages stay tall. Rewrites lo/hi IN PLACE before shape(); runs once per
-// lane at rasterise time (not per frame). Skipped at high zoom where columns resolve real
-// wave cycles (no brick to fix, and stretching would distort the true shape).
-const DB_BASE = 0.12; // height a section's notch floor maps to
-const DB_TOP = 0.9; // height a fully-loud section's peaks map to
-const DB_ABS = 0.4; // macro-pedestal blend: ↑ keeps loud/quiet contrast, ↓ flattens to pure texture
-const DB_TAU_SEC = 1.2; // follower time constant ≈ how long a "section" is
-function debrick(lo: Float32Array, hi: Float32Array, ow: number, secPerPx: number): void {
-  if (ow < 8) return;
-  const m = new Float32Array(ow);
-  let gPeak = 1e-4;
-  for (let x = 0; x < ow; x++) {
-    const a = -lo[x] > hi[x] ? -lo[x] : hi[x];
-    m[x] = a;
-    if (a > gPeak) gPeak = a;
-  }
-  const tau = Math.max(6, Math.min(ow * 0.5, DB_TAU_SEC / Math.max(secPerPx, 1e-6)));
-  const decay = Math.exp(-1 / tau);
-  const envHi = new Float32Array(ow);
-  const envLo = new Float32Array(ow);
-  // Forward peak/valley followers: instant attack to a new extreme, one-pole release back.
-  let pf = m[0];
-  let vf = m[0];
-  for (let x = 0; x < ow; x++) {
-    pf = m[x] > pf ? m[x] : pf * decay + m[x] * (1 - decay);
-    vf = m[x] < vf ? m[x] : vf * decay + m[x] * (1 - decay);
-    envHi[x] = pf;
-    envLo[x] = vf;
-  }
-  // Backward pass, combined → symmetric envelope (no lead/lag bias from the one-pole).
-  let pb = m[ow - 1];
-  let vb = m[ow - 1];
-  for (let x = ow - 1; x >= 0; x--) {
-    pb = m[x] > pb ? m[x] : pb * decay + m[x] * (1 - decay);
-    vb = m[x] < vb ? m[x] : vb * decay + m[x] * (1 - decay);
-    if (pb > envHi[x]) envHi[x] = pb;
-    if (vb < envLo[x]) envLo[x] = vb;
-  }
-  for (let x = 0; x < ow; x++) {
-    const a = m[x];
-    if (a < 1e-4) continue; // leave true silence alone
-    const span = envHi[x] - envLo[x];
-    let stretched = span > 1e-3 ? (a - envLo[x]) / span : 0.5; // local contrast 0..1
-    stretched = stretched < 0 ? 0 : stretched > 1 ? 1 : stretched;
-    const loud = envHi[x] / gPeak; // 0..1 macro loudness of this section
-    // floor=DB_BASE·(1-ABS) … ceiling=TOP·loud ; texture fills between, pedestal keeps it loud
-    const out = DB_BASE * (1 - DB_ABS) + DB_TOP * loud * (DB_ABS + (1 - DB_ABS) * stretched);
-    const scale = out / a; // scale both edges equally → keep the signed straddle, change height
-    hi[x] *= scale;
-    lo[x] *= scale;
-  }
-}
 
 // What the offscreen waveform layer currently holds — rebuilt only when one of
 // these changes (zoom/track/stems/mute/size/colour) or the view scrolls off it.
@@ -370,6 +325,9 @@ interface WaveMeta {
   freq: boolean; // frequency-colour mode (toggle → re-rasterise)
   freqCols: string; // band hues joined — recolour → re-rasterise
   viv: number; // vividness (change → re-rasterise)
+  layers: boolean; // layered-band mode AS RESOLVED for this size (the threshold can flip it on a resize)
+  fromDeck: boolean; // bands derived from the deck accent (change → re-rasterise)
+  stemsDeck: boolean; // stem lanes derived from the deck accent (change → re-rasterise)
   dbrk: boolean; // de-brickwall on/off (change → re-rasterise)
   glow: boolean; // glow on/off (change → re-rasterise)
   stemCols: string; // per-stem colour overrides, joined — recolour → re-rasterise
@@ -472,7 +430,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   useEffect(() => {
     measure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, props.freqColors, props.freqLow, props.freqMid, props.freqHigh, props.vividness, props.debrick, props.glow, stemColsKey(props.stemColors)]);
+  }, [props.accent, props.stripColor, props.loopColor, props.markerColor, props.selectorColor, props.freqColors, props.freqLow, props.freqMid, props.freqHigh, props.vividness, props.bandLayers, props.bandFromDeck, props.stemsFollowDeck, props.debrick, props.glow, stemColsKey(props.stemColors)]);
 
   const clampWin = (wsec: number) => {
     const dur = deck.duration || 1; // scalar — survives the mobile mix-buffer release
@@ -491,15 +449,56 @@ export function WaveformViewport(props: WaveformViewportProps) {
   ) => {
     const p = view.current;
     const mid = h / 2;
+    // `h` is DEVICE pixels; the layer threshold is in CSS px, so undo the DPR scale.
+    const dprNow = sizeRef.current.dpr || 1;
     const stems = deck.stemPyramids;
     const lo = new Float32Array(ow);
     const hi = new Float32Array(ow);
     const lb = new Float32Array(ow); // per-column low/mid/high band energy (freq-colour)
     const mb = new Float32Array(ow);
     const hb = new Float32Array(ow);
-    const cL = hexRGB(p.freqLow); // band hues (from settings) parsed once per rasterise
-    const cM = hexRGB(p.freqMid);
-    const cH = hexRGB(p.freqHigh);
+    const pk = new Float32Array(ow); // per-column loudest band (layered mode)
+    const eb = new Float32Array(ow); // per-column ENERGY (RMS bands, weighted back to true balance) — debrick's contrast source
+    // The MIX's band anchors (Settings ▸ Lows/Mids/Highs), parsed once per rasterise. A collapsed
+    // waveform has no stem identity to carry, so the global palette is exactly right for it; a
+    // stem lane builds its own ramp from its own colour instead (see bandRamp).
+    // TWO readings of the same three hues, because the two renderers need opposite things.
+    // The LAYERED one composites additively, so overlap makes its own brightness and the picked
+    // hues go in untouched — that is what keeps a core telling you WHICH bands built it instead
+    // of going white. The FLAT one paints one colour per column with nothing to composite, so
+    // the dark→base→bright ordering has to be baked into the colours or the nesting reads
+    // inside-out (the shipped defaults put the mid brightest — see tiltLuma).
+    // ★ OR: THE BANDS ARE THE DECK'S OWN COLOUR. Three independently-picked hues have no relation
+    // to each other or to the deck they belong to, which is how the shipped defaults ended up
+    // mis-ordered in the first place. Deriving them from the accent — the same bandRamp the stem
+    // lanes use — makes the relationship structural instead of a thing to get right by hand: one
+    // hue, three shades, and the additive overlap supplies the bright core. It also makes each
+    // deck's waveform read as THAT deck at a glance, which two shared palettes never could.
+    const mixRaw: [[number, number, number], [number, number, number], [number, number, number]] =
+      p.bandFromDeck
+        // ★ `accent`, NOT `stripColor` — the SAME trap as the stem lanes, left behind when that one
+        // was fixed. Strip is a single GLOBAL colour, so falling back through it means every deck's
+        // wave comes out the same, which is precisely what "follow the DECK colour" promises not to
+        // do. It also outranked the album-art accent: a deck themed orange by its cover still drew
+        // a green wave, because Strip was set and got asked first.
+        ? bandRamp(p.accent)
+        : [hexRGB(p.freqLow), hexRGB(p.freqMid), hexRGB(p.freqHigh)];
+    const mixFlat = p.bandFromDeck ? mixRaw : tiltLuma(mixRaw);
+    // One ramp per stem, built once per rasterise rather than per lane per column.
+    // ★ OR THE WHOLE DECK IN ONE HUE. With `stemsFollowDeck` the four lanes are shades of this
+    // deck's own accent instead of four independent colours, so a glance at any lane tells you
+    // which deck you are on. Hue is then spoken for, so the lanes are told apart by BRIGHTNESS —
+    // the same trade the mono palette makes — and each lane still gets its own band ramp on top.
+    // PER DECK, and deliberately from `accent` rather than `stripColor`: Strip is one global
+    // colour, so basing the lanes on it would give both decks the same stems and lose the whole
+    // point. `accent` is this deck's own — and when Deck artwork is on it is derived from the
+    // loaded track's cover, so the lanes re-colour to whatever is playing, per deck, for free.
+    // The layer already rebuilds on an accent change (see contentStale), so that follows live.
+    const laneBase = p.stemsFollowDeck ? deckShades(p.accent, STEM_ORDER.length) : null;
+    const stemCols: Record<string, [[number, number, number], [number, number, number], [number, number, number]]> = {};
+    STEM_ORDER.forEach((n, i) => {
+      stemCols[n] = bandRamp(laneBase ? laneBase[i] : p.stemColors[n] || STEM_COLORS[n] || p.accent);
+    });
     const viv = p.vividness; // band saturation
     const glow = p.glow; // deck-coloured bloom behind the wave
 
@@ -522,7 +521,21 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // De-brickwall only when each column aggregates many samples (envelope view). Zoomed in
       // far enough to resolve individual wave cycles, lo/hi IS the real signed waveform and
       // there's no brick to open up — remapping it would distort the trace.
-      if (p.debrick && secPerPx * srcSr >= 48) debrick(lo, hi, ow, secPerPx);
+      if (p.debrick && secPerPx * srcSr >= 48) {
+        // The bands ARE an RMS loudness curve (analyze.ts stores sqrt(sum/count) per bucket), so
+        // sampling them here costs one pass and gives debrick a contour that limiting could not
+        // flatten. lb/mb/hb are safe scratch: whichever painter runs next refills them.
+        let en: Float32Array | null = null;
+        let enPeak = 0;
+        if (lodPy) {
+          sampleBands(pickLevel(lodPy, secPerPx * srcSr), srcSr, rLeft, secPerPx, ow, lb, mb, hb);
+          const bp = lodPy.bandPeaks ?? [1, 1, 1];
+          for (let x = 0; x < ow; x++) eb[x] = lb[x] * bp[0] + mb[x] * bp[1] + hb[x] * bp[2];
+          en = eb;
+          enPeak = trackEnergyPeak(lodPy);
+        }
+        debrick(lo, hi, ow, secPerPx, trackPeak(lodPy), en, enPeak);
+      }
       return true;
     };
     const paintWave = (
@@ -556,7 +569,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
       yc: number,
       amp: number,
       alpha: number,
+      cols: [[number, number, number], [number, number, number], [number, number, number]],
     ) => {
+      const [cL, cM, cH] = cols;
       if (!fillEnvelope(srcSr, raw, raw1, lodPy)) return;
       sampleBands(pickLevel(lodPy, secPerPx * srcSr), srcSr, rLeft, secPerPx, ow, lb, mb, hb);
       ctx.save();
@@ -571,6 +586,18 @@ export function WaveformViewport(props: WaveformViewportProps) {
         ctx.fillStyle = rgba(p.accent, 0.5);
         ctx.fill(buildSilhouette(yc, amp));
         ctx.restore();
+      }
+      // The same balance correction the layered mode applies (see BAND_TILT) — the `/ sum` below
+      // is just as blind to it, and without this a short lane falling back to the tint would
+      // JUMP colour balance against the layered lane beside it.
+      const bpT = lodPy.bandPeaks;
+      if (bpT) {
+        const wl = Math.pow(bpT[0], BAND_TILT), wm = Math.pow(bpT[1], BAND_TILT), wh = Math.pow(bpT[2], BAND_TILT);
+        for (let x = 0; x < ow; x++) {
+          lb[x] *= wl;
+          mb[x] *= wm;
+          hb[x] *= wh;
+        }
       }
       // Each column is a 1px vertical bar spanning its own envelope top→bottom (the bars
       // ARE the silhouette, so NO clip), coloured by its band mix + vividness. The
@@ -604,14 +631,108 @@ export function WaveformViewport(props: WaveformViewportProps) {
       }
       ctx.restore();
     };
-    // Does this pyramid carry real band data? Remote-stem display (setRemoteStemView)
-    // has it zeroed — fall back to the flat stem colour rather than painting it black.
+    // ★ REKORDBOX-STYLE LAYERED BANDS: THE BANDS STACK, THEY DO NOT NEST.
+    // Two earlier shapes of this were wrong in instructive ways. Painting three CONCENTRIC lobes
+    // opaquely made each one delete what it covered, so the band carrying most of the music
+    // survived only as a rim. Compositing those same concentric lobes additively fixed the
+    // deletion and introduced a worse artefact: every lobe is centred on the SAME line, so the
+    // innermost region always contains all three bands and always sums to white — a permanent
+    // white stripe whose thickness is just the smallest lobe, reporting nothing.
+    // The fix is to stop overlapping at all. Each band owns its own SLICE of the column, ordered
+    // outward from the centre — high, then mid, then low — and its thickness IS its share of the
+    // energy there. Nothing is hidden behind anything, nothing sums to white, and the picture
+    // becomes readable rather than decorative: a bass-heavy bar is visibly mostly low-coloured,
+    // a hi-hat is a bright sliver. The outer silhouette is untouched, so the wave keeps exactly
+    // the shape every other mode draws.
+    const paintLayered = (
+      srcSr: number,
+      raw: Float32Array | null,
+      raw1: Float32Array | null,
+      lodPy: Pyramid,
+      yc: number,
+      amp: number,
+      alpha: number,
+      cols: [[number, number, number], [number, number, number], [number, number, number]],
+    ) => {
+      if (!fillEnvelope(srcSr, raw, raw1, lodPy)) return;
+      sampleBands(pickLevel(lodPy, secPerPx * srcSr), srcSr, rLeft, secPerPx, ow, lb, mb, hb);
+      ctx.save();
+      if (alpha < 1) ctx.globalAlpha = alpha;
+      if (glow) {
+        ctx.save();
+        ctx.shadowColor = p.accent;
+        ctx.shadowBlur = 9;
+        ctx.fillStyle = rgba(p.accent, 0.5);
+        ctx.fill(buildSilhouette(yc, amp));
+        ctx.restore();
+      }
+      // Restore as much of the real spectral balance as BAND_TILT asks for. Without it the shares
+      // below are computed from three bands that were each scaled to peak at 1, which answers
+      // "how near its own maximum is this band" rather than "how much of this sound is it".
+      const bp = lodPy.bandPeaks;
+      const wL = bp ? Math.pow(bp[0], BAND_TILT) : 1;
+      const wM = bp ? Math.pow(bp[1], BAND_TILT) : 1;
+      const wH = bp ? Math.pow(bp[2], BAND_TILT) : 1;
+      // Cumulative boundaries, as fractions of the column's half-height, measured from the centre
+      // out: pk holds high's share, and (pk + mid's share) — low simply takes the rest, so the
+      // three always tile the envelope exactly with no seam and no overlap.
+      for (let x = 0; x < ow; x++) {
+        const l = lb[x] * wL;
+        const m = mb[x] * wM;
+        const h2 = hb[x] * wH;
+        const sum = l + m + h2;
+        if (sum <= 1e-6) {
+          pk[x] = 0;
+          lb[x] = 0;
+          continue;
+        }
+        pk[x] = h2 / sum; // boundary 1: high occupies [0, pk]
+        lb[x] = (h2 + m) / sum; // boundary 2: mid occupies [pk, lb]; low takes [lb, 1]
+      }
+      const cl = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+      // High first (innermost), low last (outermost) — drawn in any order, since they tile.
+      const slices: Array<[number, [number, number, number]]> = [
+        [0, cols[2]],
+        [1, cols[1]],
+        [2, cols[0]],
+      ];
+      for (const [si, col] of slices) {
+        let [rf, gf, bf] = col;
+        if (viv !== 1) {
+          const gray = 0.299 * rf + 0.587 * gf + 0.114 * bf;
+          rf = gray + (rf - gray) * viv;
+          gf = gray + (gf - gray) * viv;
+          bf = gray + (bf - gray) * viv;
+        }
+        const path = new Path2D();
+        // Inner and outer boundary of this slice, as a fraction of the half-height.
+        const innerAt = (x: number) => (si === 0 ? 0 : si === 1 ? pk[x] : lb[x]);
+        const outerAt = (x: number) => (si === 0 ? pk[x] : si === 1 ? lb[x] : 1);
+        // Upper ribbon: out along the outer edge, back along the inner one.
+        for (let x = 0; x < ow; x++) path.lineTo(x, yc - shape(hi[x]) * amp * outerAt(x));
+        for (let x = ow - 1; x >= 0; x--) path.lineTo(x, yc - shape(hi[x]) * amp * innerAt(x));
+        path.closePath();
+        // Lower ribbon, mirrored — a separate subpath in the same fill, so it is still one fill.
+        path.moveTo(0, yc - shape(lo[0]) * amp * outerAt(0));
+        for (let x = 0; x < ow; x++) path.lineTo(x, yc - shape(lo[x]) * amp * outerAt(x));
+        for (let x = ow - 1; x >= 0; x--) path.lineTo(x, yc - shape(lo[x]) * amp * innerAt(x));
+        path.closePath();
+        ctx.fillStyle = `rgb(${cl(rf)},${cl(gf)},${cl(bf)})`;
+        ctx.fill(path);
+      }
+      // A hairline through silence, so a gap still reads as a line rather than as nothing.
+      ctx.fillStyle = `rgb(${cl(cols[0][0])},${cl(cols[0][1])},${cl(cols[0][2])})`;
+      for (let x = 0; x < ow; x++) {
+        if (shape(hi[x]) * amp - shape(lo[x]) * amp < 0.75) ctx.fillRect(x, yc - 0.375, 1, 0.75);
+      }
+      ctx.restore();
+    };
+    // Does this pyramid carry real band data? Remote-stem display (setRemoteStemView) has it
+    // zeroed — fall back to the flat stem colour rather than painting a lane black.
     const hasBands = (py: Pyramid): boolean => {
-      // Scan the whole coarse top level, not just bucket[0] — a stem that's silent at the
-      // track START (vocals/other after an intro) has zero energy in the first bucket but
-      // real bands later. Sampling only [0] made that one stem fall back to a flat colour
-      // on mobile while drums/bass (content at t=0) painted banded. Early-exits on the
-      // first non-zero bucket, so a real-band pyramid costs O(1).
+      // Scan the whole coarse top level, not just bucket[0] — a stem silent at the track START
+      // (vocals after an intro) has zero energy in the first bucket but real bands later.
+      // Early-exits on the first non-zero bucket, so a real-band pyramid costs O(1).
       const { low, mid, high } = py.levels[py.levels.length - 1];
       for (let i = 0; i < low.length; i++) {
         if (low[i] + mid[i] + high[i] > 1e-6) return true;
@@ -637,9 +758,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
         const alpha = 0.16 + 0.84 * Math.min(1, amp);
         const yc = (li + 0.5) * laneH;
         if (p.freqColors && hasBands(py)) {
-          paintBanded(ssr, raw, null, py, yc, half, alpha); // each stem in its own band colours
+          // Each stem in ITS OWN hue family (bandRamp), layered where the lane can show the
+          // nesting: hue answers "which stem", the nesting answers "what is in it".
+          if (p.bandLayers && laneH / dprNow >= LAYER_MIN_LANE) paintLayered(ssr, raw, null, py, yc, half, alpha, stemCols[name]);
+          else paintBanded(ssr, raw, null, py, yc, half, alpha, stemCols[name]);
         } else {
-          const color = p.stemColors[name] || STEM_COLORS[name] || p.accent;
+          const color = (laneBase ? laneBase[li] : null) || p.stemColors[name] || STEM_COLORS[name] || p.accent;
           paintWave(ssr, raw, null, py, yc, half, rgba(color, alpha));
         }
       }
@@ -652,8 +776,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       const raw = deck.buffer && secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
       const raw1 = raw && deck.buffer!.numberOfChannels > 1 ? deck.buffer!.getChannelData(1) : null;
       if (p.freqColors) {
-        // rekordbox-style 3-band colour of the mix.
-        paintBanded(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, 1);
+        // rekordbox-style 3-band colour of the mix — full height, so it layers unless the
+        // whole lane is a sliver (both decks on a phone: the wave canvas measures ~21px).
+        if (p.bandLayers && h / dprNow >= LAYER_MIN_LANE) paintLayered(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, 1, mixRaw);
+        else paintBanded(bsr, raw, raw1, p.pyramid, mid, mid * 0.95, 1, mixFlat);
       } else {
         // Flat single colour (Strip colour, else the deck accent — so clearing Strip
         // gives each deck its own colour).
@@ -692,7 +818,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (!wctx) return;
     wctx.clearRect(0, 0, ow, h);
     rasterize(wctx, waveLeft, colSec, ow, h);
-    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
@@ -826,6 +952,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
       m0.freq !== p.freqColors ||
       m0.freqCols !== p.freqLow + p.freqMid + p.freqHigh ||
       m0.viv !== p.vividness ||
+      m0.layers !== p.bandLayers ||
+      m0.fromDeck !== p.bandFromDeck ||
+      m0.stemsDeck !== p.stemsFollowDeck ||
       m0.dbrk !== p.debrick ||
       m0.glow !== p.glow ||
       m0.stemCols !== stemColsKey(p.stemColors);
@@ -923,10 +1052,14 @@ export function WaveformViewport(props: WaveformViewportProps) {
       const pxPerBeat = (interval / trackWindow) * w;
       const beatsPerBar = beatgrid.beatsPerBar ?? 4;
       const downbeat = beatgrid.downbeat ?? 0;
-      // The marker-bar thickness setting also scales the beat-grid line weights, kept in
-      // proportion (bar > beat > sub). /2 so the 2px default is the neutral 1× — unchanged
-      // from the original 2.2 / 1.3 / 1 px tiers.
-      const gridScale = Math.max(1, p.markerThickness || 2) / 2;
+      // ★ THE GRID NO LONGER RIDES `markerThickness`. That setting says, in its own words, "px
+      // width of the cue/loop/hot-cue + phrase marker bars" — a handful of deliberate points per
+      // track — and it was ALSO scaling every beat-grid line. So turning cues up to 4 (to make
+      // your own cue points findable, which is the only reason to touch it) silently doubled a
+      // CONTINUOUS background: bar lines to 4.4px at 95% alpha, beat lines to 2.6px, every 18px.
+      // Measured at that zoom, ~17% of the lane was grid. One control was answering two
+      // questions — how loud should my markers be, and how loud should the ruler be — and they
+      // have opposite answers. The grid is a reference; its weight is fixed and small.
       // gridSize is the snap resolution in BEATS (8 = 2 bars, 1 = a beat, 0.0625 = 1/16
       // beat). Three independent tiers, each LOD-gated by its own pixel spacing:
       //   • BAR  — bold + bar number, every beatsPerBar beats from the downbeat.
@@ -943,25 +1076,24 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // the skip-grid, so the sub-lines always resolve down to whatever loop is actually running.
       const gs = loop?.active && loop.beats > 0 ? Math.min(p.gridSize, loop.beats) : p.gridSize;
       const subs = gs < 1 ? Math.max(2, Math.round(1 / gs)) : 1; // divisions per beat
-      const pxPerBar = pxPerBeat * beatsPerBar;
       // Adaptive bar LOD: coarsen the bold grid 1→2→4→8→16→32… BARS as you zoom out,
       // so a readable structural (phrase-scale) grid is ALWAYS present — right out to
       // the whole song — instead of the bar lines vanishing once they get too dense.
-      const MIN_BAR_PX = 22;
-      let barStep = 1;
-      while (pxPerBar * barStep < MIN_BAR_PX) barStep *= 2;
-      const fine = barStep === 1; // tight enough to also show individual beats / subs
-      const showSub = fine && subs > 1 && pxPerBeat / subs >= 4;
-      const showBeat = fine && pxPerBeat >= 9;
-      const showLabels = pxPerBar * barStep >= 26;
-      const subCol = rgba(p.markerColor, 0.16);
-      const beatCol = rgba(p.markerColor, 0.42);
-      const barCol = rgba(p.markerColor, 0.95);
+      // ★ THE LOD LIVES IN gridLod.ts, and it is the SHIPPED path, not a copy the tests shadow.
+      // Which tiers draw and how strongly is a claim about a CURVE over zoom ("no in-between state
+      // covers too much of the song", "the collapse is a dissolve, not a cut") and a curve cannot
+      // be checked from one frame — so it is a pure function, swept in gridLod.test.ts, and that
+      // suite also asserts the tiers this replaced FAIL both guarantees, so it can actually fail.
+      const lod = gridLod(pxPerBeat, beatsPerBar, subs);
+      const { barStep, halfFade, beatFade, subFade, showLabels } = lod;
+      const subCol = (f: number) => rgba(p.markerColor, GRID_ALPHA.sub * f);
+      const beatCol = (f: number) => rgba(p.markerColor, GRID_ALPHA.beat * f);
+      const barCol = (f = 1) => rgba(p.markerColor, GRID_ALPHA.bar * f);
 
-      const vline = (t: number, wpx: number, color: string) => {
+      const vline = (t: number, wpx: number, color: string, top = 0, frac = 1) => {
         if (t < 0 || t > dur || t < left || t > right) return;
         ctx.fillStyle = color;
-        ctx.fillRect(toX(t) - (wpx * dpr) / 2, 0, Math.max(1, wpx * dpr), h);
+        ctx.fillRect(toX(t) - (wpx * dpr) / 2, top, Math.max(1, wpx * dpr), h * frac);
       };
       // Time of a (possibly fractional) beat index — interpolated between tracked beats so
       // sub-beat / coarse lines ride the real groove; extrapolated past the ends.
@@ -979,25 +1111,37 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // BAR tier — bold lines every `barStep` bars from the downbeat (+ bar number),
       // stepping by whole groups so the whole-song view stays cheap. The label shows
       // the bar number; at coarse steps that reads as 1, 9, 17… (8s) or 1, 17, 33… (16s).
-      const leftBar = Math.floor(((left - firstBeat) / interval - downbeat) / beatsPerBar / barStep) * barStep;
+      // ★ THE HALF-STEP GOES DOWN FIRST, UNDERNEATH. Stepping by barStep/2 and drawing the
+      // in-between lines at `halfFade` means the tier you are zooming TOWARD dissolves in rather
+      // than the whole grid re-pitching itself in one frame.
+      const step = barStep > 1 && halfFade > 0 ? barStep / 2 : barStep;
+      const leftBar = Math.floor(((left - firstBeat) / interval - downbeat) / beatsPerBar / step) * step;
       if (showLabels) ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`; // set once, not per labelled bar
-      for (let b = leftBar - barStep; ; b += barStep) {
+      for (let b = leftBar - step; ; b += step) {
         const t = beatTimeAt(downbeat + b * beatsPerBar);
         if (t > right) break;
-        vline(t, 2.2 * gridScale, barCol);
-        if (showLabels && t >= left && t <= right && t >= 0 && t <= dur) {
-          ctx.fillStyle = barCol;
+        // A line that belongs to the COARSE tier is solid; a half-step line rides the fade.
+        const onCoarse = ((b / barStep) | 0) * barStep === b;
+        vline(t, GRID_W.bar, barCol(onCoarse ? 1 : halfFade));
+        // Only the coarse tier is ever labelled — numbering the fading half-steps would double
+        // the label density for the length of every transition, which is the noisiest possible
+        // moment to do it.
+        if (onCoarse && showLabels && t >= left && t <= right && t >= 0 && t <= dur) {
+          ctx.fillStyle = barCol();
           ctx.fillText(String(b + 1), toX(t) + 3 * dpr, h - 4 * dpr);
         }
       }
 
-      // BEAT + SUB tiers — only at fine zoom (barStep === 1); the bar beats are already
-      // drawn bold above, so skip them here and just lay the lighter in-between lines.
-      if (showBeat || showSub) {
+      // BEAT + SUB tiers — the bar beats are already drawn above, so these lay only the lighter
+      // in-between lines. Both ride a fade rather than a boolean, so they arrive as the zoom
+      // makes room for them instead of switching on all at once.
+      if (beatFade > 0 || subFade > 0) {
+        const bc = beatCol(beatFade);
+        const sc = subCol(subFade);
         const drawFine = (i: number, t: number) => {
-          if (showSub) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), 1 * gridScale, subCol);
+          if (subFade > 0) for (let j = 1; j < subs; j++) vline(beatTimeAt(i + j / subs), GRID_W.sub, sc);
           const isBar = (((i - downbeat) % beatsPerBar) + beatsPerBar) % beatsPerBar === 0;
-          if (!isBar && showBeat) vline(t, 1.3 * gridScale, beatCol);
+          if (!isBar && beatFade > 0) vline(t, GRID_W.beat, bc);
         };
         if (beats && beats.length >= 2) {
           let lo = 0;
@@ -1015,9 +1159,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
         }
       }
 
-      // Phrase boundaries — the 8/16/32-bar section starts. Drawn over the bar grid
-      // as a bright accent line + a phrase number, so the build/drop/breakdown
-      // structure is visible at a glance — ALWAYS, including zoomed out to the whole song.
+      // Phrase (section) boundaries — variable-length now (structure.ts's chroma SSM), not a
+      // fixed 8/16/32-bar comb. Drawn over the bar grid as a bright accent line + the rekordbox-
+      // style repeat-section letter (phraseLabels[i], A/B/C/D… — a REPEATED section reuses its
+      // earlier letter), so the build/drop/breakdown structure is visible at a glance — ALWAYS,
+      // including zoomed out to the whole song. Falls back to a bare P-number for an
+      // older-format cached grid analysed before phraseLabels existed.
       const phrases = beatgrid.phrases;
       if (phrases && phrases.length) {
         ctx.font = `bold ${10 * dpr}px ui-monospace, monospace`;
@@ -1025,12 +1172,31 @@ export function WaveformViewport(props: WaveformViewportProps) {
           const t = phrases[i];
           if (t < left || t > right || t < 0 || t > dur) continue;
           const x = toX(t);
-          // Phrase boundary rides the same marker-thickness control, kept a hair bolder
-          // than a cue bar so the structural sections still stand out.
-          const pw = (Math.max(1, p.markerThickness || 2) + 1) * dpr;
-          ctx.fillStyle = rgba(p.accent, 0.85);
+          // ★ THE PHRASE BAR IS A GRID TIER, NOT A MARKER. It used to be `markerThickness + 1`
+          // px at 0.85 alpha, which put a CONTINUOUS structural line under the slider whose own
+          // description covers the handful of cue/loop bars — and once the beat grid was cut
+          // loose from that slider (see gridLod.ts) the phrase bars were left as the heaviest
+          // thing on the lane by a factor of six. Fixed weight, sized against the bar line it
+          // sits above: strongest tier in the grid, roughly 2× a bar, not a wall.
+          const pw = GRID_W.phrase * dpr;
+          // Same reason as the rail's: the deck accent IS the waveform's own hue, so a phrase
+          // line drawn in it disappears into the loudest part of the track — exactly where the
+          // structure you want to see usually is.
+          ctx.fillStyle = rgba(p.markerColor, GRID_ALPHA.phrase);
           ctx.fillRect(x - pw / 2, 0, pw, h);
-          ctx.fillText(`P${i + 1}`, x + 4 * dpr, 11 * dpr);
+          // ★ THE LETTER IS INK, THE LINE IS A WASH. The label was inheriting the bar's own
+          // translucency and sitting on top of the waveform at 10px — thin strokes at 0.72 alpha
+          // over a bright master read as "dim and transparent, hard to read". A short dark halo
+          // plus a full-strength fill costs about a pixel around each glyph and makes the section
+          // letter legible over anything the track throws under it.
+          const lbl = beatgrid.phraseLabels?.[i] ?? `P${i + 1}`;
+          ctx.lineJoin = "round";
+          ctx.miterLimit = 2;
+          ctx.lineWidth = 3.5 * dpr;
+          ctx.strokeStyle = "rgba(4,6,10,0.92)";
+          ctx.strokeText(lbl, x + 4 * dpr, 11 * dpr);
+          ctx.fillStyle = p.markerColor;
+          ctx.fillText(lbl, x + 4 * dpr, 11 * dpr);
         }
       }
     }
@@ -1050,6 +1216,29 @@ export function WaveformViewport(props: WaveformViewportProps) {
         ctx.fillText(label, x + 2.5 * dpr, 10 * dpr);
       }
     };
+    // ★ SAVED LOOPS WERE ON NO SURFACE AT ALL HERE. `deck.hotCues` was drawn and `deck.hotLoops`
+    // simply was not — and a pad holds one OR the other, so a bank of saved loops showed as an
+    // empty waveform while the pads said they were full. Same grammar the rail uses so the two
+    // views describe one thing: the pad's own colour, a faint tint over the loop's SPAN (that is
+    // what makes it a loop rather than a cue at a glance), a numbered tab at its IN, and a plain
+    // edge at its OUT. Drawn before the live loop and the cues so those still paint on top.
+    deck.hotLoops.forEach((l, i) => {
+      if (!l || !(l.end > l.start)) return;
+      const c = CUE_COLORS[i % CUE_COLORS.length];
+      const x0 = Math.max(0, toX(l.start));
+      const x1 = Math.min(w, toX(l.end));
+      if (x1 > 0 && x0 < w && x1 > x0) {
+        ctx.fillStyle = rgba(c, 0.12);
+        ctx.fillRect(x0, 0, x1 - x0, h);
+      }
+      flag(l.start, c, String(i + 1));
+      // The OUT edge gets a line but no tab: the span already says where it ends, and a second
+      // numbered tab per loop would double the furniture for no extra information.
+      if (l.end >= left && l.end <= left + trackWindow) {
+        ctx.fillStyle = rgba(c, 0.8);
+        ctx.fillRect(toX(l.end) - (mt * dpr) / 4, 0, Math.max(1, (mt * dpr) / 2), h);
+      }
+    });
     if (loop && loop.end > loop.start) {
       flag(loop.start, p.loopColor, "▶");
       flag(loop.end, p.loopColor, "◀");

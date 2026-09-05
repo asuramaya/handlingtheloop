@@ -2286,9 +2286,9 @@ export class Deck {
   fxDevice(addr: FxAddr): FxDevice | undefined {
     return this.rack.device(addr);
   }
-  addFxChain(name: string, stems = 0): FxChain {
+  addFxChain(name: string, stems = 0, ephemeral = false): FxChain {
     const id = `c${this.chainSeq++}`;
-    const c = this.rack.addChain(id, name, stems);
+    const c = this.rack.addChain(id, name, stems, ephemeral);
     this.syncStemTaps();
     return c;
   }
@@ -2598,7 +2598,10 @@ export class Deck {
    *  everything else. */
   fxChainSnapshot(): FxChainSlot[] {
     return this.rack.chainList
-      .filter((c) => !c.master)
+      // Ephemeral (auto-mixer) chains are excluded HERE, once, because every consumer of rack
+      // state — the session wire, the profile save, the room snapshot — reads through this one
+      // method. A transition's reverb is not part of anyone's rack. See FxChain.ephemeral.
+      .filter((c) => !c.master && !c.ephemeral)
       .map((c) => ({
         name: c.name,
         stems: c.stems,
@@ -2628,7 +2631,11 @@ export class Deck {
       });
       return;
     }
-    for (const c of this.rack.chainList.filter((c) => !c.master).map((c) => c.id)) this.removeFxChain(c);
+    // Ephemeral chains SURVIVE an apply. A snapshot describes the user's rack, and an auto-mixer
+    // chain is not in it — so its absence means "not described", never "deleted". Without this, a
+    // remote's routine rack update landing mid-transition would silently rip out the chain a blend
+    // was running through, leaving the mixer holding a dead reference.
+    for (const c of this.rack.chainList.filter((c) => !c.master && !c.ephemeral).map((c) => c.id)) this.removeFxChain(c);
     for (const c of chains) {
       const made = this.addFxChain(c.name);
       // Stems go through setFxChainStems so the one-owner partition is enforced by the same code

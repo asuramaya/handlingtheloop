@@ -2,10 +2,46 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsToSeconds, decideLive, other, radioSeedSet } from "./autoMixer";
-import type { TrackMeta } from "../library/types";
+import { barsToSeconds, decideLive, gainTrim, other } from "./autoMixer";
 
-const track = (videoId: string): TrackMeta => ({ videoId, title: videoId, artist: "", duration: 0, thumbnail: null, views: null });
+
+describe("gainTrim — AUTO's channel gain staging", () => {
+  const db = (g: number) => 20 * Math.log10(g);
+
+  test("a track already at the reference level is left alone", () => {
+    expect(gainTrim(0.14)).toBeCloseTo(1, 6);
+  });
+
+  test("a quiet master is pushed UP toward the reference", () => {
+    const g = gainTrim(0.07); // half the reference RMS → +6 dB wanted
+    expect(g).toBeGreaterThan(1);
+    expect(db(g)).toBeCloseTo(6, 1);
+  });
+
+  test("a loud master is pulled DOWN toward the reference", () => {
+    const g = gainTrim(0.28); // double the reference → −6 dB wanted
+    expect(g).toBeLessThan(1);
+    expect(db(g)).toBeCloseTo(-6, 1);
+  });
+
+  // The clamp is what keeps a pathological track (a near-silent rip, a brickwalled master)
+  // from being shoved 20 dB and blowing up the mix.
+  test("boost is clamped at +6 dB however quiet the track is", () => {
+    expect(db(gainTrim(0.0001))).toBeCloseTo(6, 6);
+  });
+
+  test("cut is clamped at −6 dB however loud the track is", () => {
+    expect(db(gainTrim(0.9))).toBeCloseTo(-6, 6);
+  });
+
+  // Deck.loudness reports 0 for both "no buffer yet" and "pure silence"; dividing by it would
+  // be an infinite boost, so both must fall through to unity and be retried later.
+  test("loudness 0 (no buffer / silence) → unity, never an infinite boost", () => {
+    expect(gainTrim(0)).toBe(1);
+    expect(gainTrim(-1)).toBe(1);
+    expect(gainTrim(NaN)).toBe(1);
+  });
+});
 
 describe("barsToSeconds", () => {
   // 4 bars * 4 beats/bar * 60s / bpm. At 120bpm: 16 beats * 0.5s = 8s.
@@ -57,45 +93,9 @@ describe("other", () => {
   });
 });
 
-// The death-spiral guard: the radio seed set must NEVER include the idle deck when it holds our own
-// eager-preload (or the queue's own next), or the deck-seed signature flips every tick → cooldown
-// bypass → refetch → tail-replace → reload → forever. The stability property is the real assertion.
-const A = track("Atrack0001"), B = track("Btrack0002"), C = track("Ctrack0003");
-describe("radioSeedSet — the fedBack spiral guard", () => {
-  test("normal case: live + anchor + a genuinely user-loaded other deck", () => {
-    const seeds = radioSeedSet({ live: A, anchor: A, idleTrack: B, preloadedIsIdle: false, queueNextId: "Ztrack0099" });
-    expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001", "Btrack0002"]); // live==anchor deduped
-  });
-
-  test("EXCLUDES the idle deck when it holds our eager-preload (preloadedIsIdle)", () => {
-    const seeds = radioSeedSet({ live: A, anchor: A, idleTrack: B, preloadedIsIdle: true, queueNextId: null });
-    expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001"]); // B (the preload) is NOT a seed
-  });
-
-  test("EXCLUDES the idle deck when it merely holds the queue's own next track", () => {
-    const seeds = radioSeedSet({ live: A, anchor: A, idleTrack: B, preloadedIsIdle: false, queueNextId: "Btrack0002" });
-    expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001"]);
-  });
-
-  test("STABILITY: as the idle deck cycles through preloaded tracks, the seed set never changes", () => {
-    // This is the property the spiral violated — the seed signature must stay put while only the
-    // idle deck's preload churns, so seedChanged never fires and the cooldown holds.
-    const sig = (idle: TrackMeta) => radioSeedSet({ live: A, anchor: A, idleTrack: idle, preloadedIsIdle: true, queueNextId: null }).map((s) => s.videoId).join(",");
-    expect(sig(B)).toBe(sig(C)); // idle B vs idle C → same seeds ("Atrack0001")
-    expect(sig(B)).toBe("Atrack0001");
-  });
-
-  test("a distinct anchor (vibe) is kept alongside the live deck", () => {
-    const seeds = radioSeedSet({ live: A, anchor: C, idleTrack: B, preloadedIsIdle: true, queueNextId: null });
-    expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001", "Ctrack0003"]); // idle B excluded, anchor C kept
-  });
-
-  test("dedupes and drops empties", () => {
-    expect(radioSeedSet({ live: null, anchor: null, idleTrack: null, preloadedIsIdle: false, queueNextId: null })).toEqual([]);
-    const seeds = radioSeedSet({ live: A, anchor: A, idleTrack: A, preloadedIsIdle: false, queueNextId: null });
-    expect(seeds.map((s) => s.videoId)).toEqual(["Atrack0001"]); // all the same track → one seed
-  });
-});
+// The fedBack spiral guard (radioSeedSet) that used to live here is gone with the function — see
+// the note in autoMixer.ts. Its replacement, the anchor/current seeding model, is tested in
+// selector.test.ts, where the logic now lives.
 
 // The stale-liveId stall: "deck B plays but it thinks A is live, stalls till A ends". decideLive
 // must ALWAYS resolve to a deck the user is actually hearing, and when the user starts a second

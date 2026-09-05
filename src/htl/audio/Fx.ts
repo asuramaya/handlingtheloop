@@ -104,6 +104,14 @@ export interface FxChain {
   devices: FxDevice[];
   /** The master channel. Exactly one chain carries this, and it is always last. */
   master?: boolean;
+  /** ★ PERFORMANCE STATE, NOT RACK CONFIGURATION. An ephemeral chain is built by the auto-mixer
+   *  for the length of ONE transition and torn down after — a reverb on the outgoing vocal so it
+   *  dissolves instead of vanishing, say. It is a real chain in the graph and you can hear it, but
+   *  it is not something the user arranged, so it is excluded from every SNAPSHOT: it must not be
+   *  saved into a profile (a chain that exists for twenty seconds is not part of your rack) and it
+   *  must not be mirrored to a session (a remote's rack UI would sprout and drop a row on every
+   *  mix). Deck.fxChainSnapshot is the one gate; everything downstream reads through it. */
+  ephemeral?: boolean;
 }
 /** The address of a device now that there is more than one place to be. A slot INDEX only ever
  *  worked because there was a single rack; kinds are unique within a chain by rule, so this pair
@@ -199,8 +207,8 @@ export class FxRack {
   }
   /** A new stem chain, inserted BEFORE the master (which is always last, because that is where it
    *  is in the signal). Returns it. */
-  addChain(id: string, name: string, stems = 0): FxChain {
-    const c: FxChain = { id, name, stems, devices: [] };
+  addChain(id: string, name: string, stems = 0, ephemeral = false): FxChain {
+    const c: FxChain = { id, name, stems, devices: [], ...(ephemeral ? { ephemeral: true } : {}) };
     this.chains.splice(Math.max(0, this.chains.length - 1), 0, c);
     this.rebuild();
     return c;

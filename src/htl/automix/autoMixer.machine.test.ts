@@ -70,9 +70,134 @@ class FakeDeck {
   setEqLow(): void {}
   setEqHigh(): void {}
   setFilter(): void {}
-  setStemGain(): void {}
+  // Stem gains ARE recorded — the stem race asserts that a degrade actually hands them back.
+  stemGains: Record<string, number> = {};
+  setStemGain(name: string, v: number): void {
+    this.stemGains[name] = v;
+  }
   resetEq(): void {}
-  resetStems(): void {}
+  stemResets = 0;
+  resetStems(): void {
+    this.stemResets++;
+    this.stemGains = {};
+  }
+
+  // ── gain staging ──
+  loudness = 0.14; // the reference level, so an untouched deck needs no correction
+  trim = 1;
+  setTrim(g: number): void {
+    this.trim = g;
+  }
+
+  // ── loops ──
+  loopBeats = 0;
+  setBeatLoop(b: number): void {
+    this.loopBeats = b;
+  }
+  exitLoop(): void {
+    this.loopBeats = 0;
+  }
+  spinbacks = 0;
+  spinback(): void {
+    this.spinbacks++;
+  }
+  cues = new Set<number>();
+  slotIsSet(i: number): boolean {
+    return this.cues.has(i);
+  }
+  hotCue(i: number): void {
+    this.cues.add(i);
+  }
+
+  // ── a minimal FX rack: enough to build, find and tear down an ephemeral stem chain ──
+  rack = new FakeRack();
+  addFxChain(name: string, stems = 0, ephemeral = false) {
+    return this.rack.addChain(`c${this.rack.seq++}`, name, stems, ephemeral);
+  }
+  removeFxChain(id: string): boolean {
+    return this.rack.removeChain(id);
+  }
+  setFxChainStems(id: string, stems: number): void {
+    const c = this.rack.chain(id);
+    if (c) c.stems = stems;
+  }
+  addFxTo(chainId: string, kind: string) {
+    const c = this.rack.chain(chainId);
+    if (!c || c.devices.some((d) => d.kind === kind)) return null;
+    const d = mkDev(kind);
+    c.devices.push(d);
+    return d;
+  }
+}
+
+interface FakeDev {
+  kind: string;
+  bypassed: boolean;
+  params: Record<string, number>;
+  setBypass(b: boolean, hard?: boolean): void;
+  setParam(k: string, v: number): void;
+  getParam(k: string): number;
+  snapshotParams(): Record<string, number>;
+}
+
+function mkDev(kind: string): FakeDev {
+  const d: FakeDev = {
+    kind,
+    bypassed: true, // the permanent bank sits DORMANT until thrown — same as the real rack
+    params: { mix: 0.25 },
+    setBypass(b) {
+      d.bypassed = b;
+    },
+    setParam(k, v) {
+      d.params[k] = v;
+    },
+    getParam(k) {
+      return d.params[k] ?? 0;
+    },
+    snapshotParams: () => ({ ...d.params }),
+  };
+  return d;
+}
+
+interface FakeChain { id: string; name: string; stems: number; devices: FakeDev[]; master?: boolean; ephemeral?: boolean }
+
+class FakeRack {
+  seq = 0;
+  // Mirrors Deck.PERMANENT_KINDS: the whole pad-FX bank is always resident on the master chain.
+  chains: FakeChain[] = [
+    {
+      id: "master",
+      name: "MASTER",
+      stems: 0,
+      devices: ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"].map(mkDev),
+      master: true,
+    },
+  ];
+  device(addr: { chain: string; kind: string }): FakeDev | undefined {
+    return this.chain(addr.chain)?.devices.find((d) => d.kind === addr.kind);
+  }
+  get chainList(): readonly FakeChain[] {
+    return this.chains;
+  }
+  get allDevices() {
+    return this.chains.flatMap((c) => c.devices);
+  }
+  chain(id: string): FakeChain | undefined {
+    return this.chains.find((c) => c.id === id);
+  }
+  addChain(id: string, name: string, stems: number, ephemeral: boolean): FakeChain {
+    const c: FakeChain = { id, name, stems, devices: [], ...(ephemeral ? { ephemeral: true } : {}) };
+    // Same one-owner partition the real rack enforces.
+    for (const o of this.chains) if (!o.master) o.stems &= ~stems;
+    this.chains.splice(this.chains.length - 1, 0, c);
+    return c;
+  }
+  removeChain(id: string): boolean {
+    const i = this.chains.findIndex((c) => c.id === id && !c.master);
+    if (i < 0) return false;
+    this.chains.splice(i, 1);
+    return true;
+  }
 }
 
 class FakeEngine {
@@ -137,6 +262,7 @@ class FakeQueue {
 
 class Rig {
   engine = new FakeEngine();
+  perf: "subtle" | "standard" | "showy";
   queue = new FakeQueue();
   mixer: AutoMixer;
   nowMs = 0;
@@ -145,10 +271,12 @@ class Rig {
   deckTracks: Record<DeckId, TrackMeta | null> = { A: null, B: null };
   setups = new Map<string, Setup>();
   failLoads = new Set<string>(); // videoIds whose load resolves but never LANDS (un-loadable)
+  stemsPending = new Set<DeckId>(); // decks whose separation is still in flight
   liveHist: (DeckId | null)[] = [];
   phaseHist: AutoMixPhase[] = [];
 
-  constructor() {
+  constructor(perf: "subtle" | "standard" | "showy" = "standard") {
+    this.perf = perf;
     const deps: AutoMixerDeps = {
       engine: this.engine as unknown as AudioEngine,
       queue: this.queue as unknown as MixQueue,
@@ -165,7 +293,8 @@ class Rig {
       },
       getCrossfade: () => this.xfade,
       now: () => this.nowMs,
-      stemsPending: () => false,
+      stemsPending: (id) => this.stemsPending.has(id),
+      performance: () => this.perf,
       onChange: () => {},
     };
     this.mixer = new AutoMixer(deps);
@@ -478,5 +607,298 @@ describe("AutoMixer machine — full transition path", () => {
     await r.tick(500);
     expect(r.live).toBe("B");
     expect(r.phase).toBe("armed");
+  });
+});
+
+// ── THE STEM RACE ───────────────────────────────────────────────────────────────────────────────
+// Whether the incoming track is separated by mix time is a genuine race, and it used to be
+// resolved exactly once at startMix. These drive a real transition and flip stem availability
+// underneath it, which is the thing that actually happens on a slow separation or a mobile OOM.
+describe("AutoMixer machine — the stem race", () => {
+  // Run a transition, calling `during` on every tick that is in the mixing phase.
+  async function mix(r: Rig, during: (r: Rig) => void): Promise<boolean> {
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") during(r);
+      if (r.live === "B" && r.phase === "armed") return true;
+    }
+    return false;
+  }
+
+  function rig(aStems: boolean, bStems: boolean): Rig {
+    const r = new Rig();
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: aStems });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: bStems });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    return r;
+  }
+
+  test("stems that arrive EARLY in the blend upgrade it to a stem swap", async () => {
+    const r = rig(true, false); // outgoing separated, incoming not — starts as an EQ blend
+    let upgraded = false;
+    const done = await mix(r, (rr) => {
+      // Separation lands the moment the blend begins, i.e. before the bass swap.
+      rr.engine.B.hasStems = true;
+      if (rr.mixer.getStatus().plan?.style === "stemswap") upgraded = true;
+    });
+    expect(done).toBe(true);
+    expect(upgraded).toBe(true);
+  });
+
+  // ★ The constraint that makes the upgrade safe. After the bass swap has begun, the low end is
+  // part-way across on the EQ path; switching to stem gains there would jump it.
+  test("stems that arrive LATE do not upgrade — the low end is already crossing", async () => {
+    const r = rig(true, false);
+    let sawStemswap = false;
+    let heldPast = false;
+    const done = await mix(r, (rr) => {
+      const st = rr.mixer.getStatus();
+      // Blend progress, read exactly off the crossfader: with A live the ramp runs −1 → +1, so
+      // p = (x + 1) / 2. Gating the test on the SAME quantity the guard uses makes it deterministic
+      // rather than a guess about how many ticks a blend takes.
+      const progress = (rr.xfade + 1) / 2;
+      const swapStart = (st.plan?.bassSwapBar ?? 0) / Math.max(1, st.plan?.bars ?? 1);
+      if (progress > swapStart + 0.1) {
+        heldPast = true;
+        rr.engine.B.hasStems = true; // separation finishes only now — too late to switch cleanly
+      }
+      if (st.plan?.style === "stemswap") sawStemswap = true;
+    });
+    expect(done).toBe(true);
+    expect(heldPast).toBe(true); // the scenario actually happened
+    expect(sawStemswap).toBe(false); // …and the mixer declined to upgrade
+  });
+
+  test("stems LOST mid-blend degrade to an EQ blend and hand the stem gains back", async () => {
+    const r = rig(true, true); // both separated — starts as a stem swap
+    let sawStemswap = false;
+    let degraded = false;
+    const done = await mix(r, (rr) => {
+      const style = rr.mixer.getStatus().plan?.style;
+      if (style === "stemswap") {
+        sawStemswap = true;
+        rr.engine.B.hasStems = false; // mobile drops the buffer under memory pressure
+      } else if (sawStemswap && style === "blend") {
+        degraded = true;
+      }
+    });
+    expect(done).toBe(true);
+    expect(sawStemswap).toBe(true);
+    expect(degraded).toBe(true);
+    // resetStems() was called on the way down, so no half-applied stem mix is left behind.
+    expect(r.engine.A.stemResets).toBeGreaterThan(0);
+  });
+
+  test("a transition where stems never arrive is a plain blend, start to finish", async () => {
+    const r = rig(false, false);
+    const styles = new Set<string>();
+    const done = await mix(r, (rr) => {
+      const s = rr.mixer.getStatus().plan?.style;
+      if (s) styles.add(s);
+    });
+    expect(done).toBe(true);
+    expect(styles.has("stemswap")).toBe(false);
+  });
+});
+
+// ── AUTO-owned FX + loops ───────────────────────────────────────────────────────────────────────
+// The auto-mixer borrows the user's decks. Everything it builds for a transition has to be gone
+// afterwards — that is the whole contract, and these are the leaks that would break it.
+describe("AutoMixer machine — nothing is left behind", () => {
+  function rig(stems: boolean): Rig {
+    const r = new Rig();
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: stems });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: stems });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    return r;
+  }
+
+  test("the ephemeral vocal-tail chain is built during a stem swap and gone after it", async () => {
+    const r = rig(true);
+    let builtDuringMix = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing" && r.engine.A.rack.chains.some((c) => c.ephemeral)) builtDuringMix = true;
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+    expect(builtDuringMix).toBe(true);
+    // Settle tore it down — on BOTH decks, whichever way the transition went.
+    expect(r.engine.A.rack.chains.some((c) => c.ephemeral)).toBe(false);
+    expect(r.engine.B.rack.chains.some((c) => c.ephemeral)).toBe(false);
+  });
+
+  test("claiming the VOICE stem gives it back to the user's chain afterwards", async () => {
+    const r = rig(true);
+    // The user owns a stem chain holding VOICE (4) + INST (8) before AUTO touches anything.
+    const user = r.engine.A.addFxChain("MY VOX", 0b1100);
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+    expect(r.engine.A.rack.chain(user.id)?.stems).toBe(0b1100);
+  });
+
+  test("no deck is left looping after a transition", async () => {
+    const r = rig(false);
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+    expect(r.engine.A.loopBeats).toBe(0);
+    expect(r.engine.B.loopBeats).toBe(0);
+  });
+
+  // Disabling AUTO mid-transition is the harshest teardown path there is.
+  test("disable() mid-mix leaves no chain, no loop and no trim behind", async () => {
+    const r = rig(true);
+    // A genuinely quiet master, so gain staging has something to correct and the restore is a
+    // real assertion rather than a coincidence of both values being 1.
+    r.engine.A.loudness = 0.05;
+    r.engine.B.loudness = 0.05;
+    let trimmedDuring = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.engine.A.trim !== 1 || r.engine.B.trim !== 1) trimmedDuring = true;
+      if (r.phase === "mixing") break;
+    }
+    expect(trimmedDuring).toBe(true); // AUTO did level the channels
+    r.mixer.disable();
+    expect(r.engine.A.rack.chains.some((c) => c.ephemeral)).toBe(false);
+    expect(r.engine.A.loopBeats).toBe(0);
+    expect(r.engine.A.trim).toBe(1); // …and handed them back at unity
+    expect(r.engine.B.trim).toBe(1);
+  });
+
+  // The other half of the gain-staging contract: a hand on the knob outranks AUTO permanently.
+  test("a trim the user moves is never touched again", async () => {
+    const r = rig(false);
+    r.engine.A.loudness = 0.05;
+    for (let i = 0; i < 20; i++) await r.tick(500);
+    const auto = r.engine.A.trim;
+    expect(auto).not.toBe(1); // AUTO owns it at this point
+    r.engine.A.setTrim(0.33); // the user reaches over mid-set
+    for (let i = 0; i < 40; i++) await r.tick(500);
+    expect(r.engine.A.trim).toBe(0.33);
+    r.mixer.disable();
+    expect(r.engine.A.trim).toBe(0.33); // not even reset on the way out — it is theirs now
+  });
+});
+
+// ── EFFECTS WITHOUT STEMS ───────────────────────────────────────────────────────────────────────
+// Separation is optional and often late, so the gestures that give a transition its character are
+// built from the channel FX bank and the loop engine — both of which every deck always has. These
+// drive real transitions on decks with NO stems at all and assert that something actually happened
+// to the audio, and that everything borrowed came back.
+describe("AutoMixer machine — effects carry a stem-free transition", () => {
+  function rig(perf: "subtle" | "standard" | "showy" = "showy"): Rig {
+    const r = new Rig(perf);
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    return r;
+  }
+
+  async function run(r: Rig, during: (r: Rig) => void = () => {}): Promise<boolean> {
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") during(r);
+      if (r.live === "B" && r.phase === "armed") return true;
+    }
+    return false;
+  }
+
+  // A well-matched pair SHOULD get a long blend — that is correct, not a failure of imagination.
+  // What must not happen is every transition being the same one, so this runs several in a row on
+  // one mixer (which is what carries `lastStyle`) and asks for variety across them.
+  test("consecutive transitions do not all come out the same", async () => {
+    const r = new Rig("showy");
+    for (let i = 1; i <= 5; i++) r.setup(`t${i}`, { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2"), mkTrack("t3"), mkTrack("t4"), mkTrack("t5")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    const seen = new Set<string>();
+    for (let i = 0; i < 2000; i++) {
+      await r.tick(500);
+      const s = r.mixer.getStatus().plan?.style;
+      if (r.phase === "mixing" && s) seen.add(s);
+      if (seen.size >= 2) break;
+    }
+    expect(seen.has("stemswap")).toBe(false); // no stems anywhere
+    expect(seen.size).toBeGreaterThan(1); // it did not just blend every time
+  });
+
+  // A pair whose tempos genuinely clash is where the effects have to carry the change — there is
+  // no beatmatch to hide behind.
+  test("a clashing pair reaches for an effect gesture, and borrows the device to do it", async () => {
+    const r = new Rig("showy");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 175, hasStems: false }); // no octave fold rescues this
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    const delay = r.engine.A.rack.device({ chain: "master", kind: "delay" })!;
+    delay.setParam("mix", 0.33);
+    delay.setParam("feedback", 0.11);
+    const wasBypassed = delay.bypassed;
+
+    let engagedSomething = false;
+    let style: string | undefined;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") {
+        style = r.mixer.getStatus().plan?.style;
+        for (const d of r.engine.A.rack.chain("master")!.devices) if (!d.bypassed) engagedSomething = true;
+      }
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+
+    expect(style).not.toBe("blend"); // a clash is never blended
+    expect(engagedSomething).toBe(true); // an effect actually fired
+    // …and the user's delay is back exactly as they left it.
+    expect(delay.bypassed).toBe(wasBypassed);
+    expect(delay.params.mix).toBeCloseTo(0.33, 6);
+    expect(delay.params.feedback).toBeCloseTo(0.11, 6);
+  });
+
+  test("every FX device on both decks is dormant again once the transition settles", async () => {
+    const r = rig();
+    await run(r);
+    for (const id of ["A", "B"] as const) {
+      for (const d of r.engine[id].rack.chain("master")!.devices) {
+        expect(d.bypassed).toBe(true);
+      }
+    }
+  });
+
+  // loopChop is the one gesture that needs no FX device at all — just the loop engine and a filter.
+  test("a loop-driven gesture never leaves the outgoing deck looping", async () => {
+    const r = rig();
+    let looped = false;
+    await run(r, (rr) => {
+      if (rr.engine.A.loopBeats > 0) looped = true;
+    });
+    expect(r.engine.A.loopBeats).toBe(0);
+    expect(r.engine.B.loopBeats).toBe(0);
+    void looped; // whether a loop gesture was CHOSEN is up to resolveStyle; the release is not
+  });
+
+  test("under 'subtle' the mixer still completes transitions and leaves nothing engaged", async () => {
+    const r = rig("subtle");
+    expect(await run(r)).toBe(true);
+    for (const d of r.engine.A.rack.chain("master")!.devices) expect(d.bypassed).toBe(true);
+    expect(r.engine.A.loopBeats).toBe(0);
   });
 });

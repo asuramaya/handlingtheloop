@@ -8,6 +8,8 @@
 // + FFT and are deliberately out of scope.
 import { describe, it, expect } from "vitest";
 import {
+  paceFromBpm,
+  trackEnergy,
   camelotParts,
   harmonicDistance,
   smartKeyShift,
@@ -804,5 +806,84 @@ describe("piTrim (PI phase-lock controller)", () => {
   it("raw exposes the pre-clamp output so the diagnostic can flag saturation", () => {
     const r = piTrim({ err: 0.5, integral: 0, ...CFG });
     expect(Math.abs(r.raw)).toBeGreaterThan(Math.abs(r.trim)); // raw > clamped → saturated
+  });
+});
+
+// ── perceptual energy ───────────────────────────────────────────────────────────────────────────
+// trackEnergy takes a Pyramid, which is plain data, so it IS in scope here (unlike computePyramid
+// itself, which needs real audio). A synthetic pyramid is enough to pin the behaviour that
+// matters: monotonicity in each component, and a usable spread across 0..1.
+describe("paceFromBpm — tempo folded into the perceived octave", () => {
+  it("maps the middle of the dance range near the middle of the scale", () => {
+    expect(paceFromBpm(130)).toBeCloseTo(0.5, 1);
+  });
+
+  it("is monotonic within the window", () => {
+    expect(paceFromBpm(160)).toBeGreaterThan(paceFromBpm(120));
+    expect(paceFromBpm(120)).toBeGreaterThan(paceFromBpm(90));
+  });
+
+  // A 70 bpm halftime track FEELS like the 140 it is written against — judging it as a ballad is
+  // the same half/double confusion the sync engine folds away.
+  it("folds half- and double-time into the same perceived pace", () => {
+    expect(paceFromBpm(70)).toBeCloseTo(paceFromBpm(140), 6);
+    expect(paceFromBpm(180)).toBeCloseTo(paceFromBpm(90), 6);
+  });
+
+  it("an unknown tempo sits in the middle rather than accusing the track either way", () => {
+    expect(paceFromBpm(null)).toBe(0.5);
+    expect(paceFromBpm(0)).toBe(0.5);
+  });
+
+  it("stays inside 0..1 for absurd input", () => {
+    for (const b of [1, 20, 400, 10_000]) {
+      expect(paceFromBpm(b)).toBeGreaterThanOrEqual(0);
+      expect(paceFromBpm(b)).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe("trackEnergy", () => {
+  const fill = (n: number, v: number) => Float32Array.from({ length: n }, () => v);
+  const pyr = (low: number, mid: number, high: number, peaks?: [number, number, number]) => ({
+    sampleRate: 44100,
+    length: 4096,
+    levels: [{ bucket: 512, min: fill(8, -0.5), max: fill(8, 0.5), low: fill(8, low), mid: fill(8, mid), high: fill(8, high) }],
+    bandPeaks: peaks,
+  });
+
+  it("a louder, brighter, faster track reads as higher energy than a quiet, dark, slow one", () => {
+    const hot = trackEnergy(pyr(0.6, 0.6, 0.6), 150);
+    const cold = trackEnergy(pyr(0.15, 0.05, 0.02), 80);
+    expect(hot).toBeGreaterThan(cold);
+  });
+
+  it("is monotonic in drive, all else equal", () => {
+    expect(trackEnergy(pyr(0.6, 0.4, 0.2), 128)).toBeGreaterThan(trackEnergy(pyr(0.2, 0.13, 0.07), 128));
+  });
+
+  it("is monotonic in brightness, all else equal", () => {
+    // Same total band energy, redistributed upward.
+    expect(trackEnergy(pyr(0.3, 0.3, 0.3), 128)).toBeGreaterThan(trackEnergy(pyr(0.7, 0.1, 0.1), 128));
+  });
+
+  it("is monotonic in tempo, all else equal", () => {
+    expect(trackEnergy(pyr(0.4, 0.3, 0.2), 165)).toBeGreaterThan(trackEnergy(pyr(0.4, 0.3, 0.2), 90));
+  });
+
+  // bandPeaks restore the true inter-band balance that the per-band normalisation threw away.
+  it("honours bandPeaks — a track whose highs are genuinely tiny is not treated as bright", () => {
+    const flat = trackEnergy(pyr(0.4, 0.4, 0.4, [1, 1, 1]), 128);
+    const bassy = trackEnergy(pyr(0.4, 0.4, 0.4, [1, 0.2, 0.05]), 128);
+    expect(bassy).toBeLessThan(flat);
+  });
+
+  it("always returns a usable 0..1 value, including for degenerate input", () => {
+    expect(trackEnergy(pyr(0, 0, 0), 128)).toBe(0.5); // silence → no opinion, not 0
+    expect(trackEnergy({ sampleRate: 44100, length: 0, levels: [] }, 128)).toBe(0.5);
+    for (const e of [trackEnergy(pyr(1, 1, 1), 175), trackEnergy(pyr(0.01, 0.01, 0.01), 60)]) {
+      expect(e).toBeGreaterThanOrEqual(0);
+      expect(e).toBeLessThanOrEqual(1);
+    }
   });
 });

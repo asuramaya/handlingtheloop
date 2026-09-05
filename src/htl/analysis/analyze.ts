@@ -77,6 +77,8 @@ export interface TrackAnalysis {
   beatgrid: Beatgrid | null;
   key: KeyInfo | null;
   pyramid: Pyramid;
+  /** Perceptual energy 0..1 — see trackEnergy. Shared to D1 alongside bpm/key. */
+  energy: number;
 }
 
 // The minimal slice of AudioBuffer the analysers actually touch. Accepting this
@@ -543,8 +545,11 @@ export const GRID_FORMAT_EPOCH = 1;
  *    3 = + chroma self-similarity structure detection (structure.ts): section boundaries are now
  *        VARIABLE-length (a real chroma SSM + checkerboard novelty), replacing the old single
  *        fixed 8/16/32-bar period comb fit, and repeated sections get a rekordbox-style A/B/C/D
- *        label (Phase 3 — segment-similarity block clustering off the same SSM). */
-export const ANALYSIS_VERSION = 3;
+ *        label (Phase 3 — segment-similarity block clustering off the same SSM).
+ *    4 = + perceptual `energy` (trackEnergy): drive + brightness + folded pace, 0..1. Drives the
+ *        auto-mix energy arc. A v3 row is still a perfectly good grid, so the loader keeps it and
+ *        simply has no energy for that track until something re-analyses it. */
+export const ANALYSIS_VERSION = 4;
 
 /** Serialize a Beatgrid to a compact JSON string for the crowdsourced analysis cache. The dynamic
  *  `beats`/`phrases` are Float32Arrays, which JSON.stringify mangles into `{0:..,1:..}` objects —
@@ -686,7 +691,70 @@ function detectBeatgridUniform(buffer: AudioLike): Beatgrid | null {
  *  the LOD pyramid are still derived from the buffer (they aren't persisted; both are cheap). */
 export function analyzeTrack(buffer: AudioLike, suppliedGrid?: Beatgrid | null): TrackAnalysis {
   const beatgrid = suppliedGrid ?? detectBeatgrid(buffer);
-  return { bpm: beatgrid?.bpm ?? null, beatgrid, key: detectKey(buffer), pyramid: computePyramid(buffer) };
+  const pyramid = computePyramid(buffer);
+  const bpm = beatgrid?.bpm ?? null;
+  return { bpm, beatgrid, key: detectKey(buffer), pyramid, energy: trackEnergy(pyramid, bpm) };
+}
+
+// ----------------------------- perceptual energy ---------------------------
+// HOW HARD DOES THIS TRACK HIT — one number, 0..1, so the auto-mix radio can hold or shape an
+// energy arc across a set instead of walking greedily from one nearest-neighbour to the next.
+//
+// It is deliberately NOT loudness. A brickwalled quiet-arrangement ballad and a dynamic peak-time
+// track can measure the same RMS; what separates them is how much of the energy sits above the
+// bass, and how fast it moves. So three components:
+//
+//   DRIVE      — how consistently the track is putting out energy at all (its band means, restored
+//                to their true relative scale by `bandPeaks`, which the per-band normalisation had
+//                thrown away).
+//   BRIGHTNESS — the share of that energy above the low band. Hats, synths and vocal presence read
+//                as "up"; a sub-heavy dub plate reads as "down" even when it is very loud.
+//   PACE       — tempo, folded into the perceived octave so a 70 bpm halftime track is judged as
+//                the 140 it feels like rather than as a ballad.
+//
+// ★ CALIBRATION IS APPROXIMATE AND THAT IS FINE. Nothing consumes the absolute value: the selector
+// only ever compares |candidate − target|, so what has to be right is the ORDERING and a usable
+// spread across the 0..1 range. Treating this as a calibrated LUFS-style measurement would be
+// over-claiming; treating it as a reliable "is this harder or softer than that" is not.
+const E_DRIVE = 0.4;
+const E_BRIGHT = 0.3;
+const E_PACE = 0.3;
+
+function meanOf(a: Float32Array): number {
+  if (!a.length) return 0;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i];
+  return s / a.length;
+}
+
+/** Tempo → 0..1 pace, folded into the perceived 85–175 bpm window. Half/double-time tracks fold
+ *  up or down into it, which is the same octave logic SYNC and the mixability scorer use. */
+export function paceFromBpm(bpm: number | null | undefined): number {
+  if (!bpm || bpm <= 0) return 0.5; // unknown tempo → the middle, not an accusation either way
+  let b = bpm;
+  while (b < 85) b *= 2;
+  while (b >= 175) b /= 2;
+  return Math.max(0, Math.min(1, (b - 85) / 90));
+}
+
+/** Perceptual energy of an analysed track, 0..1. */
+export function trackEnergy(p: Pyramid, bpm: number | null): number {
+  const lvl = p.levels[p.levels.length - 1] ?? p.levels[0];
+  if (!lvl || !lvl.low.length) return 0.5;
+  // bandPeaks are ratios against the loudest band (always contains a 1), so multiplying the
+  // per-band normalised means by them restores the real balance between the bands.
+  const [pl, pm, ph] = p.bandPeaks ?? [1, 1, 1];
+  const lo = meanOf(lvl.low) * pl;
+  const mi = meanOf(lvl.mid) * pm;
+  const hi = meanOf(lvl.high) * ph;
+  const total = lo + mi + hi;
+  if (!(total > 0)) return 0.5;
+  const drive = Math.max(0, Math.min(1, total));
+  // Scaled: the high band carries genuinely little absolute energy in almost all music, so the
+  // raw share sits in a narrow band near zero and would contribute nothing without a stretch.
+  const bright = Math.max(0, Math.min(1, ((mi * 0.5 + hi) / total) * 2.5));
+  const pace = paceFromBpm(bpm);
+  return Math.max(0, Math.min(1, E_DRIVE * drive + E_BRIGHT * bright + E_PACE * pace));
 }
 
 /** Analyse from raw planar channels (what a Web Worker receives — no AudioBuffer).

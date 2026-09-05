@@ -1,0 +1,11 @@
+-- Perceptual energy (0..1) for the auto-mix energy arc — see trackEnergy in src/htl/analysis.
+--
+-- Added as a nullable column with the same self-healing contract as `grid` (0023) and `palette`
+-- (0024): the writer attempts it in a separate guarded statement and swallows the failure, and the
+-- batch reader falls back to a column list without it. So a deployment where the code is ahead of
+-- the migration keeps working, and the value simply lands once this applies.
+--
+-- Rows written by ANALYSIS_VERSION 3 and earlier have NULL here. That is a legitimate state, not a
+-- gap to backfill: a v3 row is still a perfectly good grid, and the selector treats an absent
+-- energy as "unknown" rather than as a middling score.
+ALTER TABLE track_analysis ADD COLUMN energy REAL;

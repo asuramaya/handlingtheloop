@@ -1,7 +1,7 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
 import { foldTempoOctave, nearestBeat } from "../analysis";
 import type { TrackMeta } from "../library/types";
-import { pickTransition, resolveStyle } from "./mixability";
+import { pickTransition, resolveStyle, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
 import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
@@ -1172,7 +1172,7 @@ export class AutoMixer {
     // away from whatever the last transition was. `useStems` follows the decision rather than
     // driving it — a stem swap is now one option among several rather than an automatic upgrade.
     const caps = this.capabilities(this.liveId, idle);
-    const style = resolveStyle(this.plan, caps, this.lastStyle);
+    const style = resolveStyle(this.plan, caps, this.lastStyle, { shape: this.styleShape(idle) });
     this.plan.style = style;
     this.lastStyle = style;
     this.useStems = style === "stemswap";
@@ -1610,6 +1610,17 @@ export class AutoMixer {
   // The track after next, if the queue knows one. Deliberately reads `upcoming[1]` rather than
   // tracking its own cursor: `upcoming[0]` is what ensurePreload is already loading onto the idle
   // deck, so [1] is the first track NOTHING else is working on.
+  // What the SET is doing, for the gesture chooser. The arc is the user's stated intent; the lift
+  // is what these two particular records do to the energy. Lift is null unless BOTH are analysed —
+  // an unanalysed pair is not a flat one, and reporting 0 would apply the wind-down bias to every
+  // track the analysis hasn't reached yet.
+  private styleShape(idle: DeckId): StyleShape {
+    const outE = this.liveId ? this.deps.deckTrack(this.liveId)?.energy : null;
+    const incE = this.deps.deckTrack(idle)?.energy;
+    const known = outE != null && Number.isFinite(outE) && incE != null && Number.isFinite(incE);
+    return { arc: this.deps.queue.arc, lift: known ? (incE as number) - (outE as number) : null };
+  }
+
   private warmAhead(): void {
     if (!this.deps.warmStems) return;
     const after = this.deps.queue.upcoming[1];

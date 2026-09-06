@@ -8,7 +8,7 @@ import { AutoMixer, type AutoMixerDeps } from "./autoMixer";
 import type { AudioEngine, DeckId } from "../audio";
 import type { MixQueue } from "./queue";
 import type { TrackMeta } from "../library/types";
-import type { AutoMixPhase } from "./types";
+import type { AutoMixPhase, EnergyArc } from "./types";
 import { gpuHeld } from "../stems/gpuQueue";
 
 // ── fakes ──────────────────────────────────────────────────────────────────────────────────────
@@ -233,6 +233,10 @@ class FakeEngine {
 class FakeQueue {
   upcoming: TrackMeta[] = [];
   current: TrackMeta | null = null;
+  // The real MixQueue carries the arc, and startMix reads it to shape the gesture. Missing here,
+  // `queue.arc` would be undefined and every shaped branch would silently take the neutral path —
+  // a suite green for the wrong reason.
+  arc: EnergyArc = "ride";
   removed: string[] = [];
   reseeds = 0;
   advance(): TrackMeta | null {

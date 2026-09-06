@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "vitest";
 import type { TrackMeta } from "../library/types";
-import type { StyleCapabilities, TransitionPlan } from "./types";
+import type { StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 import {
   avgMixability,
   bpmRatioFolded,
@@ -245,5 +245,110 @@ describe("songCore — the artist-prefix gap", () => {
 
   it("leaves a title with no prefix alone", () => {
     expect(songCore("Archangel")).toBe("archangel");
+  });
+});
+
+// ── the arc's say in the gesture ───────────────────────────────────────────────────────────────
+// The pair decides what is POSSIBLE and what FITS; the arc decides what the change should SAY.
+// These assert that the shape moves the choice without ever overriding suitability.
+describe("resolveStyle — the shape of the set", () => {
+  const plan = (score: number, confident = true): TransitionPlan => ({
+    style: "blend",
+    bars: 16,
+    bassSwapBar: 8,
+    keyMatch: true,
+    score,
+    keyKnown: true,
+    confident,
+  });
+  const caps = (over: Partial<StyleCapabilities> = {}): StyleCapabilities => ({
+    stems: false,
+    fx: true,
+    incomingBody: true,
+    grid: true,
+    ...over,
+  });
+
+  test("no shape passed → identical to the pair-only behaviour", () => {
+    const bare = resolveStyle(plan(0.6), caps(), null);
+    const explicitNeutral = resolveStyle(plan(0.6), caps(), null, {});
+    expect(explicitNeutral).toBe(bare);
+  });
+
+  // A mid-fit pair prefers `blend` on the pair alone. Climbing, it should reach for an event.
+  test("a BUILD trades the long blend for a gesture that arrives", () => {
+    const riding = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: null } });
+    const building = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "build", lift: null } });
+    expect(riding).toBe("blend");
+    expect(building).not.toBe("blend");
+    expect(["loopChop", "dropSwap", "gateChop", "cut"]).toContain(building);
+  });
+
+  // …and the reverse: a RIDE must not pick something that announces itself.
+  test("a RIDE keeps the seam quiet even when the pair is a clash", () => {
+    const style = resolveStyle(plan(0.2), caps(), null, { shape: { arc: "ride", lift: null } });
+    expect(style).not.toBe("cut");
+    expect(style).not.toBe("dropSwap");
+  });
+
+  // ★ THE CAP. Shape moves a gesture a place or two; it must never promote one the pair
+  // genuinely cannot support, nor reach past availability.
+  test("shape never promotes an UNAVAILABLE gesture", () => {
+    const style = resolveStyle(plan(0.2), caps({ grid: false, incomingBody: false, fx: false }), null, {
+      shape: { arc: "build", lift: 0.5 },
+    });
+    expect(style).toBe("cut"); // everything needing a grid/body/fx is filtered out first
+  });
+
+  test("shape never promotes a stem swap without stems", () => {
+    for (const arc of ["ride", "build", "journey"] as const) {
+      expect(resolveStyle(plan(0.9), caps({ stems: false }), null, { shape: { arc, lift: 0.3 } })).not.toBe("stemswap");
+    }
+  });
+
+  // The lift is the PAIR's energy step, and it speaks even when the arc is neutral.
+  test("a big step UP reaches for a forward gesture whatever the arc says", () => {
+    const flat = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: 0 } });
+    const jump = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: 0.4 } });
+    expect(jump).not.toBe(flat);
+    expect(["loopChop", "dropSwap", "gateChop", "cut"]).toContain(jump);
+  });
+
+  test("a big step DOWN reaches for something to hide the seam behind", () => {
+    const style = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: -0.4 } });
+    expect(["washOut", "filter", "echoOut"]).toContain(style);
+  });
+
+  // ★ NULL IS NOT ZERO. An unanalysed pair has no opinion; treating it as flat would apply the
+  // wind-down bias to every track the analysis hasn't reached.
+  test("an unknown lift behaves like no lift, not like a flat one", () => {
+    const unknown = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: null } });
+    const flat = resolveStyle(plan(0.6), caps(), null, { shape: { arc: "ride", lift: 0 } });
+    expect(unknown).toBe(flat);
+  });
+
+  // "journey" earns its variety honestly — a wider dodge, not a bias toward one family.
+  test("a JOURNEY dodges a repeat further down the list than a ride would", () => {
+    const seen = new Set<TransitionStyle>();
+    let last: TransitionStyle | null = null;
+    for (let i = 0; i < 6; i++) {
+      last = resolveStyle(plan(0.6), caps(), last, { shape: { arc: "journey", lift: null } });
+      seen.add(last);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(2);
+  });
+
+  test("every arc still returns a style the caps allow, across the whole score range", () => {
+    for (const arc of ["ride", "build", "journey"] as const) {
+      for (const score of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+        for (const c of [caps(), caps({ stems: true }), caps({ fx: false }), caps({ grid: false })]) {
+          const style = resolveStyle(plan(score), c, null, { shape: { arc, lift: 0.2 } });
+          if (style === "stemswap") expect(c.stems).toBe(true);
+          if (style === "gateChop") expect(c.fx && c.grid).toBe(true);
+          if (style === "loopChop" || style === "spinOut") expect(c.grid).toBe(true);
+          if (style === "dropSwap") expect(c.incomingBody && c.grid).toBe(true);
+        }
+      }
+    }
   });
 });

@@ -1,5 +1,5 @@
 import type { TrackMeta } from "../library/types";
-import type { StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
+import type { EnergyArc, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
 
 // How well does track B mix after track A? Pure functions over the metadata the
 // app already stores on a TrackMeta (Camelot `key` + analyzed `bpm`). Used to
@@ -214,20 +214,109 @@ function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolea
   }
 }
 
+// ── THE SHAPE OF THE SET ───────────────────────────────────────────────────────────────────────
+//
+// `stylePreference` answers "do these two records fit", which is a question about the PAIR. It has
+// no idea whether the set is climbing, holding, or wandering — so a build and a wind-down with the
+// same compatibility score got the identical gesture. The arc already exists and already picks the
+// TRACKS (targetEnergy, in selector.ts); it just never had a say in how they were joined.
+//
+// A gesture is not only a way to get from A to B, it is a statement about direction. A long blend
+// says "nothing is changing"; a drop swap says "here we go". Choosing between them from the pair
+// alone throws away the one thing that makes a set feel authored.
+//
+// FORWARD gestures cut, mark, or arrive: they make the change an event.
+const FORWARD: readonly TransitionStyle[] = ["dropSwap", "loopChop", "gateChop", "cut"];
+// LONG gestures dissolve: they make the change something you notice afterwards.
+const LONG: readonly TransitionStyle[] = ["blend", "stemswap", "washOut"];
+// MASKING gestures hide the seam behind an effect — what you want when energy is dropping and a
+// bare blend would just sound like the set running out of steam.
+const MASKING: readonly TransitionStyle[] = ["washOut", "filter", "echoOut"];
+
+/** What the set is doing right now, as far as the gesture is concerned. */
+export interface StyleShape {
+  arc: EnergyArc;
+  /** Incoming energy minus outgoing, when BOTH are analysed; null when either is unknown.
+   *  Null means "no opinion" and must never be read as zero — an unanalysed pair is not a flat
+   *  one, and treating it as flat would apply the wind-down bias to half the library. */
+  lift: number | null;
+}
+
+// How many positions to move a style, for this shape. Kept SMALL on purpose: the cap is the same
+// promise `tolerance` makes — a clearly-better option is never sacrificed to be interesting. A
+// gesture two places down the list is a peer; one eight places down is there because it does not
+// belong, and no amount of arc should promote it.
+const LIFT_STRONG = 0.18; // energy delta that counts as a real step up or down, not noise
+
+// ★ A REAL STEP OVERRIDES THE STATED ARC — it does not argue with it.
+//
+// The first cut of this stacked an arc bias and a lift bias additively, and the arithmetic made
+// the lift unable to ever matter: `blend` sits at index 0 in the mid-fit row AND collects the
+// ride bonus, so no bounded nudge from the other direction could reach it. Stacking small deltas
+// from two sources that disagree just means the one with the head start always wins, quietly.
+//
+// The rule that actually expresses the intent: the arc is what the user ASKED the set to do; the
+// lift is what these two records ARE doing. When the records genuinely step — and in a "ride"
+// they mostly don't, because the selector is aiming at the current energy, so a big lift here
+// means it could not find a close match — the pair is the better evidence. A long blend across a
+// real jump sounds like the new track bursting in halfway through, whatever the arc said.
+function shapeDelta(style: TransitionStyle, shape: StyleShape): number {
+  const step = shape.lift == null ? 0 : shape.lift >= LIFT_STRONG ? 1 : shape.lift <= -LIFT_STRONG ? -1 : 0;
+
+  // A real step DOWN: nothing else applies. Hide the seam, or the set sounds like it is dying.
+  if (step < 0) return MASKING.includes(style) ? -1.5 : 0;
+  // A real step UP reads as a build regardless of what the arc was set to.
+  const arc = step > 0 ? "build" : shape.arc;
+
+  if (arc === "build") {
+    // Climbing: reward arrival, penalise dissolve.
+    if (FORWARD.includes(style)) return -1.5;
+    if (style === "blend") return 1.5;
+    return 0;
+  }
+  if (arc === "ride") {
+    // Holding a groove: the transition should be the thing nobody notices.
+    if (LONG.includes(style)) return -1;
+    if (style === "cut" || style === "dropSwap") return 1;
+    return 0;
+  }
+  // "journey" gets NO per-style bias — its variety comes from the wider tolerance, which is the
+  // honest way to express "surprise me" (biasing toward a family would just pick a new rut).
+  return 0;
+}
+
+export interface ResolveOpts {
+  /** How far down the preference list an alternative may sit and still count as "equally good"
+   *  when dodging a repeat. */
+  tolerance?: number;
+  /** The set's shape. Omitted → pair-only behaviour, exactly as before. */
+  shape?: StyleShape;
+}
+
 /** Pick the style this transition will actually use.
  *
- *  Preference order, then availability, then anti-repetition: among the styles that are BOTH
- *  suitable and possible, skip the one used last time if there is another equally-suitable
- *  candidate. "Equally suitable" means within `tolerance` positions in the preference list — so a
+ *  Preference order (now shaped by the arc), then availability, then anti-repetition: among the
+ *  styles that are BOTH suitable and possible, skip the one used last time if there is another
+ *  equally-suitable candidate. "Equally suitable" means within `tolerance` positions — so a
  *  clearly-better option is never sacrificed just to be different. */
 export function resolveStyle(
   plan: TransitionPlan,
   caps: StyleCapabilities,
   lastStyle: TransitionStyle | null,
-  tolerance = 1,
+  opts: ResolveOpts = {},
 ): TransitionStyle {
-  const prefs = stylePreference(plan.score, plan.confident).filter((s) => styleAvailable(s, caps));
-  if (!prefs.length) return "cut"; // always possible, and an honest answer for a hopeless pair
+  const { shape } = opts;
+  // "journey" means keep it moving, so it gets a wider net to dodge a repeat into.
+  const tolerance = opts.tolerance ?? (shape?.arc === "journey" ? 2 : 1);
+  const available = stylePreference(plan.score, plan.confident).filter((s) => styleAvailable(s, caps));
+  if (!available.length) return "cut"; // always possible, and an honest answer for a hopeless pair
+  // Stable re-rank: equal adjusted ranks keep preference order, so with no shape this is identity.
+  const prefs = shape
+    ? available
+        .map((s, i) => ({ s, k: i + shapeDelta(s, shape), i }))
+        .sort((a, b) => a.k - b.k || a.i - b.i)
+        .map((x) => x.s)
+    : available;
   const first = prefs[0];
   if (first !== lastStyle) return first;
   // The best option is what we just did — take the next one, but only if it is close behind.

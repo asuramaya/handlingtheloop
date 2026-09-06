@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsToSeconds, decideLive, entryRamp, gainTrim, other } from "./autoMixer";
+import { barsToSeconds, decideLive, entryRamp, gainTrim, other, stemBlend } from "./autoMixer";
 
 
 describe("gainTrim — AUTO's channel gain staging", () => {
@@ -241,6 +241,90 @@ describe("entryRamp — how the incoming track arrives", () => {
         if (r.filter != null) {
           expect(r.filter).toBeLessThanOrEqual(0);
           expect(r.filter).toBeGreaterThanOrEqual(-1);
+        }
+      }
+    }
+  });
+});
+
+// ── the stem swap's envelope ───────────────────────────────────────────────────────────────────
+// Also invisible to the machine tests before this: FakeDeck.setStemGain records nothing.
+describe("stemBlend — the arrangement-aware swap", () => {
+  const std = (p: number, s: number, keyMatch = true) => stemBlend(p, s, { keyMatch, acapella: false });
+  const aca = (p: number, s = p) => stemBlend(p, s, { keyMatch: true, acapella: true });
+
+  // ★ THE INVARIANT THE WHOLE GESTURE PROTECTS: never two low ends at once. The bass pair must
+  // always sum to about one, at every point of every blend.
+  test("only one low end at a time, standard and acapella alike", () => {
+    for (let i = 0; i <= 20; i++) {
+      const p = i / 20;
+      for (const g of [std(p, p), std(p, p, false), aca(p)]) {
+        expect(g.live.bass + g.inc.bass).toBeGreaterThan(0.85);
+        expect(g.live.bass + g.inc.bass).toBeLessThan(1.15);
+      }
+    }
+  });
+
+  test("standard: the two lead vocals never sit at full together", () => {
+    for (let i = 0; i <= 20; i++) {
+      const p = i / 20;
+      const g = std(p, p);
+      expect(Math.min(g.live.vocals, g.inc.vocals)).toBeLessThan(0.35);
+    }
+  });
+
+  test("standard: a dissonant pair swaps its melody TIGHTER than a key-matched one", () => {
+    // At the midpoint the un-matched pair is already most of the way through its handover; the
+    // key-matched one is still overlapping on purpose.
+    expect(std(0.55, 0.5, false).inc.other).toBeGreaterThan(std(0.55, 0.5, true).inc.other);
+  });
+
+  // ── the hold ──
+  test("acapella: the outgoing keeps ONLY its voice while the incoming bed plays", () => {
+    const mid = aca(0.55);
+    expect(mid.live.vocals).toBe(1); // held, flat, no creep
+    expect(mid.live.drums).toBeCloseTo(0, 6);
+    expect(mid.live.bass).toBeCloseTo(0, 6);
+    expect(mid.live.other).toBeCloseTo(0, 6);
+    expect(mid.inc.drums).toBe(1); // …over a bed that is fully established
+    expect(mid.inc.bass).toBe(1);
+    expect(mid.inc.vocals).toBe(0); // and the incoming's own voice is not in it yet
+  });
+
+  test("acapella: the held vocal is FLAT, not a slow fade (that would just be a blend)", () => {
+    expect(aca(0.3).live.vocals).toBe(1);
+    expect(aca(0.5).live.vocals).toBe(1);
+    expect(aca(0.7).live.vocals).toBe(1);
+    expect(aca(0.88).live.vocals).toBeCloseTo(0, 6); // then it steps aside
+  });
+
+  test("acapella: the incoming voice arrives only AFTER the held one has gone", () => {
+    for (let i = 0; i <= 20; i++) {
+      const p = i / 20;
+      const g = aca(p);
+      expect(Math.min(g.live.vocals, g.inc.vocals)).toBeCloseTo(0, 6);
+    }
+  });
+
+  test("every blend ends with the incoming at full and the outgoing silent", () => {
+    for (const g of [std(1, 1), std(1, 1, false), aca(1)]) {
+      for (const k of ["drums", "bass", "vocals", "other"] as const) {
+        expect(g.inc[k]).toBeCloseTo(1, 6);
+        expect(g.live[k]).toBeCloseTo(0, 6);
+      }
+    }
+  });
+
+  test("no stem gain ever leaves 0..1", () => {
+    for (const opts of [{ keyMatch: true, acapella: false }, { keyMatch: false, acapella: false }, { keyMatch: true, acapella: true }]) {
+      for (let i = 0; i <= 40; i++) {
+        const p = i / 40;
+        const g = stemBlend(p, p, opts);
+        for (const side of [g.live, g.inc]) {
+          for (const k of ["drums", "bass", "vocals", "other"] as const) {
+            expect(side[k]).toBeGreaterThanOrEqual(0);
+            expect(side[k]).toBeLessThanOrEqual(1);
+          }
         }
       }
     }

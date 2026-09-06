@@ -1018,6 +1018,8 @@ export class AutoMixer {
     other: 0b1000,
   };
   static readonly AUTO_CHAIN = "AUTO";
+  /** Iteration order for the per-stem writes. Named so the swap can't silently skip one. */
+  private static readonly STEMS = ["drums", "bass", "vocals", "other"] as const;
 
   /** The deck's AUTO chain, seeded ONCE if it has never existed on this device. A user who deletes
    *  it has deleted it — that is how the tail is turned off — so `seeded` is sticky. */
@@ -1177,6 +1179,12 @@ export class AutoMixer {
     this.plan.style = style;
     // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
     this.plan.entry = resolveEntry(style, caps, shape);
+    // The acapella hold, when the harmony actually permits it. keyKnown is the load-bearing half:
+    // pickTransition reports keyMatch:true for an UNKNOWN pair too (a neutral guess), and holding
+    // a lead vocal over a bed on that guess is the way this move goes badly wrong. Unknown is not
+    // permission. Subtle taste sits it out, like every other flourish.
+    this.plan.acapella =
+      style === "stemswap" && this.plan.keyMatch && this.plan.keyKnown && this.perf() !== "subtle";
     this.lastStyle = style;
     this.useStems = style === "stemswap";
     event("automix.transition", {
@@ -1323,26 +1331,11 @@ export class AutoMixer {
     const swapSpan = 1 / Math.max(1, this.plan.bars);
     const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
     if (this.useStems) {
-      // Arrangement-aware stem swap — not just a bass trade:
-      //  • DRUMS + BASS swap decks around bassSwapBar (`s`) — only one low end at a time.
-      //  • VOCALS hand off with a GAP: the outgoing vocal ducks out by mid-blend, the
-      //    incoming vocal drops in late — the two lead vocals never sit at full together
-      //    (clash avoidance / acapella-style handoff).
-      //  • OTHER (melody/harmony) crossfades between the decks: a long blend when the pair
-      //    is key-matched, a tight swap when it isn't (don't stack two dissonant melodies).
-      const km = this.plan.keyMatch;
-      live.setStemGain("bass", lerp(1, 0, s));
-      live.setStemGain("drums", lerp(1, 0, s));
-      inc.setStemGain("bass", lerp(0, 1, s));
-      inc.setStemGain("drums", lerp(0, 1, s));
-      // Disjoint vocal windows: outgoing out over [0, 0.45], incoming in over [0.6, 1].
-      live.setStemGain("vocals", lerp(1, 0, clamp(p / 0.45, 0, 1)));
-      inc.setStemGain("vocals", lerp(0, 1, clamp((p - 0.6) / 0.4, 0, 1)));
-      // Melody/harmony handoff (rhythm leads, melody follows, vocal lands last).
-      const incOther = km ? clamp((p - 0.4) / 0.5, 0, 1) : clamp((p - 0.45) / 0.2, 0, 1);
-      const liveOther = km ? clamp((p - 0.55) / 0.45, 0, 1) : clamp((p - 0.5) / 0.2, 0, 1);
-      inc.setStemGain("other", incOther);
-      live.setStemGain("other", lerp(1, 0, liveOther));
+      const g = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      for (const k of AutoMixer.STEMS) {
+        live.setStemGain(k, g.live[k]);
+        inc.setStemGain(k, g.inc[k]);
+      }
     } else if (this.plan.style === "dropSwap") {
       // THE DROP SWAP. Not a blend at all: the outgoing COLLAPSES — its bass is pulled and a
       // high-pass climbs until only a thin ghost of it is left — and then it is simply gone, with
@@ -1706,6 +1699,65 @@ export function entryRamp(
     default:
       return { filter: null, eqLow: 0 }; // "open" — just arrive
   }
+}
+
+export type StemGains = { drums: number; bass: number; vocals: number; other: number };
+
+/** Both decks' stem gains at transition progress `p`, with `s` the bass-swap ramp.
+ *
+ *  THE STANDARD SWAP is arrangement-aware rather than a bass trade:
+ *   • DRUMS + BASS swap around bassSwapBar — only one low end at a time, always.
+ *   • VOCALS hand off with a GAP: the outgoing ducks out by mid-blend, the incoming lands late,
+ *     so two lead vocals never sit at full together.
+ *   • OTHER (melody/harmony) crossfades — long when the pair is key-matched, tight when it is
+ *     not, because stacking two dissonant melodies is the thing to avoid.
+ *
+ *  ★ THE ACAPELLA HOLD is the move a person makes and a crossfader cannot. Everything else of the
+ *  outgoing track is taken away EARLY — drums, bass, and melody are gone by the time the incoming
+ *  bed is established — and its VOCAL is held, alone, over the new track, for the middle of the
+ *  blend. Then it steps aside and the incoming's own vocal arrives in the space.
+ *
+ *  It is gated on a KNOWN key match at the call site, and that gate is the whole thing: a lead
+ *  vocal held over a bed in an unrelated key is the exact way this move goes wrong, and it goes
+ *  wrong loudly. Unknown is not permission — see the `acapella` flag in startMix.
+ *
+ *  Pure and exported for the same reason as entryRamp: the FakeDeck's setStemGain records nothing,
+ *  so nothing about a stem swap's envelope was ever observable from a test. */
+export function stemBlend(
+  p: number,
+  s: number,
+  opts: { keyMatch: boolean; acapella: boolean },
+): { live: StemGains; inc: StemGains } {
+  const rhythmOut = lerp(1, 0, s);
+  const rhythmIn = lerp(0, 1, s);
+
+  if (opts.acapella) {
+    // Clear the outgoing bed early and bring the incoming's in to replace it, so that by ~45%
+    // there is exactly ONE instrumental playing and one voice over it.
+    const bedOut = clamp(p / 0.45, 0, 1);
+    const bedIn = clamp(p / 0.4, 0, 1);
+    // The vocal holds FLAT — no creep, or it turns into an ordinary fade — then leaves over a
+    // short window, and the incoming's own vocal starts only after it has gone.
+    const held = lerp(1, 0, clamp((p - 0.72) / 0.16, 0, 1));
+    return {
+      live: { drums: lerp(1, 0, bedOut), bass: lerp(1, 0, bedOut), other: lerp(1, 0, bedOut), vocals: held },
+      inc: { drums: bedIn, bass: bedIn, other: bedIn, vocals: clamp((p - 0.9) / 0.1, 0, 1) },
+    };
+  }
+
+  const km = opts.keyMatch;
+  const incOther = km ? clamp((p - 0.4) / 0.5, 0, 1) : clamp((p - 0.45) / 0.2, 0, 1);
+  const liveOther = km ? clamp((p - 0.55) / 0.45, 0, 1) : clamp((p - 0.5) / 0.2, 0, 1);
+  return {
+    live: {
+      drums: rhythmOut,
+      bass: rhythmOut,
+      // Disjoint vocal windows: outgoing out over [0, 0.45], incoming in over [0.6, 1].
+      vocals: lerp(1, 0, clamp(p / 0.45, 0, 1)),
+      other: lerp(1, 0, liveOther),
+    },
+    inc: { drums: rhythmIn, bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.6) / 0.4, 0, 1)), other: incOther },
+  };
 }
 
 export function other(id: DeckId): DeckId {

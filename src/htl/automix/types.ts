@@ -59,6 +59,11 @@ export interface TransitionPlan {
   score: number; // 0..1 mixability that produced this plan (for the UI badge)
   keyKnown: boolean; // the key relationship was actually known (not a neutral guess)
   confident: boolean; // at least one of key/tempo was known for both tracks
+  /** THE ACAPELLA HOLD: strip the outgoing track to its voice alone over the incoming's bed for
+   *  the middle of the blend. Only meaningful on a `stemswap`, and only ever set when the pair's
+   *  key relationship is KNOWN and compatible — a lead vocal held over an unrelated key is the
+   *  precise way this move goes wrong. */
+  acapella?: boolean;
   /** Hold the outgoing track in a 4-bar loop at its exit point until the incoming's body arrives.
    *  Orthogonal to `style` — it buys RUNWAY, it is not itself a way of blending. Set when the
    *  incoming needs more intro time under the outgoing than the outgoing has left to give. */

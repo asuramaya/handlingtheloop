@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsToSeconds, decideLive, entryRamp, gainTrim, other, stemBlend } from "./autoMixer";
+import { barsToSeconds, decideLive, entryRamp, gainTrim, other, rollLadder, stemBlend } from "./autoMixer";
 
 
 describe("gainTrim — AUTO's channel gain staging", () => {
@@ -328,5 +328,69 @@ describe("stemBlend — the arrangement-aware swap", () => {
         }
       }
     }
+  });
+});
+
+// ── the loop-roll accelerando ──────────────────────────────────────────────────────────────────
+describe("rollLadder — halving the loop into the drop", () => {
+  const long = 64; // a 16-bar blend
+  const short = 32; // an 8-bar blend
+  const sample = (start: number, beats: number, n = 200) =>
+    Array.from({ length: n + 1 }, (_, i) => rollLadder(i / n, start, beats));
+
+  test("silent before the ladder starts", () => {
+    for (const p of [0, 0.2, 0.37]) expect(rollLadder(p, 0.38, long)).toBe(0);
+  });
+
+  // ★ THE RELEASE. Late is a stutter over the downbeat everything was aimed at; early is inaudible.
+  test("releases BEFORE the end, never at or after it", () => {
+    expect(rollLadder(0.99, 0.38, long)).toBe(0);
+    expect(rollLadder(1, 0.38, long)).toBe(0);
+    expect(rollLadder(0.97, 0.38, long)).toBeGreaterThan(0); // still rolling just before
+  });
+
+  test("only ever halves — the loop never grows back mid-roll", () => {
+    for (const beats of [short, long, 128]) {
+      const seen = sample(0.38, beats).filter((v) => v > 0);
+      for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeLessThanOrEqual(seen[i - 1]);
+    }
+  });
+
+  test("every rung is a power-of-two beat count, and the last one is a single beat", () => {
+    const seen = [...new Set(sample(0.38, long).filter((v) => v > 0))];
+    for (const v of seen) expect([1, 2, 4, 8]).toContain(v);
+    const rolling = sample(0.38, long).filter((v) => v > 0);
+    expect(rolling[rolling.length - 1]).toBe(1);
+  });
+
+  // ★ THE FIX FOR THE FIXED LADDER. A long blend has runway for the full 8-beat rung; a short one
+  // does not, and must start tight rather than start long and get truncated.
+  test("a long blend starts from a two-bar loop", () => {
+    expect(Math.max(...sample(0.38, long))).toBe(8);
+  });
+
+  // An 8-bar blend still has runway for the full ladder from 0.38 (19 beats for a 15-beat ladder).
+  // A LATE start on a short blend does not, and must drop its top rung rather than truncate it.
+  test("a short runway drops its longest rung instead of truncating it", () => {
+    const startedAt = Math.max(...sample(0.62, short)); // dropSwap's start, on an 8-bar blend
+    expect(startedAt).toBeLessThan(8);
+    expect([1, 2, 4]).toContain(startedAt);
+  });
+
+  test("each rung lasts about its own length in beats, so every loop plays through once", () => {
+    const n = 2000;
+    const beats = long;
+    const held: Record<number, number> = {};
+    for (let i = 0; i <= n; i++) {
+      const v = rollLadder(i / n, 0.38, beats);
+      if (v > 0) held[v] = (held[v] ?? 0) + (beats / n);
+    }
+    // Each rung gets exactly its own beats; the allocation is exact, the sampling is not.
+    for (const [len, got] of Object.entries(held)) expect(got).toBeCloseTo(Number(len), 0);
+  });
+
+  test("a degenerate blend length rolls nothing rather than dividing by zero", () => {
+    expect(rollLadder(0.5, 0.38, 0)).toBe(0);
+    expect(rollLadder(0.5, 0.99, long)).toBe(0); // start past the release point
   });
 });

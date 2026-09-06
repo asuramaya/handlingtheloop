@@ -1350,7 +1350,7 @@ export class AutoMixer {
       // the last bar before a cut: the outgoing eats its own tail while the filter climbs, and the
       // drop lands into the space it leaves. Halving on a schedule rather than a timer keeps it on
       // the grid, and `rollBeats` makes each step fire once instead of every tick.
-      this.loopRoll(live, p >= 0.9 ? 1 : p >= 0.8 ? 2 : p >= 0.7 ? 4 : 0);
+      this.loopRoll(live, rollLadder(p, 0.62, this.transitionBeats()));
     } else if (this.plan.style === "washOut") {
       // THE WASH. The outgoing swells into a big reverb and its dry signal is pulled out from
       // under it, so the track evaporates rather than fades. Where echoOut is rhythmic (tempo-
@@ -1378,7 +1378,7 @@ export class AutoMixer {
       // stems: the outgoing is caught in a loop that halves (1 bar → 1/2 → 1 beat) while a filter
       // climbs over it, and the incoming rises underneath. It is pure loop engine + one knob, so
       // it is available on any pair with a beatgrid, which is most of them.
-      this.loopRoll(live, p >= 0.85 ? 1 : p >= 0.65 ? 2 : p >= 0.4 ? 4 : 0, false);
+      this.loopRoll(live, rollLadder(p, 0.38, this.transitionBeats()), false);
       live.setFilter(lerp(0, 0.85, clamp((p - 0.4) / 0.5, 0, 1)));
       live.setEqLow(lerp(0, EQ_KILL, clamp((p - 0.3) / 0.4, 0, 1)));
     } else if (this.plan.style === "echoOut") {
@@ -1637,6 +1637,11 @@ export class AutoMixer {
     this.deps.warmStems(vid);
   }
 
+  /** The blend's length in beats — what a loop ladder is actually measured in. */
+  private transitionBeats(): number {
+    return Math.max(1, (this.plan?.bars ?? 0) * BEATS_PER_BAR);
+  }
+
   private quietGpuStart(): void {
     if (this.gpuQuiet) return;
     this.gpuQuiet = holdGpu();
@@ -1699,6 +1704,60 @@ export function entryRamp(
     default:
       return { filter: null, eqLow: 0 }; // "open" — just arrive
   }
+}
+
+// ── THE LOOP-ROLL ACCELERANDO ──────────────────────────────────────────────────────────────────
+//
+// The oldest trick there is: catch the outgoing track in a loop and halve it — two bars, one bar,
+// half a bar, one beat — so the last stretch of the transition tightens into the new track. It
+// needs no effect and no stems, only a beatgrid, which is why it is available on nearly every pair.
+//
+// Two things the old inline ladders got wrong.
+//
+// ★ THE RUNGS WERE FIXED WHILE THE BLEND WAS NOT. `p >= 0.9 ? 1 : p >= 0.8 ? 2 : p >= 0.7 ? 4 : 0`
+// spends a fixed FRACTION of the transition on each rung, but a loop is measured in BEATS. On a
+// 32-bar blend that gives a 4-beat loop about 13 beats — it repeats three times and stops being a
+// build. On an 8-bar blend the same rung gets three beats: the loop is cut off before it has
+// played once, which does not read as a loop at all, just a glitch. So each rung is allocated
+// exactly its OWN length in beats — the 8-beat rung plays for 8 beats — and the ladder starts from
+// whichever rung actually fits the runway available. A short blend simply begins later, at 2 beats.
+//
+// ★ AND IT WAS RELEASED LATE. The roll used to run until settle, which fires on the first 150 ms
+// tick at or after p = 1. On a one-beat loop at 128 bpm a tick is a third of the loop, so the
+// release landed anywhere up to a third of a beat INTO the new track — audible, and exactly the
+// wrong kind of audible: a stutter over the downbeat everything else was aimed at. Releasing a
+// hair EARLY is inaudible; releasing late is the whole gesture missing its landing. So the ladder
+// returns 0 just before the end and the loop is out before the downbeat arrives.
+const ROLL_RUNGS = [8, 4, 2, 1] as const;
+const ROLL_RELEASE = 0.985; // exit here, not at 1 — see above
+
+/** Loop length in beats at transition progress `p`, or 0 for "not looping".
+ *  `start` is where the ladder begins; `transitionBeats` is how long the whole blend is. */
+export function rollLadder(p: number, start: number, transitionBeats: number): number {
+  if (p < start || p >= ROLL_RELEASE) return 0;
+  const span = ROLL_RELEASE - start;
+  if (span <= 0 || !(transitionBeats > 0)) return 0;
+  const runway = span * transitionBeats;
+  // Drop rungs from the TOP until the ladder fits: a short blend starts tight rather than
+  // starting long and truncating. At least one rung always survives.
+  let rungs: readonly number[] = ROLL_RUNGS;
+  const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
+  while (rungs.length > 1 && sum(rungs) > runway) rungs = rungs.slice(1);
+  const ladder = sum(rungs);
+  // ★ MEASURED BACKWARDS FROM THE RELEASE, not forwards from `start`. Spreading the rungs across
+  // the available runway — the obvious way, and the first way this was written — scales every rung
+  // by runway/ladder, so on a long blend the "one beat" rung is held for two and a half beats and
+  // the accelerando is not an accelerando at all, just four loops of the wrong lengths. Anchoring
+  // at the end instead gives every rung exactly its own beats, so each loop plays through once and
+  // the halving is real. `start` becomes what it should always have been: a NOT-BEFORE bound.
+  const beatsLeft = (ROLL_RELEASE - p) * transitionBeats;
+  if (beatsLeft > ladder) return 0; // the ladder has not begun yet
+  let acc = 0;
+  for (let i = rungs.length - 1; i >= 0; i--) {
+    acc += rungs[i];
+    if (beatsLeft <= acc) return rungs[i];
+  }
+  return rungs[0];
 }
 
 export type StemGains = { drums: number; bass: number; vocals: number; other: number };

@@ -4,6 +4,7 @@ import type { StyleCapabilities, TransitionPlan, TransitionStyle } from "./types
 import {
   avgMixability,
   bpmRatioFolded,
+  resolveEntry,
   camelotDistance,
   mixability,
   pickTransition,
@@ -348,6 +349,71 @@ describe("resolveStyle — the shape of the set", () => {
           if (style === "loopChop" || style === "spinOut") expect(c.grid).toBe(true);
           if (style === "dropSwap") expect(c.incomingBody && c.grid).toBe(true);
         }
+      }
+    }
+  });
+});
+
+// ── which arrival goes with which exit ─────────────────────────────────────────────────────────
+describe("resolveEntry — the incoming gesture", () => {
+  const caps = (over: Partial<StyleCapabilities> = {}): StyleCapabilities => ({
+    stems: false,
+    fx: true,
+    incomingBody: true,
+    grid: true,
+    ...over,
+  });
+
+  // ★ BEHAVIOUR-PRESERVING BY DEFAULT. With no shape, every style must get back the entry it
+  // already had baked into its branch — otherwise the extraction changed how the app sounds.
+  test("with no shape, each style keeps its historical arrival", () => {
+    expect(resolveEntry("blend", caps())).toBe("sweep");
+    expect(resolveEntry("cut", caps())).toBe("sweep");
+    expect(resolveEntry("filter", caps())).toBe("sweepWide");
+    expect(resolveEntry("loopChop", caps())).toBe("underLoop");
+    for (const s of ["dropSwap", "washOut", "gateChop", "echoOut", "spinOut"] as const) {
+      expect(resolveEntry(s, caps())).toBe("open");
+    }
+  });
+
+  // A stem swap hands over stem by stem on both decks; an EQ/filter ramp on top would fight it.
+  test("a stem swap never takes an entry ramp, whatever the shape", () => {
+    for (const arc of ["ride", "build", "journey"] as const) {
+      expect(resolveEntry("stemswap", caps({ stems: true }), { arc, lift: 0.5 })).toBe("open");
+    }
+  });
+
+  // ★ THE PAIRING THE OLD SINGLE-STYLE PLAN COULD NOT EXPRESS.
+  test("a collapsing exit on a build drops the incoming in rather than opening it", () => {
+    expect(resolveEntry("dropSwap", caps(), { arc: "build", lift: null })).toBe("dropIn");
+    expect(resolveEntry("gateChop", caps(), { arc: "build", lift: null })).toBe("dropIn");
+    expect(resolveEntry("spinOut", caps(), { arc: "build", lift: null })).toBe("dropIn");
+  });
+
+  test("…and a real step up does it even when the arc says ride", () => {
+    expect(resolveEntry("dropSwap", caps(), { arc: "ride", lift: 0.4 })).toBe("dropIn");
+  });
+
+  // The drop only reads as a drop because the incoming was cued to a real body downbeat. Without
+  // one there is nothing to land on, so it must fall back rather than hold back into silence.
+  test("no body section on the incoming → no drop-in, whatever the arc", () => {
+    expect(resolveEntry("dropSwap", caps({ incomingBody: false }), { arc: "build", lift: 0.5 })).toBe("open");
+    expect(resolveEntry("loopChop", caps({ incomingBody: false }), { arc: "build", lift: 0.5 })).toBe("underLoop");
+  });
+
+  test("no grid → no drop-in either (nothing to land ON)", () => {
+    expect(resolveEntry("dropSwap", caps({ grid: false }), { arc: "build", lift: 0.5 })).toBe("open");
+  });
+
+  test("a long exit over a falling step swells the incoming in instead", () => {
+    expect(resolveEntry("blend", caps(), { arc: "ride", lift: -0.4 })).toBe("riseIn");
+    expect(resolveEntry("washOut", caps(), { arc: "ride", lift: -0.4 })).toBe("riseIn");
+  });
+
+  test("a fading exit is never paired with a drop-in — there is no hole to land in", () => {
+    for (const s of ["blend", "washOut", "echoOut", "filter"] as const) {
+      for (const arc of ["ride", "build", "journey"] as const) {
+        expect(resolveEntry(s, caps(), { arc, lift: 0.5 })).not.toBe("dropIn");
       }
     }
   });

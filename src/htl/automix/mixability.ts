@@ -1,5 +1,5 @@
 import type { TrackMeta } from "../library/types";
-import type { EnergyArc, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
+import type { EnergyArc, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
 
 // How well does track B mix after track A? Pure functions over the metadata the
 // app already stores on a TrackMeta (Camelot `key` + analyzed `bpm`). Used to
@@ -323,6 +323,48 @@ export function resolveStyle(
   const alt = prefs.find((s, i) => s !== lastStyle && i <= tolerance);
   return alt ?? first;
 }
+
+// ── THE INCOMING HALF ──────────────────────────────────────────────────────────────────────────
+//
+// What each gesture ALREADY did to the incoming deck, extracted verbatim so this refactor is
+// behaviour-preserving by construction. Anything not listed just arrives.
+const DEFAULT_ENTRY: Partial<Record<TransitionStyle, TransitionEntry>> = {
+  filter: "sweepWide",
+  loopChop: "underLoop",
+  blend: "sweep",
+  cut: "sweep",
+};
+
+/** How the incoming track should arrive, given how the outgoing one is leaving.
+ *
+ *  Two rules, and a default that is simply what the style always did:
+ *   • A gesture that COLLAPSES the outgoing (dropSwap, spinOut, gateChop) leaves a hole, and a
+ *     hole wants something to land in it — so when the incoming has a body section to land ON,
+ *     hold it back and drop it in. This is the pairing the single-style plan could not express.
+ *   • A wind-down wants the opposite: the incoming should grow into the room rather than arrive,
+ *     so a long gesture over a falling energy step gets the swell.
+ *  Everything else keeps its historical entry. */
+export function resolveEntry(
+  style: TransitionStyle,
+  caps: StyleCapabilities,
+  shape?: StyleShape,
+): TransitionEntry {
+  const fallback = DEFAULT_ENTRY[style] ?? "open";
+  // A stem swap already hands over stem by stem; an entry ramp on top would fight it.
+  if (style === "stemswap") return "open";
+  if (!shape) return fallback;
+  const step = shape.lift == null ? 0 : shape.lift >= LIFT_STRONG ? 1 : shape.lift <= -LIFT_STRONG ? -1 : 0;
+
+  if (COLLAPSING.includes(style) && caps.incomingBody && caps.grid) {
+    // Climbing, or the pair itself steps up → make the arrival the event.
+    if (shape.arc === "build" || step > 0) return "dropIn";
+  }
+  if (LONG.includes(style) && (step < 0 || (shape.arc === "ride" && step === 0))) return "riseIn";
+  return fallback;
+}
+
+// Gestures that take the outgoing track APART rather than fading it — they end in a gap.
+const COLLAPSING: readonly TransitionStyle[] = ["dropSwap", "spinOut", "gateChop", "loopChop"];
 
 /** Rank candidate tracks by how well each mixes after `seed` (best first). Stable
  *  for equal scores (keeps the source order, i.e. YouTube relevance). */

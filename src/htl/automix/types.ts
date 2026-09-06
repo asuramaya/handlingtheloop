@@ -30,8 +30,29 @@ export type TransitionStyle =
   | "dropSwap"
   | "spinOut";
 
+/** ★ THE OTHER HALF OF A TRANSITION.
+ *
+ *  `TransitionStyle` is really the OUTGOING gesture — how the old track leaves. Every branch of
+ *  the mixer's style switch spends its lines on the outgoing deck and then does one of two things
+ *  to the incoming: `setEqLow(0)` (just arrive) or a small filter/bass ramp. A real DJ picks those
+ *  two halves separately — filter the outgoing out while the incoming drops in on its downbeat is
+ *  a different move from filtering one out while the other sweeps in, and the old single-style
+ *  plan could express neither.
+ *
+ *  So the entry is its own axis. Each existing style keeps the entry it always had (see
+ *  DEFAULT_ENTRY), so nothing changes unless the shape of the set asks for something else. */
+export type TransitionEntry =
+  | "open" // arrive at full, no shaping — what most gestures did
+  | "sweep" // rise from a gentle low-pass, bass swapping in on the plan's schedule
+  | "sweepWide" // the same, but from much further down and across the whole blend
+  | "underLoop" // sit under the outgoing's loop, opening as it tightens
+  | "dropIn" // held back under a low-pass, then LANDS — the incoming is the event
+  | "riseIn"; // a long swell, bass arriving late — the incoming grows into the room
+
 export interface TransitionPlan {
   style: TransitionStyle;
+  /** How the INCOMING track arrives. Optional: absent → the style's historical default. */
+  entry?: TransitionEntry;
   bars: number; // length of the transition, in bars of the outgoing track
   bassSwapBar: number; // bar within the transition where the low end swaps decks
   keyMatch: boolean; // engage harmonic key-match on the incoming deck

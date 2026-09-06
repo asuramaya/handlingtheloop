@@ -1,9 +1,9 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
 import { foldTempoOctave, nearestBeat } from "../analysis";
 import type { TrackMeta } from "../library/types";
-import { pickTransition, resolveStyle, type StyleShape } from "./mixability";
+import { pickTransition, resolveEntry, resolveStyle, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
-import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionPlan, TransitionStyle } from "./types";
+import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
 import type { AutoFxSettings, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
@@ -1172,12 +1172,16 @@ export class AutoMixer {
     // away from whatever the last transition was. `useStems` follows the decision rather than
     // driving it — a stem swap is now one option among several rather than an automatic upgrade.
     const caps = this.capabilities(this.liveId, idle);
-    const style = resolveStyle(this.plan, caps, this.lastStyle, { shape: this.styleShape(idle) });
+    const shape = this.styleShape(idle);
+    const style = resolveStyle(this.plan, caps, this.lastStyle, { shape });
     this.plan.style = style;
+    // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
+    this.plan.entry = resolveEntry(style, caps, shape);
     this.lastStyle = style;
     this.useStems = style === "stemswap";
     event("automix.transition", {
       style,
+      entry: this.plan.entry,
       bars: this.plan.bars,
       score: Math.round(this.plan.score * 100) / 100,
       confident: this.plan.confident,
@@ -1349,7 +1353,6 @@ export class AutoMixer {
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.4, 0, 1)));
       live.setFilter(lerp(0, 0.95, collapse * collapse)); // accelerating — it falls away, not fades
       live.setEqHigh(lerp(0, -8, collapse));
-      inc.setEqLow(0);
       // THE BUILD. A stepped loop-roll — one bar, then a half, then a beat — is how a DJ tightens
       // the last bar before a cut: the outgoing eats its own tail while the filter climbs, and the
       // drop lands into the space it leaves. Halving on a schedule rather than a timer keeps it on
@@ -1367,7 +1370,6 @@ export class AutoMixer {
       live.setFilter(lerp(0, 0.7, wet)); // the dry body thins as the wet swells
       // A freeze on the tail turns the last swell into a pad the incoming walks in over.
       if (p > 0.82) rev?.setParam("freeze", 1);
-      inc.setEqLow(0);
     } else if (this.plan.style === "gateChop") {
       // THE GATE CHOP. The outgoing is cut into tempo-synced slices that get deeper as it leaves,
       // so it stops sounding like a track being faded and starts sounding like a rhythmic device
@@ -1378,7 +1380,6 @@ export class AutoMixer {
       gate?.setParam("rate", p > 0.66 ? 0.5 : 0.25);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.45, 0, 1)));
       live.setFilter(lerp(0, 0.6, clamp((p - 0.4) / 0.6, 0, 1)));
-      inc.setEqLow(0);
     } else if (this.plan.style === "loopChop") {
       // THE LOOP CHOP — the classic build, and the one gesture here that needs NO effect and NO
       // stems: the outgoing is caught in a loop that halves (1 bar → 1/2 → 1 beat) while a filter
@@ -1387,8 +1388,6 @@ export class AutoMixer {
       this.loopRoll(live, p >= 0.85 ? 1 : p >= 0.65 ? 2 : p >= 0.4 ? 4 : 0, false);
       live.setFilter(lerp(0, 0.85, clamp((p - 0.4) / 0.5, 0, 1)));
       live.setEqLow(lerp(0, EQ_KILL, clamp((p - 0.3) / 0.4, 0, 1)));
-      inc.setFilter(lerp(-0.5, 0, clamp(p / 0.6, 0, 1)));
-      inc.setEqLow(0);
     } else if (this.plan.style === "echoOut") {
       // THE ECHO OUT. The outgoing's last phrase is thrown into the delay and its own dry signal
       // is pulled out from under it, so the track dissolves into its own repeats while the
@@ -1403,7 +1402,6 @@ export class AutoMixer {
       // Freeze the repeats at the end: the outgoing is gone but its last phrase keeps ringing over
       // the incoming, which is the whole point of throwing it in the first place.
       if (p > 0.85) dly?.setParam("freeze", 1);
-      inc.setEqLow(0);
     } else if (this.plan.style === "spinOut") {
       // THE SPIN OUT. A clash that no blend can fix, made deliberate: the outgoing keeps its full
       // body right up to the last bar and is then spun down (fired once, at the trigger point) as
@@ -1413,28 +1411,25 @@ export class AutoMixer {
         live.spinback();
       }
       live.setEqLow(lerp(0, EQ_KILL, clamp((p - 0.6) / 0.4, 0, 1)));
-      inc.setEqLow(0);
     } else if (this.plan.style === "filter") {
       // Cheap one-knob filter sweep: incoming opens from a low-pass; the outgoing
       // leaves through a high-pass in the back half. Bass still swaps so lows don't
       // stack. The filter masks an unproven pairing — sounds deliberate.
-      inc.setFilter(lerp(-0.85, 0, p));
       live.setFilter(lerp(0, 0.85, clamp((p - 0.45) / 0.55, 0, 1)));
       live.setEqLow(lerp(0, EQ_KILL, s));
-      inc.setEqLow(lerp(EQ_KILL, 0, s));
     } else {
       // EQ3 blend: bass swap, plus duck the OUTGOING highs in the last third so the
       // hats/cymbals don't clash on the way out — a 3-band handover, not just lows.
       live.setEqLow(lerp(0, EQ_KILL, s));
-      inc.setEqLow(lerp(EQ_KILL, 0, s));
       live.setEqHigh(lerp(0, -10, clamp((p - 0.6) / 0.4, 0, 1)));
       // Contextual one-knob filter motion layered on the EQ: the INCOMING slides in from
       // under a gentle low-pass over the first half, the OUTGOING ghosts out through a
       // rising high-pass over the back half — HP/LP follow whichever deck is leaving vs
       // entering. Subtler than the dedicated "filter" style; the EQ does the heavy lift.
-      inc.setFilter(lerp(-0.55, 0, clamp(p / 0.5, 0, 1)));
       live.setFilter(lerp(0, 0.6, clamp((p - 0.5) / 0.5, 0, 1)));
     }
+    // …and the INCOMING half, once, for every gesture — see applyEntry.
+    if (!this.useStems) this.applyEntry(inc, p, s);
 
     // Flourishes ride ON TOP of whatever gesture just ran, so they go last — a lift written before
     // the style's own setEqHigh would simply be overwritten.
@@ -1449,6 +1444,25 @@ export class AutoMixer {
     // Done when the ramp finishes, the outgoing track runs out, or the user kills
     // the outgoing deck (a deliberate "drop the old track" move → finish on incoming).
     if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !live.playing) this.settle();
+  }
+
+  // ── THE INCOMING HALF OF THE TRANSITION ──────────────────────────────────────────────────────
+  //
+  // Every gesture above spends its lines on the OUTGOING deck. What each one used to do to the
+  // incoming deck was one or two lines tacked on the end of its branch, and because it lived
+  // inside the branch it could never be chosen independently — "filter the old one out" and
+  // "drop the new one in on its downbeat" were welded into a single decision.
+  //
+  // These are those lines, lifted out unchanged and given names. `resolveEntry` maps each style
+  // back to the one it always had, so the default path is bit-for-bit what it was; the two new
+  // entries (dropIn, riseIn) are the moves that were previously unreachable.
+  //
+  // Not called for a stem swap: that gesture hands over stem by stem on both decks at once, and
+  // an EQ/filter ramp layered on top would fight its own handover.
+  private applyEntry(inc: Deck, p: number, s: number): void {
+    const r = entryRamp(this.plan?.entry ?? "open", p, s);
+    if (r.filter != null) inc.setFilter(r.filter);
+    inc.setEqLow(r.eqLow);
   }
 
   // The user took over the crossfader mid-mix: neutralise the half-applied EQ/stems,
@@ -1648,6 +1662,49 @@ export class AutoMixer {
     if (!force && key === this.lastEmitKey) return;
     this.lastEmitKey = key;
     this.deps.onChange(s);
+  }
+}
+
+/** The incoming deck's shaping at transition progress `p` (0..1), with `s` the plan's bass-swap
+ *  ramp. `filter: null` means "write nothing" — the historical `open` behaviour touched only EQ.
+ *
+ *  Pure and exported so the ramps can be asserted directly: the FakeDeck in the machine tests has
+ *  always had no-op setEqLow/setFilter, so a transition's incoming shaping was invisible to the
+ *  whole suite. Extracting the entries from the style branches would have been unverifiable
+ *  otherwise — the tests would have gone green whatever these numbers said. */
+export function entryRamp(
+  entry: TransitionEntry,
+  p: number,
+  s: number,
+): { filter: number | null; eqLow: number } {
+  switch (entry) {
+    // The blend's arrival: in from under a gentle low-pass over the first half, bass on the plan's
+    // swap schedule.
+    case "sweep":
+      return { filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)), eqLow: lerp(EQ_KILL, 0, s) };
+    // The filter style's arrival: further down, and opening across the WHOLE blend.
+    case "sweepWide":
+      return { filter: lerp(-0.85, 0, p), eqLow: lerp(EQ_KILL, 0, s) };
+    // Sits under the outgoing's tightening loop and opens as it does. Bass is already free — the
+    // loop chop kills the outgoing low separately, so there is nothing to swap with.
+    case "underLoop":
+      return { filter: lerp(-0.5, 0, clamp(p / 0.6, 0, 1)), eqLow: 0 };
+    // ★ THE ARRIVAL AS THE EVENT. Held back — bass killed, well under a low-pass, and NOT creeping
+    // open, so the ear stops expecting it — then released hard over the last fifth. Paired with a
+    // gesture that collapses the outgoing, this is what makes the new track land in a hole rather
+    // than emerge from a fade. It only reads as a drop because the incoming was cued to its own
+    // body section: what lands is a real downbeat.
+    case "dropIn": {
+      const release = clamp((p - 0.8) / 0.2, 0, 1);
+      return { filter: lerp(-0.8, 0, release), eqLow: lerp(EQ_KILL, 0, release) };
+    }
+    // ★ THE OPPOSITE. A long swell with the low end arriving late, so the incoming grows into the
+    // room instead of turning up in it — for a wind-down, where a clean arrival would sound like
+    // the set restarting.
+    case "riseIn":
+      return { filter: lerp(-0.9, 0, p), eqLow: lerp(EQ_KILL, 0, clamp((p - 0.45) / 0.55, 0, 1)) };
+    default:
+      return { filter: null, eqLow: 0 }; // "open" — just arrive
   }
 }
 

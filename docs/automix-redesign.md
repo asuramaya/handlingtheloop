@@ -431,3 +431,96 @@ All nine steps in §4 landed in one session. Everything below is in the tree.
   one manual listen before this is called done.
 - The energy scalar's calibration is approximate by design; only its ordering is
   load-bearing. See the note above `trackEnergy`.
+
+---
+
+## 7. Second round — the mix itself
+
+The first round made AUTO pick the right *records*. This round is about what
+happens between them, and it opened with a bug report that turned out to be
+about neither: **severe visual lag during an auto transition.**
+
+### 7.1 The lag was the separator, not the mixer
+
+`stems/gpuQueue.ts` has documented the mechanism all along — HT-Demucs runs on
+WebGPU and the browser compositor draws from the same GPU. What the file
+*solved* was two separations at once. One separation is enough to starve the
+compositor on its own, and AUTO arranged for it to happen at the worst possible
+moment: `ensurePreload` fires the incoming track's separation the instant the
+deck arms, and `STEM_WAIT_MAX = 8` makes the mixer *wait* at mix-out for stems
+that haven't landed. So the heaviest GPU job in the app ran while two waveforms
+were scrolling and the crossfader was sweeping.
+
+Two fixes, both about *when* the GPU is busy:
+
+- **A quiet window.** `holdGpu()` is raised from cue to settle. No new job
+  starts while it is up; a job already running is left alone, because WebGPU
+  work cannot be preempted and killing it would trade minutes of compute for a
+  few hundred milliseconds of jank. A counter rather than a flag, and every exit
+  path lowers it — a leaked hold starves separation for the rest of the session.
+- **Warm ahead.** `warmStems` separates the track *after* next, off-deck,
+  doubling the lead. It rides the same `stemJobs` map, so the deck load later
+  finds the in-flight promise instead of starting a second job. It deliberately
+  does **not** populate the track cache: `loadTrackToDeck` reads a cache hit as
+  "analysis already done" and skips both the stored-beatgrid read and the post
+  back, so caching there would quietly stop every warmed track contributing its
+  grid. It decodes a throwaway buffer instead.
+
+Ruled out first, and worth recording so nobody re-suspects them: decode already
+runs on a throwaway `OfflineAudioContext`, and stem resampling uses
+`startRendering` — neither touches the main thread. `applyCrossfade` does write
+App-root state every 150 ms with **zero memoized components in 64**, which is
+real and additive, but measured at 4.4 ms median on an empty board. Not the
+headline.
+
+### 7.2 A transition has two halves
+
+`TransitionStyle` was never the transition — it was the *outgoing* gesture.
+Every branch of `tickMixing` spent its lines on the departing deck and tacked
+one or two onto the end for the arriving one. Because those lines lived inside
+the branch, the halves were welded: "filter the old track out" and "drop the new
+one in on its downbeat" was unsayable.
+
+`TransitionEntry` is now its own axis, with `DEFAULT_ENTRY` mapping every style
+back to the arrival it already had. The two new entries are the previously
+unreachable ones — `dropIn` holds the incoming back and lands it; `riseIn`
+swells it in with the low end late. They are paired by what the exit *leaves
+behind*: a collapsing gesture ends in a hole and a hole wants something to land
+in it; a dissolving one leaves no hole and never gets a drop-in.
+
+### 7.3 Three lessons that generalise
+
+- **Two small deltas that disagree = the one with the head start always wins.**
+  Shaping gesture choice by arc *and* by energy step, additively, made the
+  energy term unable to ever matter — `blend` sits at index 0 *and* collects the
+  ride bonus. A real step now **overrides** the arc rather than arguing with it.
+- **A fraction of a transition is a different bar on every blend.** Every
+  discrete FX moment was a constant like `p > 0.82`. On a 12-bar blend that is
+  bar 9.84 — the freeze lands *after* the downbeat. `barsLeft` is free, because
+  `blendBarsFor` and `chooseMixOut` already align the transition to the outgoing
+  track's phrases, so a bar line inside it is a bar line in the music.
+- **Spreading rungs across the available runway is not an accelerando.** The
+  loop ladder scaled every rung by `runway/ladder`, so the one-beat rung was
+  held for two and a half beats. Measuring *backwards* from the release point
+  gives each rung exactly its own beats.
+
+### 7.4 The test-fake hazard, twice more
+
+`FakeDeck.setEqLow`, `setFilter` and `setStemGain` are no-ops that record
+nothing — so **no test has ever observed a transition's incoming shaping or its
+stem envelope.** Extracting either would have been unverifiable, and a green
+suite would have said nothing about whether the app still sounded the same.
+`entryRamp`, `stemBlend`, `rollLadder` and `barsLeft` are therefore pure and
+exported, and golden-tested against the pre-refactor formulas written out
+longhand. Separately, `FakeQueue` lacked the real queue's `arc`, which would
+have sent every newly-shaped branch down the neutral path.
+
+This is the same failure that bit round one (see §6). The rule it keeps
+teaching: **when a fake's method returns void, ask what the suite can still
+see.**
+
+### 7.5 Still unheard
+
+Everything in §7 is verified by unit test, typecheck and build. None of it has
+been heard. The autoplay gesture requirement still blocks driving a real
+transition under browser automation — obligation `cb7f25d6`.

@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsToSeconds, decideLive, entryRamp, gainTrim, other, rollLadder, stemBlend } from "./autoMixer";
+import { barsLeft, barsToSeconds, decideLive, entryRamp, gainTrim, other, rollLadder, stemBlend } from "./autoMixer";
 
 
 describe("gainTrim — AUTO's channel gain staging", () => {
@@ -392,5 +392,75 @@ describe("rollLadder — halving the loop into the drop", () => {
   test("a degenerate blend length rolls nothing rather than dividing by zero", () => {
     expect(rollLadder(0.5, 0.38, 0)).toBe(0);
     expect(rollLadder(0.5, 0.99, long)).toBe(0); // start past the release point
+  });
+});
+
+// ── phrase-locking ─────────────────────────────────────────────────────────────────────────────
+// The continuous ramps ride `p` and should. The MOMENTS — a freeze, a rate change, a release —
+// have to land on a bar line, and a fraction of the transition is a different bar on every blend.
+describe("barsLeft — counting the transition in bars, not fractions", () => {
+  test("counts down from the full length to zero", () => {
+    expect(barsLeft(0, 16)).toBe(16);
+    expect(barsLeft(0.5, 16)).toBe(8);
+    expect(barsLeft(1, 16)).toBe(0);
+  });
+
+  test("never negative, even past the end", () => {
+    expect(barsLeft(1.4, 16)).toBe(0);
+  });
+
+  // ★ THE POINT. "The last two bars" is the same musical instruction on every blend length;
+  // "p > 0.82" is bar 9.84 of twelve, bar 14.8 of eighteen, and a different beat every time.
+  test("a bars-remaining threshold is the SAME musical moment at every blend length", () => {
+    for (const bars of [8, 12, 16, 24, 32]) {
+      // The p at which two bars remain, converted back, is exactly two bars from the end.
+      const p = 1 - 2 / bars;
+      expect(barsLeft(p, bars)).toBeCloseTo(2, 9);
+    }
+  });
+
+  test("the old fixed fraction was NOT — this is the defect being fixed", () => {
+    const atFraction = [12, 18].map((bars) => barsLeft(0.82, bars));
+    expect(atFraction[0]).not.toBeCloseTo(atFraction[1], 1); // 2.16 bars vs 3.24 bars
+  });
+});
+
+describe("entryRamp dropIn — released on a bar line", () => {
+  test("the release spans the last two bars on a long blend", () => {
+    const bars = 16;
+    expect(entryRamp("dropIn", 1 - 2.5 / bars, 1, bars).eqLow).toBe(-26); // still held, 2.5 bars out
+    expect(entryRamp("dropIn", 1 - 2 / bars, 1, bars).eqLow).toBeCloseTo(-26, 6); // release begins
+    expect(entryRamp("dropIn", 1 - 1 / bars, 1, bars).eqLow).toBeCloseTo(-13, 6); // halfway through it
+    expect(entryRamp("dropIn", 1, 1, bars).eqLow).toBeCloseTo(0, 9); // landed
+  });
+
+  // A short blend cannot spend two of its bars releasing — that would be a quarter of the mix.
+  test("a short blend releases over a proportionally shorter window", () => {
+    const bars = 4;
+    expect(entryRamp("dropIn", 1 - 1.5 / bars, 1, bars).eqLow).toBe(-26); // held longer, in bars
+    expect(entryRamp("dropIn", 1, 1, bars).eqLow).toBeCloseTo(0, 9);
+  });
+
+  test("the same musical moment whatever the blend length", () => {
+    for (const bars of [8, 12, 16, 24]) {
+      // One bar from the end, every blend is at the same point of its release.
+      const mid = entryRamp("dropIn", 1 - 1 / bars, 1, bars);
+      expect(mid.eqLow).toBeCloseTo(-13, 6);
+    }
+  });
+
+  test("without a bar count it falls back to the old fraction, still landing fully open", () => {
+    expect(entryRamp("dropIn", 0.5, 1, 0).eqLow).toBe(-26);
+    const landed = entryRamp("dropIn", 1, 1, 0);
+    expect(landed.eqLow).toBeCloseTo(0, 9);
+    expect(landed.filter).toBeCloseTo(0, 9);
+  });
+
+  test("still fully open at the end, at every blend length — settle inherits nothing shaped", () => {
+    for (const bars of [0, 4, 8, 12, 16, 32]) {
+      const end = entryRamp("dropIn", 1, 1, bars);
+      expect(end.eqLow).toBeCloseTo(0, 9);
+      expect(end.filter).toBeCloseTo(0, 9);
+    }
   });
 });

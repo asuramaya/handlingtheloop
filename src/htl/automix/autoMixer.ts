@@ -1361,16 +1361,18 @@ export class AutoMixer {
       rev?.setParam("mix", wet * 0.8);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setFilter(lerp(0, 0.7, wet)); // the dry body thins as the wet swells
-      // A freeze on the tail turns the last swell into a pad the incoming walks in over.
-      if (p > 0.82) rev?.setParam("freeze", 1);
+      // A freeze on the tail turns the last swell into a pad the incoming walks in over — thrown
+      // ON THE DOWNBEAT of the last two bars, not at whatever fraction happens to be near it.
+      if (barsLeft(p, this.plan.bars) <= 2) rev?.setParam("freeze", 1);
     } else if (this.plan.style === "gateChop") {
       // THE GATE CHOP. The outgoing is cut into tempo-synced slices that get deeper as it leaves,
       // so it stops sounding like a track being faded and starts sounding like a rhythmic device
       // being played. Depth ramps rather than switching, which is what keeps it musical.
       const gate = this.borrowedFx?.saved.find((x) => x.device.kind === "gate")?.device;
       gate?.setParam("depth", clamp(p / 0.7, 0, 1) * 0.9);
-      // Tighten the slicing as it goes: 1/8 → 1/16 in the last third.
-      gate?.setParam("rate", p > 0.66 ? 0.5 : 0.25);
+      // Tighten the slicing as it goes: 1/8 → 1/16 for the last phrase. On a bar line, because a
+      // rate change landing mid-bar is heard as the gate slipping rather than as a gear change.
+      gate?.setParam("rate", barsLeft(p, this.plan.bars) <= 4 ? 0.5 : 0.25);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.45, 0, 1)));
       live.setFilter(lerp(0, 0.6, clamp((p - 0.4) / 0.6, 0, 1)));
     } else if (this.plan.style === "loopChop") {
@@ -1393,8 +1395,9 @@ export class AutoMixer {
       live.setEqHigh(lerp(0, -6, wet));
       live.setFilter(lerp(0, 0.5, wet));
       // Freeze the repeats at the end: the outgoing is gone but its last phrase keeps ringing over
-      // the incoming, which is the whole point of throwing it in the first place.
-      if (p > 0.85) dly?.setParam("freeze", 1);
+      // the incoming, which is the whole point of throwing it in the first place. On the downbeat
+      // of the last two bars — a delay freezing off the grid smears the very thing it captured.
+      if (barsLeft(p, this.plan.bars) <= 2) dly?.setParam("freeze", 1);
     } else if (this.plan.style === "spinOut") {
       // THE SPIN OUT. A clash that no blend can fix, made deliberate: the outgoing keeps its full
       // body right up to the last bar and is then spun down (fired once, at the trigger point) as
@@ -1453,7 +1456,7 @@ export class AutoMixer {
   // Not called for a stem swap: that gesture hands over stem by stem on both decks at once, and
   // an EQ/filter ramp layered on top would fight its own handover.
   private applyEntry(inc: Deck, p: number, s: number): void {
-    const r = entryRamp(this.plan?.entry ?? "open", p, s);
+    const r = entryRamp(this.plan?.entry ?? "open", p, s, this.plan?.bars ?? 0);
     if (r.filter != null) inc.setFilter(r.filter);
     inc.setEqLow(r.eqLow);
   }
@@ -1674,6 +1677,7 @@ export function entryRamp(
   entry: TransitionEntry,
   p: number,
   s: number,
+  bars = 0,
 ): { filter: number | null; eqLow: number } {
   switch (entry) {
     // The blend's arrival: in from under a gentle low-pass over the first half, bass on the plan's
@@ -1693,7 +1697,14 @@ export function entryRamp(
     // than emerge from a fade. It only reads as a drop because the incoming was cued to its own
     // body section: what lands is a real downbeat.
     case "dropIn": {
-      const release = clamp((p - 0.8) / 0.2, 0, 1);
+      // ★ RELEASED OVER THE LAST TWO BARS, not the last fifth. This is the most timing-critical
+      // moment in the whole system — the gesture exists to make the incoming track LAND — and a
+      // fifth of the transition is a different number of bars on every blend, so the release
+      // opened mid-bar as often as not. Two bars is a phrase-relative instruction: the same
+      // musical gesture at any tempo or blend length. `bars` unknown (0) falls back to the
+      // fraction, which is what every non-drop entry uses anyway.
+      const window = bars > 0 ? Math.min(2, bars / 4) : 0;
+      const release = window > 0 ? clamp(1 - barsLeft(p, bars) / window, 0, 1) : clamp((p - 0.8) / 0.2, 0, 1);
       return { filter: lerp(-0.8, 0, release), eqLow: lerp(EQ_KILL, 0, release) };
     }
     // ★ THE OPPOSITE. A long swell with the low end arriving late, so the incoming grows into the
@@ -1758,6 +1769,26 @@ export function rollLadder(p: number, start: number, transitionBeats: number): n
     if (beatsLeft <= acc) return rungs[i];
   }
   return rungs[0];
+}
+
+// ── PHRASE-LOCKING THE EFFECTS ─────────────────────────────────────────────────────────────────
+//
+// The continuous ramps — a reverb swelling, a filter climbing — are right to ride `p`: they are
+// gestures with no moment in them, and quantising them would just make them steppy.
+//
+// The DISCRETE events are the problem. A delay freezing, a gate doubling its rate, a held-back
+// track being released: those are moments, and a moment either lands on a bar line or it sounds
+// like a mistake. They were all written as fractions of the transition — `p > 0.82`, `p > 0.85`,
+// `p > 0.66` — which means the bar they land on depends on how long the blend happens to be. On a
+// 12-bar blend `p > 0.82` is bar 9.84: the freeze arrives most of a beat after the downbeat, which
+// is exactly where the ear hears it as late rather than as a decision.
+//
+// Counting in BARS REMAINING fixes it, and does so for free: the blend's length is chosen by
+// blendBarsFor and its start by chooseMixOut, both of which work off the outgoing track's phrase
+// structure. So a bar line inside the transition is already a bar line in the music, and "the last
+// two bars" is a phrase-relative instruction on every pair, whatever the tempo or the length.
+export function barsLeft(p: number, bars: number): number {
+  return Math.max(0, (1 - p) * Math.max(1, bars));
 }
 
 export type StemGains = { drums: number; bass: number; vocals: number; other: number };

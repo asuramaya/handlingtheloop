@@ -102,10 +102,17 @@ export function DockResizer({ varName, measure, min = 300, max = 560, rangeVars 
       // if it's on the left half (e.g. after a side-swap), dragging right shrinks it.
       sign = handleRect.left + handleRect.width / 2 >= targetRect.left + targetRect.width / 2 ? 1 : -1;
     }
+    // `size` is the RENDERED extent, not the stored var — which is what lets the stylesheet's
+    // cap hold: a drag on a dock clamped down by max-height resumes from where it actually is.
     data.current = { pos: axis === "y" ? e.clientY : e.clientX, size: axis === "y" ? targetRect.height : targetRect.width, sign };
-    // Read the range at GRAB time, not module load: the dock range vars are viewport-
-    // independent today but resolving them per drag costs nothing and survives them
-    // becoming responsive later.
+    // Read the range at GRAB time, not module load: resolving per drag costs nothing and the
+    // range is free to become responsive.
+    //
+    // The bottom dock's ceiling is NOT enforced here, deliberately. --dock-h-max is 820px of
+    // plain px, and on a window shorter than that the rendered height is capped by the
+    // stylesheet instead (`max-height: calc(100dvh - …)` on .dock-bottom — see its comment for
+    // the off-screen-handle trap that rule exists to prevent). Re-stating that viewport figure
+    // here would make two places decide one thing, which is how the guard would come back.
     const lo = rootPx(rangeVars[0], min);
     const hi = rootPx(rangeVars[1], max);
     document.body.style.cursor = axis === "y" ? "row-resize" : "col-resize";

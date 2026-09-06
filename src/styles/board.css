@@ -1230,6 +1230,24 @@
   .modal-backdrop.dock-bottom {
     inset: auto 0 0 0;
     height: clamp(var(--dock-h-min), var(--dock-h-bottom, var(--dock-h)), var(--dock-h-max));
+    /* ★ THE VIEWPORT GUARD THE SIDE DOCKS ALREADY HAD, and this one did not.
+     *
+     * dock-left/right cap themselves at `calc(100vw - 160px)` so a remembered width can never
+     * swallow the whole screen. The bottom dock had no equivalent, and for it the consequence is
+     * worse than cosmetic: it is pinned to the BOTTOM edge, so its top edge sits at
+     * `viewportHeight - height` — and its top edge is where the only drag handle lives.
+     *
+     * --dock-h-max is 820px of plain px (it has to be: DockResizer reads these back as literal
+     * text, so a vh unit would parse as a bare number). So on any window shorter than the
+     * remembered height — a laptop at 125% scale is about 760px of viewport — the top edge goes
+     * NEGATIVE, the handle goes off-screen, and the dock can never be resized again. The value
+     * is in localStorage, so it survives every reload; the only escape is clearing site data.
+     * A control whose sole affordance can put itself permanently out of reach is a trap.
+     *
+     * dvh, not vh, because a mobile URL bar collapsing must not strand the handle either. The
+     * chin is subtracted because it is fixed at z-index 5000 over everything: a handle underneath
+     * it is just as unreachable as one off-screen, only harder to explain. */
+    max-height: calc(100dvh - var(--chin-h, 40px) - 24px);
   }
   .modal-backdrop.dock-bottom > .panel {
     width: 100%;

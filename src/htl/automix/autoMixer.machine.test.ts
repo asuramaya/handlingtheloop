@@ -1126,3 +1126,103 @@ describe("AutoMixer — the separation schedule", () => {
     expect(gpuHeld()).toBe(false);
   });
 });
+
+// ── the tail needs ONE deck, not two ───────────────────────────────────────────────────────────
+// beginVocalTail routes an OUTGOING stem and never touches the incoming deck, but it used to live
+// inside the `useStems` branch — and useStems requires BOTH decks separated. So the user's AUTO
+// chain sat in the rack doing nothing unless a full stem swap happened to win the separation race.
+describe("AutoMixer machine — the AUTO chain engages on the outgoing deck alone", () => {
+  const autoChain = (r: Rig, id: "A" | "B") => r.engine[id].rack.chains.find((c) => c.name === "AUTO");
+
+  async function transition(r: Rig, during: (r: Rig) => void = () => {}): Promise<boolean> {
+    const from = r.live;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") during(r);
+      if (r.live !== from && r.phase === "armed") return true;
+    }
+    return false;
+  }
+
+  // ★ THE FIX. Outgoing separated, incoming NOT — so no stem swap is possible — and the tail must
+  // still run, because it only ever needed the deck it is routing from.
+  test("routes the outgoing stem even when the incoming deck has no stems", async () => {
+    const r = new Rig("standard");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: true }); // outgoing: separated
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false }); // incoming: lost the race
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let routedDuring = false;
+    const done = await transition(r, (rr) => {
+      if ((autoChain(rr, "A")?.stems ?? 0) !== 0) routedDuring = true;
+    });
+    expect(done).toBe(true);
+    expect(routedDuring).toBe(true);
+    // …and it is handed back exactly as before: the chain persists, silent.
+    expect(autoChain(r, "A")).toBeDefined();
+    expect(autoChain(r, "A")!.stems).toBe(0);
+  });
+
+  // The other half: neither deck separated → nothing to route, and nothing seeded either.
+  test("no stems on the outgoing deck → no routing, and no chain forced into the rack", async () => {
+    const r = new Rig("standard");
+    for (const t of ["t1", "t2"]) r.setup(t, { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let routedDuring = false;
+    await transition(r, (rr) => {
+      if ((autoChain(rr, "A")?.stems ?? 0) !== 0) routedDuring = true;
+    });
+    expect(routedDuring).toBe(false);
+    expect(r.autoFx.seeded).toBe(false); // never offered — there was nothing it could do
+  });
+
+  // Subtle taste still opts out of every flourish, tail included.
+  test("subtle performance still declines the tail", async () => {
+    const r = new Rig("subtle");
+    for (const t of ["t1", "t2"]) r.setup(t, { duration: 60, bpm: 120, hasStems: true });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let routedDuring = false;
+    await transition(r, (rr) => {
+      if ((autoChain(rr, "A")?.stems ?? 0) !== 0) routedDuring = true;
+    });
+    expect(routedDuring).toBe(false);
+  });
+
+  // ★ A DEGRADE IS USUALLY THE INCOMING DECK'S FAULT, and the tail does not depend on it. Yanking
+  // the user's effect off a vocal mid-phrase for an unrelated reason is the bug being fixed.
+  test("the tail survives a stem-race degrade caused by the incoming deck", async () => {
+    const r = new Rig("standard");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: true });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: true });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let routedAfterDegrade = false;
+    let degraded = false;
+    await transition(r, (rr) => {
+      const inc = rr.live === "A" ? rr.engine.B : rr.engine.A;
+      if (!degraded && rr.phase === "mixing") {
+        inc.hasStems = false; // the incoming loses its stems mid-blend
+        degraded = true;
+        return;
+      }
+      if (degraded && (autoChain(rr, "A")?.stems ?? 0) !== 0) routedAfterDegrade = true;
+    });
+    expect(degraded).toBe(true);
+    expect(routedAfterDegrade).toBe(true); // the outgoing tail kept playing
+    expect(autoChain(r, "A")!.stems).toBe(0); // …and was still released at settle
+  });
+});

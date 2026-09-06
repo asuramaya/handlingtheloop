@@ -1086,7 +1086,12 @@ export class AutoMixer {
     if (this.useStems && !both) {
       live.resetStems();
       inc.resetStems();
-      this.endVocalTail();
+      // The tail is NOT torn down here. `both` going false is usually the INCOMING deck losing
+      // its separation race, and the tail depends only on the OUTGOING deck — killing it would
+      // yank the user's effect off a vocal mid-phrase for a reason that has nothing to do with
+      // that vocal. It is released at settle like every other borrowed thing; endVocalTail is
+      // idempotent, so the exit paths still cover it.
+      if (!live.hasStems) this.endVocalTail(); // …unless the OUTGOING is what went away
       this.useStems = false;
       if (this.plan) this.plan = { ...this.plan, style: "blend" };
       event("automix.stems", { at: "degrade", p: Math.round(p * 100) / 100 });
@@ -1198,8 +1203,16 @@ export class AutoMixer {
     });
 
     this.armGesture(style, this.liveId);
+    // ★ THE TAIL NEEDS ONE DECK, NOT TWO. This used to sit inside the `useStems` branch below,
+    // which meant the user's AUTO chain only ever engaged on a full stem swap — and a stem swap
+    // needs BOTH decks separated. But the tail routes an OUTGOING stem and touches the incoming
+    // deck not at all, so gating it on the pair was over-strict by exactly one deck. The visible
+    // consequence was a chain sitting in everyone's rack doing nothing on most transitions.
+    // beginVocalTail self-gates on the outgoing deck's own stems, so this is safe to call for
+    // every gesture: an echo-out or a filter over a separated outgoing track now dissolves its
+    // vocal through whatever the user has dialled, the same way a stem swap already did.
+    this.beginVocalTail(this.liveId);
     if (this.useStems) {
-      this.beginVocalTail(this.liveId); // the outgoing vocal gets somewhere to dissolve into
       // The incoming enters as DRUMS + BASS only — its melody (other) and vocal come in
       // LATER in the blend (beats → melody → vocal), so nothing stacks on the way in.
       inc.setEqLow(0);

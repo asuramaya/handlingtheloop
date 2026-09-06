@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, afterEach } from "vitest";
 // STATE-MACHINE HARNESS for the AutoMixer. The pure helpers (decideLive/radioSeedSet/barsToSeconds)
 // are unit-tested in autoMixer.test.ts; THIS file drives the whole tick() loop through a fake
 // engine + queue and asserts the phase PATH and — the bug class the user hit — that liveId always
@@ -9,6 +9,7 @@ import type { AudioEngine, DeckId } from "../audio";
 import type { MixQueue } from "./queue";
 import type { TrackMeta } from "../library/types";
 import type { AutoMixPhase } from "./types";
+import { gpuHeld } from "../stems/gpuQueue";
 
 // ── fakes ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -260,6 +261,17 @@ class FakeQueue {
   }
 }
 
+// Every Rig registers itself so afterEach can shut it down. The mixer holds a PROCESS-WIDE
+// resource across a transition (the GPU quiet window — see stems/gpuQueue), and most tests here
+// stop mid-transition on purpose. In the app that is fine: one mixer, alive for the session. In a
+// test file it means each abandoned rig leaves its hold up, and the count only ever climbs — so
+// the later tests that assert on gpuHeld() would read every earlier test's litter.
+const rigs: Rig[] = [];
+afterEach(() => {
+  for (const r of rigs) r.mixer.disable();
+  rigs.length = 0;
+});
+
 class Rig {
   engine = new FakeEngine();
   perf: "subtle" | "standard" | "showy";
@@ -275,6 +287,8 @@ class Rig {
   stemsPending = new Set<DeckId>(); // decks whose separation is still in flight
   liveHist: (DeckId | null)[] = [];
   phaseHist: AutoMixPhase[] = [];
+  warmed: string[] = []; // videoIds handed to warmStems, in order
+  gpuHeldHist: boolean[] = []; // gpuHeld() sampled after each tick, alongside phaseHist
 
   constructor(perf: "subtle" | "standard" | "showy" = "standard") {
     this.perf = perf;
@@ -300,9 +314,13 @@ class Rig {
       onAutoFxSeeded: () => {
         this.autoFx = { ...this.autoFx, seeded: true };
       },
+      warmStems: (vid) => {
+        this.warmed.push(vid);
+      },
       onChange: () => {},
     };
     this.mixer = new AutoMixer(deps);
+    rigs.push(this);
   }
 
   private applySetup(id: DeckId, videoId: string): void {
@@ -349,6 +367,7 @@ class Rig {
     const s = this.mixer.getStatus();
     this.liveHist.push(s.liveDeck);
     this.phaseHist.push(s.phase);
+    this.gpuHeldHist.push(gpuHeld());
   }
 
   get live(): DeckId | null {
@@ -1006,5 +1025,100 @@ describe("AutoMixer machine — the AUTO chain is the user's", () => {
     const user = r.engine.A.addFxChain("MY VOX", 0b1100); // VOICE + INST
     await transition(r);
     expect(r.engine.A.rack.chain(user.id)?.stems).toBe(0b1100);
+  });
+});
+
+// ── the separation schedule ────────────────────────────────────────────────────────────────────
+// Two rules, both about WHEN the GPU is allowed to be busy rather than what it computes:
+//   • warm the track after next, so separation has two tracks of lead instead of one;
+//   • and never START one during a transition, when a dropped frame is actually visible.
+describe("AutoMixer — the separation schedule", () => {
+  test("warms the track AFTER next, not the one being preloaded", async () => {
+    const r = new Rig();
+    const [t2, t3] = [mkTrack("t2"), mkTrack("t3")];
+    for (const v of ["t1", "t2", "t3"]) r.setup(v, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2, t3];
+    r.mixer.enable();
+    await r.tick();
+    await r.tick();
+    // t2 goes to the idle DECK (ensurePreload separates it there); t3 is the one nothing else owns.
+    expect(r.warmed).toContain("t3");
+    expect(r.warmed).not.toContain("t2");
+  });
+
+  test("does not re-ask for the same track on every 150ms tick", async () => {
+    const r = new Rig();
+    const [t2, t3] = [mkTrack("t2"), mkTrack("t3")];
+    for (const v of ["t1", "t2", "t3"]) r.setup(v, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2, t3];
+    r.mixer.enable();
+    for (let i = 0; i < 20; i++) await r.tick();
+    expect(r.warmed.filter((v) => v === "t3")).toHaveLength(1);
+  });
+
+  test("nothing to warm when the queue holds only the next track", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    for (const v of ["t1", "t2"]) r.setup(v, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.mixer.enable();
+    for (let i = 0; i < 5; i++) await r.tick();
+    expect(r.warmed).toEqual([]);
+  });
+
+  // ★ THE LAG FIX. The hold must be up for the whole visible part of the transition and DOWN
+  // again by the time the mixer is armed on the new deck — a leaked hold starves separation for
+  // the rest of the session, which is worse than the jank it was fixing.
+  test("holds the GPU across the transition and releases it at settle", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.live === "B" && r.phase === "armed") break;
+    }
+    expect(r.live).toBe("B");
+
+    // Held during cueing and mixing…
+    const heldDuring = r.phaseHist
+      .map((p, i) => ({ p, held: r.gpuHeldHist[i] }))
+      .filter((x) => x.p === "cueing" || x.p === "mixing");
+    expect(heldDuring.length).toBeGreaterThan(0);
+    expect(heldDuring.every((x) => x.held)).toBe(true);
+    // …and released by the time we are armed again on the new deck.
+    expect(gpuHeld()).toBe(false);
+  });
+
+  test("a cancelled mix releases the hold too (the mixing branch never reaches abandonCue)", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.autoAdvance = true;
+    r.mixer.enable();
+
+    let reachedMixing = false;
+    for (let i = 0; i < 600; i++) {
+      await r.tick(500);
+      if (r.phase === "mixing") {
+        reachedMixing = true;
+        break;
+      }
+    }
+    expect(reachedMixing).toBe(true);
+    expect(gpuHeld()).toBe(true);
+    r.mixer.disable(); // → cancel() from inside the mixing branch
+    expect(gpuHeld()).toBe(false);
   });
 });

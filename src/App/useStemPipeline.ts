@@ -3,7 +3,7 @@
 // verbatim from App; the App spine arrives via `deps` (destructured to the original names so the
 // closures are unchanged). The type-only `../App` import is erased at build (no runtime cycle).
 // See htl-refactor-monoliths.
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { MutableRefObject } from "react";
 import {
   loadStems,
@@ -17,6 +17,10 @@ import {
   disarmGpu,
   stemTrace,
   dropCachedBuffer,
+  decodeAudio,
+  fetchYouTubeAudio,
+  getAudio,
+  putAudio,
   type Stems,
   type StemModel,
 } from "@htl";
@@ -437,5 +441,75 @@ export function useStemPipeline(deps: StemPipelineDeps) {
     [engine, refresh, setStatusFor, promoteCachedStems, requestStemsFromHost],
   );
 
-  return { deriveStems };
+  // ── WARM AHEAD ────────────────────────────────────────────────────────────────────────────
+  //
+  // Separate a track that is NOT on a deck, so its stems are already on disk by the time it is.
+  //
+  // ★ WHY. `ensurePreload` starts the next track's separation as soon as AUTO is armed, which
+  // buys the whole of the current track — usually enough, sometimes not. When it isn't, the
+  // separation is still running when the mix begins, and the transition either janks (see
+  // stems/gpuQueue) or degrades to an EQ blend because `raceStems` finds no stems. Warming the
+  // track AFTER next doubles the lead: two tracks instead of one.
+  //
+  // ★ IT DOES NOT TOUCH THE TRACK CACHE, and that is deliberate. `loadTrackToDeck` treats a
+  // populated `getCachedTrack` entry as "analysis already done" and skips the block that reads
+  // the shared dataset's stored beatgrid AND the one that posts our own back. A warm pass that
+  // called setCachedTrack would silently stop every warmed track from contributing its grid, and
+  // make it ignore a better stored one — a real regression, bought for a decode we can afford to
+  // repeat. So we decode a THROWAWAY buffer, hand it to the separator, and let it go. The bytes
+  // are cached in IndexedDB either way (putAudio), so the deck load re-decodes but never re-fetches.
+  //
+  // ★ IT RIDES THE SAME JOB MAP. `stemJobs` is keyed `videoId:modelId`, so when the deck load
+  // eventually calls deriveStems for this track it finds our in-flight promise and awaits it
+  // rather than starting a second separation. The warm and the load converge for free.
+  const warming = useRef("");
+  const warmStems = useCallback(
+    async (videoId: string): Promise<void> => {
+      if (!videoId) return;
+      // Never on a phone. The mobile path exists to STAY under a memory budget (see
+      // MOBILE_STEM_BYTE_BUDGET); speculatively decoding a track nobody asked for is the exact
+      // opposite of that trade.
+      if (isMobileDevice()) return;
+      const model = getStemModel(stemModelRef.current);
+      if (model.tier !== "gpu") return; // only the expensive path is worth pre-paying for
+      const key = `${videoId}:${model.id}`;
+      if (stemJobs.current.has(key)) return; // a deck already asked — it owns the job
+      if (warming.current) return; // one speculative separation at a time, ever
+      warming.current = videoId;
+      stemTrace("warm:start", videoId);
+      try {
+        // Already separated? The manifest probe is far cheaper than a decode, so ask first.
+        // fetchStemManifest always RESOLVES to an object — a miss is `{ stems: [], complete: false }`,
+        // not null — so this must test `.complete`, not truthiness. (A truthiness test here would
+        // return on every call and the warm would silently never run.)
+        const manifest = await fetchStemManifest(videoId, model.id).catch(() => null);
+        if (manifest?.complete) {
+          stemTrace("warm:cached", videoId);
+          return;
+        }
+        const stored = await getAudio(videoId);
+        const data = stored ? stored.bytes : await fetchYouTubeAudio(videoId, () => {});
+        if (!stored) void putAudio(videoId, data.slice(0));
+        const mix = await decodeAudio(engine.ctx, data);
+        // Re-check: the decode took time, and a deck may have claimed this track meanwhile.
+        if (stemJobs.current.has(key)) return;
+        const job = loadStems(engine.ctx, videoId, mix, model, () => {});
+        stemJobs.current.set(key, job);
+        void job.finally(() => {
+          if (stemJobs.current.get(key) === job) stemJobs.current.delete(key);
+        });
+        await job;
+        stemTrace("warm:done", videoId);
+      } catch (e) {
+        // Best-effort by construction: a failed warm costs nothing but the attempt, and the deck
+        // load will try again for real (with UI status) when the track actually lands.
+        stemTrace("warm:failed", `${videoId} ${(e as Error).message ?? e}`);
+      } finally {
+        warming.current = "";
+      }
+    },
+    [engine, stemModelRef, stemJobs],
+  );
+
+  return { deriveStems, warmStems };
 }

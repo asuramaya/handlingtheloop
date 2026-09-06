@@ -9,6 +9,7 @@ import type { AutoFxSettings, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
 import { clamp, lerp } from "../../util/math";
 import { event } from "../debug/trace";
+import { holdGpu } from "../stems/gpuQueue";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
 // the same engine/deck controls the UI buttons drive, but the user can jog, scratch,
@@ -87,6 +88,10 @@ export interface AutoMixerDeps {
   autoFx?: () => AutoFxSettings;
   /** Called once, when AUTO seeds the AUTO chain, so the app can remember not to offer it again. */
   onAutoFxSeeded?: () => void;
+  /** Speculatively separate a track that is NOT on a deck — the one AFTER next. Fire-and-forget,
+   *  desktop-only, and free to decline (the app's implementation is best-effort). See
+   *  useStemPipeline.warmStems for why this doubles the separation lead. */
+  warmStems?: (videoId: string) => void;
   onChange: (s: AutoMixStatus) => void;
 }
 
@@ -220,6 +225,14 @@ export class AutoMixer {
   private holdLoop: DeckId | null = null; // deck currently held in a loop-extend, if any
   private stutterFired = false; // the showy one-bar stutter fires once per transition
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
+  // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
+  // stem separation starts while two waveforms are scrolling and the crossfader is sweeping — see
+  // stems/gpuQueue. Null when not held; calling the stored function is what releases it, and it is
+  // idempotent, so every exit path may call quietGpuEnd() without counting how many times.
+  private gpuQuiet: (() => void) | null = null;
+  // Last videoId handed to warmStems, so an armed tick every 150 ms doesn't re-ask for the same
+  // track forever. Only ever compared, never used to address anything.
+  private warmedId = "";
   // Decks whose TRIM we set (gain staging) → the exact value we wrote. Lets stageGain tell "the
   // trim we set last track" from "the user reached over and moved it", so AUTO tunes a channel
   // exactly once per track and never fights a hand on the knob. Cleared on disable.
@@ -312,6 +325,9 @@ export class AutoMixer {
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
+    // Unconditional, unlike abandonCue's: the mixing branch above never reaches abandonCue, and a
+    // leaked hold would starve stem separation for the rest of the session.
+    this.quietGpuEnd();
     this.spinFired = false;
     this.stutterFired = false;
     this.stutterUntil = 0;
@@ -405,6 +421,7 @@ export class AutoMixer {
     // A loop-extend is held on the OUTGOING deck, not the cued one, so it has to be released here
     // too: abandoning the cue means no mix is coming, and a deck left looping never ends.
     this.releaseHoldLoop();
+    this.quietGpuEnd(); // no mix coming → stop deferring stem work (same reason as the loop)
     if (this.cuedIdle == null) return;
     const id = this.cuedIdle;
     this.cuedIdle = null;
@@ -649,6 +666,11 @@ export class AutoMixer {
     // for separation instead of the ~30 s lead-in. Fire-and-forget; the cue still happens
     // near mix-out, off the loaded deck. Runs every armed tick but latches once loaded.
     void this.ensurePreload();
+    // …and look ONE FURTHER. ensurePreload buys the next track a full track's worth of separation
+    // time; this buys the one after it a second track's worth, at the cost of a decode that the
+    // warm throws away. Fire-and-forget every armed tick — warmStems latches on its own (one
+    // speculative job at a time, skipped entirely if the deck path already claimed the track).
+    this.warmAhead();
     if (this.mixOutTime == null) {
       this.barsSeconds = barsToSeconds(12, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
       this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
@@ -774,6 +796,8 @@ export class AutoMixer {
       this.lastXfade = sign;
       this.cuedIdle = idle;
       this.mixStarted = false;
+      // From here to settle the screen is animating continuously — hold off any new separation.
+      this.quietGpuStart();
       this.phase = "cueing";
     } catch {
       this.abandonCue();
@@ -1448,6 +1472,7 @@ export class AutoMixer {
     this.mixStarted = false;
     this.plan = null;
     this.mixOutTime = null;
+    this.quietGpuEnd();
     this.phase = "manual";
   }
 
@@ -1521,6 +1546,10 @@ export class AutoMixer {
     this.mixOutTime = null;
     this.mixStarted = false;
     this.mixElapsed = 0;
+    // The mix is over and the screen is calm again — let deferred separations run. Released
+    // BEFORE clearPreload/armed on purpose: the very next armed tick starts the next track's
+    // load, and that load wants the GPU free the instant it asks for it.
+    this.quietGpuEnd();
     // The deck we just blended in is now live; the OUTGOING deck is the new idle. Forget the
     // old preload so the next armed tick eagerly loads the next-next track onto it.
     this.clearPreload();
@@ -1574,6 +1603,32 @@ export class AutoMixer {
       grid.beats && grid.beats.length && grid.downbeat != null ? grid.beats[grid.downbeat] ?? firstBeat : firstBeat;
     const t = chooseMixIn(s, barsSeconds, baseDown);
     return t <= baseDown ? baseDown : Math.max(baseDown, nearestBeat(grid, t));
+  }
+
+  // Raise / lower the GPU quiet window. Raising twice is a no-op (one hold per transition); the
+  // release is safe to call from any exit path, including ones that never cued.
+  // The track after next, if the queue knows one. Deliberately reads `upcoming[1]` rather than
+  // tracking its own cursor: `upcoming[0]` is what ensurePreload is already loading onto the idle
+  // deck, so [1] is the first track NOTHING else is working on.
+  private warmAhead(): void {
+    if (!this.deps.warmStems) return;
+    const after = this.deps.queue.upcoming[1];
+    const vid = after?.videoId;
+    if (!vid || vid === this.warmedId) return;
+    this.warmedId = vid;
+    this.deps.warmStems(vid);
+  }
+
+  private quietGpuStart(): void {
+    if (this.gpuQuiet) return;
+    this.gpuQuiet = holdGpu();
+    event("automix.gpu", { at: "quiet" });
+  }
+  private quietGpuEnd(): void {
+    if (!this.gpuQuiet) return;
+    this.gpuQuiet();
+    this.gpuQuiet = null;
+    event("automix.gpu", { at: "resume" });
   }
 
   private emit(force: boolean): void {

@@ -1577,7 +1577,7 @@ function AppBody() {
   // STEM PIPELINE — deriveStems + its promote/cache helpers live in ./App/useStemPipeline so a
   // stems-agent owns that file instead of contending on App.tsx. The App spine (refs/engine/
   // session) is handed in; deriveStems comes back out and feeds the load + session + mobile paths.
-  const { deriveStems } = useStemPipeline({
+  const { deriveStems, warmStems } = useStemPipeline({
     setStatusFor,
     requestStemsFromHost,
     stemModelRef,
@@ -2700,11 +2700,12 @@ function AppBody() {
 
   // Latest callbacks behind a ref so the (stably-constructed) AutoMixer never holds
   // a stale closure.
-  const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack, settings });
+  const autoDeps = useRef({ autoLoad, applyCrossfade, deckTrack, settings, warmStems });
   autoDeps.current.autoLoad = autoLoad;
   autoDeps.current.applyCrossfade = applyCrossfade;
   autoDeps.current.deckTrack = deckTrack;
   autoDeps.current.settings = settings; // read per-transition — a taste change lands on the next mix
+  autoDeps.current.warmStems = warmStems;
   const mixerRef = useRef<AutoMixer | null>(null);
   if (mixerRef.current === null) {
     mixerRef.current = new AutoMixer({
@@ -2718,6 +2719,10 @@ function AppBody() {
       stemsPending: (id) => stemLoading(statusRef.current[id]),
       performance: () => autoDeps.current.settings.autoPerformance,
       autoFx: () => autoDeps.current.settings.autoFx,
+      // Pre-separate the track AFTER next, so its stems are on disk before the deck ever asks.
+      // Fire-and-forget: a rejected/failed warm is not the mixer's problem (the deck load retries
+      // for real), so the promise is deliberately dropped rather than awaited or surfaced.
+      warmStems: (vid) => void autoDeps.current.warmStems(vid),
       // Sticky: the AUTO chain is offered ONCE. Deleting it is how the tail is turned off, and a
       // mixer that keeps putting it back would be arguing with the user.
       onAutoFxSeeded: () => setSettings((cur) => ({ ...cur, autoFx: { ...cur.autoFx, seeded: true } })),

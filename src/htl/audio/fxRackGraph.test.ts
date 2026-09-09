@@ -222,3 +222,147 @@ describe("stem ownership", () => {
     expect(reaches(taps[2], out)).toBe(true);
   });
 });
+
+// ── THE RACK'S TWO REGIONS ─────────────────────────────────────────────────────────────────────
+//
+//     [ ...the user's own chains... ][ AUTO, MIC, MASTER ]
+//         freely reorderable            reserved, fixed
+//
+// Operator ruling 0708130a. Before it, only MASTER was pinned and it was pinned by an accident of
+// implementation — addChain spliced at length-1, moveChain clamped against `masterAt`. AUTO was
+// inserted before the master and then sat loose among the user's chains, so it drifted leftward as
+// they reordered; MIC would have landed in the same trap the moment it existed.
+//
+// The invariant is asserted over SEQUENCES rather than single calls, because that is the only way
+// it can fail: every individual operation looked correct before this too.
+describe("FxRack chain order — reserved chains pin right, the user owns the left", () => {
+  const names = (r: FxRack) => r.chainList.map((c) => c.name);
+  /** The property itself, checkable after any operation: no custom chain sits right of a reserved
+   *  one, the reserved block is in its declared order, and MASTER is last. */
+  const holds = (r: FxRack) => {
+    const ns = names(r);
+    const rank = (n: string) => (n === "MASTER" ? 3 : n === "MIC" ? 2 : n === "AUTO" ? 1 : 0);
+    const ranks = ns.map(rank);
+    for (let i = 1; i < ranks.length; i++) if (ranks[i] !== 0 && ranks[i] < ranks[i - 1]) return false;
+    for (let i = 1; i < ranks.length; i++) if (ranks[i] === 0 && ranks[i - 1] !== 0) return false;
+    return ns[ns.length - 1] === "MASTER";
+  };
+
+  it("a fresh rack is just the master", () => {
+    const { rack } = rackWith(0);
+    expect(names(rack)).toEqual(["MASTER"]);
+    expect(holds(rack)).toBe(true);
+  });
+
+  it("custom chains land left of the master, in the order they were added", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("a", "Drums");
+    rack.addChain("b", "Bass");
+    expect(names(rack)).toEqual(["Drums", "Bass", "MASTER"]);
+  });
+
+  // ★ THE BUG THIS RULE FIXES. AUTO used to be inserted before the master and then left loose.
+  it("AUTO pins right of every custom chain, however it was added", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("auto", "AUTO");
+    rack.addChain("a", "Drums");
+    rack.addChain("b", "Bass");
+    expect(names(rack)).toEqual(["Drums", "Bass", "AUTO", "MASTER"]);
+    expect(holds(rack)).toBe(true);
+  });
+
+  it("MIC sits between AUTO and MASTER whatever order the three arrive in", () => {
+    for (const order of [["MIC", "AUTO"], ["AUTO", "MIC"]]) {
+      const { rack } = rackWith(0);
+      rack.addChain("x", "Custom");
+      order.forEach((n, i) => rack.addChain(`r${i}`, n));
+      expect(names(rack)).toEqual(["Custom", "AUTO", "MIC", "MASTER"]);
+    }
+  });
+
+  // ★ A DRAG MUST NOT BE ABLE TO PUT A USER CHAIN RIGHT OF THE MIC.
+  it("no move can push a custom chain into the reserved block", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("a", "Drums");
+    rack.addChain("b", "Bass");
+    rack.addChain("auto", "AUTO");
+    rack.addChain("mic", "MIC");
+    for (const to of [2, 3, 4, 99, -1]) {
+      rack.moveChain("a", to);
+      expect(holds(rack)).toBe(true);
+      expect(names(rack).slice(-3)).toEqual(["AUTO", "MIC", "MASTER"]);
+    }
+  });
+
+  it("a reserved chain refuses to move at all", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("a", "Drums");
+    rack.addChain("auto", "AUTO");
+    rack.addChain("mic", "MIC");
+    for (const id of ["auto", "mic", "master"]) {
+      expect(rack.moveChain(id, 0)).toBe(false);
+      expect(names(rack)).toEqual(["Drums", "AUTO", "MIC", "MASTER"]);
+    }
+  });
+
+  it("customs still reorder freely among themselves", () => {
+    const { rack } = rackWith(0);
+    ["A", "B", "C"].forEach((n, i) => rack.addChain(`c${i}`, n));
+    rack.addChain("auto", "AUTO");
+    rack.moveChain("c2", 0);
+    expect(names(rack)).toEqual(["C", "A", "B", "AUTO", "MASTER"]);
+    expect(holds(rack)).toBe(true);
+  });
+
+  // Reserved-ness is keyed on the NAME, so a rename changes it — in either direction.
+  it("renaming a custom chain to a reserved name pins it right; renaming away releases it", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("a", "Drums");
+    rack.addChain("b", "Scratch");
+    expect(names(rack)).toEqual(["Drums", "Scratch", "MASTER"]);
+    rack.setChainName("a", "MIC");
+    expect(names(rack)).toEqual(["Scratch", "MIC", "MASTER"]);
+    rack.setChainName("a", "Drums Again");
+    expect(holds(rack)).toBe(true);
+    expect(names(rack).slice(-1)).toEqual(["MASTER"]);
+  });
+
+  it("removing a reserved chain leaves the rest of the block intact", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("a", "Drums");
+    rack.addChain("auto", "AUTO");
+    rack.addChain("mic", "MIC");
+    rack.removeChain("auto");
+    expect(names(rack)).toEqual(["Drums", "MIC", "MASTER"]);
+    expect(holds(rack)).toBe(true);
+  });
+
+  // ★ THE SEQUENCE TEST. Every single operation looked correct before this rule too — the drift
+  // only ever showed up after a run of them.
+  it("survives a long mixed run of adds, moves, renames and removals", () => {
+    const { rack } = rackWith(0);
+    rack.addChain("auto", "AUTO");
+    let n = 0;
+    for (let step = 0; step < 60; step++) {
+      const custom = rack.chainList.filter((c) => !["AUTO", "MIC", "MASTER"].includes(c.name));
+      switch (step % 5) {
+        case 0:
+          rack.addChain(`k${n}`, `Chain${n++}`);
+          break;
+        case 1:
+          if (custom.length) rack.moveChain(custom[step % custom.length].id, step % (custom.length + 3));
+          break;
+        case 2:
+          if (step === 12) rack.addChain("mic", "MIC");
+          break;
+        case 3:
+          if (custom.length > 2) rack.removeChain(custom[0].id);
+          break;
+        default:
+          if (custom.length) rack.setChainName(custom[custom.length - 1].id, `R${step}`);
+      }
+      expect(holds(rack), `invariant broke at step ${step}: ${names(rack).join(",")}`).toBe(true);
+    }
+    expect(names(rack).slice(-3)).toEqual(["AUTO", "MIC", "MASTER"]);
+  });
+});

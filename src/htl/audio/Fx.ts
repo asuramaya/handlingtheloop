@@ -197,11 +197,59 @@ export class FxRack {
   device(addr: FxAddr): FxDevice | undefined {
     return this.chain(addr.chain)?.devices.find((d) => d.kind === addr.kind);
   }
-  /** A new stem chain, inserted BEFORE the master (which is always last, because that is where it
-   *  is in the signal). Returns it. */
+  // ── THE RACK HAS TWO REGIONS ─────────────────────────────────────────────────────────────────
+  //
+  //     [ ...the user's own chains... ][ AUTO, MIC, MASTER ]
+  //         freely reorderable            reserved, fixed
+  //
+  // ★ OPERATOR RULING (0708130a): "chains like master/mic/auto should be pinned to the right and
+  // reserve the left for custom chains."
+  //
+  // Before this, only MASTER was pinned, and it was pinned by an ACCIDENT OF IMPLEMENTATION rather
+  // than by a rule: addChain spliced at length-1 and moveChain clamped against `masterAt`. AUTO was
+  // inserted before the master and then sat loose among the user's chains, so it drifted leftward
+  // as they reordered — and MIC, which does not exist yet, would have landed in the same trap the
+  // moment it was added. Three special cases discovered separately, instead of one rule stated once.
+  //
+  // Reserved-ness is keyed on NAME, which is already how the rest of the app identifies these
+  // (AutoMixer looks its chain up by `c.name === "AUTO"`), so this adds no new notion of identity.
+  private static readonly RESERVED_NAMES = ["AUTO", "MIC"] as const;
+
+  /** Where a chain sits in the reserved block: -1 = the user's, higher = further right.
+   *  The master is always the last reserved one — its place at the end IS its place in the signal. */
+  private reservedRank(c: FxChain): number {
+    if (c.master) return FxRack.RESERVED_NAMES.length;
+    const i = (FxRack.RESERVED_NAMES as readonly string[]).indexOf(c.name);
+    return i < 0 ? -1 : i;
+  }
+
+  /** The boundary: index of the leftmost reserved chain, i.e. one past the user's last one. */
+  private firstReserved(): number {
+    const i = this.chains.findIndex((c) => this.reservedRank(c) >= 0);
+    return i < 0 ? this.chains.length : i;
+  }
+
+  /** Restore the two-region invariant: customs keep their relative order, reserved go right in
+   *  RESERVED_NAMES order with the master last. Stable, so it never reshuffles the user's row.
+   *  Called wherever a chain's NAME or membership can change — one enforcer, not a rule re-derived
+   *  at each call site. */
+  private enforceChainOrder(): void {
+    const custom = this.chains.filter((c) => this.reservedRank(c) < 0);
+    const reserved = this.chains
+      .filter((c) => this.reservedRank(c) >= 0)
+      .sort((a, b) => this.reservedRank(a) - this.reservedRank(b));
+    // Spliced in place, never reassigned: `chains` is readonly BY DESIGN — the rebuild graph and
+    // every chip-row index hold this exact array, so swapping it for a new one would leave them
+    // pointing at the old contents.
+    this.chains.splice(0, this.chains.length, ...custom, ...reserved);
+  }
+
+  /** A new chain. A RESERVED name lands in its own slot on the right; anything else lands at the
+   *  end of the user's region, which is where "add a chain" has always meant. Returns it. */
   addChain(id: string, name: string, stems = 0): FxChain {
     const c: FxChain = { id, name, stems, devices: [] };
-    this.chains.splice(Math.max(0, this.chains.length - 1), 0, c);
+    this.chains.splice(this.firstReserved(), 0, c);
+    this.enforceChainOrder();
     this.rebuild();
     return c;
   }
@@ -225,12 +273,14 @@ export class FxRack {
    *  its place at the end IS its place in the signal. */
   moveChain(id: string, to: number): boolean {
     const from = this.chains.findIndex((c) => c.id === id);
-    if (from < 0 || this.chains[from].master) return false;
-    const masterAt = this.chains.findIndex((c) => c.master);
+    // A RESERVED chain does not move, and no longer only the master: AUTO and MIC are the system's
+    // too, and a drag that could displace them is a drag that could put the user's chain to the
+    // right of the mic.
+    if (from < 0 || this.reservedRank(this.chains[from]) >= 0) return false;
     const [c] = this.chains.splice(from, 1);
-    // After the splice the master has shifted left iff it sat after the source.
-    const limit = masterAt < 0 ? this.chains.length : from < masterAt ? masterAt - 1 : masterAt;
-    const dst = Math.max(0, Math.min(to, limit));
+    // Recomputed AFTER the splice, so it needs none of the old shifted-left arithmetic — and it is
+    // correct for ANY number of reserved chains, which the `masterAt` version was not.
+    const dst = Math.max(0, Math.min(to, this.firstReserved()));
     this.chains.splice(dst, 0, c);
     return dst !== from;
   }
@@ -245,7 +295,11 @@ export class FxRack {
   }
   setChainName(id: string, name: string) {
     const c = this.chain(id);
-    if (c) c.name = name;
+    if (!c) return;
+    c.name = name;
+    // Renaming can change reserved-ness in EITHER direction — a user naming a chain "MIC", or the
+    // system's chain being renamed away — so the invariant is re-enforced rather than assumed.
+    this.enforceChainOrder();
   }
   /** Put a device into a chain. Refused if that chain already holds the kind — unique WITHIN a
    *  chain is the invariant the (chain, kind) address rests on. */

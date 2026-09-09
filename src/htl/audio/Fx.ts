@@ -134,6 +134,18 @@ export class FxRack {
    *  This lands where the taps' sum lands, so an injected voice still runs through the master
    *  chain's devices exactly as it did before chains existed. */
   readonly inject: GainNode;
+  /** ★ THE MIC'S OWN DOOR, deliberately NOT `inject`.
+   *
+   *  `inject` is shared by three voices — the scratch (Deck.connectScratch), the sampler, and the
+   *  mic — and that is right for them, because none of them appears on a stem tap and all three
+   *  want the master chain. But a MIC chain must process ONLY the mic. Feeding it from `inject`
+   *  would run the scratch voice and every sampler pad through the mic's reverb, which is the
+   *  obvious wiring and the wrong one.
+   *
+   *  So the mic gets its own entry. With a MIC chain present this lands on that chain's head and
+   *  the voice runs through its devices; without one it lands on the sum exactly where `inject`
+   *  lands, so a rack with no MIC chain sounds precisely as it did before this node existed. */
+  readonly micIn: GainNode;
   /** Rack output → the deck's trim node. */
   readonly output: GainNode;
   // A permanent inner node the chain hangs off, so `input` itself is never disconnected
@@ -150,6 +162,7 @@ export class FxRack {
     this.input = ctx.createGain();
     this.output = ctx.createGain();
     this.inject = ctx.createGain();
+    this.micIn = ctx.createGain();
     this.chainIn = ctx.createGain();
     this.input.connect(this.chainIn);
     this.rebuild();
@@ -370,6 +383,11 @@ export class FxRack {
     } catch {
       /* nothing connected yet */
     }
+    try {
+      this.micIn.disconnect();
+    } catch {
+      /* nothing connected yet */
+    }
     for (const c of this.chains) for (const d of c.devices) {
       try {
         d.output.disconnect();
@@ -410,7 +428,9 @@ export class FxRack {
     const stemChains = this.chains.filter((c) => c !== master);
     if (!stemChains.length) {
       // Only the master: the plain serial rack again, just addressed by name.
-      this.inject.connect(this.chainIn); // scratch / sampler / mic join the channel here
+      this.inject.connect(this.chainIn); // scratch / sampler join the channel here
+      // No non-master chains at all, so there is no MIC chain to route into by construction.
+      this.micIn.connect(this.chainIn);
       runDevices(master.devices, this.chainIn).connect(this.output);
       return;
     }
@@ -419,6 +439,7 @@ export class FxRack {
     const sum = this.output.context.createGain();
     this.chainNodes.push(sum);
     let anyTap = false;
+    let micHead: AudioNode | null = null;
     const claimed = stemChains.reduce((m, c) => m | c.stems, 0);
     for (const c of stemChains) {
       const head = this.output.context.createGain();
@@ -434,6 +455,8 @@ export class FxRack {
           /* a tap that cannot connect leaves this chain silent — see the fallback below */
         }
       }
+      // The MIC chain is fed by the mic, not by a tap — remember its head so micIn can land on it.
+      if (c.name === "MIC") micHead = head;
       runDevices(c.devices, head).connect(sum);
     }
     // A stem NO chain claimed still has to be heard: it runs dry into the sum, so building a
@@ -456,6 +479,9 @@ export class FxRack {
     if (!anyTap) this.chainIn.connect(sum);
     // …and the injected voices ALWAYS reach the sum, tap or no tap: nothing else carries them.
     this.inject.connect(sum);
+    // THE MIC lands on its own chain when one exists, and on the sum when it does not — so adding
+    // a MIC chain changes where the voice is processed and NOTHING about whether it is heard.
+    this.micIn.connect(micHead ?? sum);
     runDevices(master.devices, sum).connect(this.output);
   }
 

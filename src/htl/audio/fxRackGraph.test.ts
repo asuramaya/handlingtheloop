@@ -366,3 +366,77 @@ describe("FxRack chain order — reserved chains pin right, the user owns the le
     expect(names(rack).slice(-3)).toEqual(["AUTO", "MIC", "MASTER"]);
   });
 });
+
+// ── THE MIC'S OWN DOOR ─────────────────────────────────────────────────────────────────────────
+//
+// A MIC chain must process the mic and NOTHING ELSE. The obvious wiring — feed it from `inject`,
+// which already carries mic-to-deck — is wrong, because inject is shared by three voices: the
+// scratch (Deck.connectScratch), the sampler, and the mic. A MIC chain fed from inject would run
+// every scratch and every sampler pad through the mic's reverb.
+//
+// So the rack has a separate `micIn`, and these assert the two halves of its contract: the mic
+// reaches its chain, and the other two voices do not.
+describe("FxRack micIn — the MIC chain hears the mic and only the mic", () => {
+  /** True when `from` reaches `to` WITHOUT passing through any node in `avoid`. */
+  const reachesAvoiding = (from: StubNode, to: StubNode, avoid: StubNode[]): boolean => {
+    const seen = new Set<StubNode>();
+    const walk = (n: StubNode): boolean => {
+      if (n === to) return true;
+      if (seen.has(n) || avoid.includes(n)) return false;
+      seen.add(n);
+      return n.edges.some((e) => walk(e.to));
+    };
+    return walk(from);
+  };
+
+  it("with NO mic chain, the mic still reaches the output — adding one must be the only change", () => {
+    const { rack, out } = rackWith(4);
+    rack.addChain("d", "Drums", 0b0001);
+    expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
+  });
+
+  it("with a MIC chain, the mic runs THROUGH its device", () => {
+    const { rack, out } = rackWith(4);
+    const mic = rack.addChain("mic", "MIC", 0);
+    const rev = fakeDevice("reverb");
+    rack.addDevice(mic.id, rev);
+    expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
+    // …and specifically through the reverb, not around it.
+    expect(reachesAvoiding(rack.micIn as unknown as StubNode, out, [rev.input as unknown as StubNode])).toBe(false);
+  });
+
+  // ★ THE ISOLATION PROPERTY — the whole reason micIn exists rather than reusing inject.
+  it("the SCRATCH and SAMPLER voices do NOT pass through the mic's chain", () => {
+    const { rack, out } = rackWith(4);
+    const mic = rack.addChain("mic", "MIC", 0);
+    const rev = fakeDevice("reverb");
+    rack.addDevice(mic.id, rev);
+    const inject = rack.inject as unknown as StubNode;
+    // They still reach the output…
+    expect(reaches(inject, out)).toBe(true);
+    // …but never by way of the mic's reverb.
+    expect(reachesAvoiding(inject, out, [rev.input as unknown as StubNode])).toBe(true);
+  });
+
+  it("a MIC chain claims no stems, so it never steals a stem from the track", () => {
+    const { rack, taps, out } = rackWith(4);
+    rack.addChain("mic", "MIC", 0);
+    // Every stem is unclaimed, so all four still reach the output dry.
+    for (const t of taps) expect(reaches(t, out)).toBe(true);
+  });
+
+  it("removing the MIC chain hands the mic back to the sum — no voice is stranded", () => {
+    const { rack, out } = rackWith(4);
+    rack.addChain("mic", "MIC", 0);
+    rack.addChain("d", "Drums", 0b0001);
+    expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
+    rack.removeChain("mic");
+    expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
+  });
+
+  it("survives the no-stem-chains rack too — mic reaches the output with only a master", () => {
+    const { rack, out } = rackWith(0);
+    rack.add(fakeDevice("delay"));
+    expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
+  });
+});

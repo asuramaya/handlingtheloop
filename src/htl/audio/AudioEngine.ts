@@ -155,7 +155,9 @@ export class AudioEngine {
     // as a record source. Recorder captures any node into an AudioBuffer for the sampler.
     // Mic routes to the PA (master, with auto-duck) or INTO a deck's channel input (the deck's FX
     // rack/EQ/fader then process the voice — no separate mic rack needed).
-    this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.inject, B: this.deckB.rack.inject }, this.musicBus.gain);
+    // micIn, NOT inject: inject is shared with the scratch voice and the sampler, so a MIC chain fed
+    // from it would process those too. See FxRack.micIn.
+    this.mic = new MicInput(this.ctx, { master: this.master, A: this.deckA.rack.micIn, B: this.deckB.rack.micIn }, this.musicBus.gain);
     this.mic.monitorOut.connect(this.cueMaster); // PFL — hear the mic in the headphone/cue device
     // Cue/master headphone blend. cueMaster (PFL) → cuePflGain, master → cueMasterSend, both
     // sum into cueOut (the headphone master level). cueOut is what setCueSinkId bridges to the

@@ -49,6 +49,17 @@ export interface ScoreParts {
 
 // Weights. The provider graph stays the backbone — it is the only term that knows a Fishmans
 // track should not be followed by Jeezy — but it no longer decides alone.
+//
+// ★ MEASURED AGAINST REAL POOLS, not reasoned about: selectorPopulation.test.ts scores these over
+// captured production rows (scripts/capture-selector-fixture.mjs). Two findings that should be in
+// front of anyone about to change a number here:
+//   • ~5% of real candidates carry ANY analysis and under 1% carry energy, so W_KEY, W_BPM,
+//     W_ENERGY and W_ANALYSED are all inert on the overwhelming majority of picks. The selector
+//     mostly ratifies provider order today.
+//   • But where analysis IS present it is decisive: full agreement is worth 0.52, which exceeds
+//     the entire rel spread of a 30-deep list (0.406). The knife is sharp and rarely drawn.
+// So the lever is COVERAGE, not these constants. Raising one to compensate for the coverage gap
+// would only change what happens in the 5% of cases that already work.
 const W_REL = 0.42;
 const W_KEY = 0.16;
 const W_BPM = 0.18;

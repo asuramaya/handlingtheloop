@@ -1,0 +1,1594 @@
+{
+  "capturedAt": "2026-09-09T22:50:36.518Z",
+  "origin": "https://handlingtheloop.com",
+  "census": {
+    "seeds": 8,
+    "candidates": 240,
+    "distinct": 228,
+    "analysed": 11,
+    "withBpm": 11,
+    "withKey": 11,
+    "withEnergy": 2,
+    "analysedOccurrences": 13,
+    "energyOccurrences": 4
+  },
+  "pools": [
+    {
+      "seed": {
+        "videoId": "a-rfX8inHto",
+        "title": "Thos Moser",
+        "artist": "food house - Topic",
+        "duration": 263
+      },
+      "candidates": [
+        {
+          "videoId": "NVgS7Kxd6cg",
+          "title": "mos thoser",
+          "artist": "food house - Topic",
+          "duration": 248
+        },
+        {
+          "videoId": "ykDUvOpZKm8",
+          "title": "Sadistic",
+          "artist": "Anya Nami",
+          "duration": 216
+        },
+        {
+          "videoId": "7pA2NRYGQEk",
+          "title": "Hollywood Baby",
+          "artist": "100 gecs",
+          "duration": 188
+        },
+        {
+          "videoId": "GwBwTiAluWY",
+          "title": "xXXi_wud_nvrst\u00f8p_\u00dcXXx",
+          "artist": "100 gecs",
+          "duration": 175
+        },
+        {
+          "videoId": "5IkN-Izd1jw",
+          "title": "Gupi & Fraxiom (food house) - Thos Moser and Mos Thoser LIVE in Chicago (food house debut set)",
+          "artist": "Mergatroid",
+          "duration": 453
+        },
+        {
+          "videoId": "nCIteMfhBWA",
+          "title": "8 now",
+          "artist": "food house - Topic",
+          "duration": 210
+        },
+        {
+          "videoId": "OMhMPbRrqrY",
+          "title": "curses",
+          "artist": "food house - Topic",
+          "duration": 173
+        },
+        {
+          "videoId": "M-IFUa3Ry-I",
+          "title": "1:15",
+          "artist": "8485",
+          "duration": 131
+        },
+        {
+          "videoId": "c_j9Z047DoU",
+          "title": "Modest",
+          "artist": "Gupi - Topic",
+          "duration": 183
+        },
+        {
+          "videoId": "igqLDdMpHMU",
+          "title": "underscores - Spoiled little brat (Official Video)",
+          "artist": "underscores",
+          "duration": 226
+        },
+        {
+          "videoId": "598tPPX_9kA",
+          "title": "False Awakening",
+          "artist": "Gupi - Topic",
+          "duration": 192
+        },
+        {
+          "videoId": "5zEiQ4olTEE",
+          "title": "Ferrari",
+          "artist": "Alice Gas - Topic",
+          "duration": 203
+        },
+        {
+          "videoId": "mZLHSDK5pYc",
+          "title": "51129",
+          "artist": "food house - Topic",
+          "duration": 208
+        },
+        {
+          "videoId": "Izj_lF5i_X4",
+          "title": "mememe",
+          "artist": "100 gecs",
+          "duration": 167
+        },
+        {
+          "videoId": "GYD11HwSyUI",
+          "title": "100 gecs - 800db cloud (Official Music Video)",
+          "artist": "100 gecs",
+          "duration": 146
+        },
+        {
+          "videoId": "VTgJWG-z0qg",
+          "title": "money machine",
+          "artist": "100 gecs",
+          "duration": 115
+        },
+        {
+          "videoId": "5XGaqjTKe20",
+          "title": "bloodstains",
+          "artist": "100 gecs",
+          "duration": 130
+        },
+        {
+          "videoId": "m8ZdI13ujdk",
+          "title": "sole",
+          "artist": "food house - Topic",
+          "duration": 162
+        },
+        {
+          "videoId": "oYOPz1vqeZU",
+          "title": "Dumbest Girl Alive",
+          "artist": "100 gecs",
+          "duration": 138
+        },
+        {
+          "videoId": "H2vTrHc-OGk",
+          "title": "2hollis - poster boy (official audio)",
+          "artist": "2hollis",
+          "duration": 122
+        },
+        {
+          "videoId": "7sWKvCaMV-k",
+          "title": "757",
+          "artist": "100 gecs",
+          "duration": 127
+        },
+        {
+          "videoId": "cUDY8v8AsHM",
+          "title": "if you make music .. stop it",
+          "artist": "Fraxiom - Topic",
+          "duration": 169
+        },
+        {
+          "videoId": "2YvDwY80qJI",
+          "title": "4K CARPET",
+          "artist": "passengerprincess - Topic",
+          "duration": 121
+        },
+        {
+          "videoId": "c8tcxpsHk20",
+          "title": "Black Rum",
+          "artist": "Cake Pop - Topic",
+          "duration": 147
+        },
+        {
+          "videoId": "xfN3nqxvmOU",
+          "title": "#BrooklynBloodPop!",
+          "artist": "syko",
+          "duration": 146
+        },
+        {
+          "videoId": "lxwK4ILnccU",
+          "title": "one you know",
+          "artist": "food house - Topic",
+          "duration": 224
+        },
+        {
+          "videoId": "9iKltFVAMm4",
+          "title": "metal",
+          "artist": "food house - Topic",
+          "duration": 174
+        },
+        {
+          "videoId": "cI2X4_hw-7U",
+          "title": "I deserve this",
+          "artist": "Rebzyyx",
+          "duration": 104
+        },
+        {
+          "videoId": "TbsBEb1ZxWA",
+          "title": "Caravan Palace - Lone Digger (Album version)",
+          "artist": "CaravanPalace",
+          "duration": 231
+        },
+        {
+          "videoId": "iUGclRjzfm4",
+          "title": "Joey Valence & Brae- BUSSIT (Official Music Video)",
+          "artist": "Joey Valence & Brae",
+          "duration": 205
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "oz7-7ouXUJU",
+        "title": "Ghosts 'n' Stuff",
+        "artist": "deadmau5 - Topic",
+        "duration": 195
+      },
+      "candidates": [
+        {
+          "videoId": "AT0e3LGteoA",
+          "title": "Strobe",
+          "artist": "deadmau5",
+          "duration": 634
+        },
+        {
+          "videoId": "xAdvWC9gXUo",
+          "title": "I Remember",
+          "artist": "Kaskade",
+          "duration": 548
+        },
+        {
+          "videoId": "SfG3GCP9ZT8",
+          "title": "Escape",
+          "artist": "Kx5",
+          "duration": 241
+        },
+        {
+          "videoId": "y81-iBC8iEg",
+          "title": "Ghosts 'n' Stuff (Extended Mix)",
+          "artist": "deadmau5",
+          "duration": 329
+        },
+        {
+          "videoId": "Lchll-Uf9yQ",
+          "title": "Raise Your Weapon",
+          "artist": "deadmau5",
+          "duration": 503
+        },
+        {
+          "videoId": "jkxD2C9mKbY",
+          "title": "Science",
+          "artist": "deadmau5",
+          "duration": 588
+        },
+        {
+          "videoId": "g4_ueTnlmCo",
+          "title": "You And I (deadmau5 Remix)",
+          "artist": "Medina",
+          "duration": 380
+        },
+        {
+          "videoId": "cEJMWP0A3Rw",
+          "title": "Deadmau5 feat. Rob Swire - Ghosts N Stuff",
+          "artist": "NFSHP2MW Gaming",
+          "duration": 190
+        },
+        {
+          "videoId": "h8rAlCpqW5g",
+          "title": "Ameonna",
+          "artist": "deadmau5",
+          "duration": 443
+        },
+        {
+          "videoId": "GrH7dR9Ql14",
+          "title": "Moar Ghosts n Stuff",
+          "artist": "deadmau5",
+          "duration": 271
+        },
+        {
+          "videoId": "OPUQqaINY7s",
+          "title": "Professional Griefers (Vocal Mix)",
+          "artist": "deadmau5",
+          "duration": 244
+        },
+        {
+          "videoId": "XQDiUuMPEPE",
+          "title": "Channel 42",
+          "artist": "deadmau5",
+          "duration": 291
+        },
+        {
+          "videoId": "K_yBUfMGvzc",
+          "title": "Deorro - Five Hours (Static Video) [LE7ELS]",
+          "artist": "PRMD Music",
+          "duration": 330
+        },
+        {
+          "videoId": "iO1Tr9itZUc",
+          "title": "Animal Rights",
+          "artist": "deadmau5",
+          "duration": 375
+        },
+        {
+          "videoId": "gDndZn0YPdI",
+          "title": "deadmau5 - Sofi Needs a Ladder",
+          "artist": "deadmau5",
+          "duration": 407
+        },
+        {
+          "videoId": "lw3iCVeTe30",
+          "title": "Call on Me (Radio Mix)",
+          "artist": "Eric Prydz",
+          "duration": 172
+        },
+        {
+          "videoId": "FGBhQbmPwH8",
+          "title": "Daft Punk - One More Time (Official Video)",
+          "artist": "Daft Punk",
+          "duration": 322
+        },
+        {
+          "videoId": "EX4jGLiZlYk",
+          "title": "Raise Your Weapon (Radio Edit)",
+          "artist": "deadmau5",
+          "duration": 203
+        },
+        {
+          "videoId": "72uQmknnefI",
+          "title": "I Remember (Radio Edit)",
+          "artist": "deadmau5",
+          "duration": 201
+        },
+        {
+          "videoId": "RH_F8YctI6Y",
+          "title": "The Veldt (8 Minute Edit)",
+          "artist": "deadmau5",
+          "duration": 521
+        },
+        {
+          "videoId": "KMuVsv3KFaI",
+          "title": "Quezacotl",
+          "artist": "deadmau5",
+          "duration": 435
+        },
+        {
+          "videoId": "ySx897NPUNE",
+          "title": "Patience",
+          "artist": "deadmau5",
+          "duration": 329
+        },
+        {
+          "videoId": "YFdcs6uEmqg",
+          "title": "Aural Psynapse",
+          "artist": "deadmau5",
+          "duration": 450
+        },
+        {
+          "videoId": "f3XlIQ5pmdQ",
+          "title": "Swedish House Mafia - Greyhound - Extended Video Remix HD",
+          "artist": "Catitos",
+          "duration": 410
+        },
+        {
+          "videoId": "BR_DFMUzX4E",
+          "title": "Armin van Buuren feat. Trevor Guthrie - This Is What It Feels Like (Official Music Video)",
+          "artist": "Armada Music TV and Armin van Buuren",
+          "duration": 250
+        },
+        {
+          "videoId": "Lur-rvf6A1c",
+          "title": "Clarity",
+          "artist": "Zedd",
+          "duration": 272
+        },
+        {
+          "videoId": "HfbKF_Jcbhk",
+          "title": "Spectrum",
+          "artist": "Zedd",
+          "duration": 244
+        },
+        {
+          "videoId": "qGg9b-FPj8Y",
+          "title": "Some Chords",
+          "artist": "deadmau5",
+          "duration": 444
+        },
+        {
+          "videoId": "dy3QONktMoY",
+          "title": "deadmau5 & Wolfgang Gartner - Channel 43 (Radio Edit)",
+          "artist": "deadmau5",
+          "duration": 190
+        },
+        {
+          "videoId": "Jb6gcoR266U",
+          "title": "Around the World",
+          "artist": "Daft Punk",
+          "duration": 430
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "E0ozmU9cJDg",
+        "title": "Master of Puppets (Remastered)",
+        "artist": "Metallica - Topic",
+        "duration": 515
+      },
+      "candidates": [
+        {
+          "videoId": "B_HSa1dEL9s",
+          "title": "For Whom The Bell Tolls (Remastered)",
+          "artist": "Metallica",
+          "duration": 310
+        },
+        {
+          "videoId": "apK2jCrfnsk",
+          "title": "One (Remastered)",
+          "artist": "Metallica",
+          "duration": 447
+        },
+        {
+          "videoId": "XVk-IAbohRk",
+          "title": "Not One Shovel- Oswit Canyon  (Country Rock Version)    HD 1080p",
+          "artist": "Bruce G",
+          "duration": 294
+        },
+        {
+          "videoId": "XZuM4zFg-60",
+          "title": "Enter Sandman (Remastered)",
+          "artist": "Metallica",
+          "duration": 332
+        },
+        {
+          "videoId": "WM8bTdBs-cw",
+          "title": "Metallica: One (Official Music Video)",
+          "artist": "Metallica",
+          "duration": 465
+        },
+        {
+          "videoId": "9HZ_tx8aWuA",
+          "title": "Fade To Black (Remastered)",
+          "artist": "Metallica",
+          "duration": 418
+        },
+        {
+          "videoId": "5abamRO41fE",
+          "title": "Slipknot - Psychosocial [OFFICIAL VIDEO] [HD]",
+          "artist": "Slipknot",
+          "duration": 303
+        },
+        {
+          "videoId": "FLTchCiC0T0",
+          "title": "Seek & Destroy (Remastered)",
+          "artist": "Metallica",
+          "duration": 415
+        },
+        {
+          "videoId": "hTWKbfoikeg",
+          "title": "Nirvana - Smells Like Teen Spirit (Official Music Video)",
+          "artist": "Nirvana",
+          "duration": 279
+        },
+        {
+          "videoId": "bc5Nk1DXyEY",
+          "title": "War Pigs",
+          "artist": "Black Sabbath",
+          "duration": 475
+        },
+        {
+          "videoId": "CSvFpBOe8eY",
+          "title": "System Of A Down - Chop Suey! (Official HD Video)",
+          "artist": "System Of A Down",
+          "duration": 209
+        },
+        {
+          "videoId": "kyVnTWYDDu4",
+          "title": "METALLICA For Whom The Bell Tolls & Master of Puppets",
+          "artist": "Benedek Bereczky",
+          "duration": 826
+        },
+        {
+          "videoId": "X791IzOwt3Q",
+          "title": "Stairway to Heaven (Remaster)",
+          "artist": "Led Zeppelin",
+          "duration": 486
+        },
+        {
+          "videoId": "tlO3lZhDukU",
+          "title": "One (Remastered)",
+          "artist": "Metallica",
+          "duration": 448
+        },
+        {
+          "videoId": "a_ITtP033RI",
+          "title": "Battery (Remastered)",
+          "artist": "Metallica",
+          "duration": 313
+        },
+        {
+          "videoId": "X8OeBZQn3_w",
+          "title": "Creeping Death (Remastered)",
+          "artist": "Metallica",
+          "duration": 396
+        },
+        {
+          "videoId": "TydZ4NAXMic",
+          "title": "Orion (Remastered)",
+          "artist": "Metallica",
+          "duration": 508
+        },
+        {
+          "videoId": "ZiIc0HuJ78Q",
+          "title": "Welcome Home (Sanitarium) (Remastered)",
+          "artist": "Metallica",
+          "duration": 388
+        },
+        {
+          "videoId": "DVOImtJY7po",
+          "title": "Ride The Lightning (Remastered)",
+          "artist": "Metallica",
+          "duration": 397
+        },
+        {
+          "videoId": "F01UTYg79KY",
+          "title": "Iron Man",
+          "artist": "Black Sabbath",
+          "duration": 355
+        },
+        {
+          "videoId": "5RdmcuQm6EU",
+          "title": "Thunderstruck",
+          "artist": "AC/DC",
+          "duration": 293
+        },
+        {
+          "videoId": "0CNPR2qNzxk",
+          "title": "Welcome To The Jungle",
+          "artist": "Guns N' Roses",
+          "duration": 274
+        },
+        {
+          "videoId": "Ji_QolNU4I8",
+          "title": "Fuel",
+          "artist": "Metallica",
+          "duration": 270
+        },
+        {
+          "videoId": "TpohVYomw2o",
+          "title": "Sad But True (Remastered)",
+          "artist": "Metallica",
+          "duration": 325
+        },
+        {
+          "videoId": "Z-cEyiM9adE",
+          "title": "Wherever I May Roam (Remastered)",
+          "artist": "Metallica",
+          "duration": 405
+        },
+        {
+          "videoId": "pTYIf2pkxzQ",
+          "title": "Nothing Else Matters",
+          "artist": "Metallica",
+          "duration": 389
+        },
+        {
+          "videoId": "AkFqg5wAuFk",
+          "title": "Pantera - Walk (Official Music Video) [4K]",
+          "artist": "Pantera",
+          "duration": 316
+        },
+        {
+          "videoId": "iywaBOMvYLI",
+          "title": "System Of A Down - Toxicity (Official HD Video)",
+          "artist": "System Of A Down",
+          "duration": 225
+        },
+        {
+          "videoId": "W2QeQ9ZufAk",
+          "title": "Come As You Are",
+          "artist": "Nirvana",
+          "duration": 220
+        },
+        {
+          "videoId": "oMfMUfgjiLg",
+          "title": "Sweet Child O' Mine",
+          "artist": "Guns N' Roses",
+          "duration": 357
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "5NPBIwQyPWE",
+        "title": "Avril Lavigne - Complicated (Official Video)",
+        "artist": "AvrilLavigneVEVO",
+        "duration": 253
+      },
+      "candidates": [
+        {
+          "videoId": "dGR65RWwzg8",
+          "title": "Avril Lavigne - I'm With You (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 225
+        },
+        {
+          "videoId": "Bg59q4puhmg",
+          "title": "Avril Lavigne - Girlfriend (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 228
+        },
+        {
+          "videoId": "KlyXNRrsk4A",
+          "title": "Katy Perry - Last Friday Night (T.G.I.F.) (Official Music Video)",
+          "artist": "Katy Perry",
+          "duration": 485
+        },
+        {
+          "videoId": "0G3_kG5FFfQ",
+          "title": "Avril Lavigne - When You're Gone (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 240
+        },
+        {
+          "videoId": "kTHNpusq654",
+          "title": "Katy Perry - Hot N Cold (Official Music Video)",
+          "artist": "Katy Perry",
+          "duration": 284
+        },
+        {
+          "videoId": "FC3y9llDXuM",
+          "title": "Wheatus - Teenage Dirtbag",
+          "artist": "WheatusOfficial",
+          "duration": 247
+        },
+        {
+          "videoId": "Soa3gO7tL-c",
+          "title": "Green Day - Boulevard Of Broken Dreams [Official Music Video] [4K Upgrade]",
+          "artist": "Green Day",
+          "duration": 288
+        },
+        {
+          "videoId": "C-u5WLJ9Yk4",
+          "title": "Britney Spears - ...Baby One More Time (Official Video)",
+          "artist": "Britney Spears",
+          "duration": 237
+        },
+        {
+          "videoId": "VV1XWJN3nJo",
+          "title": "Natalie Imbruglia - Torn (Official Video)",
+          "artist": "Natalie Imbruglia",
+          "duration": 244
+        },
+        {
+          "videoId": "VT1-sitWRtY",
+          "title": "Avril Lavigne - Wish You Were Here (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 227
+        },
+        {
+          "videoId": "TIy3n2b7V9k",
+          "title": "Avril Lavigne - Sk8er Boi (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 219
+        },
+        {
+          "videoId": "Cwkej79U3ek",
+          "title": "Vanessa Carlton - A Thousand Miles",
+          "artist": "Vanessa Carlton",
+          "duration": 267
+        },
+        {
+          "videoId": "3YxaaGgTQYM",
+          "title": "Evanescence - Bring Me To Life (Official HD Music Video) ft. Paul McCoy",
+          "artist": "Evanescence",
+          "duration": 254
+        },
+        {
+          "videoId": "s8QYxmpuyxg",
+          "title": "Avril Lavigne - My Happy Ending (Official Video - Clean)",
+          "artist": "Avril Lavigne",
+          "duration": 241
+        },
+        {
+          "videoId": "MrTz5xjmso4",
+          "title": "Sean Kingston - Beautiful Girls (Official HD Video)",
+          "artist": "seankingston",
+          "duration": 262
+        },
+        {
+          "videoId": "M11SvDtPBhA",
+          "title": "Miley Cyrus - Party In The U.S.A. (Official Video)",
+          "artist": "HollywoodRecordsVEVO",
+          "duration": 208
+        },
+        {
+          "videoId": "fWNaR-rxAic",
+          "title": "Carly Rae Jepsen - Call Me Maybe",
+          "artist": "Carly Rae Jepsen",
+          "duration": 200
+        },
+        {
+          "videoId": "VuNIsY6JdUw",
+          "title": "Taylor Swift - You Belong With Me",
+          "artist": "Taylor Swift",
+          "duration": 229
+        },
+        {
+          "videoId": "8xg3vE8Ie_E",
+          "title": "Taylor Swift - Love Story",
+          "artist": "Taylor Swift",
+          "duration": 237
+        },
+        {
+          "videoId": "uelHwf8o7_U",
+          "title": "Eminem - Love The Way You Lie ft. Rihanna",
+          "artist": "EminemMusic",
+          "duration": 267
+        },
+        {
+          "videoId": "kIDWgqDBNXA",
+          "title": "Christina Aguilera - Genie In A Bottle (Official Video)",
+          "artist": "Christina Aguilera",
+          "duration": 217
+        },
+        {
+          "videoId": "4fndeDfaWCg",
+          "title": "Backstreet Boys - I Want It That Way (Official HD Video)",
+          "artist": "Backstreet Boys",
+          "duration": 220
+        },
+        {
+          "videoId": "64wxAbbWNag",
+          "title": "The One That Got Away",
+          "artist": "Katy Perry",
+          "duration": 228
+        },
+        {
+          "videoId": "iP6XpLQM2Cs",
+          "title": "Ke$ha - TiK ToK (Official HD Video)",
+          "artist": "kesha",
+          "duration": 216
+        },
+        {
+          "videoId": "LOZuxwVk7TU",
+          "title": "Britney Spears - Toxic (Official HD Video)",
+          "artist": "Britney Spears",
+          "duration": 212
+        },
+        {
+          "videoId": "tQmEd_UeeIk",
+          "title": "Avril Lavigne - What The Hell (Official Video)",
+          "artist": "Avril Lavigne",
+          "duration": 226
+        },
+        {
+          "videoId": "eVTXPUF4Oz4",
+          "title": "In The End [Official HD Music Video] - Linkin Park",
+          "artist": "Linkin Park",
+          "duration": 219
+        },
+        {
+          "videoId": "NdYWuo9OFAw",
+          "title": "Goo Goo Dolls \u2013 Iris [Official Music Video] [4K Remaster]",
+          "artist": "Goo Goo Dolls",
+          "duration": 216
+        },
+        {
+          "videoId": "6Ejga4kJUts",
+          "title": "The Cranberries - Zombie (Official Music Video)",
+          "artist": "TheCranberriesTV",
+          "duration": 308
+        },
+        {
+          "videoId": "-eGM0IJc70Y",
+          "title": "Bring Me To Life",
+          "artist": "Evanescence",
+          "duration": 236
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "IK3nKs0KWq8",
+        "title": "Join Me In Death",
+        "artist": "HIM - Topic",
+        "duration": 217
+      },
+      "candidates": [
+        {
+          "videoId": "-eGM0IJc70Y",
+          "title": "Bring Me To Life",
+          "artist": "Evanescence",
+          "duration": 236
+        },
+        {
+          "videoId": "zCXJRi2kd_Y",
+          "title": "Cool Off",
+          "artist": "Ross Hardy - Topic",
+          "duration": 167
+        },
+        {
+          "videoId": "hjlNzuB-cNQ",
+          "title": "I Don't Wanna Be Me",
+          "artist": "typeonegative",
+          "duration": 309
+        },
+        {
+          "videoId": "1lv1h3LWbNk",
+          "title": "Paparazzi (Dubstep) (Slowed)",
+          "artist": "Alximo - Topic",
+          "duration": 184
+        },
+        {
+          "videoId": "12fJAnaif34",
+          "title": "I Was Made For Lovin' You",
+          "artist": "KISS",
+          "duration": 272
+        },
+        {
+          "videoId": "CCtNVM54vNA",
+          "title": "Join Me In Death (Demo Remastered)",
+          "artist": "xd",
+          "duration": 343
+        },
+        {
+          "videoId": "qGM33G_Kd_I",
+          "title": "The Red Means I Love You",
+          "artist": "Madds Buckley",
+          "duration": 234
+        },
+        {
+          "videoId": "RAut3N1uZuI",
+          "title": "Black Sheep (Brie Larson Vocal Version)",
+          "artist": "metricmusic",
+          "duration": 295
+        },
+        {
+          "videoId": "aAFh22R4PEA",
+          "title": "He's My Man",
+          "artist": "Luvcat",
+          "duration": 233
+        },
+        {
+          "videoId": "0AgjYTE-e9c",
+          "title": "New Perspective",
+          "artist": "Panic! At The Disco",
+          "duration": 228
+        },
+        {
+          "videoId": "SBcdQslrBtI",
+          "title": "Join Me In Death",
+          "artist": "HIM",
+          "duration": 218
+        },
+        {
+          "videoId": "KUZ7jG7BKE8",
+          "title": "Sonne",
+          "artist": "Rammstein Official",
+          "duration": 273
+        },
+        {
+          "videoId": "AxuTd9rwEHQ",
+          "title": "Everlong",
+          "artist": "Foo Fighters",
+          "duration": 251
+        },
+        {
+          "videoId": "0cEPWrXHgYM",
+          "title": "Feist - My Moon My Man (Lyric Video)",
+          "artist": "FeistMusic",
+          "duration": 227
+        },
+        {
+          "videoId": "valVixMpzQY",
+          "title": "One Way Or Another",
+          "artist": "BlondieMusicOfficial",
+          "duration": 218
+        },
+        {
+          "videoId": "6pMf91N1tNU",
+          "title": "Go Away",
+          "artist": "weezer",
+          "duration": 194
+        },
+        {
+          "videoId": "pqrUQrAcfo4",
+          "title": "Do I Wanna Know?",
+          "artist": "Official Arctic Monkeys",
+          "duration": 273
+        },
+        {
+          "videoId": "HydkjjDNTmY",
+          "title": "Jane!",
+          "artist": "The Long Faces",
+          "duration": 187
+        },
+        {
+          "videoId": "BI9HQCzpDgQ",
+          "title": "Earrings",
+          "artist": "Malcolm Todd",
+          "duration": 152
+        },
+        {
+          "videoId": "JirXTmnItd4",
+          "title": "Smells Like Teen Spirit",
+          "artist": "Nirvana",
+          "duration": 302
+        },
+        {
+          "videoId": "W2QeQ9ZufAk",
+          "title": "Come As You Are",
+          "artist": "Nirvana",
+          "duration": 220
+        },
+        {
+          "videoId": "XFkzRNyygfk",
+          "title": "Radiohead - Creep",
+          "artist": "Radiohead",
+          "duration": 237
+        },
+        {
+          "videoId": "o7fgFaXKVa0",
+          "title": "Duvet",
+          "artist": "B\u00f4a",
+          "duration": 204
+        },
+        {
+          "videoId": "JAHZVS4tb1I",
+          "title": "Boys Don't Cry",
+          "artist": "The Cure",
+          "duration": 158
+        },
+        {
+          "videoId": "gjKRxd8yMyM",
+          "title": "Cherry Waves",
+          "artist": "Deftones",
+          "duration": 318
+        },
+        {
+          "videoId": "JixFMKqQU5w",
+          "title": "Evanescence - Bring Me To Life (Remastered 2023) - Official Visualizer",
+          "artist": "Evanescence",
+          "duration": 237
+        },
+        {
+          "videoId": "vn8xOJSTURE",
+          "title": "Poison Girl",
+          "artist": "HIM",
+          "duration": 232
+        },
+        {
+          "videoId": "8qW-Na9-juw",
+          "title": "Wicked Game",
+          "artist": "HIM",
+          "duration": 235
+        },
+        {
+          "videoId": "CvP-gs8YTX0",
+          "title": "Bury Me Deep Inside Your Heart",
+          "artist": "HIM",
+          "duration": 257
+        },
+        {
+          "videoId": "geD6rECYX2w",
+          "title": "Heaven Tonight",
+          "artist": "HIM",
+          "duration": 199
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "fatzC68iTa0",
+        "title": "Deadmau5 - I Forget But Then I Remembered (Mixed)",
+        "artist": "Onnosvld",
+        "duration": 494
+      },
+      "candidates": [
+        {
+          "videoId": "X3VSP50GOi4",
+          "title": "deadmau5 - I Remember [Extended]",
+          "artist": "mau5song",
+          "duration": 746
+        },
+        {
+          "videoId": "gkjWgY4mwCg",
+          "title": "Deadmau5 - No Clue (Extended Version Mixed)",
+          "artist": "Onnosvld",
+          "duration": 603
+        },
+        {
+          "videoId": "8Kzltj25rMY",
+          "title": "Deadmau5 - Bleed (Mixed)",
+          "artist": "Onnosvld",
+          "duration": 410
+        },
+        {
+          "videoId": "xAdvWC9gXUo",
+          "title": "I Remember",
+          "artist": "Kaskade",
+          "duration": 548
+        },
+        {
+          "videoId": "Lchll-Uf9yQ",
+          "title": "Raise Your Weapon",
+          "artist": "deadmau5",
+          "duration": 503
+        },
+        {
+          "videoId": "5kqdkNp-uW0",
+          "title": "deadmau5 Ft. Colleen D'Agostino - Stay (Drop The Poptart Edit)",
+          "artist": "Good4Josh",
+          "duration": 812
+        },
+        {
+          "videoId": "nvuL-EoVgqg",
+          "title": "deadmau5 - maybe not (trimau5 restoration)",
+          "artist": "trimau5",
+          "duration": 406
+        },
+        {
+          "videoId": "zK1mLIeXwsQ",
+          "title": "deadmau5 & Kaskade - I Remember (HQ)",
+          "artist": "deadmau5",
+          "duration": 594
+        },
+        {
+          "videoId": "hWUAnKUDCV8",
+          "title": "Deadmau5 - Hit save (New vocal edit) Reupload",
+          "artist": "Dakota",
+          "duration": 638
+        },
+        {
+          "videoId": "YTcopp-mpmo",
+          "title": "deadmau5 - Not Exactly",
+          "artist": "deadmau5",
+          "duration": 552
+        },
+        {
+          "videoId": "h2ZoZKJ3tmA",
+          "title": "Alone with You",
+          "artist": "deadmau5",
+          "duration": 451
+        },
+        {
+          "videoId": "isfQfpT31z4",
+          "title": "Deadmau5 - Ghosts N Stuff (Ultra Extended Mix)",
+          "artist": "Agrs",
+          "duration": 957
+        },
+        {
+          "videoId": "O2jj3YbgX_w",
+          "title": "Calvin Harris I'm Not Alone DEADMAU5 REMIX",
+          "artist": "Calvin Harris",
+          "duration": 493
+        },
+        {
+          "videoId": "ZWCtpzCpKN0",
+          "title": "Avicii - Hold Me (Extended Mix)",
+          "artist": "Onnosvld",
+          "duration": 337
+        },
+        {
+          "videoId": "ARNa-TxqZvQ",
+          "title": "Deadmau5 - HR 8938 Cephei (1080p) || HD",
+          "artist": "TheOtherMau5",
+          "duration": 652
+        },
+        {
+          "videoId": "_Pb1neEPUx0",
+          "title": "There Might Be Coffee",
+          "artist": "deadmau5",
+          "duration": 423
+        },
+        {
+          "videoId": "h2F_Iu3jQM4",
+          "title": "I Remember (Vocal Mix)",
+          "artist": "deadmau5",
+          "duration": 594
+        },
+        {
+          "videoId": "QnccxyatrD0",
+          "title": "deadmau5 / Faxing Berlin (Original Mix)",
+          "artist": "Play Records",
+          "duration": 523
+        },
+        {
+          "videoId": "3l5N2pabiME",
+          "title": "deadmau5 - aural psynapse (Cover Art)",
+          "artist": "deadmau5",
+          "duration": 451
+        },
+        {
+          "videoId": "gHWXx27VKMI",
+          "title": "deadmau5 \"The 16th hour\"",
+          "artist": "deadmau5",
+          "duration": 599
+        },
+        {
+          "videoId": "c7s9eKDQn9c",
+          "title": "Reflekt Feat. Delline Bass - Need To Feel Loved (Adam K & Soha Vocal Mix)",
+          "artist": "Altra Moda Music",
+          "duration": 383
+        },
+        {
+          "videoId": "zD9UQOX139U",
+          "title": "deadmau5 - Ameonna (Music Visualizer)",
+          "artist": "deadmau5",
+          "duration": 443
+        },
+        {
+          "videoId": "uiUAq4aVTjY",
+          "title": "deadmau5 feat. Chris James - The Veldt",
+          "artist": "deadmau5",
+          "duration": 522
+        },
+        {
+          "videoId": "cOD-R4hRUuM",
+          "title": "deadmau5 - 4ware",
+          "artist": "mau5trap",
+          "duration": 520
+        },
+        {
+          "videoId": "JUmpYJau5Vg",
+          "title": "deadmau5 - XYZ",
+          "artist": "deadmau5",
+          "duration": 576
+        },
+        {
+          "videoId": "zmC6kd3I40Q",
+          "title": "deadmau5 - Alone With You (HQ)",
+          "artist": "deadmau5",
+          "duration": 491
+        },
+        {
+          "videoId": "a2PM5iTlmRE",
+          "title": "deadmau5 - Brazil (Second Edit) (HQ)",
+          "artist": "deadmau5",
+          "duration": 398
+        },
+        {
+          "videoId": "xn5MglF01iA",
+          "title": "deadmau5 - Slip (HQ)",
+          "artist": "deadmau5",
+          "duration": 464
+        },
+        {
+          "videoId": "MEQMkzjcLEA",
+          "title": "deadmau5 - Some Chords",
+          "artist": "deadmau5",
+          "duration": 453
+        },
+        {
+          "videoId": "gDndZn0YPdI",
+          "title": "deadmau5 - Sofi Needs a Ladder",
+          "artist": "deadmau5",
+          "duration": 407
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "PHn5Q7hCjxw",
+        "title": "Immortals",
+        "artist": "Fall Out Boy - Topic",
+        "duration": 195
+      },
+      "candidates": [
+        {
+          "videoId": "dfk6i41GCNo",
+          "title": "Centuries",
+          "artist": "Fall Out Boy",
+          "duration": 229
+        },
+        {
+          "videoId": "225qTJRs9gE",
+          "title": "When Can I See You Again? (From \"Wreck-It Ralph\"/Soundtrack Version)",
+          "artist": "Owl City",
+          "duration": 219
+        },
+        {
+          "videoId": "Y4o_8zbelwY",
+          "title": "Fall Out Boy - Immortals (from Big Hero 6)",
+          "artist": "Fall Out Boy",
+          "duration": 190
+        },
+        {
+          "videoId": "VpnlMypM10Y",
+          "title": "Sharklesly mad~ (@sharks723 and itisnotvoids song)",
+          "artist": " \u22c6\u02da\u0fd4\ud835\udcf4\ud835\udcea\ud835\udced\ud835\udcee\ud835\udce3\ud835\udcf8\ud835\udceb\ud835\udcf2\ud835\udcfe\ud835\udcfc \ud80c\udda8",
+          "duration": 145
+        },
+        {
+          "videoId": "EnSN9PYPldA",
+          "title": "Where No One Goes",
+          "artist": "J\u00f3nsi",
+          "duration": 165
+        },
+        {
+          "videoId": "Zh-ZUrc-aLI",
+          "title": "Life is a Highway",
+          "artist": "Rascal Flatts",
+          "duration": 276
+        },
+        {
+          "videoId": "Z7LYXExn10o",
+          "title": "Shell Shocked (feat. Kill the Noise & Madsonik) (From \"Teenage Mutant Ninja Turtles\")",
+          "artist": "Juicy J",
+          "duration": 207
+        },
+        {
+          "videoId": "8ZBnwBVjwOk",
+          "title": "New Divide",
+          "artist": "Linkin Park",
+          "duration": 269
+        },
+        {
+          "videoId": "l9PxOanFjxQ",
+          "title": "Fall Out Boy - Immortals (From \"Big Hero 6\")",
+          "artist": "Fall Out Boy",
+          "duration": 243
+        },
+        {
+          "videoId": "230sI_WxO7Y",
+          "title": "Try Everything",
+          "artist": "Shakira",
+          "duration": 197
+        },
+        {
+          "videoId": "9PY_qyQ1S7M",
+          "title": "What's Up Danger",
+          "artist": "Blackway Music",
+          "duration": 223
+        },
+        {
+          "videoId": "IOrbP1OqNsg",
+          "title": "Enemy (from the series Arcane League of Legends)",
+          "artist": "ImagineDragons",
+          "duration": 174
+        },
+        {
+          "videoId": "LkIWmsP3c_s",
+          "title": "Fall Out Boy - My Songs Know What You Did In The Dark (Light Em Up) - Part 1 of 11",
+          "artist": "Fall Out Boy",
+          "duration": 188
+        },
+        {
+          "videoId": "YSWrmX4_qFA",
+          "title": "Animals",
+          "artist": "Maroon 5",
+          "duration": 231
+        },
+        {
+          "videoId": "QspjKVTMlL8",
+          "title": "Kung Fu Fighting (From \"Kung Fu Panda\")",
+          "artist": "CeeLo Green",
+          "duration": 150
+        },
+        {
+          "videoId": "ju4KQT0wL0I",
+          "title": "All The Stars",
+          "artist": "Kendrick Lamar",
+          "duration": 233
+        },
+        {
+          "videoId": "qW47TqD9dtY",
+          "title": "My Songs Know What You Did In The Dark (Light Em Up)",
+          "artist": "Fall Out Boy",
+          "duration": 188
+        },
+        {
+          "videoId": "Vv1K8WMvvbI",
+          "title": "The Phoenix",
+          "artist": "Fall Out Boy",
+          "duration": 247
+        },
+        {
+          "videoId": "bLm8g1gdcPc",
+          "title": "House of Memories",
+          "artist": "Panic! At The Disco",
+          "duration": 209
+        },
+        {
+          "videoId": "GJY8OMJXRAk",
+          "title": "High Hopes",
+          "artist": "Panic! At The Disco",
+          "duration": 191
+        },
+        {
+          "videoId": "V2SVRJ6dcE4",
+          "title": "Bones",
+          "artist": "ImagineDragons",
+          "duration": 166
+        },
+        {
+          "videoId": "96L5sV7rqX0",
+          "title": "Can't Hold Us (feat. Ray Dalton)",
+          "artist": "Macklemore",
+          "duration": 259
+        },
+        {
+          "videoId": "tbyWV7ccaeY",
+          "title": "HandClap",
+          "artist": "Fitz and the Tantrums",
+          "duration": 194
+        },
+        {
+          "videoId": "5bpPtbp13Uc",
+          "title": "Teeth",
+          "artist": "5SOS",
+          "duration": 206
+        },
+        {
+          "videoId": "r1AZQKsXKTY",
+          "title": "Uma Thurman",
+          "artist": "Fall Out Boy",
+          "duration": 212
+        },
+        {
+          "videoId": "_GWKkqNoyEA",
+          "title": "Counting Stars",
+          "artist": "OneRepublic",
+          "duration": 258
+        },
+        {
+          "videoId": "BeOa6kRA6aw",
+          "title": "Best Day Of My Life",
+          "artist": "American Authors",
+          "duration": 195
+        },
+        {
+          "videoId": "7wtfhZwyrcc",
+          "title": "Imagine Dragons - Believer (Official Music Video)",
+          "artist": "ImagineDragons",
+          "duration": 217
+        },
+        {
+          "videoId": "pXu6JC6-d_o",
+          "title": "Natural",
+          "artist": "ImagineDragons",
+          "duration": 190
+        },
+        {
+          "videoId": "cnRB2CgUpSw",
+          "title": "Whatever It Takes",
+          "artist": "ImagineDragons",
+          "duration": 202
+        }
+      ]
+    },
+    {
+      "seed": {
+        "videoId": "JirXTmnItd4",
+        "title": "Smells Like Teen Spirit",
+        "artist": "Nirvana - Topic",
+        "duration": 301
+      },
+      "candidates": [
+        {
+          "videoId": "W2QeQ9ZufAk",
+          "title": "Come As You Are",
+          "artist": "Nirvana",
+          "duration": 220
+        },
+        {
+          "videoId": "8eGY-4OALgM",
+          "title": "Heart-Shaped Box",
+          "artist": "Nirvana",
+          "duration": 282
+        },
+        {
+          "videoId": "E0ozmU9cJDg",
+          "title": "Master of Puppets (Remastered)",
+          "artist": "Metallica",
+          "duration": 516
+        },
+        {
+          "videoId": "BQ6aQyti0Wg",
+          "title": "La Red - Llamando A Las Puertas Del Infierno [Espa\u00f1a // ~1983]",
+          "artist": "Suonia UnderNoise",
+          "duration": 240
+        },
+        {
+          "videoId": "AxuTd9rwEHQ",
+          "title": "Everlong",
+          "artist": "Foo Fighters",
+          "duration": 251
+        },
+        {
+          "videoId": "J0xe5DcnYSA",
+          "title": "Holiday / Boulevard of Broken Dreams",
+          "artist": "Green Day",
+          "duration": 494
+        },
+        {
+          "videoId": "QqF3pc9ECf8",
+          "title": "In Bloom",
+          "artist": "Nirvana",
+          "duration": 254
+        },
+        {
+          "videoId": "oMfMUfgjiLg",
+          "title": "Sweet Child O' Mine",
+          "artist": "Guns N' Roses",
+          "duration": 357
+        },
+        {
+          "videoId": "hTWKbfoikeg",
+          "title": "Nirvana - Smells Like Teen Spirit (Official Music Video)",
+          "artist": "Nirvana",
+          "duration": 279
+        },
+        {
+          "videoId": "XZuM4zFg-60",
+          "title": "Enter Sandman (Remastered)",
+          "artist": "Metallica",
+          "duration": 332
+        },
+        {
+          "videoId": "lSDfCdycdvk",
+          "title": "Zombie",
+          "artist": "TheCranberriesTV",
+          "duration": 308
+        },
+        {
+          "videoId": "IK3nKs0KWq8",
+          "title": "Join Me In Death",
+          "artist": "HIM",
+          "duration": 217
+        },
+        {
+          "videoId": "-eGM0IJc70Y",
+          "title": "Bring Me To Life",
+          "artist": "Evanescence",
+          "duration": 236
+        },
+        {
+          "videoId": "eBG7P-K-r1Y",
+          "title": "Foo Fighters - Everlong (Official HD Video)",
+          "artist": "Foo Fighters",
+          "duration": 292
+        },
+        {
+          "videoId": "cULQhvuq1Zc",
+          "title": "Sweater Weather",
+          "artist": "The Neighbourhood",
+          "duration": 241
+        },
+        {
+          "videoId": "12fJAnaif34",
+          "title": "I Was Made For Lovin' You",
+          "artist": "KISS",
+          "duration": 272
+        },
+        {
+          "videoId": "4VxdufqB9zg",
+          "title": "Nirvana - Something In The Way (Audio)",
+          "artist": "Nirvana",
+          "duration": 231
+        },
+        {
+          "videoId": "JtWaCViY_tc",
+          "title": "Rape Me",
+          "artist": "Nirvana",
+          "duration": 170
+        },
+        {
+          "videoId": "pkcJEvMcnEg",
+          "title": "Nirvana - Lithium (Official Music Video)",
+          "artist": "Nirvana",
+          "duration": 256
+        },
+        {
+          "videoId": "m2zUrruKjDQ",
+          "title": "Mr. Brightside",
+          "artist": "TheKillersMusic",
+          "duration": 223
+        },
+        {
+          "videoId": "D_QLxj8jCF0",
+          "title": "Seven Nation Army",
+          "artist": "The White Stripes",
+          "duration": 233
+        },
+        {
+          "videoId": "zFYEYRcjK2g",
+          "title": "Creep",
+          "artist": "Radiohead",
+          "duration": 239
+        },
+        {
+          "videoId": "9kIv6vVRKpw",
+          "title": "Black Hole Sun",
+          "artist": "Soundgarden",
+          "duration": 319
+        },
+        {
+          "videoId": "CHIWNDAwTqQ",
+          "title": "Enter Sandman",
+          "artist": "Metallica",
+          "duration": 332
+        },
+        {
+          "videoId": "lhg9bYNLvOg",
+          "title": "Thunderstruck",
+          "artist": "AC/DC",
+          "duration": 293
+        },
+        {
+          "videoId": "kLKr342VKaU",
+          "title": "I Was Made For Lovin' You",
+          "artist": "KISS",
+          "duration": 242
+        },
+        {
+          "videoId": "HyHNuVaZJ-k",
+          "title": "Gorillaz - Feel Good Inc. (Official Video)",
+          "artist": "Gorillaz",
+          "duration": 255
+        },
+        {
+          "videoId": "wjNln9mXuTI",
+          "title": "Deceptacon",
+          "artist": "LeTigreWorld",
+          "duration": 185
+        },
+        {
+          "videoId": "12rsVkwSsXU",
+          "title": "Washing Machine Heart",
+          "artist": "Mitski",
+          "duration": 129
+        },
+        {
+          "videoId": "KfEEm4Zx-EU",
+          "title": "505",
+          "artist": "Official Arctic Monkeys",
+          "duration": 254
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "598tPPX_9kA": {
+      "bpm": 100.07,
+      "key": "6B",
+      "energy": null
+    },
+    "5XGaqjTKe20": {
+      "bpm": 90.15,
+      "key": "3A",
+      "energy": null
+    },
+    "FGBhQbmPwH8": {
+      "bpm": 123.27,
+      "key": "10B",
+      "energy": null
+    },
+    "GYD11HwSyUI": {
+      "bpm": 140.52,
+      "key": "5B",
+      "energy": null
+    },
+    "M-IFUa3Ry-I": {
+      "bpm": 103.7,
+      "key": "9A",
+      "energy": null
+    },
+    "NVgS7Kxd6cg": {
+      "bpm": 139.48,
+      "key": "3B",
+      "energy": null
+    },
+    "c_j9Z047DoU": {
+      "bpm": 116.93,
+      "key": "9A",
+      "energy": null
+    },
+    "-eGM0IJc70Y": {
+      "bpm": 126.84,
+      "key": "9A",
+      "energy": 0.631814797190538
+    },
+    "ARNa-TxqZvQ": {
+      "bpm": 128,
+      "key": "4B",
+      "energy": 0.4050254282130291
+    },
+    "KUZ7jG7BKE8": {
+      "bpm": 150.1,
+      "key": "10A",
+      "energy": null
+    },
+    "zK1mLIeXwsQ": {
+      "bpm": 127.74,
+      "key": "11A",
+      "energy": null
+    }
+  }
+}

@@ -104,6 +104,7 @@ import {
   type PadMode,
   type AutoMixStatus,
   type AutoMixMirror,
+  seedMicChain,
 } from "@htl";
 import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
@@ -3608,6 +3609,17 @@ function AppBody() {
             micSetRef={micVolSetRef}
             micToggleRef={micToggleRef}
             hasMic={engine.canMic && settings.audioInputId !== MIC_NONE}
+            // ★ THE MIC CHAIN APPEARS ON DEMAND, exactly as AUTO's does (operator, 0708130a): the
+            // first time the mic is pointed INTO a deck's rack, that deck is offered a MIC chain.
+            // "master" is the PA talkover and touches no rack, so it seeds nothing. Sticky, so
+            // deleting the chain declines the offer for good. The policy lives here because
+            // `micFxSeeded` is settings; the seeding itself is seedMicChain, beside the rack.
+            onMicRoute={(dest) => {
+              if (dest === "master") return;
+              if (!seedMicChain(engine.deck(dest), settings.micFxSeeded)) return;
+              setSettings((cur) => ({ ...cur, micFxSeeded: true }));
+              refresh(); // the strip reads the rack directly — nothing else tells it a chain arrived
+            }}
             phones={
               !!settings.audioCueOutputId && engine.canCueDevice
                 ? {

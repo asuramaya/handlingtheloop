@@ -48,6 +48,7 @@ export function BoardIo({
   micToggleRef,
   phones,
   hasMic = false,
+  onMicRoute,
   children,
 }: {
   sampler: SamplerApi;
@@ -56,6 +57,9 @@ export function BoardIo({
   micToggleRef?: MutableRefObject<(() => void) | null>;
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
   hasMic?: boolean;
+  // Told which way the mic now points, so the owner can offer that deck its MIC chain. The policy
+  // (offered once, sticky) is settings-shaped and lives with settings; this row only reports.
+  onMicRoute?: (dest: "master" | "A" | "B") => void;
   children?: ReactNode; // the crossfader itself — it sits BETWEEN the two tails
 }) {
   const s = sampler;
@@ -340,7 +344,7 @@ export function BoardIo({
           <div className="ctx-label">Mic goes to</div>
           {(["master", "A", "B"] as const).map((d) => (
             <button key={d} className={`fx-palette-item ${micDest === d ? "sel" : ""}`} role="menuitem" title={DEST_FULL[d]}
-              onClick={() => { setMicDest(d); engine.setMicRoute(d); }}>
+              onClick={() => { setMicDest(d); engine.setMicRoute(d); onMicRoute?.(d); }}>
               {DEST_FULL[d]}
             </button>
           ))}

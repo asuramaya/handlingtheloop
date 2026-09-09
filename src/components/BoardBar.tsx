@@ -37,6 +37,7 @@ export function BoardBar({
   micToggleRef,
   phones,
   hasMic,
+  onMicRoute,
 }: {
   master?: { value: number; canControl: boolean; onChange: (v: number) => void };
   sampler: SamplerApi;
@@ -45,6 +46,7 @@ export function BoardBar({
   micToggleRef?: MutableRefObject<(() => void) | null>;
   phones?: { mix: number; level: number; onMix: (v: number) => void; onLevel: (v: number) => void } | null;
   hasMic?: boolean;
+  onMicRoute?: (dest: "master" | "A" | "B") => void;
   xfader: {
     deckA: Deck; deckB: Deck; accentA: string; accentB: string; crossfade: number;
     onCrossfade: (v: number) => void; locked?: boolean; smart?: boolean; enabled?: boolean;
@@ -59,7 +61,7 @@ export function BoardBar({
       )}
       {/* BoardIo owns the row: [tail] crossfader [tail]. It has to, because the tails' width is a
           function of which devices exist, and only it knows that. */}
-      <BoardIo sampler={sampler} ctlRef={ctlRef} micSetRef={micSetRef} micToggleRef={micToggleRef} phones={phones} hasMic={hasMic}>
+      <BoardIo sampler={sampler} ctlRef={ctlRef} micSetRef={micSetRef} micToggleRef={micToggleRef} phones={phones} hasMic={hasMic} onMicRoute={onMicRoute}>
         <Crossfader {...xfader} />
       </BoardIo>
     </div>

@@ -107,6 +107,11 @@ export interface Settings {
   /** Where AUTO routes a stem during a transition — see AutoFxSettings. The EFFECT itself lives
    *  in the deck's rack, in a chain named AUTO, not here. */
   autoFx: AutoFxSettings;
+  /** Has the MIC chain already been offered on this device? Same contract as AutoFxSettings.seeded,
+   *  and for the same reason: the chain is offered ONCE — the first time the mic is routed into a
+   *  deck's rack — so deleting it is how you decline it, rather than fighting a mixer that keeps
+   *  putting it back. The effect itself lives in the deck's rack, in a chain named MIC, not here. */
+  micFxSeeded: boolean;
   freqColors: boolean; // collapsed (non-stem) waveform: rekordbox-style low/mid/high frequency colouring
   freqVividness: number; // band-colour saturation: 0 = grey, 1 = as-picked, up to 2 = neon-boosted
   bandLayers: boolean; // band colouring style: true = rekordbox-style LAYERED lobes (needs lane height), false = flat per-column tint
@@ -307,6 +312,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
   autoFx: { stem: "vocals", seeded: false }, // vocals: the stem that otherwise stops dead
+  micFxSeeded: false, // the MIC chain has not been offered yet; the mic lands on the sum until it is
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
   freqVividness: 1, // as-picked saturation by default
   bandLayers: true, // layered lobes where there's room; auto-falls back to the flat tint on a short lane

@@ -21,6 +21,7 @@ export { loadFxRows, saveFxRows, loadFxBank, saveFxBank, resolveFxRows, presetOf
 export { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset, factoryChainPresets, chainRows as bankChainRows, chainOf, CHAIN_KIND, type ChainPreset } from "./fxPresets";
 export { decodeAudio } from "./decode";
 export { MicInput, type MicRoute } from "./MicInput";
+export { MIC_CHAIN, micChainOf, seedMicChain } from "./micChain";
 export { Recorder, type Take } from "./Recorder";
 export {
   Sampler,

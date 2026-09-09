@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject }
 import { usePhone } from "../htl/state/usePhone";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
+import { MIC_CHAIN } from "@htl/audio";
 import { saveFxPreset, renameFxPreset, factoryFxPresets, loadFxPresets, loadFxBank } from "@htl/audio";
 import { saveChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
@@ -361,6 +362,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // holds all four it says so in a word instead of spelling out the whole alphabet.
   const chainInitials = (c: { stems: number }) => LANES.map((l) => ({ ch: l.label[0], on: !!(c.stems & l.bit), color: l.color }));
   const chainTitle = (c: { name: string; stems: number }) => {
+    // The MIC chain claims no stems ON PURPOSE — it is fed by the mic's own input, not by a stem
+    // tap — so the no-stems sentence below would be exactly backwards about it.
+    if (c.name === MIC_CHAIN) return `${c.name}: the live mic, when it is routed into this deck`;
     const on = LANES.filter((l) => c.stems & l.bit).map((l) => l.label);
     if (!on.length) return `${c.name}: no stems — this chain hears nothing`;
     if (on.length === 4) return `${c.name}: every stem`;
@@ -1079,12 +1083,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 if (c.master) return; // the master is pinned to the signal; it does not reorder
                 cd.onPointerDown(e);
               }}
-              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.name === "AUTO" ? "auto" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.name === "AUTO" ? "auto" : ""} ${c.name === MIC_CHAIN ? "mic" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.name !== MIC_CHAIN && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
             >
               <button
                 className="fx-chain"
                 title={
-                  c.name === "AUTO"
+                  c.name === MIC_CHAIN
+                    ? "The live mic runs through this chain whenever it is routed into this deck. Yours to build and yours to delete — nothing else writes to it, and deleting it sends the mic straight to the mix again."
+                    : c.name === "AUTO"
                     ? "The auto-DJ routes a stem through this chain during a transition, then releases it. Yours to build: put a reverb or a delay in it and dial it however you like — AUTO never changes what is in here. Delete it and the auto-DJ mixes without a tail."
                     : c.master
                       ? `${c.name}: the master channel, every chain sums here · right-click for presets`
@@ -1099,7 +1105,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     there is nothing to preview — four dead letters on every chip is noise that
                     looks like state. Same rule as the picker in the menu: absent, not dimmed.
                     The master takes no stems at all: it takes the SUM, after them. */}
-                {!c.master && deck.hasStems && (
+                {!c.master && c.name !== MIC_CHAIN && deck.hasStems && (
                   <span className="fx-chain-src">
                     {chainInitials(c).map((x) => (
                       <i key={x.ch} className={x.on ? "on" : ""} style={{ ["--lane" as string]: x.color }}>

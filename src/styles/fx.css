@@ -3730,3 +3730,12 @@ body:not(.no-glow) .fx-mix-fill::after {
   content: "◆ ";
   opacity: 0.75;
 }
+
+/* ★ THE MIC CHAIN. Like AUTO: a normal chain in every respect — yours to build, reorder and
+   delete — marked only so you can tell which one the live mic runs through. It is NEVER `deaf`,
+   whatever its stem mask says: it claims no stems on purpose, because it is fed by the mic's own
+   input rather than by a stem tap, and a dashed chip would be the opposite of the truth. */
+.fx-group.mic .fx-chain-name::before {
+  content: "● ";
+  opacity: 0.75;
+}

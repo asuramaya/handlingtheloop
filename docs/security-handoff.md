@@ -86,13 +86,56 @@ A full read of every credential + authorization surface. The shallow pass had th
 
 ## FINDINGS & OPEN QUESTIONS (the actual audit)
 
+### RE-WALK 2026-09-09 (Metron, obligation 7c81e80e) — Tier 1 re-checked against everything added since 2026-07
+
+Scope: the 25 files under `server/` touched since 2026-07-01 — the social, moderation, directory and
+recommendation code that landed after the deep audit closed Tier 1. Findings, strongest evidence first.
+
+**1. The internal DO→Worker bridge is authenticated and FAILS CLOSED — verified against production, not
+just read.** `POST /internal/notify` and `/internal/presence` return **403** unauthenticated, and 403
+again with a wrong bearer. The guard (`worker/index.ts:287-299`) requires a non-empty secret, so an
+unset secret denies rather than admits, and compares in constant time so a `!==` cannot leak the
+prefix. RESIDUAL, and the reason `INTERNAL_SECRET` is still worth setting: with it unset the bridge
+falls back to `TOKEN_ENC_KEY` — the key that encrypts OAuth tokens at rest — which then travels in a
+request header on every mention and every presence drop, where anything that logs headers logs it.
+Not an authentication hole; a key-exposure one. Operator has deliberately deferred it (2026-09-09).
+
+**2. Admin/moderation code is not reachable from the public app.** Every moderation function
+(`deleteUser`, `setAccountStatus`, `resolveReport`, `listReports`, `listUsers`, `deleteCommunityTrack`,
+`logTakedown`) has exactly ONE caller, `server/admin.ts`; `server/admin.ts` has exactly one importer,
+`worker/admin.ts`; and that is the entry point of a SEPARATE Worker (`wrangler.admin.jsonc`) bound to
+`admin.handlingtheloop.com` behind CF Access. The main Worker never imports it. Verified live: the
+admin host 302s to Access unauthenticated, on both the document and `/api/users`. This is isolation by
+build graph rather than by a runtime check, which is the stronger kind — there is no code path to get
+wrong, because the code is not in the bundle.
+
+**3. Set lifecycle mutations — SOUND.** See the corrected entry below; one gate before all non-GET
+methods, model-layer double-enforcement, drafts 404 rather than 403.
+
+**4. The new directory pagination introduces no cursor surface.** No client-supplied cursor is accepted
+anywhere yet — `liveRooms` deliberately reports `truncated` instead, because its sort key (`listeners`)
+is rewritten on every heartbeat and keyset paging over a mutable key silently serves rows twice or skips
+them. `discoverSets` now carries a TOTAL tiebreak `(published_at, id)`, closing a non-deterministic
+LIMIT boundary. Nothing here is attacker-controlled, so there is nothing to validate yet — but when a
+cursor IS added it becomes an API contract and needs validating as untrusted input.
+
+**5. Mutating queries that take a bare id are correctly gated at the route layer.** The unscoped
+`UPDATE`/`DELETE` statements in `server/db/*` fall into three groups, all legitimate: pooled metadata
+keyed by `video_id` (`analysis`, `transcripts`, `community` — shared by design, not per-user), admin
+functions (isolated per finding 2), and account-deletion cascades already scoped by `userId`.
+
+**METHOD NOTE.** Findings 1 and 2 were verified against the RUNNING system, because "the code says it
+checks" and "the deployed thing rejects" are different claims and only the second is the one that
+matters. Finding 3 corrected a stale citation in this very document.
+
 ### Tier 1 — multi-user authorization — ✅ RESOLVED (see the 2026-06-22 DEEP AUDIT block above)
 **The questions below were the shallow pass's open worries. The deep audit answered all of them: every path checks the method, derives the actor from the session, and authorizes against it; `host`/`pub` are un-forgeable; listeners can't drive/anchor; mod is host-gated. Kept here as the checklist that was walked, not as open work.**
 
 The social/room layer is the most code, newest, built fast by a concurrent agent. The room state machine has the right *shape* (`server/roomState.ts:54` `roleOf`, `PUB_ALLOWED`, `canDriveIntent`) — and the deep audit confirmed the *completeness* too.
 
 Audit every state-changing path and confirm it (a) checks `req.method`, (b) derives the actor from the **session** (not a client-supplied id), (c) authorizes the action against that actor:
-- **Sets** — `server/accounts.ts:252` DELETE, `:261` publish/unpublish, `:265` rename, `:270` trim. Q: does each confirm the set's `hostId === session user.id`? (IDOR: edit/delete another user's set by id.)
+- **Sets** — `server/accounts.ts:330-359` (the `/api/sets/:id` block: DELETE, publish/unpublish, rename, trim). Q: does each confirm the set's `hostId === session user.id`? **A (re-walk 2026-09-09): SOUND, and by construction rather than four times over.** One gate covers EVERY non-GET method before any action is dispatched — `if (!viewer || viewer.id !== row.hostId) return json(403)` — so a newly added action inherits the check instead of needing its own. The model layer double-enforces: `deleteSet`/`setSetStatus`/`setSetTitle`/`setSetTrim` all take `viewer.id` and scope on it. Drafts are owner-private on GET and answer **404, not 403**, so a probe cannot use the status code to learn that someone else's draft exists.
+  ⚠ THE LINE NUMBERS ABOVE WERE STALE AND POINTED AT THE WRONG CODE. As written they cited 252/261/265/270, which are now inside the PROFILE endpoint — an auditor following them would have reviewed the wrong handler and concluded whatever that handler happens to say. In a security document a drifted citation is worse than no citation: it looks walked. Prefer naming the ROUTE BLOCK (`/api/sets/:id`) over a line number, since the block survives edits and the number does not.
 - **Profile** — `server/accounts.ts:551/618/642` PUT handlers. Q: scoped to the session user only? Can you PUT another user's profile/handle?
 - **Samples** — `server/samples.ts`. Q: `GET /api/samples/:id/audio` + DELETE owner-checked? (memory says yes — verify.)
 - **Room intents (Durable Object)** — `server/room.ts` socket → intent apply; `server/roomState.ts` `roleOf`/`canDriveIntent`. Q: can a listener/watcher drive a deck, become anchor, or send intents they shouldn't? Is the actor's role derived server-side per-connection, not client-claimed? Tests: `server/room.test.ts`, `roomState.test.ts`, `roomCrowd.test.ts`.

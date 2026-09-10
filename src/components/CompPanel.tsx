@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { Deck, CompFx } from "@htl/audio";
-import { useEmit, useRefresh } from "../App/spine";
+import { useEmit, useEngine, useRefresh } from "../App/spine";
+import { useMicReady } from "./lib/useMicReady";
 import { COMP_MODES } from "@htl/audio";
 import { CompViz } from "./CompViz";
 import { CompArPad } from "./CompArPad";
@@ -51,6 +52,7 @@ interface CompPanelProps {
 
 export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const emit = useEmit();
+  const engine = useEngine();
   const refresh = useRefresh();
   const dev = deck.fxDeviceAt(slot) as CompFx | undefined;
   const [modePulse, pulseMode] = usePulse();
@@ -83,10 +85,17 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   const scSrc = Math.round(get("scSrc"));
   const otherDeck = id === "A" ? "B" : "A";
   const SC_LABEL = ["INT", otherDeck, "MIC"];
+  // MIC stays SELECTABLE with no mic running — it is dimmed, not skipped. Skipping it would make
+  // the cycle's behaviour depend on hidden state, which is the exact fault this control was built
+  // to remove; you would tap twice and land back where you started with nothing explaining why.
+  // Dimming says "this is the right control and it is waiting on something else".
+  const micReady = useMicReady(engine);
   const SC_TITLE = [
     "Detector listens to this channel — an ordinary compressor. Tap to duck from the other deck.",
     `Detector listens to deck ${otherDeck} — that track ducks this one. Tap to duck from the mic.`,
-    "Detector listens to the MIC — the music compresses when you talk, shaped by this compressor's own sidechain filters, ratio and release. Tap to go back to internal.",
+    micReady
+      ? "Detector listens to the MIC — the music compresses when you talk, shaped by this compressor's own sidechain filters, ratio and release. Tap to go back to internal."
+      : "Detector listens to the MIC — but the mic is OFF, so it is hearing silence and nothing is ducking. Turn the mic on in the I/O strip.",
   ];
   // Snapped to the nearest stop so a value set elsewhere (a preset, MIDI, a session) still lights
   // the right pip rather than falling off the cycle.
@@ -135,7 +144,7 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
         {/* One control cycling three named sources, not a toggle plus a hidden meaning — the
             same idiom as LOOKAHEAD below, which is also a set-once value you cycle and leave. */}
         <button
-          className={scSrc > 0 ? "active" : ""}
+          className={`${scSrc > 0 ? "active" : ""}${scSrc === 2 && !micReady ? " waiting" : ""}`}
           onClick={() => setParam("scSrc", (scSrc + 1) % 3)}
           title={SC_TITLE[scSrc]}
         >

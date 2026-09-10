@@ -3294,6 +3294,16 @@ button.room-tog:hover {
 .comp-panel .sat-styles button {
   min-width: 56px;
 }
+/* SC: MIC selected while the mic is OFF. Deliberately DIMMED-BUT-ACTIVE, not disabled: the
+   routing is genuinely set and correct, it is simply hearing silence, so the control is not
+   broken and must not claim to be. Disabling it would also strand the user — you could no longer
+   tap past MIC to get back to INT. The dashed underline reads as "waiting on something else",
+   and the title says which thing. */
+.comp-panel .sat-styles button.waiting {
+  opacity: 0.55;
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
 /* ★ AND NO GAP UNDER THE HEAD. Every other device draws its readout and ribbon INSIDE the viz
    canvas, so they cost it nothing but pixels of its own. COMP's are a separate element (they
    have to be — a frequency ruler only aligns with Delay's and Reverb's at the panel's full

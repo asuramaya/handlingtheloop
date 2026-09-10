@@ -223,17 +223,41 @@ export interface DirectoryPage<T> {
   items: T[];
   truncated: boolean;
   limit: number;
+  /** Pass back to fetch the next page. Null when there is none — and ALWAYS null for an ordering
+   *  that cannot be paged coherently (see the rooms directory's busy sort). */
+  nextCursor?: string | null;
 }
 /** The live public-room directory ("on now"). Signed in, it is ordered relationship-first and
  *  each room carries `rel`; signed out, busiest-first. Capped server-side, so it returns a PAGE:
  *  a failed request is an empty page that does NOT claim completeness (truncated stays false but
  *  `items` is empty, which the caller renders as "nothing on now" — the honest reading of a read
  *  that did not happen is the same as of one that found nothing). */
-export async function fetchLiveRooms(signal?: AbortSignal): Promise<DirectoryPage<LiveRoom>> {
-  const res = await fetch("/api/rooms/live", { signal, credentials: "same-origin" });
-  if (!res.ok) return { items: [], truncated: false, limit: 0 };
-  const b = (await res.json()) as { rooms: LiveRoom[]; truncated?: boolean; limit?: number };
-  return { items: b.rooms, truncated: !!b.truncated, limit: b.limit ?? b.rooms.length };
+export type RoomSort = "busy" | "recent";
+export async function fetchLiveRooms(
+  opts: { sort?: RoomSort; cursor?: string | null; signal?: AbortSignal } = {},
+): Promise<DirectoryPage<LiveRoom>> {
+  const q = new URLSearchParams();
+  if (opts.sort) q.set("sort", opts.sort);
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  const res = await fetch(`/api/rooms/live${q.size ? `?${q}` : ""}`, {
+    signal: opts.signal,
+    credentials: "same-origin",
+  });
+  if (!res.ok) return { items: [], truncated: false, limit: 0, nextCursor: null };
+  const b = (await res.json()) as {
+    rooms: LiveRoom[];
+    truncated?: boolean;
+    limit?: number;
+    nextCursor?: string | null;
+  };
+  return {
+    items: b.rooms,
+    truncated: !!b.truncated,
+    limit: b.limit ?? b.rooms.length,
+    // Absent under "busy" by design, and absent from an older server — both read as "no next
+    // page", which is the honest answer in each case.
+    nextCursor: b.nextCursor ?? null,
+  };
 }
 
 /** A durable notification event (the bell's "Recent" feed — new follower, …). The actor is
@@ -458,7 +482,7 @@ export async function fetchDiscoverSets(signal?: AbortSignal): Promise<Directory
   const res = await fetch("/api/sets/discover", { signal, credentials: "same-origin" });
   if (!res.ok) return { items: [], truncated: false, limit: 0 };
   const b = (await res.json()) as { sets: SetCard[]; truncated?: boolean; limit?: number };
-  return { items: b.sets, truncated: !!b.truncated, limit: b.limit ?? b.sets.length };
+  return { items: b.sets, truncated: !!b.truncated, limit: b.limit ?? b.sets.length, nextCursor: null };
 }
 
 /** A @handle's PUBLISHED sets (their public profile history). Public. */

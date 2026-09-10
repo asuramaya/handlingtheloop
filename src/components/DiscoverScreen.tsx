@@ -3,6 +3,7 @@ import {
   type FriendPresence,
   type ListenFace,
   type LiveRoom,
+  type RoomSort,
   type SetCard,
   fetchDiscoverSets,
   fetchLiveRooms,
@@ -65,6 +66,15 @@ export function DiscoverScreen({
   // display cap over a set it genuinely has all of. Conflating the two is what made "Show all N"
   // a false claim past the server's limit — see the note on the expander.
   const [roomsCapped, setRoomsCapped] = useState(false);
+  // ★ THE SORT IS THE USER'S, and it is not a cosmetic preference — it decides whether the
+  // directory can be PAGED at all. Busy ranks by listener count, which the server rewrites on
+  // every host heartbeat, so it can only ever be the capped top slice. Recent orders by a value
+  // that does not move while a broadcast lives, so it walks the whole list. Default busy
+  // (operator, 39dc683e): ranking is what you want first; paging is what you want when you have
+  // hit the wall.
+  const [sort, setSort] = useState<RoomSort>("busy");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [more, setMore] = useState<LiveRoom[]>([]); // pages 2+ under "recent", appended in order
   const [setsCapped, setSetsCapped] = useState(false);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
   const { query, roomsExpanded, friendsExpanded } = view;
@@ -92,11 +102,15 @@ export function DiscoverScreen({
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetchLiveRooms()
+      fetchLiveRooms({ sort })
         .then((p) => {
           if (!alive) return;
           setRooms(p.items);
           setRoomsCapped(p.truncated);
+          setCursor(p.nextCursor ?? null);
+          // Page 1 refreshed → pages 2+ describe a list that has moved on. Dropping them is the
+          // honest reset: keeping them would show rooms ranked against a snapshot that is gone.
+          setMore([]);
         })
         .catch(() => alive && setRooms((prev) => prev ?? []));
     load();
@@ -105,7 +119,7 @@ export function DiscoverScreen({
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [sort]);
 
   // ★ THE FOLLOW-GRAPH FETCH IS GONE. This used to pull the viewer's following list and
   // intersect it with the room list in the browser — and it pulled ONE PAGE, which is 50. Past
@@ -116,7 +130,7 @@ export function DiscoverScreen({
 
   // Tapping a room TUNES IN (read-only listen); your own room taps through to its profile.
   const tap = (handle: string) => (handle === self ? goToHandle(handle) : onListen(handle));
-  const live = useMemo(() => rooms ?? [], [rooms]);
+  const live = useMemo(() => [...(rooms ?? []), ...more], [rooms, more]);
 
   // ONE ranked list, re-derived only when the poll lands or the query changes. `now` is folded
   // in at rank time so "just started" ages correctly across a 30 s refresh.
@@ -157,6 +171,21 @@ export function DiscoverScreen({
         {query && (
           <button className="link-btn" onClick={() => setQuery("")}>Clear</button>
         )}
+        {/* Beside the filter, not in a menu: both of these narrow the same list, and the sort is
+            the one that decides whether you can reach past the cap at all. Two words, no chrome. */}
+        <div className="discover-sort" role="group" aria-label="Sort live rooms">
+          {(["busy", "recent"] as const).map((s) => (
+            <button
+              key={s}
+              className={`link-btn discover-sort-opt ${sort === s ? "sel" : ""}`}
+              aria-pressed={sort === s}
+              onClick={() => { if (sort !== s) { setSort(s); setView({ roomsExpanded: false }); } }}
+              title={s === "busy" ? "Most listeners first" : "Most recently started first — browse them all"}
+            >
+              {s === "busy" ? "Busiest" : "Newest"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* FRIENDS ONLINE — the co-play door, CAPPED. Uncapped it was the section most likely to
@@ -231,10 +260,31 @@ export function DiscoverScreen({
                   {roomsExpanded ? "Show fewer" : roomsCapped ? `Show ${shown.length}` : `Show all ${shown.length}`}
                 </button>
               )}
-              {roomsCapped && !query && (
+              {/* ★ A DEAD END BECOMES A DOOR. Saying "more are live than fit here" and stopping is
+                  only half-honest — it names the wall without saying there is a way round it. The
+                  busiest list cannot page (the server re-ranks it every heartbeat), but the newest
+                  one can, so the note hands you the sort that reaches the rest. */}
+              {roomsCapped && !query && sort === "busy" && (
                 <p className="discover-empty">
-                  Showing the busiest {live.length}. More rooms are live than fit here.
+                  Showing the busiest {live.length}. More rooms are live —{" "}
+                  <button className="link-btn" onClick={() => { setSort("recent"); setView({ roomsExpanded: false }); }}>
+                    browse by newest
+                  </button>{" "}
+                  to see them all.
                 </p>
+              )}
+              {sort === "recent" && cursor && !query && (
+                <button
+                  className="link-btn discover-more"
+                  onClick={() => {
+                    void fetchLiveRooms({ sort: "recent", cursor }).then((p) => {
+                      setMore((prev) => [...prev, ...p.items]);
+                      setCursor(p.nextCursor ?? null);
+                    });
+                  }}
+                >
+                  Load more
+                </button>
               )}
             </>
           )}

@@ -69,3 +69,42 @@ describe("fetchDiscoverSets follows the same contract", () => {
     expect(p.truncated).toBe(false);
   });
 });
+
+describe("fetchLiveRooms carries the sort and the cursor", () => {
+  function capture(body: unknown) {
+    const f = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+    vi.stubGlobal("fetch", f);
+    return f;
+  }
+
+  it("asks for no sort by default — the server's default is the one that counts", async () => {
+    // Sending sort=busy from the client would duplicate the default in two places, and they would
+    // drift. Absent means "whatever the server calls default".
+    const f = capture({ rooms: [] });
+    await fetchLiveRooms();
+    expect(f.mock.calls[0][0]).toBe("/api/rooms/live");
+  });
+
+  it("passes sort and cursor through when given", async () => {
+    const f = capture({ rooms: [] });
+    await fetchLiveRooms({ sort: "recent", cursor: "1700000000:user-9" });
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain("sort=recent");
+    expect(url).toContain(`cursor=${encodeURIComponent("1700000000:user-9")}`);
+  });
+
+  it("treats a missing nextCursor as NO next page", async () => {
+    // Two things produce this and both mean the same: the busy sort (which cannot page at all) and
+    // an older server. Either way there is nothing to ask for.
+    const p = await (capture({ rooms: [{ handle: "a" }], truncated: true }), fetchLiveRooms());
+    expect(p.truncated).toBe(true);
+    expect(p.nextCursor).toBeNull();
+  });
+
+  it("a failed request offers no cursor to loop on", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    const p = await fetchLiveRooms({ sort: "recent", cursor: "1:u" });
+    expect(p.items).toEqual([]);
+    expect(p.nextCursor).toBeNull(); // otherwise "Load more" retries the same failing page forever
+  });
+});

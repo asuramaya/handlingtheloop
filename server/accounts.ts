@@ -602,8 +602,23 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       // client never has to fetch (a page of) the follow graph to work it out. See liveRooms().
       const viewer = await currentUser(env, req).catch(() => null);
       if (viewer) await ensureGraphTables(env.DB);
-      const page = await liveRooms(env.DB, 100, 90_000, viewer?.id ?? null);
-      return json(200, { rooms: page.rooms, truncated: page.truncated, limit: page.limit });
+      // ?sort=recent pages; ?sort=busy (the default) does not — see liveRooms for why only one
+      // of the two orderings can carry a cursor. An unknown sort value reads as busy rather than
+      // erroring: a directory is a browse surface, and a typo should show you rooms.
+      const sort = url.searchParams.get("sort") === "recent" ? "recent" : "busy";
+      const page = await liveRooms(env.DB, {
+        limit: 100,
+        viewerId: viewer?.id ?? null,
+        sort,
+        cursor: url.searchParams.get("cursor"),
+      });
+      return json(200, {
+        rooms: page.rooms,
+        truncated: page.truncated,
+        limit: page.limit,
+        sort,
+        nextCursor: page.nextCursor,
+      });
     }
 
     // HOST announces / heartbeats their live room into the directory (E1). Requires a

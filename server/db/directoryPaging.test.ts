@@ -31,7 +31,16 @@ function fakeDb(rowCount: number, asked: Asked[] = []) {
           rec.binds = b;
           return stmt;
         },
-        all: async () => ({ results: Array.from({ length: rowCount }, (_, i) => ({ i })) }),
+        // Rows must carry the columns the query actually SELECTs — startedAt and hostId are what
+        // the cursor is built from, and a fake that omits them silently produces "no next page"
+        // rather than a failure. Descending startedAt, matching the ordering under test.
+        all: async () => ({
+          results: Array.from({ length: rowCount }, (_, i) => ({
+            handle: `h${i}`,
+            startedAt: 1_700_000_000 - i,
+            hostId: `user-${i}`,
+          })),
+        }),
       };
       return stmt;
     },
@@ -50,13 +59,13 @@ describe("the live-rooms directory reports that it is a slice", () => {
   it("asks for one MORE row than it returns, so truncation needs no COUNT(*)", async () => {
     const asked: Asked[] = [];
     const db = fakeDb(0, asked);
-    await liveRooms(db, 100, 90_000, null);
+    await liveRooms(db, { limit: 100, viewerId: null });
     // The cap travels as the LAST bind on both branches; the probe is limit+1.
     expect(asked[0].binds[asked[0].binds.length - 1]).toBe(101);
   });
 
   it("returns exactly `limit` rows and flags truncation when the probe row comes back", async () => {
-    const page = await liveRooms(fakeDb(101), 100, 90_000, null);
+    const page = await liveRooms(fakeDb(101), { limit: 100, viewerId: null });
     expect(page.rooms).toHaveLength(100); // the probe row is TRIMMED, never served
     expect(page.truncated).toBe(true);
     expect(page.limit).toBe(100);
@@ -64,13 +73,13 @@ describe("the live-rooms directory reports that it is a slice", () => {
 
   it("does not cry truncation when the set fits exactly", async () => {
     // The off-by-one that would make this feature a permanent false alarm.
-    const page = await liveRooms(fakeDb(100), 100, 90_000, null);
+    const page = await liveRooms(fakeDb(100), { limit: 100, viewerId: null });
     expect(page.rooms).toHaveLength(100);
     expect(page.truncated).toBe(false);
   });
 
   it("reports honestly on a short set", async () => {
-    const page = await liveRooms(fakeDb(3), 100, 90_000, null);
+    const page = await liveRooms(fakeDb(3), { limit: 100, viewerId: null });
     expect(page.rooms).toHaveLength(3);
     expect(page.truncated).toBe(false);
   });
@@ -79,9 +88,9 @@ describe("the live-rooms directory reports that it is a slice", () => {
     // Two branches, two SQL statements, and the signed-in one sorts by `rel` first. A tiebreak
     // added to only one of them is the same bug with a narrower trigger, so both are asserted.
     const out: Asked[] = [];
-    await liveRooms(fakeDb(0, out), 10, 90_000, null);
+    await liveRooms(fakeDb(0, out), { limit: 10, viewerId: null });
     const inn: Asked[] = [];
-    await liveRooms(fakeDb(0, inn), 10, 90_000, "viewer-1");
+    await liveRooms(fakeDb(0, inn), { limit: 10, viewerId: "viewer-1" });
     for (const a of [out[0], inn[0]]) {
       // host_id is the rooms table's primary key (announceRoom's ON CONFLICT target), so it is
       // the column that makes this ordering total.
@@ -107,5 +116,98 @@ describe("the discover-sets directory reports that it is a slice", () => {
     const asked: Asked[] = [];
     await discoverSets(fakeDb(0, asked), 60);
     expect(lastOrderTerm(asked[0].sql)).toMatch(/\bs\.id\b/);
+  });
+});
+
+describe("two orderings, and only one of them can page", () => {
+  // Operator ruling 39dc683e: "let the user pick between busy vs recent default to busy." That
+  // dissolved a trade-off rather than picking a side of it — each mode now only has to be coherent
+  // on its own terms, and these tests are what hold that line.
+
+  it("BUSY never offers a cursor, however much is behind the cap", async () => {
+    // ★ THE LOAD-BEARING ONE. `listeners` is rewritten by announceRoom on every heartbeat, so a
+    // keyset cursor over it would serve a room twice or skip it entirely as its count moved —
+    // silently, with no error anywhere. Refusing to mint the cursor is the fix; this asserts the
+    // refusal survives even in the state where a cursor would be most tempting (more rows exist).
+    const page = await liveRooms(fakeDb(101), { limit: 100, sort: "busy" });
+    expect(page.truncated).toBe(true);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("BUSY is the default, and an unknown sort is not an error", async () => {
+    const dflt = await liveRooms(fakeDb(101), { limit: 100 });
+    expect(dflt.nextCursor).toBeNull();
+    const junk = await liveRooms(fakeDb(101), { limit: 100, sort: "sideways" as unknown as "busy" });
+    expect(junk.nextCursor).toBeNull(); // a browse surface shows rooms on a typo, it does not 400
+  });
+
+  it("RECENT orders by the immutable pair and hands back a cursor", async () => {
+    const asked: Asked[] = [];
+    const page = await liveRooms(fakeDb(3, asked), { limit: 2, sort: "recent" });
+    // started_at is COALESCE-preserved for the life of a broadcast; host_id is the PK. Immutable
+    // AND total — the two properties a keyset cursor actually needs.
+    expect(asked[0].sql).toMatch(/ORDER BY r\.started_at DESC, r\.host_id DESC/);
+    expect(page.rooms).toHaveLength(2);
+    expect(page.truncated).toBe(true);
+    expect(page.nextCursor).not.toBeNull();
+  });
+
+  it("RECENT withholds the cursor on the LAST page", async () => {
+    // A cursor on a complete page invites one more round trip that returns nothing, forever.
+    const page = await liveRooms(fakeDb(2), { limit: 2, sort: "recent" });
+    expect(page.truncated).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("the cursor asks for rows strictly AFTER it, in the same total order", async () => {
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: "1700000000:user-9" });
+    // Both limbs are required. `started_at < ?` alone drops every row tied on the timestamp;
+    // the tie limb carries them, ordered by the key that makes the ordering total.
+    expect(asked[0].sql).toMatch(/r\.started_at < \? OR \(r\.started_at = \? AND r\.host_id < \?\)/);
+    expect(asked[0].binds).toContain(1700000000);
+    expect(asked[0].binds).toContain("user-9");
+  });
+
+  it("a host id containing a colon survives the round trip", async () => {
+    // The cursor is `<startedAt>:<hostId>` split on the FIRST colon. A host id with its own colon
+    // would otherwise decode to a truncated id that matches nothing — an empty page 2 and no error.
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: "1700000000:a:b:c" });
+    expect(asked[0].binds).toContain("a:b:c");
+  });
+
+  it("a malformed cursor reads as the FIRST page, never as a bound NaN", async () => {
+    // Binding NaN matches nothing and looks exactly like "the directory is empty".
+    for (const bad of ["", "nonsense", ":user-1", "abc:user-1", "1700000000:"]) {
+      const asked: Asked[] = [];
+      await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: bad });
+      expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
+      expect(asked[0].binds.some((b) => typeof b === "number" && Number.isNaN(b))).toBe(false);
+    }
+  });
+
+  it("a cursor passed to BUSY is ignored, not half-applied", async () => {
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "busy", cursor: "1700000000:user-9" });
+    expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
+  });
+
+  it("rel leads in BUSY and never in RECENT — and recent still RETURNS rel", async () => {
+    // Ranking is what busy is for. Putting a viewer-relative, mutable value at the head of the
+    // recent cursor key would contradict both the name and the reason the key works.
+    const busy: Asked[] = [];
+    await liveRooms(fakeDb(0, busy), { limit: 10, viewerId: "v1", sort: "busy" });
+    expect(busy[0].sql).toMatch(/ORDER BY rel DESC/);
+    const rec: Asked[] = [];
+    await liveRooms(fakeDb(0, rec), { limit: 10, viewerId: "v1", sort: "recent" });
+    expect(rec[0].sql).not.toMatch(/ORDER BY rel DESC/);
+    expect(rec[0].sql).toMatch(/AS rel/); // still selected, so the UI can badge a followed host
+  });
+
+  it("never leaks host_id into a room row", async () => {
+    // It is an internal id. It rides inside the opaque cursor and nowhere else.
+    const page = await liveRooms(fakeDb(2), { limit: 5, sort: "recent" });
+    for (const room of page.rooms) expect(room).not.toHaveProperty("hostId");
   });
 });

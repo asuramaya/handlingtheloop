@@ -96,67 +96,134 @@ export interface LiveRoom {
  *  1 for one-way, 0 for a stranger. Ordering puts relationship first and listeners second:
  *  busiest-first alone is a popularity ratchet, where the rooms at the top get the taps that
  *  keep them at the top and nobody else is ever reachable. */
-/** The live directory page, plus whether the caller is looking at a SLICE.
- *
- *  ★ WHY `truncated` AND NOT A CURSOR (yet). Both orderings here are keyed on `listeners`, which
- *  announceRoom REWRITES on every heartbeat — a mutable sort key. Keyset paging over a value that
- *  moves under the reader is incoherent: a room whose count rises between page 1 and page 2 can be
- *  served twice or skipped entirely, and neither shows up as an error. So the honest first fix is
- *  to stop LYING about completeness, which is the actual complaint (thread 0c98985c: "no signal to
- *  the user that they are seeing a slice"). A real cursor wants an immutable key —
- *  (started_at, host_id) is the candidate — and that is an API contract, not a query change.
- *
- *  Detected by asking for limit+1 and returning limit: one extra row instead of a COUNT(*), which
- *  matters because this thread is about D1 load in the first place. */
+/** How the directory is ordered. The two are NOT interchangeable, and the difference is the
+ *  whole reason only one of them can page — see liveRooms. */
+export type RoomSort = "busy" | "recent";
+
+/** The live directory page: the rows, whether this is a SLICE, and how to ask for the next one. */
 export interface LiveRoomsPage {
   rooms: LiveRoom[];
   /** More rows matched than were returned. The client must not present this as the whole set. */
   truncated: boolean;
   /** The cap actually applied, so a client can say "first N" without hardcoding it. */
   limit: number;
-}
-export async function liveRooms(
-  db: D1Database,
-  limit = 100,
-  freshMs = 90_000,
-  viewerId?: string | null,
-): Promise<LiveRoomsPage> {
-  const cutoff = now() - freshMs;
-  // +1 probe row: present ⇒ there is more behind the cap.
-  const probe = limit + 1;
-  if (!viewerId) {
-    const r = await db
-      .prepare(
-        `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
-                r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
-         FROM rooms r JOIN users u ON u.id = r.host_id
-         WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
-         ORDER BY r.listeners DESC, r.started_at DESC, r.host_id DESC LIMIT ?`,
-      )
-      .bind(cutoff, probe)
-      .all<LiveRoom>();
-    return page(r.results ?? [], limit);
-  }
-  const r = await db
-    .prepare(
-      `SELECT u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
-              r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt,
-              (CASE WHEN f.followee_id IS NULL THEN 0 WHEN b.follower_id IS NULL THEN 1 ELSE 2 END) AS rel
-       FROM rooms r
-       JOIN users u ON u.id = r.host_id
-       LEFT JOIN follows f ON f.follower_id = ? AND f.followee_id = r.host_id
-       LEFT JOIN follows b ON b.follower_id = r.host_id AND b.followee_id = ?
-       WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
-       ORDER BY rel DESC, r.listeners DESC, r.started_at DESC, r.host_id DESC LIMIT ?`,
-    )
-    .bind(viewerId, viewerId, cutoff, probe)
-    .all<LiveRoom>();
-  return page(r.results ?? [], limit);
+  /** Opaque; pass back as `cursor` for the next page. Null when there is no next page, and ALWAYS
+   *  null under "busy" — that ordering cannot be paged, which is a property of the data and not an
+   *  omission. Deliberately opaque so the client never learns host_id: the cursor is built from it
+   *  server-side and the row type does not carry it. */
+  nextCursor: string | null;
 }
 
-/** Trim the +1 probe row off and report whether it was there. */
-function page<T>(rows: T[], limit: number): { rooms: T[]; truncated: boolean; limit: number } {
-  return { rooms: rows.slice(0, limit), truncated: rows.length > limit, limit };
+export interface LiveRoomsOpts {
+  limit?: number;
+  freshMs?: number;
+  viewerId?: string | null;
+  sort?: RoomSort;
+  /** Only meaningful with sort="recent"; ignored otherwise. */
+  cursor?: string | null;
+}
+
+/** ★ TWO ORDERINGS, AND ONLY ONE OF THEM CAN HAVE A CURSOR. Operator ruling 39dc683e: "let the
+ *  user pick between busy vs recent default to busy."
+ *
+ *  BUSY sorts by `listeners`, which announceRoom REWRITES on every heartbeat. Keyset paging over a
+ *  value that moves under the reader is incoherent — a room whose count rises between page 1 and
+ *  page 2 is served twice or skipped, and neither shows up as an error. So busy is capped, honest
+ *  about being capped (`truncated`), and never pages: nextCursor is always null.
+ *
+ *  RECENT sorts by (started_at, host_id). started_at is COALESCE-preserved across heartbeats for
+ *  the life of a broadcast and only cleared by closeRoom; host_id is the rooms table's primary key.
+ *  So the pair is IMMUTABLE while a row is in the set and TOTAL — exactly what a keyset cursor
+ *  needs, and it pages exactly.
+ *
+ *  ONE HONEST GAP, stated rather than hidden: a room that goes dark and re-announces gets a fresh
+ *  started_at and can therefore cross a page boundary mid-walk. No cursor can prevent that — it is
+ *  a row leaving the set and re-entering it, which is what "live directory" means.
+ *
+ *  ★ AND `rel` LEADS ONLY IN BUSY. The relationship-first ordering is a ranking, and ranking is
+ *  what busy is for. Putting it in front of recent would both contradict the name and put a
+ *  viewer-relative, mutable value at the head of the cursor key. Recent still RETURNS rel so the
+ *  UI can badge a followed host; it just does not sort by it.
+ *
+ *  Truncation is detected by asking for limit+1 and returning limit — one extra row instead of a
+ *  COUNT(*), which matters because this whole thread is about D1 load. */
+export async function liveRooms(db: D1Database, opts: LiveRoomsOpts = {}): Promise<LiveRoomsPage> {
+  const limit = opts.limit ?? 100;
+  const sort: RoomSort = opts.sort === "recent" ? "recent" : "busy";
+  const viewerId = opts.viewerId ?? null;
+  const cutoff = now() - (opts.freshMs ?? 90_000);
+  const probe = limit + 1; // +1 probe row: present ⇒ there is more behind the cap.
+
+  const cols = `u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
+                r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist,
+                r.started_at AS startedAt, r.host_id AS hostId`;
+  const relCol = viewerId
+    ? `, (CASE WHEN f.followee_id IS NULL THEN 0 WHEN b.follower_id IS NULL THEN 1 ELSE 2 END) AS rel`
+    : "";
+  const relJoin = viewerId
+    ? `LEFT JOIN follows f ON f.follower_id = ? AND f.followee_id = r.host_id
+       LEFT JOIN follows b ON b.follower_id = r.host_id AND b.followee_id = ?`
+    : "";
+
+  // Every ORDER BY here ends in host_id, the primary key. A non-total ordering paired with LIMIT
+  // resolves its own boundary arbitrarily — which of two tied rows survives can differ between two
+  // identical calls, a coin flip dressed as a deterministic read.
+  const order =
+    sort === "recent"
+      ? `ORDER BY r.started_at DESC, r.host_id DESC`
+      : `ORDER BY ${viewerId ? "rel DESC, " : ""}r.listeners DESC, r.started_at DESC, r.host_id DESC`;
+
+  const binds: unknown[] = [];
+  if (viewerId) binds.push(viewerId, viewerId);
+  binds.push(cutoff);
+  // The keyset predicate, recent only. Strictly after the cursor row in the SAME total order.
+  let keyset = "";
+  const after = sort === "recent" ? decodeCursor(opts.cursor) : null;
+  if (after) {
+    keyset = ` AND (r.started_at < ? OR (r.started_at = ? AND r.host_id < ?))`;
+    binds.push(after.startedAt, after.startedAt, after.hostId);
+  }
+  binds.push(probe);
+
+  const r = await db
+    .prepare(
+      `SELECT ${cols}${relCol}
+       FROM rooms r
+       JOIN users u ON u.id = r.host_id
+       ${relJoin}
+       WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL${keyset}
+       ${order} LIMIT ?`,
+    )
+    .bind(...binds)
+    .all<LiveRoom & { hostId: string }>();
+
+  const rows = r.results ?? [];
+  const truncated = rows.length > limit;
+  const kept = rows.slice(0, limit);
+  const last = kept[kept.length - 1];
+  // A cursor only exists where paging is coherent, and only when there IS a next page.
+  const nextCursor =
+    sort === "recent" && truncated && last?.startedAt != null ? encodeCursor(last.startedAt, last.hostId) : null;
+  // host_id is an internal id and does not belong in a public payload — it rides only inside the
+  // opaque cursor. Stripped here so no caller can accidentally serialise it.
+  const roomsOut = kept.map(({ hostId: _hostId, ...room }) => room as LiveRoom);
+  return { rooms: roomsOut, truncated, limit, nextCursor };
+}
+
+/** `<startedAt>:<hostId>` — split on the FIRST colon only, so a host id containing one is safe. */
+function encodeCursor(startedAt: number, hostId: string): string {
+  return `${startedAt}:${hostId}`;
+}
+function decodeCursor(c: string | null | undefined): { startedAt: number; hostId: string } | null {
+  if (!c) return null;
+  const i = c.indexOf(":");
+  if (i <= 0) return null;
+  const startedAt = Number(c.slice(0, i));
+  const hostId = c.slice(i + 1);
+  // A malformed cursor reads as NO cursor — the first page — rather than throwing or, worse,
+  // binding NaN and silently matching nothing.
+  if (!Number.isFinite(startedAt) || !hostId) return null;
+  return { startedAt, hostId };
 }
 
 /** The notifications "Live now" source: rooms that the VIEWER follows that are broadcasting

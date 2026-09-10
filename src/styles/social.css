@@ -2923,6 +2923,30 @@ span.profile-handle:hover {
   min-width: 0;
   width: auto;
 }
+/* THE SORT PAIR, riding the filter row's own baseline. Two words and no chrome: this sits beside
+   a text input and must not out-shout it, but the SELECTED one has to be unmistakable, because
+   which sort is active decides whether the list below can be paged past its cap at all. */
+.discover-sort {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+}
+.discover-sort-opt {
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  opacity: 0.6;
+}
+.discover-sort-opt.sel {
+  opacity: 1;
+  color: var(--accent, #00e5ff);
+  background: color-mix(in srgb, var(--accent, #00e5ff) 12%, transparent);
+}
+.discover-sort-opt:hover {
+  opacity: 1;
+}
+
 /* "Show all N" — the escape hatch that makes a cap honest. A capped section that does not say
    how much it is hiding is just a section that lost your data. */
 .discover-more {

@@ -15,6 +15,10 @@ import {
   fetchStemManifest,
   armGpu,
   disarmGpu,
+  armStemLoad,
+  disarmStemLoad,
+  stemAutoFetchAllowed,
+  stemsAllowed,
   stemTrace,
   dropCachedBuffer,
   decodeAudio,
@@ -245,6 +249,22 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         // past listener), DOWNLOAD + render it; otherwise stay on the PLAIN MIX, which is
         // already in the worklet from setBuffer (so we KEEP the buffer — never releaseMixBuffer
         // on this path — and the deck just keeps playing the mix).
+        // ★ THE CRASH GUARD'S LEVEL ACTUALLY GATES NOW. Before the 2026-09-10 redesign nothing
+        // read it, so a tab that died mid-load simply died again on reload. Level 2 declines
+        // outright; level 1 declines only the AUTOMATIC fetch, so a deliberate tap still works —
+        // one bad track should not cost the feature.
+        if (!stemsAllowed()) {
+          engine.deck(id).setStems(null);
+          refresh();
+          setStatusFor(id, { phase: "ready", detail: "Plain mix — stems are off after a crash (Settings ▸ Audio)" });
+          return;
+        }
+        if (!stemAutoFetchAllowed() && !mobileStemsRef.current) {
+          engine.deck(id).setStems(null);
+          refresh();
+          setStatusFor(id, { phase: "ready", detail: "Plain mix — auto stem download paused after a crash" });
+          return;
+        }
         setStatusFor(id, { phase: "downloading", detail: "Checking for shared stems…" });
         await whenIdle();
         if (stale?.()) return;
@@ -285,7 +305,20 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             return { kind: "none" as const }; // nothing cached → plain mix (NO on-device separation)
           });
           mobileDeriveChain = run.catch(() => undefined);
-          const res = await run;
+          // ARM around the whole download+decode. The byte budget inside `run` projects RESIDENT
+          // int16 bytes; what takes the tab down is the transient float32 DECODE PEAK, which no
+          // projection sees. So the guard is the backstop for exactly the case the budget cannot
+          // measure — and it must wrap the await, not just the fetch, because the decode is where
+          // the memory actually lands.
+          armStemLoad();
+          let res: Awaited<typeof run>;
+          try {
+            res = await run;
+          } finally {
+            // Success OR a caught failure both mean the tab SURVIVED — only a hard crash leaves
+            // this armed, which is the one signal that cannot be observed from inside the tab.
+            disarmStemLoad();
+          }
           if (stale?.() || res?.kind === "stale") return;
           if (res?.kind === "neural") {
             // loadStems throws on any failure (no DSP fallback), and the try above breaks to the

@@ -258,45 +258,36 @@ export function unblockGpu(): void {
   }
 }
 
-// ─── Mobile stem-load crash-loop guard (ESCALATING) ─────────────────────────────
-// Loading stems on a phone decodes ~424 MB per set; doing it for BOTH decks on the
-// first-run seed blew the iOS tab budget → OOM → Safari auto-reloads → the seed
-// re-runs → crash again = a REFRESH LOOP. A boolean block can't break it: once
-// neural is blocked, both decks fall to the DSP split, which ALSO decodes ~424 MB
-// and OOMs — and DSP can't be "blocked" or there'd be nothing to show.
+// ─── Mobile stem-DOWNLOAD crash guard ────────────────────────────────────────
 //
-// So the guard ESCALATES, guaranteeing the loop terminates:
-//   level 0 → try best cached neural, else DSP
-//   level 1 → DSP split only (skip neural)            (after 1 crash)
-//   level 2 → NO stems — play the plain mix           (after 2 crashes; can't OOM)
-// Arm in localStorage right before ANY stem work, disarm after (success or caught
-// error). A fresh load that finds it still armed ⇒ the tab crashed → bump the level.
+// ★ REDESIGNED 2026-09-10 (operator: "investigate this on mobile and desktop, redesign it to the
+// current shape and make it nice"). What was here guarded a path that no longer exists, and had
+// been inert since 2026-07-15 two independent ways: nothing ARMED it (its only two call sites went
+// out with 3a5d512's revert of the CPU separation bench), and nothing branched on the level it
+// reported — so its Settings notice announced a downgrade that never happened. Its level 1, "DSP
+// split only", named a path deleted in f2004f2.
 //
-// ★★ ALL OF THE ABOVE DESCRIBES A MECHANISM THAT NO LONGER RUNS. Read it as history.
-// Two independent things broke it, and neither was noticed because the reading half kept
-// compiling:
+// THE INVESTIGATION, because a redesign has to be aimed at where a tab can still die TODAY:
+//   • DESKTOP separation is already guarded, correctly, by the GPU crash guard below —
+//     armGpu/disarmGpu around the work, and `gpuBlocked` genuinely gates modelSupport(). That is
+//     the pattern this one now copies, rather than inventing a second one.
+//   • MOBILE never separates at all: mobileGpuEligible() is hardcoded false, so modelSupport
+//     returns "needs-gpu" for every phone and loadStems throws before any model runs.
+//   • WHICH LEAVES ONE LIVE PATH: a phone DOWNLOADING and decoding a cached set.
+//     MOBILE_STEM_BYTE_BUDGET already declines an over-budget load — but it projects the RESIDENT
+//     int16 footprint (16 B/sample), and what kills the tab is the DECODE PEAK, which is float32
+//     and transient. A set can pass the resident projection and still die on the way in. That gap
+//     is what this guard is for, and it is the only thing it is for.
 //
-//   1. NOTHING ARMS IT. armStemLoad/disarmStemLoad have ZERO call sites anywhere in the
-//      repo — verified by grep across src/, server/ and worker/, and they are not even
-//      re-exported from the stems barrel. Their only two callers lived in the CPU
-//      separation bench, and 3a5d512 (2026-07-15) reverted that feature, taking the arm
-//      and disarm calls with it. Since nothing arms, initStemCrashGuard's armed-but-not-
-//      disarmed check can never fire, so `stemFails` never increments. Any non-zero value
-//      today is a legacy key written before that revert.
-//
-//   2. THE LADDER WAS NEVER IMPLEMENTED AS BEHAVIOUR, and cannot be as written. Nothing
-//      branches on the level: stemFailLevel() has exactly one consumer, a Settings notice
-//      that says "Downgraded after a crash" and offers to reset it. So the notice announces
-//      a downgrade that never happened. And level 1 — "DSP split only" — names a path
-//      deleted in f2004f2 (2026-07-01): there is no DSP split to fall back to, which is
-//      also what made the original argument for escalation ("both decks fall to the DSP
-//      split, which ALSO decodes ~424 MB") obsolete.
-//
-// So this is not a guard that is off; it is a guard whose premise moved. Rewiring it means
-// designing a new ladder against the CURRENT shape (neural-or-mix, and on mobile
-// cache-or-mix), not restoring the arm calls. Retiring it means deleting this file's guard
-// section and the Settings notice with it. That is an operator-facing call because the
-// notice is user-visible, so it is written down rather than decided here.
+// The pattern is the GPU guard's, because that one is proven: ARM in localStorage immediately
+// before the download+decode, DISARM once it settles (success OR caught failure — both mean the
+// tab survived). A fresh load finding it still armed can only mean the tab went down mid-load.
+// Escalating, so the loop terminates:
+//   level 0 → fetch cached stems normally
+//   level 1 → do not AUTO-fetch; asking for stems explicitly still works   (after 1 crash)
+//   level 2 → stay on the plain mix                                        (after 2 crashes)
+// Level 1 is deliberately not "no stems": one bad track should not cost the feature, and the
+// tracks that trip this are the long ones. The user keeps the door.
 const STEM_ARM_KEY = "htl:stemArm";
 const STEM_FAILS_KEY = "htl:stemFails";
 let stemFails = 0;
@@ -315,13 +306,31 @@ export function initStemCrashGuard(): number {
   }
   return stemFails;
 }
-// armStemLoad/disarmStemLoad USED TO LIVE HERE and were deleted 2026-09-09: zero call sites
-// since 3a5d512 stripped the bench that held both. They are trivially restorable from git if
-// the guard is rewired — and restoring them alone would NOT make it work, per the note above.
-// STEM_ARM_KEY is still read by initStemCrashGuard, deliberately: a user who crashed under an
-// older build can still be carrying that key, and clearing it is the one honest thing the guard
-// can still do.
-// 0 = neural+DSP ok · 1 = DSP only · ≥2 = no stems (plain mix).
+/** Arm immediately before a mobile stem download+decode. */
+export function armStemLoad(): void {
+  try {
+    localStorage.setItem(STEM_ARM_KEY, "1");
+  } catch {
+    /* no localStorage — just don't guard */
+  }
+}
+/** Disarm once it settles, success OR caught failure: both mean the tab survived. */
+export function disarmStemLoad(): void {
+  try {
+    localStorage.removeItem(STEM_ARM_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+/** Should a phone AUTO-fetch a cached stem set? False once a load has taken the tab down. */
+export function stemAutoFetchAllowed(): boolean {
+  return stemFails < 1;
+}
+/** Should stems be offered at all? False after two crashes — the terminating rung. */
+export function stemsAllowed(): boolean {
+  return stemFails < 2;
+}
+// 0 = fetch normally · 1 = no AUTO-fetch (asking still works) · >=2 = plain mix only.
 export function stemFailLevel(): number {
   return stemFails;
 }

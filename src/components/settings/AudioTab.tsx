@@ -527,9 +527,17 @@ export function AudioTab({
               deck plays the mix.
             </p>
           )}
+          {/* ★ THIS NOTICE USED TO BE A LIE, and a vague one. It read "Downgraded after a crash"
+              and offered to "Retry full quality" — for a guard that nothing armed and a level that
+              nothing acted on, so no downgrade had happened and there was nothing to retry. Both
+              halves are true now (2026-09-10 redesign): the level really does gate the mobile stem
+              download, and it says WHICH rung you are on, because "downgraded" without naming what
+              you lost is not something a user can act on. */}
           {stemFailLevel() > 0 && (
             <p className="settings-note warn">
-              Downgraded after a crash.{" "}
+              {stemFailLevel() >= 2
+                ? "Stems are off — loading them crashed this tab twice, so tracks play as the plain mix."
+                : "Stems no longer download automatically — loading one crashed this tab. Turning the switch above on still fetches them."}{" "}
               <button
                 className="link-btn"
                 onClick={() => {
@@ -537,7 +545,7 @@ export function AudioTab({
                   location.reload();
                 }}
               >
-                Retry full quality
+                Try again
               </button>
             </p>
           )}

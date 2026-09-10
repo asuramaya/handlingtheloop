@@ -154,3 +154,63 @@
      a phone-width library trims to Title / Artist / Time automatically. */
 }
 
+
+/* ===================== A PHONE HELD SIDEWAYS ================================
+   844x390 or 932x430 — WIDE ENOUGH to clear every width breakpoint in this repo, and far
+   too SHORT for the board those breakpoints then hand it. Thread f15158f3: at 844x390 the
+   FX strip landed at y=565 on a 390px-tall screen, 175px below the bottom edge and
+   unreachable, with no scroll to bring it back.
+
+   ★ THIS IS ITS OWN LAYOUT, NOT A FALLBACK TO EITHER OTHER ONE (operator, 2026-09-10):
+   "it has to be different, since we transitioned to one deck, one half of horizontal
+   mobile can be deck the other half can be viewport, there is no other way to make this
+   work."
+
+   Reusing the PORTRAIT phone rules would have been the cheap move and is wrong: portrait
+   stacks vertically, and stacking into 390px of height is the same overflow with different
+   spacing. What landscape actually offers is the HORIZONTAL axis, and that is the axis the
+   desktop board spends on two decks side by side.
+
+   So the split falls straight out of the structure that already exists rather than needing a
+   new one. `.stage` is a COLUMN of `lanes-flank` (the waveforms + overview rails — the
+   viewport) above `decks-third` (the crossfader + control banks — the deck). Turn that column
+   into a ROW and the two halves are exactly what the operator described.
+
+   One deck at a time is NOT forced here: the EXPAND gesture on a deck header already solos a
+   deck on desktop and mobile alike (.bank.expanded / .bank.collapsed above), so landscape
+   inherits a mechanism the user already knows instead of a mode it cannot turn off.
+
+   ⚠ UNVERIFIED ON GLASS. This has been reasoned and built, never seen — there is no phone in
+   this environment and no jsdom to lay it out in. The arithmetic that made it necessary was
+   measured (y=565 on a 390px screen); the result of the fix is not. It wants the operator's
+   eyes before it is trusted. */
+@media (max-height: 560px) and (pointer: coarse) {
+  .stage {
+    flex-direction: row;
+    gap: 6px;
+  }
+  /* Equal halves, and BOTH allowed to shrink — `min-width: 0` on a flex child is what stops
+     a wide waveform canvas from pinning the row open and pushing the controls off-screen,
+     which is the horizontal spelling of the exact bug this block exists to fix. */
+  .stage > .lanes-flank,
+  .stage > .decks-third {
+    flex: 1 1 50%;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* ★ THE CONTROLS SCROLL. This is the actual repair: the desk is taller than 390px and always
+     will be, so the fix is not to shrink it until the FX strip fits (that ends in controls too
+     small to hit with a thumb) but to let it scroll and keep every control reachable at full
+     size. overscroll-behavior keeps a flick at the end of the desk from scrolling the page
+     behind it. */
+  .stage > .decks-third {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* The chin is a fixed cost on a screen with 390px to spend — tighten it, do not remove it:
+     it is the only way back to Library and Settings. */
+  .chin {
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+}

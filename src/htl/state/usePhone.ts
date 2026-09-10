@@ -8,6 +8,21 @@ import { useEffect, useState } from "react";
 // opens with nowhere to render, or a panel that vanishes with no way back.
 export const PHONE_QUERY = "(max-width: 768px)";
 
+
+/**
+ * A PHONE HELD SIDEWAYS — short viewport, touch pointer. 844x390 or 932x430.
+ *
+ * This was already the second arm of ONE_PANEL_QUERY, unnamed and inlined. It is lifted out
+ * because the BOARD needs it too and for a different reason than the panels do, and an inlined
+ * string cannot be reused without being retyped — which is how two copies of one rule start
+ * disagreeing.
+ *
+ * `pointer: coarse` is not decoration: a short-but-wide DESKTOP window is just a short window. It
+ * has a cursor, it can drag a dock edge, and it is not a phone. 560px separates every phone in
+ * landscape (<=430) from every tablet in landscape (an iPad Mini is 744).
+ */
+export const LANDSCAPE_PHONE_QUERY = "(max-height: 560px) and (pointer: coarse)";
+
 /**
  * ★ A DIFFERENT QUESTION, DELIBERATELY NOT THE SAME ANSWER.
  *
@@ -35,7 +50,7 @@ export const PHONE_QUERY = "(max-width: 768px)";
  * a phone — which is what its board layout already does, so the panels now agree with the board
  * instead of contradicting it.
  */
-export const ONE_PANEL_QUERY = "(max-width: 768px), (max-height: 560px) and (pointer: coarse)";
+export const ONE_PANEL_QUERY = `(max-width: 768px), ${LANDSCAPE_PHONE_QUERY}`;
 
 function useMediaQuery(query: string): boolean {
   const [match, setMatch] = useState(
@@ -53,6 +68,11 @@ function useMediaQuery(query: string): boolean {
 
 export function usePhone(): boolean {
   return useMediaQuery(PHONE_QUERY);
+}
+
+/** True when this is a phone held sideways — see LANDSCAPE_PHONE_QUERY. */
+export function useLandscapePhone(): boolean {
+  return useMediaQuery(LANDSCAPE_PHONE_QUERY);
 }
 
 /** True when the viewport has room for exactly ONE panel — see ONE_PANEL_QUERY. Read once, at

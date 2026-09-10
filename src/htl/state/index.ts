@@ -109,4 +109,4 @@ export {
   edgeZIndex,
   panelZIndex,
 } from "./panelPlacement";
-export { PHONE_QUERY, ONE_PANEL_QUERY, usePhone, useOnePanel, isOnePanelViewport } from "./usePhone";
+export { PHONE_QUERY, ONE_PANEL_QUERY, LANDSCAPE_PHONE_QUERY, usePhone, useOnePanel, useLandscapePhone, isOnePanelViewport } from "./usePhone";

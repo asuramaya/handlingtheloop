@@ -302,6 +302,31 @@ export function fromPlaylistPanel(r: PlaylistPanelRenderer): TrackMeta | null {
   };
 }
 
+export interface PlaylistTail {
+  has_continuation?: boolean;
+  /** YouTube's declared count. Present, tempting, and NOT usable here — see playlistTruncated. */
+  total_items?: unknown;
+}
+/** Did we stop reading before the playlist ran out?
+ *
+ *  A PENDING CONTINUATION IS THE ONLY HONEST SIGNAL, and this function exists to make that a
+ *  tested rule rather than a comment somebody edits past. The obvious alternative — compare the
+ *  tracks we got against the declared `total_items` — is wrong twice over, measured against the
+ *  live API on 2026-09-01:
+ *    1. total_items is a STRING ("13 videos"), so the original `typeof total === "number"` test
+ *       could never fire at all. It was dead code that read like a working check.
+ *    2. Even parsed, the count includes UNAVAILABLE videos. A 13-item playlist hands back 10 with
+ *       has_continuation false — the other three are deleted/private and still counted.
+ *  Trusting the gap marks a fully-read playlist truncated FOREVER. And `truncated` gates pruning,
+ *  so "always truncated" means "never prune", which means a track deleted at the source stays in
+ *  the user's local copy permanently. The silent-forever failure, not the loud one.
+ *
+ *  Fails CLOSED on a malformed tail: anything that is not exactly `true` reads as "we finished",
+ *  because the alternative — defaulting to truncated — is the never-prune trap above. */
+export function playlistTruncated(tail: PlaylistTail | null | undefined): boolean {
+  return tail?.has_continuation === true;
+}
+
 export function collectVideos(node: unknown, push: (t: TrackMeta) => void, depth = 0): void {
   if (!node || depth > 40) return;
   if (Array.isArray(node)) {
@@ -409,9 +434,9 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
     // are unavailable, and they count toward the total. Trusting that gap would mark a fully-read
     // playlist truncated forever, which never prunes, which quietly means a track deleted at the
     // source stays in the local copy for good. A pending continuation is the only honest signal.
-    const tail = pl as unknown as { has_continuation?: boolean };
+    const tail = pl as unknown as PlaylistTail;
     const info = first.info as unknown as { title?: string } | undefined;
-    const truncated = tail.has_continuation === true;
+    const truncated = playlistTruncated(tail);
     return { title: info?.title ?? "Playlist", tracks, truncated };
   }
 

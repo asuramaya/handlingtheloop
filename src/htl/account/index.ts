@@ -216,12 +216,24 @@ export interface LiveRoom {
    *  to do with ONE PAGE of that graph, so past 50 follows it started quietly mislabelling. */
   rel?: 0 | 1 | 2;
 }
+/** A directory read that knows whether it is the WHOLE set. `truncated` means the server capped
+ *  the answer — the caller must not present it as complete. Same flag the library's own
+ *  playlist reads already carry (resync.ts), for the same reason. */
+export interface DirectoryPage<T> {
+  items: T[];
+  truncated: boolean;
+  limit: number;
+}
 /** The live public-room directory ("on now"). Signed in, it is ordered relationship-first and
- *  each room carries `rel`; signed out, busiest-first. */
-export async function fetchLiveRooms(signal?: AbortSignal): Promise<LiveRoom[]> {
+ *  each room carries `rel`; signed out, busiest-first. Capped server-side, so it returns a PAGE:
+ *  a failed request is an empty page that does NOT claim completeness (truncated stays false but
+ *  `items` is empty, which the caller renders as "nothing on now" — the honest reading of a read
+ *  that did not happen is the same as of one that found nothing). */
+export async function fetchLiveRooms(signal?: AbortSignal): Promise<DirectoryPage<LiveRoom>> {
   const res = await fetch("/api/rooms/live", { signal, credentials: "same-origin" });
-  if (!res.ok) return [];
-  return ((await res.json()) as { rooms: LiveRoom[] }).rooms;
+  if (!res.ok) return { items: [], truncated: false, limit: 0 };
+  const b = (await res.json()) as { rooms: LiveRoom[]; truncated?: boolean; limit?: number };
+  return { items: b.rooms, truncated: !!b.truncated, limit: b.limit ?? b.rooms.length };
 }
 
 /** A durable notification event (the bell's "Recent" feed — new follower, …). The actor is
@@ -440,11 +452,13 @@ export async function fetchSet(id: string, signal?: AbortSignal): Promise<SetCar
   return ((await res.json()) as { set: SetCard }).set ?? null;
 }
 
-/** The published-sets directory for Discover (newest first, with host identity). Public. */
-export async function fetchDiscoverSets(signal?: AbortSignal): Promise<SetCard[]> {
+/** The published-sets directory for Discover (newest first, with host identity). Public, and
+ *  capped server-side — so it returns a PAGE carrying whether more exists behind the cap. */
+export async function fetchDiscoverSets(signal?: AbortSignal): Promise<DirectoryPage<SetCard>> {
   const res = await fetch("/api/sets/discover", { signal, credentials: "same-origin" });
-  if (!res.ok) return [];
-  return ((await res.json()) as { sets: SetCard[] }).sets;
+  if (!res.ok) return { items: [], truncated: false, limit: 0 };
+  const b = (await res.json()) as { sets: SetCard[]; truncated?: boolean; limit?: number };
+  return { items: b.sets, truncated: !!b.truncated, limit: b.limit ?? b.sets.length };
 }
 
 /** A @handle's PUBLISHED sets (their public profile history). Public. */

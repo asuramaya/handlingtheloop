@@ -96,13 +96,34 @@ export interface LiveRoom {
  *  1 for one-way, 0 for a stranger. Ordering puts relationship first and listeners second:
  *  busiest-first alone is a popularity ratchet, where the rooms at the top get the taps that
  *  keep them at the top and nobody else is ever reachable. */
+/** The live directory page, plus whether the caller is looking at a SLICE.
+ *
+ *  ★ WHY `truncated` AND NOT A CURSOR (yet). Both orderings here are keyed on `listeners`, which
+ *  announceRoom REWRITES on every heartbeat — a mutable sort key. Keyset paging over a value that
+ *  moves under the reader is incoherent: a room whose count rises between page 1 and page 2 can be
+ *  served twice or skipped entirely, and neither shows up as an error. So the honest first fix is
+ *  to stop LYING about completeness, which is the actual complaint (thread 0c98985c: "no signal to
+ *  the user that they are seeing a slice"). A real cursor wants an immutable key —
+ *  (started_at, host_id) is the candidate — and that is an API contract, not a query change.
+ *
+ *  Detected by asking for limit+1 and returning limit: one extra row instead of a COUNT(*), which
+ *  matters because this thread is about D1 load in the first place. */
+export interface LiveRoomsPage {
+  rooms: LiveRoom[];
+  /** More rows matched than were returned. The client must not present this as the whole set. */
+  truncated: boolean;
+  /** The cap actually applied, so a client can say "first N" without hardcoding it. */
+  limit: number;
+}
 export async function liveRooms(
   db: D1Database,
   limit = 100,
   freshMs = 90_000,
   viewerId?: string | null,
-): Promise<LiveRoom[]> {
+): Promise<LiveRoomsPage> {
   const cutoff = now() - freshMs;
+  // +1 probe row: present ⇒ there is more behind the cap.
+  const probe = limit + 1;
   if (!viewerId) {
     const r = await db
       .prepare(
@@ -110,11 +131,11 @@ export async function liveRooms(
                 r.title, r.genre, r.listeners, r.np_title AS npTitle, r.np_artist AS npArtist, r.started_at AS startedAt
          FROM rooms r JOIN users u ON u.id = r.host_id
          WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
-         ORDER BY r.listeners DESC, r.started_at DESC LIMIT ?`,
+         ORDER BY r.listeners DESC, r.started_at DESC, r.host_id DESC LIMIT ?`,
       )
-      .bind(cutoff, limit)
+      .bind(cutoff, probe)
       .all<LiveRoom>();
-    return r.results ?? [];
+    return page(r.results ?? [], limit);
   }
   const r = await db
     .prepare(
@@ -126,11 +147,16 @@ export async function liveRooms(
        LEFT JOIN follows f ON f.follower_id = ? AND f.followee_id = r.host_id
        LEFT JOIN follows b ON b.follower_id = r.host_id AND b.followee_id = ?
        WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL
-       ORDER BY rel DESC, r.listeners DESC, r.started_at DESC LIMIT ?`,
+       ORDER BY rel DESC, r.listeners DESC, r.started_at DESC, r.host_id DESC LIMIT ?`,
     )
-    .bind(viewerId, viewerId, cutoff, limit)
+    .bind(viewerId, viewerId, cutoff, probe)
     .all<LiveRoom>();
-  return r.results ?? [];
+  return page(r.results ?? [], limit);
+}
+
+/** Trim the +1 probe row off and report whether it was there. */
+function page<T>(rows: T[], limit: number): { rooms: T[]; truncated: boolean; limit: number } {
+  return { rooms: rows.slice(0, limit), truncated: rows.length > limit, limit };
 }
 
 /** The notifications "Live now" source: rooms that the VIEWER follows that are broadcasting

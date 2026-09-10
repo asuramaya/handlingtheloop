@@ -109,8 +109,25 @@ export interface DiscoverSetRow extends SetRow {
   displayName: string | null;
   avatar: string | null;
 }
-/** Published sets across all hosts (with handles), newest first — the Discover Sets facet. */
-export async function discoverSets(db: D1Database, limit = 60): Promise<DiscoverSetRow[]> {
+export interface DiscoverSetsPage {
+  sets: DiscoverSetRow[];
+  /** More rows matched than were returned — the client must not present this as the whole set. */
+  truncated: boolean;
+  limit: number;
+}
+/** Published sets across all hosts (with handles), newest first — the Discover Sets facet.
+ *
+ *  ★ THE ORDER BY CARRIES A TOTAL TIEBREAK, and that is not cosmetic. `published_at` is not
+ *  unique — two sets published in the same millisecond are a real possibility, and a batch publish
+ *  makes it a likely one — so ORDER BY published_at DESC LIMIT n was resolving its own boundary
+ *  arbitrarily. Which of two tied rows made the cut could differ between two identical calls. `id`
+ *  is the primary key, so (published_at, id) is total and the boundary is now determinate.
+ *
+ *  Unlike liveRooms this ordering is IMMUTABLE — published_at is stamped once on the draft→
+ *  published transition and never rewritten — so this pair IS a usable keyset cursor when paging
+ *  is added. Recorded here because that difference is the whole reason the two endpoints in
+ *  thread 0c98985c need different treatments. */
+export async function discoverSets(db: D1Database, limit = 60): Promise<DiscoverSetsPage> {
   const r = await db
     .prepare(
       `SELECT s.id, s.host_id AS hostId, s.title, s.genre, s.status, s.duration, s.tracks, s.tracklist,
@@ -119,11 +136,12 @@ export async function discoverSets(db: D1Database, limit = 60): Promise<Discover
               u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM sets s JOIN users u ON u.id = s.host_id
        WHERE s.status = 'published' AND u.handle IS NOT NULL
-       ORDER BY s.published_at DESC LIMIT ?`,
+       ORDER BY s.published_at DESC, s.id DESC LIMIT ?`,
     )
-    .bind(limit)
+    .bind(limit + 1) // +1 probe row: present ⇒ more behind the cap (cheaper than a COUNT(*))
     .all<DiscoverSetRow>();
-  return r.results ?? [];
+  const rows = r.results ?? [];
+  return { sets: rows.slice(0, limit), truncated: rows.length > limit, limit };
 }
 
 /** Flip a set's lifecycle state (G1b). Owner-scoped: the host_id guard makes it a no-op

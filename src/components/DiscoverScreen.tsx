@@ -61,6 +61,11 @@ export function DiscoverScreen({
 }) {
   const [rooms, setRooms] = useState<LiveRoom[] | null>(null); // null = first load not back yet
   const [sets, setSets] = useState<SetCard[]>([]);
+  // Did the SERVER cap its answer? Distinct from ROOM_CAP below, which is this screen's own
+  // display cap over a set it genuinely has all of. Conflating the two is what made "Show all N"
+  // a false claim past the server's limit — see the note on the expander.
+  const [roomsCapped, setRoomsCapped] = useState(false);
+  const [setsCapped, setSetsCapped] = useState(false);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
   const { query, roomsExpanded, friendsExpanded } = view;
   const setQuery = (q: string) => setView({ query: q });
@@ -73,7 +78,11 @@ export function DiscoverScreen({
   useEffect(() => {
     let alive = true;
     fetchDiscoverSets()
-      .then((s) => alive && setSets(s))
+      .then((p) => {
+        if (!alive) return;
+        setSets(p.items);
+        setSetsCapped(p.truncated);
+      })
       .catch(() => {});
     return () => {
       alive = false;
@@ -84,7 +93,11 @@ export function DiscoverScreen({
     let alive = true;
     const load = () =>
       fetchLiveRooms()
-        .then((r) => alive && setRooms(r))
+        .then((p) => {
+          if (!alive) return;
+          setRooms(p.items);
+          setRoomsCapped(p.truncated);
+        })
         .catch(() => alive && setRooms((prev) => prev ?? []));
     load();
     const t = setInterval(load, 30_000);
@@ -117,6 +130,11 @@ export function DiscoverScreen({
     ) : (
       <div className="discover-section">
         <SetList sets={sets} onPlay={onPlaySet} showHost />
+        {/* Same rule as the rooms list: /api/sets/discover is capped server-side, and a list that
+            stops at the cap without saying so reads as the complete catalogue. */}
+        {setsCapped && (
+          <p className="discover-empty">Showing the {sets.length} newest. More have been published.</p>
+        )}
       </div>
     );
   }
@@ -199,13 +217,24 @@ export function DiscoverScreen({
                   <LiveRoomRow key={room.handle} room={room} self={self} tunedTo={tunedTo} onTap={tap} reason={reason} />
                 ))}
               </ul>
+              {/* ★ "Show all N" WAS A CLAIM THIS SCREEN COULD NOT MAKE. /api/rooms/live is
+                  capped server-side, so past that cap `shown.length` is the size of a SLICE and
+                  "all" named the wrong number — the same silent-truncation defect as the
+                  follow-graph page documented above, one surface along. The expander only says
+                  "all" when the server did not cap; when it did, it counts what it has and the
+                  note below says the rest exists. */}
               {shown.length > ROOM_CAP && (
                 <button
                   className="link-btn discover-more"
                   onClick={() => setView({ roomsExpanded: !roomsExpanded })}
                 >
-                  {roomsExpanded ? "Show fewer" : `Show all ${shown.length}`}
+                  {roomsExpanded ? "Show fewer" : roomsCapped ? `Show ${shown.length}` : `Show all ${shown.length}`}
                 </button>
+              )}
+              {roomsCapped && !query && (
+                <p className="discover-empty">
+                  Showing the busiest {live.length}. More rooms are live than fit here.
+                </p>
               )}
             </>
           )}

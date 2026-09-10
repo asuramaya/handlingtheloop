@@ -315,7 +315,10 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     const rest = path.slice("/api/sets/".length);
     // /api/sets/discover → the published-sets directory across all hosts (with identity), G1d.
     if (rest === "discover") {
-      return json(200, { sets: (await discoverSets(env.DB)).map(discoverCard) });
+      const setsPage = await discoverSets(env.DB);
+      // `truncated` travels with the payload so the client can say "first N" instead of implying
+      // it has everything — thread 0c98985c's actual complaint about this facet.
+      return json(200, { sets: setsPage.sets.map(discoverCard), truncated: setsPage.truncated, limit: setsPage.limit });
     }
     const slash = rest.indexOf("/");
     const id = slash === -1 ? rest : rest.slice(0, slash);
@@ -599,7 +602,8 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
       // client never has to fetch (a page of) the follow graph to work it out. See liveRooms().
       const viewer = await currentUser(env, req).catch(() => null);
       if (viewer) await ensureGraphTables(env.DB);
-      return json(200, { rooms: await liveRooms(env.DB, 100, 90_000, viewer?.id ?? null) });
+      const page = await liveRooms(env.DB, 100, 90_000, viewer?.id ?? null);
+      return json(200, { rooms: page.rooms, truncated: page.truncated, limit: page.limit });
     }
 
     // HOST announces / heartbeats their live room into the directory (E1). Requires a

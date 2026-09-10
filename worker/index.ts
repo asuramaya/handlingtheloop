@@ -337,6 +337,17 @@ async function handleInternalPresence(req: Request, env: Env): Promise<Response>
 export { DjRoom } from "../server/room";
 export { RelayRoom } from "../server/relayRoom"; // D2 crowd shards (dormant unless RELAY_SHARDS>0)
 
+// A Vite build-hashed asset: /assets/<name>-<hash>.<ext>. The hash in the filename is what
+// makes `immutable` safe, so this deliberately requires one rather than matching /assets/ —
+// and it is scoped to /assets/ so the UNHASHED public/ payloads (models/, ort/) keep
+// revalidating. Marking those immutable would pin a stale model in every browser that
+// touched it, with no filename change to ever dislodge it.
+const HASHED_ASSET = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/i;
+
+export function isHashedAsset(pathname: string): boolean {
+  return HASHED_ASSET.test(pathname);
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
@@ -371,6 +382,19 @@ export default {
     // CSP's script-src has no 'unsafe-inline', so an injected <script> can't run —
     // turning any residual HTML-injection from account-takeover into a no-op.
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
+    // CACHING, and the two halves are deliberately opposite.
+    //
+    // A build-hashed asset is immutable BY CONSTRUCTION — its content hash is in its
+    // filename, so the bytes behind that URL can never change. Revalidating it (the old
+    // `max-age=0, must-revalidate`) bought a round-trip whose answer was always
+    // "unchanged"; on a phone on mobile data that is pure latency per asset per load.
+    //
+    // The DOCUMENT keeps revalidating, and that is the whole update mechanism. There is no
+    // service worker and no reload prompt: a new deploy emits new asset hashes, index.html
+    // is the only thing naming them, so a document that always revalidates means one reload
+    // puts a client on the current build. Cache the document and that guarantee is gone —
+    // which is why this is not "cache everything harder".
+    if (isHashedAsset(url.pathname)) headers.set("Cache-Control", "public, max-age=31536000, immutable");
     // Inject per-page meta into the SPA shell: a rich share card for /@handle + /set/:id links, and
     // the default marketing description everywhere else — so every HTML page carries an accurate
     // description/OG for search + answer-engine crawlers (which see the shell, not the running app).

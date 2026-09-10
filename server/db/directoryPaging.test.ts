@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { liveRooms, liveFollowedRooms } from "./rooms";
+
+/** The cursor is base64url, so a test that hand-writes one has to speak the same encoding. */
+const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 import { discoverSets } from "./sets";
 
 // THE DIRECTORY USED TO LIE ABOUT BEING COMPLETE (thread 0c98985c).
@@ -161,7 +164,7 @@ describe("two orderings, and only one of them can page", () => {
 
   it("the cursor asks for rows strictly AFTER it, in the same total order", async () => {
     const asked: Asked[] = [];
-    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: "1700000000:user-9" });
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: b64("1700000000:user-9") });
     // Both limbs are required. `started_at < ?` alone drops every row tied on the timestamp;
     // the tie limb carries them, ordered by the key that makes the ordering total.
     expect(asked[0].sql).toMatch(/r\.started_at < \? OR \(r\.started_at = \? AND r\.host_id < \?\)/);
@@ -173,13 +176,13 @@ describe("two orderings, and only one of them can page", () => {
     // The cursor is `<startedAt>:<hostId>` split on the FIRST colon. A host id with its own colon
     // would otherwise decode to a truncated id that matches nothing — an empty page 2 and no error.
     const asked: Asked[] = [];
-    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: "1700000000:a:b:c" });
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: b64("1700000000:a:b:c") });
     expect(asked[0].binds).toContain("a:b:c");
   });
 
   it("a malformed cursor reads as the FIRST page, never as a bound NaN", async () => {
     // Binding NaN matches nothing and looks exactly like "the directory is empty".
-    for (const bad of ["", "nonsense", ":user-1", "abc:user-1", "1700000000:"]) {
+    for (const bad of ["", "nonsense", b64(":user-1"), b64("abc:user-1"), b64("1700000000:"), "!!!not-base64!!!"]) {
       const asked: Asked[] = [];
       await liveRooms(fakeDb(0, asked), { limit: 10, sort: "recent", cursor: bad });
       expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
@@ -189,7 +192,7 @@ describe("two orderings, and only one of them can page", () => {
 
   it("a cursor passed to BUSY is ignored, not half-applied", async () => {
     const asked: Asked[] = [];
-    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "busy", cursor: "1700000000:user-9" });
+    await liveRooms(fakeDb(0, asked), { limit: 10, sort: "busy", cursor: b64("1700000000:user-9") });
     expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
   });
 
@@ -264,7 +267,7 @@ describe("the directory applies blocks, in both directions and in the right bind
     // fragment added without its binds, or in the wrong order, does not throw: it shifts every
     // later parameter by one and the query quietly answers a different question. Count them.
     const both: Asked[] = [];
-    await liveRooms(fakeDb(0, both), { limit: 10, viewerId: "v1", sort: "recent", cursor: "123:h1" });
+    await liveRooms(fakeDb(0, both), { limit: 10, viewerId: "v1", sort: "recent", cursor: b64("123:h1") });
     const marks = (both[0].sql.match(/\?/g) ?? []).length;
     expect(both[0].binds).toHaveLength(marks);
     // And the order: rel join (v1, v1), cutoff, block gate (v1, v1), keyset (123, 123, h1), limit.
@@ -280,11 +283,40 @@ describe("the directory applies blocks, in both directions and in the right bind
     for (const opts of [
       { limit: 10, viewerId: null },
       { limit: 10, viewerId: "v1" },
-      { limit: 10, viewerId: null, sort: "recent" as const, cursor: "5:h" },
+      { limit: 10, viewerId: null, sort: "recent" as const, cursor: b64("5:h") },
     ]) {
       const a: Asked[] = [];
       await liveRooms(fakeDb(0, a), opts);
       expect(a[0].binds).toHaveLength((a[0].sql.match(/\?/g) ?? []).length);
     }
+  });
+});
+
+describe("the cursor is opaque in the sense it claims to be", () => {
+  it("does NOT hand the internal host id back in plain sight", async () => {
+    // The defect this fixes: room objects had hostId stripped because "an internal id does not
+    // belong in a public payload", and then the cursor emitted it verbatim. The payload was
+    // scrubbed and the cursor handed the same value straight back.
+    const page = await liveRooms(fakeDb(3), { limit: 2, sort: "recent" });
+    expect(page.nextCursor).not.toBeNull();
+    expect(page.nextCursor).not.toContain("user-");
+    expect(page.nextCursor).not.toContain(":");
+  });
+
+  it("round-trips through the query it was built from", async () => {
+    // Encoding is only worth anything if it decodes back to the same keyset binds — otherwise
+    // page 2 silently returns page 1 forever, which reads as "the list stopped growing".
+    const first = await liveRooms(fakeDb(3), { limit: 2, sort: "recent" });
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 2, sort: "recent", cursor: first.nextCursor });
+    expect(asked[0].binds).toContain(1_699_999_999); // the 2nd fake row (the fake counts DOWN)
+    expect(asked[0].binds).toContain("user-1");
+  });
+
+  it("a cursor that is not ours reads as the first page, never as an error", async () => {
+    // Includes the case that only exists now: a string that is not valid base64 at all.
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 5, sort: "recent", cursor: "????" });
+    expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
   });
 });

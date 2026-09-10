@@ -136,9 +136,20 @@ export interface LiveRoomsOpts {
  *  So the pair is IMMUTABLE while a row is in the set and TOTAL — exactly what a keyset cursor
  *  needs, and it pages exactly.
  *
+ *  ★ AND `live = 1` IS PART OF THE CURSOR'S CORRECTNESS, not just a filter. closeRoom sets
+ *  started_at = NULL and live = 0 TOGETHER, so the live filter is what keeps a NULL key out of the
+ *  paged set. Without it a NULL would sort into the set and then be permanently unreachable,
+ *  because `started_at < ?` against NULL is NULL, not true — the row would be skipped by every
+ *  page and nothing would report it. Implicit until Metron walked the legs on review; stated now
+ *  because it is load-bearing.
+ *
  *  ONE HONEST GAP, stated rather than hidden: a room that goes dark and re-announces gets a fresh
- *  started_at and can therefore cross a page boundary mid-walk. No cursor can prevent that — it is
- *  a row leaving the set and re-entering it, which is what "live directory" means.
+ *  started_at and can therefore cross a page boundary mid-walk, appearing twice or not at all. No
+ *  cursor over any key can prevent that — a keyset guarantees the ORDERING is stable, never that
+ *  the POPULATION is, and this population is "who is broadcasting right now". Trying to close it
+ *  would push toward a snapshot or a mutable-key cursor, both worse. What matters is that the
+ *  failure is BOUNDED and NAMED, so no caller builds dedupe-free paging on a promise this endpoint
+ *  never made.
  *
  *  ★ AND `rel` LEADS ONLY IN BUSY. The relationship-first ordering is a ranking, and ranking is
  *  what busy is for. Putting it in front of recent would both contradict the name and put a
@@ -225,16 +236,44 @@ export async function liveRooms(db: D1Database, opts: LiveRoomsOpts = {}): Promi
   return { rooms: roomsOut, truncated, limit, nextCursor };
 }
 
-/** `<startedAt>:<hostId>` — split on the FIRST colon only, so a host id containing one is safe. */
+// ★ THE CURSOR CARRIES host_id, AND THAT IS WHY IT IS ENCODED. Caught by Metron on review: this
+// file strips hostId from every room object because "an internal id does not belong in a public
+// payload", and the cursor then emitted `${startedAt}:${hostId}` in PLAINTEXT — the payload
+// scrubbed and the cursor handing the same value straight back. A file that states a policy and
+// does not deliver it is worse than one that states nothing, because a reader trusts the sentence.
+//
+// BASE64URL IS NOT SECRECY AND THIS COMMENT WILL NOT PRETEND IT IS. Anyone who wants the id can
+// decode it in one line. What it buys is honest and smaller: the cursor stops LOOKING parseable,
+// so no client grows code that splits it and then breaks when the key changes; and an id no longer
+// sits in plain sight in URLs, logs and referrers, which is where casual leakage actually happens.
+// If it ever needs to be tamper-EVIDENT — a cursor that cannot be hand-crafted to probe the set —
+// that is an HMAC, and it would be a different change with a key to manage. A host_id is not a
+// credential and the room is public by definition, so that is not today's problem.
+const CURSOR_SEP = ":"; // inside the encoding only — never seen by a client
+function b64url(s: string): string {
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function unb64url(s: string): string | null {
+  try {
+    return atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return null; // not valid base64 → not one of ours → treated as no cursor
+  }
+}
 function encodeCursor(startedAt: number, hostId: string): string {
-  return `${startedAt}:${hostId}`;
+  return b64url(`${startedAt}${CURSOR_SEP}${hostId}`);
 }
 function decodeCursor(c: string | null | undefined): { startedAt: number; hostId: string } | null {
   if (!c) return null;
-  const i = c.indexOf(":");
+  const raw = unb64url(c);
+  if (!raw) return null;
+  // Split on the FIRST separator only, so a host id containing one survives the round trip.
+  // Otherwise page 2 decodes to a truncated id, matches nothing, and looks exactly like
+  // "the directory is empty".
+  const i = raw.indexOf(CURSOR_SEP);
   if (i <= 0) return null;
-  const startedAt = Number(c.slice(0, i));
-  const hostId = c.slice(i + 1);
+  const startedAt = Number(raw.slice(0, i));
+  const hostId = raw.slice(i + 1);
   // A malformed cursor reads as NO cursor — the first page — rather than throwing or, worse,
   // binding NaN and silently matching nothing.
   if (!Number.isFinite(startedAt) || !hostId) return null;

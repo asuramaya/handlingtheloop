@@ -37,8 +37,9 @@ export const FX_PADS: FxPadDef[] = [
   { label: "NOISE", kind: "noise", hold: true, on: (d) => d.noiseThrow(true), off: (d) => d.noiseThrow(false), active: (d) => d.noiseThrowing, hint: "Noise riser — sweep up while held, cut on release" },
 ];
 
-// ★ THE BANK IS THE FOCUSED CHAIN. A pad is a pointer, slot i is device i of the chain you are
-// looking at, and pad order IS processing order — the same list the strip renders and the graph
+// ★ THE BANK IS THE PAD CHAIN — the focused chain in FX, the MASTER chain in FX2 (Deck.padChain,
+// which is the single source both this render and the throws read). A pad is a pointer, slot i is
+// device i of that chain, and pad order IS processing order — the same list the strip renders and the graph
 // runs. Nothing is bound, so nothing can dangle; move a device and its pad moves with it.
 // FX_PADS above stops being the bank and becomes the DEFINITION table: what a GATE pad does when
 // there is a gate to do it to.
@@ -52,7 +53,7 @@ const KIND_PAD = new Map<string, FxPadDef>();
 function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
   const found = KIND_PAD.get(kind);
   if (found) return found;
-  const dev = (d: Deck) => d.fxChain(d.fxFocus)?.devices.find((x) => x.kind === kind);
+  const dev = (d: Deck) => d.fxChain(d.padChain)?.devices.find((x) => x.kind === kind);
   const pad: FxPadDef = {
     label,
     kind,
@@ -70,10 +71,11 @@ function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
   return pad;
 }
 
-/** The eight slots for a deck, right now: the focused chain's devices in order, padded out. A
- *  null slot is an empty slot — it is not a broken pad, it is a chain with room in it. */
+/** The eight slots for a deck, right now: the PAD CHAIN's devices in order, padded out — the
+ *  focused chain in FX, the master chain in FX2. A null slot is an empty slot — it is not a broken
+ *  pad, it is a chain with room in it. */
 export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
-  const chain = deck.fxChain(deck.fxFocus) ?? deck.fxChain("master");
+  const chain = deck.fxChain(deck.padChain) ?? deck.fxChain("master");
   const pads: (FxPadDef | null)[] = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? genericPad(deck, d.kind, d.kind.toUpperCase()));
   while (pads.length < 8) pads.push(null);
   return pads.slice(0, 8);
@@ -87,7 +89,7 @@ export const FX_HOLD_MS = 220;
 
 /** The device a pad points at, in the chain the pads are aimed at. */
 function padDevice(deck: Deck, pad: FxPadDef) {
-  return pad.kind ? deck.fxChain(deck.fxFocus)?.devices.find((d) => d.kind === pad.kind) : undefined;
+  return pad.kind ? deck.fxChain(deck.padChain)?.devices.find((d) => d.kind === pad.kind) : undefined;
 }
 /** Is this pad's effect audible right now? A device can be live in TWO ways since a tap started
  *  latching it at the user's own mix: mid-throw (the device's own `throwing` flag) or simply
@@ -173,7 +175,9 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
 // NAME for exactly this reason: "what a DJ recognises is the name". So the wire carries the
 // name. The slot is still parsed off the LAST colon, so a name may contain one.
 export function fxPadArg(deck: Deck, slot: number): string {
-  const c = deck.fxChain(deck.fxFocus);
+  // The chain the press ACTUALLY hit, not the one in focus — in FX2 those differ, and sending the
+  // focused one would make the far side fire a different effect from the one you just heard.
+  const c = deck.fxChain(deck.padChain);
   return `${!c || c.master ? "master" : c.name}:${slot}`;
 }
 /** Resolve a wire chain ref against this deck: master, then a live id (an older recording, or
@@ -186,11 +190,13 @@ export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): voi
   const cut = raw.lastIndexOf(":");
   const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
   const chain = cut >= 0 ? raw.slice(0, cut) : "";
-  const back = deck.fxFocus;
+  const back = deck.padChainOverride;
   const known = chain ? chainRef(deck, chain) : undefined;
-  if (known) deck.setFxFocus(known.id);
+  // Override rather than setFxFocus: the sender NAMED its chain, so that name must win over the
+  // receiver's own padMode — and a co-DJ's press has no business moving what you are looking at.
+  if (known) deck.padChainOverride = known.id;
   fireFxPad(deck, slot, on);
-  if (known) deck.setFxFocus(back);
+  if (known) deck.padChainOverride = back;
 }
 
 // Sync + replay over the board-agnostic gesture bus: a recorded/relayed "fxPad" gesture applies

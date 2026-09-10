@@ -608,23 +608,24 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* FX2 pad-mode (FX shifted). ★ TODAY THIS IS A DUPLICATE OF THE FX BANK ABOVE: same
-            padsForDeck(deck) source, same fxPadDown/fxPadUp, same tap-to-latch/hold-for-momentary
-            tooltip. This comment used to claim FX2 was "the MOMENTARY layer" against FX's
-            "set-and-forget latch" — contradicted by Deck.ts, which called fx2 the LATCH layer, and
-            by the tooltip three lines below, which is the one that was right. The gesture split is
-            per-GESTURE and per-PAD, not per-bank. Kept rendering separately so the intended split
-            has somewhere to land; until it does, the only real difference is cosmetic (no `latched`
-            class here). See thread 9ee26ff4. */}
+        {/* FX2 pad-mode (FX shifted) = THE SECOND BANK: the same 8 pads aimed at the MASTER chain
+            while FX follows focus (Deck.padChain). Mirrors rekordbox's PAD FX 1 / PAD FX 2, which
+            are two independent banks of ASSIGNMENTS with identical momentary behaviour — not two
+            gestures over one set. It also means focusing a stem chain no longer takes away the pads
+            you were performing with: master stays one shift away.
+            ★ THE BANK SAYS WHICH CHAIN IT IS ON, because the FX strip shows FOCUS and these pads do
+            not follow it — the one place the two can disagree, and an unlabelled disagreement is
+            how this bank accumulated three contradictory comments in the first place (9ee26ff4).
+            Until 2026-09-10 this was an exact duplicate of the bank above. */}
         {deck.padMode === "fx2" && (
-        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
+        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef} data-bank="MASTER">
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `e${i}`}
               className={`pad fx fx2 ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
-              title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint}` : "Empty slot"}
+              title={pad ? `${pad.label} — MASTER chain · tap to latch, hold for momentary · ${pad.hint}` : "Empty slot on the MASTER chain — add an effect to it in the rack below"}
               onPointerDown={(e) => fxPadDown(e, i)}
               onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
               onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}

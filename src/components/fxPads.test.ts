@@ -6,9 +6,20 @@ import type { Deck } from "@htl/audio";
 // not survive the trip to another machine — so an fxPad gesture that named its chain by id always
 // missed on the far side and fired whatever that deck happened to be aimed at. The wire carries
 // the NAME, the same key applyFxChainSnapshot rebuilds on. These are the only two rules.
-const deckWith = (focus: string, chains: { id: string; name: string; master?: boolean }[]) =>
+// ★ THE DOUBLE MODELS `padChain`, NOT JUST `fxFocus`, and it has to: the wire arg names the chain
+// the press ACTUALLY hit, which in FX2 is the master chain and not the focused one. The `as unknown
+// as Deck` cast below is why a drift here is invisible to tsc — a double that lies about its shape
+// silences the compiler, so the rule it models has to be kept honest by hand. It mirrors Deck's own
+// getter deliberately rather than hardcoding an answer.
+const deckWith = (
+  focus: string,
+  chains: { id: string; name: string; master?: boolean }[],
+  padMode: "fx" | "fx2" = "fx",
+) =>
   ({
     fxFocus: focus,
+    padMode,
+    padChain: padMode === "fx2" ? "master" : focus,
     fxChainList: chains,
     fxChain: (id: string) => chains.find((c) => c.id === id),
   }) as unknown as Deck;
@@ -60,5 +71,29 @@ describe("chainRef — what the receiver resolves it to", () => {
 
   it("returns nothing for a chain this deck does not have — the caller keeps its own focus", () => {
     expect(chainRef(deckWith("master", CHAINS), "Guitar")).toBeUndefined();
+  });
+});
+
+// FX2 is the SECOND BANK: the same 8 pads aimed at the master chain instead of the focused one,
+// mirroring rekordbox's PAD FX 1 / PAD FX 2 (two independent banks of assignments, identical
+// momentary behaviour — Pioneer's Pad Editor defines both with the same sentence).
+describe("fxPadArg — FX2 names the bank it actually fired", () => {
+  it("sends master from FX2 even while another chain is focused", () => {
+    // The bug this prevents: encoding the FOCUSED chain would make a co-DJ fire a different
+    // effect from the one the sender just heard, which is precisely what the name-on-the-wire
+    // format was rewritten to stop.
+    expect(fxPadArg(deckWith("c1", CHAINS, "fx2"), 3)).toBe("master:3");
+  });
+
+  it("still sends the focused chain's NAME from FX", () => {
+    expect(fxPadArg(deckWith("c1", CHAINS, "fx"), 3)).toBe("Drums:3");
+  });
+
+  it("the two banks disagree exactly when focus is not master — and agree when it is", () => {
+    // Honest about the limit: with no chains made, focus IS master, so both banks show the same
+    // devices. That is not a duplicate bank, it is one chain seen twice, and it resolves itself
+    // the moment a stem chain exists.
+    expect(fxPadArg(deckWith("c1", CHAINS, "fx"), 0)).not.toBe(fxPadArg(deckWith("c1", CHAINS, "fx2"), 0));
+    expect(fxPadArg(deckWith("master", CHAINS, "fx"), 0)).toBe(fxPadArg(deckWith("master", CHAINS, "fx2"), 0));
   });
 });

@@ -212,15 +212,11 @@ export type SyncRole = "off" | "master" | "slave";
 // GLOBAL sample bank) ↔ sampler, fx2 ↔ fx. CUE has NO shift peer
 // (the old KEY/keyboard slot was retired — pitched playback now lives as a per-pad sampler param).
 //
-// ★ fx2 IS CURRENTLY A DUPLICATE OF fx, and this comment used to claim otherwise — it called fx2
-// "the LATCH layer of the FX bank" while DeckControls called it "the MOMENTARY layer" of the same
-// thing. Both cannot be true and neither is: padsForDeck() sources both banks from
-// deck.fxChain(deck.fxFocus) without ever reading padMode, both render the same pads through the
-// same fxPadDown/fxPadUp, and both carry the same tooltip ("tap to latch, hold for momentary").
-// The latch-vs-throw split is REAL but it is per-GESTURE (fxPadRelease's FX_HOLD_MS) and per-PAD
-// (FxPadDef.hold), never per-bank — so it already applies identically in both. The design this
-// pair was named for (fx2 as a sticky chain you keep while fx follows focus) was never built.
-// Verified 2026-09-10 across every fx2 reference in src/; see thread 9ee26ff4.
+// ★ fx2 IS THE SECOND BANK: same 8 pads, aimed at the MASTER chain instead of the focused one —
+// see `padChain` below for why, and for the hardware it mirrors. It WAS an exact duplicate until
+// 2026-09-10, while three comments (this one included) described a latch-vs-throw split per bank
+// that the code never implemented. The latch/throw split is real but per-GESTURE (FX_HOLD_MS) and
+// per-PAD (FxPadDef.hold), so it applies identically in both banks and always did. Thread 9ee26ff4.
 export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2";
 // Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). cue → cue = no
 // peer (the slot is blank); the UI shows no shifted label for CUE and shift+CUE stays in cue.
@@ -2376,11 +2372,45 @@ export class Deck {
   get fxFocus(): string {
     return this.focusedChain;
   }
-  /** Resolve a kind for a PAD: the focused chain only. Deliberately NOT falling back to the
+  /** The chain the PADS act on. FX follows focus; FX2 is pinned to the MASTER chain.
+   *
+   *  That mirrors the hardware this bank is named after: rekordbox's PAD FX 1 and PAD FX 2 are two
+   *  INDEPENDENT banks of effect assignments with identical momentary behaviour — not two gestures
+   *  over one set. (Pioneer's Pad Editor defines both with the same sentence, "While the pad is
+   *  being pressed, the assigned FX is turned on".) htl has no free per-pad assignment, but a chain
+   *  IS a set of devices, so "a second bank" translates to "a second chain".
+   *
+   *  It also fixes a real cost of pads-follow-focus: focusing a stem chain to tweak it used to take
+   *  away the pads you were performing with. FX2 keeps the master chain reachable throughout.
+   *
+   *  ★ ONE SOURCE FOR RENDER AND PRESS. padsForDeck() draws this chain and padDev() throws into it,
+   *  both through this getter, so the bank you see and the bank you hit cannot drift apart. The
+   *  previous shape had no such answer, which is how three comments came to describe a split the
+   *  code never implemented (thread 9ee26ff4).
+   *
+   *  When focus IS master — the default until you make a chain — both banks show the same devices,
+   *  honestly: there is only one chain, so there is only one bank of effects to show. */
+  get padChain(): string {
+    return this.padChainOverride ?? (this.padMode === "fx2" ? "master" : this.focusedChain);
+  }
+
+  /** An EXPLICIT pad chain, winning over the padMode default. Set only while applying a pad
+   *  gesture that already NAMES its chain — a co-DJ's press, or a replayed recording, which arrive
+   *  over the wire carrying the chain they fired on (fxPadArg).
+   *
+   *  Why an override and not setFxFocus, which this path used to use: (1) padChain reads padMode,
+   *  so a receiver sitting in FX2 would have resolved "master" and thrown away the chain the sender
+   *  named — the remote press would fire the wrong effect, which is the exact bug the wire format
+   *  was rewritten to kill; and (2) moving the local user's FOCUS because someone else pressed a
+   *  pad is a visible side effect nobody asked for. An override does the routing without touching
+   *  what the user is looking at. */
+  padChainOverride: string | null = null;
+
+  /** Resolve a kind for a PAD: the pad chain only. Deliberately NOT falling back to the
    *  master — a pad that silently fires somewhere else is worse than one that does nothing, and
    *  the strip shows you which chain you are on. */
   private padDev(kind: FxKind): FxDevice | undefined {
-    return this.rack.chain(this.focusedChain)?.devices.find((d) => d.kind === kind);
+    return this.rack.chain(this.padChain)?.devices.find((d) => d.kind === kind);
   }
 
   hasFxKind(kind: FxKind): boolean {

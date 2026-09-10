@@ -207,6 +207,27 @@ body:not(.no-glow) .pad.fx2.latched {
 .fx-bank .pad.fx {
   flex: 1 0 54px;
 }
+/* FX2 names its chain, because it is the ONE bank whose pads do not follow the FX strip's focus —
+   the strip says one thing and these pads answer to another, and an unlabelled disagreement is
+   exactly how this bank collected three contradictory comments about itself. Set vertically so it
+   costs ~10px of a row that is already tight on a phone, and STICKY so it survives the bank's own
+   horizontal scroll instead of sliding away with the first pad. Not a tooltip: there is no hover on
+   touch, which is where the row is tightest and the confusion most likely. */
+.fx-bank.fx2-bank::before {
+  content: attr(data-bank);
+  position: sticky;
+  left: 0;
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  opacity: 0.5;
+  pointer-events: none;
+}
 /* Pad shortcut markers sit bottom-LEFT so they never collide with the bottom-right stem
    letter on a chopped sampler pad. */
 .pad .kbd {

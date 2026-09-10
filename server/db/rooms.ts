@@ -173,9 +173,24 @@ export async function liveRooms(db: D1Database, opts: LiveRoomsOpts = {}): Promi
       ? `ORDER BY r.started_at DESC, r.host_id DESC`
       : `ORDER BY ${viewerId ? "rel DESC, " : ""}r.listeners DESC, r.started_at DESC, r.host_id DESC`;
 
+  // ★ BLOCKS APPLY HERE TOO (operator, 2026-09-10). This directory was the ONLY viewer-relative
+  // read in the codebase that ignored them — social.ts gates on blocks in eleven places,
+  // presence.ts in three, and the bell's own liveFollowedRooms in one. A blocked host's live room
+  // showing up in Discover while being filtered from every other surface is not a policy, it is a
+  // gap. Both directions, matching the bell: if either of you has blocked the other, the room is
+  // not offered. Signed-out viewers have no relationships, so there is nothing to filter and the
+  // predicate is simply absent — which is also why this cannot be pushed into a shared WHERE.
+  const blockGate = viewerId
+    ? ` AND NOT EXISTS (
+         SELECT 1 FROM blocks bl
+         WHERE (bl.blocker_id = ? AND bl.blocked_id = r.host_id)
+            OR (bl.blocker_id = r.host_id AND bl.blocked_id = ?))`
+    : "";
+
   const binds: unknown[] = [];
   if (viewerId) binds.push(viewerId, viewerId);
   binds.push(cutoff);
+  if (viewerId) binds.push(viewerId, viewerId);
   // The keyset predicate, recent only. Strictly after the cursor row in the SAME total order.
   let keyset = "";
   const after = sort === "recent" ? decodeCursor(opts.cursor) : null;
@@ -191,7 +206,7 @@ export async function liveRooms(db: D1Database, opts: LiveRoomsOpts = {}): Promi
        FROM rooms r
        JOIN users u ON u.id = r.host_id
        ${relJoin}
-       WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL${keyset}
+       WHERE r.live = 1 AND r.last_seen > ? AND u.handle IS NOT NULL${blockGate}${keyset}
        ${order} LIMIT ?`,
     )
     .bind(...binds)

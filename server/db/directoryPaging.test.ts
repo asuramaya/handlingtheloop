@@ -227,9 +227,11 @@ describe("the bell's followed-rooms read is NOT the directory with a filter", ()
     expect(asked[0].sql).toMatch(/b\.blocker_id = f\.follower_id AND b\.blocked_id = f\.followee_id/);
     expect(asked[0].sql).toMatch(/b\.blocker_id = f\.followee_id AND b\.blocked_id = f\.follower_id/);
 
+    // The directory gates too, as of the operator's 2026-09-10 call — it was the ONLY
+    // viewer-relative read in the codebase that did not, which made it a gap rather than a policy.
     const dir: Asked[] = [];
     await liveRooms(fakeDb(0, dir), { limit: 10, viewerId: "viewer-1" });
-    expect(dir[0].sql).not.toMatch(/blocker_id/); // the asymmetry, pinned so it cannot drift shut silently
+    expect(dir[0].sql).toMatch(/blocker_id/);
   });
 
   it("orders over a TOTAL key, like the directory does", async () => {
@@ -238,5 +240,51 @@ describe("the bell's followed-rooms read is NOT the directory with a filter", ()
     const asked: Asked[] = [];
     await liveFollowedRooms(fakeDb(0, asked), "viewer-1");
     expect(lastOrderTerm(asked[0].sql)).toMatch(/host_id/);
+  });
+});
+
+describe("the directory applies blocks, in both directions and in the right bind slots", () => {
+  it("filters a blocked host BOTH ways for a signed-in viewer", async () => {
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 10, viewerId: "viewer-1" });
+    expect(asked[0].sql).toMatch(/bl\.blocker_id = \? AND bl\.blocked_id = r\.host_id/);
+    expect(asked[0].sql).toMatch(/bl\.blocker_id = r\.host_id AND bl\.blocked_id = \?/);
+  });
+
+  it("adds NO block predicate for a signed-out viewer", async () => {
+    // Nobody to filter against, and a NOT EXISTS with nothing to bind would silently misalign
+    // every parameter after it.
+    const asked: Asked[] = [];
+    await liveRooms(fakeDb(0, asked), { limit: 10, viewerId: null });
+    expect(asked[0].sql).not.toMatch(/blocker_id/);
+  });
+
+  it("★ BINDS LINE UP WITH THE ? MARKS — the failure this whole query shape invites", async () => {
+    // Positional binds across four optional fragments (rel join, block gate, keyset, limit). A
+    // fragment added without its binds, or in the wrong order, does not throw: it shifts every
+    // later parameter by one and the query quietly answers a different question. Count them.
+    const both: Asked[] = [];
+    await liveRooms(fakeDb(0, both), { limit: 10, viewerId: "v1", sort: "recent", cursor: "123:h1" });
+    const marks = (both[0].sql.match(/\?/g) ?? []).length;
+    expect(both[0].binds).toHaveLength(marks);
+    // And the order: rel join (v1, v1), cutoff, block gate (v1, v1), keyset (123, 123, h1), limit.
+    expect(both[0].binds[0]).toBe("v1");
+    expect(both[0].binds[1]).toBe("v1");
+    expect(both[0].binds[3]).toBe("v1");
+    expect(both[0].binds[4]).toBe("v1");
+    expect(both[0].binds[5]).toBe(123);
+    expect(both[0].binds[7]).toBe("h1");
+    expect(both[0].binds[both[0].binds.length - 1]).toBe(11); // limit + 1 probe
+
+    // Same check with each fragment absent, since that is where a shift would hide.
+    for (const opts of [
+      { limit: 10, viewerId: null },
+      { limit: 10, viewerId: "v1" },
+      { limit: 10, viewerId: null, sort: "recent" as const, cursor: "5:h" },
+    ]) {
+      const a: Asked[] = [];
+      await liveRooms(fakeDb(0, a), opts);
+      expect(a[0].binds).toHaveLength((a[0].sql.match(/\?/g) ?? []).length);
+    }
   });
 });

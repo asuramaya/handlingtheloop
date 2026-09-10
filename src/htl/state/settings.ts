@@ -89,7 +89,10 @@ export interface Settings {
   // untouched: nothing to migrate, and no way to silently take someone's mic away.
   audioInputId: string;
   wirelessOutput: boolean; // force the wireless (Bluetooth/CarPlay) pre-roll buffer to stop skips when the browser under-reports outputLatency (iOS reads 0) — #14
-  autoEnhance: boolean; // desktop: silently swap in a cached neural set over the DSP split when one exists
+  // Desktop: silently swap in a cached neural set when one exists. (It used to say "over the DSP
+  // split" — there has been no DSP split since f2004f2, 2026-07-01; what it swaps over is the
+  // PLAIN MIX, or a lesser neural model.)
+  autoEnhance: boolean;
   // MOBILE only. NOT a separation switch — a phone never separates (canSeparate() is false for
   // every mobile UA, and useStemPipeline's mobile branch is fetch-and-render only). This asks a
   // loaded deck to DOWNLOAD a stem set someone's desktop already shared; with nothing cached it

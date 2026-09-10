@@ -291,7 +291,10 @@ export class Deck {
   onStemPyramids?: () => void; // viewport hook: async envelopes are ready → redraw
   onStemsReady?: () => void; // App hook: local neural pyramids built → publish to a session
   // True only when the CURRENT stems are a NEURAL split (Demucs/Open-Unmix). The viewport
-  // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform for DSP
+  // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform otherwise.
+  // (The "otherwise" is currently unreachable — see setStems: every call site passes neural=true
+  // and the DSP split was deleted in f2004f2, 2026-07-01. Kept because the flag is still the
+  // right question to ask, not because a DSP path is coming back.)
   // stems (or none / mid-separation) — the DSP split is too rough to be worth 4 lanes.
   stemsNeural = false;
   /** The track the CURRENT stems belong to. Without it, "does this deck have neural vocals?"

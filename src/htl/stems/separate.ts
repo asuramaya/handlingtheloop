@@ -226,8 +226,10 @@ async function separateDemucsWindowed(mix: AudioBuffer, model: StemModel, onProg
   stemTrace("windowed:assemble-alloc", `accMB=${mb(N, 4)}`); // crash here ⇒ the 424 MB output itself doesn't fit (track too long for this device)
 
   // ── PHASE 2: now allocate the full output (worker gone) and crossfade the windows
-  // back in from disk, one at a time. Peak ≈ 424 MB + one window — the SAME footprint
-  // as the DSP split, which the device already runs fine. ──
+  // back in from disk, one at a time. Peak ≈ 424 MB + one window. (This used to justify itself
+  // as "the SAME footprint as the DSP split, which the device already runs fine" — a comparison
+  // to a path deleted in f2004f2, 2026-07-01. The number stands on its own; the reassurance it
+  // was leaning on does not exist any more.) ──
   const out: Record<string, [Float32Array, Float32Array]> = {} as never;
   for (const t of STEM_NAMES) out[t] = [new Float32Array(N), new Float32Array(N)];
   const wsum = new Float32Array(N);

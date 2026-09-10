@@ -141,19 +141,24 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           });
           return true; // applied a cached neural set (one set — safe on mobile)
         } catch {
-          /* promotion is best-effort — caller falls back to the DSP split */
+          /* promotion is best-effort — caller falls back to the PLAIN MIX (f2004f2 killed the
+             DSP split on 2026-07-01; loadStems throws rather than fabricate one) */
           return false;
         }
       }
-      // Nothing cached anywhere → caller shows the DSP split.
+      // Nothing cached anywhere → caller stays on the PLAIN MIX. (Not "the DSP split": there
+      // has been no DSP split since f2004f2, 2026-07-01 — see loadStems' NO DSP FALLBACK note.)
       return false;
     },
     [engine, refresh, setStatusFor],
   );
 
-  // Resolve a deck's stems: light the buttons instantly with the DSP split, then —
-  // if a neural model is selected — separate (R2 cache → on-device ONNX) in the
-  // background and swap the cleaner stems in. Both sum to the mix, so it's seamless.
+  // Resolve a deck's stems. ★ THE BUTTONS DO NOT LIGHT INSTANTLY — this said "light the buttons
+  // instantly with the DSP split, then swap the cleaner stems in", describing a fallback deleted
+  // in f2004f2 (2026-07-01). There is no instant split and nothing to swap FROM: a deck plays the
+  // PLAIN MIX until a real neural set arrives (R2 cache → on-device ONNX on a capable device), and
+  // if none ever does it keeps playing the mix with the stem buttons dark. That is the honest
+  // shape, and it is the one a reader debugging "why are the buttons dark" needs to be told.
   // `stale()` (when given) drops results if the deck moved on to another track.
   const deriveStems = useCallback(
     async (id: DeckId, videoId: string, mix: AudioBuffer, stale?: () => boolean) => {

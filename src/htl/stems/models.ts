@@ -271,6 +271,32 @@ export function unblockGpu(): void {
 //   level 2 → NO stems — play the plain mix           (after 2 crashes; can't OOM)
 // Arm in localStorage right before ANY stem work, disarm after (success or caught
 // error). A fresh load that finds it still armed ⇒ the tab crashed → bump the level.
+//
+// ★★ ALL OF THE ABOVE DESCRIBES A MECHANISM THAT NO LONGER RUNS. Read it as history.
+// Two independent things broke it, and neither was noticed because the reading half kept
+// compiling:
+//
+//   1. NOTHING ARMS IT. armStemLoad/disarmStemLoad have ZERO call sites anywhere in the
+//      repo — verified by grep across src/, server/ and worker/, and they are not even
+//      re-exported from the stems barrel. Their only two callers lived in the CPU
+//      separation bench, and 3a5d512 (2026-07-15) reverted that feature, taking the arm
+//      and disarm calls with it. Since nothing arms, initStemCrashGuard's armed-but-not-
+//      disarmed check can never fire, so `stemFails` never increments. Any non-zero value
+//      today is a legacy key written before that revert.
+//
+//   2. THE LADDER WAS NEVER IMPLEMENTED AS BEHAVIOUR, and cannot be as written. Nothing
+//      branches on the level: stemFailLevel() has exactly one consumer, a Settings notice
+//      that says "Downgraded after a crash" and offers to reset it. So the notice announces
+//      a downgrade that never happened. And level 1 — "DSP split only" — names a path
+//      deleted in f2004f2 (2026-07-01): there is no DSP split to fall back to, which is
+//      also what made the original argument for escalation ("both decks fall to the DSP
+//      split, which ALSO decodes ~424 MB") obsolete.
+//
+// So this is not a guard that is off; it is a guard whose premise moved. Rewiring it means
+// designing a new ladder against the CURRENT shape (neural-or-mix, and on mobile
+// cache-or-mix), not restoring the arm calls. Retiring it means deleting this file's guard
+// section and the Settings notice with it. That is an operator-facing call because the
+// notice is user-visible, so it is written down rather than decided here.
 const STEM_ARM_KEY = "htl:stemArm";
 const STEM_FAILS_KEY = "htl:stemFails";
 let stemFails = 0;
@@ -289,20 +315,12 @@ export function initStemCrashGuard(): number {
   }
   return stemFails;
 }
-export function armStemLoad(): void {
-  try {
-    localStorage.setItem(STEM_ARM_KEY, "1");
-  } catch {
-    /* ignore */
-  }
-}
-export function disarmStemLoad(): void {
-  try {
-    localStorage.removeItem(STEM_ARM_KEY);
-  } catch {
-    /* ignore */
-  }
-}
+// armStemLoad/disarmStemLoad USED TO LIVE HERE and were deleted 2026-09-09: zero call sites
+// since 3a5d512 stripped the bench that held both. They are trivially restorable from git if
+// the guard is rewired — and restoring them alone would NOT make it work, per the note above.
+// STEM_ARM_KEY is still read by initStemCrashGuard, deliberately: a user who crashed under an
+// older build can still be carrying that key, and clearing it is the one honest thing the guard
+// can still do.
 // 0 = neural+DSP ok · 1 = DSP only · ≥2 = no stems (plain mix).
 export function stemFailLevel(): number {
   return stemFails;

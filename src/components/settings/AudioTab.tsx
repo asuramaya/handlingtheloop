@@ -644,6 +644,13 @@ export function AudioTab({
                     ? d.model
                       ? getStemModel(d.model).label
                       : "neural"
+                    // UNREACHABLE, and kept only so the ternary is total. A deck cannot hold
+                    // stems that are not neural: every setStems/loadPackedStems call site in the
+                    // app passes neural=true (the param DEFAULTS to false, which is why this is
+                    // worth stating), and the DSP split that could once produce non-neural stems
+                    // was deleted in f2004f2, 2026-07-01. If this string ever appears on screen,
+                    // something has started setting stems without the flag — that is the bug,
+                    // not this label.
                     : "DSP split";
                 const canRun = supported && !!onReanalyze;
                 return (

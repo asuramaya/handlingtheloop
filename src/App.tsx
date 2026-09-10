@@ -572,8 +572,12 @@ function AppBody() {
       setGpuCrashed(true);
       setSettings((s) => (getStemModel(s.stemModel).tier === "gpu" ? { ...s, stemModel: DEFAULT_STEM_MODEL } : s));
     }
-    // Mobile best-stems crash guard: if a prior auto-enhance took the tab down, the
-    // next loads stay on the safe DSP split instead of crash-looping (see deriveStems).
+    // Mobile stem-load crash guard. ★ CURRENTLY INERT — see the note at initStemCrashGuard:
+    // nothing has ARMED it since 3a5d512 (2026-07-15) removed its only two call sites, so it can
+    // never observe a crash, and nothing branches on the level it reports anyway. Kept as the
+    // reading half of a mechanism awaiting a decision to rewire or retire. The old wording here
+    // ("the next loads stay on the safe DSP split") was doubly wrong: no split since f2004f2,
+    // and no downgrade behaviour was ever implemented.
     initStemCrashGuard();
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1541,7 +1545,8 @@ function AppBody() {
   // when the job settles — so revisiting a model (e.g. switching A→B→A in Settings)
   // re-runs the cache-first loadStems and re-applies the stems, instead of being
   // permanently skipped (the old per-deck guard never cleared on success, which left
-  // the deck stuck on the DSP split after any model round-trip).
+  // the deck stuck on the PLAIN MIX after any model round-trip — this said "the DSP split",
+  // which f2004f2 deleted on 2026-07-01).
   const stemJobs = useRef<Map<string, Promise<Stems>>>(new Map());
 
   // LAZY MOBILE-GUEST STEMS trigger (pairs with the divergence gate in deriveStems above).
@@ -1870,9 +1875,9 @@ function AppBody() {
             }
           })();
         }
-        // Stems: light the buttons instantly with the DSP split, then (if a neural
-        // model is selected) separate in the background and swap the cleaner stems
-        // in. Both sum to the mix, so the swap is seamless. stale() guards re-loads.
+        // Stems: the deck plays the PLAIN MIX until a real neural set arrives (R2 cache →
+        // on-device separation where supported), then swaps in. There is no instant "DSP split"
+        // to light the buttons with — f2004f2 deleted it on 2026-07-01. stale() guards re-loads.
         // Keyed by the resolved id so the R2 stem cache lines up with the stream.
         void deriveStems(id, vid, cached!.buffer, stale);
       } catch (e) {

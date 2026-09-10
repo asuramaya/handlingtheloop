@@ -80,5 +80,16 @@ export function useValueDrag<T extends HTMLElement>({ value, min, max, step = 0.
     drag.current = null;
   };
 
-  return { ref, onPointerDown, onPointerMove, onPointerUp };
+  // ★ CANCEL IS NOT OPTIONAL. A pointercancel (the browser claiming the gesture for a scroll, a
+  // palm rejection, the tab backgrounding) never fires pointerup — so without this the drag state
+  // stays live and `suppressClick` stays armed, and the NEXT tap on this button silently does
+  // nothing. Every other pointer surface in this codebase already wires cancel to its up handler
+  // (CompArPad, CompHead, CrushViz, Crossfader); this hook was written without one and had no
+  // caller to reveal it.
+  //
+  // pointerLEAVE is deliberately NOT aliased, unlike on those canvases: this hook takes pointer
+  // CAPTURE the moment a drag starts, so leave does not fire mid-drag — and wiring it anyway would
+  // end the drag the instant the pointer crossed the button's edge, which is precisely what
+  // capture exists to prevent. A 150px drag span on a foot-strip button leaves that edge at once.
+  return { ref, onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };
 }

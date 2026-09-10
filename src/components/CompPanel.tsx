@@ -8,6 +8,7 @@ import { CompArPad } from "./CompArPad";
 import { CompHead } from "./CompHead";
 import { usePulse } from "./usePulse";
 import { useFrameSync } from "./useFrameSync";
+import { useValueDrag } from "./useValueDrag";
 import { fxParamIntent } from "@htl/room/fxWire";
 
 // COMP surface — a transfer curve you GRAB, the remaining cells, and a foot strip holding
@@ -99,7 +100,20 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   ];
   // Snapped to the nearest stop so a value set elsewhere (a preset, MIDI, a session) still lights
   // the right pip rather than falling off the cycle.
-  const look = LOOK_STOPS.reduce((best, v) => (Math.abs(v - get("lookahead")) < Math.abs(best - get("lookahead")) ? v : best), LOOK_STOPS[0]);
+  // The REAL value drives the label and the active state; the nearest stop only drives the pips.
+  const lookRaw = get("lookahead");
+  const look = LOOK_STOPS.reduce((best, v) => (Math.abs(v - lookRaw) < Math.abs(best - lookRaw) ? v : best), LOOK_STOPS[0]);
+  // Destructured rather than spread whole: React 18's createElement does extract `ref` out of a
+  // spread config, so `{...lookDrag}` happens to work — but it works by a detail of createElement
+  // that nothing here states, and a reader cannot tell the ref is wired by looking. Naming it is
+  // free.
+  const { ref: lookRef, ...lookHandlers } = useValueDrag<HTMLButtonElement>({
+    value: lookRaw,
+    min: 0,
+    max: 10, // CompFx clamps lookMs to 0..10; the worklet's ring is sized for exactly that ceiling
+    step: 0.1, // finer than the ear can place a pre-duck, coarse enough that the label stays short
+    onChange: (v) => setParam("lookahead", v),
+  });
 
   return (
     <div className="fx-panel sat-panel comp-panel" style={{ ["--accent" as string]: accent }}>
@@ -151,16 +165,26 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
           SC: {SC_LABEL[scSrc]}
         </button>
         <span className="fx-sep" />
-        {/* LOOKAHEAD, cycled rather than dialled. It is a set-once value — you pick whether the
-            detector sees the peak coming and by how much, and then you leave it — so it belongs
-            with MODE and AUTO in the foot, in their language, not in a knob column beside the
-            instrument. Four stops cover its useful range; the pips say where you are, exactly as
-            MODE's do. */}
+        {/* ★ LOOKAHEAD IS A BUTTONOID DIAL — it LOOKS like the foot's other buttons and BEHAVES
+            like a knob. Operator, 2026-09-10: "why not keep it there but make that a buttonoid
+            dial instead of a toggle?"
+            That dissolved a premise I had put up as a choice. I had framed it as "keep the foot's
+            button language OR get continuous control back, pick one", on the assumption that the
+            foot is button-language-only so a continuous control must move out. It is not one or
+            the other: tap still cycles the stops exactly as before, and a vertical drag or the
+            wheel now dials the real 0–10 ms range underneath. Nobody loses the old gesture and the
+            resolution comes back.
+            The pips stay COARSE on purpose — they light the nearest stop, so they read as "roughly
+            here" while the label carries the exact value. A pip per tenth of a millisecond would
+            be noise pretending to be state. */}
         <button
-          className={`cyc ${look > 0 ? "active" : ""}`}
+          ref={lookRef}
+          {...lookHandlers}
+          className={`cyc ${lookRaw > 0 ? "active" : ""}`}
           onClick={() => setParam("lookahead", LOOK_STOPS[(LOOK_STOPS.indexOf(look) + 1) % LOOK_STOPS.length] ?? 0)}
+          title="Lookahead — tap to cycle the stops, drag or scroll to dial it. The detector sees the peak coming by this much and ducks before it lands."
         >
-          {look > 0 ? `LOOK ${look}ms` : "LOOK OFF"}
+          {lookRaw > 0 ? `LOOK ${fmtLook(lookRaw)}ms` : "LOOK OFF"}
           <span className="cyc-pips" aria-hidden="true">
             {LOOK_STOPS.map((v) => (
               <i key={v} className={v === look ? "on" : ""} />
@@ -172,7 +196,13 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   );
 }
 
-/** Lookahead's stops, in ms. 0 = off; 10 is the param's own ceiling. */
+/** Whole numbers stay whole ("3ms", not "3.0ms"); an off-stop value shows its one decimal. */
+function fmtLook(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+/** Lookahead's stops, in ms. 0 = off; 10 is the param's own ceiling. Now the TAP targets of a
+ *  control you can also dial continuously — they are convenient landmarks, not the whole range. */
 const LOOK_STOPS = [0, 1, 3, 10];
 
 const MODE_HINT = [

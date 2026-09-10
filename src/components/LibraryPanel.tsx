@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
-import { canonicalVideoId, type Library, type Playlist, type TrackMeta } from "@htl/library";
+import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
   fetchMe,
@@ -317,9 +317,19 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
     );
   };
 
-  const byId = useMemo(() => {
+  // TWO maps, because there are two genuinely different questions here and one map answering
+  // both is how the id spaces got tangled in the first place. `byVideoId` serves the LEGACY
+  // drag-and-drop payload, which is an array of raw videoIds. `byKey` serves playlist
+  // membership, which is trackKeys. They are not interchangeable.
+  const byVideoId = useMemo(() => {
     const m = new Map<string, TrackMeta>();
     for (const t of library.collection) m.set(t.videoId, t);
+    return m;
+  }, [library.collection]);
+
+  const byKey = useMemo(() => {
+    const m = new Map<string, TrackMeta>();
+    for (const t of library.collection) m.set(trackKey(t), t);
     return m;
   }, [library.collection]);
 
@@ -448,7 +458,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       const parsed = JSON.parse(raw);
       // New payload = full metas; tolerate the legacy id-array payload too.
       if (Array.isArray(parsed) && typeof parsed[0] === "string") {
-        return (parsed as string[]).map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
+        return (parsed as string[]).map((id) => byVideoId.get(id)).filter((t): t is TrackMeta => !!t);
       }
       return (parsed as TrackMeta[]).filter((t) => t && t.videoId);
     } catch {
@@ -536,7 +546,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           {syncingId === p.id ? "⟳" : "⇄"}
         </span>
       )}
-      <span className="lib-count">{p.trackIds.length}</span>
+      <span className="lib-count">{p.trackKeys.length}</span>
       <span
         className="lib-del"
         role="button"
@@ -916,8 +926,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           (() => {
             const pl = library.playlists.find((p) => p.id === activePlaylistId);
             if (!pl) return <div className="lib-empty">Playlist not found.</div>;
-            const tracks = pl.trackIds
-              .map((id) => byId.get(id))
+            const tracks = pl.trackKeys
+              .map((k) => byKey.get(k))
               .filter((t): t is TrackMeta => t !== undefined)
               .map(withCached);
             return (
@@ -927,7 +937,12 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 onLoad={onLoad}
                 onQueue={queueAdd}
                 onQueueNext={queueNext}
-                onRemove={(vid) => library.removeFromPlaylist(pl.id, vid)}
+                // TrackTable's row identity is the videoId; playlist membership is a trackKey.
+                // Translate at the boundary rather than letting either side guess.
+                onRemove={(vid) => {
+                  const t = byVideoId.get(vid);
+                  if (t) library.removeFromPlaylist(pl.id, trackKey(t));
+                }}
                 removeTitle="Remove from playlist"
                 emptyHint="Empty playlist. Add tracks from Search or your Collection."
                 loadedIds={loadedIds}

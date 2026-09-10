@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchMyPlaylists } from "@htl/media";
-import type { Library, TrackMeta } from "@htl/library";
+import { trackKey, type Library, type TrackMeta } from "@htl/library";
 import {
   type Candidate,
   type Confidence,
@@ -104,7 +104,7 @@ export function SyncPanel({
   const nativeLists = useMemo<ServicePlaylist[]>(
     () => [
       { id: COLLECTION_ID, title: "Collection", count: library.collection.length, thumbnail: null },
-      ...library.playlists.map((p) => ({ id: p.id, title: p.name, count: p.trackIds.length, thumbnail: null })),
+      ...library.playlists.map((p) => ({ id: p.id, title: p.name, count: p.trackKeys.length, thumbnail: null })),
     ],
     [library],
   );
@@ -178,8 +178,8 @@ export function SyncPanel({
       metas = library.collection;
     } else {
       const pl = library.playlists.find((p) => p.id === listId);
-      const byId = new Map(library.collection.map((t) => [t.videoId, t]));
-      metas = (pl?.trackIds ?? []).map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
+      const byKey = new Map(library.collection.map((t) => [trackKey(t), t]));
+      metas = (pl?.trackKeys ?? []).map((k) => byKey.get(k)).filter((t): t is TrackMeta => !!t);
     }
     return metas.map((t) => ({
       title: t.title,

@@ -31,12 +31,17 @@ export const MAX_TRACK_SECONDS = 30 * 60;
 export interface Playlist {
   id: string;
   name: string;
-  trackIds: string[]; // videoIds, in order
+  // Membership as `trackKey`s (identity.ts), in order — the SAME identity the collection
+  // dedupes on. Was raw videoIds, which meant the two layers disagreed about what "the same
+  // track" is; playlistKeys.ts migrates legacy rows at every ingest boundary. The name says
+  // trackKeys so a stale call site is a compile error rather than a silent id-space mismatch.
+  trackKeys: string[];
   sourceListId?: string; // YouTube/Spotify playlist id this was imported from (dedup re-imports)
   sourceService?: string; // "youtube" | "spotify" | … — which service section it belongs to
   lastSynced?: number; // epoch ms of the last re-sync from the source provider
   // Spotify/TIDAL only: stable SOURCE-track key (isrc / spotifyId / artist|title) → the matched
-  // YouTube videoId. Lets re-sync dedup by SOURCE identity instead of the fuzzy match (which drifts
+  // track's `trackKey` (was the raw videoId; migrated with membership, and it must stay in the
+  // same id space as trackKeys or re-sync dedup compares across two spaces and never matches). Lets re-sync dedup by SOURCE identity instead of the fuzzy match (which drifts
   // to a different video for the same song across runs and used to accrete duplicates forever), and
   // prune only tracks whose source row is actually gone — never manual additions. Absent on YouTube
   // (exact-id) and legacy playlists (they just re-match afresh once).

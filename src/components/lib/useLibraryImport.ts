@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { reconcileResync, resyncNeedsMatch, sourceTrackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
+import { reconcileResync, trackKey, resyncNeedsMatch, sourceTrackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchPlaylist } from "@htl/media";
 import {
   friendlySyncError,
@@ -135,7 +135,10 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
       // to nothing. Keep what we have; a genuinely-emptied source is indistinguishable from a failed
       // read here, and not destroying local data is the safe default.
       const keptLocal = () => flash(`Couldn’t read “${cleanPlaylistName(pl.name)}” — kept your local copy.`, 4000);
-      const have = new Set(pl.trackIds);
+      // ONE id space for the whole reconcile: membership, freshness and the sourceMatch values are
+      // all trackKeys now. Mixing spaces here is what let a re-match drift to a different video and
+      // accrete a duplicate — the reconciler compares strings, so it cannot notice the mismatch.
+      const have = new Set(pl.trackKeys);
       let added = 0;
       let removed = 0;
       // Songs the source has that we could not find on YouTube. The IMPORT path discloses these
@@ -158,8 +161,8 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
           flash(`Synced “${cleanPlaylistName(pl.name)}”: +${added} · playlist too large to read fully — nothing removed.`, 6000);
           return;
         }
-        const freshIds = new Set(fresh.map((t) => t.videoId));
-        for (const vid of pl.trackIds) if (!freshIds.has(vid)) { library.removeFromPlaylist(pl.id, vid); removed++; }
+        const freshKeys = new Set(fresh.map((t) => trackKey(t)));
+        for (const k of pl.trackKeys) if (!freshKeys.has(k)) { library.removeFromPlaylist(pl.id, k); removed++; }
       } else if (service === "spotify" || service === "tidal") {
         // Spotify / TIDAL: fuzzy-matched. Follow each song by SOURCE identity (the sourceMatch map),
         // so a re-match that drifts to a different video keeps the song once instead of accreting a
@@ -173,10 +176,11 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
         const toMatch = resyncNeedsMatch(sources, sourceTrackKey, oldMap, have);
         const pairs = await matchTracksToYouTube(toMatch, (d, n) => setImportMsg(`Matching ${d}/${n}…`));
         const matched: Record<string, string> = {};
-        const trackByVid = new Map<string, TrackMeta>();
+        const trackByKey = new Map<string, TrackMeta>();
         for (const { track, source } of pairs) {
-          matched[sourceTrackKey(source)] = track.videoId;
-          trackByVid.set(track.videoId, track);
+          const k = trackKey(track);
+          matched[sourceTrackKey(source)] = k;
+          trackByKey.set(k, track);
         }
         unmatched = toMatch.length - Object.keys(matched).length;
         const { newMap, addIds, removeIds } = reconcileResync({
@@ -186,11 +190,11 @@ export function useLibraryImport(library: Library, setView: ViewToPlaylist) {
           matched,
           truncated: !!truncated,
         });
-        for (const vid of addIds) {
-          const t = trackByVid.get(vid);
+        for (const k of addIds) {
+          const t = trackByKey.get(k);
           if (t) { library.addToPlaylist(pl.id, t); added++; }
         }
-        for (const vid of removeIds) { library.removeFromPlaylist(pl.id, vid); removed++; } // always [] on a truncated read
+        for (const k of removeIds) { library.removeFromPlaylist(pl.id, k); removed++; } // always [] on a truncated read
         library.setSourceMatch(pl.id, newMap);
         if (truncated) {
           // The source was too large to read in full (provider page guard) — this is NOT the whole

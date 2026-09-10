@@ -1,5 +1,6 @@
 import { useMemo, useState, type DragEvent } from "react";
 import type { Library } from "@htl";
+import { trackKey } from "@htl/library";
 import {
   type AutoMixStatus,
   type EnergyArc,
@@ -97,17 +98,17 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, o
   const upcoming = mirror ? mirror.upcoming : queue.upcoming;
   const enabled = st.enabled;
 
-  // Resolve each playlist's videoIds against the collection so we can seed the queue.
-  const byId = useMemo(() => {
+  // Resolve each playlist's trackKeys against the collection so we can seed the queue.
+  const byKey = useMemo(() => {
     const m = new Map<string, TrackMeta>();
-    for (const t of library.collection) m.set(t.videoId, t);
+    for (const t of library.collection) m.set(trackKey(t), t);
     return m;
   }, [library.collection]);
 
   const seedPlaylist = (playlistId: string) => {
     const pl = library.playlists.find((p) => p.id === playlistId);
     if (!pl) return;
-    const tracks = pl.trackIds.map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
+    const tracks = pl.trackKeys.map((k) => byKey.get(k)).filter((t): t is TrackMeta => !!t);
     if (!tracks.length) return;
     queue.loadTracks(tracks, { smartSort: queue.smartSort, mode: "playlist" });
   };
@@ -133,7 +134,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, o
             <option value="__radio__">↺ Radio — auto-suggest from what you play</option>
             {library.playlists.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} ({p.trackIds.length})
+                {p.name} ({p.trackKeys.length})
               </option>
             ))}
           </select>

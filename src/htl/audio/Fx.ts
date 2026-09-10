@@ -848,7 +848,8 @@ export abstract class BaseFxDevice implements FxDevice {
   }
 
   // --- throw / latch lifecycle ------------------------------------------------
-  // A pad THROW (momentary FX2) or LATCH (FX) engages the effect: un-bypass + a subclass param
+  // A pad THROW or LATCH engages the effect: un-bypass + a subclass param
+  // (this said "momentary FX2 / LATCH FX"; the two banks are identical — see PadMode in Deck.ts)
   // boost + (see throwMix) a guaranteed-audible send. Bypass is the SINGLE SOURCE OF TRUTH —
   // engaging remembers the prior bypass; releasing RE-READS the live bypass (never a stale capture)
   // before restoring it; and a manual bypass toggle mid-throw clears the whole thing (see

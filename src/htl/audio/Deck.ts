@@ -209,8 +209,18 @@ export type SyncRole = "off" | "master" | "slave";
 
 // Performance-pad modes. Unshifted: cue / fx / loop / sampler (the deck's LOCAL sample pads).
 // Shifted peers (SHIFT on the mode row): roll (momentary loop) ↔ loop, global (the account's
-// GLOBAL sample bank) ↔ sampler, fx2 (the LATCH layer of the FX bank) ↔ fx. CUE has NO shift peer
+// GLOBAL sample bank) ↔ sampler, fx2 ↔ fx. CUE has NO shift peer
 // (the old KEY/keyboard slot was retired — pitched playback now lives as a per-pad sampler param).
+//
+// ★ fx2 IS CURRENTLY A DUPLICATE OF fx, and this comment used to claim otherwise — it called fx2
+// "the LATCH layer of the FX bank" while DeckControls called it "the MOMENTARY layer" of the same
+// thing. Both cannot be true and neither is: padsForDeck() sources both banks from
+// deck.fxChain(deck.fxFocus) without ever reading padMode, both render the same pads through the
+// same fxPadDown/fxPadUp, and both carry the same tooltip ("tap to latch, hold for momentary").
+// The latch-vs-throw split is REAL but it is per-GESTURE (fxPadRelease's FX_HOLD_MS) and per-PAD
+// (FxPadDef.hold), never per-bank — so it already applies identically in both. The design this
+// pair was named for (fx2 as a sticky chain you keep while fx follows focus) was never built.
+// Verified 2026-09-10 across every fx2 reference in src/; see thread 9ee26ff4.
 export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2";
 // Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). cue → cue = no
 // peer (the slot is blank); the UI shows no shifted label for CUE and shift+CUE stays in cue.

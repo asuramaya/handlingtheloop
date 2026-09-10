@@ -608,9 +608,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {/* FX2 pad-mode (FX shifted): the MOMENTARY layer of the same 8 effects. Hold to throw the
-            effect, release to drop it — a hands-on stab vs FX's set-and-forget latch. Lit = live
-            while held. Right-click reveals the panel. */}
+        {/* FX2 pad-mode (FX shifted). ★ TODAY THIS IS A DUPLICATE OF THE FX BANK ABOVE: same
+            padsForDeck(deck) source, same fxPadDown/fxPadUp, same tap-to-latch/hold-for-momentary
+            tooltip. This comment used to claim FX2 was "the MOMENTARY layer" against FX's
+            "set-and-forget latch" — contradicted by Deck.ts, which called fx2 the LATCH layer, and
+            by the tooltip three lines below, which is the one that was right. The gesture split is
+            per-GESTURE and per-PAD, not per-bank. Kept rendering separately so the intended split
+            has somewhere to land; until it does, the only real difference is cosmetic (no `latched`
+            class here). See thread 9ee26ff4. */}
         {deck.padMode === "fx2" && (
         <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
           {padsForDeck(deck).map((pad, i) => (

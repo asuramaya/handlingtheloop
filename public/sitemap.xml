@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Deliberately just <loc>. `lastmod` was here reading 2026-07-06 and went stale the day after
+     it was written, and Google states plainly that it ignores lastmod it finds untrustworthy — a
+     permanently-wrong date is worse than none, because it teaches the crawler to discount the
+     whole file. `changefreq` and `priority` are ignored outright by Google and Bing.
+     Profile (/@handle) and set (/set/:id) URLs are deliberately absent: they are user data, they
+     come and go, and a sitemap listing URLs that 404 is the same untrustworthiness one level up.
+     They are discoverable by links instead, and each already carries its own OG card. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://handlingtheloop.com/</loc>
-    <lastmod>2026-07-06</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
   </url>
 </urlset>

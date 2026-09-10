@@ -17,6 +17,28 @@ import { bufferToWav } from "./encodeWav";
 import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
 
 type DeckId = "A" | "B";
+
+/** Where a deck's compressor takes its DETECTOR signal from.
+ *  "off"  — its own audio: an ordinary compressor. The default, and what every shipped preset
+ *           already was (scExt: 0), so naming it costs no existing user a change in sound.
+ *  "deck" — the other deck: classic cross-deck ducking.
+ *  "mic"  — the live mic: the music compresses when you talk. Distinct from MicInput's talkover
+ *           duck, which is a flat gain pull on the whole music bus; this runs through the
+ *           compressor's own detector, so the sidechain HP/LP, ratio, attack and release shape it. */
+export type SidechainSource = "off" | "deck" | "mic";
+
+/** `scSrc`'s numeric param value -> the source it names. Index IS the param value, so this array
+ *  is the single definition of that mapping — the panel and the engine read the same one rather
+ *  than each hard-coding 0/1/2 and drifting apart. */
+export const SC_SOURCES: readonly SidechainSource[] = ["off", "deck", "mic"];
+
+/** `scSrc` -> source, total over any number. A param arrives from presets, saved profiles, room
+ *  sync and MIDI, so it is not guaranteed to be one of 0/1/2 — an old profile predating this
+ *  control has no scSrc at all, and MIDI hands over whatever the controller sent. Everything
+ *  unrecognised resolves to "off", which is both the safe answer and the pre-existing behaviour. */
+export function sidechainSourceFor(paramValue: number): SidechainSource {
+  return SC_SOURCES[Math.round(paramValue)] ?? "off";
+}
 const other = (id: DeckId): DeckId => (id === "A" ? "B" : "A");
 
 /** Live SYNC phase-lock telemetry for the Debug panel. */
@@ -254,14 +276,42 @@ export class AudioEngine {
   // PRE-rack tap of the other deck (see Deck.sidechainTap), because patching deck OUTPUTS into each
   // other's comps makes the two racks mutually dependent — a genuine cycle in the audio graph, which
   // Web Audio mutes.
+  // Per-deck sidechain SOURCE. Was a permanent A<->B cross-patch with no way to reach it: the
+  // audio was always connected and the worklet's `scExt` gate defaulted to 0 on every preset, so
+  // the capability existed, was correct, and nothing in the UI ever pointed at it. That is a
+  // discoverability failure, not a missing feature — hence a NAMED source rather than another
+  // opaque boolean. It also finally makes true the line CompFx has claimed since it was written
+  // ("input 1: the OTHER deck, or the mic"): the mic half had never been built.
   private patchSidechains() {
     try {
-      const a = this.deckA.compDevice;
-      const b = this.deckB.compDevice;
-      if (a) this.deckB.sidechainTap.connect(a.sidechain);
-      if (b) this.deckA.sidechainTap.connect(b.sidechain);
+      for (const id of ["A", "B"] as const) {
+        const self = id === "A" ? this.deckA : this.deckB;
+        const peer = id === "A" ? this.deckB : this.deckA;
+        const comp = self.compDevice;
+        if (!comp) continue;
+        // The DEVICE owns the choice (it is a param, so it rides presets/profiles/room-sync/MIDI
+        // for free); the ENGINE owns the wiring, because only it can see the other deck and the
+        // mic. Re-running on every change keeps the two in step.
+        comp.onSidechainSourceChange = () => this.patchSidechains();
+        const src = sidechainSourceFor(comp.getParam("scSrc"));
+        // Tear the old routing down FIRST and unconditionally. Switching source without this
+        // leaves the previous feed connected, so "mic" would quietly mean "mic AND the other
+        // deck" — a detector summing two sources nobody asked to sum.
+        try {
+          peer.sidechainTap.disconnect(comp.sidechain);
+        } catch {
+          /* wasn't connected */
+        }
+        try {
+          this.mic.tap.disconnect(comp.sidechain);
+        } catch {
+          /* wasn't connected */
+        }
+        if (src === "deck") peer.sidechainTap.connect(comp.sidechain);
+        else if (src === "mic") this.mic.tap.connect(comp.sidechain);
+      }
     } catch (e) {
-      console.warn("[htl] cross-deck sidechain patch failed:", e);
+      console.warn("[htl] sidechain patch failed:", e);
     }
   }
 

@@ -77,7 +77,17 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
   };
   const mode = Math.round(get("mode"));
   const auto = get("auto") >= 0.5;
-  const ext = get("scExt") >= 0.5;
+  // The sidechain SOURCE, three-way. Was a two-state INT/EXT toggle whose "EXT" silently meant
+  // "the other deck" — the only external source that existed. Naming the source instead of
+  // toggling an abstraction is what makes the mic reachable at all.
+  const scSrc = Math.round(get("scSrc"));
+  const otherDeck = id === "A" ? "B" : "A";
+  const SC_LABEL = ["INT", otherDeck, "MIC"];
+  const SC_TITLE = [
+    "Detector listens to this channel — an ordinary compressor. Tap to duck from the other deck.",
+    `Detector listens to deck ${otherDeck} — that track ducks this one. Tap to duck from the mic.`,
+    "Detector listens to the MIC — the music compresses when you talk, shaped by this compressor's own sidechain filters, ratio and release. Tap to go back to internal.",
+  ];
   // Snapped to the nearest stop so a value set elsewhere (a preset, MIDI, a session) still lights
   // the right pip rather than falling off the cycle.
   const look = LOOK_STOPS.reduce((best, v) => (Math.abs(v - get("lookahead")) < Math.abs(best - get("lookahead")) ? v : best), LOOK_STOPS[0]);
@@ -122,10 +132,14 @@ export function CompPanel({ deck, id, slot, accent }: CompPanelProps) {
           AUTO
         </button>
         <span className="fx-sep" />
-        {/* One toggle, not two mutually-exclusive buttons standing in for it — INT/EXT is a
-            single real state, same idiom as AUTO right next to it. */}
-        <button className={ext ? "active" : ""} onClick={() => setParam("scExt", ext ? 0 : 1)} title={ext ? "Detector listens to this channel — tap for the other deck" : `Detector listens to deck ${id === "A" ? "B" : "A"} — the other track ducks this one`}>
-          SC: {ext ? (id === "A" ? "B" : "A") : "INT"}
+        {/* One control cycling three named sources, not a toggle plus a hidden meaning — the
+            same idiom as LOOKAHEAD below, which is also a set-once value you cycle and leave. */}
+        <button
+          className={scSrc > 0 ? "active" : ""}
+          onClick={() => setParam("scSrc", (scSrc + 1) % 3)}
+          title={SC_TITLE[scSrc]}
+        >
+          SC: {SC_LABEL[scSrc]}
         </button>
         <span className="fx-sep" />
         {/* LOOKAHEAD, cycled rather than dialled. It is a set-once value — you pick whether the

@@ -5,7 +5,10 @@
 //   input ─┬─→ dry·(1−mix) ────────────────────────────────────────────────→ output
 //          └─→ [comp worklet] ──────────────────────────────→ wet ─(mix)──→ output
 //                    ▲
-//   sidechain ───────┘   (input 1: the OTHER deck, or the mic — patched by the engine)
+//   sidechain ───────┘   (input 1: the other deck OR the mic — AudioEngine.setSidechainSource
+//                          picks which, and drives `scExt` to match so the patch and the gate
+//                          can never disagree. Until 2026-09-09 this line claimed the mic was
+//                          already handled; it was not — only A<->B was ever wired.)
 //
 // It's an INSERT (dry/wet crossfade like the saturator), not a send — which also hands you
 // PARALLEL compression for free: mix at 50% with a hard ratio is the New-York drum trick.
@@ -27,6 +30,10 @@ export class CompFx extends BaseFxDevice {
 
   /** External sidechain input — the engine patches the other deck / the mic into this. */
   readonly sidechain: GainNode;
+
+  /** Set by AudioEngine: re-run the patch when `scSrc` changes. The device knows WHICH source is
+   *  wanted; only the engine can see the other deck and the mic, so it does the wiring. */
+  onSidechainSourceChange?: () => void;
   private node: AudioWorkletNode | null = null;
   private readonly dryLeg: GainNode;
 
@@ -43,6 +50,11 @@ export class CompFx extends BaseFxDevice {
     scHz: 0,
     scLoHz: 20000,
     scExt: 0,
+    // 0 = own audio (an ordinary compressor), 1 = the other deck, 2 = the live mic. The ENGINE
+    // owns the actual patching; this param exists so the choice rides every mechanism a param
+    // already has — presets, profiles, room sync, MIDI, undo — instead of needing its own copy
+    // of each. `scExt` follows it, so the gate and the patch can never disagree.
+    scSrc: 0,
     lookMs: 0,
     ceilingDb: -0.3,
   };
@@ -201,6 +213,20 @@ export class CompFx extends BaseFxDevice {
       // convention as Delay/Reverb's own LP cut, not a 0-sentinel that needs its own branch.
       { id: "scLp", def: 20000, get: () => this.wp.scLoHz, set: (v) => this.post("scLoHz", clamp(v, 1000, 20000)) },
       { id: "scExt", def: 0, get: () => this.wp.scExt, set: (v) => this.post("scExt", v >= 0.5 ? 1 : 0) },
+      {
+        id: "scSrc",
+        def: 0,
+        get: () => this.wp.scSrc,
+        set: (v) => {
+          const src = clamp(Math.round(v), 0, 2);
+          this.wp.scSrc = src;
+          // The worklet gate follows the source. Setting one without the other is how the old
+          // shape got into its dead state: every shipped preset carried scExt:0 while the audio
+          // sat patched, so the feature was wired, correct, and unreachable.
+          this.post("scExt", src === 0 ? 0 : 1);
+          this.onSidechainSourceChange?.();
+        },
+      },
       { id: "lookahead", def: 0, get: () => this.wp.lookMs, set: (v) => this.post("lookMs", clamp(v, 0, 10)) },
       { id: "ceiling", def: -0.3, get: () => this.wp.ceilingDb, set: (v) => this.post("ceilingDb", clamp(v, -12, 0)) },
     );

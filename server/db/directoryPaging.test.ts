@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveRooms } from "./rooms";
+import { liveRooms, liveFollowedRooms } from "./rooms";
 import { discoverSets } from "./sets";
 
 // THE DIRECTORY USED TO LIE ABOUT BEING COMPLETE (thread 0c98985c).
@@ -209,5 +209,34 @@ describe("two orderings, and only one of them can page", () => {
     // It is an internal id. It rides inside the opaque cursor and nowhere else.
     const page = await liveRooms(fakeDb(2), { limit: 5, sort: "recent" });
     for (const room of page.rooms) expect(room).not.toHaveProperty("hostId");
+  });
+});
+
+describe("the bell's followed-rooms read is NOT the directory with a filter", () => {
+  // Thread 0c98985c called this "pure duplication" of /api/rooms/live and proposed collapsing the
+  // two to save a per-user D1 read. It is not duplication, and the difference is a safety one.
+
+  it("gates on blocks in BOTH directions — the reason it cannot be sourced from the directory", async () => {
+    // liveRooms has no blocks predicate at all (the directory is public). Sourcing the bell from
+    // it would deliver a blocked host's live room into the blocker's notifications. The gate is
+    // defence-in-depth — a block already deletes the follow edge — and defence-in-depth is
+    // precisely what gets deleted for looking redundant.
+    const asked: Asked[] = [];
+    await liveFollowedRooms(fakeDb(0, asked), "viewer-1");
+    expect(asked[0].sql).toMatch(/NOT EXISTS/);
+    expect(asked[0].sql).toMatch(/b\.blocker_id = f\.follower_id AND b\.blocked_id = f\.followee_id/);
+    expect(asked[0].sql).toMatch(/b\.blocker_id = f\.followee_id AND b\.blocked_id = f\.follower_id/);
+
+    const dir: Asked[] = [];
+    await liveRooms(fakeDb(0, dir), { limit: 10, viewerId: "viewer-1" });
+    expect(dir[0].sql).not.toMatch(/blocker_id/); // the asymmetry, pinned so it cannot drift shut silently
+  });
+
+  it("orders over a TOTAL key, like the directory does", async () => {
+    // started_at alone is not unique; which of two rooms started in the same millisecond survived
+    // LIMIT 50 was arbitrary and could differ between two identical calls.
+    const asked: Asked[] = [];
+    await liveFollowedRooms(fakeDb(0, asked), "viewer-1");
+    expect(lastOrderTerm(asked[0].sql)).toMatch(/host_id/);
   });
 });

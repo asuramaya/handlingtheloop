@@ -231,6 +231,23 @@ function decodeCursor(c: string | null | undefined): { startedAt: number; hostId
  *  readers pay O(following ∩ live). Blocks-gated both directions (defense-in-depth: a block
  *  already deletes the follow edge, but enforce at read so the bell can never leak a blocker's
  *  live status). `startedAt` drives the client's "new since I last looked" badge. */
+/** ★ NOT INTERCHANGEABLE WITH liveRooms, however much the two look alike — and thread 0c98985c
+ *  called this "pure duplication" of it, which is wrong in the one direction that matters.
+ *
+ *  This read is BLOCKS-GATED in both directions and the public directory is not. Sourcing the
+ *  bell from /api/rooms/live to save a query would put a blocked host's live room straight into
+ *  the blocker's notifications — a safety regression bought with one saved D1 read. The gate is
+ *  defence-in-depth (a block already deletes the follow edge) and defence-in-depth is exactly
+ *  what you do not delete because it looks redundant.
+ *
+ *  The ORDER BY ends in host_id, the rooms PK, for the same reason as the directory's: started_at
+ *  alone is not unique, so which of two rooms started in the same millisecond survives LIMIT 50
+ *  was arbitrary and could differ between two identical calls.
+ *
+ *  NOTE the cap is silent: past 50 simultaneously-live followed hosts the bell truncates with no
+ *  signal, the same shape 7089813 fixed in the directory. Left as-is deliberately — following 50
+ *  people who are live AT ONCE is not a state this app reaches — but it is the same defect and
+ *  should be fixed the same way if the bell ever grows a "see all". */
 export async function liveFollowedRooms(db: D1Database, viewerId: string, freshMs = 90_000): Promise<LiveRoom[]> {
   const cutoff = now() - freshMs;
   const r = await db
@@ -245,7 +262,7 @@ export async function liveFollowedRooms(db: D1Database, viewerId: string, freshM
            SELECT 1 FROM blocks b
            WHERE (b.blocker_id = f.follower_id AND b.blocked_id = f.followee_id)
               OR (b.blocker_id = f.followee_id AND b.blocked_id = f.follower_id))
-       ORDER BY r.started_at DESC LIMIT 50`,
+       ORDER BY r.started_at DESC, r.host_id DESC LIMIT 50`,
     )
     .bind(viewerId, cutoff)
     .all<LiveRoom>();

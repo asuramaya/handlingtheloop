@@ -229,7 +229,10 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, o
         onLoad={onLoad}
         deckLoaded={deckLoaded}
         deckColors={deckColors}
-        onRemove={canEdit ? edit.remove : undefined}
+        // The queue's remove is a room INTENT: its videoId crosses the wire to other devices, so
+        // it keeps that id space deliberately. Take the videoId from the track here rather than
+        // widening a synced protocol to carry a second kind of id.
+        onRemove={canEdit ? (t) => edit.remove(t.videoId) : undefined}
         removeTitle="Remove from queue"
         onReorder={canEdit ? edit.move : undefined}
         extraCol={extraCol}

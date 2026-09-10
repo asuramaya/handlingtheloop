@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Store, migrateLegacyKey } from "../persistence";
-import { canonicalizeTrack, canonicalVideoId, trackKey } from "./identity";
+import { canonicalizeTrack, trackKey } from "./identity";
 import { migratePlaylists, type StoredPlaylist } from "./playlistKeys";
 import type { Playlist, TrackMeta } from "./types";
 
@@ -42,7 +42,7 @@ export interface Library {
   collection: TrackMeta[];
   playlists: Playlist[];
   addTrack: (track: TrackMeta) => void;
-  removeTrack: (videoId: string) => void;
+  removeTrack: (track: TrackMeta) => void;
   setBpm: (videoId: string, bpm: number) => void;
   setKey: (videoId: string, key: string) => void;
   createPlaylist: (name: string, sourceListId?: string, sourceService?: string) => string;
@@ -78,13 +78,14 @@ export function useLibrary(): Library {
     });
   }, []);
 
-  // Removes by IDENTITY, not by raw videoId. The old `t.videoId !== videoId` predicate was the
-  // same `videoId === videoId` bug identity.ts was written to kill: every unresolved catalog
-  // track carries an empty videoId, so removing one of them removed ALL of them at once.
-  const removeTrack = useCallback((videoId: string) => {
+  // Takes the TRACK and removes by IDENTITY. It used to take a videoId and filter on
+  // `t.videoId !== videoId` — the same `videoId === videoId` bug identity.ts was written to kill,
+  // since every unresolved catalog track carries an empty videoId and removing one removed ALL of
+  // them. An intermediate version took the videoId and looked the track back up, which still had
+  // to GUESS which of several empty-id rows was meant. Passing the track removes the guess.
+  const removeTrack = useCallback((track: TrackMeta) => {
+    const key = trackKey(track);
     setData((d) => {
-      const target = d.collection.find((t) => t.videoId === videoId);
-      const key = target ? trackKey(target) : `yt:${canonicalVideoId(videoId) || videoId}`;
       return {
         collection: d.collection.filter((t) => trackKey(t) !== key),
         playlists: d.playlists.map((p) => ({

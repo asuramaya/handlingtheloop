@@ -937,12 +937,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 onLoad={onLoad}
                 onQueue={queueAdd}
                 onQueueNext={queueNext}
-                // TrackTable's row identity is the videoId; playlist membership is a trackKey.
-                // Translate at the boundary rather than letting either side guess.
-                onRemove={(vid) => {
-                  const t = byVideoId.get(vid);
-                  if (t) library.removeFromPlaylist(pl.id, trackKey(t));
-                }}
+                // TrackTable's row identity IS the trackKey now, so this hands membership the
+                // exact string it stores — no translation, and no boundary left to get wrong.
+                // The row hands over the track; membership takes its trackKey. Each side names the
+                // identity it wants instead of agreeing on an untyped string in the middle.
+                onRemove={(t) => library.removeFromPlaylist(pl.id, trackKey(t))}
                 removeTitle="Remove from playlist"
                 emptyHint="Empty playlist. Add tracks from Search or your Collection."
                 loadedIds={loadedIds}

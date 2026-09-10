@@ -5,11 +5,14 @@ import type { MenuState } from "./trackTable";
 interface TrackContextMenuProps {
   menu: MenuState;
   onClose: () => void;
-  byId: Map<string, TrackMeta>;
+  /** trackKey -> track. `menu.ids` are trackKeys, matching TrackTable's row identity. */
+  byKey: Map<string, TrackMeta>;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   onQueue?: (track: TrackMeta) => void; // add to the end of the auto-mix queue
   onQueueNext?: (track: TrackMeta) => void; // jump to the front of the queue
-  onRemove?: (videoId: string) => void;
+  /** Receives the TRACK, not an id — see TrackTable's own note: videoId and trackKey are both
+   *  `string`, so an id here is a mismatch the compiler cannot catch. */
+  onRemove?: (track: TrackMeta) => void;
   removeTitle?: string;
   playlists?: { id: string; name: string }[];
   onAddToPlaylist?: (playlistId: string, track: TrackMeta) => void;
@@ -30,7 +33,7 @@ interface TrackContextMenuProps {
 export function TrackContextMenu({
   menu,
   onClose,
-  byId,
+  byKey,
   onLoad,
   onQueue,
   onQueueNext,
@@ -44,7 +47,7 @@ export function TrackContextMenu({
   canFile,
   onClearSelection,
 }: TrackContextMenuProps) {
-  const tracksOf = (ids: string[]) => ids.map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
+  const tracksOf = (keys: string[]) => keys.map((k) => byKey.get(k)).filter((t): t is TrackMeta => !!t);
 
   return (
     <Menu x={menu.x} y={menu.y} onClose={onClose} head={menu.ids.length > 1 ? `${menu.ids.length} tracks` : undefined}>
@@ -56,7 +59,7 @@ export function TrackContextMenu({
               className="fx-palette-item"
               role="menuitem"
               onClick={() => {
-                const t = byId.get(menu.ids[0]);
+                const t = byKey.get(menu.ids[0]);
                 if (t) onLoad("A", t);
                 onClose();
               }}
@@ -67,7 +70,7 @@ export function TrackContextMenu({
               className="fx-palette-item"
               role="menuitem"
               onClick={() => {
-                const t = byId.get(menu.ids[0]);
+                const t = byKey.get(menu.ids[0]);
                 if (t) onLoad("B", t);
                 onClose();
               }}
@@ -158,7 +161,7 @@ export function TrackContextMenu({
                 <button
                   className="fx-palette-item danger" role="menuitem"
                   onClick={() => {
-                    menu.ids.forEach((id) => onRemove(id));
+                    tracksOf(menu.ids).forEach((t) => onRemove(t));
                     onClearSelection();
                     onClose();
                   }}

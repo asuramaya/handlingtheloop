@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { TrackMeta } from "@htl/library";
+import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
 import { fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
@@ -30,7 +30,12 @@ interface TrackTableProps {
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   onQueue?: (track: TrackMeta) => void; // ＋ Add to the auto-mix queue
   onQueueNext?: (track: TrackMeta) => void; // ↑ Play next
-  onRemove?: (videoId: string) => void;
+  /** Receives the TRACK, not an id. Deliberately: a bare string here has to be either a videoId
+   *  or a trackKey, both are `string`, and the type checker cannot tell them apart — so a caller
+   *  wired to the wrong id space compiles silently and fails at runtime. Handing over the object
+   *  lets each consumer take the identity IT needs (playlist membership wants trackKey; the queue's
+   *  remove intent wants videoId, because that id crosses the wire to other devices). */
+  onRemove?: (track: TrackMeta) => void;
   removeTitle?: string;
   emptyHint: string;
   loadedIds?: Set<string>;
@@ -123,7 +128,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   const touchDragging = useRef(false);
   const touchStart = useRef({ x: 0, y: 0 });
   const touchPayload = useRef<TouchDragPayload | null>(null);
-  const byId = useMemo(() => new Map(tracks.map((t) => [t.videoId, t])), [tracks]);
+  // ROW IDENTITY IS THE trackKey, not the videoId — the same identity the collection and playlists
+  // dedupe on. Two unresolved catalog rows (Spotify/Tidal) both carry an empty videoId, so keying
+  // selection on it made them ONE row: select one, act on the other. The videoId still answers the
+  // questions that are genuinely about the VIDEO — what is cached, what is analysed, what is loaded
+  // on a deck — and those deliberately keep using it below.
+  const byKey = useMemo(() => new Map(tracks.map((t) => [trackKey(t), t])), [tracks]);
   const canFile = !!onAddToPlaylist || !!onCreatePlaylistWith;
 
   // Fill blank bpm/key from the pooled `track_analysis` (the crowdsourced metadata lane) so a
@@ -314,7 +324,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     }
     if (e.shiftKey && anchor.current != null) {
       const [a, b] = anchor.current < i ? [anchor.current, i] : [i, anchor.current];
-      const range = view.slice(a, b + 1).map((t) => t.videoId);
+      const range = view.slice(a, b + 1).map((t) => trackKey(t));
       setSelected((prev) => {
         const s = e.ctrlKey || e.metaKey ? new Set(prev) : new Set<string>();
         range.forEach((x) => s.add(x));
@@ -346,7 +356,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     setMenu({ x: clientX, y: clientY, ids: targetIds(i, id), kind });
   }
 
-  const tracksOf = (ids: string[]) => ids.map((id) => byId.get(id)).filter((t): t is TrackMeta => !!t);
+  const tracksOf = (keys: string[]) => keys.map((k) => byKey.get(k)).filter((t): t is TrackMeta => !!t);
 
   // A clickable, sortable header cell with an asc/desc caret + (optionally) a
   // drag-to-resize border on its right edge.
@@ -484,11 +494,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             )}
             {view.slice(vStart, vEnd).map((t, k) => {
               const i = vStart + k; // true index into `view` (selection/menus/reorder use it)
+              const rowKey = trackKey(t); // identity for selection/menus; NOT for deck/cache state
               return (
               <tr
                 ref={k === 0 ? firstRowRef : undefined}
-                key={`${t.videoId}:${i}`}
-                className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(t.videoId) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
+                key={`${rowKey}:${i}`}
+                className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(rowKey) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
                 draggable
                 onClick={(e) => {
                   // Left click → the "Load to Deck A / B" menu (pick a deck). Modifier-
@@ -500,15 +511,15 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                     return;
                   }
                   if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) {
-                    selectOnClick(e, i, t.videoId);
+                    selectOnClick(e, i, rowKey);
                     return;
                   }
-                  openMenu("load", e.clientX, e.clientY, i, t.videoId);
+                  openMenu("load", e.clientX, e.clientY, i, rowKey);
                 }}
                 onContextMenu={(e) => {
                   // Right click → the file menu (add to playlist / collection, remove).
                   e.preventDefault();
-                  openMenu("add", e.clientX, e.clientY, i, t.videoId);
+                  openMenu("add", e.clientX, e.clientY, i, rowKey);
                 }}
                 onTouchStart={(e) => {
                   const touch = e.touches[0];
@@ -538,7 +549,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                     touchArmed.current = false;
                     suppressClick.current = true;
                     const touch = e.changedTouches[0];
-                    openMenu("add", touch?.clientX ?? touchStart.current.x, touch?.clientY ?? touchStart.current.y, i, t.videoId);
+                    openMenu("add", touch?.clientX ?? touchStart.current.x, touch?.clientY ?? touchStart.current.y, i, rowKey);
                   }
                 }}
                 onTouchCancel={() => {
@@ -556,7 +567,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   }
                   if (!touchDragging.current) {
                     touchDragging.current = true;
-                    const metas = tracksOf(targetIds(i, t.videoId));
+                    const metas = tracksOf(targetIds(i, rowKey));
                     touchPayload.current = { tracks: metas, label: metas.length > 1 ? `${metas.length} tracks` : t.title, thumbnail: t.thumbnail };
                     startTouchDrag(touchPayload.current, touch.clientX, touch.clientY);
                   } else if (touchPayload.current) {
@@ -569,7 +580,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   // search track — which isn't in the collection map yet — can still be
                   // filed onto a playlist or the collection at the drop site. A reorderable
                   // list (Queue) ALSO carries the row index for the intra-list move.
-                  const metas = tracksOf(targetIds(i, t.videoId));
+                  const metas = tracksOf(targetIds(i, rowKey));
                   e.dataTransfer.setData(TRACK_DND_MIME, JSON.stringify(metas));
                   if (onReorder) {
                     e.dataTransfer.setData(ROW_INDEX_MIME, String(i));
@@ -645,7 +656,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
         <TrackContextMenu
           menu={menu}
           onClose={() => setMenu(null)}
-          byId={byId}
+          byKey={byKey}
           onLoad={onLoad}
           onQueue={onQueue}
           onQueueNext={onQueueNext}

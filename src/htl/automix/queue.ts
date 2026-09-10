@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { TrackMeta } from "../library/types";
 import { fetchRecommendations } from "../media/recommend";
-import { fetchAnalysisBatch } from "../media/api";
+import { fetchAnalysisBatch, fetchFeaturesByIsrc } from "../media/api";
 import { smartSortChain, songCore } from "./mixability";
 import { type Candidate, isEligible, pickBest, radioSeeds, targetEnergy } from "./selector";
 import type { EnergyArc, MixMode, RadioContext } from "./types";
@@ -79,6 +79,10 @@ const SEED_HISTORY = 8; // recent plays kept for the artist-cooldown / repeat wi
 const POOL_MAX = 60; // standing candidates; a fill tops up to here
 const POOL_LOW = 20; // refill when the pool drops below this — NOT every song
 const POOL_ENRICH = 24; // per fill, ask D1 for analysis on up to this many un-analysed candidates
+// Per fill, how many ISRC-carrying candidates get the free-DB lookup. Small on purpose: one
+// request each, against public infrastructure, for tracks that may never play. The operator's
+// framing — "if radio is suggesting 4 songs, analyze them ahead of time" — is the size of this.
+const ISRC_ENRICH = 4;
 
 export function dedupeByVideoId(list: TrackMeta[]): TrackMeta[] {
   const seen = new Set<string>();
@@ -266,6 +270,38 @@ export function useMixQueue(): MixQueue {
       const a = ana[c.track.videoId];
       if (!a) continue;
       c.track = { ...c.track, bpm: c.track.bpm ?? a.bpm, key: c.track.key ?? a.key, energy: c.track.energy ?? a.energy ?? null };
+    }
+    await enrichPoolByIsrc();
+  };
+
+  // ★ THE SECOND FREE SOURCE, and the pool never asked it. D1 covers ~5% of real radio candidates
+  // (measured over 8 captured pools, decision 10473743) — which is what leaves the selector's
+  // key/bpm/energy weights inert on the overwhelming majority of picks. The other terms are not
+  // too timid; they are IDLE.
+  //
+  // /api/features resolves key/BPM from the free public DBs (MusicBrainz → AcousticBrainz) for a
+  // track that carries an ISRC, and it does so WITHOUT A DECODE — which is the whole reason it can
+  // run speculatively over a pool. Passing `v` also makes the server write the hit into the shared
+  // D1 dataset, so a miss converted here is a hit for every future session, on every device.
+  //
+  // Operator's rule (39dc683e): analysis is cheap and runs eagerly; STEMS are heavy and wait for a
+  // load. This is the cheap half taken at its word. Note what is deliberately NOT done: the
+  // decode-and-fingerprint path (useQueuePrefetch) stays pointed at the QUEUE, because that one
+  // costs a full audio fetch per track and must not be spent on candidates that may never play.
+  //
+  // Only candidates the provider already ISRC-tagged qualify — TIDAL track radio supplies them,
+  // YouTube's does not — so this is bounded by what arrives, and small.
+  const enrichPoolByIsrc = async (): Promise<void> => {
+    const targets = poolRef.current
+      .filter((c) => (c.track.bpm == null || c.track.key == null) && !!c.track.isrc)
+      .slice(0, ISRC_ENRICH);
+    if (!targets.length) return;
+    // Sequential, not Promise.all: these hit third-party DBs through our own worker, and a burst
+    // of parallel lookups on every fill is exactly how a free API starts refusing us.
+    for (const c of targets) {
+      const f = await fetchFeaturesByIsrc(c.track.isrc!, c.track.videoId).catch(() => null);
+      if (!f || (f.bpm == null && f.key == null)) continue;
+      c.track = { ...c.track, bpm: c.track.bpm ?? f.bpm, key: c.track.key ?? f.key };
     }
   };
 

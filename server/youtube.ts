@@ -28,8 +28,13 @@
 // REQUIRE_JS_PLAYER: False (direct, non-ciphered URLs, same as ANDROID_VR used to give)
 // and no GVS_PO_TOKEN_POLICY entry at all (defaults to not-required). Verified directly:
 // full byte-exact downloads of two independently-confirmed-blocked tracks, both complete
-// in under a second. ANDROID_VR is kept below, unused for audio, only as a reference/
-// fallback shape — flip PRIMARY_CLIENT back if YouTube ever closes this one too.
+// in under a second. ANDROID_VR is kept below and is genuinely UNUSED FOR AUDIO — its only two
+// call sites are DIAG_CLIENTS (diagnostics) and captionTracks (captions), verified by grep, not
+// assumed. Keep it for those; do NOT read it as an audio fallback. It is not one: since
+// 2026-08-17 it 403s every format past ~1.1 MB, so flipping the primary back to it would resolve
+// a URL that then refuses to serve bytes. (This line used to say "flip PRIMARY_CLIENT back if
+// YouTube ever closes this one too", which contradicted the note above CLIENT_CASCADE saying
+// exactly why that does not work — two comments in one file giving opposite advice.)
 const VISIONOS_VERSION = "1.02";
 const VISIONOS_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
@@ -336,7 +341,10 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
 // `REQUIRE_JS_PLAYER: False` (formats carry direct, non-ciphered URLs — we never download or
 // parse base.js) AND free of a `GVS_PO_TOKEN_POLICY`. Against yt-dlp master those sets are:
 //     REQUIRE_JS_PLAYER: False  →  android, android_vr, ios, visionos
-//     no GVS_PO_TOKEN_POLICY    →  visionos, tv, tv_downgraded, web_embedded
+//     no GVS_PO_TOKEN_POLICY    →  web, web_safari, web_embedded, visionos, tv, tv_downgraded
+// (Re-derived against yt-dlp master 2026-09-09: `web` and `web_safari` are un-gated too — they
+// were missing from this list before. The CONCLUSION is unchanged, because both need the JS
+// player, but the roster is a closed-world claim and a reader counts candidates off it.)
 // VISIONOS is the only member of both — the last unwalled JS-free client in the table. When it
 // goes, the answer is not another entry in this array: it is a real PO-token provider (already
 // known NOT to unlock ANDROID_VR, which likely wants Play Integrity hardware attestation) or
@@ -415,12 +423,17 @@ function pickAudio(formats: RawFormat[]): RawFormat | null {
   return audio[0];
 }
 
-// Streaming is ANONYMOUS-ONLY via CLIENT_CASCADE (VISIONOS, falling back to
-// ANDROID_VR — the "JS-less", non-PO-gated clients that yield DIRECT, non-ciphered
-// urls the worker can byte-stream). Account credentials can't unlock Premium formats
-// on these clients, so none are used — `auth` only ever carries a browser-minted
-// visitorData / PO token that hardens the anonymous request against datacenter
-// bot-blocks. `playerWithRetry` already retries with a fresh visitorData per client.
+// Streaming is ANONYMOUS-ONLY via CLIENT_CASCADE — today a single client, VISIONOS: the last
+// "JS-less", non-PO-gated client that yields DIRECT, non-ciphered urls the worker can
+// byte-stream. THERE IS NO FALLBACK. This comment used to say "falling back to ANDROID_VR",
+// which was already untrue when written and stayed here after ANDROID_VR was removed from the
+// cascade on 2026-09-05 (see the long note above CLIENT_CASCADE for why: it 403s every format
+// past ~1.1 MB, so it resolved a URL that then refused to serve bytes). A comment promising a
+// fallback that does not exist is worse than no comment — it tells the next reader they are
+// covered. Account credentials can't unlock Premium formats on this client, so none are used —
+// `auth` only ever carries a browser-minted visitorData / PO token that hardens the anonymous
+// request against datacenter bot-blocks. `playerWithRetry` retries with a FRESH visitorData,
+// which is the part that recovers anything: a burned token, not a burned client.
 export async function resolveAudio(videoId: string, auth?: YtAuth, fx: Fetcher = directFetch): Promise<ResolvedAudio> {
   const pr = await playerWithRetry(videoId, 6, auth, fx);
   const fmt = pickAudio(pr.streamingData?.adaptiveFormats ?? []);
@@ -604,8 +617,10 @@ function decodeEntities(s: string): string {
     .replace(/&(?:amp|lt|gt|quot|#39|apos);/g, (e) => ENTITIES[e] ?? e);
 }
 
-// The video's caption track list. ANDROID_VR (the stream client) omits it, so we
-// ask the ANDROID / WEB clients (which carry `captions`) until one answers.
+// The video's caption track list. ANDROID_VR is tried first here for historical reasons — it was
+// the stream client until 2026-08-24, and it is NOT the stream client any more (VISIONOS is) — so
+// read this list as "clients that carry `captions`", not as anything about streaming. It omits
+// captions itself, so ANDROID / WEB are asked until one answers.
 async function captionTracks(videoId: string, auth?: YtAuth, freshVisitor = false): Promise<CaptionTrack[]> {
   // On a retry we force a brand-new visitorData: a session that's "bad" for captions
   // fails identically every time, so reusing the cached one would waste the retry.

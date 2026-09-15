@@ -120,13 +120,51 @@ if (new Set(peers.map((p) => p.name).filter(Boolean)).size < 2) {
 const meName = (peers.find((p) => p.id === you) || {}).name ?? null;
 const mine = peers.filter((p) => p.name === meName);
 if (mine.length > 1) console.error(`[grant] NOTE — ${mine.length} devices on my own account (${meName}); ignoring my own ghosts: ${JSON.stringify(mine.filter((p) => p.id !== you).map((p) => p.id))}`);
-const targets = peers.filter((p) => p.id !== you && p.joined && p.name && p.name !== meName);
+// NOT filtered on `joined` any more: a pending guest is precisely the case that needs approving
+// first. Filtering it out here is what made this tool look at a knocking peer and see an empty room.
+const targets = peers.filter((p) => p.id !== you && p.name && p.name !== meName);
 if (!targets.length) {
-  console.error(`[grant] ABORT — no joined peer on a DIFFERENT account than mine (${meName}). Roster: ${JSON.stringify(peers)}`);
+  console.error(`[grant] ABORT — no peer on a DIFFERENT account than mine (${meName}). Roster: ${JSON.stringify(peers)}`);
   await browser.close();
   process.exit(3);
 }
 
+// ★ APPROVE BEFORE GRANT — TWO HOST ACTIONS, NOT ONE. room.ts:425 refuses a grant whose target
+// is not joined (`if (!target || !this.isLive(target) || !this.isJoined(target)) break;`) and the
+// refusal is a bare break: a grant to a PENDING device is a silent no-op, the same shape as the
+// intent drop. The read-back would then correctly report "not confirmed" and send the reader
+// hunting the grant path when the fault is one step earlier.
+//
+// Why a guest is pending at all, since room.ts:387 admits `aj.invited` directly: `invited` is a
+// Worker-set URL flag (room.ts:297, "a push-invite grant was consumed → auto-admit"), so it is
+// true only on the connection that CONSUMED the invite code. Re-run the guest with the same code
+// and it arrives knocking instead — which is the normal state of any repeat harness run.
+// Approval persists server-side (room.ts:436-441), so approving is also the durable fix.
+const pending = targets.filter((p) => !p.joined);
+for (const t of targets) {
+  if (!t.joined) {
+    await page.evaluate((id) => window.__g.ws?.send(JSON.stringify({ t: "approve", to: id })), t.id);
+    console.log(`[grant] → approved ${t.name} (${t.id}) — was PENDING`);
+  }
+}
+// Wait for the approval to actually land before granting, rather than assuming ordering: the
+// grant's precondition is the approval's RESULT, so sending both back-to-back re-creates the
+// silent drop this step exists to avoid.
+if (pending.length) {
+  let joined = false;
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    const now = await page.evaluate(() => window.__g.peers);
+    if (pending.every((t) => now.find((p) => p.id === t.id)?.joined)) { joined = true; break; }
+  }
+  if (!joined) {
+    const now = await page.evaluate(() => window.__g.peers);
+    console.error(`[grant] ABORT — approval did not land; target still not joined. Roster: ${JSON.stringify(now)}`);
+    await browser.close();
+    process.exit(4);
+  }
+  console.log(`[grant] approval confirmed — ${pending.map((t) => t.name).join(", ")} now joined`);
+}
 for (const t of targets) {
   await page.evaluate((id) => { window.__g.ws?.send(JSON.stringify({ t: "grant", to: id, on: true })); window.__g.sent.push(id); }, t.id);
   console.log(`[grant] → granted ${t.name} (${t.id})`);

@@ -333,10 +333,18 @@ export const DEFAULT_SETTINGS: Settings = {
   // simply better than YouTube's captions, so there is no longer any reason for the good path to be
   // opt-in. (A neural vocal stem upgrades these from line-level to word-level; it is not required.)
   lyricsModel: "lrclib",
-  libraryDock: "left", // matches the old default dock side
-  settingsDock: "right", // matches the old default (unchanged behaviour until a user opts into something else)
-  peopleDock: "right", // matches the old default
-  sessionDock: "right", // matches the old default
+  // ALL FOUR PANELS DEFAULT TO CENTER (operator, 2026-09-15). These used to inherit the docks
+  // each panel happened to ship with — library left, the other three right — which was three
+  // different answers preserved for no reason but their own history. Centered is the one placement
+  // that does not depend on which panel you opened or how wide the window is, and on a phone the
+  // single-slot resolver overrides all four to "sheet" anyway (placementFor), so this changes the
+  // DESKTOP default only. Anyone who has already chosen a dock keeps it: the Store merges a saved
+  // object over these defaults, so this reaches new installs and untouched settings, never a
+  // preference someone set.
+  libraryDock: "center",
+  settingsDock: "center",
+  peopleDock: "center",
+  sessionDock: "center",
   panelOrder: ["library", "settings", "people", "session"], // Library on top by default — it's the one you drag FROM
   panelDim: 0.55, // matches the old hardcoded rgba(0,0,0,0.55)
 };

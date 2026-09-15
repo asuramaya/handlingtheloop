@@ -187,7 +187,39 @@ if (!ok) {
 const errs = await page.evaluate(() => window.__g.got);
 if (errs.length) console.error(`[grant] server errors: ${JSON.stringify(errs)}`);
 
-console.log(`[grant] holding the room ${HOLD}s — drive the guest side now.`);
-await sleep(HOLD * 1000);
+// ★ KEEP GRANTING FOR THE WHOLE HOLD, because a grant is per-DEVICE and the far side's device id
+// CHANGES EVERY RUN (fresh browser profile per invocation). Granting once and then merely waiting
+// admits exactly one window: the moment the other agent restarts --drive to pick up a fix, that new
+// device arrives PENDING and ungranted, and their gate correctly refuses to drive — which reads as
+// "the grant path is broken" when the truth is that the grant was addressed to a device that no
+// longer exists. Approval persists per device id (room.ts:441 saveApproved), not per account, so a
+// new device gets no benefit from the last one's approval.
+console.log(`[grant] holding the room ${HOLD}s — drive the guest side now (re-granting any new device as it appears).`);
+const seen = new Set(targets.map((t) => t.id));
+const until = Date.now() + HOLD * 1000;
+while (Date.now() < until) {
+  await sleep(1000);
+  const now = await page.evaluate(() => window.__g.peers);
+  const fresh = now.filter((p) => p.id !== you && p.name && p.name !== meName && !seen.has(p.id));
+  for (const t of fresh) {
+    seen.add(t.id);
+    console.log(`[grant] NEW DEVICE ${t.name} (${t.id}) ${t.joined ? "joined" : "PENDING"} — admitting`);
+    if (!t.joined) await page.evaluate((id) => window.__g.ws?.send(JSON.stringify({ t: "approve", to: id })), t.id);
+    // Same law as the first pass: the grant's precondition is the approval's RESULT, so wait for
+    // joined to actually appear rather than firing both back-to-back into a silent drop.
+    for (let i = 0; i < 20; i++) {
+      await sleep(250);
+      const r = await page.evaluate(() => window.__g.peers);
+      if (r.find((p) => p.id === t.id)?.joined) break;
+    }
+    await page.evaluate((id) => window.__g.ws?.send(JSON.stringify({ t: "grant", to: id, on: true })), t.id);
+    for (let i = 0; i < 20; i++) {
+      await sleep(250);
+      const r = await page.evaluate(() => window.__g.peers);
+      const p = r.find((x) => x.id === t.id);
+      if (p?.controlling && p.decks === "AB") { console.log(`[grant] CONFIRMED — ${t.name} (${t.id}) decks=AB controlling=true`); break; }
+    }
+  }
+}
 await browser.close();
 console.log("[grant] done.");

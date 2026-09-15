@@ -21,7 +21,7 @@
 // So this keeps the ids.
 
 import { chromium } from "playwright-core";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -45,6 +45,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const URL_ = arg("url", "http://localhost:8787/");
 const SID = arg("sid", null);
 const HOLD = +arg("hold", 180);
+const OUT = arg("out", "synclab-host-grant.json");
 // How long to WAIT for the far side to show up, separate from how long to hold once it has.
 // These were one number and it broke the handshake: the wait was hard-coded to 60 s while --hold
 // applied only AFTER a successful grant, so "my window is open for 420 s" was false — the process
@@ -55,13 +56,30 @@ const WAIT = +arg("wait", 600);
 // Stash the room socket and keep FULL peer records (id included). synclab's recorder maps peers to
 // names for readability; a grant needs the id, so this one keeps both.
 const HOOK = `
-window.__g = { peers: [], you: null, ws: null, sent: [], got: [] };
+window.__g = { peers: [], you: null, ws: null, sent: [], got: [], frames: [], t0: Date.now() };
+// RECORD THE RECEIVE SIDE TOO. Holding the room and recording it were two processes, and that is
+// exactly how a compare ends up joining two DIFFERENT TIME WINDOWS: the granted drive against an
+// older ungranted capture, matched on frame identity and reported as a delivery rate. Same shape as
+// a correct query over the wrong rows. One process holds, grants AND records, so the file that
+// verifies the run is by construction the file from the run.
+// The field t belongs to the PROTOCOL (it IS the frame type) and is never overwritten; ts is
+// page-relative, at is wall-clock and the only clock that joins across two browsers.
+// (No backticks anywhere in this block: the whole hook is a template literal.)
+const __rec = (o) => { o.at = Date.now(); o.ts = Math.round(performance.now()); window.__g.frames.push(o); };
+const __peek = (data, dir) => {
+  if (typeof data !== "string") return { dir, t: "(binary)", bytes: data?.byteLength ?? 0 };
+  try {
+    const m = JSON.parse(data);
+    return { dir, t: m.t, kind: m.intent?.kind, id: m.intent?.id, deck: m.intent?.deck ?? m.deck, param: m.intent?.param ?? m.intent?.fx, chain: m.intent?.chain, value: typeof m.intent?.value === "number" ? Math.round(m.intent.value * 1000) / 1000 : m.intent?.value, from: m.from, seq: m.seq, bytes: data.length };
+  } catch { return { dir, t: "(unparsed)", bytes: data.length }; }
+};
 const O = window.WebSocket;
 function P(url, protocols) {
   const ws = protocols === undefined ? new O(url) : new O(url, protocols);
   if (String(url).includes("/api/room")) {
     window.__g.ws = ws;
     ws.addEventListener("message", (e) => {
+      __rec(__peek(e.data, "in"));
       try {
         const m = JSON.parse(e.data);
         if (m.t === "welcome" && m.you) window.__g.you = m.you;
@@ -69,6 +87,8 @@ function P(url, protocols) {
         if (m.t === "error") window.__g.got.push(m.message);
       } catch {}
     });
+    const __send = ws.send.bind(ws);
+    ws.send = (d) => { __rec(__peek(d, "out")); return __send(d); };
   }
   return ws;
 }
@@ -221,5 +241,12 @@ while (Date.now() < until) {
     }
   }
 }
+const frames = await page.evaluate(() => window.__g.frames);
+const finalPeers = await page.evaluate(() => window.__g.peers);
+writeFileSync(OUT, JSON.stringify({ role: "host-grant", you, peers: finalPeers, frames }, null, 1));
+const census = {};
+for (const f of frames) census[`${f.dir} ${f.t}${f.kind ? ":" + f.kind : ""}`] = (census[`${f.dir} ${f.t}${f.kind ? ":" + f.kind : ""}`] || 0) + 1;
+console.log(`[grant] wrote ${OUT} — ${frames.length} frames`);
+for (const [k, v] of Object.entries(census).sort((a, b) => b[1] - a[1])) console.log(`    ${String(v).padStart(5)}  ${k}`);
 await browser.close();
 console.log("[grant] done.");

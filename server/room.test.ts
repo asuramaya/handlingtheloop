@@ -20,11 +20,21 @@ class FakeWs implements Ws {
     this.closed = true;
     this.closeCode = code;
   }
+  // ★ CLONE BOTH WAYS. Cloudflare's real serializeAttachment structured-clones the value with the
+  // hibernating socket, so a real deserializeAttachment hands back a FRESH COPY every call. Storing
+  // and returning the reference makes this double MORE FORGIVING THAN PRODUCTION — and that is the
+  // worse direction. FakeState's defect made a write that never happened look like it did: the test
+  // lied about the code, loudly, on our desk. This one would make a mutation REAL HIBERNATION
+  // DISCARDS look like it persisted: the test passes here and the code fails in production, on
+  // hibernation, which is the least reproducible condition in the system.
+  // LATENT, NOT LIVE when closed: room.ts serializes at exactly two sites (connect, and patch —
+  // which builds a fresh object via spread) and nothing mutates a deserialized attachment. Shut
+  // before anyone writes the mutation that would walk through it.
   serializeAttachment(v: unknown): void {
-    this.att = v;
+    this.att = structuredClone(v);
   }
   deserializeAttachment(): unknown {
-    return this.att;
+    return this.att === null || this.att === undefined ? this.att : structuredClone(this.att);
   }
   get a(): Attachment {
     return this.att as Attachment;

@@ -1214,6 +1214,9 @@ export class Deck {
         typeof requestIdleCallback !== "undefined" ? requestIdleCallback(() => r()) : setTimeout(r, 0),
       );
     const BUCKET = 256;
+    // Under one 60 Hz frame, so a build in progress can never be the reason a frame is dropped.
+    const SLICE_MS = 8;
+    let sliceStart = performance.now();
     const out = {} as Record<StemName, Pyramid>;
     for (const name of STEM_NAMES) {
       const b = stems[name];
@@ -1272,9 +1275,23 @@ export class Deck {
           lSum = mSum = hSum = 0;
           cnt = 0;
         }
-        if ((i & 0xfffff) === 0xfffff) {
+        // ★ YIELD ON ELAPSED TIME, NOT ON A SAMPLE COUNT. This used to break every 0x100000
+        // samples, which sounds frequent and is not: at 48 kHz it is ~22 SECONDS of audio in one
+        // uninterrupted pass, so a 4-minute stem yielded about eleven times and each stretch
+        // between yields was a long task in its own right. A sample count is a guess about how
+        // fast the machine is, and it is wrong in the direction that matters — the slower the
+        // device, the longer each fixed-size chunk blocks it, so the phones that can least afford
+        // the stall get the biggest one. Measured at 4x CPU with a real track: the song-load
+        // window blocked 3.1 s with a single 1195 ms frame.
+        //
+        // A clock adapts by itself: fast machines run long chunks and yield rarely, slow ones cut
+        // the chunk down until it fits. SLICE_MS is under a frame, so a build in flight cannot
+        // cost a dropped frame however slow the device is. The sample mask stays as the cheap
+        // gate — reading the clock 11 million times would cost more than the stall it prevents.
+        if ((i & 0xffff) === 0xffff && performance.now() - sliceStart > SLICE_MS) {
           await idle();
           if (job !== this.stemPyramidJob) return; // superseded by a newer track/stems
+          sliceStart = performance.now();
         }
       }
       for (let i = 0; i < count; i++) {
@@ -1285,6 +1302,7 @@ export class Deck {
       out[name] = buildLodPyramid(min, max, n, b.sampleRate, BUCKET, low, mid, high);
       await idle();
       if (job !== this.stemPyramidJob) return;
+      sliceStart = performance.now();
     }
     if (job === this.stemPyramidJob) {
       this.stemPyramids = out;

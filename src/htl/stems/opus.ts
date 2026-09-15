@@ -121,6 +121,24 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
   });
   dec.configure({ codec: "opus", sampleRate: sr, numberOfChannels: ch });
 
+  // ★ THIS RUNS ON THE MAIN THREAD, SO IT HAS TO GIVE IT BACK. Four stems are decoded on every
+  // song load, and both loops here — feeding packets in, and copying planes out — used to run
+  // start to finish without once yielding. Measured with scripts/phonelab/laglab.mjs at 4x CPU
+  // with a real track loading, decodeStemOpus was the largest single piece of app code on the
+  // path and the song-load window carried a 1.4-SECOND frame: one frozen picture, mid-set.
+  //
+  // Slicing on ELAPSED TIME rather than a packet or frame count is deliberate, for the reason
+  // buildStemPyramidsLazy spells out: a fixed count is a guess about machine speed that is wrong
+  // in the direction that hurts, because the slower the device the longer each fixed chunk blocks
+  // it. A clock cuts the chunk down until it fits, on whatever hardware is actually running.
+  //
+  // The real repair is to decode off the main thread entirely (thread 6472479a). This makes the
+  // stall divisible in the meantime, which is the difference between a board that pauses and a
+  // board that stutters — and only one of those loses you the mix.
+  const SLICE_MS = 8; // under a frame, so a decode in flight cannot itself drop one
+  const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+  let slice = performance.now();
+
   let p = 12;
   let ts = 0;
   while (p + 4 <= bytes.byteLength) {
@@ -130,6 +148,10 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
     dec.decode(new W.EncodedAudioChunk({ type: "key", timestamp: ts, data: new Uint8Array(bytes, p, len) }));
     p += len;
     ts += 20_000; // ordering only; real durations come from the decoded frames
+    if (performance.now() - slice > SLICE_MS) {
+      await breathe();
+      slice = performance.now();
+    }
   }
   await dec.flush();
   dec.close();
@@ -143,12 +165,17 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
   // all on the load path. A subarray is a view, not a copy: copyTo writes the plane where it
   // finally belongs, once. (copyTo requires the destination to be exactly plane-sized, which is
   // what the subarray bounds give it.)
+  slice = performance.now();
   for (let c = 0; c < ch; c++) {
     const dest = out.getChannelData(c);
     let o = 0;
     for (const d of frames) {
       d.copyTo(dest.subarray(o, o + d.numberOfFrames), { planeIndex: c, format: "f32-planar" });
       o += d.numberOfFrames;
+      if (performance.now() - slice > SLICE_MS) {
+        await breathe();
+        slice = performance.now();
+      }
     }
   }
   for (const d of frames) d.close();

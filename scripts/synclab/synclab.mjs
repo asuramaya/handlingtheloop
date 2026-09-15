@@ -59,7 +59,14 @@ window.__sync = { frames: [], console: [], sockets: [], tasks: [], t0: Date.now(
 // reusing t silently overwrote every frame type with a number, and the summary printed
 // 'out 419' instead of 'out intent:fxParam'. The wire format names the field first; the
 // harness works around it. (No backticks in here: this whole block is a template literal.)
-const rec = (o) => { o.at = Date.now(); o.ts = Math.round(performance.now()); window.__sync.frames.push(o); };
+// ★ PUSH EVERY RECORD OUT TO NODE AS IT HAPPENS. Keeping them in a page global loses the lot the
+// moment the document is swapped — and this app DOES swap it: joining strips the invite code from
+// the URL, which is a real navigation, and everything recorded before it dies with the old
+// document. A run then reports 'socket: NEVER OPENED' while the far side can see the device
+// connected, which is the worst kind of wrong: it looks like a finding about the app.
+// An exposed binding survives navigation, so the Node side accumulates and the page keeps nothing
+// it cannot afford to lose.
+const rec = (o) => { o.at = Date.now(); o.ts = Math.round(performance.now()); window.__sync.frames.push(o); try { window.__syncPush && window.__syncPush(o); } catch {} };
 const peek = (data) => {
   if (typeof data !== "string") return { t: "(binary)", bytes: data?.byteLength ?? 0 };
   try {
@@ -126,9 +133,10 @@ function PatchedWS(url, protocols) {
   const ws = protocols === undefined ? new OrigWS(url) : new OrigWS(url, protocols);
   const room = String(url).includes("/api/room");
   window.__sync.sockets.push({ url: String(url).slice(0, 120), room, event: "new", at: Date.now(), ts: Math.round(performance.now()) });
-  ws.addEventListener("open", () => window.__sync.sockets.push({ room, event: "open", at: Date.now(), ts: Math.round(performance.now()) }));
-  ws.addEventListener("close", (e) => window.__sync.sockets.push({ room, event: "close", code: e.code, at: Date.now(), ts: Math.round(performance.now()) }));
-  ws.addEventListener("error", () => window.__sync.sockets.push({ room, event: "error", at: Date.now(), ts: Math.round(performance.now()) }));
+  const sock = (o) => { window.__sync.sockets.push(o); try { window.__syncSock && window.__syncSock(o); } catch {} };
+  ws.addEventListener("open", () => sock({ room, event: "open", at: Date.now(), ts: Math.round(performance.now()) }));
+  ws.addEventListener("close", (e) => sock({ room, event: "close", code: e.code, at: Date.now(), ts: Math.round(performance.now()) }));
+  ws.addEventListener("error", () => sock({ room, event: "error", at: Date.now(), ts: Math.round(performance.now()) }));
   if (room) {
     ws.addEventListener("message", (e) => rec({ dir: "in", ...peek(e.data) }));
     const send = ws.send.bind(ws);
@@ -245,6 +253,53 @@ page.on("console", (m) => {
   const t = m.text();
   if (/\[htl\]/.test(t) || m.type() === "error") process.stderr.write(`  [${ROLE} ${m.type()}] ${t.slice(0, 200)}\n`);
 });
+// Accumulators on the NODE side — immune to the page's document being replaced.
+const allFrames = [];
+const allSockets = [];
+await page.exposeFunction("__syncPush", (o) => { allFrames.push(o); });
+await page.exposeFunction("__syncSock", (o) => { allSockets.push(o); });
+// ★ RECORD FROM PLAYWRIGHT'S OWN WEBSOCKET EVENTS, NOT BY PATCHING window.WebSocket.
+// The in-page patch worked for hours and then silently stopped catching the room socket — the app
+// opens it and the wrapper never sees it. Whatever the reason (a reference taken before the init
+// script, a bundling change), the failure mode is the one that matters: the capture reports
+// 'socket: NEVER OPENED' while the far side can see the device connected, which reads as a finding
+// about the app rather than about the instrument. Metron watched three of my devices join, be
+// approved and be granted, while my own files said no socket existed.
+// Playwright's events sit below the page entirely, so there is nothing in the document for a
+// navigation or a bundler to take away. Verified against this exact case before switching.
+const parseFrame = (payload, dir) => {
+  const at = Date.now();
+  if (typeof payload !== "string") return { dir, t: "(binary)", bytes: payload?.length ?? 0, at };
+  let m;
+  try { m = JSON.parse(payload); } catch { return { dir, t: "(unparsed)", bytes: payload.length, at }; }
+  const o = { dir, t: m.t, kind: m.intent?.kind, deck: m.intent?.deck ?? m.deck, param: m.intent?.param ?? m.intent?.fx, value: typeof m.intent?.value === "number" ? Math.round(m.intent.value * 1000) / 1000 : m.intent?.value, bytes: payload.length, at };
+  if (m.intent && typeof m.intent === "object") {
+    const parts = [];
+    for (const k of Object.keys(m.intent).sort()) {
+      const v = m.intent[k];
+      const ty = typeof v;
+      if (v === null || ty === "string" || ty === "number" || ty === "boolean") parts.push(k + "=" + (ty === "number" ? Math.round(v * 1000) / 1000 : String(v)));
+    }
+    o.sig = parts.join("|");
+  }
+  if (typeof m.seq === "number") o.seq = m.seq;
+  if (m.from) o.from = m.from;
+  if (Array.isArray(m.peers)) {
+    o.who = m.peers.map((x) => x?.name ?? x?.id ?? "?").slice(0, 8);
+    o.peers = m.peers.map((x) => ({ id: x?.id, name: x?.name, joined: x?.joined, controlling: x?.controlling, decks: x?.decks }));
+  }
+  if (m.you) o.you = m.you;
+  return o;
+};
+page.on("websocket", (ws) => {
+  const isRoom = ws.url().includes("/api/room");
+  allSockets.push({ room: isRoom, event: "open", at: Date.now(), url: ws.url().slice(0, 120) });
+  if (!isRoom) return;
+  ws.on("framesent", (f) => allFrames.push(parseFrame(f.payload, "out")));
+  ws.on("framereceived", (f) => allFrames.push(parseFrame(f.payload, "in")));
+  ws.on("close", () => allSockets.push({ room: true, event: "close", at: Date.now() }));
+  ws.on("socketerror", () => allSockets.push({ room: true, event: "error", at: Date.now() }));
+});
 await page.addInitScript(RECORDER);
 if (ENGAGE) {
   await page.addInitScript(`try { localStorage.setItem("htl_room_engage", JSON.stringify({ joined: true, control: ${CONTROL}, listen: true, ts: Date.now() })); } catch {}`);
@@ -292,12 +347,20 @@ if (has("drive")) {
   let peers = [];
   let others = [];
   for (let i = 0; i < 40; i++) {
-    const snap = await page.evaluate(() => {
+    const snapNode = (() => {
+      const id = allFrames.find((x) => x.you)?.you ?? null;
+      const f = [...allFrames].reverse().find((x) => x.peers);
+      if (!f || !id) return null;
+      const mine = f.peers.find((p) => p.id === id);
+      return { peers: f.peers, you: id, myName: mine?.name ?? null };
+    })();
+    const snap = snapNode ?? await page.evaluate(() => {
       // ★ `you` RIDES ONLY ON welcome; `peers` RIDES ON welcome AND EVERY presence. Requiring both
       // on one frame pins you to the welcome forever — the single moment when a guest is still
       // PENDING and ungranted. The gate then waits 120 s for a grant it has already been told
       // arrived, and aborts on a stale row. Take the identity from welcome and the state from the
       // LATEST presence.
+      if (!window.__sync) return null;
       const id = window.__sync.frames.find((x) => x.you)?.you ?? null;
       const f = [...window.__sync.frames].reverse().find((x) => x.peers);
       if (!f || !id) return null;
@@ -317,7 +380,8 @@ if (has("drive")) {
   const bail = async (code, ...lines) => {
     for (const l of lines) console.error(l);
     try {
-      const partial = await page.evaluate(() => ({ ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href, aborted: true }));
+      const partialPage = await page.evaluate(() => (window.__sync ? { ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href, aborted: true } : { frames: [], sockets: [], tasks: [], gestures: [], url: location.href, aborted: true, lostRecorder: true }));
+      const partial = { ...partialPage, frames: allFrames.length ? allFrames : partialPage.frames, sockets: allSockets.length ? allSockets : partialPage.sockets };
       writeFileSync(OUT, JSON.stringify(partial, null, 1));
       console.error(`[${ROLE}] capture kept at ${OUT} (aborted run — the frames say why)`);
     } catch { /* the page may already be gone; the message above is still the point */ }
@@ -345,7 +409,14 @@ if (has("drive")) {
   // exists to delete.
   let me = null;
   for (let i = 0; i < 120; i++) {
-    me = await page.evaluate(() => {
+    const meNode = (() => {
+      const id = allFrames.find((x) => x.you)?.you ?? null;
+      const f = [...allFrames].reverse().find((x) => x.peers);
+      if (!f || !id) return null;
+      return f.peers.find((p) => p.id === id) ?? null;
+    })();
+    me = meNode ?? await page.evaluate(() => {
+      if (!window.__sync) return null;
       const id = window.__sync.frames.find((x) => x.you)?.you ?? null;
       const f = [...window.__sync.frames].reverse().find((x) => x.peers);
       if (!f || !id) return null;
@@ -364,9 +435,9 @@ if (has("drive")) {
     );
   }
   console.log(`[${ROLE}] gate passed — roster ${JSON.stringify(peers)} · other account(s): ${JSON.stringify(others.map((o) => o.name))}${me ? ` · me: controlling=${me.controlling} decks=${me.decks ?? ""}` : ""}`);
-  await page.evaluate(() => { window.__sync.gestures = []; });
+  await page.evaluate(() => { if (window.__sync) window.__sync.gestures = []; });
   for (const g of GESTURES) {
-    await page.evaluate((id) => window.__sync.gestures.push({ id, at: Date.now(), ts: Math.round(performance.now()) }), g.id);
+    await page.evaluate((id) => { if (window.__sync) window.__sync.gestures.push({ id, at: Date.now(), ts: Math.round(performance.now()) }); }, g.id);
     if (g.shift) await page.keyboard.down("Shift");
     await page.keyboard.press(g.key);
     if (g.shift) await page.keyboard.up("Shift");
@@ -378,7 +449,10 @@ if (has("drive")) {
   await sleep(HOLD * 1000);
 }
 
-const data = await page.evaluate(() => ({ ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href }));
+const pageData = await page.evaluate(() => (window.__sync ? { ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href } : { frames: [], sockets: [], tasks: [], gestures: [], url: location.href, lostRecorder: true }));
+// The Node accumulation is authoritative; the page copy is a fallback for anything recorded
+// before the binding existed.
+const data = { ...pageData, frames: allFrames.length ? allFrames : pageData.frames, sockets: allSockets.length ? allSockets : pageData.sockets };
 writeFileSync(OUT, JSON.stringify(data, null, 1));
 const room = data.sockets.filter((s) => s.room);
 console.log(`[${ROLE}] wrote ${OUT} — ${data.frames.length} room frames, ${room.length} socket events, ${data.tasks.length} long tasks`);

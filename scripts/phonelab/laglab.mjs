@@ -53,6 +53,14 @@ const URL_ = arg("url", "https://handlingtheloop.com/");
 const CPU = +arg("cpu", 4);
 const JSON_ONLY = has("json");
 const PROFILE = has("profile"); // also run the JS sampling profiler and name the hot functions
+// ★ MEASURE THE BOARD IN THE STATE THE BUG IS REPORTED FROM. The first version of this harness
+// measured an IDLE board — nothing playing, no effect engaged — and then drew conclusions about a
+// working one. The app seeds two community tracks at boot, so a track loads either way, but a
+// SILENT deck runs none of the per-frame meter/playhead/waveform work that a playing one does,
+// and an un-thrown effect runs no wet path at all. --play waits for a real track, starts it, and
+// throws an FX pad, so the gesture windows below are recorded against a board that is doing its
+// actual job.
+const PLAY = has("play");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The recorder. Installed BEFORE the app's own scripts run, so nothing in the boot path is
@@ -85,9 +93,18 @@ if (CPU > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: CPU });
 // The sampling profiler NAMES the blocking work. A long-task window tells you WHEN the main
 // thread stalled; only a profile tells you WHAT was on it — and against a minified bundle the
 // names are mangled, so point --profile at a dev server (unminified) to get real ones.
+let pageT0 = 0; // the page's performance.now() read immediately after the profiler started
 if (PROFILE) { await cdp.send("Profiler.enable"); await cdp.send("Profiler.setSamplingInterval", { interval: 200 }); await cdp.send("Profiler.start"); }
 
 await page.goto(URL_, { waitUntil: "domcontentloaded" });
+// ★ THE TWO CLOCKS ARE NOT THE SAME CLOCK. Long-task entries are timed on the page's performance
+// timeline (origin = navigation); the CDP profiler stamps its samples on V8's own monotonic clock
+// with an unrelated epoch. Correlating them without saying so produces an empty intersection and
+// the confident conclusion that nothing was running during a 1.8-second freeze. Take one reading
+// of each, back to back, and every later sample maps across by the difference.
+if (PROFILE) {
+  pageT0 = await page.evaluate(() => performance.now());
+}
 await page.evaluate(`window.__lag.mark("boot")`);
 await sleep(4000);
 
@@ -112,6 +129,48 @@ async function gesture(name, body, settle = 1400) {
 }
 
 await gesture("idle-baseline", async () => {}, 2500);
+
+if (PLAY) {
+  // Wait for the seeded track to be REALLY there, rather than sleeping a guessed interval: the
+  // stem rows only exist once the decode + stem pack has landed, so they are the honest signal.
+  await gesture("await-track", async () => {
+    for (let i = 0; i < 60; i++) {
+      const ready = await page.evaluate(() => {
+        const t = document.body.innerText;
+        return t.includes("DRUM") && !t.includes("0:00 / 0:00");
+      });
+      if (ready) return;
+      await sleep(500);
+    }
+  }, 500);
+
+  await gesture("play", async () => {
+    await page.keyboard.press("Space");
+  }, 2500);
+
+  // An FX PAD THROW — the gesture the operator called "fx application". Pad mode goes to FX, then
+  // a pad is held, which is what actually engages a device's wet path.
+  await gesture("fx-pad-throw", async () => {
+    await page.evaluate(`(() => {
+      const bank = document.querySelector('.bank.focused') || document.querySelector('.bank');
+      const mode = bank && [...bank.querySelectorAll('.pad-mode button, .pad-mode *')].find((e) => /^FX/.test((e.textContent || '').trim()));
+      if (mode) mode.click();
+    })()`);
+    await sleep(400);
+    const box = await page.evaluate(`(() => {
+      const bank = document.querySelector('.bank.focused') || document.querySelector('.bank');
+      const pad = bank && bank.querySelector('.pad');
+      if (!pad) return null;
+      const r = pad.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    if (!box) return;
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.down();
+    await sleep(1500); // held — the wet path is live for this whole window
+    await page.mouse.up();
+  }, 1500);
+}
 
 for (const want of tabNames) {
   await gesture(`tab:${want}`, async () => {
@@ -194,6 +253,37 @@ if (profile) {
     .filter((r) => r.ms >= 5)
     .sort((a, b) => b.ms - a.ms)
     .slice(0, 18);
+  // ★ THE WORST TASK, BY NAME. A whole-run table ranks by TOTAL cost, which is a different
+  // question from "what froze the picture" — a function called constantly for 2 ms can outrank the
+  // one that blocked for a second and a half, and the single long freeze is the one a person
+  // actually feels. This slices the samples to the worst long task's own time range and reports
+  // who was on the thread during it. It is the difference between "the decode is expensive" and
+  // "THIS is the 1.6 s frame".
+  const worst = raw.tasks.reduce((a, b) => (b.d > (a?.d ?? 0) ? b : a), null);
+  if (worst) {
+    const t0 = worst.t;
+    const t1 = worst.t + worst.d;
+    // profile.startTime is in microseconds on the same clock as the entries' milliseconds.
+    // profile.startTime is on V8's clock; pageT0 was read on the page's, immediately after the
+    // profiler started. Anchor the sample walk at pageT0 and advance it by the deltas, which are
+    // plain elapsed microseconds and so are clock-agnostic.
+    let at = pageT0;
+    const inTask = new Map();
+    profile.samples.forEach((id, i) => {
+      at += (profile.timeDeltas[i] ?? 0) / 1000;
+      if (at >= t0 && at <= t1) inTask.set(id, (inTask.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0) / 1000);
+    });
+    const win = windows.find((w) => t0 >= w.from && t0 < w.to);
+    console.log(`\n  ⚠ the single worst task: ${worst.d.toFixed(0)} ms, in window "${win?.name ?? "?"}" — who was on the thread`);
+    const rowsW = [...inTask.entries()]
+      .map(([id, ms]) => { const n = byId.get(id); const f = n?.callFrame ?? {}; return { ms, name: f.functionName || "(anonymous)", where: `${(f.url || "").split("/").pop()}:${(f.lineNumber ?? 0) + 1}` }; })
+      .filter((r) => r.ms >= 2)
+      .sort((a, b) => b.ms - a.ms)
+      .slice(0, 8);
+    if (rowsW.length === 0) console.log("     (no samples landed inside it — raise --profile's sampling rate)");
+    for (const r of rowsW) console.log(`  ${r.ms.toFixed(0).padStart(6)}   ${r.name.slice(0, 36).padEnd(36)}  ${r.where}`);
+  }
+
   console.log("\n  on the main thread (self time, whole run)");
   console.log("     ms     %   function                                where");
   for (const r of rowsP) console.log(`  ${r.ms.toFixed(0).padStart(6)}  ${((r.ms / total) * 100).toFixed(1).padStart(4)}   ${r.name.slice(0, 36).padEnd(36)}  ${r.where}`);

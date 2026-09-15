@@ -213,6 +213,24 @@ if (JOINERS > 0) {
     console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames} (${(r.lyricsBytes / 1024).toFixed(1)} KB) · other ${((r.bytes - r.stemBytes - r.lyricsBytes) / 1024).toFixed(1)} KB`);
   }
 
+  // ★ THE BASELINE MUST ACTUALLY BE EMPTY, AND NOTHING USED TO CHECK IT. Room state PERSISTS:
+  // lastStemView survives in DO storage across runs, so a reused handle hands the "baseline"
+  // joiner leftover stemview from a previous run. Deckard walked into exactly this — a baseline of
+  // 57.9 KB/joiner, ratio 0.96, control ABORT — and the abort looked identical to a working bound.
+  // That is the failure mode this control exists to prevent, reappearing inside the control: a
+  // condition-dependent verdict that cannot tell "the bound works" from "my baseline was dirty",
+  // and which could equally MASK a real regression.
+  // So the assumption is now asserted rather than assumed.
+  const baselineStem = results.empty.reduce((n, r) => n + r.stemBytes, 0);
+  if (baselineStem > 0) {
+    console.error(`\n  ABORT — the baseline room is NOT empty: ${(baselineStem / 1024).toFixed(1)} KB of stemview reached baseline joiners.`);
+    console.error(`  lastStemView persists in DO storage across runs, so this handle carries leftovers and the fat/empty ratio is uninterpretable in BOTH directions.`);
+    console.error(`  Use a fresh host handle, or clear the room's stemviews, and re-run.`);
+    writeFileSync(OUT, JSON.stringify({ mode: "join-storm", handle: HANDLE, fatBytes: FAT, results, aborted: "dirty-baseline" }, null, 1));
+    await browser.close();
+    process.exit(6);
+  }
+
   if (FAT > 0) {
     // Park a SYNTHETIC stemview in lastStemView. Sent as a normal stemview from the controlling
     // host, so it goes through the real size/rate gate rather than around it.

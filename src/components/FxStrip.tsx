@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject }
 import { usePhone } from "../htl/state/usePhone";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
-import { MIC_CHAIN } from "@htl/audio";
+import { MIC_CHAIN, chainWaitingForStems } from "@htl/audio";
 import { saveFxPreset, renameFxPreset, factoryFxPresets, loadFxPresets, loadFxBank } from "@htl/audio";
 import { saveChainPreset, renameChainPreset, factoryChainPresets, type ChainPreset } from "@htl/audio";
 import { EqCurve } from "./EqCurve";
@@ -1083,7 +1083,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 if (c.master) return; // the master is pinned to the signal; it does not reorder
                 cd.onPointerDown(e);
               }}
-              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.name === "AUTO" ? "auto" : ""} ${c.name === MIC_CHAIN ? "mic" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.name !== MIC_CHAIN && c.stems === 0 ? "deaf" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
+              className={`fx-group ${open ? "open" : ""} ${c.master ? "master" : ""} ${c.name === "AUTO" ? "auto" : ""} ${c.name === MIC_CHAIN ? "mic" : ""} ${c.id === chain?.id ? "sel" : ""} ${!c.master && c.name !== MIC_CHAIN && c.stems === 0 ? "deaf" : ""} ${chainWaitingForStems(c, deck.hasStems) ? "waiting-stems" : ""} ${chainDrag.from === ci ? "is-dragging" : ""} ${chainDrag.at === ci ? "drop-before" : ""} ${chainDrag.at === ci + 1 ? "drop-after" : ""} ${tabDrag.onto === c.id ? "drop-in" : ""}`}
             >
               <button
                 className="fx-chain"
@@ -1094,7 +1094,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     ? "The auto-DJ routes a stem through this chain during a transition, then releases it. Yours to build: put a reverb or a delay in it and dial it however you like — AUTO never changes what is in here. Delete it and the auto-DJ mixes without a tail."
                     : c.master
                       ? `${c.name}: the master channel, every chain sums here · right-click for presets`
-                      : `${chainTitle(c)} · drag to reorder · right-click for stems and presets`
+                      : chainWaitingForStems(c, deck.hasStems)
+                        ? `${chainTitle(c)} — WAITING FOR STEMS. This chain is built and hearing nothing: this track has not been separated, so there is no vocal/drum/bass/inst signal to route into it and the deck is playing the whole track straight past it. Separate the track and the chain starts working exactly as configured — nothing in here needs changing.`
+                        : `${chainTitle(c)} · drag to reorder · right-click for stems and presets`
                 }
                 onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (!chainLong.fired.current) setSelChainId(c.id); }}
                 {...chainLong.bind(c.id)}
@@ -1105,6 +1107,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     there is nothing to preview — four dead letters on every chip is noise that
                     looks like state. Same rule as the picker in the menu: absent, not dimmed.
                     The master takes no stems at all: it takes the SUM, after them. */}
+                {/* ★ THE SLOT MUST NOT GO BLANK WHEN THE CHAIN IS INERT. Hiding the stem letters with
+                    nothing separated is right on its own terms — four dead letters is noise that
+                    looks like state — but it emptied the one surface that could explain a chain which
+                    is configured, holding devices, and hearing silence. The absence of information
+                    coincided exactly with the state needing explanation, which is how "chain 1 add
+                    reverb, apply to vocals, nothing going through the chain" reads as a broken route
+                    rather than an unseparated track. So WAIT goes in that same slot. */}
+                {chainWaitingForStems(c, deck.hasStems) && <span className="fx-chain-wait">WAIT</span>}
                 {!c.master && c.name !== MIC_CHAIN && deck.hasStems && (
                   <span className="fx-chain-src">
                     {chainInitials(c).map((x) => (

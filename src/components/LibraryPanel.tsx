@@ -116,18 +116,27 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   // remembered across reloads. One JSON blob holds all three so the right tab reopens.
   // A persisted playlist that no longer exists falls back to Collection.
   //
-  // ★ THE PANEL'S MEMORY IS SPREAD OVER FOUR KEYS, and this is the roster, because a reader who
+  // ★ THE PANEL'S MEMORY IS SPREAD OVER FIVE KEYS, and this is the roster, because a reader who
   // finds one of them has no way to learn the others exist — a grep for `Store<` finds NONE of
   // them (they are direct localStorage) and a grep for a guessed key name finds only itself.
   //   htl:libView      here          — the open tab { view, search, sync }
   //   htl:libNav       below         — sidebar open/closed
   //   htl:libSections  below         — which sidebar sections are expanded
+  //   htl:wizardSeen   below         — the first-run wizard has been shown
   //   htl:tt:<list>    TrackTable    — per-LIST find-controls: filter, sort, cache/stem
   //                                    narrowing, scroll position (see lib/trackTableState.ts)
-  // They are deliberately separate rather than one blob: the first three are PANEL scope and
+  // They are deliberately separate rather than one blob: the first four are PANEL scope and
   // single-valued, the last is per-list and there is one per collection/community/playlist, which
   // a panel-level blob cannot hold without inventing nesting. They describe disjoint state, so
-  // they cannot contradict each other — but only if the next person knows all four are here.
+  // they cannot contradict each other — but only if the next person knows all five are here.
+  //
+  // ★ AND THIS ROSTER IS CHECKED, not trusted: lib/libraryKeys.test.ts reads this file as text and
+  // asserts the keys that exist and the keys listed here are the same set, in both directions. It
+  // is here because a roster is a CLOSED-WORLD CLAIM — the one sentence shape that tells a reader
+  // to stop looking, and therefore the one that fails silently when it rots. It earned itself
+  // immediately: this comment originally said FOUR and omitted htl:wizardSeen, which was in the
+  // file the whole time. Add a key, add it there, or the suite fails instead of the map quietly
+  // going false.
   const persistedView = useMemo(() => {
     try {
       return JSON.parse(localStorage.getItem("htl:libView") || "null") as

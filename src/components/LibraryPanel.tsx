@@ -115,6 +115,19 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   // The open library tab (Collection / Community / a playlist / Search / Sync) is
   // remembered across reloads. One JSON blob holds all three so the right tab reopens.
   // A persisted playlist that no longer exists falls back to Collection.
+  //
+  // ★ THE PANEL'S MEMORY IS SPREAD OVER FOUR KEYS, and this is the roster, because a reader who
+  // finds one of them has no way to learn the others exist — a grep for `Store<` finds NONE of
+  // them (they are direct localStorage) and a grep for a guessed key name finds only itself.
+  //   htl:libView      here          — the open tab { view, search, sync }
+  //   htl:libNav       below         — sidebar open/closed
+  //   htl:libSections  below         — which sidebar sections are expanded
+  //   htl:tt:<list>    TrackTable    — per-LIST find-controls: filter, sort, cache/stem
+  //                                    narrowing, scroll position (see lib/trackTableState.ts)
+  // They are deliberately separate rather than one blob: the first three are PANEL scope and
+  // single-valued, the last is per-list and there is one per collection/community/playlist, which
+  // a panel-level blob cannot hold without inventing nesting. They describe disjoint state, so
+  // they cannot contradict each other — but only if the next person knows all four are here.
   const persistedView = useMemo(() => {
     try {
       return JSON.parse(localStorage.getItem("htl:libView") || "null") as

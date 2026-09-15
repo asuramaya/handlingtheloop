@@ -184,9 +184,22 @@ async function joinOnce(label) {
   const fr = await pg.evaluate(() => window.__l.frames);
   await ctx.close();
   const bytes = fr.reduce((n, f) => n + (f.bytes || 0), 0);
-  const stem = fr.filter((f) => f.t === "stemview");
-  const lyr = fr.filter((f) => f.t === "lyrics");
-  return { label, frames: fr.length, bytes, stemFrames: stem.length, stemBytes: stem.reduce((n, f) => n + (f.bytes || 0), 0), lyricsFrames: lyr.length };
+  // BREAK OUT BYTES PER FRAME TYPE, not just counts. The first version recorded stemBytes and only
+  // a lyrics COUNT, so when Deckard asked what lyrics actually cost a joiner the capture could not
+  // say — the ~15 KB remainder blended lyrics with state, automix, welcome and presence. A count
+  // is not a cost, and lyrics are the one payload with NO client-side clamp (stemview's bucket
+  // count is capped at 4500/stem in Deck.ts, lyrics are bounded nowhere), so it is exactly the
+  // field worth keeping.
+  const byType = {};
+  for (const f of fr) {
+    const k = f.t || "?";
+    byType[k] = byType[k] || { n: 0, b: 0 };
+    byType[k].n++;
+    byType[k].b += f.bytes || 0;
+  }
+  const stem = byType.stemview || { n: 0, b: 0 };
+  const lyr = byType.lyrics || { n: 0, b: 0 };
+  return { label, frames: fr.length, bytes, byType, stemFrames: stem.n, stemBytes: stem.b, lyricsFrames: lyr.n, lyricsBytes: lyr.b };
 }
 
 if (JOINERS > 0) {
@@ -197,7 +210,7 @@ if (JOINERS > 0) {
     const r = await joinOnce(`empty#${i + 1}`);
     if (!r) { console.error("[listenlab] ABORT — a baseline listener socket never opened."); await browser.close(); process.exit(3); }
     results.empty.push(r);
-    console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames}`);
+    console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames} (${(r.lyricsBytes / 1024).toFixed(1)} KB) · other ${((r.bytes - r.stemBytes - r.lyricsBytes) / 1024).toFixed(1)} KB`);
   }
 
   if (FAT > 0) {
@@ -217,7 +230,7 @@ if (JOINERS > 0) {
       const r = await joinOnce(`fat#${i + 1}`);
       if (!r) { console.error("[listenlab] ABORT — a fat-case listener socket never opened."); await browser.close(); process.exit(3); }
       results.fat.push(r);
-      console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames}`);
+      console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames} (${(r.lyricsBytes / 1024).toFixed(1)} KB) · other ${((r.bytes - r.stemBytes - r.lyricsBytes) / 1024).toFixed(1)} KB`);
     }
   }
 

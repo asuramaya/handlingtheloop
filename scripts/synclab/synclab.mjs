@@ -76,7 +76,15 @@ const peek = (data) => {
       // guessed first and all of which read back undefined. The guessed version could not tell a
       // shared room from two isolated ones, and said so only because the no-jam CONTROL produced
       // an identical result to the jam. Read the wire type, do not guess at it.
-      if (Array.isArray(m.peers)) o.who = m.peers.map((x) => x?.name ?? x?.id ?? "?").slice(0, 8);
+      if (Array.isArray(m.peers)) {
+        o.who = m.peers.map((x) => x?.name ?? x?.id ?? "?").slice(0, 8);
+        // ★ KEEP THE FLAGS, NOT JUST THE NAMES. Collapsing peers to names reads nicely and threw
+        // away the two fields that decide whether a drive can work at all: the device id (a grant
+        // addresses an id, not a name) and controlling/decks (permission). Without them a gate can
+        // only prove someone is PRESENT, and presence is not permission.
+        o.peers = m.peers.map((x) => ({ id: x?.id, name: x?.name, joined: x?.joined, controlling: x?.controlling, decks: x?.decks }));
+      }
+      if (m.you) o.you = m.you;
       if (typeof m.listeners === "number") o.listeners = m.listeners;
       if (m.you) o.you = m.you;
       if (m.anchorId !== undefined) o.anchor = m.anchorId;
@@ -222,12 +230,43 @@ if (has("drive")) {
     if (peers.length >= 2) break;
     await sleep(1000);
   }
-  if (peers.length < 2) {
-    console.error(`[${ROLE}] ABORT — only ${peers.length} peer(s) in the room (${JSON.stringify(peers)}). The far side is not here, so nothing measured now would mean anything.`);
+  // ★ AN ABORT MUST KEEP ITS EVIDENCE. The first version exited before writing the capture, so the
+  // one run that most needed explaining — the one that refused to measure — left nothing to explain
+  // it with. The gate's whole job is to say WHY, and the why is in the frames.
+  const bail = async (code, ...lines) => {
+    for (const l of lines) console.error(l);
+    try {
+      const partial = await page.evaluate(() => ({ ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href, aborted: true }));
+      writeFileSync(OUT, JSON.stringify(partial, null, 1));
+      console.error(`[${ROLE}] capture kept at ${OUT} (aborted run — the frames say why)`);
+    } catch { /* the page may already be gone; the message above is still the point */ }
     await browser.close();
-    process.exit(3);
+    process.exit(code);
+  };
+
+  if (peers.length < 2) {
+    await bail(3, `[${ROLE}] ABORT — only ${peers.length} peer(s) in the room (${JSON.stringify(peers)}). The far side is not here, so nothing measured now would mean anything.`);
   }
-  console.log(`[${ROLE}] gate passed — peers: ${JSON.stringify(peers)}`);
+  // ★ PRESENCE IS NOT PERMISSION, AND THE FIRST VERSION OF THIS GATE CONFLATED THEM. It proved a
+  // second peer was in the room and let that imply this side could speak. An ungranted guest drives
+  // NOTHING — the client refuses before the wire (App.tsx:2332), so eight gestures emit zero
+  // intents and the run looks like a total sync failure instead of a permission state. A gate that
+  // checks the easy precondition and stays silent on the hard one is worse than no gate, because it
+  // reads as a pass. Name which precondition failed.
+  const me = await page.evaluate(() => {
+    const f = [...window.__sync.frames].reverse().find((x) => x.peers && x.you);
+    if (!f) return null;
+    return f.peers.find((p) => p.id === f.you) ?? null;
+  });
+  if (me && me.controlling === false) {
+    await bail(
+      4,
+      `[${ROLE}] ABORT — this device is in the room but has NOT been granted the decks (controlling=false, decks="${me.decks ?? ""}").`,
+      `[${ROLE}]   An ungranted guest emits no intents at all, so a run now would record a total sync failure that is really a permission state.`,
+      `[${ROLE}]   The HOST must send {t:"grant", to:"${me.id}", on:true} first.`,
+    );
+  }
+  console.log(`[${ROLE}] gate passed — peers: ${JSON.stringify(peers)}${me ? ` · me: controlling=${me.controlling} decks=${me.decks ?? ""}` : ""}`);
   await page.evaluate(() => { window.__sync.gestures = []; });
   for (const g of GESTURES) {
     await page.evaluate((id) => window.__sync.gestures.push({ id, at: Date.now(), ts: Math.round(performance.now()) }), g.id);

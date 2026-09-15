@@ -250,4 +250,25 @@ console.log(`[${ROLE}] socket: ${room.map((s) => s.event).join(" → ") || "NEVE
 const kinds = {};
 for (const f of data.frames) { const k = `${f.dir} ${f.t}${f.kind ? ":" + f.kind : ""}`; kinds[k] = (kinds[k] ?? 0) + 1; }
 for (const [k, n] of Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 14)) console.log(`   ${String(n).padStart(5)}  ${k}`);
+
+// ── receive-side health ───────────────────────────────────────────────────────────────────────
+// Two questions a per-side log can answer ALONE, without the other side's file, and both matter to
+// "is the live session smooth": does the inbound tick stream arrive evenly, and does anything block
+// the main thread WHILE it is arriving.
+const peersSeen = data.frames.filter((f) => f.who).map((f) => f.who);
+if (peersSeen.length) console.log(`   peers: ${JSON.stringify(peersSeen[0])} → ${JSON.stringify(peersSeen.at(-1))}`);
+const ticks = data.frames.filter((f) => f.t === "tick" && f.dir === "in").map((f) => f.at);
+if (ticks.length > 8) {
+  const gaps = ticks.slice(1).map((t, i) => t - ticks[i]).sort((a, b) => a - b);
+  const q = (p) => gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * p))];
+  const stalled = gaps.filter((g) => g > 1000).length;
+  console.log(`   inbound ticks: ${ticks.length} over ${Math.round((ticks.at(-1) - ticks[0]) / 1000)}s — cadence median ${q(0.5)} ms · p95 ${q(0.95)} ms · worst ${gaps.at(-1)} ms · gaps>1s: ${stalled}`);
+  // ★ WHERE a block happened decides what it MEANS. Twelve long tasks on a receiving client reads
+  // as "live sync stalls the far side" — until you place them on the timeline and every one lands
+  // in the first 22 seconds, before the stream even starts. Boot cost and sync cost are different
+  // problems with different owners, and a count alone cannot tell them apart.
+  const during = data.tasks.filter((t) => t.at >= ticks[0]);
+  const boot = data.tasks.length - during.length;
+  console.log(`   long tasks: ${boot} during BOOT, ${during.length} during the STREAM${during.length ? ` (worst ${Math.max(...during.map((t) => t.d))} ms)` : " — the stream itself blocked nothing"}`);
+}
 await browser.close();

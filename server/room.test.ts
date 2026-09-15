@@ -51,7 +51,15 @@ class FakeState implements DurableObjectState {
   store = new Map<string, unknown>();
   alarmAt: number | null = null;
   storage = {
-    get: async <T>(k: string) => this.store.get(k) as T | undefined,
+    // Clone on GET as well as PUT. Real storage DESERIALISES, so a caller can never receive the
+    // object the store holds. Returning the reference leaves a read-modify-write (schedulePresenceOffline:
+    // get -> pending[acct] = ... -> put) mutating the STORE ITSELF before its put runs — and if such
+    // a path ever failed to put, the store would still show the change, which is the same "a write
+    // that never happened looks like it did" defect the put fix closed from the other side.
+    get: async <T>(k: string) => {
+      const v = this.store.get(k);
+      return (v === undefined ? undefined : structuredClone(v)) as T | undefined;
+    },
     // ★ CLONE ON PUT, as real storage does by serialising. Storing the reference let a later
     // mutation of the same in-memory object retroactively change what was "persisted" — so a test
     // asserting that both decks reached disk PASSED against code that wrote only one. The fake was

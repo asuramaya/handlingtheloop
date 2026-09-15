@@ -136,13 +136,18 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
 
   const totalFrames = frames.reduce((a, d) => a + d.numberOfFrames, 0);
   const out = ctx.createBuffer(ch, Math.max(1, totalFrames), sr);
+  // ★ COPY STRAIGHT INTO THE DESTINATION, not via a scratch array per frame. Opus decodes in
+  // small frames, so a 4-minute stem is on the order of 12,000 of them — and the old shape
+  // allocated a Float32Array and made a SECOND copy for every one of them, per channel. That is
+  // ~24,000 short-lived allocations per stem and four stems per track, all on the main thread,
+  // all on the load path. A subarray is a view, not a copy: copyTo writes the plane where it
+  // finally belongs, once. (copyTo requires the destination to be exactly plane-sized, which is
+  // what the subarray bounds give it.)
   for (let c = 0; c < ch; c++) {
     const dest = out.getChannelData(c);
     let o = 0;
     for (const d of frames) {
-      const tmp = new Float32Array(d.numberOfFrames);
-      d.copyTo(tmp, { planeIndex: c, format: "f32-planar" });
-      dest.set(tmp, o);
+      d.copyTo(dest.subarray(o, o + d.numberOfFrames), { planeIndex: c, format: "f32-planar" });
       o += d.numberOfFrames;
     }
   }

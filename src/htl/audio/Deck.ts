@@ -2,6 +2,7 @@ import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analy
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
+import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
@@ -928,7 +929,8 @@ export class Deck {
     if (!py) return null;
     const stems = {} as Record<StemName, { min: string; max: string }>;
     const bands = {} as Record<StemName, { low: string; mid: string; high: string }>;
-    const BAND_BUCKETS = 768; // coarse band resolution shipped over the wire
+    // BAND_BUCKETS and MAX_BUCKETS now live in stemViewBudget.ts, because the SERVER derives its
+    // wire bound from them — the ceiling is a shared invariant and belongs to neither side alone.
     let bucket = 256;
     let length = 0;
     let sampleRate = this.ctx.sampleRate;
@@ -942,7 +944,7 @@ export class Deck {
       // coarsened further once a long track would blow past ~4500 buckets. The byte
       // ceiling stays bounded for the 4-deck payload; oversized still rides in-memory only
       // (the DO 128 KiB cap — see server/room.ts), it just won't persist.
-      const minBucket = Math.max(1024, Math.ceil(p.length / 4500));
+      const minBucket = Math.max(1024, Math.ceil(p.length / MAX_BUCKETS));
       const lvl = p.levels.find((l) => l.bucket >= minBucket) ?? p.levels[p.levels.length - 1];
       bucket = lvl.bucket;
       stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };

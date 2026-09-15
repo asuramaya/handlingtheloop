@@ -14,6 +14,7 @@
 import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
 import { canDriveIntent } from "../src/htl/room/protocol";
 import { digestKey } from "../src/htl/room/digestKey";
+import { MAX_STEMVIEW_BYTES } from "../src/htl/audio/stemViewBudget";
 import {
   type Attachment,
   type Ws,
@@ -147,6 +148,10 @@ export class DjRoom {
   private static LYRICS_FLUSH_MS = 400;
   private lyricsPending = new Map<string, { msg: ServerMsg; from: string }>();
   private lyricsTimer: ReturnType<typeof setTimeout> | null = null;
+  // Ordinary hygiene, not cover for a designed-in divergence: a dropped envelope means remote
+  // waveforms go absent, and that should be a readable fact rather than something only a
+  // byte-level capture could reveal.
+  private stemViewDropped = 0;
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
   // The crowd→DJ side-channels (reactions/hype + song requests) — self-contained units that
@@ -716,7 +721,20 @@ export class DjRoom {
           const now = Date.now();
           const rk = `${self}:${msg.deck}`;
           const tooSoon = now - (this.stemViewRate[rk] ?? 0) < 2000;
-          if (size <= 400_000 && !tooSoon) {
+          // ★ ONE THRESHOLD, DERIVED, GOVERNING RELAY AND CACHE TOGETHER. This was a hand-written
+          // 400_000 — a number encoding something the CLIENT owns (how big an envelope
+          // extractStemView can produce, set by its bucket clamp). MAX_STEMVIEW_BYTES derives that
+          // from the clamp itself, so the two cannot drift.
+          // It governs BOTH because the same `if` admits to lastStemView, and lastStemView is
+          // replayed by sendCatchUp to every arrival forever with no rate limit — so one frame
+          // passing this gate once sets a per-arrival tax on everyone after it. Splitting the
+          // threshold (cache small, relay large) would institutionalise a band of sizes where an
+          // arrival's view permanently differs from a live peer's, invisibly to both.
+          // FAILS CLOSED on purpose: an over-large envelope is dropped for everyone, so a remote
+          // waveform goes visibly ABSENT and gets reported — where a stale same-song envelope is
+          // silently WRONG and never does. See stemViewBudget.ts for the two-phase deploy rule.
+          if (size > MAX_STEMVIEW_BYTES) this.stemViewDropped++;
+          if (size <= MAX_STEMVIEW_BYTES && !tooSoon) {
             this.stemViewRate[rk] = now;
             this.lastStemView[msg.deck] = msg.view;
             this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });

@@ -91,19 +91,35 @@ console.log(`[grant] loaded ${URL_}`);
 let peers = [];
 for (let i = 0; i < 60; i++) {
   peers = await page.evaluate(() => window.__g.peers);
-  if (peers.length >= 2) break;
+  // Distinct ACCOUNTS, not array length: peers.length >= 2 is satisfied by two devices of ONE
+  // account, which is how a solo agent with one leftover tab passes a "second peer is really
+  // here" check and measures its own empty room.
+  if (new Set(peers.map((p) => p.name).filter(Boolean)).size >= 2) break;
   await sleep(1000);
 }
 const you = await page.evaluate(() => window.__g.you);
-console.log(`[grant] you=${you} peers=${JSON.stringify(peers.map((p) => `${p.name}:${p.id}${p.host ? "(host)" : ""} decks=${JSON.stringify(p.decks)}`))}`);
-if (peers.length < 2) {
-  console.error(`[grant] ABORT — only ${peers.length} peer(s). Nobody to grant to.`);
+console.log(`[grant] you=${you} peers=${JSON.stringify(peers.map((p) => `${p.name}:${p.id}${p.host ? "(host)" : ""} ${p.joined ? "joined" : "PENDING"} decks=${JSON.stringify(p.decks)}`))}`);
+if (new Set(peers.map((p) => p.name).filter(Boolean)).size < 2) {
+  console.error(`[grant] ABORT — only ${new Set(peers.map((p) => p.name).filter(Boolean)).size} distinct account(s) present (${peers.length} device rows). Nobody to grant to.`);
   await browser.close();
   process.exit(3);
 }
 
-const targets = peers.filter((p) => p.id !== you && p.joined);
-if (!targets.length) { console.error("[grant] ABORT — no joined peer other than me."); await browser.close(); process.exit(3); }
+// TARGET A DIFFERENT ACCOUNT, not merely a different DEVICE id. Same-account multi-device is the
+// supported "control extension" model, so my own stale headless windows are legitimately present
+// and legitimately NOT a second DJ. Filtering on `p.id !== you` alone, this tool granted a ghost of
+// my own account on a live run — the roster read ["UserB:d-…", "UserB:d-…"], one joined, and a
+// read-back would then have confirmed decks:"AB" on a device with nobody behind it. A read-back is
+// not a positive control when the thing it reads back can be the verifier.
+const meName = (peers.find((p) => p.id === you) || {}).name ?? null;
+const mine = peers.filter((p) => p.name === meName);
+if (mine.length > 1) console.error(`[grant] NOTE — ${mine.length} devices on my own account (${meName}); ignoring my own ghosts: ${JSON.stringify(mine.filter((p) => p.id !== you).map((p) => p.id))}`);
+const targets = peers.filter((p) => p.id !== you && p.joined && p.name && p.name !== meName);
+if (!targets.length) {
+  console.error(`[grant] ABORT — no joined peer on a DIFFERENT account than mine (${meName}). Roster: ${JSON.stringify(peers)}`);
+  await browser.close();
+  process.exit(3);
+}
 
 for (const t of targets) {
   await page.evaluate((id) => { window.__g.ws?.send(JSON.stringify({ t: "grant", to: id, on: true })); window.__g.sent.push(id); }, t.id);

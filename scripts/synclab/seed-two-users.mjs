@@ -116,7 +116,15 @@ if (inviteFor) {
     console.error("  401 => the seed is not visible to THIS worker (different D1, or --local not used)");
     process.exit(2);
   }
+  // ★ USE OUR OWN ORIGIN, NOT THE ONE THE RESPONSE REPORTS. The Worker builds `url` from its own
+  // computed origin, which resolves to SITE_HOST (handlingtheloop.com) even when the request came
+  // from localhost — so the receipt names PRODUCTION while the invite row lives only in the LOCAL
+  // D1. Handing that link to the other side sends them to production with a code that does not
+  // exist there, and the failure presents as a sync bug rather than a wrong URL. Caught by checking
+  // the ARTEFACT (the local room_invites row, bound to the host) instead of the receipt.
+  const joinUrl = `${origin}/?join=${body.code}`;
   console.log(`
 ${u.name} hosts. Invite URL for the other side:
-  ${body.url}`);
+  ${joinUrl}`);
+  if (body.url && body.url !== joinUrl) console.log(`  (the API reports ${body.url} — its origin is SITE_HOST, not this worker; ignore it)`);
 }

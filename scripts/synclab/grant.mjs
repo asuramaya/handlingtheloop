@@ -45,6 +45,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const URL_ = arg("url", "http://localhost:8787/");
 const SID = arg("sid", null);
 const HOLD = +arg("hold", 180);
+// How long to WAIT for the far side to show up, separate from how long to hold once it has.
+// These were one number and it broke the handshake: the wait was hard-coded to 60 s while --hold
+// applied only AFTER a successful grant, so "my window is open for 420 s" was false — the process
+// aborted at 60 s if the peer was still booting. The waiting half is the half that has to be
+// patient, because the other agent is mid-turn and cannot see this clock.
+const WAIT = +arg("wait", 600);
 
 // Stash the room socket and keep FULL peer records (id included). synclab's recorder maps peers to
 // names for readability; a grant needs the id, so this one keeps both.
@@ -84,12 +90,12 @@ const page = await context.newPage();
 await page.addInitScript(HOOK);
 await page.addInitScript(`try { localStorage.setItem("htl_room_engage", JSON.stringify({ joined: true, control: true, listen: true, ts: Date.now() })); } catch {}`);
 await page.goto(URL_, { waitUntil: "domcontentloaded", timeout: 60000 });
-console.log(`[grant] loaded ${URL_}`);
+console.log(`[grant] loaded ${URL_} — waiting up to ${WAIT}s for a second account, then holding ${HOLD}s`);
 
 // RUN GATE, same law as synclab's: refuse to grant into an empty room. A grant issued to nobody
 // looks identical to a grant that worked, from this side.
 let peers = [];
-for (let i = 0; i < 60; i++) {
+for (let i = 0; i < WAIT; i++) {
   peers = await page.evaluate(() => window.__g.peers);
   // Distinct ACCOUNTS, not array length: peers.length >= 2 is satisfied by two devices of ONE
   // account, which is how a solo agent with one leftover tab passes a "second peer is really

@@ -180,10 +180,12 @@
    deck on desktop and mobile alike (.bank.expanded / .bank.collapsed above), so landscape
    inherits a mechanism the user already knows instead of a mode it cannot turn off.
 
-   ⚠ UNVERIFIED ON GLASS. This has been reasoned and built, never seen — there is no phone in
-   this environment and no jsdom to lay it out in. The arithmetic that made it necessary was
-   measured (y=565 on a 390px screen); the result of the fix is not. It wants the operator's
-   eyes before it is trusted. */
+   ⚠ STILL UNVERIFIED ON GLASS, but no longer unverified. There is no phone in this environment,
+   so nobody here has SEEN this; what is now measured is the thing the thread is actually about —
+   scripts/phonelab/landscapelab.mjs drives headless Chromium at 844x390 with isMobile + hasTouch
+   and asserts the FX strip is reachable. That proves REACHABILITY, not that it looks right; those
+   are different claims and this comment will not let the first stand in for the second. The first
+   version of this block passed every test it had and failed that measurement — see below. */
 @media (max-height: 560px) and (pointer: coarse) {
   .stage {
     flex-direction: row;
@@ -198,14 +200,47 @@
     min-width: 0;
     min-height: 0;
   }
-  /* ★ THE CONTROLS SCROLL. This is the actual repair: the desk is taller than 390px and always
-     will be, so the fix is not to shrink it until the FX strip fits (that ends in controls too
-     small to hit with a thumb) but to let it scroll and keep every control reachable at full
-     size. overscroll-behavior keeps a flick at the end of the desk from scrolling the page
-     behind it. */
+  /* ★ THE CONTROLS SCROLL — and this comment used to claim that was already achieved here. IT WAS
+     NOT, and the correction is the point of this block. Measured on the deployed build at 844x390
+     (scripts/phonelab/landscapelab.mjs): .fx-rack-bar sat at y=401 on a 390px-tall viewport with NO
+     scrollable ancestor. The strip had moved 164px closer than the y=565 that opened f15158f3, and
+     was still unreachable.
+
+     WHY THE SCROLL DID NOTHING, which no amount of reading the rule would show: it was on the wrong
+     element. The overflow is generated inside .bank-main (scrollHeight 366 vs clientHeight 281), and
+     .bank sits between it and .decks-third with overflow-y: hidden (374 vs 297) — so .bank SWALLOWED
+     the overflow before .decks-third could ever see it. .decks-third reported scrollHeight ==
+     clientHeight == 345, generated no scrollbar, and had nothing to drag. A scroller OUTSIDE the
+     clip is not a scroller, and every individual rule involved is correct on its own: the defect
+     lives only in their relationship at this height.
+
+     So the scroll goes on the element that actually CONTAINS the overflow. .decks-third keeps
+     overflow-y: auto as a harmless outer guard (it is the right place if the row itself ever
+     overflows), but .bank-main is the one that does the work — the same treatment the portrait
+     block already gives it, which never applied here because that block is gated on
+     (max-width: 768px) and a phone in landscape is 844 wide. The rule was written and could not
+     reach the case it was written for. */
   .stage > .decks-third {
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+  .stage .decks-row .bank-main {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+  /* SECOND LEG, and it is mine: the portrait rules give .eq-row `flex: 0 1 auto` with
+     `min-height: 0`, which permits it to shrink to NOTHING. At 390px of height it did exactly that
+     — .eq-row and .fx-strip both measured height 0 with scrollHeight 66, so the FX strip was not
+     merely below the fold, it was hanging out of a parent that had collapsed to a line. Refusing to
+     shrink makes them content-sized, which is what .bank-main now scrolls. `flex-shrink: 0` rather
+     than a min-height in pixels: the content knows its own height and a hardcoded floor would be
+     one more number to go stale. */
+  .stage .decks-row .bank-main > .eq-row,
+  .stage .decks-row .bank-main .fx-strip {
+    flex-shrink: 0;
   }
   /* The chin is a fixed cost on a screen with 390px to spend — tighten it, do not remove it:
      it is the only way back to Library and Settings. */

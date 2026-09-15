@@ -134,7 +134,17 @@ if (before.page === after.page) {
   console.log(
     `\n✗ INCONCLUSIVE — the page never turned (${before.page} -> ${after.page}).` +
       `\n  Every delta above is zero because nothing happened, not because nothing moved.` +
-      (before.phone ? "" : "\n  This viewport is WIDER than 768px, so the board is on its DESKTOP layout and the FX page does not exist here.") +
+      // ★ THIS MESSAGE WAS ITSELF A STALE MAP. It said flatly "the board is on its DESKTOP layout",
+      // true when written and false the moment a LANDSCAPE gate keyed on (max-height: 560px) and
+      // (pointer: coarse) arrived: a phone held sideways is 844 wide, clears 768, and still gets a
+      // phone layout. So this harness declared INCONCLUSIVE for a reason that had stopped existing,
+      // and would have let a real live bug pass as "cannot measure here". An instrument’s own
+      // diagnostic is a load-bearing claim about the code and goes stale exactly like a comment.
+      (before.phone
+        ? ""
+        : "\n  This viewport is WIDER than 768px, so the PORTRAIT phone rules do not apply here." +
+          "\n  NOTE: wide no longer means desktop — (max-height: 560px) and (pointer: coarse) gives a" +
+          "\n  landscape phone its own layout at this width. Measure THAT with landscapelab.mjs.") +
       "\n",
   );
   process.exit(2);

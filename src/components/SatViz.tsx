@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { watchBox } from "./canvasBox";
 import type { Deck } from "@htl/audio";
 import { SaturatorFx, SAT_STYLES } from "@htl/audio";
 import { drawCurvePanel, fitCanvas } from "./curveInset";
@@ -64,6 +65,9 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
     const timeBuf = new Float32Array(analyser.fftSize);
     const BANDS = (dev0.constructor as typeof SaturatorFx).BANDS;
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
@@ -72,8 +76,8 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
       // simply freezes, with no error anywhere to explain it. Costs one map lookup a frame.
       const dev = (deck.fxDeviceAt(slot) as SaturatorFx | undefined) ?? dev0;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -224,6 +228,7 @@ export function SatViz({ deck, slot, accent, set, sel, onSelect }: SatVizProps) 
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      box.stop();
       try {
         dev0.output.disconnect(analyser);
       } catch {

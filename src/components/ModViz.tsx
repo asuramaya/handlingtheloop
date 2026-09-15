@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { watchBox } from "./canvasBox";
 import { MOD_MODES, MOD_WAVES, BARBER_RAMPS, modLfoShape, barberRampShape, type Deck, type ModFx } from "@htl/audio";
 import { drawCurvePanel, fitCanvas } from "./curveInset";
 import { drawReadout, READOUT_H } from "./Readout";
@@ -78,6 +79,9 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     }
     const lfoBuf = new Float32Array(lfoAn.fftSize);
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
@@ -88,8 +92,8 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
       const bpm = deck.effectiveBpm;
       if (bpm) dev.setSyncBpm(bpm);
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -312,6 +316,7 @@ export function ModViz({ deck, slot, accent, set }: ModVizProps) {
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      box.stop();
       try {
         dev0.output.disconnect(an);
       } catch {

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { watchBox } from "./canvasBox";
 import { NOISE_DIRS, NOISE_TYPES, type Deck, type NoiseFx } from "@htl/audio";
 import { drawReadout, READOUT_H } from "./Readout";
 
@@ -48,6 +49,9 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
     for (let i = 0; i < NR; i++) freqs[i] = F_MIN * Math.pow(F_MAX / F_MIN, i / (NR - 1));
     const resp = new Float32Array(NR);
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
@@ -67,8 +71,8 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
       dev.setKeyHz(key ? 16.3516 * Math.pow(2, key.tonic / 12) * 4 : 0);
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -165,6 +169,7 @@ export function NoiseViz({ deck, slot, accent, set }: NoiseVizProps) {
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      box.stop();
       try {
         dev0.output.disconnect(an);
       } catch {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { watchBox } from "./canvasBox";
 import type { Deck, CompFx } from "@htl/audio";
 
 // The compressor's instrument — a transfer curve you GRAB (drag the bend for threshold+ratio,
@@ -265,13 +266,16 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     let inSmooth = DB_MIN;
     let inPeak = DB_MIN;
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       const dev = (deck.fxDeviceAt(slot) as CompFx | undefined) ?? dev0;
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -582,6 +586,7 @@ export function CompViz({ deck, slot, accent, set, setHot, left, children }: Com
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      box.stop();
       try {
         dev0.input.disconnect(ownAn);
       } catch {

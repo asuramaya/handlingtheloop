@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { watchBox } from "./canvasBox";
 import { CRUSH_MODES, type Deck, type CrushFx } from "@htl/audio";
 import { drawReadout, READOUT_H } from "./Readout";
 
@@ -50,6 +51,9 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       return x - Math.floor(x); // deterministic 0..1 (stable wobble, not per-frame flicker)
     };
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       // ★ RE-FETCHED EVERY FRAME, never captured once. A device swapped under a live rAF
@@ -58,8 +62,8 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
       // simply freezes, with no error anywhere to explain it. Costs one map lookup a frame.
       const dev = (deck.fxDeviceAt(slot) as CrushFx | undefined) ?? dev0;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -215,6 +219,7 @@ export function CrushViz({ deck, slot, accent, set }: CrushVizProps) {
     raf = requestAnimationFrame(draw);
     return () => {
       cancelAnimationFrame(raf);
+      box.stop();
       try {
         dev0.output.disconnect(wet);
       } catch {

@@ -83,24 +83,59 @@ export function CompHead({ deck, slot, accent, set, hot, setHot }: CompHeadProps
     if (!ctx) return;
 
     let raf = 0;
+    // ★ DRAW ONLY WHEN THE PICTURE WOULD DIFFER. This canvas is a frequency ribbon and a line of
+    // text — both of which change when you touch a grip and at no other time — and it was being
+    // repainted 60 times a second for the life of the panel. Measured (scripts/phonelab/laglab.mjs,
+    // 4× CPU, the mid-tier-phone setting): 398 ms of self time, the single most expensive draw in
+    // the app, ahead of the waveform. The COMP page was the one window that blocked in every run.
+    //
+    // Every input here is a scalar, so a joined signature is a complete and exact statement of
+    // "would this paint differently?" — no heuristic, no staleness window. The rAF loop itself
+    // keeps running (a param can change from anywhere: the wire, MIDI, automix), it just stops
+    // PAINTING an identical frame. CompViz and CompArPad are live meters and legitimately redraw
+    // every frame; this one never was.
+    let lastSig = "";
+    // ★ THE SIZE COMES FROM AN OBSERVER, NOT FROM THE ELEMENT EACH FRAME. `canvas.clientWidth` is
+    // not a field read: it forces the browser to flush pending style and layout before it can
+    // answer. Doing that inside a rAF loop is the textbook layout thrash, and it is charged to
+    // THIS function's self time, which is why the draw looked expensive even with every actual
+    // painting call skipped — the dirty check below cut the painting and the cost did not move.
+    // A ResizeObserver reports the same number, after layout, only when it changes.
+    let cw = canvas.clientWidth;
+    let chh = canvas.clientHeight;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) { cw = r.width; chh = r.height; }
+    });
+    ro.observe(canvas);
     const draw = () => {
       // Re-fetched every frame, never closed over — the one thing DelayViz does that its siblings
       // don't, and the reason its picture never freezes on a hot-swapped device.
       const dev = (deck.fxDeviceAt(slot) as CompFx | undefined) ?? dev0;
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = cw;
+      const h = chh;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
       }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
 
       const hp = dev.getParam("scHp");
       const lp = dev.getParam("scLp");
       const isLimit = Math.round(dev.getParam("mode")) === 3;
+      // Everything the two draws below read, in one string. `w`/`h`/`dpr` are in it because a
+      // resize clears the canvas, so a size change must repaint even when no value moved.
+      const sig = `${w}|${h}|${dpr}|${accent}|${hp}|${lp}|${isLimit}|${dev.getParam("threshold")}|${dev.getParam("ratio")}|${dev.getParam("ceiling")}|${hot.current ?? ""}|${drag.current?.kind ?? ""}`;
+      if (sig === lastSig) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      lastSig = sig;
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
       drawReadout(ctx, w, accent, {
         // The two headline numbers of the curve — Delay's own "time · feedback" pattern. MODE,
         // AUTO and the SC source are LITERAL BUTTONS in the foot strip, wearing their own state;
@@ -122,7 +157,10 @@ export function CompHead({ deck, slot, accent, set, hot, setHot }: CompHeadProps
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, [deck, slot, accent]);
 
   const local = (e: React.PointerEvent) => {

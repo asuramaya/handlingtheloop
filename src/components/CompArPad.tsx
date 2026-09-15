@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { watchBox } from "./canvasBox";
 import type { Deck, CompFx } from "@htl/audio";
 
 // ATTACK/RELEASE — its own small XY pad to the LEFT of the curve, same family as NoiseViz's
@@ -40,6 +41,9 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
     // that gives up on a dependency it was merely EARLY for, with nothing to retry it. The device
     // is re-fetched inside draw() every frame anyway, so the loop can simply skip a frame instead.
 
+    // The box, watched rather than polled — reading canvas.clientWidth inside the loop below
+    // forced a layout flush on every frame (see canvasBox.ts for the measurement).
+    const box = watchBox(canvas);
     let raf = 0;
     const draw = () => {
       // Re-fetched every frame, never captured once — see CompViz's own comment on this.
@@ -50,8 +54,8 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       }
 
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = canvas.clientWidth;
-      const h = canvas.clientHeight;
+      const w = box.w;
+      const h = box.h;
       if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
         canvas.width = Math.round(w * dpr);
         canvas.height = Math.round(h * dpr);
@@ -120,7 +124,10 @@ export function CompArPad({ deck, slot, accent, set, setHot }: CompArPadProps) {
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      box.stop();
+    };
   }, [deck, slot, accent]);
 
   const apply = (e: React.PointerEvent) => {

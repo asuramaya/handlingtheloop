@@ -48,3 +48,33 @@ describe("rackDelta", () => {
     expect(rackDelta(after, snapshot)).toEqual({ add: [], remove: [] });
   });
 });
+
+// ★ THE OPERATOR CORRECTED THE FRAMING: "the reverb sync is myopic. the problem occured on all
+// effects reverb was just an example." They are right, and the reason every effect failed
+// identically is worth pinning: eq and comp are the ONLY two Deck.ensurePadFx boots onto the
+// master chain, so every OTHER effect must be added by hand — and adding was the operation that
+// never propagated. So the broken set was not "reverb", it was "everything except eq and comp".
+// These assert the fix is general, one case per addable kind, so no future reader has to take
+// "it's generic" on trust.
+describe("rackDelta is general across EVERY addable kind, not just the reported one", () => {
+  const ADDABLE = ["delay", "reverb", "saturator", "crush", "mod", "gate", "noise"];
+
+  it.each(ADDABLE)("syncs an added %s the same way", (kind) => {
+    expect(rackDelta(["eq", "comp"], ["eq", kind, "comp"])).toEqual({ add: [kind], remove: [] });
+  });
+
+  it.each(ADDABLE)("syncs a removed %s the same way", (kind) => {
+    expect(rackDelta(["eq", kind, "comp"], ["eq", "comp"])).toEqual({ add: [], remove: [kind] });
+  });
+
+  it("syncs the whole bank arriving at once, in the sender's order", () => {
+    // A co-DJ who builds a full rack must not have it arrive one device at a time or reordered.
+    expect(rackDelta(["eq", "comp"], ["eq", ...ADDABLE, "comp"]).add).toEqual(ADDABLE);
+  });
+
+  it("eq and comp are the pair that always synced — which is why the bug looked selective", () => {
+    // Both resident on every deck from boot, so they were never in the `add` set and never broke.
+    // A reader seeing "eq and comp work, nothing else does" should land here.
+    expect(rackDelta(["eq", "comp"], ["eq", "comp"])).toEqual({ add: [], remove: [] });
+  });
+});

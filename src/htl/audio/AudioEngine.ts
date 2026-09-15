@@ -598,10 +598,32 @@ export class AudioEngine {
       await ctx.setSinkId(deviceId || ""); // "" → default device
       return true;
     } catch (e) {
+      // ★ A DEVICE THAT IS GONE IS NOT AN ERROR TO REPEAT FOREVER. The chosen output id is
+      // persisted, so an interface that was unplugged (or a browser that reissued its ids, which
+      // Chrome does on a permissions/profile change) makes this throw NotFoundError on EVERY load
+      // — and the mix then sits on whatever device it had, with a scary console line and no
+      // recovery. Fall back to the DEFAULT device explicitly and report the fallback, so the
+      // outcome is "you are on the default output" rather than an unanswered warning.
+      const missing = e instanceof Error && e.name === "NotFoundError";
+      if (missing && deviceId) {
+        console.warn(`[htl] output device ${deviceId} is gone — falling back to the system default`);
+        this.onSinkLost?.(deviceId);
+        try {
+          await ctx.setSinkId("");
+          return true;
+        } catch {
+          /* even the default refused — nothing left to try */
+        }
+      }
       console.warn("[htl] setSinkId failed:", e);
       return false;
     }
   }
+
+  /** Fired when a persisted output device has vanished and we fell back to the default. The UI
+   *  owns the setting, so it — not the engine — clears the dead id; otherwise the engine would be
+   *  reaching into settings and the next load would retry the same missing device. */
+  onSinkLost?: (deviceId: string) => void;
 
   // ── Live mic (talkover + sampling) ──────────────────────────────────────────────────────
   /** Acquire the mic (user gesture + secure context). `deviceId` picks an input ("" = default). */

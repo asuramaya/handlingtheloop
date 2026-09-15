@@ -1394,8 +1394,13 @@ function AppBody() {
   // Route the mix to the chosen output device (only re-applies when it changes, so a
   // theme tweak never re-routes audio). "" = system default.
   useEffect(() => {
+    // Clear a dead id rather than retrying it every load: the engine falls back to the default
+    // output and tells us which device vanished, and the SETTING is ours to fix, not its.
+    engine.onSinkLost = (gone) => {
+      setSettings((s) => (s.audioOutputId === gone ? { ...s, audioOutputId: "" } : s));
+    };
     void engine.setSinkId(settings.audioOutputId);
-  }, [engine, settings.audioOutputId]);
+  }, [engine, settings.audioOutputId, setSettings]);
 
   // Route the headphone-cue (PFL) bus to a separate device. "" = no separate cue
   // (single output) — the CUE button stays a plain cue-point button.

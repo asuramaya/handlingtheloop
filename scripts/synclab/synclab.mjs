@@ -241,10 +241,16 @@ if (has("drive")) {
   let others = [];
   for (let i = 0; i < 40; i++) {
     const snap = await page.evaluate(() => {
-      const f = [...window.__sync.frames].reverse().find((x) => x.peers && x.you);
-      if (!f) return null;
-      const mine = f.peers.find((p) => p.id === f.you);
-      return { peers: f.peers, you: f.you, myName: mine?.name ?? null };
+      // ★ `you` RIDES ONLY ON welcome; `peers` RIDES ON welcome AND EVERY presence. Requiring both
+      // on one frame pins you to the welcome forever — the single moment when a guest is still
+      // PENDING and ungranted. The gate then waits 120 s for a grant it has already been told
+      // arrived, and aborts on a stale row. Take the identity from welcome and the state from the
+      // LATEST presence.
+      const id = window.__sync.frames.find((x) => x.you)?.you ?? null;
+      const f = [...window.__sync.frames].reverse().find((x) => x.peers);
+      if (!f || !id) return null;
+      const mine = f.peers.find((p) => p.id === id);
+      return { peers: f.peers, you: id, myName: mine?.name ?? null };
     });
     if (snap) {
       peers = snap.peers.map((p) => p.name);
@@ -280,11 +286,23 @@ if (has("drive")) {
   // intents and the run looks like a total sync failure instead of a permission state. A gate that
   // checks the easy precondition and stays silent on the hard one is worse than no gate, because it
   // reads as a pass. Name which precondition failed.
-  const me = await page.evaluate(() => {
-    const f = [...window.__sync.frames].reverse().find((x) => x.peers && x.you);
-    if (!f) return null;
-    return f.peers.find((p) => p.id === f.you) ?? null;
-  });
+  // ★ WAIT FOR THE GRANT, DON'T SNAPSHOT ONCE. Checking `controlling` a single time races the
+  // host's approve→grant: the peer appears, we look immediately, the grant has not landed yet, and
+  // we abort on a precondition that was about to be satisfied. The gate is supposed to make the
+  // handshake self-sequencing — one non-blocking read reintroduces exactly the timing race it
+  // exists to delete.
+  let me = null;
+  for (let i = 0; i < 120; i++) {
+    me = await page.evaluate(() => {
+      const id = window.__sync.frames.find((x) => x.you)?.you ?? null;
+      const f = [...window.__sync.frames].reverse().find((x) => x.peers);
+      if (!f || !id) return null;
+      return f.peers.find((p) => p.id === id) ?? null;
+    });
+    if (!me || me.controlling) break;
+    if (i === 0) console.log(`[${ROLE}] in the room, waiting for the host to approve + grant (id ${me.id})…`);
+    await sleep(1000);
+  }
   if (me && me.controlling === false) {
     await bail(
       4,

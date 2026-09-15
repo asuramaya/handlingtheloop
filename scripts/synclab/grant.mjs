@@ -193,16 +193,30 @@ for (const t of targets) {
 // VERIFY BY READ-BACK, not by the fact that send() returned. The server patches the target's
 // attachment and re-broadcasts presence; if decks does not become "AB" there, the grant did not
 // land and every number after it would be measured on the ungranted path anyway.
+// ★ VERIFY OVER THE TARGETS, NOT OVER "EVERYONE WHO ISN'T ME". This read-back used to filter on
+// `p.id !== you`, which INCLUDES the same-account ghosts deliberately excluded from the grant — so
+// it printed "UserA decks=AB controlling=true, UserB decks=AB controlling=true" where the second
+// clause described a device that was never granted. The verification population was not the target
+// population: the wrong-rows fault, inside the one step whose entire job is verification.
+// It also reported a CONFIRMED with no timestamp on the row it read — a stale row and a current row
+// are indistinguishable once only the verdict is printed. Both fixed: targets only, and the age of
+// the reading is stated.
+const targetIds = new Set(targets.map((t) => t.id));
 let ok = false;
+const verifyFrom = Date.now();
 for (let i = 0; i < 20; i++) {
   await sleep(500);
   const now = await page.evaluate(() => window.__g.peers);
-  const t = now.filter((p) => p.id !== you);
-  if (t.length && t.every((p) => p.decks === "AB" && p.controlling)) { ok = true; console.log(`[grant] CONFIRMED — ${t.map((p) => `${p.name} decks=AB controlling=true`).join(", ")}`); break; }
+  const t = now.filter((p) => targetIds.has(p.id));
+  if (t.length === targetIds.size && t.every((p) => p.decks === "AB" && p.controlling)) {
+    ok = true;
+    console.log(`[grant] CONFIRMED (read ${Date.now() - verifyFrom}ms after the grant) — ${t.map((p) => `${p.name}:${p.id} decks=AB controlling=true`).join(", ")}`);
+    break;
+  }
 }
 if (!ok) {
   const now = await page.evaluate(() => window.__g.peers);
-  console.error(`[grant] NOT CONFIRMED — peers read back: ${JSON.stringify(now)}`);
+  console.error(`[grant] NOT CONFIRMED after ${Date.now() - verifyFrom}ms — targets ${JSON.stringify([...targetIds])}, peers read back: ${JSON.stringify(now)}`);
 }
 const errs = await page.evaluate(() => window.__g.got);
 if (errs.length) console.error(`[grant] server errors: ${JSON.stringify(errs)}`);

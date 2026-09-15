@@ -20,8 +20,48 @@ export interface ReadoutSpec {
 // important detail is written last by convention), then, if even the first segment won't fit,
 // clip it with an ellipsis. Never lets two zones draw over each other at a narrow width.
 const SEP = "  ·  ";
+// ★ MEASURING TEXT IS NOT FREE, AND THIS RUNS THREE TIMES A FRAME PER OPEN PANEL. Every FX panel
+// draws this strip from its own rAF loop, and every zone calls measureText at least once — more
+// when it has to trim, where the fallback shrinks the string ONE CHARACTER AT A TIME, measuring
+// each step. Measured with scripts/phonelab/laglab.mjs at 4x CPU with a track loaded and playing,
+// drawReadout was 1035 ms of self time over the run, in the same band as the waveform.
+//
+// The saving grace is that the ANSWER almost never changes: the text is a formatted parameter and
+// the width is a panel that is not being resized, so frame N+1 asks the identical question frame N
+// already answered. The font is a module constant (set on the ctx below), so it is not part of the
+// key — if that ever becomes a variable, it has to be.
+//
+// Bounded, and bounded by CLEARING rather than by evicting: the keys are value strings, so a knob
+// swept across its range mints a new one per distinct value and an LRU would spend more on
+// bookkeeping than the measure it saves. Dropping the whole map on overflow costs one cold frame.
+const FIT_CACHE = new Map<string, string>();
+const FIT_CACHE_MAX = 800;
 function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
   if (maxW <= 0) return "";
+  // Quantise the width: a panel mid-resize produces a fractional pixel every frame, which would
+  // make every key unique and the cache pure overhead during the one gesture it most needs to be cheap.
+  const key = `${Math.round(maxW)}|${text}`;
+  const hit = FIT_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const out = fitTextUncached(ctx, text, maxW);
+  if (FIT_CACHE.size >= FIT_CACHE_MAX) FIT_CACHE.clear();
+  FIT_CACHE.set(key, out);
+  return out;
+}
+// The width of an already-fitted string, cached on the same terms as FIT_CACHE and for the same
+// reason: the layout below needs the exact widths of `mid` and `left` every frame, and measureText
+// is the expensive call whichever caller makes it. Exact, not approximate — the font is fixed and
+// measureText is unaffected by the canvas transform, so the same string always has the same width.
+const WIDTH_CACHE = new Map<string, number>();
+function widthOf(ctx: CanvasRenderingContext2D, text: string): number {
+  const hit = WIDTH_CACHE.get(text);
+  if (hit !== undefined) return hit;
+  const w = ctx.measureText(text).width;
+  if (WIDTH_CACHE.size >= FIT_CACHE_MAX) WIDTH_CACHE.clear();
+  WIDTH_CACHE.set(text, w);
+  return w;
+}
+function fitTextUncached(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
   if (ctx.measureText(text).width <= maxW) return text;
   const parts = text.split(SEP);
   while (parts.length > 1) {
@@ -50,10 +90,10 @@ export function drawReadout(ctx: CanvasRenderingContext2D, w: number, accent: st
   // beside it (or beside each other when it's blank), the right zone giving way before the left.
   let midW = 0;
   const mid = spec.mid ? fitText(ctx, spec.mid, w - pad * 2) : "";
-  if (mid) midW = ctx.measureText(mid).width;
+  if (mid) midW = widthOf(ctx, mid);
   const sideBudget = mid ? (w - midW) / 2 - gap - pad : w - pad * 2;
   const left = spec.left ? fitText(ctx, spec.left, sideBudget) : "";
-  const leftW = left ? ctx.measureText(left).width : 0;
+  const leftW = left ? widthOf(ctx, left) : 0;
   const right = spec.right ? fitText(ctx, spec.right, mid ? sideBudget : sideBudget - leftW - (left ? gap : 0)) : "";
   if (left) {
     ctx.textAlign = "left";

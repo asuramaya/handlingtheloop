@@ -2225,6 +2225,11 @@ export class Deck {
     return this.rack.rebuildDegraded((kind, chainId) => this.makeFx(kind, chainId));
   }
 
+  /** Devices still running as pass-throughs on this deck — see FxRack.degradedDevices. */
+  degradedFx(): { chain: string; kind: string }[] {
+    return this.rack.degradedDevices();
+  }
+
   /** Every device this deck owns, in SIGNAL order — stem chains first, then the master. Slot
    *  indices walk THIS list. With only a master chain (the default, and everything that shipped
    *  before chains) it is exactly the old flat rack, so nothing that addresses a slot had to

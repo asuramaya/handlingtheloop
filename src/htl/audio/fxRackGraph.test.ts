@@ -440,3 +440,45 @@ describe("FxRack micIn — the MIC chain hears the mic and only the mic", () => 
     expect(reaches(rack.micIn as unknown as StubNode, out)).toBe(true);
   });
 });
+
+// ★ CAN ANYONE SEE A DEVICE THAT IS STILL A PASS-THROUGH? rebuildDegraded deliberately SKIPS a
+// device whose replacement is also degraded ("still no worklet — leave it be"), which is correct
+// and utterly invisible: the rack then holds a device that looks normal, reports nothing, and
+// carries audio untouched for the life of the deck. The only console line anyone ever saw was the
+// original degrade warning, with no statement of whether it was ever answered — an operator sent
+// exactly that log and it could not be diagnosed either way. These assert the REMAINING state is
+// reportable, which is the half that was missing.
+describe("FxRack.degradedDevices — the state nobody could see", () => {
+  it("is empty on a healthy rack", () => {
+    const { rack } = rackWith(0);
+    rack.add(fakeDevice("delay"));
+    rack.add(fakeDevice("reverb"));
+    expect(rack.degradedDevices()).toEqual([]);
+  });
+
+  it("names a degraded device and the chain it sits in", () => {
+    const { rack } = rackWith(0);
+    rack.add(fakeDevice("delay"));
+    rack.add(fakeDevice("comp", true)); // degraded
+    const out = rack.degradedDevices();
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("comp");
+    expect(out[0].chain).toBeTruthy(); // the chain's NAME, so a log line is readable
+  });
+
+  it("★ still reports a device the repair COULD NOT FIX — the invisible case", () => {
+    // The repair returns 0 here (every replacement is degraded too), which previously produced
+    // total silence in the logs: no repair line, no remaining line, warning left as the last word.
+    const { rack } = rackWith(0);
+    rack.add(fakeDevice("comp", true));
+    expect(rack.rebuildDegraded((kind) => fakeDevice(kind, true))).toBe(0);
+    expect(rack.degradedDevices().map((d) => d.kind)).toEqual(["comp"]);
+  });
+
+  it("is empty again once the repair succeeds — so the report cannot cry wolf", () => {
+    const { rack } = rackWith(0);
+    rack.add(fakeDevice("comp", true));
+    expect(rack.rebuildDegraded((kind) => fakeDevice(kind))).toBe(1);
+    expect(rack.degradedDevices()).toEqual([]);
+  });
+});

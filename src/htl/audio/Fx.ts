@@ -490,6 +490,20 @@ export class FxRack {
    *
    *  In PLACE: same chain, same position, so nothing that addresses a slot or an (chain, kind)
    *  address notices, and the rack is rebuilt once at the end rather than per device. */
+  /** Every device still running as a PASS-THROUGH, with the chain it sits in.
+   *
+   *  ★ WHY THIS EXISTS: rebuildDegraded skips a device whose replacement is ALSO degraded ("still
+   *  no worklet -> leave it be"), which is correct and completely invisible. So the rack could hold
+   *  a compressor that looks normal, reports no error, and carries audio untouched for the life of
+   *  the deck — and the only console line anyone ever saw was the original scary warning, with no
+   *  statement of whether it was ever answered. A count of what REMAINS is the missing half: it is
+   *  the difference between "a device came back" and "a device is still doing nothing". */
+  degradedDevices(): { chain: string; kind: string }[] {
+    const out: { chain: string; kind: string }[] = [];
+    for (const c of this.chains) for (const d of c.devices) if (d.degraded) out.push({ chain: c.name, kind: d.kind });
+    return out;
+  }
+
   rebuildDegraded(make: (kind: FxKind, chainId: string) => FxDevice | null): number {
     let n = 0;
     for (const c of this.chains) {

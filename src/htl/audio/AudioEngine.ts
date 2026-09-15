@@ -224,6 +224,26 @@ export class AudioEngine {
       // showing the ring: the first thing it printed was two of those warnings and no answer.
       const repaired = this.deckA.rebuildDegradedFx() + this.deckB.rebuildDegradedFx();
       if (repaired) event("fx-repaired", { n: repaired });
+      // ★ AND SAY IT WHERE THE EVIDENCE IS READ — THE CONSOLE, not only the ring. The degrade warns
+      // via console.warn ("comp worklet unavailable, degrading to a pass-through"); the answer went
+      // to the debug ring alone. So a pasted console — which is how a live bug actually reaches us —
+      // showed the scary line and NOTHING about its resolution, making "repaired" and "still
+      // silently passing audio untouched" indistinguishable from the outside. An operator sent
+      // exactly that log and it could not be diagnosed.
+      //
+      // Both branches are stated deliberately. A repair that says nothing leaves the warning
+      // standing as the last word; a REMAINING degrade is the one that matters, because
+      // rebuildDegraded skips a device whose replacement is also degraded and that device will
+      // carry audio untouched for the life of the deck with no further sign of it.
+      const stillDegraded = [...this.deckA.degradedFx(), ...this.deckB.degradedFx()];
+      if (repaired) console.info(`[htl] fx repaired after the worklet race: ${repaired} device(s) rebuilt`);
+      if (stillDegraded.length) {
+        console.warn(
+          "[htl] fx STILL degraded (these carry audio untouched — a pass-through, not an error):",
+          stillDegraded.map((d) => `${d.chain}/${d.kind}`).join(", "),
+        );
+        event("fx-degraded-remaining", { n: stillDegraded.length });
+      }
       this.installMasterLimiter();
       this.patchSidechains();
     });

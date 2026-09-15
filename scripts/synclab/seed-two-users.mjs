@@ -30,16 +30,27 @@ const exp = now + 7 * DAY;
 // Stable ids, so a re-seed is idempotent and both agents address the SAME users across runs —
 // two harnesses seeding different ids is how "it synced for me" and "it did not for me" happen.
 const USERS = [
-  { id: "u_synclab_a", sid: "sid_synclab_a", handle: "synclaba", name: "Synclab A" },
-  { id: "u_synclab_b", sid: "sid_synclab_b", handle: "synclabb", name: "Synclab B" },
+  { id: "u_synclab_a", sid: "sid_synclab_a", handle: "synclaba", name: "Synclab A", sub: "dev_synclab_a" },
+  { id: "u_synclab_b", sid: "sid_synclab_b", handle: "synclabb", name: "Synclab B", sub: "dev_synclab_b" },
 ];
 
-// INSERT OR REPLACE so re-running is safe; google_sub is NULL (unique, and nothing reads it here).
+// INSERT OR REPLACE so re-running is safe. Columns are NAMED, never positional — `users` gained
+// handle/handle_folded/handle_set_at in migration 0012, so a positional VALUES list written against
+// the 0001 shape would silently land values in the wrong columns.
+//
+// google_sub is TEXT UNIQUE and DISTINCT per user rather than NULL: SQLite permits many NULLs in a
+// unique index so NULL would work today, but a distinct value keeps the fixture correct if that
+// column ever becomes NOT NULL, and costs nothing. (Deckard's correction.)
+//
+// handle + handle_folded are set because userBySession SELECTS them and the public-room path
+// resolves a host by @handle — a host with a NULL handle is addressable by invite code but not by
+// name, which would look like a routing bug the first time we tried ?room=@synclabb.
+// handle_folded carries the unique index (idx_users_handle_folded), so it must match the fold.
 const sql = [
   ...USERS.map(
     (u) =>
-      `INSERT OR REPLACE INTO users (id,google_sub,email,name,avatar,created_at,last_login) ` +
-      `VALUES ('${u.id}',NULL,'${u.id}@local.test','${u.name}',NULL,${now},${now});`,
+      `INSERT OR REPLACE INTO users (id,google_sub,email,name,avatar,created_at,last_login,handle,handle_folded,handle_set_at) ` +
+      `VALUES ('${u.id}','${u.sub}','${u.id}@local.test','${u.name}',NULL,${now},${now},'${u.handle}','${u.handle}',${now});`,
   ),
   ...USERS.map(
     (u) =>
@@ -79,4 +90,33 @@ if (process.argv.includes("--apply")) {
     process.exit(2);
   }
   console.log("✓ both sessions resolve to a user by the app's own query");
+}
+
+// Mint the HOST's invite link, so the whole two-party setup is one command instead of a manual
+// POST. /api/room/invite is POST-only, requires the host's session cookie, and returns
+// { code, url: "<origin>/?join=<code>" } — the code only NAMES a session, it does not grant
+// anything (the WS upgrade is authed per connection), which is why it is safe to print.
+const inviteFor = process.argv.includes("--invite") ? process.argv[process.argv.indexOf("--invite") + 1] : null;
+if (inviteFor) {
+  const u = USERS.find((x) => x.id === inviteFor || x.handle === inviteFor);
+  if (!u) {
+    console.error(`✗ unknown user ${inviteFor} — expected one of ${USERS.map((x) => x.id).join(", ")}`);
+    process.exit(2);
+  }
+  const origin = process.env.HTL_ORIGIN || "http://localhost:8787";
+  const res = await fetch(`${origin}/api/room/invite`, {
+    method: "POST",
+    headers: { cookie: `htl_session=${u.sid}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // 401 here means the cookie did not resolve to a user — i.e. the seed did not take, or the
+    // worker is pointed at a different D1 than the one seeded. Say which, rather than "failed".
+    console.error(`✗ invite failed ${res.status}:`, body);
+    console.error("  401 => the seed is not visible to THIS worker (different D1, or --local not used)");
+    process.exit(2);
+  }
+  console.log(`
+${u.name} hosts. Invite URL for the other side:
+  ${body.url}`);
 }

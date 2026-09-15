@@ -57,6 +57,10 @@ const SID = arg("sid", null);
 const HANDLE = arg("handle", null); // the host's @handle — how a public listener tunes in
 const OUT = arg("out", "listenlab.json");
 const SWEEP = +arg("sweep", 40); // frames per swept control
+// JOIN-STORM MODE: how many listeners to admit in sequence, measuring what each one is handed on
+// arrival. 0 = the ordinary convergence run.
+const JOINERS = +arg("joiners", 0);
+const FAT = +arg("fat", 0); // bytes of SYNTHETIC stemview to park in lastStemView before joining
 const GAP = +arg("gap", 10); // ms between sweep frames — well under DIGEST_FLUSH_MS so it coalesces
 
 if (!HANDLE) { console.error("listenlab: --handle <hostHandle> is required (a public listener tunes in by @handle)"); process.exit(2); }
@@ -138,6 +142,108 @@ let pub = null;
 for (let i = 0; i < 20; i++) { await sleep(500); pub = await host.evaluate(() => window.__h.publicOn); if (pub) break; }
 console.log(`[listenlab] room public: ${pub}`);
 if (!pub) { console.error("[listenlab] ABORT — room did not report public:true, so a listener cannot be admitted."); await browser.close(); process.exit(3); }
+
+// ── JOIN-STORM MODE ────────────────────────────────────────────────────────────────────────────
+// ★ THE PATH THIS MEASURES, and why it is NOT the lyrics pattern again. I claimed stemview was a
+// second instance of "the disk learned to coalesce and the wire did not". That was FALSE and
+// Deckard disproved it from my own file: room.ts gates the stemview RELAY at 2000 ms per
+// sender:deck with a 400,000-char cap, and since relay() calls pushToRelays first, that gate
+// governs the peer fan-out AND the D2 crowd shards. Ceiling 1.0 frame/s per controlling sender,
+// so ~400 KB/s worst case steady. The stream is bounded.
+//
+// sendCatchUp (room.ts:1186) is NOT. It writes BOTH decks' lastStemView and lastLyrics to a socket
+// with no rate limit and no per-socket budget, from four call sites — including line 357, which
+// fires for EVERY anonymous public listener at admission. So the multiplier is CROWD SIZE:
+//
+//     N joiners  ⇒  N × up to 800 KB (2 decks × the 400 KB cap), ungated.
+//
+// Join-time amplification, not a stream. It is also the gap in MY OWN lyrics fix: the 400 ms relay
+// throttle bounds the steady fan-out and does nothing about the copy handed to each new arrival.
+//
+// ★ POSITIVE CONTROL FOR THIS MODE, and it is a different control from the jog: run the SAME join
+// against an EMPTY lastStemView and a FAT one. If both report the same bytes-per-joiner, the
+// instrument is not measuring catch-up at all and the numbers mean nothing. A join-cost checker
+// that cannot tell a fat room from an empty one is the 4/4 matcher again.
+//
+// The fat payload is SYNTHETIC and labelled as such wherever it is reported: it exercises the
+// mechanism and bounds it, and it is NOT a claim about the size of a real stem separation.
+async function joinOnce(label) {
+  const ctx = await browser.newContext({ viewport: { width: 400, height: 300 } }); // NO cookie — anonymous
+  const pg = await ctx.newPage();
+  await pg.addInitScript(LISTEN_HOOK(HANDLE));
+  await pg.goto(URL_, { waitUntil: "domcontentloaded", timeout: 60000 });
+  let ok = false;
+  for (let i = 0; i < 40; i++) {
+    const sk = await pg.evaluate(() => window.__l.sockets);
+    if (sk.some((x) => x.event === "open")) { ok = true; break; }
+    if (sk.some((x) => x.event === "close" || x.event === "error")) break;
+    await sleep(250);
+  }
+  if (!ok) { await ctx.close(); return null; }
+  await sleep(2500); // let the catch-up burst land
+  const fr = await pg.evaluate(() => window.__l.frames);
+  await ctx.close();
+  const bytes = fr.reduce((n, f) => n + (f.bytes || 0), 0);
+  const stem = fr.filter((f) => f.t === "stemview");
+  const lyr = fr.filter((f) => f.t === "lyrics");
+  return { label, frames: fr.length, bytes, stemFrames: stem.length, stemBytes: stem.reduce((n, f) => n + (f.bytes || 0), 0), lyricsFrames: lyr.length };
+}
+
+if (JOINERS > 0) {
+  const results = { empty: [], fat: [] };
+  // BASELINE: join an empty-ish room first, so the fat case has something it must differ from.
+  console.log(`\n[listenlab] join-storm — BASELINE (no synthetic stemview parked)`);
+  for (let i = 0; i < JOINERS; i++) {
+    const r = await joinOnce(`empty#${i + 1}`);
+    if (!r) { console.error("[listenlab] ABORT — a baseline listener socket never opened."); await browser.close(); process.exit(3); }
+    results.empty.push(r);
+    console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames}`);
+  }
+
+  if (FAT > 0) {
+    // Park a SYNTHETIC stemview in lastStemView. Sent as a normal stemview from the controlling
+    // host, so it goes through the real size/rate gate rather than around it.
+    console.log(`\n[listenlab] parking a SYNTHETIC stemview of ~${(FAT / 1024).toFixed(0)} KB per deck (NOT a real separation)`);
+    for (const deck of ["A", "B"]) {
+      await host.evaluate(({ d, n }) => {
+        const view = { synthetic: true, pad: "x".repeat(n) };
+        window.__h.ws?.send(JSON.stringify({ t: "stemview", deck: d, view }));
+      }, { d: deck, n: FAT });
+      await sleep(2100); // clear the 2000ms per sender:deck gate
+    }
+    await sleep(500);
+    console.log(`[listenlab] join-storm — FAT room`);
+    for (let i = 0; i < JOINERS; i++) {
+      const r = await joinOnce(`fat#${i + 1}`);
+      if (!r) { console.error("[listenlab] ABORT — a fat-case listener socket never opened."); await browser.close(); process.exit(3); }
+      results.fat.push(r);
+      console.log(`    ${r.label}: ${r.frames} frames · ${(r.bytes / 1024).toFixed(1)} KB · stemview ${r.stemFrames} (${(r.stemBytes / 1024).toFixed(1)} KB) · lyrics ${r.lyricsFrames}`);
+    }
+  }
+
+  const sum = (a) => a.reduce((n, r) => n + r.bytes, 0);
+  const avg = (a) => (a.length ? sum(a) / a.length : 0);
+  console.log(`\n  JOIN COST — what the room hands each arrival`);
+  console.log(`    baseline: ${results.empty.length} joiners · ${(avg(results.empty) / 1024).toFixed(1)} KB each · ${(sum(results.empty) / 1024).toFixed(1)} KB total`);
+  if (results.fat.length) {
+    console.log(`    fat:      ${results.fat.length} joiners · ${(avg(results.fat) / 1024).toFixed(1)} KB each · ${(sum(results.fat) / 1024).toFixed(1)} KB total   [SYNTHETIC payload]`);
+    const ratio = avg(results.empty) > 0 ? avg(results.fat) / avg(results.empty) : Infinity;
+    console.log(`\n  POSITIVE CONTROL — a fat room MUST cost a joiner more than an empty one`);
+    console.log(`    ratio fat/empty = ${Number.isFinite(ratio) ? ratio.toFixed(2) : "∞"}`);
+    if (Number.isFinite(ratio) && ratio < 1.5) {
+      console.error(`\n  ABORT — the control FAILED: parking ~${(FAT / 1024).toFixed(0)} KB per deck did not measurably change what a joiner is handed. This instrument cannot tell a fat room from an empty one, so its join-cost numbers mean nothing.`);
+      writeFileSync(OUT, JSON.stringify({ mode: "join-storm", handle: HANDLE, fatBytes: FAT, results }, null, 1));
+      await browser.close();
+      process.exit(4);
+    }
+    console.log(`    → the instrument CAN distinguish them, so the per-joiner cost above is trustworthy`);
+  }
+  writeFileSync(OUT, JSON.stringify({ mode: "join-storm", handle: HANDLE, fatBytes: FAT, results }, null, 1));
+  console.log(`\n  wrote ${OUT}`);
+  console.log(`  NOTE: sendCatchUp is ungated (room.ts:1186) — no rate limit, no per-socket budget — so this cost is LINEAR in crowd size and is join-time amplification, not a stream.`);
+  await browser.close();
+  process.exit(0);
+}
 
 // ── LISTENER ───────────────────────────────────────────────────────────────────────────────────
 const lisCtx = await browser.newContext({ viewport: { width: 800, height: 600 } }); // NO cookie — anonymous

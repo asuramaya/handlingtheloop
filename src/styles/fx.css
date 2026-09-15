@@ -300,6 +300,26 @@
   border-style: dashed;
   opacity: 0.72;
 }
+/* WAITING FOR STEMS — configured, holding devices, hearing silence because the track has not been
+   separated. Deliberately styled DIFFERENTLY from .deaf, not the same "not working" grey, because
+   the two need opposite actions: a deaf chain wants a stem SELECTION, a waiting chain wants a
+   SEPARATION. One shared mark would send people to the wrong control. Dashed like deaf (both are
+   half-built) but tinted rather than merely faded, and it carries a WAIT chip, because the slot
+   where the stem letters would have gone is empty in exactly this state — the strip hides them
+   when nothing is separated, which emptied the one surface that could have explained the silence. */
+.fx-group.waiting-stems {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--warn, #e0a33a) 60%, var(--border, #333));
+}
+.fx-chain-wait {
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  padding: 0 3px;
+  border-radius: 2px;
+  color: var(--warn, #e0a33a);
+  border: 1px solid color-mix(in srgb, var(--warn, #e0a33a) 45%, transparent);
+  opacity: 0.9;
+}
 /* A DEVICE hovering over a group — a different act (move it INTO this chain), so a different
    mark: the whole container lights rather than one edge. */
 .fx-group.drop-in {

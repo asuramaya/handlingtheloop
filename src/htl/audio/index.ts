@@ -22,6 +22,7 @@ export { loadChainPresets, saveChainPreset, deleteChainPreset, renameChainPreset
 export { decodeAudio } from "./decode";
 export { MicInput, type MicRoute } from "./MicInput";
 export { MIC_CHAIN, micChainOf, seedMicChain } from "./micChain";
+export { chainWaitingForStems, anyChainWaitingForStems, chainIsDeaf } from "./chainRouting";
 export { Recorder, type Take } from "./Recorder";
 export {
   Sampler,

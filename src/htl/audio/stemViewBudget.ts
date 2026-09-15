@@ -67,8 +67,11 @@ export const STEMVIEW_PAYLOAD_CEILING = STEM_LANES * (b64Len(2 * MAX_BUCKETS) + 
  *  envelope is a handful of short keys per stem, so this is headroom, not an estimate to tune. */
 export const STEMVIEW_ENVELOPE_OVERHEAD = 4096;
 
-/** A Durable Object value is capped at 128 KiB. */
-export const DO_VALUE_CAP = 128 * 1024;
+// The DO per-value cap is a PLATFORM fact, not a stem-view one — it lives in room/doLimits.ts and
+// is re-exported here only so callers reasoning about this budget can see the constraint it is
+// derived from without a second import.
+import { DO_VALUE_CAP as DO_CAP } from "../room/doLimits";
+export { DO_VALUE_CAP } from "../room/doLimits";
 
 /** Envelopes per persisted record. `storage.put("stemviews", this.lastStemView)` writes ONE value
  *  holding decks A and B together — which is the denominator the first version of this file got
@@ -95,7 +98,7 @@ const RECORD_OVERHEAD = 2048;
  *  bound is derived DOWN from it. "Everything admitted is also persistable" is then true by
  *  construction, which is what licenses eventually retiring persistStemViews' oversized
  *  in-memory-only path. */
-export const MAX_STEMVIEW_RECORD_BYTES = DO_VALUE_CAP;
+export const MAX_STEMVIEW_RECORD_BYTES = DO_CAP;
 
 /** What the SERVER admits for ONE deck, for both relay and cache. Derived down from the record
  *  budget, so two admitted envelopes always fit in one persisted value.

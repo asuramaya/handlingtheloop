@@ -15,6 +15,7 @@ import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "..
 import { canDriveIntent } from "../src/htl/room/protocol";
 import { digestKey } from "../src/htl/room/digestKey";
 import { MAX_STEMVIEW_BYTES, MAX_STEMVIEW_RECORD_BYTES } from "../src/htl/audio/stemViewBudget";
+import { DO_VALUE_CAP } from "../src/htl/room/doLimits";
 import {
   type Attachment,
   type Ws,
@@ -248,6 +249,13 @@ export class DjRoom {
   // The oversized-lives-in-memory-only path is now unreachable by construction (the per-deck
   // admission bound is derived down from this record budget), but it is deliberately left in
   // place: retiring it is a separate change that wants measuring, not reasoning.
+  // ★ THE THROTTLE DROPS, IT DOES NOT DEFER — so the same deck publishing twice inside one window
+  // still loses the second write. Reachable: App.tsx publishes on onStemsReady and useStemViewSync
+  // re-streams on a remote's stem request, so a listener arriving just after stems are ready
+  // clusters two publishes of one deck. It is benign ONLY because those clustered republishes
+  // carry the SAME envelope, so the dropped write is a duplicate — per-deck keying narrowed the
+  // collision, content idempotence is what makes the remainder harmless. That distinction predicts
+  // where this shape bites next: ANY throttled cache whose successive writes are not idempotent.
   private async persistStemViews(deck: string): Promise<void> {
     const now = Date.now();
     if (now - (this.stemAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
@@ -272,7 +280,13 @@ export class DjRoom {
     const now = Date.now();
     if (now - (this.lyricAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
     try {
-      if (JSON.stringify(this.lastLyrics).length > 120_000) return;
+      // Derived from the platform cap, not hand-written. NOTE WHAT IS DIFFERENT HERE: stemview has
+      // a client-side clamp (Deck.ts caps the bucket COUNT), so its bound can be derived DOWN from
+      // this record budget and the two can be proven to agree. LYRICS HAVE NO SUCH CLAMP — nothing
+      // in the client bounds a word list — so this cap is the ONLY thing bounding the record, and
+      // an over-long track's captions simply stop persisting. That absence is a finding, not an
+      // oversight of this line: there is no ceiling in the code to derive one from.
+      if (JSON.stringify(this.lastLyrics).length > DO_VALUE_CAP) return;
       this.lyricAt[deck] = now;
       await this.state.storage.put("lyrics", this.lastLyrics);
     } catch {

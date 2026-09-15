@@ -1,4 +1,5 @@
 // Per-user synced data: the UI settings blob + play stats ("top songs").
+import { resolveTrackName } from "../trackName";
 import { type D1Database, now } from "./core";
 
 /** The signed-in user's synced UI settings blob (JSON string), or null if never saved. */
@@ -120,22 +121,64 @@ export async function logUserPlay(
     .run();
 }
 
-/** A user's most-played tracks, highest first (the profile's top songs). */
+/** A user's most-played tracks, highest first (the profile's top songs).
+ *
+ *  ★ THE NAME IS RESOLVED, NOT REPRINTED. What this table stores is whatever the client happened
+ *  to hold when the play was logged — which for a YouTube-sourced track is the UPLOADER's title
+ *  and channel ("Deadmau5 - HR 8938 Cephei (1080p) || HD" by "TheOtherMau5"), and for a track
+ *  loaded by bare id is nothing at all. The profile was printing both verbatim, so a public page
+ *  showed raw video ids where song names belong.
+ *
+ *  The app already knows better and was never asked. Two joins, best evidence first:
+ *    • track_identity — Chromaprint → AcoustID → MusicBrainz, the canonical artist/title. This is
+ *      the actual resolution from a video id to a song.
+ *    • community_tracks — the cached-catalogue index, which carries title/artist for anything
+ *      anyone has loaded. It is what rescues the rows stored with NO metadata, since a track you
+ *      played is a track that got cached.
+ *  Anything still unresolved goes through resolveTrackName's conventions, and an id is never a
+ *  name — see server/trackName.ts.
+ *
+ *  Both joins are LEFT: a profile must render with neither table populated. */
 export async function getTopTracks(db: D1Database, userId: string, limit = 12): Promise<TopTrack[]> {
   await ensureUserPlays(db);
   const r = await db
     .prepare(
-      `SELECT video_id, title, artist, thumbnail, plays
-       FROM user_track_stats WHERE user_id = ?
-       ORDER BY plays DESC, last_played_at DESC LIMIT ?`,
+      `SELECT s.video_id, s.title, s.artist, s.thumbnail, s.plays,
+              i.artist AS id_artist, i.title AS id_title,
+              c.title  AS c_title,  c.artist AS c_artist, c.thumbnail AS c_thumb
+       FROM user_track_stats s
+       LEFT JOIN track_identity  i ON i.video_id = s.video_id
+       LEFT JOIN community_tracks c ON c.video_id = s.video_id
+       WHERE s.user_id = ?
+       ORDER BY s.plays DESC, s.last_played_at DESC, s.video_id DESC LIMIT ?`,
     )
     .bind(userId, Math.min(Math.max(limit, 1), 50))
-    .all<{ video_id: string; title: string | null; artist: string | null; thumbnail: string | null; plays: number }>();
-  return (r.results ?? []).map((row) => ({
-    videoId: row.video_id,
-    title: row.title || "",
-    artist: row.artist || "",
-    thumbnail: row.thumbnail,
-    plays: row.plays,
-  }));
+    .all<{
+      video_id: string;
+      title: string | null;
+      artist: string | null;
+      thumbnail: string | null;
+      plays: number;
+      id_artist: string | null;
+      id_title: string | null;
+      c_title: string | null;
+      c_artist: string | null;
+      c_thumb: string | null;
+    }>();
+  return (r.results ?? []).map((row) => {
+    const named = resolveTrackName({
+      identityArtist: row.id_artist,
+      identityTitle: row.id_title,
+      // The community index is the better of the two stored strings when the play carried none.
+      title: row.title || row.c_title,
+      artist: row.artist || row.c_artist,
+    });
+    return {
+      videoId: row.video_id,
+      title: named.title,
+      artist: named.artist,
+      thumbnail: row.thumbnail || row.c_thumb,
+      plays: row.plays,
+    };
+  });
 }

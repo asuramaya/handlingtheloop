@@ -152,7 +152,14 @@ export function ProfilePublicView({
                   loading="lazy"
                 />
                 <span className="profile-top-meta">
-                  <span className="profile-top-title">{t.title || t.videoId}</span>
+                  {/* ★ NEVER THE VIDEO ID. This said `t.title || t.videoId`, so a track stored
+                      without metadata printed "2PpBU7EfiEY" on a PUBLIC profile — an internal id
+                      standing where a song name belongs. The server resolves the name now
+                      (track_identity → community_tracks → the uploader's own conventions, see
+                      server/trackName.ts) and can always produce something; this fallback is the
+                      belt-and-braces for an older server or a partial payload, and it says what is
+                      true — that we do not know — rather than showing the id. */}
+                  <span className="profile-top-title">{t.title || "Unknown track"}</span>
                   {t.artist && <span className="profile-top-artist">{t.artist}</span>}
                 </span>
                 <span className="profile-top-plays">{t.plays}×</span>

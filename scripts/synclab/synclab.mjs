@@ -86,6 +86,16 @@ const peek = (data) => {
       }
       o.sig = parts.join("|");
     }
+    // ★ seq IS A BETTER DELIVERY CHECK THAN ANY FIELD MATCH, and it was on the wire all along.
+    // The DO stamps it server-side and monotonic per room (room.ts:656). So delivery is verifiable
+    // by CONTIGUITY: a GAP is loss, a REPEAT is duplication, and it needs no per-branch field
+    // knowledge — which is the whole difficulty a union type creates. Two frames that look
+    // identical still have different seqs, so it sees exactly the case that made the field matcher
+    // mute on the FX pads. Metron's find. Field matching stays, but as a LATENCY tool, which is
+    // what it is actually good at.
+    if (typeof m.seq === "number") o.seq = m.seq;
+    if (m.from) o.from = m.from;
+    }
     // PRESENCE IS THE ONE PAYLOAD WORTH KEEPING, because it answers the question every other
     // measurement depends on: are these two browsers actually in the SAME ROOM? Without it, a
     // perfect-looking run of two isolated sessions is indistinguishable from real sync — both sides
@@ -163,6 +173,19 @@ if (has("compare")) {
   // Arrivals nobody sent, or sent once and delivered twice.
   const surplus = inb.filter((x, i) => !taken.has(i) && out.some((o) => o.sig !== undefined && o.sig === x.sig));
   if (surplus.length) console.log(`\n  ⚠ ${surplus.length} DUPLICATE arrival(s) — an intent sent once was applied more than once: ${[...new Set(surplus.map((x) => x.sig?.slice(0, 40)))].join(", ")}`);
+  // ── delivery by seq contiguity ────────────────────────────────────────────────────────────────
+  const seqs = B.frames.filter((f) => f.dir === "in" && typeof f.seq === "number").map((f) => f.seq);
+  if (seqs.length > 1) {
+    const lo = Math.min(...seqs), hi = Math.max(...seqs);
+    const uniq = new Set(seqs);
+    const missing = [];
+    for (let i = lo; i <= hi; i++) if (!uniq.has(i)) missing.push(i);
+    const dupes = seqs.length - uniq.size;
+    console.log(`\n  BY SEQ (server-stamped, detects loss AND duplication):`);
+    console.log(`    range ${lo}→${hi} — expected ${hi - lo + 1} · received ${seqs.length} · unique ${uniq.size}`);
+    console.log(`    MISSING: ${missing.length ? missing.join(",") : "none"}    DUPLICATE: ${dupes || "none"}`);
+  }
+
   const sorted = [...lat].sort((a, b) => a - b);
   console.log(`\n  delivered ${matched}/${out.length}${out.length ? ` (${Math.round((matched / out.length) * 100)}%)` : ""}`);
   const q = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : 0);

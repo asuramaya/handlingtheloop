@@ -901,6 +901,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
             cacheFilter
+            stateKey="collection"
           />
         )}
         {view === "community" && (
@@ -920,6 +921,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToCollection={library.addTrack}
             inCollection={inCollection}
             cacheFilter
+            stateKey="community"
           />
         )}
         {isPlaylist &&
@@ -950,6 +952,14 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 playlists={playlistRefs.filter((p) => p.id !== pl.id)}
                 onAddToPlaylist={library.addToPlaylist}
                 onCreatePlaylistWith={createPlaylistWith}
+                // Per PLAYLIST, not one shared "playlist" key: two playlists are different lists of
+                // different lengths, so one's scroll position restored into the other lands
+                // somewhere arbitrary. A deleted playlist leaves a dead key, which costs a few
+                // bytes and can mislead nothing — its own view is the only reader.
+                stateKey={`pl:${pl.id}`}
+                // Remount on a playlist switch, so the table reads ITS key rather than carrying the
+                // previous playlist's restored state into a list it does not describe.
+                key={pl.id}
               />
             );
           })()}

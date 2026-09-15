@@ -7,6 +7,7 @@ import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
 import { useColumnLayout } from "./lib/useColumnLayout";
 import { startTouchDrag, moveTouchDrag, endTouchDrag, cancelTouchDrag, type TouchDragPayload } from "../htl/state/touchDrag";
+import { loadTableState, saveTableState } from "./lib/trackTableState";
 import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
@@ -58,7 +59,11 @@ interface TrackTableProps {
   onReorder?: (from: number, to: number) => void; // enables intra-list drag-reorder (Queue)
   deckLoaded?: { A: string | null; B: string | null }; // videoIds on each deck → an A/B chip on that row
   deckColors?: { A: string; B: string }; // deck accent colours for the A/B chips
-  cacheFilter?: boolean; // show Cached / Stemmed toggle chips that narrow the view by pool state
+  cacheFilter?: boolean;
+  /** Persist this table's find-controls (filter, sort, cache/stem narrowing, scroll position)
+   *  under this key, and restore them on mount. Omit for a table whose state is owned elsewhere —
+   *  the Explorer's search results, whose query belongs to whoever ran the search. */
+  stateKey?: string; // show Cached / Stemmed toggle chips that narrow the view by pool state
 }
 
 // Imperative surface a hardware controller drives: a browse encoder moves a row cursor,
@@ -100,16 +105,25 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   deckLoaded,
   deckColors,
   cacheFilter,
+  stateKey,
 }: TrackTableProps, ref) {
   const searchMode = !!onSubmitSearch; // toolbar field submits a YouTube search instead of filtering
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>("index");
-  const [sortDir, setSortDir] = useState<1 | -1>(1);
-  const [query, setQuery] = useState(initialQuery ?? ""); // filter (library/queue) OR search box text
+  // ★ RESTORED, because closing the library UNMOUNTS it. The panel renders as `{open && (…)}`, so
+  // every one of these died the moment you loaded a track — which is precisely when the panel
+  // closes, i.e. the work of finding a track was discarded at the moment you were about to do it
+  // again. Read once, on mount: `stateKey` changing means a different list, and a different list
+  // gets its own remount via React's key, not a mutation of this one.
+  const saved = useMemo(() => loadTableState(stateKey), [stateKey]);
+  const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey ?? "index");
+  const [sortDir, setSortDir] = useState<1 | -1>(saved.sortDir ?? 1);
+  // `initialQuery` still wins: a SEARCH table's text belongs to whoever ran the search, and this
+  // memory must never overwrite it.
+  const [query, setQuery] = useState(initialQuery ?? saved.query ?? ""); // filter (library/queue) OR search box text
   const [reorderOver, setReorderOver] = useState<number | null>(null); // queue: row being hovered for reorder
-  const [cacheOnly, setCacheOnly] = useState(false); // narrow to pooled (instant-load) tracks
-  const [stemOnly, setStemOnly] = useState(false); // narrow to tracks whose stems are cached
+  const [cacheOnly, setCacheOnly] = useState(saved.cacheOnly ?? false); // narrow to pooled (instant-load) tracks
+  const [stemOnly, setStemOnly] = useState(saved.stemOnly ?? false); // narrow to tracks whose stems are cached
   const cacheVer = useCacheStatus(); // re-render rows (+ recompute the filter) when the manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   // Column sizing (persisted widths, row scale, # / thumb px widths + resize handlers).
@@ -207,6 +221,61 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     const h = firstRowRef.current?.offsetHeight;
     if (h) setRowH((prev) => (Math.abs(h - prev) > 0.5 ? h : prev));
   }, [scale, view.length]);
+  // ── remembering where you were ───────────────────────────────────────────────────────────────
+  // The find-controls are plain state and save on change. The SCROLL position cannot be: writing
+  // localStorage on every scroll event would put a synchronous string encode in the middle of a
+  // gesture, which is exactly the class of cost laglab was built to catch. So it is read from the
+  // live element at the moments that matter — when a control changes, and on unmount, which is the
+  // close that started all this.
+  const savedScroll = useRef(saved.scrollTop ?? 0);
+  // ★ TRACK THE POSITION LIVE; DO NOT READ IT AT UNMOUNT. Reading scrollerRef.current.scrollTop in
+  // the cleanup looks right and returns 0, every time: by then React has detached the node, and a
+  // detached element reports no scroll. So closing the panel — the exact moment this feature
+  // exists for — OVERWROTE the remembered position with zero. Measured, not reasoned: seeded a
+  // 300-track collection, scrolled to 900, closed, and the store held scrollTop 0 while the sort
+  // it saved in the same write came back correctly.
+  //
+  // A ref updated from the scroll event holds the last LIVE value, so the cleanup persists a
+  // number it already has instead of asking a corpse. The listener costs one assignment per event
+  // — no serialisation, nothing that touches layout.
+  useEffect(() => {
+    if (!stateKey) return;
+    const sc = scrollerRef.current;
+    if (!sc) return;
+    const onScroll = () => { savedScroll.current = sc.scrollTop; };
+    onScroll();
+    sc.addEventListener("scroll", onScroll, { passive: true });
+    return () => sc.removeEventListener("scroll", onScroll);
+  }, [stateKey, view.length, virtualize]);
+  const persist = useCallback(() => {
+    if (!stateKey) return;
+    // Prefer the live element when it is still attached (a control changed mid-session); fall back
+    // to the tracked value, which is the only thing available once the node is gone.
+    const sc = scrollerRef.current;
+    if (sc?.isConnected) savedScroll.current = sc.scrollTop;
+    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current });
+  }, [stateKey, sortKey, sortDir, query, cacheOnly, stemOnly]);
+  // Save when a control moves, AND on unmount — the cleanup is the one that catches closing the
+  // panel or loading a track, where nothing changed but the component is about to be destroyed.
+  useEffect(() => {
+    if (!stateKey) return;
+    persist();
+    return persist;
+  }, [stateKey, persist]);
+
+  // ★ RESTORE ONCE, AND ONLY AFTER THERE IS SOMETHING TO SCROLL. Setting scrollTop before the rows
+  // have height silently clamps to 0, so this waits for a scroller and a non-empty list — and then
+  // never runs again, or it would fight the person's own scrolling on every re-render.
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (restored.current || !stateKey) return;
+    const sc = scrollerRef.current;
+    const want = saved.scrollTop ?? 0;
+    if (!sc || view.length === 0) return;
+    restored.current = true;
+    if (want > 0) sc.scrollTop = want;
+  }, [stateKey, saved.scrollTop, view.length, rowH]);
+
   // Compute the visible window from the scroller's position. The table top tracks logical
   // row 0 (the spacers preserve full height), so (scrollerTop − row0Top)/rowH = rows above.
   const recompute = useCallback(() => {

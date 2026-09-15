@@ -1,5 +1,6 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
+import { rackDelta } from "./fxSnapshotReconcile";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
@@ -2652,12 +2653,27 @@ export class Deck {
       params: d.kind === "eq" ? {} : d.snapshotParams(),
     }));
   }
-  /** Reconcile the rack to `slots`. Membership is now FIXED (EQ + the permanent pad-FX bank are
-   *  always resident), so this never adds or removes — it syncs each matching device's params +
-   *  bypass BY KIND, then reconciles chain ORDER to the snapshot. The EQ reuses `this.eq` and its
-   *  params ride the eq* path (skipped here). `undefined` = an older snapshot with no FX info →
-   *  leave the bank at its defaults. Kinds the snapshot omits (e.g. an older, smaller chain) keep
-   *  their dormant defaults; unknown kinds are ignored. */
+  /** Reconcile the rack to `slots`: ADD what the snapshot has and we lack, REMOVE what we have and
+   *  it lacks, then sync params + bypass by kind and match the order.
+   *
+   *  ★ IT USED TO DO NEITHER, and that was the "effects don't sync" bug. This said "Membership is
+   *  now FIXED (EQ + the permanent pad-FX bank are always resident), so this never adds or removes"
+   *  and enforced it with `if (idx < 0) continue; // shouldn't happen post-provision`. TRUE when
+   *  written. Then a chain came to OWN its devices (ensurePadFx boots only eq + comp) and the ＋
+   *  button made membership variable, and this line never learned — so a co-DJ's added reverb was
+   *  dropped on the floor while eq and comp, resident on both sides, synced perfectly. Operator:
+   *  "i add reverb to master, other user does not see reverb, but eq and comp the stock fx are
+   *  there and synced, just not add/removes." Diagnosed by Deckard.
+   *
+   *  ★ ADDS ONLY WHAT IS MISSING — never a wholesale rebuild, even though a rebuild would also
+   *  produce the right membership. Tearing the master down destroys LIVE AudioNodes: a reverb tail
+   *  mid-decay, a delay's feedback, a gate mid-cycle. So a co-DJ turning one knob must not glitch
+   *  everyone else's rack, which is exactly what copying roomSim's fake (a wholesale rebuild — the
+   *  right outcome by the wrong method) would have done.
+   *
+   *  The EQ reuses `this.eq` and its params ride the eq* path (skipped here). `undefined` = an older
+   *  snapshot with no FX info → leave the rack alone entirely. Unknown kinds are ignored and are
+   *  never read as removals. eq and comp can never be removed (UNDELETABLE_MASTER_KINDS). */
   applyFxSnapshot(slots: ReadonlyArray<{ kind: string; bypassed: boolean; params: Record<string, number> }> | undefined) {
     if (!slots) return;
     // Guarantee the bank is resident before syncing — covers a restore/room-intent that lands
@@ -2666,9 +2682,28 @@ export class Deck {
     // exactly as the old rebuild did — same worklet-availability characteristics, never param loss.)
     this.ensurePadFx();
     const known = slots.filter((s) => Deck.FX_KINDS.has(s.kind));
+    // MEMBERSHIP FIRST, params second — a device has to exist before its params can land on it.
+    // The decision is a pure function (fxSnapshotReconcile) so the node suite can test it and so
+    // roomSim's fake runs the SAME algorithm instead of claiming to mirror this one.
+    const delta = rackDelta(
+      this.rack.list.map((d) => d.kind),
+      known.map((s) => s.kind),
+    );
+    for (const kind of delta.remove) {
+      const at = this.rack.indexOf(kind as FxKind);
+      if (at >= 0) this.rack.remove(at); // rack.remove, not removeFxAt: that one guards the OLD fixed-membership set
+    }
+    for (const kind of delta.add) {
+      const d = this.makeFx(kind, "master");
+      if (!d) continue;
+      this.rack.add(d);
+      // Pad-throw kinds land DORMANT exactly as a local add does, so a synced rack behaves like a
+      // hand-built one; the snapshot's own bypass value is applied below and wins either way.
+      if (Deck.PAD_THROW_KINDS.has(kind)) d.setBypass(true, true);
+    }
     for (const s of known) {
       const idx = this.rack.indexOf(s.kind as FxKind);
-      if (idx < 0) continue; // not resident (shouldn't happen post-provision) — never re-create
+      if (idx < 0) continue; // creation refused (unknown kind / duplicate) — nothing to sync onto
       const d = this.rack.deviceAt(idx);
       if (!d || d.kind === "eq") continue; // EQ params come from the eq* ControlParams
       for (const k in s.params) d.setParam(k, s.params[k]);

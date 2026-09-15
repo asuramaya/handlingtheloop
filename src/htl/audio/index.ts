@@ -23,6 +23,7 @@ export { decodeAudio } from "./decode";
 export { MicInput, type MicRoute } from "./MicInput";
 export { MIC_CHAIN, micChainOf, seedMicChain } from "./micChain";
 export { chainWaitingForStems, anyChainWaitingForStems, chainIsDeaf } from "./chainRouting";
+export { rackDelta, UNDELETABLE_MASTER_KINDS } from "./fxSnapshotReconcile";
 export { Recorder, type Take } from "./Recorder";
 export {
   Sampler,

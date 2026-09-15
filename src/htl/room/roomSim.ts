@@ -15,6 +15,7 @@
 // gesture named", never "it sounded right".
 
 import { applyBoardAction } from "../board/boardActions";
+import { rackDelta } from "../audio/fxSnapshotReconcile";
 import type { Deck } from "../audio/Deck";
 import { applyIntent, type IntentDeck, type IntentEngine, type IntentHost } from "./applyIntent";
 
@@ -159,9 +160,37 @@ export class FakeDeck implements IntentDeck {
     this.log.push(`fxChains ${chains.map((c) => c.name).join(",")}`);
   }
   applyFxSnapshot(rack: FxSlot[]): void {
-    // Mirrors the real one: it rebuilds the MASTER chain and says nothing about stem chains.
+    // ★ THIS COMMENT USED TO SAY "Mirrors the real one" AND IT DID NOT. It rebuilt the master chain
+    // wholesale — `master.devices = rack.map(...)` — which ADDS devices, while the real
+    // applyFxSnapshot dropped every non-resident kind on the floor. So the fake produced the right
+    // answer by the wrong method, the coordination tests exercised add/remove against something that
+    // could not reproduce the bug, and they passed green while a co-DJ's added reverb never appeared
+    // for anyone. A closed-world claim in a FAKE, covering for a closed-world claim in the real code.
+    //
+    // It now runs the same DECISION the real deck runs (rackDelta), so it cannot be right where the
+    // real one is wrong. It still applies that decision the fake way — plain objects, no AudioNodes
+    // — which is the part a simulator is allowed to differ on.
     const master = this.chains[this.chains.length - 1];
-    master.devices = rack.map((s) => ({ kind: s.kind, params: { ...(s.params ?? {}) }, bypassed: !!s.bypassed }));
+    const delta = rackDelta(
+      master.devices.map((d) => d.kind),
+      rack.map((s) => s.kind),
+    );
+    master.devices = master.devices.filter((d) => !delta.remove.includes(d.kind));
+    for (const kind of delta.add) master.devices.push({ kind, params: {}, bypassed: false });
+    // Params + bypass by kind, for whatever is now resident — membership first, params second.
+    for (const s of rack) {
+      const d = master.devices.find((x) => x.kind === s.kind);
+      if (!d) continue;
+      d.params = { ...(s.params ?? {}) };
+      d.bypassed = !!s.bypassed;
+    }
+    // Order follows the snapshot, residents it omits keeping their relative tail position.
+    const wanted = rack.map((s) => s.kind);
+    master.devices.sort((a, b) => {
+      const ia = wanted.indexOf(a.kind);
+      const ib = wanted.indexOf(b.kind);
+      return (ia < 0 ? wanted.length : ia) - (ib < 0 ? wanted.length : ib);
+    });
     this.log.push(`fxRack ${rack.map((s) => s.kind).join(",")}`);
   }
 

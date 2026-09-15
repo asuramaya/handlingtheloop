@@ -55,24 +55,43 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // the transport and would hide a frame the app built late or handled slowly.
 const RECORDER = `
 window.__sync = { frames: [], console: [], sockets: [], tasks: [], t0: Date.now() };
-const rec = (o) => { o.at = Date.now(); o.t = Math.round(performance.now()); window.__sync.frames.push(o); };
+// The field t belongs to the PROTOCOL (it IS the frame type). The page-relative clock is ts —
+// reusing t silently overwrote every frame type with a number, and the summary printed
+// 'out 419' instead of 'out intent:fxParam'. The wire format names the field first; the
+// harness works around it. (No backticks in here: this whole block is a template literal.)
+const rec = (o) => { o.at = Date.now(); o.ts = Math.round(performance.now()); window.__sync.frames.push(o); };
 const peek = (data) => {
   if (typeof data !== "string") return { t: "(binary)", bytes: data?.byteLength ?? 0 };
   try {
     const m = JSON.parse(data);
     // Keep the SHAPE, drop the payload: snapshots and stem views are enormous and the question is
     // always "did this kind of message cross, and when", never "what were the 40,000 samples".
-    return { t: m.t, kind: m.intent?.kind, deck: m.intent?.deck ?? m.deck, param: m.intent?.param ?? m.intent?.fx, value: typeof m.intent?.value === "number" ? Math.round(m.intent.value * 1000) / 1000 : m.intent?.value, bytes: data.length };
+    const o = { t: m.t, kind: m.intent?.kind, deck: m.intent?.deck ?? m.deck, param: m.intent?.param ?? m.intent?.fx, value: typeof m.intent?.value === "number" ? Math.round(m.intent.value * 1000) / 1000 : m.intent?.value, bytes: data.length };
+    // PRESENCE IS THE ONE PAYLOAD WORTH KEEPING, because it answers the question every other
+    // measurement depends on: are these two browsers actually in the SAME ROOM? Without it, a
+    // perfect-looking run of two isolated sessions is indistinguishable from real sync — both sides
+    // send, neither receives the other, and every per-side summary looks healthy.
+    if (m.t === "presence" || m.t === "welcome" || m.t === "role") {
+      // The field is peers (protocol.ts:308/314) — not people/devices/presence, all of which I
+      // guessed first and all of which read back undefined. The guessed version could not tell a
+      // shared room from two isolated ones, and said so only because the no-jam CONTROL produced
+      // an identical result to the jam. Read the wire type, do not guess at it.
+      if (Array.isArray(m.peers)) o.who = m.peers.map((x) => x?.name ?? x?.id ?? "?").slice(0, 8);
+      if (typeof m.listeners === "number") o.listeners = m.listeners;
+      if (m.you) o.you = m.you;
+      if (m.anchorId !== undefined) o.anchor = m.anchorId;
+    }
+    return o;
   } catch { return { t: "(unparsed)", bytes: data.length }; }
 };
 const OrigWS = window.WebSocket;
 function PatchedWS(url, protocols) {
   const ws = protocols === undefined ? new OrigWS(url) : new OrigWS(url, protocols);
   const room = String(url).includes("/api/room");
-  window.__sync.sockets.push({ url: String(url).slice(0, 120), room, event: "new", at: Date.now(), t: Math.round(performance.now()) });
-  ws.addEventListener("open", () => window.__sync.sockets.push({ room, event: "open", at: Date.now(), t: Math.round(performance.now()) }));
-  ws.addEventListener("close", (e) => window.__sync.sockets.push({ room, event: "close", code: e.code, at: Date.now(), t: Math.round(performance.now()) }));
-  ws.addEventListener("error", () => window.__sync.sockets.push({ room, event: "error", at: Date.now(), t: Math.round(performance.now()) }));
+  window.__sync.sockets.push({ url: String(url).slice(0, 120), room, event: "new", at: Date.now(), ts: Math.round(performance.now()) });
+  ws.addEventListener("open", () => window.__sync.sockets.push({ room, event: "open", at: Date.now(), ts: Math.round(performance.now()) }));
+  ws.addEventListener("close", (e) => window.__sync.sockets.push({ room, event: "close", code: e.code, at: Date.now(), ts: Math.round(performance.now()) }));
+  ws.addEventListener("error", () => window.__sync.sockets.push({ room, event: "error", at: Date.now(), ts: Math.round(performance.now()) }));
   if (room) {
     ws.addEventListener("message", (e) => rec({ dir: "in", ...peek(e.data) }));
     const send = ws.send.bind(ws);
@@ -85,7 +104,7 @@ for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) PatchedWS[k] = Orig
 window.WebSocket = PatchedWS;
 
 try {
-  new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__sync.tasks.push({ at: Date.now(), t: Math.round(e.startTime), d: Math.round(e.duration) }); })
+  new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__sync.tasks.push({ at: Date.now(), ts: Math.round(e.startTime), d: Math.round(e.duration) }); })
     .observe({ entryTypes: ["longtask"] });
 } catch {}
 `;
@@ -119,17 +138,38 @@ const ROLE = arg("role", "a");
 const URL_ = arg("url", "https://handlingtheloop.com/");
 const OUT = arg("out", `synclab-${ROLE}.json`);
 const HOLD = +arg("hold", 60); // seconds to stay open recording
+// The session cookie for THIS side. Against `wrangler dev` these come from
+// /api/auth/dev?name=<who> — a real D1 user + session, no OAuth, and the route does not exist in
+// production (gated on env.DEV_LOGIN, set only in .dev.vars). Each side gets its OWN browser, so
+// the two cookie jars never touch.
+const SID = arg("sid", null);
+// ★ ENGAGE ON BOOT. The room socket does not open until the device JOINS a session — a signed-out
+// solo page opens none at all, which the recorder's own positive control established. The client
+// persists its switch state under htl_room_engage so a refresh re-engages (client.ts:103), so
+// seeding that key is how a headless side joins without driving the Session panel by hand.
+// `control` is the drive switch and is independent of `listen` (audio), which is why they are
+// separate flags rather than one "joined".
+const ENGAGE = has("engage");
+const CONTROL = !has("no-control");
 const exe = findChrome();
 if (!exe) { console.error("synclab: no Chromium found."); process.exit(2); }
 
 const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"] });
-const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+if (SID) {
+  const u = new URL(URL_);
+  await context.addCookies([{ name: "htl_session", value: SID, domain: u.hostname, path: "/", httpOnly: true, secure: u.protocol === "https:", sameSite: "Lax" }]);
+}
+const page = await context.newPage();
 page.on("pageerror", (e) => process.stderr.write(`  [${ROLE} page error] ${String(e).slice(0, 160)}\n`));
 page.on("console", (m) => {
   const t = m.text();
   if (/\[htl\]/.test(t) || m.type() === "error") process.stderr.write(`  [${ROLE} ${m.type()}] ${t.slice(0, 200)}\n`);
 });
 await page.addInitScript(RECORDER);
+if (ENGAGE) {
+  await page.addInitScript(`try { localStorage.setItem("htl_room_engage", JSON.stringify({ joined: true, control: ${CONTROL}, listen: true, ts: Date.now() })); } catch {}`);
+}
 await page.goto(URL_, { waitUntil: "domcontentloaded", timeout: 60000 });
 console.log(`[${ROLE}] loaded ${URL_}`);
 await sleep(HOLD * 1000);

@@ -67,25 +67,49 @@ export const STEMVIEW_PAYLOAD_CEILING = STEM_LANES * (b64Len(2 * MAX_BUCKETS) + 
  *  envelope is a handful of short keys per stem, so this is headroom, not an estimate to tune. */
 export const STEMVIEW_ENVELOPE_OVERHEAD = 4096;
 
-/** A Durable Object value is capped at 128 KiB. room.ts states this in three places, and today the
- *  admitted envelope could exceed it — which is why persistStemViews has an "oversized lives in
- *  memory only" path at all. */
+/** A Durable Object value is capped at 128 KiB. */
 export const DO_VALUE_CAP = 128 * 1024;
 
-/** Headroom over the derived ceiling, so a modest client-side change does not instantly black out
- *  remote waveforms — the failure the two-phase rule above exists to manage. */
-const HEADROOM = 2;
+/** Envelopes per persisted record. `storage.put("stemviews", this.lastStemView)` writes ONE value
+ *  holding decks A and B together — which is the denominator the first version of this file got
+ *  wrong. */
+export const DECKS_PER_RECORD = 2;
 
-/** What the SERVER admits, for both relay and cache.
+/** JSON structure around the two envelopes in the record: the outer braces and the "A"/"B" keys,
+ *  plus slack. Small and deliberately generous. */
+const RECORD_OVERHEAD = 2048;
+
+/** ★ THE DENOMINATORS, because getting them wrong is what the first version of this file did.
  *
- *  Derived from the client's own clamp, then CLAMPED TO THE DO CAP rather than merely landing
- *  under it. At today's constants the derivation gives 128,768 and the cap 131,072, so the min is
- *  the derivation — but that is arithmetic luck, and a later bucket change would silently push an
- *  admitted envelope past what the DO can store. Writing the min makes "everything admitted is
- *  also persistable" a PROPERTY instead of a coincidence, which in turn means the oversized
- *  in-memory-only path can eventually retire rather than lurking as a second code path nobody
- *  exercises.
+ *  ADMISSION is per DECK   — room.ts measures `JSON.stringify(msg.view).length`, one envelope.
+ *  PERSISTENCE is per RECORD — persistStemViews measures `JSON.stringify(this.lastStemView).length`,
+ *                              BOTH decks under one key.
  *
- *  Anything above this cannot have been produced by this client — which is what makes dropping it
- *  safe rather than merely convenient. */
-export const MAX_STEMVIEW_BYTES = Math.min((STEMVIEW_PAYLOAD_CEILING + STEMVIEW_ENVELOPE_OVERHEAD) * HEADROOM, DO_VALUE_CAP);
+ *  The first version wrote `Math.min(perDeckDerivation, DO_VALUE_CAP)` and called the result a
+ *  property. It compared a per-deck quantity against a per-record cap: two decks admitted at that
+ *  bound produce a ~257 KB record, twice what the DO can store. Not a live defect — real envelopes
+ *  are ~40 KB/deck so a real record is ~80 KB — but the property was still luck, by about 1.5x
+ *  instead of by construction, which is exactly what the min() was written to eliminate.
+ *
+ *  So the budget is now stated where the constraint actually lives — the RECORD — and the per-deck
+ *  bound is derived DOWN from it. "Everything admitted is also persistable" is then true by
+ *  construction, which is what licenses eventually retiring persistStemViews' oversized
+ *  in-memory-only path. */
+export const MAX_STEMVIEW_RECORD_BYTES = DO_VALUE_CAP;
+
+/** What the SERVER admits for ONE deck, for both relay and cache. Derived down from the record
+ *  budget, so two admitted envelopes always fit in one persisted value.
+ *
+ *  Anything above this cannot have been produced by this client (the clamp ceiling is
+ *  STEMVIEW_PAYLOAD_CEILING, comfortably below), which is what makes dropping it safe rather than
+ *  merely convenient. */
+export const MAX_STEMVIEW_BYTES = Math.floor((MAX_STEMVIEW_RECORD_BYTES - RECORD_OVERHEAD) / DECKS_PER_RECORD);
+
+/** ★ THE HARD CONSTRAINT THIS EXPOSES, and it did not exist before the budget was derived:
+ *  the DO's per-value cap is now a CEILING ON THE CLIENT CLAMP. MAX_BUCKETS cannot be raised past
+ *  the point where STEMVIEW_PAYLOAD_CEILING exceeds MAX_STEMVIEW_BYTES, because past it the server
+ *  must refuse envelopes the client legitimately produces — every remote waveform goes absent.
+ *  The test asserts this, so a future clamp raise fails loudly in CI instead of blacking out
+ *  sessions at runtime. If that assertion ever fires, the envelope format has to get smaller
+ *  (coarser buckets, fewer bands) or persistence has to stop being one key. */
+export const CLAMP_FITS_RECORD = STEMVIEW_PAYLOAD_CEILING <= MAX_STEMVIEW_BYTES;

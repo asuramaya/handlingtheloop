@@ -14,7 +14,7 @@
 import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
 import { canDriveIntent } from "../src/htl/room/protocol";
 import { digestKey } from "../src/htl/room/digestKey";
-import { MAX_STEMVIEW_BYTES } from "../src/htl/audio/stemViewBudget";
+import { MAX_STEMVIEW_BYTES, MAX_STEMVIEW_RECORD_BYTES } from "../src/htl/audio/stemViewBudget";
 import {
   type Attachment,
   type Ws,
@@ -233,14 +233,21 @@ export class DjRoom {
     await this.state.storage.put("approved", [...this.approved]);
   }
 
-  // Best-effort persistence of the per-deck stem envelopes. They can be large; stay well
-  // under the DO's 128 KiB per-value cap (oversized ones live in memory only — the host
-  // re-streams on the next join / track change anyway) and never throw.
+  // Best-effort persistence of the per-deck stem envelopes, as ONE value holding both decks.
+  // The oversized-lives-in-memory-only path is now unreachable by construction (the per-deck
+  // admission bound is derived down from this record budget), but it is deliberately left in
+  // place: retiring it is a separate change that wants measuring, not reasoning.
   private async persistStemViews(): Promise<void> {
     const now = Date.now();
     if (now - this.stemAt < DjRoom.PERSIST_MIN_MS) return; // throttled — in-memory copy stays live
     try {
-      if (JSON.stringify(this.lastStemView).length > 120_000) return;
+      // Derived, not hand-written — and note the DENOMINATOR: this measures the WHOLE RECORD
+      // (both decks under one key), where the admission gate above measures ONE deck. Those are
+      // different quantities, and conflating them is how the first version of stemViewBudget.ts
+      // claimed a property it did not have. Because the per-deck bound is now derived DOWN from
+      // this record budget, two admitted envelopes always fit — so this guard is defence in depth
+      // rather than a live gate, and should never fire.
+      if (JSON.stringify(this.lastStemView).length > MAX_STEMVIEW_RECORD_BYTES) return;
       this.stemAt = now;
       await this.state.storage.put("stemviews", this.lastStemView);
     } catch {

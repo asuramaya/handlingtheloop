@@ -7,6 +7,8 @@ import {
   MAX_STEMVIEW_BYTES,
   STEMVIEW_PAYLOAD_CEILING,
   STEM_LANES,
+  CLAMP_FITS_RECORD,
+  DECKS_PER_RECORD,
 } from "./stemViewBudget";
 
 const b64Len = (n: number) => Math.ceil(n / 3) * 4;
@@ -18,18 +20,26 @@ describe("stemViewBudget", () => {
     expect(STEMVIEW_PAYLOAD_CEILING).toBe(60_288); // 4 x (12,000 + 3,072) at today's constants
   });
 
-  // THE PROPERTY, not the coincidence. At today's numbers the derivation lands under the DO cap on
-  // its own; a later bucket change could push it past, and then an admitted envelope would be one
-  // the DO cannot store — reviving the "oversized lives in memory only" split this is meant to end.
-  it("can never admit an envelope the Durable Object cannot store", () => {
-    expect(MAX_STEMVIEW_BYTES).toBeLessThanOrEqual(DO_VALUE_CAP);
+  // ★ THE DENOMINATORS. Admission is per DECK; persistence is per RECORD (both decks, one key).
+  // The first version min()'d a per-deck derivation against the per-record cap and called it a
+  // property — two decks admitted at that bound produced a ~257 KB record, twice what the DO can
+  // store. This is the assertion that would have caught it.
+  it("two ADMITTED envelopes always fit in ONE persisted record", () => {
+    const record = DECKS_PER_RECORD * MAX_STEMVIEW_BYTES + 2048; // + the record's own JSON overhead
+    expect(record).toBeLessThanOrEqual(DO_VALUE_CAP);
   });
 
-  it("admits everything this client can actually produce, with headroom", () => {
-    expect(MAX_STEMVIEW_BYTES).toBeGreaterThan(STEMVIEW_PAYLOAD_CEILING);
-    // Two decks' worth of ceiling is what a joiner is handed by sendCatchUp; the bound must not be
-    // so tight that an ordinary separation is refused.
-    expect(MAX_STEMVIEW_BYTES).toBeGreaterThan(STEMVIEW_PAYLOAD_CEILING * 1.5);
+  it("admits everything this client can actually produce", () => {
+    expect(MAX_STEMVIEW_BYTES).toBeGreaterThanOrEqual(STEMVIEW_PAYLOAD_CEILING);
+  });
+
+  // ★ THE CONSTRAINT THE DERIVATION EXPOSED: the DO's per-value cap is now a ceiling on the CLIENT
+  // clamp. Raise MAX_BUCKETS past the point where the payload ceiling exceeds the per-deck budget
+  // and the server must refuse envelopes the client legitimately produces — every remote waveform
+  // goes absent, in every session, at once. This fails in CI instead.
+  it("fails loudly if a clamp raise outgrows what one record can hold", () => {
+    expect(CLAMP_FITS_RECORD).toBe(true);
+    expect(STEMVIEW_PAYLOAD_CEILING).toBeLessThanOrEqual(MAX_STEMVIEW_BYTES);
   });
 
   it("is far below the 400 KB it replaces — that is the point", () => {

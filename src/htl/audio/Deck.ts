@@ -1,6 +1,7 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
+import { chainPlan } from "./fxChainReconcile";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
@@ -2751,8 +2752,45 @@ export class Deck {
       });
       return;
     }
-    for (const c of this.rack.chainList.filter((c) => !c.master).map((c) => c.id)) this.removeFxChain(c);
-    for (const c of chains) {
+    // ★ RECONCILE PER CHAIN. This used to remove EVERY non-master chain and rebuild all of them the
+    // moment the structure differed — which is exactly what adding one device does. So the single
+    // gesture the operator reported ("chain 1 add reverb, apply to vocals") destroyed the live
+    // AudioNodes of every OTHER chain on every peer: a reverb tail cut, a delay's feedback lost, a
+    // gate restarted mid-cycle. The fast path above exists precisely to prevent that, and the
+    // else-branch undid it on the only path that ever changes membership.
+    // The unit is the CHAIN: one the snapshot still names keeps its audio and reconciles its own
+    // devices; only a genuinely new chain is built and only a genuinely absent one dies.
+    const plan = chainPlan(
+      this.rack.chainList.filter((c) => !c.master).map((c) => ({ id: c.id, name: c.name, stems: c.stems ?? 0, devices: c.devices.map((d) => d.kind) })),
+      chains,
+      Deck.FX_KINDS,
+    );
+    for (const id of plan.remove) this.removeFxChain(id);
+    for (const k of plan.keep) {
+      // Stems first: setFxChainStems re-partitions ownership across chains, so a device added to a
+      // chain whose claim is about to change should land after the claim settles. Only written when
+      // it actually changed — re-writing an unchanged claim churns the partition for nothing.
+      if (k.stemsChanged) this.setFxChainStems(k.id, k.snapshot.stems ?? 0);
+      for (const kind of k.removeDevices) this.removeFxFrom({ chain: k.id, kind: kind as FxKind });
+      for (const kind of k.addDevices) this.addFxTo(k.id, kind as FxKind);
+      // Order, in place — moving a device keeps its node alive where re-creating it would not.
+      const chain = this.rack.chain(k.id);
+      if (chain) {
+        k.order.forEach((kind, want) => {
+          const at = chain.devices.findIndex((d) => d.kind === kind);
+          if (at >= 0 && at !== want) this.moveFxIn(k.id, at, want);
+        });
+      }
+      // Params and bypass for everything that survived OR was just added.
+      const live = this.rack.chain(k.id);
+      for (const s of k.snapshot.devices) {
+        const d = live?.devices.find((x) => x.kind === s.kind);
+        if (!d || d.kind === "eq") continue;
+        for (const key in s.params) d.setParam(key, s.params[key]);
+        d.setBypass(s.bypassed, true);
+      }
+    }
+    for (const c of plan.add) {
       const made = this.addFxChain(c.name);
       // Stems go through setFxChainStems so the one-owner partition is enforced by the same code
       // path a live edit uses — a snapshot must not be able to write a state a gesture cannot.

@@ -67,6 +67,25 @@ const peek = (data) => {
     // Keep the SHAPE, drop the payload: snapshots and stem views are enormous and the question is
     // always "did this kind of message cross, and when", never "what were the 40,000 samples".
     const o = { t: m.t, kind: m.intent?.kind, deck: m.intent?.deck ?? m.deck, param: m.intent?.param ?? m.intent?.fx, value: typeof m.intent?.value === "number" ? Math.round(m.intent.value * 1000) / 1000 : m.intent?.value, bytes: data.length };
+    // AN INTENT IS A UNION, SO DO NOT PROJECT A FIXED FIELD SET OVER IT. Recording {param, value}
+    // captures a knob turn honestly and EMPTIES every branch that does not carry those fields. A
+    // board gesture (the FX pads) is {kind, deck, id, phase, arg} — no param, no value — so four
+    // distinct pad presses all flattened to 'board:A:undefined:undefined', four identical rows. A
+    // matcher keying on that returns the first inbound match for all four and reports 4/4 whether
+    // four crossed, one crossed, or one crossed four times. It fails toward PASS, and it silently
+    // cancelled the repeated-press control added specifically to catch a double-apply.
+    // So: key on the branch's OWN identity — every scalar field the intent actually carries.
+    if (m.intent && typeof m.intent === "object") {
+      const parts = [];
+      for (const k of Object.keys(m.intent).sort()) {
+        const v = m.intent[k];
+        const t = typeof v;
+        if (v === null || t === "string" || t === "number" || t === "boolean") {
+          parts.push(k + "=" + (t === "number" ? Math.round(v * 1000) / 1000 : String(v)));
+        }
+      }
+      o.sig = parts.join("|");
+    }
     // PRESENCE IS THE ONE PAYLOAD WORTH KEEPING, because it answers the question every other
     // measurement depends on: are these two browsers actually in the SAME ROOM? Without it, a
     // perfect-looking run of two isolated sessions is indistinguishable from real sync — both sides
@@ -125,15 +144,25 @@ if (has("compare")) {
   const out = A.frames.filter((f) => f.dir === "out" && f.t === "intent");
   const inb = B.frames.filter((f) => f.dir === "in" && f.t === "intent");
   console.log(`\nsynclab compare — A sent ${out.length} intents, B received ${inb.length}\n`);
-  console.log("  kind              param        A sent     B got    latency");
+  console.log("  kind      intent identity                       A sent  latency");
   let matched = 0;
   const lat = [];
+  // ★ CONSUME EACH INBOUND MATCH. Without this, one arrival can satisfy every identical outbound
+  // row — so N sends and ONE delivery still prints N/N. Consuming is also what makes a DOUBLE-APPLY
+  // visible: two arrivals for one send leave a surplus, and a surplus is the only evidence an
+  // idempotency bug ever produces.
+  const taken = new Set();
   for (const o of out) {
-    // Match on the identity the wire carries, then take the FIRST arrival after it was sent.
-    const m = inb.find((x) => x.kind === o.kind && x.deck === o.deck && x.param === o.param && x.value === o.value && x.at >= o.at - 50);
-    if (m) { matched++; lat.push(m.at - o.at); }
-    console.log(`  ${String(o.kind ?? "?").padEnd(16)}${String(o.param ?? "").padEnd(12)}${String(o.at % 100000).padStart(7)}  ${m ? String(m.at % 100000).padStart(8) : "   MISSING".padStart(8)}  ${m ? String(m.at - o.at).padStart(7) + " ms" : "    —"}`);
+    const key = (x) => (x.sig !== undefined || o.sig !== undefined ? x.sig === o.sig : x.kind === o.kind && x.deck === o.deck && x.param === o.param && x.value === o.value);
+    const idx = inb.findIndex((x, i) => !taken.has(i) && key(x) && x.at >= o.at - 50);
+    const m = idx >= 0 ? inb[idx] : null;
+    if (m) { taken.add(idx); matched++; lat.push(m.at - o.at); }
+    const label = o.sig ? o.sig.replace(/^kind=[^|]*\|?/, "").slice(0, 34) : String(o.param ?? "");
+    console.log(`  ${String(o.kind ?? "?").padEnd(10)}${label.padEnd(36)}${String(o.at % 100000).padStart(7)}  ${m ? String(m.at - o.at).padStart(6) + " ms" : " MISSING"}`);
   }
+  // Arrivals nobody sent, or sent once and delivered twice.
+  const surplus = inb.filter((x, i) => !taken.has(i) && out.some((o) => o.sig !== undefined && o.sig === x.sig));
+  if (surplus.length) console.log(`\n  ⚠ ${surplus.length} DUPLICATE arrival(s) — an intent sent once was applied more than once: ${[...new Set(surplus.map((x) => x.sig?.slice(0, 40)))].join(", ")}`);
   const sorted = [...lat].sort((a, b) => a - b);
   console.log(`\n  delivered ${matched}/${out.length}${out.length ? ` (${Math.round((matched / out.length) * 100)}%)` : ""}`);
   const q = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : 0);

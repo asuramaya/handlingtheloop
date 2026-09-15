@@ -33,7 +33,9 @@ export interface LyricsSyncDeps {
 export interface LyricsSync {
   onRoomLyrics: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   reprocessLyrics: (id: DeckId, engineOverride?: "lrclib" | "youtube") => void;
-  sendHostLyrics: (id: DeckId, force?: boolean) => void;
+  /** `forceKey` is the ROSTER signature: a re-send fires once per roster change (a peer joined),
+   *  not once per effect run. Omit it for an ordinary content-driven send. */
+  sendHostLyrics: (id: DeckId, forceKey?: string) => void;
 }
 
 export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
@@ -117,8 +119,31 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
   captionsRef.current = captions;
   const captionSourceRef = useRef(captionSource);
   captionSourceRef.current = captionSource;
-  const lastLyricsSent = useRef<Record<DeckId, LyricsLine[] | null>>({ A: null, B: null });
-  const sendHostLyrics = useCallback((id: DeckId, force = false) => {
+  // ★ DEDUPE BY VALUE, NOT BY REFERENCE — and rate-limit the force path by WHAT IT IS FOR.
+  //
+  // Measured on a live two-party session (scripts/synclab, paired capture): 4,090 inbound lyrics
+  // frames and 1,478 outbound in 25 SECONDS, ~18 KB each — 100 MB of room traffic, of which lyrics
+  // was 99%. Every tick, state, intent and presence frame together made up the other 1%. On a phone
+  // on mobile data that is not a lag spike, it is a saturated link caused by one message type.
+  //
+  // Two independent holes produced it and the fix closes both, deliberately, because chasing which
+  // one was firing is how the last four hours went:
+  //   1. The old guard was `lines === lastSent` — REFERENCE equality. It is exact when the lines
+  //      array is rebuilt only on a real resolve, and it degrades to "always send" the moment any
+  //      caller hands over a freshly-derived array with identical content. A reference check cannot
+  //      tell "new lyrics" from "same lyrics, new array".
+  //   2. `force` exists to re-send to a NEWLY JOINED guest, and it bypasses the guard entirely. An
+  //      effect that fires for any other reason then re-broadcasts the whole payload every time.
+  //      The bypass was right; what was missing is that it should fire once per ROSTER CHANGE, not
+  //      once per effect run. So force now takes the roster signature and remembers the last one it
+  //      sent for — the same value the caller already computes to decide a peer joined.
+  const lastLyricsSig = useRef<Record<DeckId, string>>({ A: "", B: "" });
+  const lastForceKey = useRef<Record<DeckId, string>>({ A: "", B: "" });
+  /** Cheap value identity for a resolved line set: the track it belongs to, how many lines, and the
+   *  first and last cue times. Two different resolutions of the same track differ in at least one. */
+  const lyricsSig = (vid: string, lines: LyricsLine[]): string =>
+    `${vid}:${lines.length}:${lines[0]?.start ?? ""}:${lines[lines.length - 1]?.end ?? ""}`;
+  const sendHostLyrics = useCallback((id: DeckId, forceKey?: string) => {
     const r = roomRef.current;
     if (!r) return;
     if (r.status !== "online" || (!r.controlling && !r.isAnchor)) return;
@@ -129,8 +154,13 @@ export function useLyricsSync(deps: LyricsSyncDeps): LyricsSync {
     // contamination guard). If they've diverged (mid-load), skip until they reconcile.
     const lyricsVid = captionVidRef.current[id];
     if (!lyricsVid || lyricsVid !== latest.current.loaded[id]) return;
-    if (!force && lines === lastLyricsSent.current[id]) return;
-    lastLyricsSent.current[id] = lines;
+    const sig = lyricsSig(lyricsVid, lines);
+    // A roster change re-sends even when the content is unchanged — that is the whole point of the
+    // force path — but only ONCE for that roster, however many times the effect runs.
+    const forced = forceKey !== undefined && forceKey !== lastForceKey.current[id];
+    if (!forced && sig === lastLyricsSig.current[id]) return;
+    if (forceKey !== undefined) lastForceKey.current[id] = forceKey;
+    lastLyricsSig.current[id] = sig;
     r.sendLyrics(id, lyricsVid, lines, captionSourceRef.current[id] || "pool");
   }, []);
 

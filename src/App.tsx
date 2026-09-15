@@ -2956,8 +2956,10 @@ function AppBody() {
       sendHostStemView("A");
       sendHostStemView("B");
       // …and the word-timed lyrics (forced) so a fresh joiner's caption ribbon fills in too.
-      sendHostLyrics("A", true);
-      sendHostLyrics("B", true);
+      // Pass the ROSTER signature, not a bare `true`: the force re-send exists for a newly joined
+      // guest, so it should fire once per roster change however often this effect runs.
+      sendHostLyrics("A", joinedSig);
+      sendHostLyrics("B", joinedSig);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room.isAnchor, room.status, joinedSig, loaded, room.publishState, buildSnapshot, sendHostStemView, sendHostLyrics]);

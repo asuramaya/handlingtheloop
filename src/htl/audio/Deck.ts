@@ -2191,7 +2191,29 @@ export class Deck {
    *  so this makes a fresh instance every time — except the master's EQ, which stays the deck's own
    *  `this.eq` because the eq* ControlParams, the session sync and the EQ throw all address that
    *  one object by name. A stem chain that wants an EQ gets its own. */
+  /** Set by AudioEngine: a worklet-backed device was just built BEFORE addModule() landed, so it
+   *  is a pass-through. Only the engine owns the worklet promise, so only it can schedule the
+   *  repair — the deck's job is to say that one is needed.
+   *
+   *  ★ WHY A HOOK AND NOT A CALL SITE. The old repair ran ONCE, in the engine's constructor, after
+   *  ensureWorklets resolved — which covers a rack restored at BOOT and nothing else. A rack that
+   *  arrives LATER from the wire (a co-DJ's fxRack intent, applyFxSnapshot / applyFxChains) had no
+   *  repair at all: the device wired input straight to output, looked entirely normal, and did
+   *  nothing for the life of the deck. The operator hit precisely that: "i noticed when i loaded
+   *  reverb it didnt appear for the other users in the session". Hanging the repair off the DEGRADE
+   *  rather than off a location covers every path that can build one — boot, wire, and any later
+   *  add — because the trigger is now the cause. */
+  onDegradedFx?: () => void;
+
   private makeFx(kind: string, chainId = "master"): FxDevice | null {
+    const d = this.makeFxRaw(kind, chainId);
+    // Ask for a repair the moment a device admits it lost the worklet race. Idempotent and cheap
+    // on the engine side (one coalesced pass per worklet load), so firing it per device is fine.
+    if (d?.degraded) this.onDegradedFx?.();
+    return d;
+  }
+
+  private makeFxRaw(kind: string, chainId = "master"): FxDevice | null {
     switch (kind) {
       case "eq":
         return chainId === "master" ? this.eq : new Eq3(this.ctx);

@@ -211,6 +211,12 @@ export class AudioEngine {
     // reverb/crush/mod devices build AudioWorkletNodes in their constructors, so provisioning
     // before addModule() would degrade them to the native fallback for good. ensurePadFx is
     // idempotent, so a later re-run of ensureWorklets (iOS re-attach) needs no re-provision.
+    // ★ A DEGRADE ANYWHERE SCHEDULES A REPAIR, not just one at boot. Either deck says so the moment
+    // it builds a device that lost the worklet race, and we wait for the (now truthful) worklet
+    // promise before rebuilding. Coalesced: one pass per pending flag, so a rack arriving from the
+    // wire with six degraded devices costs one repair, not six.
+    this.deckA.onDegradedFx = () => this.scheduleFxRepair();
+    this.deckB.onDegradedFx = () => this.scheduleFxRepair();
     void this.ensureWorklets().then(() => {
       this.deckA.ensurePadFx();
       this.deckB.ensurePadFx();
@@ -222,31 +228,43 @@ export class AudioEngine {
       // scary line and no resolution — you could not tell a compressor that came back from one
       // that is still passing audio through untouched. Surfaced the moment the Debug tab started
       // showing the ring: the first thing it printed was two of those warnings and no answer.
-      const repaired = this.deckA.rebuildDegradedFx() + this.deckB.rebuildDegradedFx();
-      if (repaired) event("fx-repaired", { n: repaired });
-      // ★ AND SAY IT WHERE THE EVIDENCE IS READ — THE CONSOLE, not only the ring. The degrade warns
-      // via console.warn ("comp worklet unavailable, degrading to a pass-through"); the answer went
-      // to the debug ring alone. So a pasted console — which is how a live bug actually reaches us —
-      // showed the scary line and NOTHING about its resolution, making "repaired" and "still
-      // silently passing audio untouched" indistinguishable from the outside. An operator sent
-      // exactly that log and it could not be diagnosed.
-      //
-      // Both branches are stated deliberately. A repair that says nothing leaves the warning
-      // standing as the last word; a REMAINING degrade is the one that matters, because
-      // rebuildDegraded skips a device whose replacement is also degraded and that device will
-      // carry audio untouched for the life of the deck with no further sign of it.
-      const stillDegraded = [...this.deckA.degradedFx(), ...this.deckB.degradedFx()];
-      if (repaired) console.info(`[htl] fx repaired after the worklet race: ${repaired} device(s) rebuilt`);
-      if (stillDegraded.length) {
-        console.warn(
-          "[htl] fx STILL degraded (these carry audio untouched — a pass-through, not an error):",
-          stillDegraded.map((d) => `${d.chain}/${d.kind}`).join(", "),
-        );
-        event("fx-degraded-remaining", { n: stillDegraded.length });
-      }
+      this.repairDegradedFx("boot");
       this.installMasterLimiter();
       this.patchSidechains();
     });
+  }
+
+  private fxRepairPending = false;
+  /** Rebuild any pass-through devices once the worklets are genuinely ready, and SAY what happened.
+   *  Safe to call from any path that can build a device early — boot, a room intent, a later add. */
+  private scheduleFxRepair(): void {
+    if (this.fxRepairPending) return; // coalesce: one pass covers every degrade queued behind it
+    this.fxRepairPending = true;
+    void this.ensureWorklets()
+      .then(() => this.repairDegradedFx("late"))
+      // A worklet load that FAILS must not become an unhandled rejection — the devices stay
+      // degraded (already reported by repairDegradedFx's remaining-warning on the next attempt)
+      // and the pending flag clears, so a later degrade can try again.
+      .catch((e) => console.warn("[htl] late fx repair could not run (worklets unavailable):", e))
+      .finally(() => {
+        this.fxRepairPending = false;
+      });
+  }
+
+  /** The repair + its report, one place, so boot and the wire cannot describe the same event
+   *  differently. `when` only labels the log line. */
+  private repairDegradedFx(when: "boot" | "late"): void {
+    const repaired = this.deckA.rebuildDegradedFx() + this.deckB.rebuildDegradedFx();
+    if (repaired) event("fx-repaired", { n: repaired, when });
+    const stillDegraded = [...this.deckA.degradedFx(), ...this.deckB.degradedFx()];
+    if (repaired) console.info(`[htl] fx repaired after the worklet race (${when}): ${repaired} device(s) rebuilt`);
+    if (stillDegraded.length) {
+      console.warn(
+        `[htl] fx STILL degraded after the ${when} repair (these carry audio untouched — a pass-through, not an error):`,
+        stillDegraded.map((d) => `${d.chain}/${d.kind}`).join(", "),
+      );
+      event("fx-degraded-remaining", { n: stillDegraded.length, when });
+    }
   }
 
   // ★ THE REAL MASTER BRICKWALL. What was here before was a DynamicsCompressorNode at ratio 20 with
@@ -338,7 +356,6 @@ export class AudioEngine {
   // Modules we've successfully addModule()'d — so a re-run never double-registers (which
   // throws), but still re-creates any NODE that failed to attach.
   private modulesAdded = new Set<string>();
-  private ensuring = false;
 
   /** addModule() a worklet source exactly once. Records the failure (surfaced in Settings ▸
    *  Debug) and returns false so the caller skips node creation this round. */
@@ -368,60 +385,69 @@ export class AudioEngine {
    *  current track's PCM, so a late attach still plays). `workletError` is recomputed from the
    *  live attach state so the debug overlay reflects reality, not a stale first-run failure. */
   async ensureWorklets(): Promise<void> {
-    if (this.ensuring) return;
-    this.ensuring = true;
-    try {
-      if (await this.addModuleOnce("scratch", SCRATCH_WORKLET_SRC)) {
-        try {
-          // deckId (shared with the stretch node below) keys the PCM registry both
-          // worklets read/write in their common AudioWorkletGlobalScope — see
-          // scratchWorklet.ts's header comment.
-          if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
-          if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
-        } catch (e) {
-          console.warn("[htl] scratch node attach failed (will retry):", e);
-        }
+    // ★ SHARE THE IN-FLIGHT PROMISE. This used to be `if (this.ensuring) return;` — a promise that
+    // RESOLVED IMMEDIATELY for a concurrent caller while the modules were still loading. A lying
+    // promise: awaiting it returned a yes that was false, and the consequence of believing it is
+    // exactly a device built before addModule() lands, i.e. a permanent pass-through. Latent while
+    // every caller was fire-and-forget; the repair path below now genuinely awaits this, so it had
+    // to stop lying first. Cleared in finally, so the iOS re-attach path stays re-runnable.
+    if (this.workletsReady) return this.workletsReady;
+    this.workletsReady = this.loadWorklets().finally(() => {
+      this.workletsReady = null;
+    });
+    return this.workletsReady;
+  }
+  private workletsReady: Promise<void> | null = null;
+
+  private async loadWorklets(): Promise<void> {
+    if (await this.addModuleOnce("scratch", SCRATCH_WORKLET_SRC)) {
+      try {
+        // deckId (shared with the stretch node below) keys the PCM registry both
+        // worklets read/write in their common AudioWorkletGlobalScope — see
+        // scratchWorklet.ts's header comment.
+        if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
+        if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
+      } catch (e) {
+        console.warn("[htl] scratch node attach failed (will retry):", e);
       }
-      if (await this.addModuleOnce("stretch", STRETCH_WORKLET_SRC)) {
-        try {
-          if (!this.deckA.stretchAttached) {
-            // FIVE outputs: [0] the mix (what has always been here) and [1..4] the per-stem taps
-            // for stem-routed FX chains. The taps stay SILENT and cost nothing until a chain asks
-            // for them (Deck.setStemTaps → the worklet's taps flag); declaring them at
-            // construction is the only way to have them at all, since a node's output count is
-            // fixed for its lifetime and the PCM lives inside this node.
-            this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "A" } }));
-            this.deckA.configureStretch(this.stretchCfg);
-          }
-          if (!this.deckB.stretchAttached) {
-            this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "B" } }));
-            this.deckB.configureStretch(this.stretchCfg);
-          }
-        } catch (e) {
-          console.warn("[htl] stretch node attach failed (will retry on next gesture):", e);
+    }
+    if (await this.addModuleOnce("stretch", STRETCH_WORKLET_SRC)) {
+      try {
+        if (!this.deckA.stretchAttached) {
+          // FIVE outputs: [0] the mix (what has always been here) and [1..4] the per-stem taps
+          // for stem-routed FX chains. The taps stay SILENT and cost nothing until a chain asks
+          // for them (Deck.setStemTaps → the worklet's taps flag); declaring them at
+          // construction is the only way to have them at all, since a node's output count is
+          // fixed for its lifetime and the PCM lives inside this node.
+          this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "A" } }));
+          this.deckA.configureStretch(this.stretchCfg);
         }
-      }
-      await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
-      await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
-      await this.addModuleOnce("moddelay", MOD_DELAY_WORKLET_SRC); // ModFx chorus/flanger
-      await this.addModuleOnce("comp", COMP_WORKLET_SRC); // CompFx (deck dynamics + the master brickwall)
-      await this.addModuleOnce("tape", TAPE_WORKLET_SRC); // SaturatorFx's TAPE style (hysteresis); other styles stay native
-      if (!this.ringNode && (await this.addModuleOnce("ringrec", RING_REC_WORKLET_SRC))) {
-        try {
-          const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);
-          const node = new AudioWorkletNode(this.ctx, "ringrec", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { size } });
-          this.master.connect(node); // tap the as-heard mix (post-crossfade, pre-limiter)
-          this.ringKeep = this.ctx.createGain();
-          this.ringKeep.gain.value = 0; // silent — only keeps the node in the pull graph
-          node.connect(this.ringKeep).connect(this.ctx.destination);
-          node.port.onmessage = (e: MessageEvent) => this.onRingMessage(e);
-          this.ringNode = node;
-        } catch (e) {
-          console.warn("[htl] ring recorder attach failed:", e);
+        if (!this.deckB.stretchAttached) {
+          this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "B" } }));
+          this.deckB.configureStretch(this.stretchCfg);
         }
+      } catch (e) {
+        console.warn("[htl] stretch node attach failed (will retry on next gesture):", e);
       }
-    } finally {
-      this.ensuring = false;
+    }
+    await this.addModuleOnce("reverb", REVERB_WORKLET_SRC); // ReverbFx creates nodes on demand
+    await this.addModuleOnce("crush", CRUSH_WORKLET_SRC); // CrushFx creates nodes on demand
+    await this.addModuleOnce("moddelay", MOD_DELAY_WORKLET_SRC); // ModFx chorus/flanger
+    await this.addModuleOnce("comp", COMP_WORKLET_SRC); // CompFx (deck dynamics + the master brickwall)
+    await this.addModuleOnce("tape", TAPE_WORKLET_SRC); // SaturatorFx's TAPE style (hysteresis); other styles stay native
+    if (!this.ringNode && (await this.addModuleOnce("ringrec", RING_REC_WORKLET_SRC))) {
+      try {
+        const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);
+        const node = new AudioWorkletNode(this.ctx, "ringrec", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { size } });
+        this.master.connect(node); // tap the as-heard mix (post-crossfade, pre-limiter)
+        this.ringKeep = this.ctx.createGain();
+        this.ringKeep.gain.value = 0; // silent — only keeps the node in the pull graph
+        node.connect(this.ringKeep).connect(this.ctx.destination);
+        node.port.onmessage = (e: MessageEvent) => this.onRingMessage(e);
+        this.ringNode = node;
+      } catch (e) {
+        console.warn("[htl] ring recorder attach failed:", e);
+      }
     }
     // Recompute the diagnostic from the live state (a later re-attach clears a stale failure).
     const miss: string[] = [];

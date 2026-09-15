@@ -13,6 +13,7 @@
 // Hibernation API so idle rooms cost nothing. See docs/shared-session.md.
 import type { ClientMsg, ServerMsg, Peer, Intent, StageReq, StageGate } from "../src/htl/room/protocol";
 import { canDriveIntent } from "../src/htl/room/protocol";
+import { digestKey } from "../src/htl/room/digestKey";
 import {
   type Attachment,
   type Ws,
@@ -140,6 +141,12 @@ export class DjRoom {
   // rack grows, this stops each new param's sweep from multiplying listener fan-out.
   private static COALESCE_KINDS: ReadonlySet<string> = new Set(["control", "crossfade", "stemGain", "fxParam"]);
   private static DIGEST_FLUSH_MS = 50; // ~20 Hz
+  // Captions are read by eye; a few hundred ms of coalescing is imperceptible against an 18 KB
+  // payload arriving 165 times a second. Deliberately far slower than DIGEST_FLUSH_MS: a knob
+  // sweep must feel continuous, a caption line does not.
+  private static LYRICS_FLUSH_MS = 400;
+  private lyricsPending = new Map<string, { msg: ServerMsg; from: string }>();
+  private lyricsTimer: ReturnType<typeof setTimeout> | null = null;
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
   // The crowd→DJ side-channels (reactions/hype + song requests) — self-contained units that
@@ -724,7 +731,19 @@ export class DjRoom {
         // best-effort persistence contract as stemview (never throw out of here).
         if ((this.isControlling(self) || self === this.anchorId) && (msg.deck === "A" || msg.deck === "B")) {
           this.lastLyrics[msg.deck] = { videoId: msg.videoId, lines: msg.lines, source: msg.source };
-          this.relay(self, { t: "lyrics", deck: msg.deck, videoId: msg.videoId, lines: msg.lines, source: msg.source });
+          // COALESCE THE RELAY, not just the disk write. Measured on a two-party local run:
+          // 4,090 inbound lyrics frames in 24.8 s — 165/s at ~18 KB each, 70 MB, 99% of ALL room
+          // traffic. The caption payload is last-value-wins state (the line above overwrites
+          // lastLyrics wholesale), so re-sending it at input rate buys nothing and on a phone over
+          // 4G saturates the link by itself.
+          // The write-throttle directly below this handler already learned exactly this lesson for
+          // STORAGE (PERSIST_MIN_MS, after a busy session blew the free-tier daily write cap) and
+          // it was never applied to the WIRE — the same knowledge in two layers with one updated.
+          // Throttled rather than deduped on purpose: a dedupe has to decide whether two payloads
+          // are "the same", and a re-resolution with better timings is a real change that a cheap
+          // signature could drop forever. Last-value-wins with a trailing flush cannot lose the
+          // final state, only the intermediate frames nobody can read at 165/s anyway.
+          this.queueLyrics(msg.deck, { t: "lyrics", deck: msg.deck, videoId: msg.videoId, lines: msg.lines, source: msg.source }, self);
           void this.persistLyrics();
         }
         break;
@@ -1317,17 +1336,30 @@ export class DjRoom {
   }
 
   // What makes a sweep "the same control" — so last-value-wins coalescing replaces, not
-  // queues: kind + deck + the param/stem/slot it targets.
-  private static digestKey(i: Intent): string {
-    const a = i as unknown as Record<string, unknown>;
-    return `${i.kind}:${a.deck ?? ""}:${a.param ?? a.stem ?? a.slot ?? ""}`;
+  // merges, two different controls — now lives in src/htl/room/digestKey.ts, pure and tested.
+  // It was keyed on the bare `param`, which collided every FX device sharing a name (`mix` is
+  // the generic wet/dry on all of them), so one device froze for listeners while another moved.
+
+  // Coalesce the LYRICS relay the same way, and for the same reason the digest exists: a
+  // high-frequency last-value-wins payload should cross at a rate a human can perceive, not at
+  // the rate the producer emits. One timer per room, latest-per-deck, trailing flush — so the
+  // final caption state always lands even if every intermediate frame is dropped.
+  private queueLyrics(deck: string, msg: ServerMsg, from: string): void {
+    this.lyricsPending.set(deck, { msg, from });
+    if (this.lyricsTimer) return;
+    this.lyricsTimer = setTimeout(() => {
+      this.lyricsTimer = null;
+      const batch = [...this.lyricsPending.values()];
+      this.lyricsPending.clear();
+      for (const e of batch) this.relay(e.from, e.msg);
+    }, DjRoom.LYRICS_FLUSH_MS);
   }
 
   // Buffer a continuous sweep for the listener crowd, keeping only the latest value per
   // control, and flush the batch at ~DIGEST_FLUSH_MS. During an active sweep the DO is awake
   // (it's processing the intents), so the timer fires; an idle room never queues anything.
   private queueDigest(intent: Intent, msg: ServerMsg): void {
-    this.digest.set(DjRoom.digestKey(intent), msg);
+    this.digest.set(digestKey(intent), msg);
     if (this.digestTimer) return;
     this.digestTimer = setTimeout(() => {
       this.digestTimer = null;

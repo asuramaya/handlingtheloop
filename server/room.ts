@@ -122,8 +122,19 @@ export class DjRoom {
   // is fine. Throttle each cache to at most one write per PERSIST_MIN_MS.
   private static PERSIST_MIN_MS = 10_000;
   private snapAt = 0;
-  private stemAt = 0;
-  private lyricAt = 0;
+  // ★ PER DECK, not per record. These throttle a write whose VALUE covers both decks, so a single
+  // timestamp made deck B's publish collide with deck A's and vanish: leading-edge throttle, no
+  // trailing flush, and a deck publishes its envelope roughly once per track load — so there is no
+  // following write to carry the update in. Memory kept both decks, disk kept one, permanently,
+  // with nothing reporting it. Measured by Deckard on the real sqlite: a room parked with two decks
+  // held one, 60,032 bytes for a single deck's stem set.
+  // Keying by deck costs at most ONE extra write per window (there are two decks), which is a
+  // bounded price for a record that is otherwise silently half-written. A trailing setTimeout would
+  // have been the other fix and a worse one: the flush lands up to PERSIST_MIN_MS later, by which
+  // time an idle DO may have been evicted, so the write that repairs the record is exactly the one
+  // most likely never to run.
+  private stemAt: Record<string, number> = {};
+  private lyricAt: Record<string, number> = {};
   // Public-room hardening. MAX_LISTENERS caps the anonymous crowd one DO admits (the
   // single-threaded fan-out ceiling — beyond this a relay tier is needed). ANCHOR_GRACE_MS
   // holds the clock through a host network blip instead of yanking it (→ a frozen room +
@@ -237,9 +248,9 @@ export class DjRoom {
   // The oversized-lives-in-memory-only path is now unreachable by construction (the per-deck
   // admission bound is derived down from this record budget), but it is deliberately left in
   // place: retiring it is a separate change that wants measuring, not reasoning.
-  private async persistStemViews(): Promise<void> {
+  private async persistStemViews(deck: string): Promise<void> {
     const now = Date.now();
-    if (now - this.stemAt < DjRoom.PERSIST_MIN_MS) return; // throttled — in-memory copy stays live
+    if (now - (this.stemAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
     try {
       // Derived, not hand-written — and note the DENOMINATOR: this measures the WHOLE RECORD
       // (both decks under one key), where the admission gate above measures ONE deck. Those are
@@ -248,7 +259,7 @@ export class DjRoom {
       // this record budget, two admitted envelopes always fit — so this guard is defence in depth
       // rather than a live gate, and should never fire.
       if (JSON.stringify(this.lastStemView).length > MAX_STEMVIEW_RECORD_BYTES) return;
-      this.stemAt = now;
+      this.stemAt[deck] = now;
       await this.state.storage.put("stemviews", this.lastStemView);
     } catch {
       /* best-effort — a failed persist must never tear down a socket */
@@ -257,12 +268,12 @@ export class DjRoom {
 
   // Same best-effort contract as the stem envelopes: a long track's word list can be sizeable,
   // so cap it well under the 128 KiB per-value limit (oversized stays in memory + re-streams).
-  private async persistLyrics(): Promise<void> {
+  private async persistLyrics(deck: string): Promise<void> {
     const now = Date.now();
-    if (now - this.lyricAt < DjRoom.PERSIST_MIN_MS) return; // throttled — in-memory copy stays live
+    if (now - (this.lyricAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
     try {
       if (JSON.stringify(this.lastLyrics).length > 120_000) return;
-      this.lyricAt = now;
+      this.lyricAt[deck] = now;
       await this.state.storage.put("lyrics", this.lastLyrics);
     } catch {
       /* best-effort — never tear down a socket over a persist */
@@ -745,7 +756,7 @@ export class DjRoom {
             this.stemViewRate[rk] = now;
             this.lastStemView[msg.deck] = msg.view;
             this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
-            void this.persistStemViews();
+            void this.persistStemViews(msg.deck);
           }
         }
         break;
@@ -769,7 +780,7 @@ export class DjRoom {
           // signature could drop forever. Last-value-wins with a trailing flush cannot lose the
           // final state, only the intermediate frames nobody can read at 165/s anyway.
           this.queueLyrics(msg.deck, { t: "lyrics", deck: msg.deck, videoId: msg.videoId, lines: msg.lines, source: msg.source }, self);
-          void this.persistLyrics();
+          void this.persistLyrics(msg.deck);
         }
         break;
       }

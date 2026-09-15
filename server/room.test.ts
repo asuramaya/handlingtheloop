@@ -52,7 +52,11 @@ class FakeState implements DurableObjectState {
   alarmAt: number | null = null;
   storage = {
     get: async <T>(k: string) => this.store.get(k) as T | undefined,
-    put: async (k: string, v: unknown) => void this.store.set(k, v),
+    // ★ CLONE ON PUT, as real storage does by serialising. Storing the reference let a later
+    // mutation of the same in-memory object retroactively change what was "persisted" — so a test
+    // asserting that both decks reached disk PASSED against code that wrote only one. The fake was
+    // right where the real thing is wrong, which is the same defect roomSim's FakeDeck had.
+    put: async (k: string, v: unknown) => void this.store.set(k, structuredClone(v)),
     delete: async (k: string) => this.store.delete(k),
     getAlarm: async () => this.alarmAt,
     setAlarm: async (t: number) => void (this.alarmAt = t),
@@ -377,6 +381,32 @@ describe("DjRoom crowd guard + requests", () => {
     await h.connect({ device: "L2", pub: true });
     const res = await h.room.fetch(new Request("https://x/internal/count"));
     expect(await res.json()).toMatchObject({ listeners: 2, public: true }); // real sockets, not self-reported
+  });
+
+  // ★ BOTH DECKS MUST REACH DISK. persistStemViews throttles a write whose VALUE covers both decks.
+  // With ONE timestamp for the record, deck B's publish inside the window hit the leading-edge
+  // throttle and returned, and because a deck publishes its envelope roughly once per track load
+  // there was no following write to carry it in — memory held both decks, disk held one,
+  // permanently, with nothing reporting it. Found on the real sqlite by Deckard: a room parked with
+  // two decks stored 60,032 bytes for a single deck's stem set.
+  it("persists BOTH decks' stem envelopes when they publish inside one throttle window", async () => {
+    const host = await liveHost();
+    await h.send(host, { t: "stemview", deck: "A", view: { lane: "a".repeat(64) } });
+    await h.send(host, { t: "stemview", deck: "B", view: { lane: "b".repeat(64) } });
+    const stored = h.state.store.get("stemviews") as Record<string, unknown> | undefined;
+    expect(stored).toBeDefined();
+    expect(stored!.A).toBeDefined();
+    expect(stored!.B).toBeDefined(); // the regression: B was silently absent
+  });
+
+  it("persists BOTH decks' lyrics inside one throttle window", async () => {
+    const host = await liveHost();
+    await h.send(host, { t: "lyrics", deck: "A", videoId: "v1", lines: [{ s: 0, w: "a" }], source: "t" });
+    await h.send(host, { t: "lyrics", deck: "B", videoId: "v2", lines: [{ s: 0, w: "b" }], source: "t" });
+    const stored = h.state.store.get("lyrics") as Record<string, unknown> | undefined;
+    expect(stored).toBeDefined();
+    expect(stored!.A).toBeDefined();
+    expect(stored!.B).toBeDefined();
   });
 
   it("a ban survives a DO eviction (reconstruct over the same storage)", async () => {

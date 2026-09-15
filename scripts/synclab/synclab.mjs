@@ -128,7 +128,26 @@ if (has("compare")) {
   }
   const sorted = [...lat].sort((a, b) => a - b);
   console.log(`\n  delivered ${matched}/${out.length}${out.length ? ` (${Math.round((matched / out.length) * 100)}%)` : ""}`);
-  if (sorted.length) console.log(`  latency  median ${sorted[Math.floor(sorted.length / 2)]} ms · p95 ${sorted[Math.floor(sorted.length * 0.95)]} ms · worst ${sorted.at(-1)} ms`);
+  const q = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : 0);
+  if (sorted.length) console.log(`  all rows   median ${q(sorted, 0.5)} ms · p95 ${q(sorted, 0.95)} ms · worst ${sorted.at(-1)} ms   ← see the warning below`);
+  // ★ ONE BURST IS ONE MEASUREMENT, NOT N OF THEM. The initial state publish emits ~25 control
+  // intents inside a couple of milliseconds; they cross together and share a single latency. Counted
+  // as 25 independent samples they DOMINATE the median and report the app as 25x slower at live
+  // gestures than it is — a size-biased estimator, where the sample's composition is nothing like
+  // the population being described. Collapse anything sent within the same 50 ms to one row, and
+  // report the per-GESTURE figure separately, because that is the number a person actually feels.
+  const bursts = [];
+  for (let i = 0; i < out.length; i++) {
+    const m = inb.find((x) => x.kind === out[i].kind && x.deck === out[i].deck && x.param === out[i].param && x.value === out[i].value && x.at >= out[i].at - 50);
+    if (!m) continue;
+    const last = bursts.at(-1);
+    if (last && out[i].at - last.at <= 50) { last.n++; continue; }
+    bursts.push({ at: out[i].at, lat: m.at - out[i].at, n: 1 });
+  }
+  const bl = bursts.map((b) => b.lat).sort((a, b) => a - b);
+  console.log(`  by BURST   ${bursts.length} distinct send(s): median ${q(bl, 0.5)} ms · p95 ${q(bl, 0.95)} ms · worst ${bl.at(-1) ?? 0} ms`);
+  const big = bursts.filter((b) => b.n > 1);
+  if (big.length) console.log(`  (${big.map((b) => b.n).join(" + ")} intent(s) rode in ${big.length} batch(es) — one crossing each, not ${big.reduce((s, b) => s + b.n, 0)} measurements)`);
   if (matched < out.length) console.log(`\n  ⚠ ${out.length - matched} intent(s) never reached B — that is a real sync failure, not latency.`);
   process.exit(0);
 }
@@ -172,9 +191,58 @@ if (ENGAGE) {
 }
 await page.goto(URL_, { waitUntil: "domcontentloaded", timeout: 60000 });
 console.log(`[${ROLE}] loaded ${URL_}`);
-await sleep(HOLD * 1000);
 
-const data = await page.evaluate(() => ({ ...window.__sync, url: location.href }));
+// ── the driver ────────────────────────────────────────────────────────────────────────────────
+// Gestures go through the KEYBOARD, not canvases: keybinds.ts stores PHYSICAL key codes, so a
+// synthetic press is layout-independent and hits the same path a finger does. Canvas drags need a
+// visible, correctly-positioned element and have already produced three meaningless runs today by
+// landing off-screen or on nothing.
+const GESTURES = [
+  { id: "transport-play", key: "Space" },
+  { id: "sync", key: "KeyS" },
+  { id: "keylock", key: "KeyZ" },
+  { id: "pitch-up", key: "Equal" },
+  { id: "pitch-down", key: "Minus" },
+  { id: "tempo-nudge-up", key: "Equal", shift: true },
+  { id: "grid-magnet", key: "KeyG" },
+  { id: "transport-pause", key: "Space" },
+];
+
+if (has("drive")) {
+  // ★ RUN GATE, NOT A CHECK YOU CAN SKIP. Two browsers in SEPARATE rooms look exactly like working
+  // sync from either side — both send, neither receives, both summaries read healthy. So refuse to
+  // drive at all until presence proves a second peer is actually here. A delivery number measured
+  // against an empty room is worse than no number, because it is confidently wrong.
+  let peers = [];
+  for (let i = 0; i < 40; i++) {
+    peers = await page.evaluate(() => {
+      const f = [...window.__sync.frames].reverse().find((x) => x.who);
+      return f?.who ?? [];
+    });
+    if (peers.length >= 2) break;
+    await sleep(1000);
+  }
+  if (peers.length < 2) {
+    console.error(`[${ROLE}] ABORT — only ${peers.length} peer(s) in the room (${JSON.stringify(peers)}). The far side is not here, so nothing measured now would mean anything.`);
+    await browser.close();
+    process.exit(3);
+  }
+  console.log(`[${ROLE}] gate passed — peers: ${JSON.stringify(peers)}`);
+  await page.evaluate(() => { window.__sync.gestures = []; });
+  for (const g of GESTURES) {
+    await page.evaluate((id) => window.__sync.gestures.push({ id, at: Date.now(), ts: Math.round(performance.now()) }), g.id);
+    if (g.shift) await page.keyboard.down("Shift");
+    await page.keyboard.press(g.key);
+    if (g.shift) await page.keyboard.up("Shift");
+    await sleep(1600); // let the intent emit, cross, and apply before the next one muddies it
+  }
+  console.log(`[${ROLE}] drove ${GESTURES.length} gestures`);
+  await sleep(4000);
+} else {
+  await sleep(HOLD * 1000);
+}
+
+const data = await page.evaluate(() => ({ ...window.__sync, gestures: window.__sync.gestures ?? [], url: location.href }));
 writeFileSync(OUT, JSON.stringify(data, null, 1));
 const room = data.sockets.filter((s) => s.room);
 console.log(`[${ROLE}] wrote ${OUT} — ${data.frames.length} room frames, ${room.length} socket events, ${data.tasks.length} long tasks`);

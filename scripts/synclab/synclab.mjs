@@ -205,14 +205,21 @@ console.log(`[${ROLE}] loaded ${URL_}`);
 // synthetic press is layout-independent and hits the same path a finger does. Canvas drags need a
 // visible, correctly-positioned element and have already produced three meaningless runs today by
 // landing off-screen or on nothing.
+// ★ THE FX GESTURES ARE THE POINT, and the first list did not have one. The operator's symptom is
+// FX — "chain 1 add reverb, apply to vocals, nothing going through the chain" — so a green run on
+// transport/tempo/grid would have said nothing whatever about the thing they reported, while
+// looking like a full pass. KeyI selects FX pad mode, Digit1-8 throw the pads (keybinds.ts:59,102).
 const GESTURES = [
   { id: "transport-play", key: "Space" },
   { id: "sync", key: "KeyS" },
   { id: "keylock", key: "KeyZ" },
   { id: "pitch-up", key: "Equal" },
-  { id: "pitch-down", key: "Minus" },
   { id: "tempo-nudge-up", key: "Equal", shift: true },
   { id: "grid-magnet", key: "KeyG" },
+  { id: "pad-mode-fx", key: "KeyI" },
+  { id: "fx-throw-1", key: "Digit1" },
+  { id: "fx-throw-2", key: "Digit2" },
+  { id: "fx-throw-1-again", key: "Digit1" },
   { id: "transport-pause", key: "Space" },
 ];
 
@@ -221,13 +228,29 @@ if (has("drive")) {
   // sync from either side — both send, neither receives, both summaries read healthy. So refuse to
   // drive at all until presence proves a second peer is actually here. A delivery number measured
   // against an empty room is worse than no number, because it is confidently wrong.
+  // ★ TWO PEERS IS NOT TWO PEOPLE. `peers.length >= 2` is satisfied by two DEVICES OF THE SAME
+  // ACCOUNT — which the room explicitly supports (a phone driving a laptop) and which every
+  // headless window either of us leaves behind also produces. Metron found it by running the
+  // negative control he expected to be boring: a room holding only HIM read as two peers, both
+  // named UserB, one a stale device from an earlier run. A solo agent with one leftover tab would
+  // have passed this gate, driven into a room containing nobody else, and got a delivery number —
+  // the exact isolated-room false positive the gate exists to kill, back through a door neither of
+  // us checked. My own 31/31 capture turns out to have carried such a ghost.
+  // So: require a JOINED peer on a DIFFERENT ACCOUNT NAME, not merely a different id.
   let peers = [];
+  let others = [];
   for (let i = 0; i < 40; i++) {
-    peers = await page.evaluate(() => {
-      const f = [...window.__sync.frames].reverse().find((x) => x.who);
-      return f?.who ?? [];
+    const snap = await page.evaluate(() => {
+      const f = [...window.__sync.frames].reverse().find((x) => x.peers && x.you);
+      if (!f) return null;
+      const mine = f.peers.find((p) => p.id === f.you);
+      return { peers: f.peers, you: f.you, myName: mine?.name ?? null };
     });
-    if (peers.length >= 2) break;
+    if (snap) {
+      peers = snap.peers.map((p) => p.name);
+      others = snap.peers.filter((p) => p.id !== snap.you && p.joined && p.name !== snap.myName);
+    }
+    if (others.length >= 1) break;
     await sleep(1000);
   }
   // ★ AN ABORT MUST KEEP ITS EVIDENCE. The first version exited before writing the capture, so the
@@ -244,8 +267,12 @@ if (has("drive")) {
     process.exit(code);
   };
 
-  if (peers.length < 2) {
-    await bail(3, `[${ROLE}] ABORT — only ${peers.length} peer(s) in the room (${JSON.stringify(peers)}). The far side is not here, so nothing measured now would mean anything.`);
+  if (others.length < 1) {
+    await bail(
+      3,
+      `[${ROLE}] ABORT — no JOINED peer on a different account. Roster: ${JSON.stringify(peers)}.`,
+      `[${ROLE}]   Two devices of the same account satisfy a peer COUNT and are not a second DJ — stale headless windows look exactly like company.`,
+    );
   }
   // ★ PRESENCE IS NOT PERMISSION, AND THE FIRST VERSION OF THIS GATE CONFLATED THEM. It proved a
   // second peer was in the room and let that imply this side could speak. An ungranted guest drives
@@ -266,7 +293,7 @@ if (has("drive")) {
       `[${ROLE}]   The HOST must send {t:"grant", to:"${me.id}", on:true} first.`,
     );
   }
-  console.log(`[${ROLE}] gate passed — peers: ${JSON.stringify(peers)}${me ? ` · me: controlling=${me.controlling} decks=${me.decks ?? ""}` : ""}`);
+  console.log(`[${ROLE}] gate passed — roster ${JSON.stringify(peers)} · other account(s): ${JSON.stringify(others.map((o) => o.name))}${me ? ` · me: controlling=${me.controlling} decks=${me.decks ?? ""}` : ""}`);
   await page.evaluate(() => { window.__sync.gestures = []; });
   for (const g of GESTURES) {
     await page.evaluate((id) => window.__sync.gestures.push({ id, at: Date.now(), ts: Math.round(performance.now()) }), g.id);

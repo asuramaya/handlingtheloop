@@ -61,6 +61,9 @@ let mobileDeriveChain: Promise<unknown> = Promise.resolve();
 export interface StemPipelineDeps {
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
   requestStemsFromHost: (id: DeckId, model: StemModel) => boolean;
+  /** Whether THIS device may spend CPU/GPU separating — the session's anchor, or a solo rig.
+   *  A predicate, not a boolean: the anchor can move mid-session. See App's maySeparate. */
+  maySeparate: () => boolean;
   stemModelRef: MutableRefObject<string>;
   mobileStemsRef: MutableRefObject<boolean>;
   autoEnabledRef: MutableRefObject<boolean>;
@@ -77,6 +80,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
   const {
     setStatusFor,
     requestStemsFromHost,
+    maySeparate,
     stemModelRef,
     mobileStemsRef,
     autoEnabledRef,
@@ -413,13 +417,25 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       // (Light int8 models already report support==="runs" on phones, so phones DO
       // contribute those; heavy fp32 / GPU stay desktop-gated — forcing them on mobile
       // OOM-kills the tab.)
-      if (!cached && support !== "runs") {
+      // ★ HOST-ONLY SEPARATION (operator ruling). Two independent reasons a cold cache does
+      // NOT become a separation here: this hardware can't run the model (`support`), or this
+      // device is not the session's separation authority (`maySeparate`) — a guest, or a
+      // listener watching someone else's set. The second is the new one: it used to be absent
+      // entirely, so a DESKTOP LISTENER ran a full demucs pass for a set it was only watching,
+      // and two capable DJs separated the same track twice. Phones were already spared, but by
+      // the OOM fix rather than by policy — which is exactly why the hole was desktop-shaped.
+      const authority = maySeparate();
+      if (!cached && (support !== "runs" || !authority)) {
         engine.deck(id).setStems(null); // no stems → plain mix
         // In a session, a controlling remote that can't make these (no GPU, etc.) asks the
         // host to separate + stream them instead of a dead end.
         if (requestStemsFromHost(id, model)) return;
-        const detail =
-          support === "blocked"
+        const detail = !authority
+          ? // Not our work to do. The host is the only device that separates; if it can't,
+            // the ruling is that there are no stems — so say that plainly rather than
+            // implying this device could fix it by finding a better machine.
+            `${model.label}: only the session host separates — no shared stems for this track yet. Playing the mix.`
+          : support === "blocked"
             ? `${model.label}: GPU separation was disabled after a crash. Re-enable it in Settings ▸ Stems, or pick a CPU model. Playing the mix.`
             : `${model.label}: separate on ${support === "needs-gpu" ? "a GPU desktop" : "a desktop"} first — playing the mix for now.`;
         setStatusFor(id, { phase: "unavailable", detail });
@@ -476,7 +492,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         if (gpuSeparate) disarmGpu();
       }
     },
-    [engine, refresh, setStatusFor, promoteCachedStems, requestStemsFromHost],
+    [engine, refresh, setStatusFor, promoteCachedStems, requestStemsFromHost, maySeparate],
   );
 
   // ── WARM AHEAD ────────────────────────────────────────────────────────────────────────────

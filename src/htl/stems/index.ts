@@ -26,6 +26,29 @@ async function decodeStemBlob(ctx: BaseAudioContext, bytes: ArrayBuffer): Promis
   return decodeAudio(ctx, bytes);
 }
 
+/** Thrown when this device is not the session's separation authority and the stems are not
+ *  cached. NOT a failure: the caller plays the plain mix, or asks the host to separate. */
+export class NotSeparationAuthority extends Error {
+  readonly modelId: string;
+  constructor(modelId: string) {
+    super(`loadStems: not the separation authority for "${modelId}" and no cached set`);
+    this.name = "NotSeparationAuthority";
+    this.modelId = modelId;
+  }
+}
+
+// Whether THIS device may spend CPU/GPU separating. Module-level like setDemucsQuality, and
+// for the same reason: it is a cross-cutting property of the device, not of one call. Default
+// PERMISSIVE so a solo rig (and every test) separates exactly as before — App registers the
+// real predicate, which answers false for a guest, a listener, and anyone who is not the
+// session's anchor. A predicate rather than a boolean so it is read at decision time: the
+// anchor can move mid-session, and a stale snapshot of the role is the whole bug class.
+let separationAllowed: () => boolean = () => true;
+/** Register the app's separation-authority predicate. Called once, from App. */
+export function setSeparationAuthority(fn: () => boolean): void {
+  separationAllowed = fn;
+}
+
 export const STEM_NAMES = ["vocals", "drums", "bass", "other"] as const;
 export type StemName = (typeof STEM_NAMES)[number];
 export type Stems = Record<StemName, AudioBuffer>;
@@ -266,6 +289,20 @@ export async function loadStems(
   } catch {
     /* cache miss → separate or fall back */
   }
+
+  // ★ THE SEPARATION AUTHORITY GATE — operator ruling: separation is HOST-ONLY, and a
+  // listener never pays for a set it is merely watching ("we cannot place the debt of
+  // separation on mere listeners"). ENFORCED HERE, at the one place separation can begin,
+  // rather than at the call sites: every path — deriveStems, warmStems, the mobile fetch,
+  // re-analyze/forceSeparate — funnels through loadStems, so a future caller cannot forget
+  // the check. Callers that can do something better (delegate to the host) pre-check and
+  // never reach this; this is the backstop that makes the invariant structural.
+  //
+  // It ALSO removes the duplicate-work race by construction. The shared R2 cache holds only
+  // COMPLETED stems — the manifest is written after the work — so two capable devices both
+  // probe, both miss, and both separate the same track. There is no in-flight state to
+  // consult and adding one would need a claim protocol; one authority needs neither.
+  if (!separationAllowed()) throw new NotSeparationAuthority(m.id);
 
   // Cold cache: only separate if THIS device can run THIS model on-device
   // (light int8 → phones too; heavy fp32 → desktop; demucs → desktop GPU). If not,

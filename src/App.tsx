@@ -82,6 +82,7 @@ import {
   getAudio,
   putAudio,
   loadStems,
+  setSeparationAuthority,
   getStemModel,
   modelSupport,
   isMobileDevice,
@@ -1490,6 +1491,41 @@ function AppBody() {
     setStatus((s) => ({ ...s, [id]: st }));
   }, []);
 
+  // ★★ THE SEPARATION AUTHORITY. Operator ruling: "if the host cant separate then so be it,
+  // no stems ... we cannot place the debt of separation on mere listeners." Exactly ONE device
+  // per session may spend CPU/GPU on demucs, which also kills the duplicate-work race for free
+  // (the shared R2 cache records only COMPLETED stems, so two capable devices used to both miss
+  // and both separate the same track — there is no in-flight state to consult).
+  //
+  // Read as a PREDICATE, never snapshotted: the anchor moves (a host refresh hands the clock to
+  // its own phone and takes it back on return), so a cached role is stale exactly when it matters.
+  //
+  // WHY NOT BARE isAnchor, which is the obvious version and is WRONG: the client connects to its
+  // own room whether or not the user ever engages the session switches, and the server only
+  // claims an anchor for a JOINED device (room.ts: `isJoined(self) && !anchorActive`). So a plain
+  // solo DJ — the commonest case in the app — is status:"online" with anchorId still null and
+  // isAnchor false. Gating on isAnchor alone would have stopped a solo rig separating at all.
+  // Hence the last clause: with nobody else joined there is nobody to defer TO, so we are the
+  // authority by default. A public listener is excluded FIRST and unconditionally — it may see an
+  // empty peer roster, which would otherwise read as "alone" and hand it the very debt the ruling
+  // forbids.
+  const maySeparate = useCallback((): boolean => {
+    const r = roomRef.current;
+    if (!r) return true; // no room at all → solo rig, nobody to defer to
+    if (r.listeningTo) return false; // public listener → NEVER, by ruling
+    if (r.isAnchor) return true; // the session's single authority
+    // Someone else is participating → the anchor owns this, not us. Ask, don't compute.
+    if (r.peers.some((p) => p.id !== r.you && p.joined)) return false;
+    return true; // connected but nobody else joined → solo in practice
+  }, []);
+  // Register it with the stems module, which enforces it at the ONE place separation begins
+  // (loadStems), so no present or future call site can bypass the ruling by forgetting a check.
+  const maySeparateRef = useRef(maySeparate);
+  maySeparateRef.current = maySeparate;
+  useEffect(() => {
+    setSeparationAuthority(() => maySeparateRef.current());
+  }, []);
+
   // In a session as a CONTROLLING remote (not the audio host/anchor) that can't make
   // these stems locally, ask the host to separate them and stream the 4-lane view back.
   // Returns true when it delegated to the host (so the caller skips its local dead-end).
@@ -1591,6 +1627,7 @@ function AppBody() {
   const { deriveStems, warmStems } = useStemPipeline({
     setStatusFor,
     requestStemsFromHost,
+    maySeparate,
     stemModelRef,
     mobileStemsRef,
     autoEnabledRef,
@@ -1950,6 +1987,17 @@ function AppBody() {
         setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
         return;
       }
+      // ★ HOST-ONLY, and this path needs its OWN check: re-analyze passes force=true, which
+      // skips the cache probe entirely, so the cold-cache gate in deriveStems never sees it.
+      // Without this a guest or listener could hand itself a full separation from Settings.
+      if (!maySeparate()) {
+        setStatusFor(id, {
+          phase: "unavailable",
+          detail: "Only the session host can re-analyze stems — you're not the audio host of this session.",
+        });
+        setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
+        return;
+      }
       // Free the existing stems before re-separating (esp. on mobile) so the old set
       // and the freshly-computed one don't coexist and OOM the tab.
       if (isMobileDevice()) {
@@ -1985,7 +2033,7 @@ function AppBody() {
         if (gpuSeparate) disarmGpu();
       }
     },
-    [engine, refresh, setStatusFor],
+    [engine, refresh, setStatusFor, maySeparate],
   );
 
   // "Re-analyze loaded track(s)" with `modelId` from Settings: switch to that model

@@ -1,3 +1,4 @@
+import type { StemAckState } from "../htl/room/protocol";
 // useSessionSync — the inbound session-sync engine: applies a host's snapshot / control intents /
 // playhead ticks to THIS device's local engine (the follower side of a shared room). Lifted out of
 // App.tsx so a session agent owns this file instead of contending on App. PURE RELOCATION: the
@@ -51,7 +52,7 @@ export interface SessionSyncDeps {
    *  separation ruling. Without it the ack is received and ignored — no regression, just the old
    *  timeout behaviour until the consumer is wired. Two agents in one file is how FxStrip.tsx lost
    *  its hunks; an optional dep is the cheap way not to need the same file at the same moment. */
-  stemAckRef?: MutableRefObject<(id: DeckId, state: "loading" | "separating" | "refused", reason?: string, pct?: number) => void>;
+  stemAckRef?: MutableRefObject<(id: DeckId, state: StemAckState, reason?: string, pct?: number) => void>;
   autoMixerControlRef: MutableRefObject<(action: "toggle" | "skip" | "mixnow" | "hold") => void>;
   mixQueueRef: MutableRefObject<MixQueue | null>;
   autoIsRemoteRef: MutableRefObject<boolean>;

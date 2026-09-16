@@ -375,3 +375,7 @@ export const STEM_ACK_STALL_MS = 60_000;
  *  stall limit rather than chosen beside it: the heartbeat and the watchdog are one invariant with two
  *  owners (host sends, requester waits), so they live together and cannot drift apart. */
 export const STEM_ACK_HEARTBEAT_MS = Math.floor(STEM_ACK_STALL_MS / 4);
+
+/** The stemsAck states, derived from the intent itself so receivers cannot hold a stale copy of the
+ *  union. (A hand-copied union in two receivers broke the build the moment "queued" was added.) */
+export type StemAckState = Extract<Intent, { kind: "stemsAck" }>["state"];

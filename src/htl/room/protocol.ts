@@ -205,7 +205,10 @@ export type Intent =
   // requester drives its own watchdog off this rather than a constant), "refused" carries WHY.
   // `pct` rides only on "separating", in coarse steps set by the HOST (see useStemViewSync) so the
   // frame count is bounded by construction rather than by how the separator happens to chunk work.
-  | { kind: "stemsAck"; deck: DeckId; model: string; state: "separating" | "refused"; reason?: string; pct?: number }
+  // "loading" is the cold-host phase BEFORE separation: the model weights downloading. It has its own
+  // state rather than a share of "separating" because its duration is set by the host's BANDWIDTH,
+  // not its compute, and folding it in would need an invented split of the percentage.
+  | { kind: "stemsAck"; deck: DeckId; model: string; state: "loading" | "separating" | "refused"; reason?: string; pct?: number }
   | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics

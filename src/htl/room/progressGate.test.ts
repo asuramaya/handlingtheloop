@@ -36,4 +36,23 @@ describe("makeProgressGate", () => {
     expect(gate(Number.NaN)).toBeNull();
     expect(gate(Number.POSITIVE_INFINITY)).toBeNull();
   });
+
+  // ★ WHY THE HOST USES ONE GATE PER PHASE. A gate never goes backwards, so a download that reaches 100
+  // followed by separation restarting at 0 would be swallowed whole by a SHARED gate — the requester
+  // would hear the download finish and then silence for the entire separation. Only a cold host hits
+  // this, which is exactly why it needs pinning here rather than being found in production.
+  it("a gate shared across two phases swallows the second phase; separate gates do not", () => {
+    const shared = makeProgressGate(10);
+    for (let p = 0; p <= 100; p += 5) shared(p); // phase 1: download completes
+    let sharedPhase2 = 0;
+    for (let p = 0; p <= 90; p += 5) if (shared(p) !== null) sharedPhase2++;
+    expect(sharedPhase2).toBe(0); // the bug a shared gate would cause
+
+    const load = makeProgressGate(10);
+    const sep = makeProgressGate(10);
+    for (let p = 0; p <= 100; p += 5) load(p);
+    let separatePhase2 = 0;
+    for (let p = 0; p <= 90; p += 5) if (sep(p) !== null) separatePhase2++;
+    expect(separatePhase2).toBe(10); // 0,10,…,90 all heard
+  });
 });

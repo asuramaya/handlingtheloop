@@ -51,7 +51,7 @@ export interface SessionSyncDeps {
    *  separation ruling. Without it the ack is received and ignored — no regression, just the old
    *  timeout behaviour until the consumer is wired. Two agents in one file is how FxStrip.tsx lost
    *  its hunks; an optional dep is the cheap way not to need the same file at the same moment. */
-  stemAckRef?: MutableRefObject<(id: DeckId, state: "separating" | "refused", reason?: string, pct?: number) => void>;
+  stemAckRef?: MutableRefObject<(id: DeckId, state: "loading" | "separating" | "refused", reason?: string, pct?: number) => void>;
   autoMixerControlRef: MutableRefObject<(action: "toggle" | "skip" | "mixnow" | "hold") => void>;
   mixQueueRef: MutableRefObject<MixQueue | null>;
   autoIsRemoteRef: MutableRefObject<boolean>;

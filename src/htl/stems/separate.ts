@@ -36,6 +36,17 @@ interface Job {
 }
 const jobs = new Map<number, Job>();
 
+// ★ MODEL-LOAD PROGRESS IS NOT PER-JOB, so it does not ride the job's onProgress. The weights are
+// fetched once per worker session, not once per job or per window — and the windowed path rescales
+// onProgress into a fraction of each window, which would mangle a download percentage. A listener
+// set is the honest shape: whoever currently cares (a host answering a remote's stem request)
+// subscribes for the duration and unsubscribes after. Values are 0..100.
+const modelLoadListeners = new Set<(pct: number) => void>();
+export function onModelLoading(cb: (pct: number) => void): () => void {
+  modelLoadListeners.add(cb);
+  return () => modelLoadListeners.delete(cb);
+}
+
 function getWorker(): Worker {
   if (!worker) {
     worker = new Worker(new URL("./separator.worker.ts", import.meta.url), { type: "module" });
@@ -43,6 +54,10 @@ function getWorker(): Worker {
       const { type, id } = e.data;
       const job = jobs.get(id);
       if (!job) return;
+      if (type === "loading") {
+        for (const cb of modelLoadListeners) cb(e.data.pct);
+        return;
+      }
       if (type === "progress") job.onProgress?.(e.data.pct);
       else if (type === "done") {
         jobs.delete(id);

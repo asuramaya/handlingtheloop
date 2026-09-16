@@ -15,6 +15,7 @@ import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
 import type { SeparationReport, StemStatus } from "../App";
 import { makeProgressGate } from "../htl/room/progressGate";
+import { onModelLoading } from "../htl/stems/separate";
 
 /** Progress is forwarded in steps of this many percent — caps a separation at ~10 wire frames
  *  regardless of how many segments or shift-TTA passes the separator splits the work into. */
@@ -151,6 +152,13 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       if (model.kind === "dsp") return void ack("refused", `${model.label} is a local-only model — the host can't stream it.`);
       if (!deviceSupportsModel(model)) return void ack("refused", `The host's device can't run ${model.label}.`);
       const key = `${vid}:${model.id}`;
+      // ★ LOAD-BEARING, NOT WASTE: this second requester gets ONE ack and no gate or report of its own.
+      // Its stall watchdog is kept alive only by the FIRST request's progress frames, which reach it
+      // because the writer leg relays stemsAck to every co-DJ and the frames carry deck+model, not a
+      // requester id. Narrow that relay to the original requester and this one times out mid-way
+      // through a healthy separation. If it is ever narrowed, target every PENDING requester of the
+      // deck:model. (I had filed the broadcast as harmless waste to tidy; Deckard caught that tidying
+      // it would introduce exactly this bug.)
       if (reqSepGuard.current[id] === key) return void ack("separating", "The host is already separating this track.");
       reqSepGuard.current[id] = key;
       ack("separating");
@@ -165,6 +173,15 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       // function beside an untested reimplementation is how a fake ends up right where the real
       // code is wrong.
       const gate = makeProgressGate(PROGRESS_STEP);
+      // A SEPARATE gate for the load phase. makeProgressGate never goes backwards within one instance,
+      // so sharing it would let a finished download (100) suppress separation restarting from 0 as
+      // "no new progress" — a bug that would only ever show on a cold host.
+      const loadGate = makeProgressGate(PROGRESS_STEP);
+      const stopLoad = onModelLoading((p) => {
+        const pct = loadGate(p);
+        if (pct === null) return;
+        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state: "loading", pct });
+      });
       const report: SeparationReport = (e) => {
         if (e.kind === "failed") return void ack("refused", e.reason);
         const pct = gate(e.pct);
@@ -174,6 +191,7 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       // No .catch(): forceSeparate never throws — failures arrive through `report` instead. The
       // .catch() that used to sit here could not fire, and claimed to handle exactly this.
       void forceSeparate(id, vid, deck.buffer, model, undefined, report).finally(() => {
+        stopLoad();
         if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
       });
     },

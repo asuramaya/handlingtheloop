@@ -107,7 +107,17 @@ function loadOrt(threads: number): Promise<any> {
 // now. A plain restart-from-scratch retry has bad odds if blips repeat faster than a full
 // download completes, so this RESUMES via Range requests (confirmed supported: the CDN
 // returns 206 Partial Content) instead of re-fetching all 170 MB after every blip.
-async function fetchResumable(url: string, tries = 8): Promise<ArrayBuffer | null> {
+// ★ THE MODEL DOWNLOAD USED TO BE SILENT. The first progress frame of a separation leaves only when
+// segment 1 FINISHES, and on a cold host that is after a ~170 MB weights download plus ORT session
+// creation. This loop tracked `received`/`total` the whole time and never said so — so a remote who
+// asked for stems heard "separating" and then nothing for as long as the HOST'S BANDWIDTH took
+// (~68 s at 20 Mbps), and its stall watchdog reported a dead host that was downloading fine.
+// No constant could be right, because the variable is the network, not compute.
+// Reported as its OWN phase rather than folded into separation %, which would need an invented
+// split. Set per job in onmessage; null when nothing is listening.
+let reportLoad: ((received: number, total: number) => void) | null = null;
+
+async function fetchResumable(url: string, tries = 8, onBytes?: (received: number, total: number) => void): Promise<ArrayBuffer | null> {
   let received = 0;
   let total = -1;
   let chunks: Uint8Array[] = [];
@@ -137,6 +147,7 @@ async function fetchResumable(url: string, tries = 8): Promise<ArrayBuffer | nul
         if (done) break;
         chunks.push(value);
         received += value.byteLength;
+        if (Number.isFinite(total) && total > 0) onBytes?.(received, total);
       }
       if (!Number.isFinite(total) || received >= total) {
         const buf = new Uint8Array(received);
@@ -179,7 +190,16 @@ function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<an
     // exist. If a sidecar genuinely exists and this probe gives up on it, InferenceSession.
     // create below fails on its own, with a real "missing external data" error — a much
     // more honest failure than blaming network fragility for a load that actually worked.
-    const [modelBytes, dataBytes] = await Promise.all([fetchResumable(url), fetchResumable(dataUrl).catch(() => null)]);
+    // Only the MODEL fetch reports load progress; the sidecar is a speculative probe that normally 404s.
+    // The reporter is PASSED to the model fetch, not read from a module variable at call time. A first
+    // draft nulled the shared variable around the sidecar probe — but the two fetches run CONCURRENTLY
+    // in this Promise.all, so nulling it for the sidecar silenced the model download's reports for as
+    // long as the probe was in flight. Caught in review before commit; a parameter cannot be clobbered
+    // by a sibling await.
+    const [modelBytes, dataBytes] = await Promise.all([
+      fetchResumable(url, undefined, reportLoad ?? undefined),
+      fetchResumable(dataUrl).catch(() => null),
+    ]);
     if (!modelBytes) throw new Error(`model fetch returned 404: ${url}`);
     const opts: Record<string, unknown> = { executionProviders: eps };
     if (dataBytes) opts.externalData = [{ path: `${filename}.data`, data: new Uint8Array(dataBytes) }];
@@ -382,6 +402,15 @@ self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
     const full = [new Float32Array(msg.l), new Float32Array(msg.r)];
     const N = msg.frames;
     const post: Post = (pct) => self.postMessage({ type: "progress", id, pct });
+    // Throttled at the worker too, so a 170 MB stream does not post a message per network chunk to
+    // the main thread; the wire gate downstream bounds what leaves the host.
+    let lastLoadPct = -1;
+    reportLoad = (received, total) => {
+      const pct = Math.floor((received / total) * 100);
+      if (pct <= lastLoadPct) return;
+      lastLoadPct = pct;
+      self.postMessage({ type: "loading", id, pct });
+    };
 
     // ONE architecture lives here now: the demucs core. Open-Unmix and the whole-model
     // demucs export were ripped with the rest of the retired separators (the onnx rip).

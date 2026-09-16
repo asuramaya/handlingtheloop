@@ -733,7 +733,7 @@ function AppBody() {
   // room + separation wiring exist below). Lets onRoomIntent call it without an ordering cycle.
   const stemReqRef = useRef<(id: DeckId, model: string) => void>(() => {});
   // The REQUESTER's half of stemsAck — filled below once setStatusFor exists.
-  const stemAckRef = useRef<(id: DeckId, state: "separating" | "refused", reason?: string, pct?: number) => void>(() => {});
+  const stemAckRef = useRef<(id: DeckId, state: "loading" | "separating" | "refused", reason?: string, pct?: number) => void>(() => {});
   // Per-deck timers that revert a remote's "Requesting…" chip if the host never delivers
   // (e.g. the host can't separate that model) — cleared when its stem view arrives.
   const stemReqTimers = useRef<Partial<Record<DeckId, ReturnType<typeof setTimeout>>>>({});
@@ -2388,10 +2388,13 @@ function AppBody() {
       return;
     }
     const p = typeof pct === "number" ? pct : undefined;
+    // "loading" (the host downloading model weights) re-arms the same stall watchdog as separation
+    // progress: once every phase REPORTS, the watchdog measures silence rather than guessing duration.
+    const what = state === "loading" ? "downloading the stem model" : "separating stems";
     setStatusFor(id, {
       phase: "separating",
       ...(p !== undefined ? { pct: p } : {}),
-      detail: p !== undefined ? `The session host is separating stems… ${p}%` : reason ?? "The session host is separating stems…",
+      detail: p !== undefined ? `The session host is ${what}… ${p}%` : reason ?? `The session host is ${what}…`,
     });
     stemReqTimers.current[id] = setTimeout(() => {
       setStatusFor(id, { phase: "unavailable", detail: "The session host stopped reporting progress on these stems." });

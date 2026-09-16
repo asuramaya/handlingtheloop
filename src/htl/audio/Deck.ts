@@ -2,6 +2,7 @@ import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analy
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
+import { isSameStemApply } from "./stemApply";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
@@ -1162,6 +1163,15 @@ export class Deck {
    *  seamlessly — all-on sums to the same mix, so there's no audible jump. Also
    *  builds the per-stem waveform envelopes so the viewport can render them. */
   setStems(stems: Stems | null, neural = false, videoId?: string) {
+    // ★ THE SAME SET, APPLIED AGAIN, IS A NO-OP. Applying stems is NOT cheap or idempotent: it
+    // restarts the pyramid build, re-packs four stems to int16 on the MAIN THREAD, and re-seats
+    // playback. When a remote stem request joins the host's own separation of a track (one shared
+    // job — see loadStems), BOTH callers resume on that job's result and both apply it, back to
+    // back, at the exact moment stems land. The separation was deduped; the work after it was not.
+    // Keyed on object IDENTITY plus the flags, so only a literal re-apply is skipped — a re-analyze
+    // produces a NEW object and still replaces the set, which is its whole purpose. Guarding here,
+    // not at the callers, covers every ordering (request-then-derive as well as derive-then-request).
+    if (isSameStemApply({ stems: this.stems, neural: this.stemsNeural, videoId: this.stemsVideoId }, { stems, neural, videoId: videoId ?? null })) return;
     this.stems = stems;
     this.stemsLoaded = !!stems;
     this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured

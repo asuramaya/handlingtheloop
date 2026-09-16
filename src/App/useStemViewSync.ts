@@ -14,7 +14,8 @@ import { getStemModel, deviceSupportsModel, type StemModel, type StemView } from
 import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
 import type { SeparateOpts, SeparationReport, StemStatus } from "../App";
-import { makeProgressGate } from "../htl/room/progressGate";
+import { startStemRequestReporter } from "../htl/room/stemRequestReporter";
+import { STEM_ACK_HEARTBEAT_MS, type StemAckState } from "../htl/room/protocol";
 import { onModelLoading } from "../htl/stems/separate";
 
 /** Progress is forwarded in steps of this many percent — caps a separation at ~10 wire frames
@@ -41,6 +42,9 @@ export interface StemViewSync {
 export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
   const { engine, refresh, roomRef, emitRef } = useSpine();
   const { setStatusFor, forceSeparate, loaded, latest, stemReqTimers, stemViewWaitTimers, reqSepGuard } = deps;
+  // The phase each deck's in-flight request is actually in, so a SECOND requester for the same track is
+  // told the truth ("queued", "loading", "separating") instead of a hardcoded "separating".
+  const reqPhase = useRef<Partial<Record<DeckId, { state: StemAckState; pct?: number }>>>({});
 
   // A stem view that arrived for a track this deck hasn't finished decoding yet (the
   // catch-up burst on join races the deck load) — stashed here and re-applied the moment
@@ -135,8 +139,12 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
   // being slow.
   const handleStemRequest = useCallback(
     (id: DeckId, modelId: string) => {
-      const ack = (state: "separating" | "refused", reason?: string) =>
-        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state, ...(reason ? { reason } : {}) });
+      const ack = (state: StemAckState, reason?: string, pct?: number) =>
+        emitRef.current({
+          kind: "stemsAck", deck: id, model: modelId, state,
+          ...(reason ? { reason } : {}),
+          ...(pct !== undefined ? { pct } : {}),
+        });
       // Not the audio authority: say so rather than leaving the requester to time out. Silence here
       // is the worst case — every OTHER device in the room is also not the anchor.
       if (!roomRef.current?.isAnchor) return;
@@ -159,9 +167,15 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       // through a healthy separation. If it is ever narrowed, target every PENDING requester of the
       // deck:model. (I had filed the broadcast as harmless waste to tidy; Deckard caught that tidying
       // it would introduce exactly this bug.)
-      if (reqSepGuard.current[id] === key) return void ack("separating", "The host is already separating this track.");
+      // A second requester used to be told "separating" even when the job was still waiting in the GPU
+      // queue — naming the wrong phase, which is the merge "queued" exists to prevent. It gets the phase
+      // the first request is ACTUALLY in, and its watchdog is then kept alive by that request's
+      // heartbeat (below), which reaches it through the writer-leg broadcast.
+      if (reqSepGuard.current[id] === key) {
+        const now = reqPhase.current[id];
+        return void ack(now?.state ?? "queued", "The host is already working on this track.", now?.pct);
+      }
       reqSepGuard.current[id] = key;
-      ack("separating");
       // ★ PROGRESS, COALESCED AT THE SOURCE. The separator posts a true fraction per SEGMENT (and
       // per shift-TTA pass), so the raw rate is set by the WORK — a faster GPU or a shorter segment
       // would silently raise it. Forwarding it raw would bound the wire by today's segment length,
@@ -172,44 +186,34 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       // The gate is the tested one (progressGate.test.ts), not an inline copy of it — a tested
       // function beside an untested reimplementation is how a fake ends up right where the real
       // code is wrong.
-      const gate = makeProgressGate(PROGRESS_STEP);
-      // A SEPARATE gate for the load phase. makeProgressGate never goes backwards within one instance,
-      // so sharing it would let a finished download (100) suppress separation restarting from 0 as
-      // "no new progress" — a bug that would only ever show on a cold host.
-      const loadGate = makeProgressGate(PROGRESS_STEP);
-      // ★ STOP SPEAKING THE MOMENT THIS DEVICE IS NO LONGER THE AUTHORITY. stopLoad() otherwise ran only
-      // when the job settled, so a host that lost anchor mid-job (handover, reconnect) kept acking a
-      // request it no longer owned — while the NEW anchor may be answering the same requester. Checked
-      // on every emission rather than by watching role changes, so there is no subscription to forget:
-      // the first emission after losing anchor unsubscribes and says nothing. (Deckard, 11377.)
-      let stopped = false;
-      const stillAuthority = () => {
-        if (stopped) return false;
-        if (roomRef.current?.isAnchor) return true;
-        stopped = true;
-        stopLoad();
-        return false;
-      };
-      const stopLoad = onModelLoading((p) => {
-        if (!stillAuthority()) return;
-        const pct = loadGate(p);
-        if (pct === null) return;
-        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state: "loading", pct });
+      // ★ PROGRESS, COALESCED AT THE SOURCE, plus PHASES and a HEARTBEAT. The separator posts per segment,
+      // so forwarding raw would bound the wire by today's segment length; each phase emits only on a new
+      // PROGRESS_STEP (~10 frames per separation). A queued request has no progress of its own, so the
+      // current phase is also re-sent every STEM_ACK_HEARTBEAT_MS. All of it — one gate per phase, the
+      // gate-bypassing heartbeat, the anchor-loss check, the single teardown — lives in the tested
+      // startStemRequestReporter; this hook only wires it. (Safe to send only since bd7af4c kept
+      // stemsAck off the listener crowd.)
+      const reporter = startStemRequestReporter({
+        ack,
+        isAuthority: () => !!roomRef.current?.isAnchor,
+        subscribeLoading: onModelLoading,
+        onPhase: (state, pct) => {
+          reqPhase.current[id] = { state, pct };
+        },
+        heartbeatMs: STEM_ACK_HEARTBEAT_MS,
+        step: PROGRESS_STEP,
       });
-      const report: SeparationReport = (e) => {
-        if (!stillAuthority()) return;
-        if (e.kind === "failed") return void ack("refused", e.reason);
-        const pct = gate(e.pct);
-        if (pct === null) return;
-        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state: "separating", pct });
-      };
+      const report: SeparationReport = (e) => reporter.report(e);
       // No .catch(): forceSeparate never throws — failures arrive through `report` instead. The
       // .catch() that used to sit here could not fire, and claimed to handle exactly this.
       // purpose "request": join the job already running for this track+model (or use the cache) instead
       // of forcing a second separation. This is the argument that actually closes the duplicate.
       void forceSeparate(id, vid, deck.buffer, model, { purpose: "request", report }).finally(() => {
-        stopLoad();
-        if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
+        reporter.stop();
+        if (reqSepGuard.current[id] === key) {
+          reqSepGuard.current[id] = undefined;
+          reqPhase.current[id] = undefined;
+        }
       });
     },
     [engine, forceSeparate, sendHostStemView, emitRef],

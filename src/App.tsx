@@ -1,5 +1,8 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
 import type { StemAckState } from "./htl/room/protocol";
+// The requester's stall limit and the host's heartbeat are one invariant with two owners, so both
+// live in protocol.ts — a local copy here could drift from the heartbeat that keeps it alive.
+import { STEM_ACK_STALL_MS } from "./htl/room/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
 import { SongOverview } from "./components/SongOverview";
@@ -142,7 +145,6 @@ export type StemPhase =
 /** How long a requester waits for the NEXT progress step before reporting the host has gone quiet.
  *  A stall window, not a total deadline: progress arrives in ~10% steps, and even a long track on a
  *  CPU host moves a step well inside this. The old fixed 20 s TOTAL is what fired mid-success. */
-const STEM_ACK_STALL_MS = 60_000;
 
 /** How a separation's outcome leaves forceSeparate for someone other than this device's own UI —
  *  today, the host answering a remote's stem request. forceSeparate never throws, so without this a
@@ -2063,6 +2065,18 @@ function AppBody() {
           force, // reanalyze forces a fresh compute; a request joins running work or uses the cache
         );
         if (stale?.()) return;
+        // ★ THE DECK MUST STILL HOLD THIS TRACK. The only guard used to be `stale`, which a remote
+        // request never passes — and nothing downstream checks either: setStems packs whatever it is
+        // handed against the deck's CURRENT buffer. So a request for track T, still separating when
+        // the host loaded track U onto that deck, applied T's stems there, and the deck played T's
+        // stems while cued on U. Today's work made that far easier to hit: every request now lands
+        // on the host and can wait behind running and preload jobs in the one-at-a-time GPU queue,
+        // long enough to outlast a track change on an AUTO host. Checked against the deck itself for
+        // BOTH purposes, because re-analyze had the same hole.
+        if (latest.current.loaded[id] !== videoId) {
+          report?.({ kind: "failed", reason: "The host changed the track on that deck before its stems were ready." });
+          return;
+        }
         // loadStems throws on failure now (no DSP fallback) → the catch below reports it. A
         // returned set is always the real neural model, so flag it neural (setStems defaults false).
         engine.deck(id).setStems(stems, true, videoId);

@@ -208,7 +208,12 @@ export type Intent =
   // "loading" is the cold-host phase BEFORE separation: the model weights downloading. It has its own
   // state rather than a share of "separating" because its duration is set by the host's BANDWIDTH,
   // not its compute, and folding it in would need an invented split of the percentage.
-  | { kind: "stemsAck"; deck: DeckId; model: string; state: "loading" | "separating" | "refused"; reason?: string; pct?: number }
+  // "queued" = accepted, but waiting behind other GPU work (another separation, the auto-DJ's preloads,
+  // a transition hold). A distinct state rather than "separating" with no pct, because otherwise the
+  // requester cannot tell WAITING TO START from STARTED BUT FIRST STEP NOT DONE — two different facts
+  // merged into one, which is exactly what stemsAck exists to stop. Queue time is set by OTHER work, so
+  // a queued host must HEARTBEAT (it has no progress of its own to gate on); see STEM_ACK_HEARTBEAT_MS.
+  | { kind: "stemsAck"; deck: DeckId; model: string; state: "queued" | "loading" | "separating" | "refused"; reason?: string; pct?: number }
   | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics
@@ -363,3 +368,10 @@ export function canDriveIntent(decks: string, intent: Intent): boolean {
   if (deck === "A" || deck === "B") return decks.includes(deck);
   return decks.includes("A") && decks.includes("B"); // deck-less → must hold both
 }
+
+/** How long a stem requester tolerates silence from the host before reporting it gone quiet. */
+export const STEM_ACK_STALL_MS = 60_000;
+/** How often a host with no progress of its own (queued) must say it is still there. Derived from the
+ *  stall limit rather than chosen beside it: the heartbeat and the watchdog are one invariant with two
+ *  owners (host sends, requester waits), so they live together and cannot drift apart. */
+export const STEM_ACK_HEARTBEAT_MS = Math.floor(STEM_ACK_STALL_MS / 4);

@@ -2,7 +2,7 @@ import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analy
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
-import { isSameStemApply } from "./stemApply";
+import { isSameStemApply, stemApplyId } from "./stemApply";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
@@ -281,6 +281,9 @@ export class Deck {
   // pyramids are built (the iPhone OOM fix — see buildStemPyramidsLazy). hasStems and
   // the stem mixer stay live off this flag + the worklet, not the (freed) buffers.
   private stemsLoaded = false;
+  // Id of the stem set the ENGINE last received through setStems — survives the float32 release,
+  // reset wherever the engine's stems are replaced. See stemApply.ts.
+  private lastAppliedStemId: number | undefined;
   // Resident int16 stem bytes handed to the worklet for THIS deck (0 when mix-only). The mobile
   // seatbelt sums this across decks to refuse a stem load that would OOM the tab, instead of
   // crashing — a byte-accurate budget replacing the old (bytes-blind) seconds proxy.
@@ -837,6 +840,7 @@ export class Deck {
     }
     this._bend = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
+    this.lastAppliedStemId = undefined; // INVALIDATION: the engine gets the plain mix
     this.stemsLoaded = false;
     this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = false; // ...and it is NOT this track's neural split until one lands
@@ -909,6 +913,7 @@ export class Deck {
    *  fills in when the host's stem envelopes arrive (setRemoteStemView, phase 2). */
   markRemoteStems(present: boolean, neural = true) {
     this.remoteStems = present;
+    this.lastAppliedStemId = undefined; // INVALIDATION: a mirror holds no local set
     this.stemsLoaded = present;
     this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = present && neural;
@@ -1171,7 +1176,14 @@ export class Deck {
     // Keyed on object IDENTITY plus the flags, so only a literal re-apply is skipped — a re-analyze
     // produces a NEW object and still replaces the set, which is its whole purpose. Guarding here,
     // not at the callers, covers every ordering (request-then-derive as well as derive-then-request).
-    if (isSameStemApply({ stems: this.stems, neural: this.stemsNeural, videoId: this.stemsVideoId }, { stems, neural, videoId: videoId ?? null })) return;
+    if (
+      isSameStemApply(
+        { stems: this.stems, appliedId: this.lastAppliedStemId, loaded: this.stemsLoaded, remote: this.remoteStems, neural: this.stemsNeural, videoId: this.stemsVideoId },
+        { stems, neural, videoId: videoId ?? null },
+      )
+    )
+      return;
+    this.lastAppliedStemId = stems ? stemApplyId(stems) : undefined;
     this.stems = stems;
     this.stemsLoaded = !!stems;
     this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
@@ -1345,6 +1357,7 @@ export class Deck {
    *  → LOD only). Mirrors the tail of setStems' mobile branch, minus the float32 pack. */
   loadPackedStems(packed: PackedStems, neural = false, videoId?: string) {
     this.stems = null;
+    this.lastAppliedStemId = undefined; // INVALIDATION: the engine gets a packed set, not a setStems one
     this.stemsLoaded = true;
     this.syncStemTaps(); // stems arriving or leaving changes whether stem chains can be honoured
     this.stemsNeural = neural;

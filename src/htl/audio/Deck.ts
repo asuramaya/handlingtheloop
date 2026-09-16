@@ -632,6 +632,15 @@ export class Deck {
     // release `buf` once stems are packed (releaseMixBuffer), so a stems pack must NOT be
     // gated on `buf` — only the mix path requires it.
     if (!node || (!useStems && !buf)) return;
+    // ★ lastAppliedStemId DESCRIBES WHAT THE ENGINE HOLDS, so it is maintained HERE — the only place the
+    // engine gets audio — not only at the sites that clear stems. From this line on the engine is about
+    // to be (re)loaded; if that load is the MIX, no stem set is applied any more. The per-site resets
+    // (setBuffer, markRemoteStems, loadPackedStems) missed a fifth path: a stretch-node REATTACH after
+    // the float32 release (mobile always; desktop over 480 s) repacks the mix because `this.stems` is
+    // null, while stemsLoaded stays true and the id survives — so a later re-apply of the same set was
+    // skipped and the deck played the plain mix under stem controls. Owning the invariant at the
+    // chokepoint covers that path and any future one.
+    if (!useStems) this.lastAppliedStemId = undefined;
     // Mobile packs INT16 (halves the audio-thread footprint so 4 stems × 2 decks fit a
     // phone). Desktop keeps raw FLOAT32 — RAM is plentiful and a `.slice` memcpy is far
     // cheaper than a per-sample pack loop on the load path (the pack froze the main

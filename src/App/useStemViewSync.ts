@@ -13,7 +13,7 @@ import type { MutableRefObject } from "react";
 import { getStemModel, deviceSupportsModel, type StemModel, type StemView } from "@htl";
 import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
-import type { SeparationReport, StemStatus } from "../App";
+import type { SeparateOpts, SeparationReport, StemStatus } from "../App";
 import { makeProgressGate } from "../htl/room/progressGate";
 import { onModelLoading } from "../htl/stems/separate";
 
@@ -23,7 +23,7 @@ const PROGRESS_STEP = 10;
 
 export interface StemViewSyncDeps {
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
-  forceSeparate: (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean, report?: SeparationReport) => Promise<void>;
+  forceSeparate: (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, opts: SeparateOpts) => Promise<void>;
   loaded: Record<DeckId, string | null>;
   // Read-narrowed view of App's `latest` ref (covariant `current` → only `.loaded` is touched).
   latest: { readonly current: { loaded: Record<DeckId, string | null> } };
@@ -190,7 +190,9 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       };
       // No .catch(): forceSeparate never throws — failures arrive through `report` instead. The
       // .catch() that used to sit here could not fire, and claimed to handle exactly this.
-      void forceSeparate(id, vid, deck.buffer, model, undefined, report).finally(() => {
+      // purpose "request": join the job already running for this track+model (or use the cache) instead
+      // of forcing a second separation. This is the argument that actually closes the duplicate.
+      void forceSeparate(id, vid, deck.buffer, model, { purpose: "request", report }).finally(() => {
         stopLoad();
         if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
       });

@@ -1,3 +1,4 @@
+import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
 import type { StemAckState } from "./htl/room/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckLane, type DeckMeta } from "./components/DeckLane";
@@ -146,6 +147,13 @@ const STEM_ACK_STALL_MS = 60_000;
 /** How a separation's outcome leaves forceSeparate for someone other than this device's own UI —
  *  today, the host answering a remote's stem request. forceSeparate never throws, so without this a
  *  caller cannot tell a failure from a success. */
+/** Options for forceSeparate. `purpose` is required so every call site states its intent. */
+export interface SeparateOpts {
+  purpose: SeparatePurpose;
+  stale?: () => boolean;
+  report?: SeparationReport;
+}
+
 export type SeparationReport = (e: { kind: "progress"; pct: number } | { kind: "failed"; reason: string }) => void;
 
 export interface StemStatus {
@@ -1993,7 +2001,20 @@ function AppBody() {
   // cached result (the Settings "Re-analyze" action). `force` makes loadStems skip
   // the R2 download and re-compute. Only meaningful where the device can run it.
   const forceSeparate = useCallback(
-    async (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean, report?: SeparationReport) => {
+    async (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, opts: SeparateOpts) => {
+      const { stale, report, purpose } = opts;
+      // ★ `purpose` IS REQUIRED, and that is the point. This function serves two different intents:
+      //   "reanalyze" — the user asked for a FRESH compute (maybe at a different shift-TTA quality,
+      //                 which the job key does not include), so it must force and must not be
+      //                 swallowed by an existing job;
+      //   "request"   — a remote asked for these stems to EXIST, so it must join a running job or hit
+      //                 the cache rather than forcing a second separation of the same track.
+      // Hardcoding force=true for both is what made a remote request separate the host's track a second
+      // time even after loadStems learned to dedupe (0dbe499). It is a required field rather than an
+      // inference from whether `report` was passed, because a signal that merely correlates with intent
+      // is the dead .catch() again — and required means the compiler refuses a call site that doesn't say.
+      const force = separationForces(purpose);
+      const verb = force ? "Re-analyzing" : "Separating";
       // ★ `report` EXISTS BECAUSE THIS FUNCTION NEVER THROWS. Every failure below is caught and
       // turned into local status, so a caller that awaits it cannot tell success from failure —
       // it always resolves. handleStemRequest had a `.catch()` on this call that could therefore
@@ -2027,7 +2048,7 @@ function AppBody() {
       }
       const gpuSeparate = model.tier === "gpu" && isChromium(); // GPU guard: Chromium-only path
       if (gpuSeparate) armGpu(model.id);
-      setStatusFor(id, { phase: "separating", pct: 0, detail: `Re-analyzing with ${model.label}…` });
+      setStatusFor(id, { phase: "separating", pct: 0, detail: `${verb} with ${model.label}…` });
       try {
         const stems = await loadStems(
           engine.ctx,
@@ -2036,17 +2057,17 @@ function AppBody() {
           model,
           (pct) => {
             const p = Math.round(pct * 100);
-            setStatusFor(id, { phase: "separating", pct: p, detail: `Re-analyzing with ${model.label}… ${p}%` });
+            setStatusFor(id, { phase: "separating", pct: p, detail: `${verb} with ${model.label}… ${p}%` });
             report?.({ kind: "progress", pct: p });
           },
-          true, // force a re-compute, ignore + overwrite the cache
+          force, // reanalyze forces a fresh compute; a request joins running work or uses the cache
         );
         if (stale?.()) return;
         // loadStems throws on failure now (no DSP fallback) → the catch below reports it. A
         // returned set is always the real neural model, so flag it neural (setStems defaults false).
         engine.deck(id).setStems(stems, true, videoId);
         refresh();
-        setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready (re-analyzed).` });
+        setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: force ? `${model.label} ready (re-analyzed).` : `${model.label} ready.` });
       } catch (e) {
         console.warn("[htl] re-analyze failed:", e);
         report?.({ kind: "failed", reason: `The host's separation failed: ${e instanceof Error ? e.message : String(e)}` });
@@ -2073,7 +2094,7 @@ function AppBody() {
         const vid = loaded[id];
         const deck = engine.deck(id);
         if (!vid || !deck.buffer) continue;
-        void forceSeparate(id, vid, deck.buffer, model);
+        void forceSeparate(id, vid, deck.buffer, model, { purpose: "reanalyze" });
       }
     },
     [engine, loaded, forceSeparate],

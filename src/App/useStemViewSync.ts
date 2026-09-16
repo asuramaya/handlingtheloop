@@ -177,12 +177,27 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       // so sharing it would let a finished download (100) suppress separation restarting from 0 as
       // "no new progress" — a bug that would only ever show on a cold host.
       const loadGate = makeProgressGate(PROGRESS_STEP);
+      // ★ STOP SPEAKING THE MOMENT THIS DEVICE IS NO LONGER THE AUTHORITY. stopLoad() otherwise ran only
+      // when the job settled, so a host that lost anchor mid-job (handover, reconnect) kept acking a
+      // request it no longer owned — while the NEW anchor may be answering the same requester. Checked
+      // on every emission rather than by watching role changes, so there is no subscription to forget:
+      // the first emission after losing anchor unsubscribes and says nothing. (Deckard, 11377.)
+      let stopped = false;
+      const stillAuthority = () => {
+        if (stopped) return false;
+        if (roomRef.current?.isAnchor) return true;
+        stopped = true;
+        stopLoad();
+        return false;
+      };
       const stopLoad = onModelLoading((p) => {
+        if (!stillAuthority()) return;
         const pct = loadGate(p);
         if (pct === null) return;
         emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state: "loading", pct });
       });
       const report: SeparationReport = (e) => {
+        if (!stillAuthority()) return;
         if (e.kind === "failed") return void ack("refused", e.reason);
         const pct = gate(e.pct);
         if (pct === null) return;

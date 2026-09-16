@@ -153,6 +153,17 @@ export class DjRoom {
   // to ~20Hz (last value per control), discrete events passed straight through. As the FX
   // rack grows, this stops each new param's sweep from multiplying listener fan-out.
   private static COALESCE_KINDS: ReadonlySet<string> = new Set(["control", "crossfade", "stemGain", "fxParam"]);
+  // ★ Intents the anonymous crowd never receives. TWO REASONS, opposite in kind, same conclusion:
+  //  • jog — gestural and non-reconstructable; a listener holds position from the tick instead.
+  //  • reqStems, stemsAck — ADDRESSED TO ONE DEVICE and meaningless to the crowd. A listener cannot
+  //    issue a stem request (requestStemsFromHost requires `controlling`) and so has no pending
+  //    request for an ack to resolve. These used to fall through to relayToListeners uncoalesced,
+  //    because nothing named them — a per-requester signal broadcast to a population that cannot
+  //    use it. Harmless at ~2 frames per request; the moment stemsAck carries separation progress
+  //    it becomes one frame per segment per shift, fanned to the whole crowd at a rate set by the
+  //    WORK rather than by anyone's need, which is the lyrics storm's exact shape. So this is
+  //    closed FIRST, before progress is forwarded — the order is the fix.
+  private static LISTENER_DROP_KINDS: ReadonlySet<string> = new Set(["jog", "reqStems", "stemsAck"]);
   private static DIGEST_FLUSH_MS = 50; // ~20 Hz
   // Captions are read by eye; a few hundred ms of coalescing is imperceptible against an 18 KB
   // payload arriving 165 times a second. Deliberately far slower than DIGEST_FLUSH_MS: a knob
@@ -701,13 +712,14 @@ export class DjRoom {
         // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
         // may be driving / mirroring the platter). skipListeners=true → non-pub only.
         this.relay(self, out, true);
-        // The LISTENER crowd (digest roll-up): jog is gestural + non-reconstructable → drop
-        // (they hold position from the tick, resync at the next anchor). Continuous SWEEPS
+        // The LISTENER crowd (digest roll-up): LISTENER_DROP_KINDS never reach them — jog because
+        // it is gestural, the stem request/ack pair because they are addressed to one device (see
+        // the set's comment). Continuous SWEEPS
         // are coalesced (~20Hz, last value per control) so a rack of FX sweeps doesn't fan
         // out at input rate. Everything else (load/cue/loop/transport/hotcue/sync/fxRack/…)
         // passes straight through.
         const kind = msg.intent.kind;
-        if (kind === "jog") break;
+        if (DjRoom.LISTENER_DROP_KINDS.has(kind)) break;
         if (DjRoom.COALESCE_KINDS.has(kind)) this.queueDigest(msg.intent, out);
         else this.relayToListeners(out);
         break;

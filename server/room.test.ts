@@ -427,6 +427,26 @@ describe("DjRoom crowd guard + requests", () => {
     expect(stored!.B).toBeDefined();
   });
 
+  // ★ The stem request/ack pair is addressed to ONE device; the anonymous crowd must never get it.
+  // POSITIVE CONTROL FIRST: an ordinary board intent MUST reach the same listener. Without it,
+  // "the listener received no stemsAck" is vacuous — a listener socket receiving nothing at all
+  // would pass the negative assertions trivially, which is the 4/4 matcher again.
+  it("keeps stemsAck and reqStems off the listener crowd, while ordinary intents still reach it", async () => {
+    const host = await liveHost();
+    const listener = (await h.connect({ device: "L1", pub: true })).ws!;
+    const intentsOf = (k: string) => listener.msgs().filter((m) => m.t === "intent" && (m as { intent?: { kind?: string } }).intent?.kind === k).length;
+
+    await h.send(host, { t: "intent", intent: { kind: "transport", deck: "A", playing: true } });
+    expect(intentsOf("transport")).toBe(1); // the control: this listener DOES receive intents
+
+    await h.send(host, { t: "intent", intent: { kind: "stemsAck", deck: "A", model: "htdemucs", state: "separating" } });
+    await h.send(host, { t: "intent", intent: { kind: "reqStems", deck: "A", model: "htdemucs" } });
+    await h.send(host, { t: "intent", intent: { kind: "jog", deck: "A", value: 0.1 } });
+    expect(intentsOf("stemsAck")).toBe(0);
+    expect(intentsOf("reqStems")).toBe(0);
+    expect(intentsOf("jog")).toBe(0);
+  });
+
   it("a ban survives a DO eviction (reconstruct over the same storage)", async () => {
     const host = await liveHost();
     await h.connect({ device: "A", pub: true });

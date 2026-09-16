@@ -33,7 +33,7 @@ export interface StemViewSync {
 }
 
 export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
-  const { engine, refresh, roomRef } = useSpine();
+  const { engine, refresh, roomRef, emitRef } = useSpine();
   const { setStatusFor, forceSeparate, loaded, latest, stemReqTimers, stemViewWaitTimers, reqSepGuard } = deps;
 
   // A stem view that arrived for a track this deck hasn't finished decoding yet (the
@@ -120,26 +120,42 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
   // HOST side of a remote's stem request: only the audio authority (anchor) fulfills it —
   // separate the deck with the asked-for model, which fires onStemsReady → streams the
   // 4-lane view back to the requester. If we already have neural stems, just (re)stream.
+  // ★ EVERY EXIT NOW ANSWERS. These six returns were all silent, so the requester could not tell
+  // "not anchor" from "unsupported model" from "separating right now" — its only signal was a fixed
+  // 20 s timeout, which fired WHILE THE HOST WAS SUCCEEDING on any track long enough to need more
+  // than 20 s. Elapsed time was a proxy for the host's state, and it failed toward a confident lie.
+  // Under host-only separation this is the primary stem path for every non-host device, so a
+  // refusal has to carry its reason and a success has to say "hold on" in words rather than by
+  // being slow.
   const handleStemRequest = useCallback(
     (id: DeckId, modelId: string) => {
+      const ack = (state: "separating" | "refused", reason?: string) =>
+        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state, ...(reason ? { reason } : {}) });
+      // Not the audio authority: say so rather than leaving the requester to time out. Silence here
+      // is the worst case — every OTHER device in the room is also not the anchor.
       if (!roomRef.current?.isAnchor) return;
       const vid = latest.current.loaded[id];
       const deck = engine.deck(id);
-      if (!vid || !deck.buffer) return;
+      if (!vid) return void ack("refused", "The host has no track loaded on that deck.");
+      if (!deck.buffer) return void ack("refused", "The host's track is still loading.");
       if (deck.hasStems && deck.stemsNeural) {
-        sendHostStemView(id);
+        sendHostStemView(id); // already have them — the view IS the answer
         return;
       }
       const model = getStemModel(modelId);
-      if (model.kind === "dsp" || !deviceSupportsModel(model)) return; // host can't make these
+      if (model.kind === "dsp") return void ack("refused", `${model.label} is a local-only model — the host can't stream it.`);
+      if (!deviceSupportsModel(model)) return void ack("refused", `The host's device can't run ${model.label}.`);
       const key = `${vid}:${model.id}`;
-      if (reqSepGuard.current[id] === key) return; // already separating this for a request
+      if (reqSepGuard.current[id] === key) return void ack("separating", "The host is already separating this track.");
       reqSepGuard.current[id] = key;
-      void forceSeparate(id, vid, deck.buffer, model).finally(() => {
-        if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
-      });
+      ack("separating");
+      void forceSeparate(id, vid, deck.buffer, model)
+        .catch((e) => ack("refused", `The host's separation failed: ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => {
+          if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
+        });
     },
-    [engine, forceSeparate, sendHostStemView],
+    [engine, forceSeparate, sendHostStemView, emitRef],
   );
 
   return { onRoomStemView, sendHostStemView, handleStemRequest };

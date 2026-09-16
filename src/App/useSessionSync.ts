@@ -45,6 +45,13 @@ export interface SessionSyncDeps {
   followRef: MutableRefObject<boolean>;
   ensureGuestStemsRef: MutableRefObject<(id: DeckId) => void>;
   stemReqRef: MutableRefObject<(id: DeckId, model: string) => void>;
+  /** The host's answer to a reqStems we sent — replaces the requester's fixed timeout with a fact.
+   *  OPTIONAL deliberately: the wire half (host emits, receiver routes) lands independently of the
+   *  requester-side UI wiring in App.tsx, which is being edited concurrently for the host-only
+   *  separation ruling. Without it the ack is received and ignored — no regression, just the old
+   *  timeout behaviour until the consumer is wired. Two agents in one file is how FxStrip.tsx lost
+   *  its hunks; an optional dep is the cheap way not to need the same file at the same moment. */
+  stemAckRef?: MutableRefObject<(id: DeckId, state: "separating" | "refused", reason?: string) => void>;
   autoMixerControlRef: MutableRefObject<(action: "toggle" | "skip" | "mixnow" | "hold") => void>;
   mixQueueRef: MutableRefObject<MixQueue | null>;
   autoIsRemoteRef: MutableRefObject<boolean>;
@@ -85,6 +92,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     followRef,
     ensureGuestStemsRef,
     stemReqRef,
+    stemAckRef,
     autoMixerControlRef,
     mixQueueRef,
     autoIsRemoteRef,
@@ -335,6 +343,12 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // host separates + streams the view back); it's not a local control to apply.
       if (intent.kind === "reqStems") {
         stemReqRef.current(intent.deck, intent.model);
+        return;
+      }
+      // The host's ANSWER to our reqStems. Intercepted like reqStems itself — it is a message about
+      // a request's fate, not a control to apply to the board.
+      if (intent.kind === "stemsAck") {
+        stemAckRef?.current(intent.deck, intent.state, intent.reason);
         return;
       }
       applyIntent(intent);

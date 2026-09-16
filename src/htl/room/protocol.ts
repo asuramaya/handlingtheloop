@@ -192,6 +192,18 @@ export type Intent =
   | { kind: "key"; slave: DeckId | null } // key-match: which deck is shifted (null = off); for the button
   | { kind: "skip"; deck: DeckId; beats: number } // jog / beat-jump resolution (absolute)
   | { kind: "reqStems"; deck: DeckId; model: string } // a remote asks the audio host to separate stems + stream the view
+  // ★ THE HOST'S ANSWER TO reqStems, and it exists because the requester previously had NO answer:
+  // its only signal was a FIXED 20 s timeout, while handleStemRequest has six silent early returns
+  // (not anchor, no track, no buffer, dsp model, unsupported model, already separating) that are
+  // indistinguishable from each other AND from success-in-progress. A real separation is ~15 s on
+  // WebGPU and longer on CPU, a long track, or with shift-TTA — so the timeout fired WHILE THE HOST
+  // WAS SUCCEEDING and told the user the host could not do it, seconds before the stems arrived.
+  // Elapsed time was standing in for the host's state: a proxy, failing toward a confident lie.
+  // Under the host-only separation ruling this stops being cosmetic — it becomes the primary stem
+  // UX for every device that is not the host.
+  // `state` is the fact the requester needed: "separating" means hold and keep waiting (the
+  // requester drives its own watchdog off this rather than a constant), "refused" carries WHY.
+  | { kind: "stemsAck"; deck: DeckId; model: string; state: "separating" | "refused"; reason?: string }
   | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics

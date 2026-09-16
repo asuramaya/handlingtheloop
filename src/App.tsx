@@ -137,6 +137,16 @@ export type StemPhase =
   | "promoted"
   | "failed"
   | "unavailable";
+/** How long a requester waits for the NEXT progress step before reporting the host has gone quiet.
+ *  A stall window, not a total deadline: progress arrives in ~10% steps, and even a long track on a
+ *  CPU host moves a step well inside this. The old fixed 20 s TOTAL is what fired mid-success. */
+const STEM_ACK_STALL_MS = 60_000;
+
+/** How a separation's outcome leaves forceSeparate for someone other than this device's own UI —
+ *  today, the host answering a remote's stem request. forceSeparate never throws, so without this a
+ *  caller cannot tell a failure from a success. */
+export type SeparationReport = (e: { kind: "progress"; pct: number } | { kind: "failed"; reason: string }) => void;
+
 export interface StemStatus {
   phase: StemPhase;
   pct?: number; // 0–100, while downloading/separating
@@ -722,6 +732,8 @@ function AppBody() {
   // A remote's "make these stems" request, routed to the host handler (assigned once the
   // room + separation wiring exist below). Lets onRoomIntent call it without an ordering cycle.
   const stemReqRef = useRef<(id: DeckId, model: string) => void>(() => {});
+  // The REQUESTER's half of stemsAck — filled below once setStatusFor exists.
+  const stemAckRef = useRef<(id: DeckId, state: "separating" | "refused", reason?: string, pct?: number) => void>(() => {});
   // Per-deck timers that revert a remote's "Requesting…" chip if the host never delivers
   // (e.g. the host can't separate that model) — cleared when its stem view arrives.
   const stemReqTimers = useRef<Partial<Record<DeckId, ReturnType<typeof setTimeout>>>>({});
@@ -1980,9 +1992,16 @@ function AppBody() {
   // cached result (the Settings "Re-analyze" action). `force` makes loadStems skip
   // the R2 download and re-compute. Only meaningful where the device can run it.
   const forceSeparate = useCallback(
-    async (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean) => {
-      if (model.kind === "dsp") return;
+    async (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean, report?: SeparationReport) => {
+      // ★ `report` EXISTS BECAUSE THIS FUNCTION NEVER THROWS. Every failure below is caught and
+      // turned into local status, so a caller that awaits it cannot tell success from failure —
+      // it always resolves. handleStemRequest had a `.catch()` on this call that could therefore
+      // never fire: dead code, shipped under a commit message claiming a failed separation now
+      // reports its error. It did not. The requester's only evidence was, again, silence.
+      // `report` is how the outcome leaves this function for anyone who is not this device's UI.
+      if (model.kind === "dsp") return void report?.({ kind: "failed", reason: `${model.label} is a local-only model.` });
       if (modelSupport(model) !== "runs") {
+        report?.({ kind: "failed", reason: `The host's device can't run ${model.label}.` });
         setStatusFor(id, { phase: "unavailable", detail: `${model.label}: can't re-analyze on this device.` });
         setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
         return;
@@ -1991,6 +2010,7 @@ function AppBody() {
       // skips the cache probe entirely, so the cold-cache gate in deriveStems never sees it.
       // Without this a guest or listener could hand itself a full separation from Settings.
       if (!maySeparate()) {
+        report?.({ kind: "failed", reason: "This device is not the session's audio host." });
         setStatusFor(id, {
           phase: "unavailable",
           detail: "Only the session host can re-analyze stems — you're not the audio host of this session.",
@@ -2016,6 +2036,7 @@ function AppBody() {
           (pct) => {
             const p = Math.round(pct * 100);
             setStatusFor(id, { phase: "separating", pct: p, detail: `Re-analyzing with ${model.label}… ${p}%` });
+            report?.({ kind: "progress", pct: p });
           },
           true, // force a re-compute, ignore + overwrite the cache
         );
@@ -2027,6 +2048,7 @@ function AppBody() {
         setStatusFor(id, { phase: "ready", src: stemSrcLabel(model.id), detail: `${model.label} ready (re-analyzed).` });
       } catch (e) {
         console.warn("[htl] re-analyze failed:", e);
+        report?.({ kind: "failed", reason: `The host's separation failed: ${e instanceof Error ? e.message : String(e)}` });
         setStatusFor(id, { phase: "failed", detail: `${model.label} re-analyze failed — see console.` });
         setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
       } finally {
@@ -2140,6 +2162,7 @@ function AppBody() {
     followRef,
     ensureGuestStemsRef,
     stemReqRef,
+    stemAckRef,
     autoMixerControlRef,
     mixQueueRef,
     autoIsRemoteRef,
@@ -2347,6 +2370,34 @@ function AppBody() {
   }, [captions, captionSource, room.status, room.controlling, room.isAnchor, sendHostLyrics]);
 
   stemReqRef.current = handleStemRequest;
+  // ★ THE REQUESTER NOW WAITS ON THE HOST'S WORD, NOT A CLOCK. requestStemsFromHost arms a fixed 20 s
+  // timeout, which used to be the ONLY evidence of the host's state and fired while the host was
+  // still succeeding. An ack replaces that guess with a fact:
+  //   refused    → say WHY immediately, instead of 20 s of "Requesting…" followed by a wrong reason;
+  //   separating → drop the fixed deadline and re-arm a STALL watchdog on every progress step, so a
+  //                long track on a slow host is allowed as long as it keeps moving, and only a host
+  //                that has genuinely gone quiet is reported.
+  // Success needs no branch here: the stem view landing clears the timer (onRoomStemView), as before.
+  stemAckRef.current = (id, state, reason, pct) => {
+    const t = stemReqTimers.current[id];
+    if (t) clearTimeout(t);
+    stemReqTimers.current[id] = undefined;
+    if (state === "refused") {
+      setStatusFor(id, { phase: "unavailable", detail: reason ?? "The session host can't make stems for this track." });
+      setTimeout(() => setStatusFor(id, null), 6000);
+      return;
+    }
+    const p = typeof pct === "number" ? pct : undefined;
+    setStatusFor(id, {
+      phase: "separating",
+      ...(p !== undefined ? { pct: p } : {}),
+      detail: p !== undefined ? `The session host is separating stems… ${p}%` : reason ?? "The session host is separating stems…",
+    });
+    stemReqTimers.current[id] = setTimeout(() => {
+      setStatusFor(id, { phase: "unavailable", detail: "The session host stopped reporting progress on these stems." });
+      setTimeout(() => setStatusFor(id, null), 6000);
+    }, STEM_ACK_STALL_MS);
+  };
 
   useEffect(() => {
     engine.deckA.onStemsReady = () => sendHostStemView("A");

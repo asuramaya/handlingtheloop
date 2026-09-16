@@ -51,7 +51,7 @@ export interface SessionSyncDeps {
    *  separation ruling. Without it the ack is received and ignored — no regression, just the old
    *  timeout behaviour until the consumer is wired. Two agents in one file is how FxStrip.tsx lost
    *  its hunks; an optional dep is the cheap way not to need the same file at the same moment. */
-  stemAckRef?: MutableRefObject<(id: DeckId, state: "separating" | "refused", reason?: string) => void>;
+  stemAckRef?: MutableRefObject<(id: DeckId, state: "separating" | "refused", reason?: string, pct?: number) => void>;
   autoMixerControlRef: MutableRefObject<(action: "toggle" | "skip" | "mixnow" | "hold") => void>;
   mixQueueRef: MutableRefObject<MixQueue | null>;
   autoIsRemoteRef: MutableRefObject<boolean>;
@@ -348,7 +348,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // The host's ANSWER to our reqStems. Intercepted like reqStems itself — it is a message about
       // a request's fate, not a control to apply to the board.
       if (intent.kind === "stemsAck") {
-        stemAckRef?.current(intent.deck, intent.state, intent.reason);
+        stemAckRef?.current(intent.deck, intent.state, intent.reason, intent.pct);
         return;
       }
       applyIntent(intent);

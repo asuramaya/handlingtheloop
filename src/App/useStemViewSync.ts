@@ -13,11 +13,16 @@ import type { MutableRefObject } from "react";
 import { getStemModel, deviceSupportsModel, type StemModel, type StemView } from "@htl";
 import type { DeckId } from "@htl/audio";
 import { useSpine } from "./spine";
-import type { StemStatus } from "../App";
+import type { SeparationReport, StemStatus } from "../App";
+import { makeProgressGate } from "../htl/room/progressGate";
+
+/** Progress is forwarded in steps of this many percent — caps a separation at ~10 wire frames
+ *  regardless of how many segments or shift-TTA passes the separator splits the work into. */
+const PROGRESS_STEP = 10;
 
 export interface StemViewSyncDeps {
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
-  forceSeparate: (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean) => Promise<void>;
+  forceSeparate: (id: DeckId, videoId: string, mix: AudioBuffer, model: StemModel, stale?: () => boolean, report?: SeparationReport) => Promise<void>;
   loaded: Record<DeckId, string | null>;
   // Read-narrowed view of App's `latest` ref (covariant `current` → only `.loaded` is touched).
   latest: { readonly current: { loaded: Record<DeckId, string | null> } };
@@ -149,11 +154,28 @@ export function useStemViewSync(deps: StemViewSyncDeps): StemViewSync {
       if (reqSepGuard.current[id] === key) return void ack("separating", "The host is already separating this track.");
       reqSepGuard.current[id] = key;
       ack("separating");
-      void forceSeparate(id, vid, deck.buffer, model)
-        .catch((e) => ack("refused", `The host's separation failed: ${e instanceof Error ? e.message : String(e)}`))
-        .finally(() => {
-          if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
-        });
+      // ★ PROGRESS, COALESCED AT THE SOURCE. The separator posts a true fraction per SEGMENT (and
+      // per shift-TTA pass), so the raw rate is set by the WORK — a faster GPU or a shorter segment
+      // would silently raise it. Forwarding it raw would bound the wire by today's segment length,
+      // the "throttle measures the wrong denominator" mistake from the other end. So: emit only when
+      // progress crosses a new PROGRESS_STEP, which caps a whole separation at ~10 frames no matter
+      // how the work is chunked. Terminal success needs no frame — the stem view arriving IS it.
+      // This only became safe to send after bd7af4c kept stemsAck off the listener crowd.
+      // The gate is the tested one (progressGate.test.ts), not an inline copy of it — a tested
+      // function beside an untested reimplementation is how a fake ends up right where the real
+      // code is wrong.
+      const gate = makeProgressGate(PROGRESS_STEP);
+      const report: SeparationReport = (e) => {
+        if (e.kind === "failed") return void ack("refused", e.reason);
+        const pct = gate(e.pct);
+        if (pct === null) return;
+        emitRef.current({ kind: "stemsAck", deck: id, model: modelId, state: "separating", pct });
+      };
+      // No .catch(): forceSeparate never throws — failures arrive through `report` instead. The
+      // .catch() that used to sit here could not fire, and claimed to handle exactly this.
+      void forceSeparate(id, vid, deck.buffer, model, undefined, report).finally(() => {
+        if (reqSepGuard.current[id] === key) reqSepGuard.current[id] = undefined;
+      });
     },
     [engine, forceSeparate, sendHostStemView, emitRef],
   );

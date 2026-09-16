@@ -3,6 +3,7 @@ import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
 import { isSameStemApply, stemApplyId } from "./stemApply";
+import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
@@ -303,6 +304,10 @@ export class Deck {
   private stemPyramidJob = 0;
   onStemPyramids?: () => void; // viewport hook: async envelopes are ready → redraw
   onStemsReady?: () => void; // App hook: local neural pyramids built → publish to a session
+  /** App hook: a stem set this deck was marked as holding never reached the engine (applied before
+   *  the playback node attached) and is gone. The deck has already reset itself to honest
+   *  no-stems; the app should derive the set again. Called with the track the set belonged to. */
+  onStemsLost?: (videoId: string | null) => void;
   // True only when the CURRENT stems are a NEURAL split (Demucs/Open-Unmix). The viewport
   // shows a per-stem 4-lane waveform for neural stems and one collapsed waveform otherwise.
   // (The "otherwise" is currently unreachable — see setStems: every call site passes neural=true
@@ -628,6 +633,22 @@ export class Deck {
     const node = this.stretchNode;
     const buf = this.buffer;
     const useStems = !!this.stems;
+    // ★ A SET THAT NEVER ARRIVED. Checked BEFORE the early return, because the case that matters most
+    // is exactly the one that returns early: on mobile the mix buffer can be gone too, and then this
+    // function would load NOTHING and the deck would be silent under lit stem controls. See
+    // stemsLost.ts. Reset to honest no-stems (controls dim, hasStems false so no host streams a view it
+    // does not have) and ask the app to derive again — after this load finishes, not during it.
+    if (stemsLostOnLoad({ nodeAttached: !!node, loadingStems: useStems, stemsLoaded: this.stemsLoaded, remote: this.remoteStems })) {
+      const lostVideoId = this.stemsVideoId;
+      this.stemsLoaded = false;
+      this.syncStemTaps(); // stems leaving changes whether stem chains can be honoured
+      this.stemsNeural = false;
+      this.stemsVideoId = null;
+      this.stemPyramids = null;
+      this.engineStems = false;
+      this.lastAppliedStemId = undefined;
+      queueMicrotask(() => this.onStemsLost?.(lostVideoId));
+    }
     // Need a source: stems play from `this.stems`, the plain mix from `buf`. On mobile we
     // release `buf` once stems are packed (releaseMixBuffer), so a stems pack must NOT be
     // gated on `buf` — only the mix path requires it.
@@ -879,6 +900,12 @@ export class Deck {
    *  (dropCachedBuffer) — BOTH must go for the buffer to actually free. No-op if already gone. */
   releaseMixBuffer() {
     if (!this.buffer) return;
+    // ★ NEVER FREE THE ONLY AUDIO THE ENGINE COULD PLAY. Callers release the mix because "stems are the
+    // worklet's audio source now" — false when stems were applied before the playback node attached, in
+    // which case the engine holds nothing. Freeing the mix then left a deck that loads NOTHING on attach:
+    // silent. Keeping ~92 MB until the engine truly holds stems costs far less than the float32 set the
+    // stem release still frees, and the caller's next successful apply releases it.
+    if (!this.engineStems) return;
     void this.loudness; // force the lazy RMS scan to cache `_loudness` before the buffer drops
     this.buffer = null;
   }
@@ -1372,7 +1399,10 @@ export class Deck {
     this.stemsNeural = neural;
     this.stemsVideoId = videoId ?? null;
     this.remoteStems = false; // real local stems — no longer mirroring a host's remote view
-    this.engineStems = true;
+    // TRUE only if the packed PCM actually reaches a node. The post below is `stretchNode?.port`, which
+    // silently drops the stems when no node is attached yet — so a hardcoded `true` here claimed the
+    // engine held a set it never received, and releaseMixBuffer then trusted that claim.
+    this.engineStems = !!this.stretchNode;
     this.stemPyramids = null;
     const job = ++this.stemPyramidJob;
     const transfer: ArrayBuffer[] = [];

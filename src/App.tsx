@@ -2441,6 +2441,22 @@ function AppBody() {
   useEffect(() => {
     engine.deckA.onStemsReady = () => sendHostStemView("A");
     engine.deckB.onStemsReady = () => sendHostStemView("B");
+    // ★ A STEM SET THAT NEVER REACHED THE ENGINE (applied before the playback node attached — see
+    // Deck/stemsLost.ts). The deck has already reset to honest no-stems and kept its mix audible; derive
+    // the set again through the ordinary path, which now finds a node. Only for the track still on the
+    // deck — if it changed, the new track's own load owns its stems. The guards are cleared because they
+    // record a set that no longer exists, and would otherwise make deriveStems return as "already done".
+    const stemsLost = (id: DeckId) => (lostVideoId: string | null) => {
+      const vid = latest.current.loaded[id];
+      const deck = engine.deck(id);
+      if (!lostVideoId || vid !== lostVideoId || !deck.buffer) return;
+      deriveGuard.current[id] = "";
+      stemLoadedKey.current[id] = "";
+      refresh();
+      void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
+    };
+    engine.deckA.onStemsLost = stemsLost("A");
+    engine.deckB.onStemsLost = stemsLost("B");
     // Loop fine-adjust / move → broadcast the absolute region (emitRef no-ops unless
     // controlling). in/out/exit/beat already emit their own loop intents.
     const loopEdit = (id: DeckId) => () => {
@@ -2452,10 +2468,14 @@ function AppBody() {
     return () => {
       engine.deckA.onStemsReady = undefined;
       engine.deckB.onStemsReady = undefined;
+      engine.deckA.onStemsLost = undefined;
+      engine.deckB.onStemsLost = undefined;
       engine.deckA.onLoopEdit = undefined;
       engine.deckB.onLoopEdit = undefined;
     };
-  }, [engine, sendHostStemView]);
+    // deriveStems + refresh: the stems-lost handler calls them, so a stale copy would re-derive through
+    // yesterday's closures. Re-running this effect only re-wires the deck hooks.
+  }, [engine, sendHostStemView, deriveStems, refresh]);
 
   // Our own actions broadcast as intents (the controls also apply locally first, so
   // this is purely the network echo). Any CONTROLLING participant drives (shared

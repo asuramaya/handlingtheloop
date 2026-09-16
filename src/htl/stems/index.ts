@@ -255,7 +255,37 @@ async function encodeWav(buffer: AudioBuffer): Promise<ArrayBuffer> {
 // — it never fabricates a band/centre "DSP split". Every caller catches and plays the
 // plain mix with an honest status. A fabricated split was worse than none (it lit the
 // stem mixer over pseudo-stems the user couldn't tell from the real thing).
-export async function loadStems(
+// ★★ ONE JOB PER (TRACK, MODEL) — the dedupe lives HERE, for the same reason the authority gate
+// does: this is the one place separation begins, so a caller that bypasses a dedupe elsewhere
+// cannot bypass this one.
+//
+// WHY IT HAD TO MOVE. App already shared jobs through a `stemJobs` map, and deriveStems and the
+// auto preload both read it. The remote-request path did not — it went through forceSeparate,
+// which never looked at the map. In the commonest session flow the host and guest load a track
+// together: the host's own separation starts and fills the map, the guest's request crosses the
+// network, and by the time it arrives the host's stems aren't FINISHED yet — so the request
+// started a second full separation of the same track, queued behind the first. A dedupe that
+// only covers the callers who remember to consult it is a convention, not a guarantee. Here it
+// covers everyone who calls loadStems.
+//
+// FORCE IS THE ONE EXCEPTION, AND ONLY ON ITS OWN SIDE. `force` is Settings ▸ Re-analyze — the
+// user explicitly asking for a fresh compute, possibly at a different shift-TTA quality that is
+// NOT part of this key — so a forced call always starts its own job rather than quietly returning
+// someone else's. But it still REGISTERS, so an ordinary caller arriving mid-re-analyze joins it
+// instead of starting another: "make these stems exist" is satisfied by any separation already
+// running, forced or not.
+//
+// PROGRESS FANS OUT to every caller that attached, and a late arrival is replayed the last value
+// immediately — so a remote requester joining a separation at 40% hears 40% now, not silence until
+// the next step.
+interface InflightStems {
+  promise: Promise<Stems>;
+  listeners: Set<(pct: number) => void>;
+  last: number; // most recent progress fraction, -1 before any
+}
+const inflight = new Map<string, InflightStems>();
+
+export function loadStems(
   ctx: BaseAudioContext,
   videoId: string,
   mix: AudioBuffer,
@@ -264,6 +294,43 @@ export async function loadStems(
   force = false, // re-analyze: skip the cache (R2 download) and RE-COMPUTE, overwriting it
 ): Promise<Stems> {
   const m = typeof model === "string" ? getStemModel(model) : model;
+  const key = `${videoId}:${m.id}`;
+  if (!force) {
+    const running = inflight.get(key);
+    if (running) {
+      if (onProgress) {
+        running.listeners.add(onProgress);
+        if (running.last >= 0) onProgress(running.last);
+      }
+      return running.promise;
+    }
+  }
+  const entry: InflightStems = { promise: undefined as unknown as Promise<Stems>, listeners: new Set(), last: -1 };
+  if (onProgress) entry.listeners.add(onProgress);
+  const fan = (pct: number) => {
+    entry.last = pct;
+    for (const l of entry.listeners) l(pct);
+  };
+  entry.promise = runLoadStems(ctx, videoId, mix, m, fan, force);
+  inflight.set(key, entry);
+  // Identity check: a forced re-analyze may have replaced this entry while it ran; only remove
+  // our own. Both branches, so a failed job clears and the next caller can retry — without this a
+  // single failure would be handed back to every caller forever.
+  const clear = () => {
+    if (inflight.get(key) === entry) inflight.delete(key);
+  };
+  entry.promise.then(clear, clear);
+  return entry.promise;
+}
+
+async function runLoadStems(
+  ctx: BaseAudioContext,
+  videoId: string,
+  mix: AudioBuffer,
+  m: StemModel,
+  onProgress: (pct: number) => void,
+  force: boolean,
+): Promise<Stems> {
   // A non-neural ("off"/dsp-kind) model has no stems to load — callers gate that upstream
   // (deriveStems treats "off" as the plain no-stems mix), so reaching here is a programmer error.
   if (m.kind === "dsp") throw new Error(`loadStems: non-neural model "${m.id}" has no stems`);
@@ -281,7 +348,7 @@ export async function loadStems(
         const bytes = await downloadStemBytes(videoId, STEM_NAMES[i], manifest.ns ?? m.id);
         wav.push(bytes);
         out[STEM_NAMES[i]] = await decodeStemBlob(ctx, bytes.slice(0));
-        onProgress?.((i + 1) / STEM_NAMES.length);
+        onProgress((i + 1) / STEM_NAMES.length);
       }
       void saveStemsLocal(videoId, m.id, wav);
       return out;
@@ -298,10 +365,13 @@ export async function loadStems(
   // the check. Callers that can do something better (delegate to the host) pre-check and
   // never reach this; this is the backstop that makes the invariant structural.
   //
-  // It ALSO removes the duplicate-work race by construction. The shared R2 cache holds only
-  // COMPLETED stems — the manifest is written after the work — so two capable devices both
-  // probe, both miss, and both separate the same track. There is no in-flight state to
-  // consult and adding one would need a claim protocol; one authority needs neither.
+  // It also removes the ACROSS-DEVICE duplicate: the shared R2 cache holds only COMPLETED
+  // stems, so two capable devices used to both miss and both separate the same track — one
+  // authority prevents that without a claim protocol. It does NOT prevent a duplicate WITHIN the
+  // authority (two callers on the host for the same track); that is the in-flight map above
+  // loadStems. This comment previously said one authority closed the duplicate race "by
+  // construction", which was true only across devices — and it is the sentence a reader would
+  // have used to stop looking for the within-host duplicate that was still there.
   if (!separationAllowed()) throw new NotSeparationAuthority(m.id);
 
   // Cold cache: only separate if THIS device can run THIS model on-device

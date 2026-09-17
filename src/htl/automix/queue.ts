@@ -1,7 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import type { TrackMeta } from "../library/types";
 import { fetchRecommendations } from "../media/recommend";
-import { fetchAnalysisBatch, fetchFeaturesByIsrc } from "../media/api";
+import { fetchFeaturesByIsrc } from "../media/api";
+import { lookupAnalysis } from "../media/analysisStatus";
+import { d1EnrichTargets, isrcEnrichTargets } from "./poolEnrich";
 import { smartSortChain, songCore } from "./mixability";
 import { type Candidate, isEligible, pickBest, radioSeeds, targetEnergy } from "./selector";
 import type { EnergyArc, MixMode, RadioContext } from "./types";
@@ -78,7 +80,6 @@ const PLAYED_CAP = 100; // remember only the last N plays — older ones can res
 const SEED_HISTORY = 8; // recent plays kept for the artist-cooldown / repeat window
 const POOL_MAX = 60; // standing candidates; a fill tops up to here
 const POOL_LOW = 20; // refill when the pool drops below this — NOT every song
-const POOL_ENRICH = 24; // per fill, ask D1 for analysis on up to this many un-analysed candidates
 // Per fill, how many ISRC-carrying candidates get the free-DB lookup. Small on purpose: one
 // request each, against public infrastructure, for tracks that may never play. The operator's
 // framing — "if radio is suggesting 4 songs, analyze them ahead of time" — is the size of this.
@@ -116,6 +117,10 @@ export function useMixQueue(): MixQueue {
   const history = useRef<TrackMeta[]>([]);
   // THE CANDIDATE POOL — standing, scored, drawn from one track at a time. See the header note.
   const poolRef = useRef<Candidate[]>([]);
+  // ISRC lookups already made this session (hit or miss). The public DBs behind /api/features do not
+  // grow minute to minute, and a hit is written into D1, where the pooled lookup finds it.
+  const isrcTried = useRef(new Set<string>());
+  const enrichStats = useRef({ asked: 0, hits: 0 }); // the last fill's D1 ask, for the fill trace
   const filling = useRef(false);
   const lastFill = useRef(0);
   const lastSeed = useRef<string | null>(null); // signature of the seed SET the queue was last filled from
@@ -155,7 +160,7 @@ export function useMixQueue(): MixQueue {
   const enrichAnalysis = useCallback(async (ids: string[]) => {
     const missing = ids.filter((id) => /^[\w-]{11}$/.test(id));
     if (!missing.length) return;
-    const ana = await fetchAnalysisBatch(missing);
+    const ana = await lookupAnalysis(missing);
     if (!Object.keys(ana).length) return;
     const patch = (t: TrackMeta): TrackMeta => {
       const a = ana[t.videoId];
@@ -258,19 +263,19 @@ export function useMixQueue(): MixQueue {
   // Top the pool up with analysis the shared D1 cache already knows. Runs on every fill, over
   // candidates still missing key/BPM — the cache grows as other sessions analyse tracks, so a
   // candidate that sat in the pool unanalysed can become a fully-scoreable one later for free.
+  // Asks for EVERY un-analysed candidate (see poolEnrich.ts for why there is no slice); the pooled
+  // lookup answers already-answered ids without a request. The ISRC source runs whatever D1 said:
+  // it used to sit behind `if no D1 hits, return`, which skipped it on exactly the fills it exists
+  // for. `enrichStats` feeds the fill trace, so the D1 hit rate can be read off a live session.
   const enrichPool = async (): Promise<void> => {
-    const missing = poolRef.current
-      .filter((c) => (c.track.bpm == null || c.track.key == null || c.track.energy == null) && /^[\w-]{11}$/.test(c.track.videoId))
-      .slice(0, POOL_ENRICH)
-      .map((c) => c.track.videoId);
-    if (!missing.length) return;
-    const ana = await fetchAnalysisBatch(missing);
-    if (!Object.keys(ana).length) return;
+    const missing = d1EnrichTargets(poolRef.current);
+    const ana = missing.length ? await lookupAnalysis(missing) : {};
     for (const c of poolRef.current) {
       const a = ana[c.track.videoId];
       if (!a) continue;
       c.track = { ...c.track, bpm: c.track.bpm ?? a.bpm, key: c.track.key ?? a.key, energy: c.track.energy ?? a.energy ?? null };
     }
+    enrichStats.current = { asked: missing.length, hits: Object.keys(ana).length };
     await enrichPoolByIsrc();
   };
 
@@ -292,10 +297,9 @@ export function useMixQueue(): MixQueue {
   // Only candidates the provider already ISRC-tagged qualify — TIDAL track radio supplies them,
   // YouTube's does not — so this is bounded by what arrives, and small.
   const enrichPoolByIsrc = async (): Promise<void> => {
-    const targets = poolRef.current
-      .filter((c) => (c.track.bpm == null || c.track.key == null) && !!c.track.isrc)
-      .slice(0, ISRC_ENRICH);
+    const targets = isrcEnrichTargets(poolRef.current, isrcTried.current, ISRC_ENRICH);
     if (!targets.length) return;
+    for (const c of targets) isrcTried.current.add(c.track.videoId);
     // Sequential, not Promise.all: these hit third-party DBs through our own worker, and a burst
     // of parallel lookups on every fill is exactly how a free API starts refusing us.
     for (const c of targets) {
@@ -401,6 +405,8 @@ export function useMixQueue(): MixQueue {
           fetched: lists.reduce((n, l) => n + l.length, 0),
           pool: poolRef.current.length,
           analysed: poolRef.current.filter((c) => c.track.bpm != null && c.track.key != null).length,
+          d1Asked: enrichStats.current.asked,
+          d1Hits: enrichStats.current.hits,
           anchorAge: effCtx.anchorAge,
         });
       } catch {

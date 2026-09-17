@@ -50,23 +50,19 @@ export async function fetchMeta(videoId: string, signal?: AbortSignal): Promise<
   return getJson(`/api/meta?v=${encodeURIComponent(videoId)}`, signal, await ytAuthHeaders());
 }
 
-/** Known BPM/key for a batch of videoIds from the shared analysis dataset — lets the
- *  auto-mixer score/transition candidate tracks it hasn't decoded. Best-effort. */
-export async function fetchAnalysisBatch(
-  ids: string[],
-  signal?: AbortSignal,
-): Promise<Record<string, { bpm: number | null; key: string | null; energy?: number | null }>> {
+export type BatchAnalysis = Record<string, { bpm: number | null; key: string | null; energy?: number | null }>;
+
+/** Known BPM/key for a batch of videoIds from the shared analysis dataset. THROWS on a failed
+ *  request: an id absent from the result means "no row", and a failure must not look like that.
+ *  Callers want the pooled read, `lookupAnalysis` (analysisStatus.ts), not this. */
+export async function fetchAnalysisRows(ids: string[], signal?: AbortSignal): Promise<BatchAnalysis> {
   const clean = ids.filter((id) => /^[\w-]{11}$/.test(id));
   if (!clean.length) return {};
-  try {
-    const { analysis } = await getJson<{ analysis: Record<string, { bpm: number | null; key: string | null; energy?: number | null }> }>(
-      `/api/analysis?ids=${clean.map(encodeURIComponent).join(",")}`,
-      signal,
-    );
-    return analysis || {};
-  } catch {
-    return {}; // matching degrades to provider order — never break the queue
-  }
+  const { analysis } = await getJson<{ analysis: BatchAnalysis }>(
+    `/api/analysis?ids=${clean.map(encodeURIComponent).join(",")}`,
+    signal,
+  );
+  return analysis || {};
 }
 
 export interface StoredAnalysis {

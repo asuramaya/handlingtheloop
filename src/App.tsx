@@ -116,6 +116,7 @@ import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
+import { isStemWork } from "./App/stemWork";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
@@ -163,6 +164,7 @@ export interface StemStatus {
   pct?: number; // 0–100, while downloading/separating
   detail: string;
   src?: string; // short engine label for the persistent chip ("Demucs" / "Open-Unmix")
+  of?: "track"; // a TRACK-load write sharing this slot, never stem work (see App/stemWork.ts)
 }
 
 // One labelled group of live diagnostics for the Settings → Debug tab (audio engine,
@@ -207,11 +209,6 @@ function terseStem(s: StemStatus | null | undefined): StemBadge | null {
   }
 }
 
-// Stems are actively loading (fetching from cache or separating) — used to show the
-// "Stems loading…" placeholder in the stem-mixer row so a deck whose stems aren't
-// ready yet stays height-aligned with one whose stems are.
-const stemLoading = (s: StemStatus | null | undefined): boolean =>
-  !!s && (s.phase === "downloading" || s.phase === "separating");
 
 
 
@@ -1750,7 +1747,7 @@ function AppBody() {
         // id system. Everything downstream keys off this resolved `vid`.
         let vid = track.videoId;
         if (!vid) {
-          setStatusFor(id, { phase: "downloading", detail: "Matching…" });
+          setStatusFor(id, { phase: "downloading", of: "track", detail: "Matching…" });
           const playable = await resolvePlayable(
             {
               title: track.title,
@@ -1830,14 +1827,14 @@ function AppBody() {
                 if (stale()) return;
                 const pct = p.totalBytes != null ? Math.round((p.receivedBytes / p.totalBytes) * 100) : undefined;
                 const label = pct != null ? `${pct}%` : `${Math.round(p.receivedBytes / 1024)}kb`;
-                setStatusFor(id, { phase: "downloading", pct, detail: `Downloading… ${label}` });
+                setStatusFor(id, { phase: "downloading", of: "track", pct, detail: `Downloading… ${label}` });
               },
               ctrl.signal,
             );
             void putAudio(vid, data.slice(0)); // cache for next refresh
           }
           if (stale()) return;
-          setStatusFor(id, { phase: "downloading", detail: "Decoding…" });
+          setStatusFor(id, { phase: "downloading", of: "track", detail: "Decoding…" });
           const buffer = await decodeAudio(engine.ctx, data);
           if (stale()) return;
           // Cache-first (Metadata B): reuse a persisted beatgrid from the shared dataset instead of
@@ -2885,7 +2882,7 @@ function AppBody() {
       deckTrack: (id) => autoDeps.current.deckTrack(id),
       getCrossfade: () => crossfadeRef.current,
       now: () => performance.now(),
-      stemsPending: (id) => stemLoading(statusRef.current[id]),
+      stemsPending: (id) => isStemWork(statusRef.current[id]),
       performance: () => autoDeps.current.settings.autoPerformance,
       autoFx: () => autoDeps.current.settings.autoFx,
       // Pre-separate the track AFTER next, so its stems are on disk before the deck ever asks.
@@ -3830,9 +3827,9 @@ function AppBody() {
             collapsed={expandedLane != null && expandedLane !== "A"}
             mirror={false}
             shift={bankShift("A")}
-            stemPending={stemLoading(status.A)}
+            stemPending={isStemWork(status.A)}
             stemPendingPct={status.A?.pct ?? null}
-            otherStemPending={stemLoading(status.B)}
+            otherStemPending={isStemWork(status.B)}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.a}
@@ -3860,9 +3857,9 @@ function AppBody() {
             collapsed={expandedLane != null && expandedLane !== "B"}
             mirror={false}
             shift={bankShift("B")}
-            stemPending={stemLoading(status.B)}
+            stemPending={isStemWork(status.B)}
             stemPendingPct={status.B?.pct ?? null}
-            otherStemPending={stemLoading(status.A)}
+            otherStemPending={isStemWork(status.A)}
             tempoRange={settings.tempoRange}
             pitchRange={settings.pitchRange}
             levelGainDb={levelGainsDb.b}

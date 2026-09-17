@@ -114,6 +114,12 @@ body.no-glow .lane.focused::after {
   font-size: 12px;
   letter-spacing: 0.5px;
 }
+/* No stems on THIS deck while the other shows a row: an empty spacer at the cells' height so
+   side-by-side decks stay aligned. Says nothing. Collapsed on a phone (board.css), where the
+   focused deck owns the surface and the other deck isn't on screen to align with. */
+.stems-row.stems-reserve {
+  min-height: 50px;
+}
 .stems-pending-dot {
   width: 7px;
   height: 7px;

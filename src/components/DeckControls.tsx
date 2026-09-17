@@ -5,6 +5,7 @@ import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
+import { stemRowState } from "./stemRowState";
 import { Menu } from "./ContextMenu";
 import { useDeckStackHeight } from "./lib/useDeckStackHeight";
 import type { StemName } from "@htl/stems";
@@ -127,6 +128,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // wired to the FLX4's hardware bank buttons, so folding the page into it would mean a
   // controller press — or another device in the session — silently re-laying-out your phone.
   const [page, setPage] = useState<"perform" | "fx">("perform");
+  // The stem-mixer row: cells / this deck loading / a silent alignment spacer / nothing.
+  // "Marked" covers a mirror still waiting for the host's envelopes — see stemRowState.ts.
+  const stemRow = stemRowState({
+    ready: deck.stemControlsReady,
+    marked: deck.hasStems,
+    pending: stemPending,
+    otherShowsRow: otherDeck.stemControlsReady || otherDeck.hasStems || otherStemPending,
+  });
   // The control surface's own height, measured on the MIX page and held across the turn to the
   // FX page — see useDeckStackHeight for why this cannot be a CSS number.
   const [stackEl, setStackEl] = useState<HTMLDivElement | null>(null);
@@ -899,7 +908,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             once those envelopes actually land (stemControlsReady), so the cells never sit
             above a single combined waveform while the host hasn't / can't stream them. */}
         {/* MOBILE stems are a global preference now (Settings ▸ Stems), not a per-deck button. */}
-        {deck.stemControlsReady ? (
+        {stemRow === "cells" ? (
         <div className="stems-row">
           {STEM_CELLS.map((s) => (
             <ValueCell
@@ -926,15 +935,18 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             />
           ))}
         </div>
-        ) : stemPending || otherDeck.stemControlsReady || otherStemPending ? (
-          // This deck has no stem row yet but the OTHER deck shows one (ready or
-          // loading), or this deck's own stems are still loading. Reserve the row's
-          // height with a "Stems loading…" placeholder so both decks' EQ + foot buttons
-          // stay aligned, instead of the gap collapsing to the bottom.
+        ) : stemRow === "loading" ? (
+          // THIS deck's stems are on the way (its own fetch/separation, or a mirror whose envelopes
+          // haven't landed). Same height as the cells, so the swap doesn't move the stack.
           <div className="stems-row stems-pending" aria-live="polite">
             <span className="stems-pending-dot" />
             Stems loading{stemPendingPct != null ? ` ${Math.round(stemPendingPct)}%` : "…"}
           </div>
+        ) : stemRow === "reserve" ? (
+          // No stems HERE, but the other deck shows a row: a silent spacer keeps two side-by-side
+          // decks aligned. It says nothing (it used to say "loading", falsely) and collapses on a
+          // phone, where the other deck is off screen. See stemRowState.ts.
+          <div className="stems-row stems-reserve" aria-hidden="true" />
         ) : null}
 
         {/* FX strip (bottom third) — the channel-strip device rack. The EQ tab is the

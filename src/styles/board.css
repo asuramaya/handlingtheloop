@@ -760,6 +760,12 @@
   .stage .decks-row:has(> .bank.focused):not(:has(> .bank.expanded)) > .bank:not(.focused) {
     display: none;
   }
+  /* The stem row's alignment spacer (a deck with no stems, beside one with stems) aligns against a
+     deck that is now off screen — so it only takes height from the buttons. Collapse it. A deck
+     that is actually LOADING stems still shows its placeholder. */
+  .stems-row.stems-reserve {
+    display: none;
+  }
 
   /* When the stack IS too tall for the phone, the bank SCROLLS. align-items:stretch
      (not the base `center`) makes `.bank-main` fill the bank height and align to the

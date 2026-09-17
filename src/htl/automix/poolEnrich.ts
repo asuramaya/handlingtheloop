@@ -26,6 +26,28 @@ export function d1EnrichTargets(pool: readonly PoolEntry[]): string[] {
     .map((c) => c.track.videoId);
 }
 
+/** Patch known analysis onto pool candidates, filling only blank fields. Returns how many
+ *  candidates GAINED a field. That count, not the number of rows returned, is what a hit rate
+ *  should read: a known row with no energy keeps its candidate a target, and is answered again
+ *  from the pool on every fill while adding nothing. */
+export function patchPool(
+  pool: PoolEntry[],
+  rows: Record<string, { bpm: number | null; key: string | null; energy?: number | null }>,
+): number {
+  let gained = 0;
+  for (const c of pool) {
+    const a = rows[c.track.videoId];
+    if (!a) continue;
+    const bpm = c.track.bpm ?? a.bpm;
+    const key = c.track.key ?? a.key;
+    const energy = c.track.energy ?? a.energy ?? null;
+    if (bpm === (c.track.bpm ?? null) && key === (c.track.key ?? null) && energy === (c.track.energy ?? null)) continue;
+    c.track = { ...c.track, bpm, key, energy };
+    gained++;
+  }
+  return gained;
+}
+
 /** Up to `n` ISRC-carrying candidates still missing bpm or key that have not been tried yet. */
 export function isrcEnrichTargets<T extends PoolEntry>(pool: readonly T[], tried: ReadonlySet<string>, n: number): T[] {
   return pool.filter((c) => (c.track.bpm == null || c.track.key == null) && !!c.track.isrc && !tried.has(c.track.videoId)).slice(0, n);

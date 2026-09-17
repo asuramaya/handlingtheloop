@@ -1,9 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import type { TrackMeta } from "../library/types";
 import { fetchRecommendations } from "../media/recommend";
-import { fetchFeaturesByIsrc } from "../media/api";
-import { lookupAnalysis } from "../media/analysisStatus";
-import { d1EnrichTargets, isrcEnrichTargets } from "./poolEnrich";
+import { fetchFeaturesByIsrcRows } from "../media/api";
+import { analysisState, lookupAnalysis } from "../media/analysisStatus";
+import { d1EnrichTargets, isrcEnrichTargets, patchPool } from "./poolEnrich";
 import { smartSortChain, songCore } from "./mixability";
 import { type Candidate, isEligible, pickBest, radioSeeds, targetEnergy } from "./selector";
 import type { EnergyArc, MixMode, RadioContext } from "./types";
@@ -120,7 +120,9 @@ export function useMixQueue(): MixQueue {
   // ISRC lookups already made this session (hit or miss). The public DBs behind /api/features do not
   // grow minute to minute, and a hit is written into D1, where the pooled lookup finds it.
   const isrcTried = useRef(new Set<string>());
-  const enrichStats = useRef({ asked: 0, hits: 0 }); // the last fill's D1 ask, for the fill trace
+  // The last fill's D1 ask, for the fill trace: `unknown` = targets with no known row going in (a
+  // request, or a miss still inside its TTL); `gained` = candidates that actually got a field.
+  const enrichStats = useRef({ unknown: 0, gained: 0 });
   const filling = useRef(false);
   const lastFill = useRef(0);
   const lastSeed = useRef<string | null>(null); // signature of the seed SET the queue was last filled from
@@ -266,16 +268,14 @@ export function useMixQueue(): MixQueue {
   // Asks for EVERY un-analysed candidate (see poolEnrich.ts for why there is no slice); the pooled
   // lookup answers already-answered ids without a request. The ISRC source runs whatever D1 said:
   // it used to sit behind `if no D1 hits, return`, which skipped it on exactly the fills it exists
-  // for. `enrichStats` feeds the fill trace, so the D1 hit rate can be read off a live session.
+  // for. `enrichStats` feeds the fill trace, so the D1 hit rate can be read off a live session:
+  // gained / unknown. Not rows returned / ids asked, which re-counts a known row that has no energy
+  // on every fill (it stays a target, is answered from the pool, and patches nothing).
   const enrichPool = async (): Promise<void> => {
     const missing = d1EnrichTargets(poolRef.current);
+    const unknown = missing.filter((id) => analysisState(id) == null).length;
     const ana = missing.length ? await lookupAnalysis(missing) : {};
-    for (const c of poolRef.current) {
-      const a = ana[c.track.videoId];
-      if (!a) continue;
-      c.track = { ...c.track, bpm: c.track.bpm ?? a.bpm, key: c.track.key ?? a.key, energy: c.track.energy ?? a.energy ?? null };
-    }
-    enrichStats.current = { asked: missing.length, hits: Object.keys(ana).length };
+    enrichStats.current = { unknown, gained: patchPool(poolRef.current, ana) };
     await enrichPoolByIsrc();
   };
 
@@ -299,11 +299,18 @@ export function useMixQueue(): MixQueue {
   const enrichPoolByIsrc = async (): Promise<void> => {
     const targets = isrcEnrichTargets(poolRef.current, isrcTried.current, ISRC_ENRICH);
     if (!targets.length) return;
-    for (const c of targets) isrcTried.current.add(c.track.videoId);
     // Sequential, not Promise.all: these hit third-party DBs through our own worker, and a burst
     // of parallel lookups on every fill is exactly how a free API starts refusing us.
     for (const c of targets) {
-      const f = await fetchFeaturesByIsrc(c.track.isrc!, c.track.videoId).catch(() => null);
+      // Marked tried only on an ANSWER. A failure (an outage, a 429 from the public DBs) is not
+      // evidence these DBs have nothing, so the candidate stays eligible for a later fill.
+      let f: Awaited<ReturnType<typeof fetchFeaturesByIsrcRows>>;
+      try {
+        f = await fetchFeaturesByIsrcRows(c.track.isrc!, c.track.videoId);
+      } catch {
+        continue;
+      }
+      isrcTried.current.add(c.track.videoId);
       if (!f || (f.bpm == null && f.key == null)) continue;
       c.track = { ...c.track, bpm: c.track.bpm ?? f.bpm, key: c.track.key ?? f.key };
     }
@@ -405,8 +412,8 @@ export function useMixQueue(): MixQueue {
           fetched: lists.reduce((n, l) => n + l.length, 0),
           pool: poolRef.current.length,
           analysed: poolRef.current.filter((c) => c.track.bpm != null && c.track.key != null).length,
-          d1Asked: enrichStats.current.asked,
-          d1Hits: enrichStats.current.hits,
+          d1Unknown: enrichStats.current.unknown,
+          d1Gained: enrichStats.current.gained,
           anchorAge: effCtx.anchorAge,
         });
       } catch {

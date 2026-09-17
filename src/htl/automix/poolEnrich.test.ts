@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { d1EnrichTargets, isrcEnrichTargets } from "./poolEnrich";
+import { d1EnrichTargets, isrcEnrichTargets, patchPool } from "./poolEnrich";
 import type { TrackMeta } from "../library/types";
 
 const t = (i: number, over: Partial<TrackMeta> = {}): { track: TrackMeta } => ({
@@ -33,5 +33,24 @@ describe("isrcEnrichTargets", () => {
     const pool = [t(1), t(2, { isrc: "X", bpm: 100, key: "1A" }), ...Array.from({ length: 5 }, (_, i) => t(10 + i, { isrc: `I${i}` }))];
     expect(isrcEnrichTargets(pool, new Set(), 4)).toHaveLength(4);
     expect(isrcEnrichTargets(pool, new Set(), 4).every((c) => !!c.track.isrc && c.track.bpm == null)).toBe(true);
+  });
+});
+
+describe("patchPool", () => {
+  const row = { bpm: 120, key: "8A", energy: null };
+
+  test("counts candidates that GAINED a field, once — a known row with no energy is not a hit twice", () => {
+    const pool = [t(1)];
+    const rows = { [pool[0].track.videoId]: row };
+    expect(patchPool(pool, rows)).toBe(1);
+    expect(pool[0].track.bpm).toBe(120);
+    expect(d1EnrichTargets(pool)).toHaveLength(1); // still a target: energy is blank
+    expect(patchPool(pool, rows)).toBe(0);
+  });
+
+  test("never overwrites a field the candidate already has", () => {
+    const pool = [t(1, { bpm: 90 })];
+    patchPool(pool, { [pool[0].track.videoId]: { bpm: 120, key: "8A", energy: 0.3 } });
+    expect(pool[0].track).toMatchObject({ bpm: 90, key: "8A", energy: 0.3 });
   });
 });

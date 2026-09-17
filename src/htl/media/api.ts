@@ -94,23 +94,29 @@ export async function fetchAnalysisFull(videoId: string, signal?: AbortSignal): 
 
 /** Key/BPM for a single track via its ISRC (free public DBs — MusicBrainz →
  *  AcousticBrainz). Cheap (no decode); null when uncovered. `videoId` lets the
- *  server cache the hit to the shared dataset. */
+ *  server cache the hit to the shared dataset. THROWS on a failed request, so a caller that
+ *  remembers "tried" can tell an outage or a 429 from "these DBs have nothing". */
+export async function fetchFeaturesByIsrcRows(
+  isrc: string,
+  videoId?: string,
+  signal?: AbortSignal,
+): Promise<{ bpm: number | null; key: string | null } | null> {
+  const params = new URLSearchParams({ isrc });
+  if (videoId) params.set("v", videoId);
+  const { features } = await getJson<{ features: { bpm: number | null; key: string | null } | null }>(
+    `/api/features?${params.toString()}`,
+    signal,
+  );
+  return features ?? null;
+}
+
+/** fetchFeaturesByIsrcRows with a failure folded into null, for callers that keep no memory. */
 export async function fetchFeaturesByIsrc(
   isrc: string,
   videoId?: string,
   signal?: AbortSignal,
 ): Promise<{ bpm: number | null; key: string | null } | null> {
-  try {
-    const params = new URLSearchParams({ isrc });
-    if (videoId) params.set("v", videoId);
-    const { features } = await getJson<{ features: { bpm: number | null; key: string | null } | null }>(
-      `/api/features?${params.toString()}`,
-      signal,
-    );
-    return features ?? null;
-  } catch {
-    return null;
-  }
+  return fetchFeaturesByIsrcRows(isrc, videoId, signal).catch(() => null);
 }
 
 /** Identify a track from its Chromaprint fingerprint → canonical ISRC + clean

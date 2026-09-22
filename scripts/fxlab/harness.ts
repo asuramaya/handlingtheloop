@@ -3158,6 +3158,9 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     worstErr: errs.length ? Math.max(...errs.map(Math.abs)) : null,
     finalErr: tail.length ? tail.reduce((a, b) => a + Math.abs(b), 0) / tail.length : null,
     trimHeld: samples.filter((s) => s.trim != null && Math.abs(s.trim) > 1e-6).length,
+    // The AUDIBLE cost of whatever the loop is doing: a rate trim IS a pitch shift when keylock is
+    // off, so any proposal to widen the budget has to report this beside the error it buys.
+    maxTrim: Math.max(0, ...samples.map((s) => Math.abs(s.trim ?? 0))),
     saturatedTicks: samples.filter((s) => s.sat).length,
     series: samples.filter((_, i) => i % 2 === 0).map((s) => `${s.t}s ${s.err == null ? "--" : s.err.toFixed(3)}`),
   };

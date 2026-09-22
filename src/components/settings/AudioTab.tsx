@@ -442,6 +442,20 @@ export function AudioTab({
             and no per-deck control can reach it, because the limiter sees the decks already summed.
             3 dB of trim here took it to 0.02 dB. It defaults to 0 — the fix costs output level, so
             it is offered, not imposed. */}
+        {/* ★ SYNC RESPONSIVENESS — measured, not chosen. The shipped 0.06 leaves a seek 0.242 beats
+            out (~113 ms at 128 bpm) and takes eleven seconds to decay to 0.018; 0.18 settles the
+            same seek to 0.005 in a fraction of that, at 4.19% peak rate trim instead of 1.47%.
+            Defaults to the shipped value: nobody's sync feel changes until they ask for it. */}
+        <Slider
+          label="Sync responsiveness"
+          info="How hard SYNC pulls a following deck back onto the beat after it drifts or you nudge it. Low is gentle and inaudible but slow — measured, a seek takes about eleven seconds to come fully back. High re-locks in a fraction of that, at the cost of a briefly larger tempo trim, which is a small pitch move when keylock is off. It does not affect two tracks whose beatgrids simply breathe differently."
+          hint={settings.syncPhaseGain <= 0.07 ? "gentle — slow to recover" : settings.syncPhaseGain >= 0.15 ? "tight — snaps back" : "balanced"}
+          value={settings.syncPhaseGain}
+          onChange={(v) => set({ syncPhaseGain: v })}
+          min={0.02}
+          max={0.3}
+          step={0.02}
+        />
         <Slider
           label="Master headroom"
           info="How far the master is pulled down before the limiter. At 0 a loud two-deck mix runs into the ceiling, and the limiter — which hears both decks at once — ducks the whole mix on every kick, so one deck appears to pump the other. Measured: 3 dB of headroom removes that almost entirely. The cost is output level; every dB here is a dB quieter, so turn the amp up instead."

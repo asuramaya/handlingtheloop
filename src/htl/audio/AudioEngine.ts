@@ -1000,7 +1000,16 @@ export class AudioEngine {
   private propagating = false; // guards the master→slave tempo echo from recursing
   private syncCorrectTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
-  private static readonly SYNC_PHASE_K = 0.06; // P-gain: rate trim per beat of phase error (gentle, ~8 s time constant)
+  /** Default P-gain: rate trim per beat of phase error (gentle, ~8 s time constant). Overridable —
+   *  see settings.syncPhaseGain and setSyncPhaseGain; the measurement is recorded beside the setting. */
+  private static readonly SYNC_PHASE_K = 0.06;
+  private syncPhaseK = AudioEngine.SYNC_PHASE_K;
+  /** How hard SYNC pulls a deck back onto the beat. Clamped to a range that is measured, not
+   *  guessed: below the shipped value the loop is slower than the eleven seconds already reported as
+   *  too slow, and above 0.30 the rate trim it commands is a plainly audible pitch move. */
+  setSyncPhaseGain(k: number) {
+    this.syncPhaseK = Number.isFinite(k) ? Math.max(0.02, Math.min(0.3, k)) : AudioEngine.SYNC_PHASE_K;
+  }
   private static readonly SYNC_INTEGRAL_K = 0.003; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
   private static readonly SYNC_FF_SMOOTH = 0.25; // one-pole smoothing on the rubato feed-forward (~0.28 s @ 80 ms tick) so the rate never STEPS as the beat window advances
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
@@ -1104,7 +1113,7 @@ export class AudioEngine {
       err,
       integral: this.syncIntegral,
       dt: AudioEngine.SYNC_TICK_MS / 1000,
-      kp: AudioEngine.SYNC_PHASE_K,
+      kp: this.syncPhaseK,
       ki: AudioEngine.SYNC_INTEGRAL_K,
       clamp: headroom,
     });

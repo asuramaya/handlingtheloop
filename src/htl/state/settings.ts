@@ -100,6 +100,17 @@ export interface Settings {
   // both decks). The name is kept for the stored key; the UI calls it "Use shared stems".
   mobileStems: boolean;
   masterHeadroomDb: number; // trim before the master limiter (0 = unity, negative = headroom)
+  // ★ HOW HARD SYNC PULLS A DECK BACK ONTO THE BEAT. The phase-lock loop's P-gain, measured rather
+  // than chosen: at the shipped 0.06 its own comment says "~8 s time constant", and a 17-second seek
+  // leaves the pair 0.242 beats out (~113 ms at 128 bpm) taking ELEVEN SECONDS to decay to 0.018.
+  // That is a deliberate gentleness — a rate trim is a pitch shift when keylock is off — and it is
+  // also exactly what "it fell out of sync and took ages to come back" describes. Measured on the
+  // real engine with real beatgrids (fxlab --sync-drift):
+  //     0.06 (gentle)  seek settles 0.025 beats, peak trim 1.47%
+  //     0.18 (tight)   seek settles 0.005 beats, peak trim 4.19%   ← 5x tighter, 3x the wobble
+  // It does NOT fix the other symptom (a mismatched pair wandering ~0.1 beat during playback); that
+  // is a separate, open problem and raising this will not hide it.
+  syncPhaseGain: number;
   // ★ HOW MUCH PERSONALITY AUTO IS ALLOWED. The auto-mixer's transitions are a spectrum: the
   // structural work (beatmatch, bass swap, gain staging, mix points) is never optional, but the
   // flourishes on top — an echo throw, a gate stutter, a spinback, an EQ lift as the incoming
@@ -314,6 +325,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wirelessOutput: false, // auto-detect by default; the user forces it on for a Bluetooth/CarPlay output that skips
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   masterHeadroomDb: 0, // unity: no change to anyone's output level until it is deliberately set
+  syncPhaseGain: 0.06, // the shipped gentleness — nobody's sync feel changes until they choose it
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
   autoFx: { stem: "vocals", seeded: false }, // vocals: the stem that otherwise stops dead

@@ -441,7 +441,22 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
             // evidence, and once in Deckard's own reading of the same extract. "Which path started
             // this load" must be read, never inferred.
             event("room.resync", { deck: id, action: resync, vid: vid ?? null, loadedVid: latest.current.loaded[id] || null });
-            runRoomLoad(id, vid!, { videoId: vid!, title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm: null });
+            // ★ AND LOAD IT WITH A NAME IF WE HAVE ONE. A tick carries only a videoId, so this
+            // branch used to build a TrackMeta with an empty title and artist — correct audio under
+            // a header reading "—" (thread 47468bb9). The last snapshot usually knows the name of
+            // the very track the anchor is asking us to hold, so use it; reconcile still backfills
+            // (App/deckNameBackfill.ts) for the case where no snapshot has arrived yet.
+            const known = lastSnapshotRef.current?.decks[id];
+            const named = known?.videoId === vid ? known : null;
+            runRoomLoad(id, vid!, {
+              videoId: vid!,
+              title: named?.name ?? "",
+              artist: named?.artist ?? "",
+              duration: named?.duration ?? 0,
+              thumbnail: null,
+              views: null,
+              bpm: named?.bpm ?? null,
+            });
             roomRef.current?.requestState(); // pull the authoritative snapshot for the new track's discrete state
           }
           return; // diverged → never drive this deck

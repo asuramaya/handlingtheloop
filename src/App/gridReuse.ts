@@ -53,3 +53,34 @@ export function mayReuseGrid(
   if (Math.abs(stored.duration - decodedDurationS) > GRID_DURATION_TOLERANCE_S) return { ok: false, why: "different-audio" };
   return { ok: true, why: "fits" };
 }
+
+// ★ AND THE OTHER HALF OF THE CONTRACT, WHICH THE GUARD ABOVE CREATED THE NEED FOR.
+//
+// mayReuseGrid protects the READER: a device whose audio disagrees with the pooled row derives its
+// own grid instead of adopting a wrong one. Nothing protected the WRITER. The contribution path then
+// posts that locally-derived grid under the same videoId at the same ANALYSIS_VERSION, and
+// putAnalysis overwrites on `excluded.version >= track_analysis.version` — verified against the
+// production SQL on a real D1: same version, different duration, and the row flips wholesale, grid
+// and all.
+//
+// So two devices holding different audio for one videoId OSCILLATE. A reads the row, rejects it,
+// derives, overwrites with its own. B reads the row, rejects it, derives, overwrites back. Neither
+// ever gets a cache hit, every load pays a full re-derive, and every load writes to D1 — silently,
+// with nothing anywhere reporting that this videoId is contested.
+//
+// A device that refused the pool for `different-audio` has NO evidence its own audio is the more
+// canonical one. Overwriting is not a repair, it is a move in a game the other device will answer.
+// Declining leaves a stable state where one side gets the cache instead of neither, which is
+// strictly better than the trade it gives up.
+//
+// The other refusals must still contribute, and `behind-version` especially: that is exactly how the
+// pool upgrades itself when ANALYSIS_VERSION moves, and suppressing it would break the lazy
+// migration that makes re-versioning cheap (docs/analysis-reversioning.md).
+//
+// The real fix is that a videoId whose audio varies is not one key — the grid wants to be keyed by
+// the AUDIO. That is a schema change, so it is named here and not taken.
+
+/** Whether a load that ended up deriving its own grid should contribute it back to the pool. */
+export function mayContributeAnalysis(why: GridReuseWhy): boolean {
+  return why !== "different-audio";
+}

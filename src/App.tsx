@@ -19,7 +19,7 @@ import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { initialDock } from "./App/initialDock";
-import { mayReuseGrid } from "./App/gridReuse";
+import { mayContributeAnalysis, mayReuseGrid } from "./App/gridReuse";
 import { event } from "@htl/debug/trace";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
@@ -1887,6 +1887,10 @@ function AppBody() {
         // Gates the contribution below: a reuse-hit has nothing new to add, so it skips the re-POST;
         // a local derive (fresh, behind, or foreign-shape) DOES post → self-healing the row.
         let reusedGrid = false;
+        // Set from the reuse verdict below: false when the pooled row describes DIFFERENT AUDIO, in
+        // which case contributing ours would only start an overwrite war with the device that wrote
+        // it. mayContributeAnalysis carries the reasoning.
+        let mayContribute = true;
         let storedPaletteStr: string | null = null; // stored art palette from the shared dataset (if any)
         if (!cached) {
           let data: ArrayBuffer;
@@ -1926,7 +1930,10 @@ function AppBody() {
           if (track.videoId) {
             const stored = await fetchAnalysisFull(track.videoId, ctrl.signal);
             if (stale()) return;
-            if (mayReuseGrid(stored, buffer.duration, ANALYSIS_VERSION).ok) suppliedGrid = deserializeGrid(stored!.grid);
+            const verdict = mayReuseGrid(stored, buffer.duration, ANALYSIS_VERSION);
+            if (verdict.ok) suppliedGrid = deserializeGrid(stored!.grid);
+            // The verdict also decides whether we may contribute — see mayContributeAnalysis.
+            mayContribute = mayContributeAnalysis(verdict.why);
             storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;
@@ -1996,7 +2003,7 @@ function AppBody() {
               }
               const pal = deserializePalette(paletteStr);
               if (pal) setMeta((m) => (m[id]?.videoId === artId ? { ...m, [id]: { ...m[id], palette: pal } } : m));
-              if (!reusedGrid || freshPalette) {
+              if (mayContribute && (!reusedGrid || freshPalette)) {
                 void postAnalysis({
                   videoId: artId,
                   bpm: derived.analysis.bpm,

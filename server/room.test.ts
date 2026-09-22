@@ -757,3 +757,37 @@ describe("DjRoom publish observability", () => {
     }
   });
 });
+
+// ★ DOES A LATER PUBLISH REACH A LISTENER THAT WAS ALREADY CONNECTED? Deckard's live log shows a
+// host publishing an EMPTY board first and a real one after (thread d4a56d30), with a listener that
+// caught up on the emptiness and never converged. That leaves two candidates — the room does not
+// relay the later publish, or the client does not apply it — and they live in different halves. The
+// server's answer is here, so the other half can be searched without guessing about this one.
+describe("DjRoom relays a later publish to a listener already tuned in", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("a PUBLIC listener that caught up on an empty board still receives the publish that follows", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true }); // go live — the broadcast plane opens
+    // The go-live publish, before the decks are restored: exactly what the live log showed.
+    await h.send(host, { t: "state", snapshot: { decks: { A: {}, B: {} } } });
+    const listener = (await h.connect({ device: "L1", pub: true })).ws!;
+    const atCatchUp = listener.sent
+      .map((m) => JSON.parse(m))
+      .filter((m) => m.t === "state")
+      .map((m) => m.snapshot?.decks?.A?.videoId ?? null);
+    expect(atCatchUp, "catch-up serves whatever the room holds — here, the empty board").toEqual([null]);
+    // …and now the host publishes the real board.
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "REAL" }, B: { videoId: "REAL2" } } } });
+    const after = listener.sent
+      .map((m) => JSON.parse(m))
+      .filter((m) => m.t === "state")
+      .map((m) => m.snapshot?.decks?.A?.videoId ?? null);
+    expect(after, "the room must relay it — a listener that joined during the empty window converges on the next publish").toContain("REAL");
+  });
+});

@@ -3058,7 +3058,7 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
 // Two decks, real engine, real grids, real transport. Phase error is read from the engine's own
 // syncDiag (errBeats, the quantity the loop is minimising) so the measurement and the controller
 // agree on what "in sync" means rather than re-deriving it beside them.
-(globalThis as unknown as { fxlabSyncDrift: (scenario: string, seconds: number) => Promise<Record<string, unknown>> }).fxlabSyncDrift = async (scenario, seconds) => {
+(globalThis as unknown as { fxlabSyncDrift: (scenario: string, seconds: number, realGrids?: { a: Record<string, unknown>; b: Record<string, unknown> }) => Promise<Record<string, unknown>> }).fxlabSyncDrift = async (scenario, seconds, realGrids) => {
   const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
   const eng = new AudioEngine();
   await eng.ensureWorklets();
@@ -3098,8 +3098,26 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   // `wave:<n>` scenarios give BOTH decks a wavering grid, independently phased so their rubato does
   // not cancel — two records breathing differently is the normal case, not the exotic one.
   const wave = scenario.startsWith("wave") ? Number(scenario.split(":")[1] || "0.02") : 0;
-  const A = mk(128, wave);
-  const B = mk(124, wave * 1.3);
+  // ★ REAL GRIDS BEAT SYNTHESISED RUBATO, and Deckard's export is why. A sinusoid at 6% is a TREND;
+  // the real pool runs 0.72–4.5% RMS with WORST single intervals of 4.4–16.4%, which the loop's
+  // ±2-beat window sees as a SPIKE, not a trend. Same number, different signal — the distinction
+  // the codec probe taught us. When a real grid is supplied, the click track is rendered FROM ITS
+  // OWN beats[], so the audio and the grid are the same artifact rather than two descriptions.
+  const fromReal = (g: Record<string, unknown>) => {
+    const beats = g.beats as number[];
+    const secs = Math.min(240, (beats[beats.length - 1] ?? 240) + 4);
+    const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (const at0 of beats) {
+        const at = Math.round(at0 * sr);
+        for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
+      }
+    }
+    return { buf: b, grid: { bpm: g.bpm, firstBeat: g.firstBeat, interval: g.interval, beats: Float32Array.from(beats), downbeat: g.downbeat, beatsPerBar: g.beatsPerBar } };
+  };
+  const A = realGrids ? fromReal(realGrids.a) : mk(128, wave);
+  const B = realGrids ? fromReal(realGrids.b) : mk(124, wave * 1.3);
   eng.deckA.setBuffer(A.buf, A.grid as never);
   eng.deckB.setBuffer(B.buf, B.grid as never);
   eng.setCrossfade(0);

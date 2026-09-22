@@ -401,7 +401,21 @@ async function main() {
       // thirds in, so recovery is inside the window.
       const secs = 18;
       const rows = [];
-      for (const sc of ["steady", "loop", "loop-master", "tempo", "seek", "wave:0.01", "wave:0.03", "wave:0.06"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
+      for (const sc of ["steady", "seek", "wave:0.03", "wave:0.06"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
+      // ★ AND THE REAL GRIDS, from Deckard's export (scripts/synclab/real-grids.json, 84a7749). A
+      // synthesised rubato is a trend; a real tracked grid has SPIKES — worst single intervals of
+      // 4.4% to 16.4% against an RMS of 0.72% to 4.5%. The loop's ±2-beat feed-forward window sees
+      // those very differently, and only the real one is the stimulus production supplies.
+      const { readFileSync: rf } = await import("node:fs");
+      const pool = JSON.parse(rf(new URL("../synclab/real-grids.json", import.meta.url), "utf8")).grids;
+      const byNote = Object.values(pool);
+      const steadiest = byNote.reduce((m, g) => (g.rmsIntervalSpread < m.rmsIntervalSpread ? g : m));
+      const waviest = byNote.reduce((m, g) => (g.rmsIntervalSpread > m.rmsIntervalSpread ? g : m));
+      for (const [name, pair] of [
+        ["real-steady", { a: steadiest, b: waviest }],
+        ["real-wavy", { a: waviest, b: byNote.find((g) => g !== waviest && g !== steadiest) ?? steadiest }],
+      ])
+        rows.push({ ...(await page.evaluate(([s, n, g]) => globalThis.fxlabSyncDrift(s, n, g), [name, secs, pair])), scenario: name });
       console.log(`\n  SYNC DRIFT — beat-phase error between a SYNCED pair (128 vs 124 bpm, B follows A), ${secs}s each\n`);
       for (const r of rows) {
         console.log(

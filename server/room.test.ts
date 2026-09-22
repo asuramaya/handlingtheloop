@@ -705,3 +705,55 @@ describe("DjRoom join hands over the board", () => {
     expect(stateIds(stranger)).toEqual([]);
   });
 });
+
+// ★ SILENCE MUST NOT BE AMBIGUOUS. The drop log alone could not separate "published and accepted"
+// from "never published at all" — opposite diagnoses with identical evidence, which sent one live
+// run down the wrong branch (thread d4a56d30). Every outcome of a publish now says which it was,
+// and catch-up says what it actually served, because "adopted a stale board" and "served nothing"
+// look the same from the client.
+describe("DjRoom publish observability", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+  const lines = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.map((c: unknown[]) => String(c[0]));
+
+  it("an accepted publish is logged WITH its content, so a stale board is visible as stale", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "aaa" }, B: { videoId: "bbb" } } } });
+      const line = lines(warn).find((m) => m.includes("state publish accepted"));
+      expect(line).toBeTruthy();
+      expect(line).toContain("A=aaa");
+      expect(line).toContain("B=bbb");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("catch-up says when the room has NEVER held a board — the case that reads as 'the listener ignored it'", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const friend = (await h.connect({ device: "g1", invited: true })).ws!;
+      await h.send(friend, { t: "join" });
+      expect(lines(warn).find((m) => m.includes("catch-up served: NO SNAPSHOT"))).toBeTruthy();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the anchor slot names both sides whenever it moves", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const host = (await h.connect({ device: "host1", host: true })).ws!;
+      await h.send(host, { t: "join" });
+      expect(lines(warn).find((m) => m.includes("anchor: none -> host1"))).toBeTruthy();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

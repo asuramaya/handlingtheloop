@@ -179,6 +179,7 @@ export class DjRoom {
   // answers a question only if somebody can see it.
   private stemViewDropped = 0;
   private stateDropAt = 0; // last time a dropped `state` publish was logged (rate limit)
+  private stateOkAt = 0; // …and the last time an ACCEPTED one was
   private static readonly STATE_DROP_LOG_MS = 5_000;
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
@@ -766,6 +767,17 @@ export class DjRoom {
         }
         // The anchor (or, while vacant, anyone) defines the authoritative set.
         if (self === this.anchorId || this.anchorId === null) {
+          // ★ AND AN ACCEPTED ONE SAYS SO TOO. Logging only the DROP made silence ambiguous: it
+          // could mean "published and accepted" or "never published at all", which are opposite
+          // diagnoses with the same evidence (thread d4a56d30 — the rig read a silent log as health
+          // when the client's publish effect had simply never run). The FINGERPRINT is what the
+          // snapshot actually carries, because the third case is "accepted, but the content is
+          // stale", and a line that only said "accepted" could not tell that one either.
+          const now0 = Date.now();
+          if (now0 - this.stateOkAt >= DjRoom.STATE_DROP_LOG_MS) {
+            this.stateOkAt = now0;
+            console.warn(`[htl-room] state publish accepted: publisher=${self} ${DjRoom.snapshotFingerprint(msg.snapshot)}`);
+          }
           this.lastSnapshot = msg.snapshot;
           this.relay(self, { t: "state", snapshot: msg.snapshot });
           // Persist THROTTLED + best-effort — the in-memory copy above already serves live relay
@@ -1279,7 +1291,21 @@ export class DjRoom {
     }
   }
 
+  /** What a board snapshot IS, in one short line — the two decks' track ids. Enough to tell a stale
+   *  cached board from a fresh one in a log, without printing a room's contents wholesale. */
+  private static snapshotFingerprint(snap: unknown): string {
+    const decks = (snap as { decks?: Record<string, { videoId?: string | null } | undefined> } | null)?.decks;
+    const at = (d: string) => decks?.[d]?.videoId ?? "—";
+    return `A=${at("A")} B=${at("B")}`;
+  }
+
   private sendCatchUp(ws: Ws): void {
+    // ★ SAY WHAT WAS SERVED. "The listener adopted a stale board" and "the listener was served
+    // nothing" look identical from the client, and both produce a device still showing its own
+    // tracks. One line here separates them at the source.
+    console.warn(
+      `[htl-room] catch-up served: ${this.lastSnapshot === undefined ? "NO SNAPSHOT (the room has never held one)" : DjRoom.snapshotFingerprint(this.lastSnapshot)}`,
+    );
     if (this.lastSnapshot !== undefined) {
       ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
     }
@@ -1364,6 +1390,10 @@ export class DjRoom {
       this.broadcastPresence(except);
       return;
     }
+    // ★ WHO HOLDS THE SLOT, every time it moves. `state` is accepted only from the anchor, so a
+    // publish that never happens and a publish refused by a slot the client does not know it lacks
+    // are the same silence on the client side. This line is the other half of that question.
+    console.warn(`[htl-room] anchor: ${this.anchorId ?? "none"} -> ${device ?? "none"}`);
     this.anchorId = device;
     await this.state.storage.put("anchor", device);
     this.broadcast({ t: "role", anchorId: device }, except);

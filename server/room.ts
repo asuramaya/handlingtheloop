@@ -174,10 +174,10 @@ export class DjRoom {
   // Ordinary hygiene, not cover for a designed-in divergence: a dropped envelope means remote
   // waveforms go absent, and that should be a readable fact rather than something only a
   // byte-level capture could reveal.
-  // ★ NOTE, because it is the reason the drop below is a LOG and not a counter: nothing in this
-  // codebase ever reads stemViewDropped. It is instrumentation with no instrument — a tally that
-  // answers a question only if somebody can see it.
+  // The count is the cheap aggregate; the LOG beside its increment is what makes it answerable.
+  // It spent its whole life as a tally nothing read — instrumentation with no instrument.
   private stemViewDropped = 0;
+  private stemViewDropAt = 0; // last time an oversized stemview was logged (rate limit)
   private stateDropAt = 0; // last time a dropped `state` publish was logged (rate limit)
   private stateOkAt = 0; // …and the last time an ACCEPTED one was
   private static readonly STATE_DROP_LOG_MS = 5_000;
@@ -830,7 +830,21 @@ export class DjRoom {
           // FAILS CLOSED on purpose: an over-large envelope is dropped for everyone, so a remote
           // waveform goes visibly ABSENT and gets reported — where a stale same-song envelope is
           // silently WRONG and never does. See stemViewBudget.ts for the two-phase deploy rule.
-          if (size > MAX_STEMVIEW_BYTES) this.stemViewDropped++;
+          // ★ AND SAY SO. This used to only increment stemViewDropped, a counter NOTHING in this
+          // codebase reads — so the one failure this gate's own comment calls "visibly ABSENT and
+          // reported" was, on the server side, invisible. The count is still kept (it is the cheap
+          // aggregate); the line is what makes a missing remote waveform diagnosable from a log
+          // instead of from a user saying a lane looked empty. Rate-limited like the others: a
+          // client republishing an oversized envelope must not become the log.
+          if (size > MAX_STEMVIEW_BYTES) {
+            this.stemViewDropped++;
+            if (now - this.stemViewDropAt >= DjRoom.STATE_DROP_LOG_MS) {
+              this.stemViewDropAt = now;
+              console.warn(
+                `[htl-room] stemview DROPPED (too large): device=${self} deck=${msg.deck} bytes=${size} cap=${MAX_STEMVIEW_BYTES} dropped=${this.stemViewDropped} — that deck's remote lanes stay empty`,
+              );
+            }
+          }
           if (size <= MAX_STEMVIEW_BYTES && !tooSoon) {
             this.stemViewRate[rk] = now;
             this.lastStemView[msg.deck] = msg.view;

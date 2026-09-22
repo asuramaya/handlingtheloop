@@ -837,3 +837,44 @@ describe("DjRoom witnesses a tune-in", () => {
     }
   });
 });
+
+// ★ THE ONE FAILURE THIS GATE PROMISES IS "VISIBLY ABSENT AND REPORTED". An oversized stem envelope
+// is dropped for everyone — the right call, since a stale same-song envelope would be silently WRONG
+// — but on the server it was recorded only in a counter that nothing in this codebase reads. A
+// missing remote waveform was therefore diagnosable only by a user saying a lane looked empty.
+describe("DjRoom stemview drop is visible", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("logs an oversized stem view, naming the deck and the size against the cap", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // One stem lane far over the wire cap — the shape a long track produces.
+      await h.send(host, { t: "stemview", deck: "B", view: { blob: "x".repeat(300_000) } });
+      const line = warn.mock.calls.map((c: unknown[]) => String(c[0])).find((m) => m.includes("stemview DROPPED"));
+      expect(line).toBeTruthy();
+      expect(line).toContain("deck=B");
+      expect(line).toContain("device=host1");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("control: a normal-sized stem view is NOT logged — the line has to mean a real drop", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.send(host, { t: "stemview", deck: "A", view: { blob: "x".repeat(1000) } });
+      expect(warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((m) => m.includes("stemview DROPPED"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

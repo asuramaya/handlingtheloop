@@ -7,6 +7,24 @@ import type { Beatgrid, TrackAnalysis } from "./analyze";
 let worker: Worker | null = null;
 let failed = false; // construction failed once → don't keep retrying, go inline
 let seq = 0;
+
+// ★ A SILENTLY DEGRADED WORKER LOOKS EXACTLY LIKE A WORKING ONE. Every fallback here is correct and
+// invisible: the track still loads, the analysis is still right, and the only difference is that the
+// whole detector just ran on the MAIN THREAD — which is the entire thing this module exists to
+// avoid. "Seems fine" is then unfalsifiable, and the symptom (a long frame at track load) surfaces
+// nowhere near the cause.
+//
+// So each distinct reason says itself ONCE per session. Once, because this runs per track load and a
+// line per load is noise nobody reads; distinct, because "could not construct" and "died mid-flight"
+// have different causes and different fixes. Metron's bc201e32 requires the same of the stems worker
+// before anyone may believe a green run from it; this is the live instance of that class, in the
+// worker that already exists.
+const told = new Set<string>();
+function fellBack(why: string): void {
+  if (told.has(why)) return;
+  told.add(why);
+  console.info(`[htl] analysis worker unavailable (${why}) — analysing on the MAIN THREAD instead; expect a long frame at track load`);
+}
 type Pending = { resolve: (a: TrackAnalysis) => void; reject: (e: unknown) => void };
 const pending = new Map<number, Pending>();
 
@@ -33,6 +51,7 @@ function getWorker(): Worker | null {
   } catch {
     failed = true;
     worker = null;
+    fellBack("could not be constructed");
     return null;
   }
 }
@@ -71,6 +90,9 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
     );
 
   const w = getWorker();
+  // No second line here: getWorker only returns null once construction has already failed, which
+  // already said so. A distinct reason per SITE rather than per CAUSE is how one condition starts
+  // reporting itself twice.
   if (!w) return Promise.resolve(inline());
 
   const l = buffer.getChannelData(0);
@@ -84,5 +106,8 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
     // Only the mix transfers — `grid` is small and structured-cloned (its Float32Arrays stay owned
     // by the caller, which needs the grid intact for its own use).
     w.postMessage({ id, ch0: mono, ch1: null, sampleRate, grid }, [mono.buffer]);
-  }).catch(() => inline()); // worker died — re-read the intact source buffer
+  }).catch(() => {
+    fellBack("died mid-flight");
+    return inline(); // re-read the intact source buffer
+  });
 }

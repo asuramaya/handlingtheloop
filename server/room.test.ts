@@ -878,3 +878,48 @@ describe("DjRoom stemview drop is visible", () => {
     }
   });
 });
+
+// ★ A THROTTLE MUST NOT EAT THE NEWS. Logging accepted publishes on a time window alone rebuilt the
+// ambiguity the line was added to remove: a host publishing an empty board and the real one a second
+// later printed only the empty one, and the silence after it could mean "never republished" or
+// "republished inside the window" — opposite diagnoses, identical evidence (thread d4a56d30, where
+// only the listener's catch-up content settled it). A changed board is news; a repeat is noise.
+describe("DjRoom publish log throttles repeats, not changes", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+  const accepted = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((m) => m.includes("state publish accepted"));
+
+  it("an EMPTY board followed by the real one prints both — the go-live sequence", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.send(host, { t: "state", snapshot: { decks: { A: {}, B: {} } } });
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "real1" }, B: { videoId: "real2" } } } });
+      const lines = accepted(warn);
+      expect(lines.length).toBe(2);
+      expect(lines[0]).toContain("A=—");
+      expect(lines[1]).toContain("A=real1");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("control: an identical republish inside the window is throttled — the line still means something", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const snap = { decks: { A: { videoId: "same" }, B: {} } };
+      await h.send(host, { t: "state", snapshot: snap });
+      await h.send(host, { t: "state", snapshot: snap });
+      await h.send(host, { t: "state", snapshot: snap });
+      expect(accepted(warn).length).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

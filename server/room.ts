@@ -180,6 +180,7 @@ export class DjRoom {
   private stemViewDropAt = 0; // last time an oversized stemview was logged (rate limit)
   private stateDropAt = 0; // last time a dropped `state` publish was logged (rate limit)
   private stateOkAt = 0; // …and the last time an ACCEPTED one was
+  private stateOkFp = ""; // the last accepted snapshot's fingerprint — a CHANGE is never throttled
   private static readonly STATE_DROP_LOG_MS = 5_000;
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
@@ -780,10 +781,19 @@ export class DjRoom {
           // when the client's publish effect had simply never run). The FINGERPRINT is what the
           // snapshot actually carries, because the third case is "accepted, but the content is
           // stale", and a line that only said "accepted" could not tell that one either.
+          // ★ RATE-LIMIT THE REPEATS, NEVER THE CHANGES. The first version throttled this line by
+          // TIME alone, which quietly rebuilt the ambiguity it was added to remove: a host that
+          // publishes an empty board and then the real one ~1 s later showed only the empty line,
+          // and the silence after it could mean "never republished" or "republished inside the
+          // window" — opposite diagnoses again (Deckard nearly read it the first way; only the
+          // listener's catch-up CONTENT settled it). A publish whose fingerprint DIFFERS from the
+          // last one is news and always prints; only an identical repeat is throttled.
           const now0 = Date.now();
-          if (now0 - this.stateOkAt >= DjRoom.STATE_DROP_LOG_MS) {
+          const fp = DjRoom.snapshotFingerprint(msg.snapshot);
+          if (fp !== this.stateOkFp || now0 - this.stateOkAt >= DjRoom.STATE_DROP_LOG_MS) {
             this.stateOkAt = now0;
-            console.warn(`[htl-room] state publish accepted: publisher=${self} ${DjRoom.snapshotFingerprint(msg.snapshot)}`);
+            this.stateOkFp = fp;
+            console.warn(`[htl-room] state publish accepted: publisher=${self} ${fp}`);
           }
           this.lastSnapshot = msg.snapshot;
           this.relay(self, { t: "state", snapshot: msg.snapshot });

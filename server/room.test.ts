@@ -740,7 +740,10 @@ describe("DjRoom publish observability", () => {
     try {
       const friend = (await h.connect({ device: "g1", invited: true })).ws!;
       await h.send(friend, { t: "join" });
-      expect(lines(warn).find((m) => m.includes("catch-up served: NO SNAPSHOT"))).toBeTruthy();
+      const line = lines(warn).find((m) => m.includes("NO SNAPSHOT"));
+      expect(line).toBeTruthy();
+      expect(line, "the device and the reason are what make the line usable when several fire at once").toContain("device=g1");
+      expect(line).toContain("why=join");
     } finally {
       warn.mockRestore();
     }

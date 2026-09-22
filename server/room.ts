@@ -415,7 +415,7 @@ export class DjRoom {
     server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.songRequests.list)));
     this.sendChatHistory(server); // recent chat backlog so a joiner has context
     // Hand a public listener the current board immediately so it can render without a round-trip.
-    if (pub) this.sendCatchUp(server);
+    if (pub) this.sendCatchUp(server, "connect:pub");
     this.broadcastPresence();
 
     return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
@@ -463,7 +463,7 @@ export class DjRoom {
           // (thread d4a56d30) for every re-entry, and it is why approve's own comment exists: the
           // display should fill in without waiting on a round-trip. Idempotent — a snapshot the
           // client already has applies to the same state.
-          this.sendCatchUp(ws);
+          this.sendCatchUp(ws, "join");
           await this.settle(self);
         } else {
           // A guest knocking. Mark pending (not joined) so the host's roster shows the
@@ -523,7 +523,7 @@ export class DjRoom {
           // Hand the freshly-approved guest the current board immediately — the snapshot
           // (decks/stems/controls) + the host's stem envelopes — so its display + mixer
           // fill in without waiting on a client-side request round-trip.
-          this.sendCatchUp(t);
+          this.sendCatchUp(t, "approve");
         }
         await this.settle(target);
         break;
@@ -873,7 +873,7 @@ export class DjRoom {
         break;
       }
       case "request-state": {
-        this.sendCatchUp(ws);
+        this.sendCatchUp(ws, "request-state");
         this.sendChatHistory(ws);
         break;
       }
@@ -1243,7 +1243,7 @@ export class DjRoom {
       if (!a?.pub) continue; // only a floor listener steps up
       this.patch(t, { pub: false, joined: true, listening: true, controlling: true, decks: deck, stage: true, stageReq: "", joinedAt: Date.now() });
       // Hand them the full board as a driver — they had only the curated digest as a listener.
-      this.sendCatchUp(t);
+      this.sendCatchUp(t, "stage-promote");
       promoted = true;
     }
     if (promoted) await this.settle(device); // stage devices never anchor — settle just re-broadcasts presence
@@ -1306,12 +1306,16 @@ export class DjRoom {
     return `A=${at("A")} B=${at("B")}`;
   }
 
-  private sendCatchUp(ws: Ws): void {
-    // ★ SAY WHAT WAS SERVED. "The listener adopted a stale board" and "the listener was served
-    // nothing" look identical from the client, and both produce a device still showing its own
-    // tracks. One line here separates them at the source.
+  private sendCatchUp(ws: Ws, why = "?"): void {
+    // ★ SAY WHAT WAS SERVED, TO WHOM, AND WHY. "The listener adopted a stale board" and "the
+    // listener was served nothing" look identical from the client, and both produce a device still
+    // showing its own tracks. The DEVICE and the REASON are here because the first live run printed
+    // seventeen of these against ONE tune-in (thread d4a56d30): five call sites reach this, one of
+    // them a client-driven `request-state` that nothing rate-limits, so an unlabelled line could not
+    // say whether that was five devices arriving or one socket being re-served sixteen times — and
+    // those are different problems, one of them a fan-out cost that scales with the crowd.
     console.warn(
-      `[htl-room] catch-up served: ${this.lastSnapshot === undefined ? "NO SNAPSHOT (the room has never held one)" : DjRoom.snapshotFingerprint(this.lastSnapshot)}`,
+      `[htl-room] catch-up served: device=${this.deviceOf(ws) ?? "?"} why=${why} ${this.lastSnapshot === undefined ? "NO SNAPSHOT (the room has never held one)" : DjRoom.snapshotFingerprint(this.lastSnapshot)}`,
     );
     if (this.lastSnapshot !== undefined) {
       ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));

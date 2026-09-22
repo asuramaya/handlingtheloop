@@ -121,6 +121,7 @@ import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
 import { shouldReleaseClaim } from "./App/loadClaim";
 import { deckNamePatch } from "./App/deckNameBackfill";
+import { publishedDeckId } from "./App/publishedDeckId";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
@@ -837,6 +838,11 @@ function AppBody() {
   // When the current claim was made, so the resync can ask how old the IN-FLIGHT load is. Asking
   // the resync clock instead is what let a slow load be cancelled and restarted forever.
   const loadingSince = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // The track this deck is loading RIGHT NOW — cleared when that load ends, however it ends. This is
+  // NOT loadingVid, which survives a successful land on purpose (it is the dedupe key). The board we
+  // publish reads this one, so a deck mid-decode announces the track that is coming instead of
+  // announcing emptiness. See App/publishedDeckId.ts.
+  const loadingNow = useRef<Record<DeckId, string>>({ A: "", B: "" });
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
@@ -1704,8 +1710,8 @@ function AppBody() {
     const { meta, loaded, crossfade, zoom, tempoRange } = latest.current;
     return {
       decks: {
-        A: deckSnapshot(engine.deckA, meta.A, loaded.A),
-        B: deckSnapshot(engine.deckB, meta.B, loaded.B),
+        A: deckSnapshot(engine.deckA, meta.A, publishedDeckId(loaded.A, loadingNow.current.A)),
+        B: deckSnapshot(engine.deckB, meta.B, publishedDeckId(loaded.B, loadingNow.current.B)),
       },
       crossfade,
       zoom,
@@ -1827,6 +1833,7 @@ function AppBody() {
         loadingVid.current[id] = vid;
         loadingSeq.current[id] = seq; // whoever claimed LAST owns the claim, same id or not
         loadingSince.current[id] = performance.now(); // so "is this load stuck?" is asked of the LOAD
+        loadingNow.current[id] = vid; //                    and so the published board says what is coming
         claimedVid = vid;
         // Lyrics: cache/pool → LRCLIB words (shown instantly, line-synced) → upgraded to
         // word-level by aligning to the neural vocal stem (CPU DSP, no GPU, contributed back)
@@ -2021,6 +2028,9 @@ function AppBody() {
         // Comparing sequences keeps what the id test was written for — a successor that dies before
         // claiming leaves the claim owned by US, so we still release it and nothing is stranded.
         if (shouldReleaseClaim({ landed, claimedVid, claimSeq: loadingSeq.current[id], mySeq: seq })) loadingVid.current[id] = "";
+        // "Loading right now" ends when this load ends, landed or not — but only if a newer load has
+        // not already taken the deck over, or we would erase ITS announcement.
+        if (loadingSeq.current[id] === seq) loadingNow.current[id] = "";
         // Every exit passes here, so this is where the line is guaranteed: a load that landed says
         // `landed`, and one that ended without landing and without throwing (an early `return` on a
         // stale sequence) — the quietest of all — says so too.

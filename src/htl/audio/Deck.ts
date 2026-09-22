@@ -3,6 +3,7 @@ import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
 import { isSameStemApply, stemApplyId } from "./stemApply";
+import { stemViewGeometryAgrees, type StemPick } from "./stemViewGeometry";
 import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
@@ -970,6 +971,11 @@ export class Deck {
     // combined waveform, permanently. DSP pyramids carry band energy too, so they colour fine.)
     if (!py) return null;
     const stems = {} as Record<StemName, { min: string; max: string }>;
+    // Each stem picks its own LOD level below, while the view ships ONE bucket/length/sampleRate —
+    // the last stem's. Record what each one actually chose so the two can be compared. See
+    // stemViewGeometry.ts: if they ever disagree, the mis-described lanes collapse mid-track on the
+    // receiving device, which is the 2026-09-15 report (thread f2b8f545).
+    const picks: StemPick[] = [];
     const bands = {} as Record<StemName, { low: string; mid: string; high: string }>;
     // BAND_BUCKETS and MAX_BUCKETS now live in stemViewBudget.ts, because the SERVER derives its
     // wire bound from them — the ceiling is a shared invariant and belongs to neither side alone.
@@ -989,6 +995,7 @@ export class Deck {
       const minBucket = Math.max(1024, Math.ceil(p.length / MAX_BUCKETS));
       const lvl = p.levels.find((l) => l.bucket >= minBucket) ?? p.levels[p.levels.length - 1];
       bucket = lvl.bucket;
+      picks.push({ name, bucket: lvl.bucket, length: p.length, sampleRate: p.sampleRate });
       stems[name] = { min: i8ToB64(quantizeI8(lvl.min)), max: i8ToB64(quantizeI8(lvl.max)) };
       // Coarse band energy (0..1) → int8 → base64, downsampled to ≤768 buckets.
       const bb = Math.min(BAND_BUCKETS, lvl.min.length);
@@ -997,6 +1004,18 @@ export class Deck {
         mid: i8ToB64(quantizeI8(downsampleAvg(lvl.mid, bb))),
         high: i8ToB64(quantizeI8(downsampleAvg(lvl.high, bb))),
       };
+    }
+    // ★ REPORT, DO NOT REPAIR. Nobody has shown the four stems CAN choose different levels — one
+    // separation, one length — so this changes nothing about what is sent; it turns "can this
+    // happen?" into an answer from the machine that actually produced the envelopes. If it ever
+    // fires, the repair is a per-stem geometry on the wire, which is a schema change and needs both
+    // peers' agreement, not a quiet normalisation here.
+    const verdict = stemViewGeometryAgrees(picks);
+    if (!verdict.agreed) {
+      console.warn(
+        `[htl] stem view geometry disagrees — ${verdict.disagreeing.join(", ")} differ from ${picks[0]?.name}; ` +
+          `the view ships one bucket/length for all four, so those lanes will render against the wrong scale (thread f2b8f545)`,
+      );
     }
     return { videoId, length, sampleRate, bucket, stems, bands };
   }

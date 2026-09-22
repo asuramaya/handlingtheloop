@@ -1945,6 +1945,15 @@ function AppBody() {
               console.info(
                 `[htl] pooled grid declined for ${vid}: it describes ${stored?.duration?.toFixed(1)}s of audio and we decoded ${buffer.duration.toFixed(1)}s — deriving locally and NOT contributing, so the pooled row stays with whoever wrote it first`,
               );
+            // ★ AND THE OTHER REFUSALS, because `different-audio` is not the one whose FREQUENCY is
+            // unknown. `unknown-duration` refuses a row we cannot check at all, and how much of the
+            // real pool that is cannot be measured from here — every row on this machine was written
+            // by this machine, which is the wrong population to answer it with. If it turns out to be
+            // most of them, every load re-derives and the only symptom is that loads got slower.
+            // `behind-version` is expected and loud on purpose: after an ANALYSIS_VERSION bump it
+            // fires once per track and IS the lazy migration running.
+            else if (verdict.why === "unknown-duration" || verdict.why === "behind-version")
+              console.info(`[htl] pooled grid not reused for ${vid}: ${verdict.why} — deriving locally and contributing at v${ANALYSIS_VERSION}`);
             storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;

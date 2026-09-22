@@ -401,7 +401,7 @@ async function main() {
       // thirds in, so recovery is inside the window.
       const secs = 18;
       const rows = [];
-      for (const sc of ["steady", "jitter:0.0232", "wander:0.0232", "jitter:0.05", "wander:0.05"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
+      for (const sc of ["steady", "offbeat", "jitter:0.0232", "wander:0.0232", "jitter:0.05", "wander:0.05"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
       // ★ AND THE REAL GRIDS, from Deckard's export (scripts/synclab/real-grids.json, 84a7749). A
       // synthesised rubato is a trend; a real tracked grid has SPIKES — worst single intervals of
       // 4.4% to 16.4% against an RMS of 0.72% to 4.5%. The loop's ±2-beat feed-forward window sees
@@ -425,7 +425,7 @@ async function main() {
       console.log(`\n  SYNC DRIFT — beat-phase error between a SYNCED pair (128 vs 124 bpm, B follows A), ${secs}s each\n`);
       for (const r of rows) {
         console.log(
-          `   ${String(r.scenario).padEnd(12)} worst ${f(r.worstErr ?? NaN, 3).padStart(7)} beats   settled ${f(r.finalErr ?? NaN, 3).padStart(7)}   max trim ${f((r.maxTrim ?? 0) * 100, 2).padStart(5)}%   saturated ${String(r.saturatedTicks).padStart(2)}/${r.n}`,
+          `   ${String(r.scenario).padEnd(12)} worst ${f(r.worstErr ?? NaN, 3).padStart(7)} beats   settled ${f(r.finalErr ?? NaN, 3).padStart(7)}   max trim ${f((r.maxTrim ?? 0) * 100, 2).padStart(5)}%   saturated ${String(r.saturatedTicks).padStart(2)}/${r.n}   audio ${f(r.audioFinalErr ?? NaN, 3).padStart(7)}`,
         );
       }
       const steady = rows[0];
@@ -435,6 +435,24 @@ async function main() {
         console.log("\n   \u2717 INCONCLUSIVE: the UNDISTURBED pair does not hold phase, so this rig is not measuring the disturbances \u2014 fix the baseline first.\n");
         process.exitCode = 1;
         return;
+      }
+      // ★ THE GRID CAN LIE AND EVERY SYNC READING STAYS GREEN. `audio` is measured from the onsets
+      // the stimulus rendered, not from the grids the loop servos on, so it is the only column able
+      // to contradict the other four. The `offbeat` row moves deck B's grid half a beat off its own
+      // audio: the loop locks the grids perfectly and reports itself in sync while the two records
+      // are audibly half a beat apart. That is Deckard's offbeat finding, reproduced from my side.
+      const ob = rows.find((r) => r.scenario === "offbeat");
+      if (ob) {
+        // The control comes FIRST: if this reading cannot see an HONEST pair as aligned, it is not
+        // an instrument, and whatever it says about the dishonest one is unreadable, not negative.
+        if (steady.audioFinalErr == null || steady.audioFinalErr > 0.05) {
+          console.log("\n   \u2717 INCONCLUSIVE: the audio-phase reading does not see the UNDISTURBED pair as aligned, so it cannot be trusted to see a misaligned one.\n");
+          process.exitCode = 1;
+          return;
+        }
+        const hid = (ob.finalErr ?? 1) < 0.05 && (ob.audioFinalErr ?? 0) > 0.3;
+        console.log(`   offbeat grid \u2014 loop reports ${f(ob.finalErr ?? NaN, 3)} beats (in sync); the AUDIO is ${f(ob.audioFinalErr ?? NaN, 3)} beats apart`);
+        console.log(`   ${hid ? "\u2713 reproduced: a grid half a beat off its own audio is INVISIBLE to every sync diagnostic \u2014 the servo is right and the map is wrong" : "\u2026 not reproduced in this run"}`);
       }
       const bad = rows.filter((r) => (r.finalErr ?? 0) > 0.05);
       console.log(`\n   ${bad.length ? `\u2717 ${bad.map((r) => r.scenario).join(", ")} do NOT return to phase within the window` : "\u2713 every scenario returns to phase after its disturbance"}\n`);

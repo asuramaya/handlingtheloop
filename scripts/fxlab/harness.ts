@@ -3093,11 +3093,20 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     }
     const grid: Record<string, unknown> = { bpm, firstBeat: beats[0], interval: spb };
     if (wave > 0) grid.beats = Float32Array.from(beats); // what the analyser actually produces
-    return { buf: b, grid };
+    return { buf: b, grid, onsets: beats };
   };
   // `wave:<n>` scenarios give BOTH decks a wavering grid, independently phased so their rubato does
   // not cancel — two records breathing differently is the normal case, not the exotic one.
-  const wave = scenario.startsWith("wave") ? Number(scenario.split(":")[1] || "0.02") : 0;
+  // ★ THE BLIND SPOT THIS RIG WAS BUILT WITH. Every stimulus above renders its click track FROM
+  // the grid, so the audio and the grid are the same artifact and can never disagree. Deckard's
+  // offbeat finding is exactly a disagreement between them: a grid that locks half a beat away
+  // from the audio's real onset, with a PERFECT tempo match. My instrument was blind to it BY
+  // CONSTRUCTION — not because the loop handles it, because the rig could not synthesise it.
+  // `offbeat:<frac>` (default half a beat) displaces deck B's GRID against its own AUDIO.
+  const offbeat = scenario.startsWith("offbeat") ? Number(scenario.split(":")[1] || "0.5") : 0;
+  // An offbeat run still wants a DYNAMIC grid underneath it — a perfect constant grid is the sine
+  // mistake, and the question here is whether a WORKING loop hides the lie, not whether a trivial one does.
+  const wave = scenario.startsWith("wave") ? Number(scenario.split(":")[1] || "0.02") : offbeat ? 0.02 : 0;
   // ★ DECKARD'S PREDICTION, MADE FALSIFIABLE FROM MY SIDE. He measured the detector's own beat
   // positions against ground truth and found per-beat JITTER of 0.014–0.023 beats between two
   // independent grids, scaling with tempo (0.0138 at 96 bpm → 0.0232 at 160). His claim is that my
@@ -3147,7 +3156,7 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
         for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
       }
     }
-    return { buf: b, grid: { bpm, firstBeat: beats[0], interval: spb, beats: Float32Array.from(beats) } };
+    return { buf: b, grid: { bpm, firstBeat: beats[0], interval: spb, beats: Float32Array.from(beats) }, onsets: beats };
   };
   // ★ REAL GRIDS BEAT SYNTHESISED RUBATO, and Deckard's export is why. A sinusoid at 6% is a TREND;
   // the real pool runs 0.72–4.5% RMS with WORST single intervals of 4.4–16.4%, which the loop's
@@ -3165,10 +3174,42 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
         for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
       }
     }
-    return { buf: b, grid: { bpm: g.bpm, firstBeat: g.firstBeat, interval: g.interval, beats: Float32Array.from(beats), downbeat: g.downbeat, beatsPerBar: g.beatsPerBar } };
+    return { buf: b, grid: { bpm: g.bpm, firstBeat: g.firstBeat, interval: g.interval, beats: Float32Array.from(beats), downbeat: g.downbeat, beatsPerBar: g.beatsPerBar }, onsets: beats };
   };
   const A = realGrids ? fromReal(realGrids.a) : jitter || wander ? mkJitter(128, jitter || wander, 11, !!wander) : mk(128, wave);
   const B = realGrids ? fromReal(realGrids.b) : jitter || wander ? mkJitter(124, jitter || wander, 977, !!wander) : mk(124, wave * 1.3);
+  if (offbeat) {
+    const gb = B.grid as Record<string, unknown>;
+    const d = (gb.interval as number) * offbeat;
+    gb.firstBeat = (gb.firstBeat as number) + d;
+    if (gb.beats) gb.beats = Float32Array.from(gb.beats as Float32Array, (x) => x + d);
+  }
+  // The SECOND OPINION, and the only one able to contradict the first. syncDiag reports the phase
+  // between the two GRIDS; this reports the phase between the two AUDIO tracks, read from the
+  // onsets the stimulus actually rendered. On honest grids they agree, which is the control. When
+  // a grid lies about where its own beat is, they diverge — and the divergence IS the lie, in beats.
+  const phaseAt = (onsets: number[], pos: number) => {
+    let lo = 0;
+    let hi = onsets.length - 1;
+    let k = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (onsets[m] <= pos) {
+        k = m;
+        lo = m + 1;
+      } else hi = m - 1;
+    }
+    if (k < 0 || k + 1 >= onsets.length) return null;
+    const span = onsets[k + 1] - onsets[k];
+    return span > 1e-6 ? (pos - onsets[k]) / span : null;
+  };
+  const audioErr = () => {
+    const pa = phaseAt(A.onsets, eng.deckA.position());
+    const pb = phaseAt(B.onsets, eng.deckB.position());
+    if (pa == null || pb == null) return null;
+    const x = pa - pb;
+    return x - Math.round(x); // fold to [-0.5, 0.5] beats — a beat later is not a beat wrong
+  };
   eng.deckA.setBuffer(A.buf, A.grid as never);
   eng.deckB.setBuffer(B.buf, B.grid as never);
   eng.setCrossfade(0);
@@ -3176,7 +3217,7 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   eng.deckB.play();
   eng.toggleSync("B"); // B follows A
   await new Promise((r) => setTimeout(r, 1500)); // let the loop acquire before sampling
-  const samples: { t: number; err: number | null; trim: number | null; sat: boolean }[] = [];
+  const samples: { t: number; err: number | null; trim: number | null; sat: boolean; aerr: number | null }[] = [];
   const t0 = performance.now();
   let did = false;
   while ((performance.now() - t0) / 1000 < seconds) {
@@ -3195,19 +3236,24 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
       if (scenario === "loop-master") eng.deckA.clearLoop();
     }
     const d = eng.syncDiag;
-    samples.push({ t: +el.toFixed(2), err: d.errBeats, trim: d.trim, sat: d.saturated });
+    samples.push({ t: +el.toFixed(2), err: d.errBeats, trim: d.trim, sat: d.saturated, aerr: audioErr() });
     await new Promise((r) => setTimeout(r, 250));
   }
   eng.deckA.pause();
   eng.deckB.pause();
   const errs = samples.map((s) => s.err).filter((e): e is number => e != null);
   const tail = errs.slice(-8);
+  const aerrs = samples.map((s) => s.aerr).filter((e): e is number => e != null);
+  const atail = aerrs.slice(-8);
   await eng.ctx.close();
   return {
     scenario,
     n: samples.length,
     worstErr: errs.length ? Math.max(...errs.map(Math.abs)) : null,
     finalErr: tail.length ? tail.reduce((a, b) => a + Math.abs(b), 0) / tail.length : null,
+    // Measured from the AUDIO, not from the grids. Where this disagrees with finalErr, the grid is
+    // the thing that is wrong — and the loop, being a servo on the grids, will never report it.
+    audioFinalErr: atail.length ? atail.reduce((a, b) => a + Math.abs(b), 0) / atail.length : null,
     trimHeld: samples.filter((s) => s.trim != null && Math.abs(s.trim) > 1e-6).length,
     // The AUDIBLE cost of whatever the loop is doing: a rate trim IS a pitch shift when keylock is
     // off, so any proposal to widen the budget has to report this beside the error it buys.

@@ -3098,6 +3098,33 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   // `wave:<n>` scenarios give BOTH decks a wavering grid, independently phased so their rubato does
   // not cancel — two records breathing differently is the normal case, not the exotic one.
   const wave = scenario.startsWith("wave") ? Number(scenario.split(":")[1] || "0.02") : 0;
+  // ★ DECKARD'S PREDICTION, MADE FALSIFIABLE FROM MY SIDE. He measured the detector's own beat
+  // positions against ground truth and found per-beat JITTER of 0.014–0.023 beats between two
+  // independent grids, scaling with tempo (0.0138 at 96 bpm → 0.0232 at 160). His claim is that my
+  // mismatched-pair floor of 0.028 IS that jitter — the phase target itself moving, which no gain
+  // and no budget can null because neither grid is more right than the other.
+  // `jitter:<rms>` injects exactly that: per-beat independent displacement at a stated RMS, with
+  // NO tempo movement at all, so the only thing the loop sees is a target that will not sit still.
+  // If the floor tracks the injected jitter, the link holds. If it does not, his explanation is
+  // wrong and I say so.
+  const jitter = scenario.startsWith("jitter") ? Number(scenario.split(":")[1] || "0.014") : 0;
+  const mkJitter = (bpm: number, rms: number, seed: number) => {
+    const secs = 240;
+    const spb = 60 / bpm;
+    const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    let st = seed >>> 0;
+    const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 0x100000000) * 2 - 1;
+    const beats: number[] = [];
+    for (let k = 0; k * spb < secs; k++) beats.push(k * spb + rnd() * rms * 1.732 * spb); // uniform → RMS
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (const at0 of beats) {
+        const at = Math.round(Math.max(0, at0) * sr);
+        for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
+      }
+    }
+    return { buf: b, grid: { bpm, firstBeat: beats[0], interval: spb, beats: Float32Array.from(beats) } };
+  };
   // ★ REAL GRIDS BEAT SYNTHESISED RUBATO, and Deckard's export is why. A sinusoid at 6% is a TREND;
   // the real pool runs 0.72–4.5% RMS with WORST single intervals of 4.4–16.4%, which the loop's
   // ±2-beat window sees as a SPIKE, not a trend. Same number, different signal — the distinction
@@ -3116,8 +3143,8 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     }
     return { buf: b, grid: { bpm: g.bpm, firstBeat: g.firstBeat, interval: g.interval, beats: Float32Array.from(beats), downbeat: g.downbeat, beatsPerBar: g.beatsPerBar } };
   };
-  const A = realGrids ? fromReal(realGrids.a) : mk(128, wave);
-  const B = realGrids ? fromReal(realGrids.b) : mk(124, wave * 1.3);
+  const A = realGrids ? fromReal(realGrids.a) : jitter ? mkJitter(128, jitter, 11) : mk(128, wave);
+  const B = realGrids ? fromReal(realGrids.b) : jitter ? mkJitter(124, jitter, 977) : mk(124, wave * 1.3);
   eng.deckA.setBuffer(A.buf, A.grid as never);
   eng.deckB.setBuffer(B.buf, B.grid as never);
   eng.setCrossfade(0);

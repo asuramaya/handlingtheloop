@@ -401,7 +401,7 @@ async function main() {
       // thirds in, so recovery is inside the window.
       const secs = 18;
       const rows = [];
-      for (const sc of ["steady", "seek"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
+      for (const sc of ["steady", "jitter:0.0138", "jitter:0.0232", "jitter:0.05"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
       // ★ AND THE REAL GRIDS, from Deckard's export (scripts/synclab/real-grids.json, 84a7749). A
       // synthesised rubato is a trend; a real tracked grid has SPIKES — worst single intervals of
       // 4.4% to 16.4% against an RMS of 0.72% to 4.5%. The loop's ±2-beat feed-forward window sees

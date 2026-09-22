@@ -16,6 +16,7 @@ import type { Intent, TickDecks } from "@htl/room";
 import { decideFollowTick, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
 import type { Settings } from "@htl/state";
+import { applyDeckFxSnapshot } from "./deckFxSnapshot";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
 import type { StemStatus } from "../App";
@@ -166,7 +167,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // intent (no restore snapshot) gets its backing effects. Without this the ECHO/VERB/SAT
       // throws fire into an empty rack (silent) on replay AND for a guest who loaded by intent.
       // Per-videoId dedupe (reconciledTarget) means this runs once per load, not over live edits.
-      if (d.fx !== undefined) deck.applyFxSnapshot(d.fx);
+      // BOTH halves — the master rack and the stem chains. See App/deckFxSnapshot.ts for why
+      // applying only `fx` here left a late-joining listener without the host's stem chains.
+      applyDeckFxSnapshot(deck, d);
     },
     [engine, setStatusFor],
   );

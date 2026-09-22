@@ -954,7 +954,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             up/down = gain; mid wheel = bell width; right-click / double-click = reset).
             Further tabs are stacked effects (delay…); + adds one. */}
         <div className="eq-row">
-          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emitControls={emitControls} onSelect={(i) => onFxSelect?.(id, i)} onOpenFx={() => setPage("fx")} fxPageOpen={page === "fx"} onCloseFx={() => setPage("perform")} ctlRef={fxCtlRef} />
+          <FxStrip deck={deck} id={id} accent={accent} otherDeck={otherDeck} otherAccent={otherAccent} emitControls={emitControls} onSelect={(i) => onFxSelect?.(id, i)} onOpenFx={() => setPage("fx")} fxPageOpen={page === "fx"} onCloseFx={() => setPage("perform")} ctlRef={fxCtlRef} locked={locked} />
         </div>
 
         {/* Channel volume — a horizontal level fader (rendered at the bank TOP via

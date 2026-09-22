@@ -57,6 +57,7 @@ interface FxStripProps {
   fxPageOpen?: boolean; // PHONE: the bank is currently ON its FX page (so the panel needs a way out)
   onCloseFx?: () => void; // PHONE: leave the FX page, back to the control surface
   ctlRef?: MutableRefObject<FxStripCtl | null>; // hardware (FLX BEAT FX) drives selection + add-mode
+  locked?: boolean; // watch-only deck: the rack may be READ and its tabs picked, never changed
 }
 
 // What the FLX BEAT FX section drives on a strip. Fixed-membership rack → no add/remove; the
@@ -88,7 +89,15 @@ function flyFrom(el: HTMLElement): { anchor: FlyAnchor } {
   return { anchor: { left: menu?.left ?? r.left, right: menu?.right ?? r.right, top: r.top } };
 }
 
-export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, onOpenFx, fxPageOpen, onCloseFx, ctlRef }: FxStripProps) {
+export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, onOpenFx, fxPageOpen, onCloseFx, ctlRef, locked = false }: FxStripProps) {
+  // ★ WATCH-ONLY IS ENFORCED AT THE MUTATORS, not at the surface. A listener needs to SEE the
+  // host's rack — pick a tab, turn to the FX page — and `.bank.locked { pointer-events: none }`
+  // took that away with everything else. Opening a hole in that blanket means the blanket is no
+  // longer the guard, so every function below that CHANGES the rack refuses while locked, and the
+  // ones that only change what this device is LOOKING AT (select, the page turn) stay live. This
+  // is the same lesson twice over: DeckLane's drop and SongOverview's drop were each unreachable
+  // only because something sat over them, which is not a guard. Hardware (the FLX knobs, the
+  // gamepad) reaches these same functions, so this gates that path too.
   const emit = useEmit();
   const refresh = useRefresh();
   const [sel, setSel] = useState(0); // selected rack index
@@ -376,12 +385,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
    *  takes stems from every other chain in the SAME act, so a sweep that claims all four is one
    *  re-partition and one rebuild, not four. */
   const setChainStems = (m: number, id = selChainId) => {
+    if (locked) return; // watch-only
     const c = deck.fxChain(id);
     if (!c || c.master) return;
     deck.setFxChainStems(id, m);
     refresh();
   };
   const addChain = () => {
+    if (locked) return; // watch-only
     const c = deck.addFxChain(`CHAIN ${chains.filter((x) => !x.master).length + 1}`);
     setSelChainId(c.id);
     refresh();
@@ -389,6 +400,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   /** Give a device to a chain. Kinds are unique WITHIN a chain, free ACROSS them — so this never
    *  takes anything from anyone: it BUILDS one here. */
   const addDeviceToChain = (kind: FxKind, id = selChainId, preset?: { name: string; params: Record<string, number> }) => {
+    if (locked) return; // watch-only
     const d = deck.addFxTo(id, kind);
     if (!d) return;
     // The picker's cursor is the preset's NAME now, like everywhere else — it used to hand down a
@@ -409,12 +421,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
    *  EQ is the channel EQ that every eq* ControlParam, the session sync and the EQ throw address,
    *  so pulling it out would leave the whole deck's EQ driving something nothing can hear. */
   const removeDeviceFromChain = (kind: FxKind, id = selChainId) => {
+    if (locked) return; // watch-only
     const gone = deck.removeFxFrom({ chain: id, kind });
     broadcastRack();
     refresh();
     return gone;
   };
   const removeChain = (id: string) => {
+    if (locked) return; // watch-only
     if (deck.removeFxChain(id)) {
       setSelChainId("master");
       broadcastRack();
@@ -478,6 +492,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
 
   // Drag a tab to reorder the chain. The dragged device stays selected as it moves.
   const reorder = (from: number, to: number) => {
+    if (locked) return; // watch-only
     if (from === to) return;
     deck.moveFx(from, to);
     broadcastRack();
@@ -489,6 +504,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   /** Step the SELECTED device one place along its chain. The one implementation of "reorder",
    *  shared by the hardware FX SELECT knob, the ◀ ▶ menu acts (touch) and the drag (mouse). */
   const moveSelBy = (dir: number) => {
+    if (locked) return; // watch-only
     const c = deck.fxChain(deck.fxFocus);
     if (!c) return;
     const here = c.devices.indexOf(deck.fxDeviceAt(cur) as never);
@@ -793,12 +809,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     setMenu({ slot, x: e.clientX, y: e.clientY });
   };
   // Touch has no right-click: long-press a tab to open its preset menu (was desktop-only).
-  const tabLong = useLongPress<number>((slot, x, y) => { tabDrag.cancel(); cancelMenuTimer(); select(slot); setMenu({ slot, x, y }); });
+  const tabLong = useLongPress<number>((slot, x, y) => { tabDrag.cancel(); cancelMenuTimer(); select(slot); if (locked) return; setMenu({ slot, x, y }); });
   // Touch has no right-click: long-press a chain chip for the same menu.
-  const chainLong = useLongPress<string>((id, x, y) => { chainDrag.cancel(); openChainMenu(id, x, y); });
+  const chainLong = useLongPress<string>((id, x, y) => { chainDrag.cancel(); if (locked) return; openChainMenu(id, x, y); });
   // Sync after a param change: the EQ rides the eq* ControlParams (emitControls), every other
   // device rides the fxRack snapshot (params + bypass).
   const syncDevice = (d: { kind: FxKind }) => {
+    if (locked) return; // watch-only
     if (d.kind === "eq") emitControls(id);
     else broadcastRack();
   };
@@ -809,6 +826,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     if (d.kind === "eq") deck.armEqPreset({ name, params: params ?? d.snapshotParams() });
   };
   const applyPreset = (slot: number, p: { name: string; params: Record<string, number> }) => {
+    if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
     // Wet/dry (mix) is a LIVE performance control, independent of the preset — leave it alone so
@@ -825,6 +843,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
    *  order. Nothing is taken from another chain — kinds are unique within a chain and free across
    *  them, so a recall creates instances rather than moving anyone else's. */
   const applyChainPreset = (id: string, p: ChainPreset) => {
+    if (locked) return; // watch-only
     const c = deck.fxChain(id);
     if (!c) return;
     for (const d of [...c.devices]) deck.removeFxFrom({ chain: id, kind: d.kind });
@@ -838,6 +857,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
 
   const applyDefault = (slot: number) => {
+    if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
     deck.resetFxParamsAt(slot);
@@ -856,6 +876,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
    *  stopped meaning anything the moment the list became reorderable, groupable and deletable —
    *  and would have silently browsed to the wrong preset rather than failing. */
   const applyPresetNamed = (slot: number, p: { name: string; params: Record<string, number> }) => {
+    if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (d) presetNameRef.current[d.kind] = p.name;
     applyPreset(slot, p);
@@ -867,6 +888,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // Shift = hard kill: skip a delay/reverb's ring-out and cut immediately (BaseFxDevice.setBypass's
   // `hard` flag). EQ has no tail to preserve, so it ignores the modifier entirely.
   const toggleBypass = (e: React.MouseEvent) => {
+    if (locked) return; // watch-only
     if (!selDev) return;
     closeMenu(); // toggling bypass dismisses the preset browse
     if (isEq) {

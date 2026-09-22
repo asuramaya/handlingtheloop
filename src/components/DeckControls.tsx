@@ -150,7 +150,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // True when the deck is parked in a SHIFTED-layer mode (ROLL/GLOBAL/…) — used to persistently tint
   // the bank so it's obvious you're on the second layer even after releasing shift.
   const inShiftedMode = deck.padMode === "roll" || deck.padMode === "global" || deck.padMode === "fx2";
+  // ★ WATCH-ONLY IS GUARDED HERE, NOT BY THE CLASS. `.bank.locked { pointer-events: none }` and
+  // the stage shield were all that stopped a listener working this bank, and a class that happens
+  // to sit over a handler is not a guard — the same shape found in DeckLane's drop, SongOverview's
+  // drop, FxStrip's mutators and the crossfader. Most of these cannot reach the session (App's
+  // emit is gated on room.controlling), but they change what THIS device plays, and the operator's
+  // rule is that performers and listeners stay in sync — so local divergence is the violation.
+  // The REMOTE path is untouched: a follower applies the host's padMode and FX-pad throws through
+  // boardActions/fxPads, never through these pointer handlers.
   const changePadMode = (m: PadMode) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     deck.setPadMode(m);
     try {
       localStorage.setItem(PAD_MODE_KEY, m);
@@ -169,8 +178,13 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const [smpMenu, setSmpMenu] = useState<{ i: number; x: number; y: number } | null>(null);
   const glbFileInput = useRef<HTMLInputElement>(null);
   const glbPickPad = useRef<number | null>(null);
-  const openGlbPicker = (i: number) => { glbPickPad.current = i; glbFileInput.current?.click(); };
+  const openGlbPicker = (i: number) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
+    glbPickPad.current = i;
+    glbFileInput.current?.click();
+  };
   const onGlbFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     const f = e.target.files?.[0];
     const i = glbPickPad.current;
     e.target.value = "";
@@ -179,6 +193,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // Press a LOCAL sample pad: empty (track loaded) → grab a region; filled → trigger (gate =
   // hold, loop = toggle, one-shot = retrigger). Mirrors the global strip's pad behaviour.
   const smpDown = (pad: SamplerPad) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (!sampler) return;
     if (pad.kind === "empty") {
       if (pad.hasTrack && !shift) { sampler.assignRegion(pad.index); refresh(); }
@@ -190,13 +205,15 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     refresh();
   };
   const smpUp = (pad: SamplerPad) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (sampler && pad.mode === "gate") { sampler.release(pad.index); refresh(); }
   };
   // Touch long-press on a sample pad opens its config menu — the right-click equivalent, which was
   // desktop-only (so inaccessible on touch). Shared by SMP + GLBL; tap still triggers immediately.
-  const smpLong = useLongPress<SamplerPad>((pad, x, y) => { if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x, y }); });
+  const smpLong = useLongPress<SamplerPad>((pad, x, y) => { if (locked) return; if (pad.kind !== "empty") setSmpMenu({ i: pad.index, x, y }); });
   // Press a GLOBAL pad: empty → file picker; filled → trigger (SHIFT = clear). Same grammar as SMP.
   const glbDown = (pad: SamplerPad) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (!sampler) return;
     if (pad.kind === "empty") { openGlbPicker(pad.index); return; }
     if (shift) { sampler.clearPad(pad.index); refresh(); return; }
@@ -212,6 +229,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // panel in the rack below, and a long-press on an FX pad cannot open a menu because a long press
   // IS the momentary throw.)
   const fxReveal = (e: React.MouseEvent, slot: number) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     e.preventDefault();
     const kind = padsForDeck(deck)[slot]?.kind;
     if (kind) fxCtlRef?.current?.openMenu(kind, e.clientX, e.clientY);
@@ -219,6 +237,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // The gesture itself lives in fxPads (shared by touch, keyboard and MIDI) — this is just the
   // pointer transport for it.
   const fxPadDown = (e: React.PointerEvent, slot: number) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const { fired, repeat, kind } = fxPadPress(deck, id, slot);
@@ -230,6 +249,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     refresh();
   };
   const fxPadUp = (slot: number, el?: HTMLElement) => {
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (fxPadRelease(deck, id, slot)) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
     // ★ Drop the focus a click leaves behind. Chrome shows :focus-visible on the last-clicked
     // element the moment you touch the KEYBOARD — so clicking a pad and then playing the bank

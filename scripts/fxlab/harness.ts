@@ -2543,3 +2543,44 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   }
   return rows;
 };
+
+// ★ HEADROOM PATH — is the Settings trim really BEFORE the master limiter, in the running engine?
+//
+// 1479574 added a gain node between the master and both limiter paths, and shipped read-verified:
+// the 1.88 dB / 0.02 dB numbers behind it came from the harness's OWN trim node in --master-duck,
+// not from this one. Different node, different graph — exactly the gap that made the offline
+// master-duck run wrong (489901b3). So it gets its own observation on the real engine.
+//
+// The observable is the limiter's own gain reduction (engine.masterGr). If the trim sits BEFORE the
+// limiter, pulling it down must take the limiter out of reduction on the same loud material. If it
+// sat after — or nowhere — the limiter would see the same peaks and keep reducing.
+(globalThis as unknown as { fxlabHeadroomPath: () => Promise<{ name: string; headroomDb: number; grDb: number }[]> }).fxlabHeadroomPath = async () => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const rows: { name: string; headroomDb: number; grDb: number }[] = [];
+  for (const [name, db] of [["no headroom", 0], ["trim -6 dB", -6], ["trim -20 dB", -20]] as const) {
+    const eng = new AudioEngine();
+    await eng.ensureWorklets();
+    eng.resume();
+    await new Promise((r) => setTimeout(r, 200));
+    const sr = eng.ctx.sampleRate;
+    const buf = eng.ctx.createBuffer(2, Math.round(sr * 2), sr);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < d.length; i++) d[i] = 0.98 * Math.sin((2 * Math.PI * 220 * i) / sr); // hot, well over the ceiling
+    }
+    eng.deckA.setBuffer(buf);
+    eng.setMasterHeadroomDb(db);
+    eng.deckA.play();
+    // Read the worst reduction over a second of real playback: the worklet posts GR back roughly
+    // every 85 ms, so one glance could land between reports and read 0 for the wrong reason.
+    let gr = 0;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      gr = Math.max(gr, eng.masterGr);
+    }
+    eng.deckA.pause();
+    rows.push({ name, headroomDb: db, grDb: gr });
+    await eng.ctx.close();
+  }
+  return rows;
+};

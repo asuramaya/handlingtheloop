@@ -69,6 +69,7 @@ function parseArgs(argv) {
       case "--gate-align": a.gateAlign = true; break;
       case "--master-duck": a.masterDuck = true; break;
       case "--sidechain-repatch": a.sidechainRepatch = true; break;
+      case "--headroom-path": a.headroomPath = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -356,6 +357,18 @@ async function main() {
       // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
       console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
       process.exitCode = worst < -100 ? 0 : 1;
+      return;
+    }
+
+    if (args.headroomPath) {
+      const rows = await page.evaluate(() => globalThis.fxlabHeadroomPath());
+      console.log("\n  HEADROOM PATH — the master limiter's own gain reduction on identical hot material:\n");
+      for (const r of rows) console.log(`   ${r.name.padEnd(14)} headroom ${String(r.headroomDb).padStart(3)} dB   limiter GR ${f(r.grDb, 2).padStart(6)} dB`);
+      const hot = rows.find((r) => r.headroomDb === 0);
+      const quiet = rows.find((r) => r.headroomDb === -20);
+      const ok = (hot?.grDb ?? 0) > 1 && (quiet?.grDb ?? 1) < 0.1;
+      console.log(`\n   ${ok ? "\u2713 the trim is BEFORE the limiter \u2014 pulling it down takes the limiter out of reduction" : "\u2717 inconclusive: the limiter did not reduce at all, or the trim did not reach it"}\n`);
+      process.exitCode = ok ? 0 : 1;
       return;
     }
 

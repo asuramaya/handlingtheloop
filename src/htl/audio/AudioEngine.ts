@@ -78,6 +78,7 @@ export class AudioEngine {
   private readonly musicBus: GainNode; // decks + region samples sum here → master; the mic auto-duck modulates its gain
   private readonly master: GainNode;
   private readonly headroom: GainNode;
+  private readonly masterOut: GainNode; // post-limiter: what leaves the app, and what a capture records
   // ★ THE MASTER'S OWN METER TAP. Post master-volume, PRE-limiter: what you asked for, before the
   // ceiling takes any of it back — `masterGr` says how much it took, and the two together are the
   // whole story of the output. Its own analyser, so a master meter never has to reach into a deck's
@@ -151,9 +152,19 @@ export class AudioEngine {
     // report — and 3 dB of trim here removes it. Everything downstream (both limiters) takes its
     // input from this node, so there is exactly one place the drive is decided.
     this.headroom = this.ctx.createGain();
+    // ★ ONE STABLE NODE AFTER THE CEILING — `masterOut` — and everything that CAPTURES the mix taps
+    // it. The limiter itself is swapped at runtime (the native one here, replaced by the worklet
+    // brickwall once the modules land), so it cannot be a tap point; this node survives the swap.
+    // Capture used to tap `master`, i.e. BEFORE the limiter: a two-deck mix peaking over 0 dBFS
+    // (measured at 1.348 with no limiter in the path — fxlab --master-duck) was written into a take
+    // by an encoder that CLAMPS to ±1 (encodeWav.ts:38), so what the DJ heard was a controlled
+    // ceiling and what they got back was hard clipping. The ring recorder's own comment already
+    // called its tap "the as-heard mix" while sitting pre-limiter; as-heard is HERE.
+    this.masterOut = this.ctx.createGain();
     this.master.connect(this.headroom);
     this.headroom.connect(this.limiter);
-    this.limiter.connect(this.ctx.destination);
+    this.limiter.connect(this.masterOut);
+    this.masterOut.connect(this.ctx.destination);
     this.masterMeter = this.ctx.createAnalyser();
     this.masterMeter.fftSize = 1024;
     this.masterMeter.smoothingTimeConstant = 0; // the UI owns its ballistics, as every other meter here does
@@ -296,7 +307,7 @@ export class AudioEngine {
         /* wasn't connected */
       }
       this.headroom.connect(lim.input);
-      lim.output.connect(this.ctx.destination);
+      lim.output.connect(this.masterOut); // …still through the one post-ceiling node, so taps survive the swap
       this.masterLimiter = lim;
     } catch (e) {
       console.warn("[htl] master limiter unavailable, keeping the native compressor:", e);
@@ -462,7 +473,7 @@ export class AudioEngine {
       try {
         const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);
         const node = new AudioWorkletNode(this.ctx, "ringrec", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { size } });
-        this.master.connect(node); // tap the as-heard mix (post-crossfade, pre-limiter)
+        this.masterOut.connect(node); // the as-heard mix: post-crossfade AND post-ceiling
         this.ringKeep = this.ctx.createGain();
         this.ringKeep.gain.value = 0; // silent — only keeps the node in the pull graph
         node.connect(this.ringKeep).connect(this.ctx.destination);
@@ -748,7 +759,10 @@ export class AudioEngine {
   // ── Capture (any node → AudioBuffer for a sampler pad) ───────────────────────────────────
   /** Arm + start recording a source: "deckA" | "deckB" | "mic" | "master". Auto-stops at maxSec. */
   startCapture(source: "deckA" | "deckB" | "mic" | "master", maxSec = 30): boolean {
-    const node: RecordSource = source === "deckA" ? this.deckA.output : source === "deckB" ? this.deckB.output : source === "mic" ? this.mic.tap : this.master;
+    // "master" records what the room heard — post-limiter. Tapping `master` instead handed the WAV
+    // encoder samples above ±1, which it clamps: hard clipping in the take, from a mix that never
+    // clipped on the way out.
+    const node: RecordSource = source === "deckA" ? this.deckA.output : source === "deckB" ? this.deckB.output : source === "mic" ? this.mic.tap : this.masterOut;
     this.recorder.setSource(node);
     return this.recorder.start(maxSec);
   }

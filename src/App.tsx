@@ -896,7 +896,16 @@ function AppBody() {
     // A shrinking range can strand a deck's tempo outside the new ± limit — the knob ring
     // would just clamp its display and go visually dead-ended while the deck kept playing
     // the old, now out-of-range value. Snap it to the new limit instead of leaving that split.
+    //
+    // ★ BUT ONLY ON A DECK THIS DEVICE MAY DRIVE. The keyboard gates on the deck you AIMED at
+    // (canDriveDeckRef, in the key handler) — and this action ignores that deck and touches BOTH.
+    // So a STAGE DJ holding deck A could press the tempo-range key, legally, and have it snap the
+    // OTHER DJ's deck locally while the server refused the matching intent (DjRoom.canDrive is
+    // deck-scoped): a silent divergence on a deck they do not hold. A per-deck gate on the button
+    // is not a gate on what the button DOES. The other deck's owner clamps their own, on their own
+    // device, from their own copy of this setting.
     (["A", "B"] as const).forEach((id) => {
+      if (!canDriveDeckRef.current(id)) return;
       const deck = engine.deck(id);
       const clamped = Math.max(-next, Math.min(next, deck.tempo));
       if (clamped !== deck.tempo) {
@@ -911,7 +920,9 @@ function AppBody() {
     const i = PITCH_RANGES.indexOf(settings.pitchRange);
     const next = PITCH_RANGES[(i + 1) % PITCH_RANGES.length];
     setSettings((s) => ({ ...s, pitchRange: next }));
+    // Same rule as cycleTempoRange: never clamp a deck this device does not hold.
     (["A", "B"] as const).forEach((id) => {
+      if (!canDriveDeckRef.current(id)) return;
       const deck = engine.deck(id);
       const clamped = Math.max(-next, Math.min(next, deck.pitch));
       if (clamped !== deck.pitch) {

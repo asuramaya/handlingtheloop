@@ -337,6 +337,13 @@ export type ServerMsg =
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }
+  // ★ "YOU HOLD THE BOARD NOW — SAY WHAT IS ON IT." Sent to a device at the moment it TAKES the
+  // anchor slot. `state` is accepted only from the anchor, so a publish made a moment before that
+  // slot arrived is discarded in silence and NOTHING ever asks for it again: the room then serves
+  // every later joiner whatever the previous session left. Measured: a host's first ~4 s is a window
+  // where a tuning-in listener adopts an empty board (thread d4a56d30). The ask costs nothing in the
+  // publish sequence itself — the client answers with the snapshot it already holds.
+  | { t: "republish" }
   // Chat (F5): a live line to everyone, the recent backlog on join, and a private "you were
   // muted/unmuted" signal to the affected device.
   | { t: "chat"; msg: ChatMsg }

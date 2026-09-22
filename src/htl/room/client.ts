@@ -248,8 +248,12 @@ export class RoomClient {
     this.send({ t: "tick", decks });
   }
   publishState(snapshot: unknown): void {
+    // Kept so the room can ask for it again — see the `republish` case. This is the board as the app
+    // last described it, which is exactly what a freshly-claimed anchor owes the room.
+    this.lastPublished = snapshot;
     this.send({ t: "state", snapshot });
   }
+  private lastPublished: unknown = undefined;
   sendLyrics(deck: DeckId, videoId: string, lines: unknown, source: string): void {
     this.send({ t: "lyrics", deck, videoId, lines, source });
   }
@@ -526,6 +530,13 @@ export class RoomClient {
         if (msg.chatSlow !== undefined) this.h.chatSlow?.(msg.chatSlow);
         if (msg.chatFollowers !== undefined) this.h.chatFollowers?.(msg.chatFollowers);
         if (msg.muted) this.h.mutedList?.(msg.muted);
+        break;
+      case "republish":
+        // The room has just handed us the anchor slot and is asking what is on our board. Answer
+        // with the last snapshot the app published — a publish it made before the slot arrived was
+        // dropped by the server in silence, and this is the only thing that asks for it again.
+        // Nothing to say (we have never published) is a legitimate answer: stay quiet.
+        if (this.lastPublished !== undefined) this.send({ t: "state", snapshot: this.lastPublished });
         break;
       case "role":
         this.anchorId = msg.anchorId;

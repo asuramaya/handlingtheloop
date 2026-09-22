@@ -969,3 +969,42 @@ describe("DjRoom catch-up reports its size", () => {
     expect(line).toContain("bytes=0");
   });
 });
+
+// ★ THE WINDOW THIS CLOSES. `state` is accepted only from the anchor, so a publish a device makes a
+// moment before that slot arrives is dropped in silence — and nothing has ever asked for it again,
+// so the room serves the previous session's board to every later joiner. Measured on the live rig as
+// the host's first ~4 s (thread d4a56d30). The room now asks the device it just handed the slot to.
+describe("DjRoom asks a new anchor to republish", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+  const asks = (ws: FakeWs) => ws.sent.map((m) => JSON.parse(m)).filter((m) => m.t === "republish").length;
+
+  it("asks the device that just took the slot", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" }); // claims a vacant anchor
+    expect(asks(host)).toBe(1);
+  });
+
+  it("asks the NEW anchor when the slot moves — the reload case this exists for", async () => {
+    // The host holds the slot, its tab goes away (a reload mints a NEW per-tab device id), and the
+    // returning device claims the vacant slot. That returning device is the one whose early publish
+    // was dropped, and the one that has to be asked.
+    const host1 = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host1, { t: "join" });
+    await h.close(host1);
+    const host2 = (await h.connect({ device: "host2", host: true })).ws!;
+    await h.send(host2, { t: "join" });
+    expect(asks(host2), "the device that now owns the board is the one that owes a snapshot").toBe(1);
+    expect(asks(host1), "a closed socket is never written to").toBe(1); // its own claim, nothing since
+  });
+
+  it("control: a device that never takes the slot is never asked", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const watcher = (await h.connect({ device: "g2", invited: true })).ws!;
+    await h.send(watcher, { t: "join" }); // joins, but the host keeps the anchor
+    expect(asks(watcher)).toBe(0);
+  });
+});

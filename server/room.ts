@@ -71,6 +71,9 @@ const CACHE_KIND: Record<ServerMsg["t"], CacheKind> = {
   requests: "live",
   presence: "live",
   "stage-self": "live",
+  // A per-socket ASK, addressed to one device at one instant — replaying it to a late joiner on a
+  // relay shard would ask the wrong device for a board it does not own.
+  republish: "live",
   chat: "live",
   "chat-history": "live",
   muted: "live",
@@ -1435,6 +1438,12 @@ export class DjRoom {
     console.warn(`[htl-room] anchor: ${this.anchorId ?? "none"} -> ${device ?? "none"}`);
     this.anchorId = device;
     await this.state.storage.put("anchor", device);
+    // ★ ASK THE NEW ANCHOR WHAT IS ON ITS BOARD. `state` is accepted only from the anchor, so a
+    // publish this device made a moment before the slot arrived was DROPPED here in silence, and
+    // nothing has ever asked for it again — the room then serves that staleness to every later
+    // joiner. Measured window: a host's first ~4 s (thread d4a56d30). Idempotent and cheap: the
+    // client answers with the snapshot it already holds, or stays quiet if it has never published.
+    if (device) for (const t of this.state.getWebSockets(device)) t.send(JSON.stringify({ t: "republish" } satisfies ServerMsg));
     this.broadcast({ t: "role", anchorId: device }, except);
     this.broadcastPresence(except);
   }

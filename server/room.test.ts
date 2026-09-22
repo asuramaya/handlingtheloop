@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { DjRoom } from "./room";
 import type { Attachment, Ws, DurableObjectState } from "./roomState";
+import { DO_VALUE_CAP } from "../src/htl/room/doLimits";
 
 class FakeWs implements Ws {
   sent: string[] = [];
@@ -74,7 +75,18 @@ class FakeState implements DurableObjectState {
     // mutation of the same in-memory object retroactively change what was "persisted" — so a test
     // asserting that both decks reached disk PASSED against code that wrote only one. The fake was
     // right where the real thing is wrong, which is the same defect roomSim's FakeDeck had.
-    put: async (k: string, v: unknown) => void this.store.set(k, structuredClone(v)),
+    //
+    // ★ AND REFUSE AN OVERSIZED VALUE, as the platform does. A real DO throws when a single value
+    // exceeds 128 KiB; this fake accepted anything, which is the FORGIVING direction — the one
+    // where the desk says yes and production says no. room.ts has fourteen put sites and only two
+    // measure themselves against the cap (lyrics explicitly, stemviews via a clamp derived from
+    // it); the rest are small by construction, and "by construction" is the kind of claim that
+    // should be held by the fake rather than by a sentence. Audit of 8c31a299.
+    put: async (k: string, v: unknown) => {
+      const bytes = JSON.stringify(v ?? null).length;
+      if (bytes > DO_VALUE_CAP) throw new RangeError(`DO value for "${k}" is ${bytes} bytes, over the ${DO_VALUE_CAP} cap`);
+      this.store.set(k, structuredClone(v));
+    },
     delete: async (k: string) => this.store.delete(k),
     getAlarm: async () => this.alarmAt,
     setAlarm: async (t: number) => void (this.alarmAt = t),
@@ -1006,5 +1018,90 @@ describe("DjRoom asks a new anchor to republish", () => {
     const watcher = (await h.connect({ device: "g2", invited: true })).ws!;
     await h.send(watcher, { t: "join" }); // joins, but the host keeps the anchor
     expect(asks(watcher)).toBe(0);
+  });
+});
+
+// ★ WHAT A 128 KiB VALUE CAP ACTUALLY DOES TO A LIVE ROOM — the audit half of 8c31a299.
+//
+// FakeState used to accept any value, so nothing in this file could tell the difference between a
+// record that persists and one the platform refuses. That is the forgiving direction: the desk says
+// yes and production says no. With the cap enforced, these ask what the room DOES about it.
+//
+// room.ts has fourteen storage.put sites and only two measure themselves against the cap (lyrics
+// explicitly, stemviews through a clamp derived from it). The snapshot is the interesting one,
+// because it is CLIENT-SUPPLIED and therefore unbounded by anything on this side.
+describe("DjRoom under the DO value cap", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  // A snapshot a real host could plausibly build: lots of decks/FX state, JSON well over 128 KiB.
+  const fatSnapshot = () => ({ decks: { A: { videoId: "FAT", pad: "x".repeat(DO_VALUE_CAP) }, B: {} } });
+
+  it("the fake now REFUSES what the platform refuses — otherwise nothing below means anything", async () => {
+    await expect(h.state.storage.put("snapshot", fatSnapshot())).rejects.toThrow(/over the \d+ cap/);
+    expect(h.state.store.has("snapshot")).toBe(false);
+  });
+
+  it("an oversized snapshot still RELAYS — the live room is served from memory, not from disk", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "state", snapshot: fatSnapshot() });
+    const relayed = guest.sent.map((m) => JSON.parse(m)).filter((m) => m.t === "state");
+    expect(relayed.some((m) => m.snapshot?.decks?.A?.videoId === "FAT")).toBe(true);
+  });
+
+  it("…and does NOT tear the socket down — a persist failure must never cost the connection", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await expect(h.send(host, { t: "state", snapshot: fatSnapshot() })).resolves.not.toThrow();
+    expect(host.closed).toBe(false);
+  });
+
+  // ★ THE DEGRADATION NOBODY HAD NAMED. The relay keeps working, so the room looks healthy — but
+  // the board never reaches disk, and a cold restart serves whatever was persisted BEFORE it. The
+  // in-memory copy is doing all the work and nothing says so.
+  //
+  // ★ AND THE TIME TRAVEL IS LOAD-BEARING, not decoration. The snapshot persist is throttled to one
+  // write per PERSIST_MIN_MS (10 s). Written without advancing the clock, the second publish is
+  // skipped by the THROTTLE and never reaches the cap at all — the assertion still passes, for a
+  // reason that has nothing to do with size. Caught by asking what else could make this row green.
+  it("silently persists NOTHING, so a cold restart loses the board it was still relaying", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const host = (await h.connect({ device: "host1", host: true })).ws!;
+      await h.send(host, { t: "join" });
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "SMALL" }, B: {} } } });
+      // The control: a normal snapshot DOES reach disk, so the absence below is the size and
+      // nothing else. Without this row the next assertion could pass on a room that never persists.
+      expect((h.state.store.get("snapshot") as { decks: { A: { videoId: string } } }).decks.A.videoId).toBe("SMALL");
+      vi.setSystemTime(1_000_000 + 30_000); // past the throttle, so the next put is genuinely attempted
+      await h.send(host, { t: "state", snapshot: fatSnapshot() });
+      expect((h.state.store.get("snapshot") as { decks: { A: { videoId: string } } }).decks.A.videoId).toBe("SMALL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The proof that the row above is about SIZE: same two publishes, same clock advance, a small
+  // second snapshot — which DOES overwrite. If this ever goes red the throttle changed, and the
+  // test above stops meaning what it says.
+  it("…while a normal second snapshot past the throttle overwrites the first", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      const host = (await h.connect({ device: "host1", host: true })).ws!;
+      await h.send(host, { t: "join" });
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "FIRST" }, B: {} } } });
+      vi.setSystemTime(2_000_000 + 30_000);
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "SECOND" }, B: {} } } });
+      expect((h.state.store.get("snapshot") as { decks: { A: { videoId: string } } }).decks.A.videoId).toBe("SECOND");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

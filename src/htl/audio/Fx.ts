@@ -667,10 +667,20 @@ export abstract class BaseFxDevice implements FxDevice {
   protected readonly params: FxParam[] = [];
   private _bypassed = false;
   private _mix: number;
-  // Activation gate (see applyWet): `wet → output` is the ONLY edge from the subclass's
-  // processing graph to the destination. When the effect is off we cut it so the audio
-  // thread prunes the whole wet subgraph; a generation counter cancels a pending cut if
+  // Activation gate (see applyWet): when the effect is off we cut EVERY edge out of the wet bus so
+  // the audio thread prunes the whole wet subgraph; a generation counter cancels a pending cut if
   // the effect is reactivated first.
+  // ★ EVERY edge, and for two years that meant one edge too few. This said `wet → output` was the
+  // ONLY path out of the subclass's graph. It was not: `wet → wetMeter` is minted in the
+  // constructor below and was never cut, and AN ANALYSER IS A PATH — a live AudioContext keeps the
+  // entire upstream of an AnalyserNode scheduled even when the analyser itself reaches nothing.
+  // Measured, with both controls, in scripts/liveprune.mjs: a counting worklet with its output cut
+  // runs 0 process() calls/s, hang a bare analyser off it and it runs 360, remove the analyser and
+  // it returns to 0. So a bypassed comp or reverb kept its worklet running at ~95% of active cost —
+  // which is the 94.7% Metron measured through a real CompFx and the 92.6% he measured offline,
+  // three independent numbers that were all reading the same meter.
+  // (An AnalyserNode has no outputs, so `wetMeter.disconnect()` is a no-op. The edge can only be
+  // severed from the source: `wet.disconnect(wetMeter)`.)
   private _wetConnected = true;
   private _wetGen = 0;
   // A passive tap on the wet bus itself — not a param, the actual signal — so a UI can fade
@@ -710,6 +720,14 @@ export abstract class BaseFxDevice implements FxDevice {
    *  release — the same shape any VU/peak meter uses to read as a graceful fade, not noise), so
    *  it still tracks every real peak, it just doesn't snap back to the floor between them. */
   get wetLevel(): number {
+    // Pruned → the wet bus reaches nothing and the meter is no longer fed, so its buffer holds
+    // whatever was in flight at the cut forever. Report the truth (silence) rather than a frozen
+    // last frame, which is what a UI fade would otherwise stall on.
+    if (!this._wetConnected) {
+      this._wetEnvelope = 0;
+      this._wetEnvelopeT = 0;
+      return 0;
+    }
     this.wetMeter.getFloatTimeDomainData(this.wetMeterBuf);
     let peak = 0;
     for (const v of this.wetMeterBuf) {
@@ -746,6 +764,7 @@ export abstract class BaseFxDevice implements FxDevice {
     this._wetGen++; // cancel any pending disconnect
     if (this._wetConnected) return;
     this.wet.connect(this.output);
+    this.wet.connect(this.wetMeter);
     this._wetConnected = true;
   }
   // pruneAfterMs: how long after the gain ramp starts before physically disconnecting. applyWet()
@@ -760,6 +779,11 @@ export abstract class BaseFxDevice implements FxDevice {
       if (gen !== this._wetGen || !this._wetConnected) return;
       try {
         this.wet.disconnect(this.output);
+      } catch {
+        /* already gone */
+      }
+      try {
+        this.wet.disconnect(this.wetMeter); // the second edge — see the gate's note above
       } catch {
         /* already gone */
       }

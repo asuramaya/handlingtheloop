@@ -22,6 +22,19 @@
 // that rig degrades to a pass-through. Playwright's Chromium does, with the autoplay flag, and it
 // must load a SECURE ORIGIN (about:blank has no ctx.audioWorklet at all).
 //
+// ★ AND THEN THE SECOND QUESTION, which is the one that turned out to matter. Metron ran the same
+// binary method live with a REAL CompFx in the path (2c191cd) and could not get the counter to zero
+// even with the device's output SEVERED — so his rig could not observe a prune at all, and his
+// bypassed row was unreadable rather than negative. The difference between his chain and the one
+// above is not the renderer and not the compressor: it is that every BaseFxDevice hangs a
+// permanently-connected AnalyserNode off its wet bus (Fx.ts, `this.wet.connect(this.wetMeter)`),
+// and applyWet only ever cuts `wet → output`. So this probe asks the mechanism question directly,
+// on a synthetic chain where the analyser is the ONLY thing that changes between rows.
+//
+// (An AnalyserNode has no outputs, so `analyser.disconnect()` is a no-op — the edge can only be
+// severed from the SOURCE side, `wet.disconnect(wetMeter)`. That is why cutting the meter looked
+// like it changed nothing.)
+//
 //   node scripts/liveprune.mjs            # needs the dev worker up for the secure origin
 import { chromium } from "playwright-core";
 import { existsSync, readdirSync } from "node:fs";
@@ -69,8 +82,19 @@ const r = await page.evaluate(async () => {
   const fullyDetached = await sample(1000);
   node.connect(out); out.connect(ctx.destination);  // the control: does it come BACK?
   const reconnected = await sample(1000);
+
+  // ★ THE SECOND EXPERIMENT: IS AN ANALYSER A PATH? — see the header note. Same counter, same
+  // context; the only thing that changes is whether an AnalyserNode is hanging off it.
+  osc.connect(node);
+  out.disconnect();                                 // no route to the destination at all
+  const cutAgain = await sample(1000);              // must be 0, or the analyser rows mean nothing
+  const analyser = ctx.createAnalyser();
+  node.connect(analyser);                           // the ONLY remaining edge out of the counter
+  const withAnalyser = await sample(1000);
+  node.disconnect(analyser);                        // control: remove it and the counter must stop
+  const analyserRemoved = await sample(1000);
   await ctx.close();
-  return { connected, afterOutputCut, fullyDetached, reconnected };
+  return { connected, afterOutputCut, fullyDetached, reconnected, cutAgain, withAnalyser, analyserRemoved };
 });
 await browser.close();
 
@@ -85,5 +109,22 @@ console.log(`   wet→output CUT    ${String(r.afterOutputCut).padStart(5)}   ${
 console.log(`   fully detached    ${String(r.fullyDetached).padStart(5)}   ${pct(r.fullyDetached)}`);
 console.log(`   reconnected       ${String(r.reconnected).padStart(5)}   ${pct(r.reconnected)}  ← the control: a zero that cannot come back is a broken probe, not a pruned node`);
 const pruned = r.afterOutputCut === 0 && r.reconnected > 0;
-console.log(`\n  ${pruned ? "PRUNED — Fx.setBypass's claim HOLDS in a live context. A bypassed device is free." : "NOT PRUNED — a bypassed device keeps running its processor; the always-armed rack is paying for it."}\n`);
+console.log(`\n  ${pruned ? "PRUNED — a cut output prunes the upstream chain in a live context, with nothing else attached." : "NOT PRUNED — a bypassed device keeps running its processor; the always-armed rack is paying for it."}\n`);
+
+console.log("  …AND IS AN ANALYSER A PATH? (BaseFxDevice never cuts wet→wetMeter)\n");
+console.log(`   cut again         ${String(r.cutAgain).padStart(5)}   ${pct(r.cutAgain)}  ← must be 0 or nothing below is readable`);
+console.log(`   + analyser hung on${String(r.withAnalyser).padStart(5)}   ${pct(r.withAnalyser)}  ← the question`);
+console.log(`   analyser removed  ${String(r.analyserRemoved).padStart(5)}   ${pct(r.analyserRemoved)}  ← the control: it must stop again`);
+if (r.cutAgain !== 0) {
+  console.log("\n  INCONCLUSIVE — the reference row did not reach zero, so this rig cannot see a prune here.\n");
+  process.exit(0);
+}
+const analyserHolds = r.withAnalyser > 0 && r.analyserRemoved === 0;
+console.log(
+  `\n  ${analyserHolds
+    ? "AN ANALYSER IS A PATH — an AnalyserNode with no outputs still keeps its whole upstream scheduled.\n  BaseFxDevice's wet bus keeps one connected forever, so cutting wet→output does NOT prune a\n  bypassed device's wet graph. applyWet's \"the ONLY edge\" is one edge short."
+    : r.withAnalyser === 0
+      ? "AN ANALYSER IS NOT A PATH — an unreachable analyser does not keep its upstream scheduled, so\n  the wet meter is not what kept Metron's CompFx counter running."
+      : "INCONCLUSIVE — the analyser row did not come back down; the control failed."}\n`,
+);
 process.exit(0);

@@ -364,19 +364,28 @@ async function main() {
 
     if (args.codecOvershoot) {
       // Thread 307cb25b: a take measured 0.06 dB ABOVE the master ceiling, which the limiter's code
-      // says cannot happen. This asks whether the RECORDER is the source, with the limiter removed
-      // from the question: a tone hard-capped in JavaScript, straight into the recorder's own tap.
-      const r = await page.evaluate(() => globalThis.fxlabCodecOvershoot());
+      // says cannot happen. Deckard found the recorder, not the limiter: a take was a lossy round
+      // trip. This now measures the SHIPPED capture path against the lossy one it replaced — a tone
+      // hard-capped in JavaScript, straight into the recorder's own tap, limiter nowhere near it.
+      const fixed = await page.evaluate(() => globalThis.fxlabCodecOvershoot(false));
+      const lossy = await page.evaluate(() => globalThis.fxlabCodecOvershoot(true));
       console.log("\n  CODEC OVERSHOOT — does a capture read back above what was put in?\n");
-      console.log(`   encoder                ${r.mime}`);
-      console.log(`   cap (JS-clipped)       ${f(r.cap, 6)}   source peak ${f(r.sourcePeak, 6)}  \u2190 no node can raise this`);
-      console.log(`   decoded take peak      ${f(r.takePeak, 6)}   overshoot ${f(r.overshootDb, 3)} dB`);
-      console.log(`   lossless formats       ${r.lossless.length ? r.lossless.join(", ") : "none offered by this browser"}`);
-      console.log(`   headroom left to 1.0   ${f(20 * Math.log10(1 / r.takePeak), 3)} dB  \u2190 bufferToWav CLAMPS at \u00b11, so this is what a take has left`);
-      const overshoots = r.takePeak > r.cap;
-      console.log(`\n  ${overshoots ? "OVERSHOOT REPRODUCED" : "NO OVERSHOOT"} — a take is a lossy round trip, so a captured peak is ${overshoots ? "NOT" : "still"} a measurement of the mix.`);
-      if (!overshoots) console.log("  The recorder is exonerated; 307cb25b's 0.06 dB is still unexplained and the limiter is back under suspicion.");
-      process.exitCode = 0; // this probe REPORTS; it is not a pass/fail gate
+      console.log(`   cap (JS-clipped)       ${f(fixed.cap, 6)}   source peak ${f(fixed.sourcePeak, 6)}  \u2190 no node can raise this`);
+      for (const [name, r] of [["shipped", fixed], ["CONTROL (lossy)", lossy]]) {
+        console.log(
+          `   ${name.padEnd(16)} ${String(r.mime).padEnd(34)} take peak ${f(r.takePeak, 6)}   overshoot ${f(r.overshootDb, 3).padStart(7)} dB   headroom to 1.0 ${f(20 * Math.log10(1 / r.takePeak), 3)} dB`,
+        );
+      }
+      console.log(`\n   lossless formats here  ${fixed.lossless.length ? fixed.lossless.join(", ") : "none offered by this browser"}`);
+      // The control must FAIL: if hiding the lossless formats does not reproduce the overshoot, the
+      // capture format was never the cause and 307cb25b is unexplained again.
+      const controlOvershoots = lossy.takePeak > lossy.cap * 1.001;
+      const fixedClean = fixed.takePeak <= fixed.cap * 1.001;
+      console.log(
+        `\n   ${!controlOvershoots ? "\u2717 INCONCLUSIVE: the lossy control did NOT overshoot, so this probe cannot see the defect \u2014 the limiter is back under suspicion" : fixedClean ? "\u2713 the lossy control reads back ABOVE its own source and the shipped path does not" : "\u2717 the shipped path still overshoots \u2014 the lossless format did not take"}\n`,
+      );
+      if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
+      process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
       return;
     }
 

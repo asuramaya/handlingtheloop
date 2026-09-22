@@ -2701,7 +2701,7 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
 // exactly the ceiling, played through the same capture path. Nothing in the graph can raise it, so
 // whatever the decoded take reads above `cap` is the codec and nothing else. If this comes back at
 // or below the cap, my explanation is wrong and the limiter is back under suspicion.
-(globalThis as unknown as { fxlabCodecOvershoot: () => Promise<{ cap: number; sourcePeak: number; takePeak: number; overshootDb: number; mime: string; lossless: string[] }> }).fxlabCodecOvershoot = async () => {
+(globalThis as unknown as { fxlabCodecOvershoot: (forceLossy?: boolean) => Promise<{ cap: number; sourcePeak: number; takePeak: number; overshootDb: number; mime: string; lossless: string[] }> }).fxlabCodecOvershoot = async (forceLossy = false) => {
   const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
   const eng = new AudioEngine();
   await eng.ensureWorklets();
@@ -2724,11 +2724,21 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   src.buffer = b;
   src.loop = true;
   // Straight into the recorder's own tap — no decks, no master chain, no limiter.
-  const mime = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.("audio/webm;codecs=opus") ? "audio/webm;codecs=opus (default)" : "unknown";
+  // THE CONTROL, and it is the real code path rather than a mock: with the lossless formats hidden,
+  // Recorder's own picker falls through to the browser default (opus) — exactly what a Safari/iOS
+  // user gets. If the probe reports no overshoot in BOTH rows, the capture format is not the cause
+  // and this explanation of 307cb25b is wrong.
+  const { pickRecorderMime } = await import("../../src/htl/audio/recorderFormat");
+  const realSupported = MediaRecorder.isTypeSupported?.bind(MediaRecorder);
+  if (forceLossy && realSupported) {
+    MediaRecorder.isTypeSupported = ((t: string) => (/pcm|wav|flac/.test(t) ? false : realSupported(t))) as typeof MediaRecorder.isTypeSupported;
+  }
+  const picked = pickRecorderMime(MediaRecorder.isTypeSupported?.bind(MediaRecorder));
+  const mime = picked ?? "browser default (webm/opus on Chromium)";
   // Is a LOSSLESS capture format even on the table here? Reported rather than assumed, because the
   // obvious fix ("record PCM") is only a fix if the browser offers it.
   const lossless = ["audio/webm;codecs=pcm", "audio/wav", "audio/x-wav", "audio/webm;codecs=flac", "audio/ogg;codecs=flac"].filter(
-    (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.(t),
+    (t) => !!realSupported?.(t),
   );
   (eng as unknown as { recorder: { setSource: (n: AudioNode) => void; start: (s: number) => boolean; stop: () => Promise<{ buffer: AudioBuffer } | null> } }).recorder.setSource(src as unknown as AudioNode);
   src.start();
@@ -2743,5 +2753,6 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     for (let i = Math.round(sr * 0.3); i < d.length; i++) takePeak = Math.max(takePeak, Math.abs(d[i]));
   }
   await eng.ctx.close();
+  if (realSupported) MediaRecorder.isTypeSupported = realSupported as typeof MediaRecorder.isTypeSupported;
   return { cap, sourcePeak, takePeak, overshootDb: 20 * Math.log10(takePeak / cap), mime, lossless };
 };

@@ -2,15 +2,17 @@
 // input gain taps whichever node you're sampling (a deck, the mic, the master/PA feed); the tap
 // feeds a MediaStreamDestination → MediaRecorder, and stop() decodes the recording back into an
 // AudioBuffer ready to drop on a pad. MediaRecorder (not a worklet) keeps it dependency-free and
-// universal; the opus round-trip is inaudible for short sampler clips.
+// universal; the capture format is the best LOSSLESS one this browser offers (recorderFormat.ts),
+// falling back to its default where none is.
 import { decodeAudio } from "./decode";
 import { bufferToWav } from "./encodeWav";
+import { pickRecorderMime } from "./recorderFormat";
 
 export type RecordSource = AudioNode | null;
 
 // A finished take: the decoded buffer (immediate playback) + a WAV blob (the upload payload).
-// We record opus/webm (universal to capture) but re-encode the decoded audio to WAV for upload —
-// opus only DECODES on Chromium, so a stored opus clip wouldn't reload on Safari/iOS; WAV does.
+// Whatever we captured in, the decoded audio is re-encoded to WAV for upload — a stored opus (or
+// webm/pcm) clip wouldn't reload on Safari/iOS; WAV does.
 export interface Take {
   buffer: AudioBuffer;
   blob: Blob;
@@ -52,11 +54,20 @@ export class Recorder {
    *  resolves the buffer). No-op if already recording or no source is connected. */
   start(maxSec = 30): boolean {
     if (this.recording || !this.current) return false;
+    // Lossless where the browser offers it: an opus round trip reads back ABOVE what went in
+    // (0.221 dB on a capped sine), and bufferToWav clamps at +/-1, so a lossy take can clip on save
+    // while the limiter was never in reduction. See recorderFormat.ts / thread 307cb25b.
+    const mime = pickRecorderMime(MediaRecorder.isTypeSupported?.bind(MediaRecorder));
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(this.dest.stream);
+      mr = mime ? new MediaRecorder(this.dest.stream, { mimeType: mime }) : new MediaRecorder(this.dest.stream);
     } catch {
-      return false;
+      // A format isTypeSupported() claimed and the constructor then refused: take the default.
+      try {
+        mr = new MediaRecorder(this.dest.stream);
+      } catch {
+        return false;
+      }
     }
     this.chunks = [];
     mr.ondataavailable = (e) => {

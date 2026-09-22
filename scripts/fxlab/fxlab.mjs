@@ -68,6 +68,7 @@ function parseArgs(argv) {
       case "--mod-width": a.modWidth = true; break;
       case "--gate-align": a.gateAlign = true; break;
       case "--master-duck": a.masterDuck = true; break;
+      case "--sidechain-repatch": a.sidechainRepatch = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -355,6 +356,20 @@ async function main() {
       // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
       console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
       process.exitCode = worst < -100 ? 0 : 1;
+      return;
+    }
+
+    if (args.sidechainRepatch) {
+      const rows = await page.evaluate(() => globalThis.fxlabSidechainRepatch());
+      console.log("\n  SIDECHAIN RE-PATCH — after the comp device is REBUILT, is the other deck still wired to its detector?\n");
+      for (const r of rows) {
+        console.log(`   ${r.name.padEnd(18)} re-patched ${r.connected ? "yes" : "NO "}   to the FRESH device ${r.toFresh ? "yes" : "NO "}${r.control ? "   \u2190 control, must be NO" : ""}`);
+      }
+      const armed = rows.find((r) => !r.control);
+      const ctrl = rows.find((r) => r.control);
+      const ok = !!armed?.toFresh && !ctrl?.connected;
+      console.log(`\n   ${ok ? "\u2713 the patch follows the device that exists, and the pre-fix control stays unwired" : "\u2717 inconclusive \u2014 the control did not fail, so this proves nothing"}\n`);
+      process.exitCode = ok ? 0 : 1;
       return;
     }
 

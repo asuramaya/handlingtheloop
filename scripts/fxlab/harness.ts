@@ -2490,3 +2490,56 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   }
   return out;
 };
+
+// ★ SIDECHAIN RE-PATCH — does the cross-deck sidechain survive a device being REBUILT?
+//
+// The defect (ba26fe5): patchSidechains ran at boot and from a callback the engine installed on the
+// comp device itself. A rack rebuild can REPLACE that device — the late worklet repair does exactly
+// that — and the replacement carried the params across but none of the wiring, and had no callback
+// with which to ask. Its sidechain control was then dead for the life of that device, whatever the
+// panel showed. The fix has FxRack announce every re-wire so the engine re-patches.
+//
+// It is unreachable from vitest (a real AudioContext, worklets and two Decks), so it is checked
+// here, on the real engine, by the one observable the fix is about: after the comp is replaced, is
+// the OTHER deck's tap connected to the NEW device's sidechain input? Web Audio cannot be asked
+// what is connected, so the tap's own `connect` is wrapped and the calls are recorded.
+(globalThis as unknown as { fxlabSidechainRepatch: () => Promise<{ name: string; control: boolean; connected: boolean; toFresh: boolean }[]> }).fxlabSidechainRepatch = async () => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const rows: { name: string; control: boolean; connected: boolean; toFresh: boolean }[] = [];
+  // `armed` = the shipped behaviour. `control` = the pre-fix behaviour, reproduced by dropping the
+  // rack's announcement — the one line ba26fe5 added. A fix whose control cannot fail proves nothing.
+  for (const mode of ["armed", "control (pre-fix)"] as const) {
+    const eng = new AudioEngine();
+    await eng.ensureWorklets();
+    eng.resume();
+    await new Promise((r) => setTimeout(r, 150)); // resume() patches from inside its own promise
+    if (mode === "control (pre-fix)") {
+      eng.deckA.rack.onRebuilt = undefined;
+      eng.deckB.rack.onRebuilt = undefined;
+    }
+    const comp = eng.deckA.compDevice;
+    if (!comp) { rows.push({ name: mode, control: mode !== "armed", connected: false, toFresh: false }); continue; }
+    comp.setParam("scSrc", 1); // EXT: the other deck feeds this deck's detector
+    const tap = eng.deckB.sidechainTap as AudioNode & { connect: (...a: never[]) => AudioNode };
+    const seen: AudioNode[] = [];
+    const orig = tap.connect.bind(tap);
+    (tap as { connect: unknown }).connect = (...a: never[]) => {
+      seen.push(a[0] as unknown as AudioNode);
+      return orig(...a);
+    };
+    // THE EVENT UNDER TEST: the comp is replaced exactly as the late worklet repair replaces it.
+    (comp as unknown as { degraded: boolean }).degraded = true;
+    const rebuilt = eng.deckA.rebuildDegradedFx();
+    await new Promise((r) => setTimeout(r, 50));
+    const fresh = eng.deckA.compDevice;
+    rows.push({
+      name: mode,
+      control: mode !== "armed",
+      connected: rebuilt > 0 && seen.length > 0,
+      toFresh: !!fresh && fresh !== comp && seen.includes(fresh.sidechain),
+    });
+    (tap as { connect: unknown }).connect = orig;
+    await eng.ctx.close();
+  }
+  return rows;
+};

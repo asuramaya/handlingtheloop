@@ -19,6 +19,7 @@ import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
 import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
+import { event } from "@htl/debug/trace";
 import type { StemStatus } from "../App";
 
 export interface SessionSyncDeps {
@@ -203,9 +204,22 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
 
   const applyRoomSnapshot = useCallback(
     (snapshot: unknown) => {
-      if (!snapFollowRef.current) return; // solo, OR a driver holding the live board → ignore catch-up snapshots
+      // ★ WHY THIS IS RECORDED. "A listener does not adopt the host's board" (thread d4a56d30) cost a
+      // night of guessing between three explanations — the room never held a board, the room held a
+      // stale one, or the client was handed a good one and ignored it. The server now says which
+      // side it was (room.ts logs every publish and catch-up with its content); this is the same
+      // sentence from the client's end, so the two can be read against each other. Into the ring
+      // (Settings ▸ Debug), not the console: a phone listener has no console, and that is exactly
+      // the device this bug is reported on.
+      if (!snapFollowRef.current) {
+        event("room.snapshot", { applied: false, why: "not following" });
+        return; // solo, OR a driver holding the live board → ignore catch-up snapshots
+      }
       const snap = snapshot as SessionSnapshot | null;
-      if (!snap || !snap.decks) return;
+      if (!snap || !snap.decks) {
+        event("room.snapshot", { applied: false, why: snap ? "no decks" : "empty" });
+        return;
+      }
       lastSnapshotRef.current = snap; // keep for the post-decode reconcile (effect below)
       setCrossfade(snap.crossfade);
       engine.setCrossfade(snap.crossfade);
@@ -224,6 +238,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           loadingVid: loadingVid.current[id],
           reconciledTarget: reconciledTarget.current[id],
         });
+        event("room.snapshot", { deck: id, action, snapVid: d.videoId ?? null, loadedVid: latest.current.loaded[id] || null });
         if (action === "load" && d.videoId) {
           // New track for this deck → load it ONCE (self-healing dedupe). Both decks load
           // concurrently so neither waits on the other; each is guarded so a failed decode

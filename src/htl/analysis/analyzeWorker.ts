@@ -42,6 +42,20 @@ let seq = 0;
 // it no longer holds.
 const WORKER_BUDGET_MS = 30_000;
 
+// ★ ONE FLAG WAS CARRYING TWO CAUSES WITH DIFFERENT CORRECT LIFETIMES. `failed` retires the worker
+// for the session, which is RIGHT for a construction failure — an environment with no usable Worker
+// will not grow one — and wrong for a hang. The trigger named above is a browser reclaiming a worker
+// under memory pressure, and that is TRANSIENT by nature: a backgrounded phone reclaims, comes back,
+// and would construct one fine. Retiring permanently converts one reclamation into a session-long
+// main-thread regression, on the platform least able to afford it, while the witness — correctly
+// saying itself once — stays quiet through every load after.
+//
+// So a hang buys exactly ONE reconstruction. The worst case is paying the budget a second time,
+// once; after that it really is retired. (Found by Metron, and it is the inverse of the distinction
+// one level down: the witness separates per-CAUSE, and this flag was merging two causes.)
+let hangs = 0;
+const HANG_RETRIES = 1;
+
 const told = new Set<string>();
 function fellBack(why: string): void {
   if (told.has(why)) return;
@@ -130,22 +144,30 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
     setTimeout(() => {
       if (!pending.has(id)) return; // answered in time
       pending.delete(id);
-      // One hang means the worker is gone, not slow — retire it so the NEXT load goes straight
-      // inline instead of paying the budget again.
-      failed = true;
+      hangs += 1;
+      const permanent = hangs > HANG_RETRIES;
+      failed = permanent; // a first hang may be a reclamation; a second is a broken worker
       try {
         worker?.terminate();
       } catch {
         /* already gone */
       }
       worker = null;
-      reject(new Error("analysis worker stopped answering"));
+      reject(new Error(permanent ? "analysis worker stopped answering twice" : "analysis worker stopped answering"));
     }, WORKER_BUDGET_MS);
     // Only the mix transfers — `grid` is small and structured-cloned (its Float32Arrays stay owned
     // by the caller, which needs the grid intact for its own use).
     w.postMessage({ id, ch0: mono, ch1: null, sampleRate, grid }, [mono.buffer]);
   }).catch((e: unknown) => {
-    fellBack(String((e as Error)?.message).includes("stopped answering") ? "stopped answering" : "died mid-flight");
+    const m = String((e as Error)?.message);
+    // Distinct facts for a reader: the first hang will be retried, the second will not.
+    fellBack(
+      m.includes("twice")
+        ? "stopped answering twice — staying on the main thread for this session"
+        : m.includes("stopped answering")
+          ? "stopped answering — will try once more on the next load"
+          : "died mid-flight",
+    );
     return inline(); // re-read the intact source buffer
   });
 }

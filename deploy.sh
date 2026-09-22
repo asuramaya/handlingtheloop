@@ -32,6 +32,10 @@ node -e '
   try {
     const r = JSON.parse(fs.readFileSync("scripts/ytclient-watch.last.json", "utf8"));
     const days = Math.floor((Date.now() - Date.parse(r.when)) / 86400000);
+    // A malformed `when` gives NaN, and NaN > 14 is FALSE — so without this the line renders as a
+    // calm "NaN d ago" with the nudge suppressed: unreadable presented as readable, inside the one
+    // instrument whose whole purpose is to be readable. Throw to the no-receipt branch instead.
+    if (!Number.isFinite(days)) throw new Error("unreadable receipt");
     console.log(`› streaming-client tripwire: ${r.fired ? "FIRED" : "quiet"}, last run ${days}d ago${days > 14 ? " — consider `node scripts/ytclient-watch.mjs`" : ""}`);
   } catch {
     console.log("› streaming-client tripwire: no receipt — run `node scripts/ytclient-watch.mjs --record`");

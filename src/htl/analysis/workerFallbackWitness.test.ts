@@ -95,20 +95,37 @@ describe("the analysis worker says so when it is not being used", () => {
     }
   });
 
-  it("one hang retires the worker, so the NEXT load does not pay the budget again", async () => {
+  it("a FIRST hang buys one reconstruction — a reclaimed worker is transient, not broken", async () => {
+    // The trigger for a hang is a browser reclaiming the worker under memory pressure, which is
+    // transient: a backgrounded phone reclaims, returns, and would construct one fine. Retiring for
+    // the session would convert one reclamation into a session-long main-thread regression, on the
+    // platform least able to afford it. (This test asserted the opposite an hour ago; the old
+    // behaviour was wrong and so was the test that pinned it.)
     vi.useFakeTimers();
     try {
       let constructed = 0;
       vi.stubGlobal("Worker", class { onerror?: () => void; onmessage?: unknown; constructor() { constructed++; } postMessage() {} terminate() {} });
-      vi.spyOn(console, "info").mockImplementation(() => {});
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
       const { analyzeTrackAsync } = await fresh();
+
       const first = analyzeTrackAsync(buf());
       await vi.advanceTimersByTimeAsync(31_000);
       await first;
       expect(constructed).toBe(1);
-      // The second load must resolve WITHOUT another 30 s wait — no timer advance here at all.
+
+      const second = analyzeTrackAsync(buf());
+      await vi.advanceTimersByTimeAsync(31_000);
+      await second;
+      expect(constructed).toBe(2); // it tried again, which is the point
+
+      // …and the SECOND hang is permanent: no third construction, no third budget.
       await analyzeTrackAsync(buf());
-      expect(constructed).toBe(1); // retired, never rebuilt
+      expect(constructed).toBe(2);
+
+      const said = info.mock.calls.map((c) => String(c[0])).filter((s) => /analysis worker unavailable/.test(s));
+      expect(said).toHaveLength(2); // two different facts, not one repeated
+      expect(said[0]).toMatch(/will try once more/);
+      expect(said[1]).toMatch(/twice/);
     } finally {
       vi.useRealTimers();
     }

@@ -2361,6 +2361,9 @@ function AppBody() {
   const room = useRoom(
     {
       onState: applyRoomSnapshot,
+      // The room asks a device what is on its board the moment it takes the anchor slot; answer with
+      // the CURRENT one rather than whatever was last published (a fresh page has published nothing).
+      snapshotNow: () => buildSnapshot(),
       onIntent: onRoomIntent,
       onAutomix: (s) => setRemoteAutomix(s as AutoMixMirror | null),
       onTick: onRoomTick,

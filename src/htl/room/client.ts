@@ -6,6 +6,7 @@
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { ENGINE_VERSION } from "./protocol";
 import { isSocketStale } from "./sessionFollow";
+import { republishSnapshot } from "./republish";
 import { SetCapture, type CapturedSet } from "./setCapture";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
@@ -17,6 +18,11 @@ export interface RoomHandlers {
   intent?: (intent: Intent, from: string, seq: number) => void;
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
+  /** Called when the ROOM asks this device to republish (it just took the anchor slot). Returns the
+   *  board as it stands now, or undefined when the app has nothing to say yet. See the `republish`
+   *  case: without a provider the ask is answered from a cached publish, which a freshly loaded page
+   *  does not have. */
+  snapshot?: () => unknown;
   automix?: (state: unknown) => void;
   stemview?: (deck: DeckId, view: unknown) => void;
   lyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
@@ -531,13 +537,22 @@ export class RoomClient {
         if (msg.chatFollowers !== undefined) this.h.chatFollowers?.(msg.chatFollowers);
         if (msg.muted) this.h.mutedList?.(msg.muted);
         break;
-      case "republish":
-        // The room has just handed us the anchor slot and is asking what is on our board. Answer
-        // with the last snapshot the app published — a publish it made before the slot arrived was
-        // dropped by the server in silence, and this is the only thing that asks for it again.
-        // Nothing to say (we have never published) is a legitimate answer: stay quiet.
-        if (this.lastPublished !== undefined) this.send({ t: "state", snapshot: this.lastPublished });
+      case "republish": {
+        // The room has just handed us the anchor slot and is asking what is on our board.
+        //
+        // ★ ASK THE APP FIRST, and fall back to the last thing we published. The first version only
+        // had the fallback, which made the frame silent in the case that matters most: a FRESHLY
+        // LOADED page has published nothing yet, so a reload answered the ask with nothing at all
+        // (Deckard caught this on the rig — my code did exactly what it said, and what it said was
+        // not enough). A provider answers with the board as it stands RIGHT NOW, which is also more
+        // truthful than a cached copy whenever the two differ.
+        const snap = republishSnapshot(this.h.snapshot?.(), this.lastPublished);
+        if (snap !== undefined) {
+          this.lastPublished = snap;
+          this.send({ t: "state", snapshot: snap });
+        }
         break;
+      }
       case "role":
         this.anchorId = msg.anchorId;
         this.peers = this.peers.map((p) => ({ ...p, anchor: p.id === msg.anchorId }));

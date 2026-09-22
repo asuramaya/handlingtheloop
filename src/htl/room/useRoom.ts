@@ -11,6 +11,9 @@ export type { TickDecks } from "./protocol";
 export interface RoomCallbacks {
   onIntent?: (intent: Intent, from: string) => void;
   onState?: (snapshot: unknown) => void;
+  /** The board as it stands NOW, for when the room asks a freshly-claimed anchor what it holds.
+   *  Distinct from publishing on change: this answers a question rather than announcing an event. */
+  snapshotNow?: () => unknown;
   onAutomix?: (state: unknown) => void;
   onTick?: (decks: TickDecks) => void;
   onStemView?: (deck: DeckId, view: unknown) => void;
@@ -236,6 +239,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       error: setError,
       intent: (i, from) => cbRef.current.onIntent?.(i, from),
       state: (s) => cbRef.current.onState?.(s),
+      snapshot: () => cbRef.current.snapshotNow?.(),
       automix: (s) => cbRef.current.onAutomix?.(s),
       tick: (d) => cbRef.current.onTick?.(d),
       stemview: (deck, view) => cbRef.current.onStemView?.(deck, view),

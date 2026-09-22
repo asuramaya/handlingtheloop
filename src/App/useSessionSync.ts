@@ -408,6 +408,14 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
               roomLoadTarget.current[id] = null; // defeat a stuck dedupe guard
               loadingVid.current[id] = "";
             }
+            // ★ SAY THAT IT WAS THE RESYNC. This branch starts a load without emitting anything,
+            // so the ring showed only `room.snapshot` lines and a reader could not tell a deck that
+            // was never re-loaded from one whose snapshot load was ABORTED by a resync load here
+            // (loadTrackToDeck aborts the previous load on the same deck). That ambiguity let a
+            // wrong conclusion look supported twice tonight — once when I read an absence as
+            // evidence, and once in Deckard's own reading of the same extract. "Which path started
+            // this load" must be read, never inferred.
+            event("room.resync", { deck: id, action: resync, vid: vid ?? null, loadedVid: latest.current.loaded[id] || null });
             runRoomLoad(id, vid!, { videoId: vid!, title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm: null });
             roomRef.current?.requestState(); // pull the authoritative snapshot for the new track's discrete state
           }

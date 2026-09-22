@@ -1738,6 +1738,19 @@ function AppBody() {
       const stale = () => seq !== loadSeq.current[id];
       let landed = false; // set once the track is on the deck → keep the loadingVid claim
       let claimedVid = ""; // the id this load claimed in loadingVid (try-scoped vid isn't visible in finally)
+      // ★ EXACTLY ONE `load.end` PER LOAD, AND ONE FOR EVERY LOAD. Both halves were wrong when this
+      // instrument was first written: a SUCCESSFUL load emitted nothing at all, so "load.start with
+      // no load.end" meant either "it worked" or "it is still hanging" — the two readings the ring
+      // exists to separate, made indistinguishable by the recorder itself. (Read live at HEAD: the
+      // host's own boot restore of both decks sat 41 s with no end line, and that was success.)
+      // Meanwhile a FAILING load emitted twice, from the catch and again from the finally, the
+      // second line overwriting `aborted` with `no-land` for anyone reading the last one.
+      let ended = false;
+      const endLoad = (why: string) => {
+        if (ended) return;
+        ended = true;
+        event("load.end", { deck: id, vid: claimedVid || (track.videoId ?? null), seq, landed, why });
+      };
       setStatusFor(id, null);
       // Free the OUTGOING track's stem set (~300–424 MB) up front, BEFORE we decode
       // the new track and build its stems. Otherwise the old set + the new mix + the
@@ -1959,8 +1972,7 @@ function AppBody() {
         // Keyed by the resolved id so the R2 stem cache lines up with the stream.
         void deriveStems(id, vid, cached!.buffer, stale);
       } catch (e) {
-        const why = (e as Error).name === "AbortError" ? "aborted" : stale() ? "superseded" : "failed";
-        event("load.end", { deck: id, vid: claimedVid || (track.videoId ?? null), seq, landed, why });
+        endLoad((e as Error).name === "AbortError" ? "aborted" : stale() ? "superseded" : "failed");
         if ((e as Error).name === "AbortError" || stale()) return;
         setStatusFor(id, { phase: "failed", detail: (e as Error).message ?? String(e) });
         return;
@@ -1973,9 +1985,10 @@ function AppBody() {
         // loading" and skipped the reload forever (the guest stayed on the wrong track). On a
         // successful land we KEEP the claim as the per-deck dedupe key.
         if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
-        // A load that ends without landing and without throwing (an early `return` on a stale
-        // sequence) is the quietest of all — say so here, where every exit passes.
-        if (!landed) event("load.end", { deck: id, vid: claimedVid || (track.videoId ?? null), seq, landed, why: stale() ? "stale" : "no-land" });
+        // Every exit passes here, so this is where the line is guaranteed: a load that landed says
+        // `landed`, and one that ended without landing and without throwing (an early `return` on a
+        // stale sequence) — the quietest of all — says so too.
+        endLoad(landed ? "landed" : stale() ? "stale" : "no-land");
       }
     },
     [engine, library, setStatusFor, refresh, deriveStems],

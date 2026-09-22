@@ -101,11 +101,38 @@ function deckWriters(): string[] {
   return [...writers];
 }
 
+// ★ AND THE RECEIVER IS DERIVED FROM THE LOOP, not from the name `deck`. The writer list is read
+// from Deck.ts now, but it was still being matched against one hard-coded variable name — and by
+// the test Deckard added himself ("is this the artifact that would CHANGE if the fact changed?") a
+// local variable's name is not. `const d = engine.deck(id); d.setTempo(…)` and
+// `engine.deck(id).setStems(null)` are both real forms in App.tsx and both sailed past it.
+//
+// Widening to any receiver would fire on `midi.setFeedback(` in the MIDI-feedback loop, which is not
+// a deck at all — a guard that cries wolf gets exemptions written to shut it up, and then it is a
+// list again. So the receivers are the identifiers THIS BODY binds to a deck, plus the inline form.
+function deckReceivers(body: string): string[] {
+  const out = new Set<string>();
+  for (const m of body.matchAll(/(?:const|let)\s+(\w+)\s*=\s*\w+\.(?:deck\s*\([^)]*\)|deckA|deckB)/g)) out.add(m[1]);
+  return [...out];
+}
+
 // A loop MUTATES if it touches a deck WRITER, emits an intent, or calls a helper that emits.
-const mutates = (body: string, drivers: string[], writers: string[]) =>
-  /\bemitRef\.current\(\{|\bemit\(\{/.test(body) ||
-  writers.some((w) => new RegExp(`\\bdeck\\.${w}\\s*[(=]`).test(body)) ||
-  drivers.some((d) => new RegExp(`\\b${d}\\(`).test(body));
+const mutates = (body: string, drivers: string[], writers: string[]) => {
+  if (/\bemitRef\.current\(\{|\bemit\(\{/.test(body)) return true;
+  if (drivers.some((d) => new RegExp(`\\b${d}\\(`).test(body))) return true;
+  const receivers = deckReceivers(body);
+  // ★ `[(=]` COUNTS `===` AS AN ASSIGNMENT. Latent while the receiver was hard-coded to `deck`;
+  // the moment receivers were derived, `d.padMode === "roll"` in the MIDI-feedback loop read as a
+  // write and the scan demanded a gate on a loop that only lights lamps. A guard that cannot tell a
+  // comparison from an assignment buys its sensitivity with false alarms, and false alarms are paid
+  // for in exemptions — which is how a derived list turns back into a roster.
+  const TOUCH = "\\s*(?:\\(|=(?!=))";
+  return writers.some(
+    (w) =>
+      receivers.some((r) => new RegExp(`\\b${r}\\.${w}${TOUCH}`).test(body)) ||
+      new RegExp(`\\w+\\.deck(?:\\s*\\([^)]*\\)|A|B)\\.${w}${TOUCH}`).test(body),
+  );
+};
 // It is SAFE if it asks per deck whether we may drive, or if it only reads.
 const ASKS = /canDriveDeckRef\.current\(|canDriveDeck\(/;
 

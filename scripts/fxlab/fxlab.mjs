@@ -391,7 +391,7 @@ async function main() {
       console.log("\n  MASTER DUCK — how far deck A's 1 kHz tone moves when deck B's kick lands, with NO deck control engaged:\n");
       for (const r of rows) {
         console.log(
-          `   ${r.name.padEnd(18)} duck ${f(r.duckDb, 2).padStart(7)} dB   recover ${Number.isFinite(r.recoverMs) ? f(r.recoverMs, 0).padStart(4) + " ms" : "  >beat"}   peak ${f(r.peak, 3)}${r.control ? "  \u2190 control, must be ~0" : ""}`,
+          `   ${r.name.padEnd(18)} duck ${f(r.duckDb, 2).padStart(7)} dB   recover ${Number.isFinite(r.recoverMs) ? f(r.recoverMs, 0).padStart(4) + " ms" : "  >beat"}   tone harmonics ${Number.isFinite(r.kickThd) ? f(r.kickThd, 1).padStart(6) + " dB" : "     n/a"}   peak ${f(r.peak, 3)}${r.control ? "  \u2190 control, must be ~0" : ""}`,
         );
       }
       const worstControl = Math.max(...rows.filter((r) => r.control).map((r) => Math.abs(r.duckDb)));

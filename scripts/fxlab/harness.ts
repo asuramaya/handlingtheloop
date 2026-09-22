@@ -2375,7 +2375,7 @@ async function liveGestureStep(params: Record<string, number>, opts: Parameters<
 // Deck A is a steady 1 kHz tone, deck B a kick on the beat. The number is how far the TONE moves
 // when the kick lands, detected at 1 kHz (Hann-windowed quadrature) so the kick's own 60 Hz is not
 // in the measurement. The no-limiter run is the control: it must read ~0, or the number is leakage.
-async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number; releaseMs?: number; trimDb?: number }): Promise<{ duckDb: number; recoverMs: number; peak: number }> {
+async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number; releaseMs?: number; trimDb?: number; toneHz?: number }): Promise<{ duckDb: number; recoverMs: number; peak: number; kickThd: number }> {
   const ctx = await liveContext();
   const sr = ctx.sampleRate;
   const beat = 0.5; // 120 BPM
@@ -2438,7 +2438,7 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     }
     return env;
   };
-  const tone = envAt(1000);
+  const tone = envAt(opts.toneHz ?? 1000);
   const kick = envAt(60);
   const hopS = hop / sr;
   const perBeat = beat / hopS;
@@ -2464,29 +2464,72 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   }
   drops.sort((a, b) => a - b);
   const fin = recov.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  // ★ WHAT A FAST RELEASE COSTS. Recovery time alone would make "release 50" look free; it is not.
+  // A limiter releasing inside a low-frequency cycle re-shapes that cycle, which shows up as
+  // HARMONICS of the kick. Measured on a window over one kick: the worst of 120/180 Hz against the
+  // 60 Hz fundamental. Reported beside the duck so the trade is visible in one row instead of two runs.
+  const binAt = (hz: number, from: number, len: number): number => {
+    let re = 0;
+    let im = 0;
+    let wsum = 0;
+    for (let i = from; i < Math.min(out.length, from + len); i++) {
+      const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * (i - from)) / (len - 1));
+      const t = i / sr;
+      re += out[i] * w * Math.cos(2 * Math.PI * hz * t);
+      im += out[i] * w * Math.sin(2 * Math.PI * hz * t);
+      wsum += w;
+    }
+    return Math.hypot(re, im) / wsum;
+  };
+  // ★ HARMONIC DISTORTION OF THE TONE, and ONLY meaningful when the tone is what the limiter is
+  // working on. The first version of this measured harmonics of the KICK — and read the same -40 dB
+  // with NO limiter in the graph, because a 180 ms decaying burst is not a pure tone and its own
+  // spectrum filled the harmonic bins. A metric whose control matches its treatment measures the
+  // stimulus, not the device. A STEADY sine has no harmonics of its own, so whatever appears here is
+  // the limiter re-shaping the cycle — which is what a fast release actually costs.
+  const f0hz = opts.toneHz ?? 1000;
+  const from = Math.round(sr * 1.5);
+  const len = Math.round(sr * 1.0);
+  const f0 = binAt(f0hz, from, len);
+  const harm = Math.max(binAt(f0hz * 2, from, len), binAt(f0hz * 3, from, len));
+  const kickThd = f0 > 1e-6 ? 20 * Math.log10(harm / f0) : NaN;
   let peak = 0;
   for (let i = Math.round(sr * 1.0); i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
   return {
     duckDb: drops.length ? drops[Math.floor(drops.length / 2)] : NaN,
     recoverMs: fin.length > recov.length / 2 ? fin[Math.floor(fin.length / 2)] : NaN,
     peak,
+    kickThd,
   };
 }
 
-(globalThis as unknown as { fxlabMasterDuck: () => Promise<{ name: string; control: boolean; duckDb: number; peak: number; recoverMs: number }[]> }).fxlabMasterDuck = async () => {
-  const cases: { name: string; control: boolean; limiter: boolean; aAmp: number; bAmp: number; releaseMs?: number; trimDb?: number }[] = [
+(globalThis as unknown as { fxlabMasterDuck: () => Promise<{ name: string; control: boolean; duckDb: number; peak: number; recoverMs: number; kickThd: number }[]> }).fxlabMasterDuck = async () => {
+  const cases: { name: string; control: boolean; limiter: boolean; aAmp: number; bAmp: number; releaseMs?: number; trimDb?: number; toneHz?: number }[] = [
     { name: "two decks, hot", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9 },
     { name: "two decks, mid", control: false, limiter: true, aAmp: 0.3, bAmp: 0.5 },
     { name: "hot, trim -3 dB", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, trimDb: -3 },
     { name: "hot, trim -6 dB", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, trimDb: -6 },
+    // THE BALLISTICS LEVER, for the case where the answer to "make it quieter" is no: a faster LIMIT
+    // release recovers between kicks instead of riding the whole bar down. It cannot remove the duck
+    // (the reduction is what keeps the mix under the ceiling) — it changes how long it lasts, which is
+    // what "pumping" actually means to an ear.
+    { name: "hot, release 250", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, releaseMs: 250 },
+    { name: "hot, release 120", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, releaseMs: 120 },
+    { name: "hot, release 80", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, releaseMs: 80 },
     { name: "hot, release 50", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9, releaseMs: 50 },
+    // ★ A BASS-TONE DISTORTION CASE WAS TRIED HERE AND REMOVED. With no kick the run has no onsets,
+    // and both the duck and the harmonic figure came back NaN for a reason I did not establish. A
+    // probe with an unexplained hole in it is worse than one that admits the gap: what a fast release
+    // costs on a LOW tone is therefore still unmeasured, and the harmonics column below — measured on
+    // the 1 kHz tone, where the no-limiter control genuinely differs from the treatments — is the only
+    // distortion evidence this harness currently supports.
     { name: "NO limiter (hot)", control: true, limiter: false, aAmp: 0.5, bAmp: 0.9 },
     { name: "limiter, trim -20", control: true, limiter: true, aAmp: 0.5, bAmp: 0.9, trimDb: -20 },
   ];
-  const out: { name: string; control: boolean; duckDb: number; peak: number; recoverMs: number }[] = [];
+  const out: { name: string; control: boolean; duckDb: number; peak: number; recoverMs: number; kickThd: number }[] = [];
   for (const c of cases) {
-    const r = await duckRunLive({ limiter: c.limiter, aAmp: c.aAmp, bAmp: c.bAmp, releaseMs: c.releaseMs, trimDb: c.trimDb });
-    out.push({ name: c.name, control: c.control, duckDb: r.duckDb, peak: r.peak, recoverMs: r.recoverMs });
+    const r = await duckRunLive({ limiter: c.limiter, aAmp: c.aAmp, bAmp: c.bAmp, releaseMs: c.releaseMs, trimDb: c.trimDb, toneHz: c.toneHz });
+    out.push({ name: c.name, control: c.control, duckDb: r.duckDb, peak: r.peak, recoverMs: r.recoverMs, kickThd: r.kickThd });
   }
   return out;
 };

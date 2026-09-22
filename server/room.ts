@@ -174,7 +174,12 @@ export class DjRoom {
   // Ordinary hygiene, not cover for a designed-in divergence: a dropped envelope means remote
   // waveforms go absent, and that should be a readable fact rather than something only a
   // byte-level capture could reveal.
+  // ★ NOTE, because it is the reason the drop below is a LOG and not a counter: nothing in this
+  // codebase ever reads stemViewDropped. It is instrumentation with no instrument — a tally that
+  // answers a question only if somebody can see it.
   private stemViewDropped = 0;
+  private stateDropAt = 0; // last time a dropped `state` publish was logged (rate limit)
+  private static readonly STATE_DROP_LOG_MS = 5_000;
   private digest = new Map<string, ServerMsg>();
   private digestTimer: ReturnType<typeof setTimeout> | null = null;
   // The crowd→DJ side-channels (reactions/hype + song requests) — self-contained units that
@@ -730,6 +735,25 @@ export class DjRoom {
         break;
       }
       case "state": {
+        // ★ A DROPPED PUBLISH IS THE ONE THAT NEEDS SAYING SO. If the publisher is not the anchor
+        // and the slot is not vacant, this snapshot is discarded in silence — and nothing asks for a
+        // republish, so the room keeps whatever the previous session left and EVERY later joiner
+        // adopts that instead of the host's real board. That is the leading hypothesis for
+        // "a listener does not adopt the host's board" (thread d4a56d30), and it was unobservable:
+        // the counter next to it (stemViewDropped) has no reader anywhere in the codebase, so
+        // another silent tally would answer nobody. A log line is readable from `wrangler tail` and
+        // from the dev worker's own output, which is where the live two-party rig can catch it.
+        // Rate-limited, because a publisher that keeps trying must not become the log.
+        if (!(self === this.anchorId || this.anchorId === null)) {
+          const now = Date.now();
+          if (now - this.stateDropAt >= DjRoom.STATE_DROP_LOG_MS) {
+            this.stateDropAt = now;
+            console.warn(
+              `[htl-room] state publish DROPPED: publisher=${self} anchor=${this.anchorId ?? "none"} — ` +
+                `the room keeps its previous snapshot and joiners will adopt that (thread d4a56d30)`,
+            );
+          }
+        }
         // The anchor (or, while vacant, anyone) defines the authoritative set.
         if (self === this.anchorId || this.anchorId === null) {
           this.lastSnapshot = msg.snapshot;

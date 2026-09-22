@@ -616,3 +616,45 @@ describe("DjRoom internal-bridge configuration", () => {
     expect(String(calls[0][0])).toBe("https://handlingtheloop.com/internal/notify");
   });
 });
+
+// ★ A PUBLISH THAT IS DROPPED MUST SAY SO. `state` is accepted only from the anchor (or while the
+// slot is vacant); anyone else's snapshot is discarded, nothing asks them to republish, and the room
+// keeps whatever the previous session left — so every later joiner adopts THAT instead of the host's
+// real board. That is the leading hypothesis for "a listener does not adopt the host's board"
+// (thread d4a56d30), and it used to happen in total silence. The drop is now logged, because the
+// only other instrument here (stemViewDropped) is a counter nothing in the codebase ever reads.
+describe("DjRoom state authority", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("logs a state publish it drops, naming the publisher and the anchor", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" }); // host becomes the anchor
+    const guest = (await h.connect({ device: "g1", host: false, invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.send(guest, { t: "state", snapshot: { decks: { A: { videoId: "guestTrack" } } } });
+      const line = warn.mock.calls.map((c) => String(c[0])).find((m) => m.includes("state publish DROPPED"));
+      expect(line, "a dropped publish must be visible somewhere a human can read it").toBeTruthy();
+      expect(line).toContain("publisher=g1");
+      expect(line).toContain("anchor=host1");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("control: the ANCHOR's own publish is accepted in silence — the log means a real drop, not noise", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "hostTrack" } } } });
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("state publish DROPPED"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

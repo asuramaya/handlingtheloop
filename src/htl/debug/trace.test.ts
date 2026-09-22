@@ -73,3 +73,25 @@ describe("console capture", () => {
     if (warn) expect(String(warn.msg)).toContain("something fell back");
   });
 });
+
+// The ring's other reader is a browser check / support call, which has no panel to click and, when
+// it does click one, has to tell the LIVE ring apart from a saved bug-report draft rendered beside
+// it. window.__htlRing() cannot be confused that way, so it is the one a probe should call.
+describe("window.__htlRing", () => {
+  it("is installed in a browser context and returns the live ring", async () => {
+    vi.resetModules();
+    const win: Record<string, unknown> = { addEventListener: () => {} };
+    (globalThis as unknown as { window?: unknown }).window = win;
+    try {
+      const mod = await import("./trace");
+      mod.clearRing();
+      mod.event("load.start", { deck: "B" });
+      const read = win.__htlRing as (() => Array<Record<string, unknown>>) | undefined;
+      expect(typeof read).toBe("function");
+      expect(read!().map((e) => e.ch)).toEqual(["load.start"]);
+    } finally {
+      delete (globalThis as unknown as { window?: unknown }).window;
+      vi.resetModules();
+    }
+  });
+});

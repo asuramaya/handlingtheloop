@@ -89,6 +89,18 @@ export function formatEvent(e: Record<string, unknown>): string {
 // Auto-capture uncaught errors + rejections into the ring the moment this module loads (it's imported
 // early by the audio engine), so a report always carries whatever just blew up — the single highest
 // value-per-byte payload after the user's own words. Guarded for non-browser (test/SSR) contexts.
+// ★ THE RING IS READABLE WITHOUT THE PANEL. `window.__htlRing()` returns the same array
+// Settings ▸ Debug renders. This exists because reading the recorder through the panel means
+// reading a LIST THAT HOLDS TWO THINGS — the live ring and, when one is saved, a bug-report draft
+// from an earlier session — and a reader who takes the first block it finds can measure an old run
+// and believe it is this one. That misreading actually happened (a ring called "stale" that was
+// simply the wrong block). A function that returns only the live ring cannot be misread that way,
+// and it is what a browser check or a support call should ask. No new data: the panel already shows
+// every line of it, and nothing is sent anywhere.
+if (typeof window !== "undefined") {
+  (window as unknown as { __htlRing?: () => Array<Record<string, unknown>> }).__htlRing = dumpRing;
+}
+
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("error", (e) => event("error", { msg: String(e.message ?? "").slice(0, 300), src: e.filename ?? "", line: e.lineno ?? 0 }));
   window.addEventListener("unhandledrejection", (e) => {

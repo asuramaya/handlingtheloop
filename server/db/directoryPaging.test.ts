@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, test } from "vitest";
 import { liveRooms, liveFollowedRooms } from "./rooms";
 
 /** The cursor is base64url, so a test that hand-writes one has to speak the same encoding. */
 const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 import { discoverSets } from "./sets";
+import { decodeKeyset, encodeKeyset } from "./cursor";
 
 // THE DIRECTORY USED TO LIE ABOUT BEING COMPLETE (thread 0c98985c).
 //
@@ -318,5 +320,117 @@ describe("the cursor is opaque in the sense it claims to be", () => {
     const asked: Asked[] = [];
     await liveRooms(fakeDb(0, asked), { limit: 5, sort: "recent", cursor: "????" });
     expect(asked[0].sql).not.toMatch(/r\.started_at < \?/);
+  });
+});
+
+// ★ A FILE-DERIVED SCAN, because the hand-written claim was wrong. The comment at the top of this
+// file said "Both now end in a primary key" — and there were THREE directory reads with an
+// ORDER BY … LIMIT, not two. publishedSets kept `ORDER BY published_at DESC LIMIT ?` with no
+// tiebreak for as long as that sentence sat here saying the job was done. That is the load-bearing
+// comment failure in the file whose whole subject is that failure.
+//
+// So this does not name the statements. It reads the source, finds every ORDER BY … LIMIT, and
+// requires each one's LAST term to be a column the schema makes unique. A fourth reader added
+// tomorrow is covered on the day it is written, and the vacuity guard means deleting the queries
+// cannot turn this green.
+describe("every paged directory read resolves over a set proven unique", () => {
+  const SRC = [
+    ["server/db/sets.ts", readFileSync(new URL("./sets.ts", import.meta.url), "utf8")],
+    ["server/db/rooms.ts", readFileSync(new URL("./rooms.ts", import.meta.url), "utf8")],
+  ] as const;
+  // Columns the schema makes unique per row: primary keys. `id` for sets, `host_id` for rooms
+  // (one live room per host — the rooms PK).
+  const UNIQUE = /\b(s\.)?id\b|\bhost_id\b|\br\.host_id\b/;
+
+  // Comments in these files DISCUSS ORDER BY at length — including the sentence that was wrong — so
+  // strip them first. A scan that reads prose finds the claim instead of the code, which is the
+  // exact confusion it exists to end.
+  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const statements = SRC.flatMap(([file, src]) =>
+    [...stripComments(src).matchAll(/ORDER BY([\s\S]*?)LIMIT/gi)].map((m) => ({ file, orderBy: m[1].replace(/\s+/g, " ").trim() })),
+  );
+
+  test("the scan found statements to check (vacuity guard)", () => {
+    expect(statements.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test.each(statements.map((s) => [s.file, s.orderBy] as const))("%s — ORDER BY %s ends in a unique column", (_file, orderBy) => {
+    const terms = orderBy.split(",").map((t) => t.trim());
+    expect(terms[terms.length - 1]).toMatch(UNIQUE);
+  });
+});
+
+// discoverSets pages now, and the properties are the same ones liveRooms needed: ask the database
+// for strictly-after rows in the SAME order as the ORDER BY, and only hand back a cursor when there
+// is a page behind it.
+describe("discoverSets paging", () => {
+  const setRows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `set-${i}`, publishedAt: 1_700_000_000 - i, handle: `h${i}` }));
+
+  function fakeSetsDb(rowCount: number, asked: Asked[] = []) {
+    return {
+      prepare(sql: string) {
+        const rec: Asked = { sql, binds: [] };
+        asked.push(rec);
+        const stmt = {
+          bind(...b: unknown[]) {
+            rec.binds = b;
+            return stmt;
+          },
+          all: async () => ({ results: setRows(rowCount) }),
+        };
+        return stmt;
+      },
+    } as unknown as Parameters<typeof discoverSets>[0];
+  }
+
+  test("no next page → no cursor, however the client asks", async () => {
+    expect((await discoverSets(fakeSetsDb(60), 60)).nextCursor).toBeNull();
+    expect((await discoverSets(fakeSetsDb(0), 60)).nextCursor).toBeNull();
+  });
+
+  test("a full page with more behind it hands back a cursor built from the LAST kept row", async () => {
+    const page = await discoverSets(fakeSetsDb(61), 60);
+    expect(page.truncated).toBe(true);
+    expect(page.nextCursor).not.toBeNull();
+    expect(decodeKeyset(page.nextCursor)).toEqual({ sortKey: 1_700_000_000 - 59, id: "set-59" });
+    expect(page.sets).toHaveLength(60); // the probe row is never served
+  });
+
+  test("the next page asks for rows strictly AFTER the boundary, in the ordering's own direction", async () => {
+    const asked: Asked[] = [];
+    const cursor = encodeKeyset(1_700_000_000, "set-0");
+    await discoverSets(fakeSetsDb(5, asked), 60, cursor);
+    const sql = asked[0].sql.replace(/\s+/g, " ");
+    expect(sql).toContain("published_at < ?");
+    expect(sql).toContain("published_at = ? AND s.id < ?");
+    expect(asked[0].binds.slice(0, 3)).toEqual([1_700_000_000, 1_700_000_000, "set-0"]);
+  });
+
+  test("a junk cursor shows the FIRST page — a browse surface does not 400 on a typo", async () => {
+    const asked: Asked[] = [];
+    const page = await discoverSets(fakeSetsDb(5, asked), 60, "not-a-cursor!!");
+    expect(asked[0].sql).not.toContain("published_at < ?");
+    expect(page.sets).toHaveLength(5);
+  });
+});
+
+// The keyset is only safe because a published set always CARRIES the key it is ordered by. This is
+// the invariant, asserted against the writers rather than trusted from a comment: nothing inserts a
+// published row, and the only writer of `status` stamps `published_at` in the same statement.
+describe("published_at can never be NULL inside status='published'", () => {
+  const src = readFileSync(new URL("./sets.ts", import.meta.url), "utf8");
+
+  test("rows are inserted as drafts with a NULL key", () => {
+    const insert = /INSERT INTO sets[\s\S]*?VALUES[^)]*\)/i.exec(src)?.[0] ?? "";
+    expect(insert).toContain("'draft'");
+    expect(insert).toMatch(/NULL\s*\)/);
+  });
+
+  test("the only writer of status sets published_at in the SAME statement", () => {
+    const writers = [...src.matchAll(/UPDATE sets SET ([^"`']+)/gi)].map((m) => m[1]);
+    const statusWriters = writers.filter((w) => /\bstatus\s*=/.test(w));
+    expect(statusWriters.length).toBe(1);
+    expect(statusWriters[0]).toMatch(/published_at\s*=/);
   });
 });

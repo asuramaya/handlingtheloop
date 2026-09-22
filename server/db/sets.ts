@@ -3,6 +3,7 @@
 // in R2 at sets/<id>.json, this table is what you query (a host's history, the published
 // directory). The host's client captures + POSTs; these helpers are the model.
 import { type D1Database, now, uuid } from "./core";
+import { decodeKeyset, encodeKeyset } from "./cursor";
 
 let setsReady = false;
 export async function ensureSetsTable(db: D1Database): Promise<void> {
@@ -93,13 +94,21 @@ export async function getSet(db: D1Database, id: string): Promise<SetRow | null>
 /** A host's own sets, newest first. `includeDrafts` is true only for the owner's view. */
 export async function setsByHost(db: D1Database, hostId: string, includeDrafts: boolean, limit = 100): Promise<SetRow[]> {
   const where = includeDrafts ? "WHERE host_id = ?" : "WHERE host_id = ? AND status = 'published'";
-  const r = await db.prepare(`${SELECT} ${where} ORDER BY created_at DESC LIMIT ?`).bind(hostId, limit).all<SetRow>();
+  // `id` is here for the same reason it is on the two directory reads: created_at is not unique, so
+  // without it WHICH of two sets recorded in the same millisecond survives the LIMIT is arbitrary.
+  // This one was found by the file-derived scan in directoryPaging.test.ts on the day it was
+  // written — a fourth reader nobody had counted, in a file whose comments claimed there were two.
+  const r = await db.prepare(`${SELECT} ${where} ORDER BY created_at DESC, id DESC LIMIT ?`).bind(hostId, limit).all<SetRow>();
   return r.results ?? [];
 }
 
 /** The published-sets directory for Discover (newest published first). */
 export async function publishedSets(db: D1Database, limit = 100): Promise<SetRow[]> {
-  const r = await db.prepare(`${SELECT} WHERE status = 'published' ORDER BY published_at DESC LIMIT ?`).bind(limit).all<SetRow>();
+  // The tiebreak is not cosmetic here either: published_at is not unique, so without `id` WHICH of
+  // two tied rows survives the LIMIT is arbitrary and can differ between two identical calls. The
+  // sibling comment in directoryPaging.test.ts said BOTH directory reads had been given a primary
+  // key — there were three, and this was the one nobody counted.
+  const r = await db.prepare(`${SELECT} WHERE status = 'published' ORDER BY published_at DESC, id DESC LIMIT ?`).bind(limit).all<SetRow>();
   return r.results ?? [];
 }
 
@@ -114,6 +123,8 @@ export interface DiscoverSetsPage {
   /** More rows matched than were returned — the client must not present this as the whole set. */
   truncated: boolean;
   limit: number;
+  /** Pass back as `cursor` for the next page. Null when there is no next page. */
+  nextCursor: string | null;
 }
 /** Published sets across all hosts (with handles), newest first — the Discover Sets facet.
  *
@@ -127,7 +138,18 @@ export interface DiscoverSetsPage {
  *  published transition and never rewritten — so this pair IS a usable keyset cursor when paging
  *  is added. Recorded here because that difference is the whole reason the two endpoints in
  *  thread 0c98985c need different treatments. */
-export async function discoverSets(db: D1Database, limit = 60): Promise<DiscoverSetsPage> {
+export async function discoverSets(db: D1Database, limit = 60, cursor?: string | null): Promise<DiscoverSetsPage> {
+  // ★ THE KEYSET IS SAFE HERE BECAUSE THE SET CANNOT HOLD A NULL KEY. Paging strictly-after a
+  // boundary only works if every row in the set HAS that key: a NULL published_at inside
+  // status='published' would sort to one end and be skipped or repeated forever. It cannot happen by
+  // construction — a set is INSERTed as 'draft' with published_at NULL, and the only writer of
+  // status (setSetStatus) stamps published_at on the draft→published flip and NULLs it on the way
+  // back. The scan test asserts that pairing rather than trusting this paragraph.
+  const after = decodeKeyset(cursor);
+  const keyset = after ? ` AND (s.published_at < ? OR (s.published_at = ? AND s.id < ?))` : "";
+  const binds: unknown[] = [];
+  if (after) binds.push(after.sortKey, after.sortKey, after.id);
+  binds.push(limit + 1); // +1 probe row: present ⇒ more behind the cap (cheaper than a COUNT(*))
   const r = await db
     .prepare(
       `SELECT s.id, s.host_id AS hostId, s.title, s.genre, s.status, s.duration, s.tracks, s.tracklist,
@@ -135,13 +157,18 @@ export async function discoverSets(db: D1Database, limit = 60): Promise<Discover
               s.published_at AS publishedAt, s.trim_start AS trimStart, s.trim_end AS trimEnd,
               u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM sets s JOIN users u ON u.id = s.host_id
-       WHERE s.status = 'published' AND u.handle IS NOT NULL
+       WHERE s.status = 'published' AND u.handle IS NOT NULL${keyset}
        ORDER BY s.published_at DESC, s.id DESC LIMIT ?`,
     )
-    .bind(limit + 1) // +1 probe row: present ⇒ more behind the cap (cheaper than a COUNT(*))
+    .bind(...binds)
     .all<DiscoverSetRow>();
   const rows = r.results ?? [];
-  return { sets: rows.slice(0, limit), truncated: rows.length > limit, limit };
+  const truncated = rows.length > limit;
+  const kept = rows.slice(0, limit);
+  const last = kept[kept.length - 1];
+  // A cursor only exists when there IS a next page, and only from a row that carries the key.
+  const nextCursor = truncated && last?.publishedAt != null ? encodeKeyset(last.publishedAt, last.id) : null;
+  return { sets: kept, truncated, limit, nextCursor };
 }
 
 /** Flip a set's lifecycle state (G1b). Owner-scoped: the host_id guard makes it a no-op

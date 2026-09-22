@@ -315,10 +315,17 @@ export async function handleAccountRoute(url: URL, req: Request, env: AccountEnv
     const rest = path.slice("/api/sets/".length);
     // /api/sets/discover → the published-sets directory across all hosts (with identity), G1d.
     if (rest === "discover") {
-      const setsPage = await discoverSets(env.DB);
       // `truncated` travels with the payload so the client can say "first N" instead of implying
-      // it has everything — thread 0c98985c's actual complaint about this facet.
-      return json(200, { sets: setsPage.sets.map(discoverCard), truncated: setsPage.truncated, limit: setsPage.limit });
+      // it has everything — and `nextCursor` is what finally lets it stop saying "first N" and
+      // fetch the rest. A malformed cursor reads as no cursor (the first page), because a browse
+      // surface shows you sets on a typo rather than 400-ing.
+      const setsPage = await discoverSets(env.DB, 60, url.searchParams.get("cursor"));
+      return json(200, {
+        sets: setsPage.sets.map(discoverCard),
+        truncated: setsPage.truncated,
+        limit: setsPage.limit,
+        nextCursor: setsPage.nextCursor,
+      });
     }
     const slash = rest.indexOf("/");
     const id = slash === -1 ? rest : rest.slice(0, slash);

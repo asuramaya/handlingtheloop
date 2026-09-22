@@ -18,6 +18,12 @@ import { join } from "node:path";
 const DIR = __dirname;
 const LOCK_AWARE = /\blocked[,:]/; // takes `locked` as a prop / destructures it
 const DROP_OPEN = /(onDrop=\{\(e\) => \{|useTouchDropTarget\()/g;
+// ★ THE WINDOW ENDS AT THE NEXT HANDLER, NOT AT A FIXED WIDTH. A fixed slice reaches into whatever
+// follows, so a NEIGHBOUR's guard reads as this handler's and a missing guard passes — Deckard hit
+// exactly that in the sibling scan (deckBankLockGuards): stripping every guard still left one case
+// green, because the window ran into the next declaration's surviving check. A scan whose control
+// cannot fail is not a test, so the bound is the next handler opening (or the end of the file).
+const WINDOW_CAP = 700;
 
 function lockAwareComponents(): { file: string; src: string }[] {
   return readdirSync(DIR)
@@ -38,8 +44,10 @@ describe("watch-only drop guards", () => {
     for (const m of opens) {
       const at = m.index ?? 0;
       const name = m[0].replace(/[({=].*/, "");
+      const next = opens.map((o) => o.index ?? 0).find((i) => i > at) ?? src.length;
+      const end = Math.min(next, at + WINDOW_CAP);
       it(`${file} · ${name} @${at} refuses a load while locked`, () => {
-        expect(src.slice(at, at + 700)).toMatch(/if \(locked\) return/);
+        expect(src.slice(at, end)).toMatch(/if \(locked\) return/);
       });
     }
   }

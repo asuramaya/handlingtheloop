@@ -13,10 +13,15 @@ import { join } from "node:path";
 // but "this mutator checks the lock" is cheap to assert, and cheap to keep true.
 const APP = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
 
-/** The body of a named useCallback mutator, far enough to see its guards. */
+/** The body of a named useCallback mutator — bounded by the NEXT declaration, never a fixed width.
+ *  ★ A fixed slice reaches into the next function, so a neighbour's guard reads as this one's and a
+ *  missing guard passes. Deckard's sibling scan had exactly that hole: stripping every guard left
+ *  one case green because the window overran into a surviving check. */
 function callbackBody(name: string): string {
   const i = APP.indexOf(`const ${name} = useCallback(`);
-  return i < 0 ? "" : APP.slice(i, i + 900);
+  if (i < 0) return "";
+  const after = APP.indexOf("\n  const ", i + 1);
+  return APP.slice(i, after < 0 ? i + 900 : Math.min(after, i + 900));
 }
 
 describe("watch-only board guards", () => {

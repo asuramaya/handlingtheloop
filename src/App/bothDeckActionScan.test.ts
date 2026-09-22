@@ -16,40 +16,115 @@ import { readFileSync } from "node:fs";
 // someone who never read this comment.
 const SRC = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
 
-/** Every `["A", "B"].forEach(...)` body in App.tsx, with enough context to judge it. */
+/** Every both-deck loop body in App.tsx, with enough context to judge it.
+ *
+ *  ★ THE FORMS MATTER AS MUCH AS THE RULE. The first version of this scan matched only
+ *  `.forEach((x) => {`, so the two `for (const d of ["A","B"])` loops in the same file were
+ *  invisible to it — including one that releases FX pads on both decks and emits for both. An
+ *  instrument that states a broad invariant and matches a narrow syntax is a hand-written roster
+ *  wearing a regex (Metron, reviewing ae3aed5). Statement forms only: a `.map` returning JSX is a
+ *  render, and a render reads.
+ */
 function bothDeckLoops(src: string): { at: number; body: string }[] {
   const out: { at: number; body: string }[] = [];
-  const re = /\(\["A",\s*"B"\][^)]*\)\.forEach\(\((\w+)\)\s*=>\s*\{/g;
-  for (let m = re.exec(src); m; m = re.exec(src)) {
-    let depth = 1;
-    let i = m.index + m[0].length;
-    for (; i < src.length && depth > 0; i++) {
-      if (src[i] === "{") depth++;
-      else if (src[i] === "}") depth--;
+  const forms = [
+    /\(\["A",\s*"B"\][^)]*\)\.forEach\(\((\w+)\)\s*=>\s*/g, // .forEach, block or expression body
+    /for \((?:const|let) (\w+) of \(?\["A",\s*"B"\][^)]*\)?\)\s*/g, // for-of, block or single statement
+  ];
+  for (const re of forms) {
+    for (let m = re.exec(src); m; m = re.exec(src)) {
+      const from = m.index + m[0].length;
+      let i = from;
+      if (src[from] === "{") {
+        let depth = 0;
+        for (; i < src.length; i++) {
+          if (src[i] === "{") depth++;
+          else if (src[i] === "}" && --depth === 0) break;
+        }
+      } else {
+        // Expression body / single statement: to the end of the statement at paren depth 0.
+        let depth = 0;
+        for (; i < src.length; i++) {
+          const c = src[i];
+          if (c === "(" || c === "{") depth++;
+          else if (c === ")" || c === "}") {
+            if (depth === 0) break;
+            depth--;
+          } else if ((c === ";" || c === "\n") && depth === 0) break;
+        }
+      }
+      out.push({ at: src.slice(0, m.index).split("\n").length, body: src.slice(m.index, i + 1) });
     }
-    out.push({ at: src.slice(0, m.index).split("\n").length, body: src.slice(m.index, i) });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/** Helpers in App.tsx that DRIVE — `(deck: DeckRef, id: DeckId, …)` whose body emits an intent.
+ *  Derived from the file, never listed here: a loop calling one of these mutates through it, which
+ *  the body's own syntax does not show. fxKeyUp is why this exists. */
+function drivingHelpers(src: string): string[] {
+  const out: string[] = [];
+  const re = /const (\w+) = \(deck: DeckRef, id: DeckId[^)]*\) => \{/g;
+  for (let m = re.exec(src); m; m = re.exec(src)) {
+    let depth = 0;
+    let i = m.index + m[0].length - 1;
+    for (; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) break;
+    }
+    if (/emitRef\.current\(/.test(src.slice(m.index, i))) out.push(m[1]);
   }
   return out;
 }
 
-// A loop MUTATES if it calls a deck setter or emits an intent for that deck.
-const MUTATES = /\bdeck\.set[A-Z]\w*\(|\bemitRef\.current\(\{|\bemit\(\{/;
+// A loop MUTATES if it calls a deck setter, emits an intent, or calls a helper that emits.
+const mutates = (body: string, drivers: string[]) =>
+  /\bdeck\.set[A-Z]\w*\(|\bemitRef\.current\(\{|\bemit\(\{/.test(body) ||
+  drivers.some((d) => new RegExp(`\\b${d}\\(`).test(body));
 // It is SAFE if it asks per deck whether we may drive, or if it only reads.
 const ASKS = /canDriveDeckRef\.current\(|canDriveDeck\(/;
 
 // Loops that mutate both decks WITHOUT a per-deck gate, each with why it is allowed to.
-const EXEMPT: { line: number; why: string }[] = [];
+// A reason, never a name — and the reason has to survive being read by someone else.
+const EXEMPT: { line: number; why: string }[] = [
+  {
+    line: 1416,
+    why:
+      "FX pad key RELEASE, both decks. ★ RELEASE IS THE ASYMMETRIC CASE: you must always be able to " +
+      "LET GO. Gating it on canDriveDeck would leave a pad latched on a deck whose grant was revoked " +
+      "mid-hold — a stuck effect, which is worse than the divergence a gate would prevent. It is " +
+      "already bounded to pads THIS device pressed (fxPads.heldPads keyed by deck+slot returns false " +
+      "with no press record), and the emit for a deck we cannot drive is dropped server-side by " +
+      "DjRoom.canDrive. Noted rather than gated: that bound is a property of the PRESS path, so if " +
+      "pad presses ever stop being per-deck gated, this exemption stops holding.",
+  },
+];
 
 describe("an action that touches BOTH decks asks per deck whether it may", () => {
   const loops = bothDeckLoops(SRC);
+  const drivers = drivingHelpers(SRC);
 
   test("the scan found loops to check (vacuity guard)", () => {
     expect(loops.length).toBeGreaterThanOrEqual(3);
   });
 
+  test("it sees the for-of form too, not only .forEach (the gap that hid fxKeyUp)", () => {
+    expect(loops.some((l) => l.body.startsWith("for ("))).toBe(true);
+  });
+
+  test("the driving-helper list is DERIVED and non-empty — an empty one silently weakens MUTATES", () => {
+    expect(drivers.length).toBeGreaterThan(0);
+    expect(drivers).toContain("fxKeyUp");
+  });
+
+  test("every exemption names a loop that is actually there and actually mutates", () => {
+    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers)));
+    expect(stale.map((e) => `EXEMPT App.tsx:${e.line} no longer matches a mutating both-deck loop`)).toEqual([]);
+  });
+
   test("every both-deck loop that mutates a deck gates per deck", () => {
     const offenders = loops
-      .filter((l) => MUTATES.test(l.body) && !ASKS.test(l.body))
+      .filter((l) => mutates(l.body, drivers) && !ASKS.test(l.body))
       .filter((l) => !EXEMPT.some((e) => Math.abs(e.line - l.at) < 3))
       .map((l) => `App.tsx:${l.at} mutates both decks without asking canDriveDeck`);
     expect(offenders).toEqual([]);

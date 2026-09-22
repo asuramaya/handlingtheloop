@@ -25,13 +25,21 @@ const SRC = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
  *  wearing a regex (Metron, reviewing ae3aed5). Statement forms only: a `.map` returning JSX is a
  *  render, and a render reads.
  */
-function bothDeckLoops(src: string): { at: number; body: string }[] {
-  const out: { at: number; body: string }[] = [];
-  const forms = [
-    /\(\["A",\s*"B"\][^)]*\)\.forEach\(\((\w+)\)\s*=>\s*/g, // .forEach, block or expression body
-    /for \((?:const|let) (\w+) of \(?\["A",\s*"B"\][^)]*\)?\)\s*/g, // for-of, block or single statement
+function bothDeckLoops(src: string): { at: number; body: string; bound: string | null }[] {
+  const out: { at: number; body: string; bound: string | null }[] = [];
+  // `bindsDeck` marks the form whose loop variable IS a deck (the others bind the id "A"/"B"), so the
+  // receiver can come from the loop's own syntax rather than from an assignment inside the body.
+  const forms: { re: RegExp; bindsDeck: boolean }[] = [
+    { re: /\(\["A",\s*"B"\][^)]*\)\.forEach\(\((\w+)\)\s*=>\s*/g, bindsDeck: false }, // .forEach, block or expression body
+    { re: /for \((?:const|let) (\w+) of \(?\["A",\s*"B"\][^)]*\)?\)\s*/g, bindsDeck: false }, // for-of, block or single statement
+    // ★ AND THE LOOP THAT ITERATES THE DECKS THEMSELVES. `for (const d of [engine.deckA,
+    // engine.deckB])` contains no "A"/"B" strings, so the two forms above never found it — the loop
+    // was invisible, not merely its receiver. App.tsx:1446 is exactly this shape and has been all
+    // along. Found by planting escapes against the receiver widening (35575b5) and asking which the
+    // scan still could not see.
+    { re: /for \((?:const|let) (\w+) of \[\s*\w+\.deckA\s*,\s*\w+\.deckB\s*\]\)\s*/g, bindsDeck: true },
   ];
-  for (const re of forms) {
+  for (const { re, bindsDeck } of forms) {
     for (let m = re.exec(src); m; m = re.exec(src)) {
       const from = m.index + m[0].length;
       let i = from;
@@ -53,7 +61,7 @@ function bothDeckLoops(src: string): { at: number; body: string }[] {
           } else if ((c === ";" || c === "\n") && depth === 0) break;
         }
       }
-      out.push({ at: src.slice(0, m.index).split("\n").length, body: src.slice(m.index, i + 1) });
+      out.push({ at: src.slice(0, m.index).split("\n").length, body: src.slice(m.index, i + 1), bound: bindsDeck ? m[1] : null });
     }
   }
   return out.sort((a, b) => a.at - b.at);
@@ -117,10 +125,10 @@ function deckReceivers(body: string): string[] {
 }
 
 // A loop MUTATES if it touches a deck WRITER, emits an intent, or calls a helper that emits.
-const mutates = (body: string, drivers: string[], writers: string[]) => {
+const mutates = (body: string, drivers: string[], writers: string[], bound: string | null = null) => {
   if (/\bemitRef\.current\(\{|\bemit\(\{/.test(body)) return true;
   if (drivers.some((d) => new RegExp(`\\b${d}\\(`).test(body))) return true;
-  const receivers = deckReceivers(body);
+  const receivers = [...deckReceivers(body), ...(bound ? [bound] : [])];
   // ★ `[(=]` COUNTS `===` AS AN ASSIGNMENT. Latent while the receiver was hard-coded to `deck`;
   // the moment receivers were derived, `d.padMode === "roll"` in the MIDI-feedback loop read as a
   // write and the scan demanded a gate on a loop that only lights lamps. A guard that cannot tell a
@@ -139,6 +147,17 @@ const ASKS = /canDriveDeckRef\.current\(|canDriveDeck\(/;
 // Loops that mutate both decks WITHOUT a per-deck gate, each with why it is allowed to.
 // A reason, never a name — and the reason has to survive being read by someone else.
 const EXEMPT: { line: number; why: string }[] = [
+  {
+    line: 1446,
+    why:
+      "LOCAL PLAYBACK FEEL, not session state: vinyl speed, backspin length and slip are this " +
+      "DEVICE's preferences, read from settings and applied to both decks. Nothing is emitted, so " +
+      "nothing can diverge from the room — the deck's owner is irrelevant to how heavy MY jog wheel " +
+      "feels. Note the three statements directly above it do the same thing to both decks without a " +
+      "loop at all (engine.deckA.setJogPhysics(…); engine.deckB.setJogPhysics(…)), which no " +
+      "loop-shaped scan can ever see: the loop was always a proxy for 'touches both decks', and the " +
+      "proxy has a hole that syntax cannot close. See the ruling on the seventh turn.",
+  },
   {
     line: 1416,
     why:
@@ -180,13 +199,13 @@ describe("an action that touches BOTH decks asks per deck whether it may", () =>
   });
 
   test("every exemption names a loop that is actually there and actually mutates", () => {
-    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers, writers)));
+    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers, writers, l.bound)));
     expect(stale.map((e) => `EXEMPT App.tsx:${e.line} no longer matches a mutating both-deck loop`)).toEqual([]);
   });
 
   test("every both-deck loop that mutates a deck gates per deck", () => {
     const offenders = loops
-      .filter((l) => mutates(l.body, drivers, writers) && !ASKS.test(l.body))
+      .filter((l) => mutates(l.body, drivers, writers, l.bound) && !ASKS.test(l.body))
       .filter((l) => !EXEMPT.some((e) => Math.abs(e.line - l.at) < 3))
       .map((l) => `App.tsx:${l.at} mutates both decks without asking canDriveDeck`);
     expect(offenders).toEqual([]);

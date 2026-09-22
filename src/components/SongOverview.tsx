@@ -150,6 +150,7 @@ export function SongOverview(props: SongOverviewProps) {
   useTouchDropTarget(
     canvasRef,
     (tracks) => {
+      if (locked) return; // watch-only: a drop LOADS a deck, which is driving. See the onDrop note.
       if (tracks[0] && onLoadTrack) onLoadTrack(tracks[0]);
     },
     setDropActive,
@@ -823,6 +824,11 @@ export function SongOverview(props: SongOverviewProps) {
       onDrop={(e) => {
         e.preventDefault();
         setDropActive(false);
+        // ★ WATCH-ONLY: A DROP IS DRIVING. This rail lives in `.lanes-flank`, OUTSIDE the control
+        // surface the no-drive shield now covers (d29dcd1), so the shield that used to make this
+        // handler unreachable no longer does. Same shape as the DeckLane drop guard added there:
+        // a handler that works only because something else sits over it is not guarded.
+        if (locked) return;
         const raw = e.dataTransfer.getData(TRACK_DND_MIME);
         if (raw && onLoadTrack) {
           try {
@@ -840,6 +846,7 @@ export function SongOverview(props: SongOverviewProps) {
         if (f && onLoadFile) onLoadFile(f);
       }}
       onDragOver={(e) => {
+        if (locked) return; // no drop cue on a deck this device may not load
         if (e.dataTransfer.types.includes(TRACK_DND_MIME)) {
           e.preventDefault();
           e.dataTransfer.dropEffect = "copy";

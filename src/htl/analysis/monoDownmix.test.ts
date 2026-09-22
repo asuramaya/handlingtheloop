@@ -72,7 +72,17 @@ describe("analysis is mono-safe", () => {
       "../stems/fft": "takes plain Float32Arrays, never an AudioLike or a channel pair — it cannot read channel 1",
     };
     const offenders: string[] = [];
-    for (const f of ["analyze.ts", "beats.ts", "structure.ts"]) {
+    // ★ AND THE ROSTER IS DERIVED, NOT WRITTEN DOWN. This named three files. There are ten modules
+    // in this directory, so a hand-written roster is itself a closed-world claim about which of
+    // them form the chain — the exact "a comment that COUNTS or NAMES its neighbours is
+    // load-bearing" shape, in test form. Add an outside import to palette.ts or debrick.ts and a
+    // three-file roster passes while the population it stands for has quietly widened. Reading the
+    // directory costs nothing and cannot go stale. (Checked at the time of writing: only analyze.ts
+    // and beats.ts reach outside at all, both to ../stems/fft, so this widening is free today —
+    // which is the point. It was free to state correctly and it was not stated correctly.)
+    const chain = readdirSync(__dirname).filter((f) => /\.ts$/.test(f) && !/\.test\./.test(f));
+    expect(chain.length).toBeGreaterThanOrEqual(3); // vacuity: an empty roster scans nothing
+    for (const f of chain) {
       const src = readFileSync(join(__dirname, f), "utf8");
       for (const m of src.matchAll(/^import\s+(?:type\s+)?.*?from\s+"([^"]+)"/gm)) {
         const spec = m[1];

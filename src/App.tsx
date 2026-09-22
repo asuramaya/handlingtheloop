@@ -2777,6 +2777,14 @@ function AppBody() {
   // the AutoMixer, which also calls it, is never routed through Smart Fader.)
   const dragCrossfade = useCallback(
     (x: number) => {
+      // ★ WATCH-ONLY: THE CROSSFADER IS A WHOLE-BOARD MOVE. Guarded HERE, at the mutator, because
+      // until now its only guard was `.xfader-bar.locked { pointer-events: none }` plus the stage
+      // shield — and setup.css claimed "Control is gated in the handlers too", which was not true of
+      // this path. Same shape as the drop handlers that were only ever covered by the shield: a
+      // control that works because something sits over it is not guarded. It also matters more than
+      // most, because a listener who moves this hears a different mix from the host's — the operator's
+      // rule is that performers and listeners stay synced.
+      if (lockedRef.current) return;
       if (smartFader.isArmed) {
         const v = x < -1 ? -1 : x > 1 ? 1 : x;
         smartFader.onCrossfade(v);

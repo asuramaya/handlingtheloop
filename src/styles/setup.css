@@ -328,8 +328,11 @@
 
 /* A watch-only / off-seat deck (a follower, or a stepped-up DJ's OTHER deck): the button
    bank + crossfader go non-interactive and dim, but the WAVEFORM lane is untouched — a
-   listener can still zoom + expand it (purely visual). Control is gated in the handlers too;
-   this is the visible affordance. */
+   listener can still zoom + expand it (purely visual). This is the visible AFFORDANCE; the guard
+   itself is in the handlers (FxStrip's mutators, DeckLane/SongOverview's drops, dragCrossfade).
+   ★ That sentence used to be written as though the handler guards already existed everywhere, and
+   for the crossfader they did not — this class was its only protection. Do not read it as licence
+   to skip a handler guard: check the handler. */
 .bank.locked,
 .xfader-bar.locked {
   pointer-events: none;

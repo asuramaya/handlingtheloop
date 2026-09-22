@@ -401,7 +401,11 @@ async function main() {
       console.log("\n  LIVE + REAL CompFx — is the upstream of a BYPASSED device still scheduled?\n");
       const pct = (n) => (r.active ? `${((n / r.active) * 100).toFixed(1)}%` : "n/a");
       console.log(`   active            ${String(r.active).padStart(5)} process() calls/s   (baseline, counter feeding the comp)`);
-      console.log(`   comp BYPASSED     ${String(r.bypassed).padStart(5)}   ${pct(r.bypassed)}  \u2190 setBypass(true), the real device`);
+      // ★ THIS ROW IS EXPECTED TO BE NON-ZERO AND IT IS NOT THE QUESTION. CompFx is an INSERT with a
+      // dry leg: bypassed, it still carries audio input→dry→output, so the counter upstream is
+      // legitimately still reachable. What bypass prunes is the WET subgraph (the worklet), which a
+      // counter placed upstream cannot see. Read the meter row, not this one.
+      console.log(`   comp BYPASSED     ${String(r.bypassed).padStart(5)}   ${pct(r.bypassed)}  \u2190 setBypass(true) \u2014 non-zero EXPECTED: the dry leg still carries audio`);
       console.log(`   un-bypassed       ${String(r.reactivated).padStart(5)}   ${pct(r.reactivated)}  \u2190 the control: a zero that cannot come back is a broken probe`);
       console.log(`   output severed    ${String(r.severed).padStart(5)}   ${pct(r.severed)}  \u2190 the REFERENCE: an unambiguously cut path`);
       console.log(`   + wet meter cut   ${String(r.severedNoMeter).padStart(5)}   ${pct(r.severedNoMeter)}  \u2190 the AnalyserNode on the wet bus, also disconnected`);

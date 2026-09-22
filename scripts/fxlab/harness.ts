@@ -3029,9 +3029,20 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   comp.output.disconnect();
   const severed = await sample(1000);
   // …and then the wet-bus AnalyserNode as well. An AnalyserNode is a SINK: it must analyse whatever
-  // reaches it, so everything upstream of it stays reachable. If THIS is the row that finally
-  // zeroes, the meter is what keeps a CompFx's upstream scheduled.
-  (comp as unknown as { wetMeter: AnalyserNode }).wetMeter.disconnect();
+  // reaches it, so everything upstream of it stays reachable.
+  //
+  // ★ THIS ROW WAS A NO-OP AND I READ IT AS A REFUTATION. An AnalyserNode HAS NO OUTPUTS, so
+  // `wetMeter.disconnect()` disconnects nothing — the edge exists only from the source side and can
+  // only be cut with `wet.disconnect(wetMeter)`. I ran this twice, saw "no change", and reported the
+  // meter RULED OUT. It was the cause all along (Deckard, 5b90ca3). A control that shows no change
+  // has two readings — the hypothesis is wrong, or the control did nothing — and I published the
+  // first without checking the second.
+  const wetBus = (comp as unknown as { wet: AudioNode; wetMeter: AnalyserNode });
+  try {
+    wetBus.wet.disconnect(wetBus.wetMeter);
+  } catch {
+    /* already cut by the bypass above, which is the fix */
+  }
   const severedNoMeter = await sample(1000);
   return { active, bypassed, reactivated, severed, severedNoMeter };
 };

@@ -230,6 +230,7 @@ export class AudioEngine {
       // showing the ring: the first thing it printed was two of those warnings and no answer.
       this.repairDegradedFx("boot");
       this.installMasterLimiter();
+      this.watchRacks();
       this.patchSidechains();
     });
   }
@@ -320,6 +321,19 @@ export class AudioEngine {
   // discoverability failure, not a missing feature — hence a NAMED source rather than another
   // opaque boolean. It also finally makes true the line CompFx has claimed since it was written
   // ("input 1: the OTHER deck, or the mic"): the mic half had never been built.
+  // ★ RE-PATCH WHENEVER A RACK CHANGES, not only at boot. patchSidechains used to run exactly
+  // twice: once from the constructor, and from the callback it installs on the comp device itself.
+  // A rack rebuild can REPLACE that device — the late worklet repair (rebuildDegradedFx) rebuilds a
+  // comp that lost the attach race, and a reconcile from a preset or the wire can too — and the
+  // fresh instance carries the params across but not the wiring: nothing patched the other deck
+  // into its sidechain input, and it had no callback with which to ask. Its sidechain control was
+  // then dead for the life of that device, whatever the panel showed. The rack now says when it
+  // re-wires, so the patch follows the devices that actually exist.
+  private watchRacks() {
+    this.deckA.rack.onRebuilt = () => this.patchSidechains();
+    this.deckB.rack.onRebuilt = () => this.patchSidechains();
+  }
+
   private patchSidechains() {
     try {
       for (const id of ["A", "B"] as const) {

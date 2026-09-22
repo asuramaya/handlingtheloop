@@ -372,7 +372,17 @@ export class FxRack {
   /** Re-wire chainIn → dev0 → dev1 → … → output. Splicing gain nodes is click-free,
    *  so add/remove/reorder are seamless. Device outputs only ever feed the next device
    *  or `output` (no external taps), so a blanket `output.disconnect()` is safe. */
+  /** Fired after every re-wire, so an owner that patched something INTO a device (the engine's
+   *  cross-deck sidechain) can re-patch. A rebuild can REPLACE a device instance — see
+   *  rebuildDegraded — and whatever was wired into the old one is wired into a corpse. */
+  onRebuilt?: () => void;
+
   private rebuild() {
+    this.rebuildGraph();
+    this.onRebuilt?.();
+  }
+
+  private rebuildGraph() {
     try {
       this.chainIn.disconnect();
     } catch {

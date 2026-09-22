@@ -2840,3 +2840,80 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   if (realSupported) MediaRecorder.isTypeSupported = realSupported as typeof MediaRecorder.isTypeSupported;
   return { mime, takePeak: peak, ceiling: Math.pow(10, -0.3 / 20), grDb: gr, clipped, fitGain };
 };
+
+// ★ HOW BIG IS A REAL BOARD? — thread ddf28822.
+//
+// server/room.ts persists the client-supplied snapshot under one Durable Object key, and a DO value
+// may not exceed 128 KiB. The put is best-effort inside a try/catch, so an oversized board RELAYS
+// perfectly and reaches disk never: the room looks healthy and a cold restart serves whatever was
+// persisted before it. room.test.ts (546c987) proved that behaviour; nobody had measured whether a
+// real board can get there.
+//
+// Guessing is the thing this repo keeps punishing, so this builds the snapshot from the REAL engine
+// — the always-armed pad-FX bank both decks provision at boot, plus stem chains with every device
+// kind in them — and serialises it through the deck's OWN fxSnapshot()/fxChainSnapshot(). Whatever
+// this returns is what the wire would carry, not an estimate of it.
+(globalThis as unknown as { fxlabSnapshotSize: (chains?: number) => Promise<{ chains: number; bytes: number; masterDevices: number; chainDevices: number; params: number }> }).fxlabSnapshotSize = async (chains = 0) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const KINDS = ["delay", "reverb", "chorus", "saturator", "crush", "mod", "gate", "noise", "comp"] as const;
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 400)); // let ensurePadFx provision the permanent bank
+  const deckSnap = (id: "A" | "B") => {
+    const deck = eng.deck(id);
+    for (let c = 0; c < chains; c++) {
+      const chain = deck.addFxChain(`stem chain ${c + 1}`, 1 << c);
+      for (const k of KINDS) deck.addFxTo(chain.id, k);
+    }
+    return {
+      videoId: "dQw4w9WgXcQ",
+      name: "A Track With A Reasonably Long Title (Extended Mix)",
+      artist: "An Artist Name",
+      bpm: 128,
+      duration: 371.5,
+      tempo: 1.02,
+      trim: 1,
+      level: 0.8,
+      eqLow: 0,
+      eqMid: -2.5,
+      eqHigh: 1.5,
+      filter: 0,
+      keylock: true,
+      quantize: true,
+      cuePoint: 12.5,
+      hotCues: Array.from({ length: 8 }, (_, i) => i * 16.25),
+      hotLoops: Array.from({ length: 8 }, (_, i) => ({ active: false, start: i * 8, end: i * 8 + 4, beats: 8 })),
+      loop: { active: true, start: 64, end: 80, beats: 32 },
+      loopInPoint: 64,
+      position: 91.25,
+      playing: true,
+      stemGains: { drums: 1, bass: 0.9, vocals: 1.1, other: 1 },
+      stemMutes: { drums: false, bass: false, vocals: true, other: false },
+      hasStems: true,
+      stemsNeural: true,
+      fx: deck.fxSnapshot(),
+      fxChains: deck.fxChainSnapshot(),
+    };
+  };
+  const snap = {
+    decks: { A: deckSnap("A"), B: deckSnap("B") },
+    crossfade: 0.5,
+    zoom: { A: 30, B: 30 },
+    tempoRange: 8,
+    syncSlave: "B",
+    keySlave: null,
+  };
+  const bytes = JSON.stringify(snap).length;
+  const masterDevices = snap.decks.A.fx.length + snap.decks.B.fx.length;
+  const chainDevices = [snap.decks.A, snap.decks.B].reduce((n, d) => n + d.fxChains.reduce((m, c) => m + c.devices.length, 0), 0);
+  const params = [snap.decks.A, snap.decks.B].reduce(
+    (n, d) =>
+      n +
+      d.fx.reduce((m, f) => m + Object.keys(f.params).length, 0) +
+      d.fxChains.reduce((m, c) => m + c.devices.reduce((k, f) => k + Object.keys(f.params).length, 0), 0),
+    0,
+  );
+  await eng.ctx.close();
+  return { chains, bytes, masterDevices, chainDevices, params };
+};

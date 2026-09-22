@@ -73,6 +73,7 @@ function parseArgs(argv) {
       case "--capture-tap": a.captureTap = true; break;
       case "--codec-overshoot": a.codecOvershoot = true; break;
       case "--codec-margin": a.codecMargin = true; break;
+      case "--snapshot-size": a.snapshotSize = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -387,6 +388,33 @@ async function main() {
       );
       if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
       process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
+      return;
+    }
+
+    if (args.snapshotSize) {
+      // Thread ddf28822: an oversized snapshot relays fine and persists NEVER, silently, so a cold
+      // restart serves a stale board. room.test.ts proved the behaviour; this asks whether a real
+      // board can reach the 128 KiB DO value cap, from the engine rather than from an estimate.
+      const CAP = 128 * 1024;
+      const rows = [];
+      for (const chains of [0, 1, 2, 4]) rows.push(await page.evaluate((c) => globalThis.fxlabSnapshotSize(c), chains));
+      console.log("\n  SNAPSHOT SIZE — what a real board serialises to, against the 128 KiB DO value cap\n");
+      for (const r of rows) {
+        const pct = (r.bytes / CAP) * 100;
+        console.log(
+          `   ${String(r.chains).padStart(2)} stem chain(s)/deck   ${String(r.bytes).padStart(7)} bytes   ${f(pct, 1).padStart(6)}% of the cap   devices ${String(r.masterDevices + r.chainDevices).padStart(3)}   params ${String(r.params).padStart(4)}${r.bytes > CAP ? "   \u2190 OVER" : ""}`,
+        );
+      }
+      const base = rows[0];
+      const perChain = rows.length > 1 ? (rows[rows.length - 1].bytes - base.bytes) / (rows[rows.length - 1].chains * 2) : 0;
+      console.log(`\n   a deck's permanent bank alone   ${base.bytes} bytes for both decks`);
+      console.log(`   each stem chain adds            ~${Math.round(perChain)} bytes`);
+      console.log(`   chains per deck to reach the cap ~${perChain > 0 ? Math.ceil((CAP - base.bytes) / (perChain * 2)) : "n/a"}`);
+      // REPORTS. The question it answers is "is ddf28822 theoretical or live", and the answer is a
+      // number, not a verdict — the UI caps how many chains a DJ can build, and this says nothing
+      // about lyrics or stem views, which ride their own keys with their own bounds.
+      console.log(`\n   ${rows.some((r) => r.bytes > CAP) ? "\u2717 a REACHABLE board exceeds the cap \u2014 ddf28822 is live, not theoretical" : "\u2713 no configuration measured here reaches the cap"}\n`);
+      process.exitCode = 0;
       return;
     }
 

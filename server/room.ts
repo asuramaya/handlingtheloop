@@ -126,6 +126,7 @@ export class DjRoom {
   // is fine. Throttle each cache to at most one write per PERSIST_MIN_MS.
   private static PERSIST_MIN_MS = 10_000;
   private snapAt = 0;
+  private snapTooBigAt = 0; // throttles the not-persisted warning; 0 = nothing wrong right now
   // ★ PER DECK, not per record. These throttle a write whose VALUE covers both decks, so a single
   // timestamp made deck B's publish collide with deck A's and vanish: leading-edge throttle, no
   // trailing flush, and a deck publishes its envelope roughly once per track load — so there is no
@@ -808,8 +809,25 @@ export class DjRoom {
             this.snapAt = now;
             try {
               await this.state.storage.put("snapshot", msg.snapshot);
-            } catch {
-              /* keep the in-memory snapshot; persistence is non-critical */
+              this.snapTooBigAt = 0;
+            } catch (e) {
+              // ★ SAY SO. The catch is right — a persist must never cost a socket — but it was
+              // SILENT, and the failure it swallows is invisible from the outside: the board keeps
+              // relaying perfectly from memory while disk holds an older one, so the room looks
+              // healthy right up until a cold restart serves the stale board. Measured (ddf28822):
+              // a two-deck board is ~2.6 KB plus ~1.7 KB per stem chain per deck, so reaching the
+              // 128 KiB value cap takes about 39 chains on a deck — not normal use, and NOTHING in
+              // the client bounds chain count. Throttled to once a minute per room: the publish
+              // that fails will fail again in ten seconds and a log nobody can read is as useless
+              // as no log.
+              const bytes = JSON.stringify(msg.snapshot ?? null).length;
+              if (now - this.snapTooBigAt >= 60_000) {
+                this.snapTooBigAt = now;
+                console.warn(
+                  `[htl-room] snapshot NOT persisted (${bytes} bytes, cap ${DO_VALUE_CAP}): the live board is served from memory and a cold restart will serve an OLDER one —`,
+                  e,
+                );
+              }
             }
           }
         }

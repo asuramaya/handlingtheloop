@@ -1187,3 +1187,40 @@ describe("DjRoom FX drive gate", () => {
     expect(sawFx(host, "B")).toBe(false);
   });
 });
+
+// The observability half of ddf28822: the persist failure was swallowed in silence, and a silent
+// degradation is the part nobody can act on. Measured with the engine (fxlab --snapshot-size): a
+// two-deck board is ~2.6 KB plus ~1.7 KB per stem chain per deck, so the cap needs ~39 chains on a
+// deck — not normal use, and nothing in the client bounds chain count.
+describe("DjRoom says when a board is too big to persist", () => {
+  let h: ReturnType<typeof makeRoom>;
+  let warns: string[];
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    h = makeRoom();
+    warns = [];
+    spy = vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => void warns.push(a.map(String).join(" ")));
+  });
+  afterEach(() => spy.mockRestore());
+
+  const fatSnapshot = () => ({ decks: { A: { videoId: "FAT", pad: "x".repeat(DO_VALUE_CAP) }, B: {} } });
+
+  it("logs the size and what it costs, instead of swallowing it", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: fatSnapshot() });
+    const line = warns.find((w) => w.includes("snapshot NOT persisted"));
+    expect(line).toBeTruthy();
+    expect(line).toMatch(/cold restart will serve an OLDER one/);
+    expect(line).toContain(String(DO_VALUE_CAP)); // the cap, so the reader can judge the number
+  });
+
+  // The control: a board that fits must stay quiet. A warning on every publish would be noise, and
+  // noise is how a real signal gets filtered out of a console.
+  it("says nothing at all about a board that fits", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "SMALL" }, B: {} } } });
+    expect(warns.filter((w) => w.includes("snapshot NOT persisted"))).toEqual([]);
+  });
+});

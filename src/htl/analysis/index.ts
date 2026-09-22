@@ -18,6 +18,7 @@ export {
   piTrim,
   serializeGrid,
   nearestBeat,
+  nextBeat,
   shiftKey,
   smartKeyShift,
   type AudioLike,

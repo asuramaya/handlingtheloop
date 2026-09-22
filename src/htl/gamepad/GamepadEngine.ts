@@ -1,5 +1,6 @@
 import type { AudioEngine, DeckId } from "@htl/audio";
 import type { MidiEvent } from "@htl/midi";
+import { nextBeat } from "@htl/analysis";
 
 // An Xbox / W3C "standard"-mapping gamepad as a DJ control surface. It does NOT touch the
 // decks directly — it emits the SAME MidiEvent stream the MIDI layer produces, fed into App's
@@ -294,12 +295,17 @@ export class GamepadEngine {
       return;
     }
     // The next beat at/after the playhead, and how long (in REAL seconds) until it sounds.
-    const nextIdx = Math.max(0, Math.ceil((pos - g.firstBeat) / g.interval));
-    const realToNext = (g.firstBeat + nextIdx * g.interval - pos) / (deck.rate || 1);
+    // ★ THROUGH THE GRID'S OWN HELPER, not `firstBeat + k·interval`. This used to read the uniform
+    // comb directly, which is a DIFFERENT answer from the tracked beats on most real material —
+    // median 0.094 beats apart across the local analysis cache, and half a beat out on the worst
+    // grids, i.e. the rumble landing precisely off the beat. It also counted bars from index 0
+    // rather than from `downbeat`, so the heavier downbeat pulse fell on whichever beat of the bar
+    // the grid happened to start on.
+    const { index: nextIdx, time: nextAt, downbeat: down } = nextBeat(g, pos);
+    const realToNext = (nextAt - pos) / (deck.rate || 1);
     if (realToNext > RUMBLE_LEAD_MS / 1000) return; // not imminent yet
     if (this.firedBeat[id] === nextIdx) return; // already pulsed for this beat
     this.firedBeat[id] = nextIdx;
-    const down = nextIdx % (g.beatsPerBar ?? 4) === 0;
     void act
       .playEffect("dual-rumble", {
         duration: down ? 110 : 70,

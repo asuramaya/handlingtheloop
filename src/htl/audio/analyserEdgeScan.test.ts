@@ -19,7 +19,12 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 // the code, which is the exact confusion it exists to end; the ORDER BY scan in server/db learned
 // this days ago and I rebuilt the mistake rather than reading its neighbour.
 const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/([^:])\/\/.*$/gm, "$1");
-const ROOTS = ["../../htl/audio", "../../components"];
+// ★ THE POPULATION WAS TOO SMALL AND IT EXCLUDED THE SCENE OF THE CRIME. This scan read src/ only,
+// so it could not see scripts/fxlab/harness.ts — the very file where I wrote the no-op twice and
+// published "the meter is ruled out" off it. It is still there. scripts/ was outside every tsconfig
+// too (89b720f4, fixed in 747b4a0); the same blind population hid both. A scan whose rows exclude
+// the place the defect actually lives is the wrong-rows error in test form.
+const ROOTS = ["../../htl/audio", "../../components", "../../../scripts/fxlab", "../../../scripts/joglab"];
 const files: { path: string; src: string }[] = [];
 for (const root of ROOTS) {
   const dir = new URL(`${root}/`, import.meta.url);
@@ -27,7 +32,7 @@ for (const root of ROOTS) {
     if (!/\.(ts|tsx)$/.test(name) || name.endsWith(".test.ts") || name.endsWith(".test.tsx")) continue;
     const u = new URL(name, dir);
     if (statSync(u).isDirectory()) continue;
-    const label = root === "../../components" ? "src/components" : "src/htl/audio";
+    const label = root.replace("../../../", "").replace("../../", "src/");
     files.push({ path: `${label}/${name}`, src: stripComments(readFileSync(u, "utf8")) });
   }
 }
@@ -37,6 +42,11 @@ function analyserNames(src: string): string[] {
   const out = new Set<string>();
   for (const m of src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*[\w.]*\.createAnalyser\(\)/g)) out.add(m[1]);
   for (const m of src.matchAll(/this\.(\w+)\s*=\s*[\w.]*\.createAnalyser\(\)/g)) out.add(m[1]);
+  // ★ AND THE ONES THIS FILE ONLY BORROWS. The harness reaches another module's meter through a
+  // cast — `(d as unknown as { wetMeter: AnalyserNode }).wetMeter` — so the name is never minted
+  // here and a scan looking only for createAnalyser() walks straight past it. Any name ANNOTATED
+  // as an AnalyserNode is an analyser for this test's purposes, whoever constructed it.
+  for (const m of src.matchAll(/(\w+)\s*:\s*AnalyserNode\b/g)) out.add(m[1]);
   return [...out];
 }
 

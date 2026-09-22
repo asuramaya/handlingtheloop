@@ -2980,7 +2980,15 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
       // analyse whatever reaches it, so everything upstream of it stays reachable — which would
       // defeat exactly the pruning setBypass's comment relies on. Cutting the meter is the one
       // difference between this row and the plain bypassed row.
-      if (mode === "bypassed-nometer") (d as unknown as { wetMeter: AnalyserNode }).wetMeter.disconnect();
+      // ★ CUT FROM THE SOURCE. This line used to read `wetMeter.disconnect()`, which severs NOTHING
+      // — an AnalyserNode has no outputs. So this row was byte-for-byte the plain bypassed row, and
+      // I read its non-difference twice as "the meter is ruled out". The hypothesis was right; the
+      // control did nothing. The edge exists only from the source and only `wet.disconnect(meter)`
+      // takes it. Caught mechanically by analyserEdgeScan once that scan was widened to see scripts/.
+      if (mode === "bypassed-nometer") {
+        const g = d as unknown as { wet: GainNode; wetMeter: AnalyserNode };
+        g.wet.disconnect(g.wetMeter);
+      }
       tail.connect(d.input);
       tail = d.output;
       devices.push(d);

@@ -549,15 +549,21 @@ async function main() {
       // ★ WHAT THIS DOES NOT ESTABLISH, said here rather than left for the reader to remember.
       console.log("\n   \u2605 READ THIS BEFORE ACTING ON THE ROWS ABOVE. The renderer is an OfflineAudioContext, and an");
       console.log("   offline render is not obliged to prune the same graph a live one does \u2014 this harness already");
-      console.log("   documents one offline/live divergence (port messages never reach a processor offline). So the");
-      console.log("   finding is 'the offline renderer does not prune a bypassed device', and whether PRODUCTION pays");
-      console.log("   this is UNCONFIRMED. Confirm on a live context before changing any code on account of it.");
-      console.log("   Offline render time is also not real-time audio-thread load; only the RATIO is being claimed.");
-      console.log("   \u2605 SETTLED SINCE: Deckard's scripts/liveprune.mjs counts process() calls on a LIVE context and");
-      console.log("   gets a clean 0 for a simple node chain \u2014 so pruning DOES work live and this offline result is a");
-      console.log("   renderer artefact for that case. What is still open is CompFx specifically: --live-comp-prune");
-      console.log("   cannot make even a SEVERED CompFx output stop scheduling its upstream, so that rig cannot see a");
-      console.log("   prune through this device and the question is unanswered rather than answered badly.\n");
+      console.log("   documents one offline/live divergence (port messages never reach a processor offline). Only the");
+      console.log("   RATIO is claimed; offline render time is not real-time audio-thread load.");
+      console.log("   \u2605 THIS PARAGRAPH USED TO SAY THE OPPOSITE, and the row moved under it. It read \'the finding is");
+      console.log("   that the offline renderer does not prune a bypassed device\' \u2014 true when written, and then 5b90ca3");
+      console.log("   cut the wet\u2192wetMeter edge in BaseFxDevice\'s own gate and the bypassed row fell to a few percent.");
+      console.log("   A hard-coded conclusion printed underneath a computed verdict will contradict it the day the");
+      console.log("   product is fixed, and say so in the confident voice. Left here as the specimen it is.");
+      console.log("   \u2605 AND THE nometer ROW ONLY STARTED MEANING ANYTHING JUST NOW: it used to call");
+      console.log("   wetMeter.disconnect(), which severs nothing, so it was the bypassed row under another name and");
+      console.log("   its non-difference was read as \'the meter is ruled out\'. It now cuts wet\u2192meter from the source.");
+      console.log("   What the gap between those two rows measures TODAY is only the analyser\'s own per-block work on");
+      console.log("   an already-pruned device \u2014 the subgraph it used to hold alive is cut by the product itself now.");
+      console.log("   \u2605 STILL OPEN: CompFx on a LIVE context. Deckard\'s scripts/liveprune.mjs gets a clean 0 for a");
+      console.log("   simple node chain, so pruning works live; but --live-comp-prune cannot make even a SEVERED CompFx");
+      console.log("   stop scheduling its upstream, so that rig cannot see a prune through this device at all.\n");
       process.exitCode = 0;
       return;
     }

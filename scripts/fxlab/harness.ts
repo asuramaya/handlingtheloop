@@ -3046,3 +3046,101 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   const severedNoMeter = await sample(1000);
   return { active, bypassed, reactivated, severed, severedNoMeter };
 };
+
+// ★ DOES A SYNCED PAIR STAY LOCKED? — the operator's report, measured before anything is blamed.
+//
+// "falling out of sync and failing to align songs". The phase-lock loop (AudioEngine.phaseCorrect)
+// already fixed drift once (6fa51b6: "SYNC matched tempo exactly but only phase-ALIGNED once"), so
+// the question is whether it still holds, and under WHAT. The loop has two early returns that leave
+// the slave's rate trim APPLIED while no correction runs — a jog/bend, and an active loop — and a
+// held trim is a constant tempo offset. That is a hypothesis; this is the instrument.
+//
+// Two decks, real engine, real grids, real transport. Phase error is read from the engine's own
+// syncDiag (errBeats, the quantity the loop is minimising) so the measurement and the controller
+// agree on what "in sync" means rather than re-deriving it beside them.
+(globalThis as unknown as { fxlabSyncDrift: (scenario: string, seconds: number) => Promise<Record<string, unknown>> }).fxlabSyncDrift = async (scenario, seconds) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 300));
+  const sr = eng.ctx.sampleRate;
+  // A click track with a KNOWN grid: the grid is the ground truth, so drift cannot be blamed on
+  // analysis. Deck B is deliberately a different tempo, which is what SYNC exists to reconcile.
+  // ★ THE STIMULUS IS THE EXPERIMENT. A PERFECT constant grid (no beats[], exact interval) gives
+  // localTempoDev a constant 0, so the feed-forward has nothing to predict and the PI has nothing
+  // to chase — the loop's job is trivial and it holds 0.000 beats forever. That is the sine-wave
+  // mistake from the codec probe in another costume: measuring the easiest signal the rig can
+  // synthesise and reporting it as the behaviour. Real analysis emits a DYNAMIC grid whose beats
+  // waver, which is the condition phaseCorrect's own comment says it exists for. `wave` is that.
+  const mk = (bpm: number, wave: number) => {
+    const secs = 240;
+    const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    const spb = 60 / bpm;
+    const beats: number[] = [];
+    let t = 0;
+    for (let k = 0; t < secs; k++) {
+      beats.push(t);
+      // A slow rubato: the bar-scale tempo breathing a live take or a DJ-played record has.
+      t += spb * (1 + wave * Math.sin((2 * Math.PI * k) / 32));
+    }
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (const at0 of beats) {
+        const at = Math.round(at0 * sr);
+        for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
+      }
+    }
+    const grid: Record<string, unknown> = { bpm, firstBeat: beats[0], interval: spb };
+    if (wave > 0) grid.beats = Float32Array.from(beats); // what the analyser actually produces
+    return { buf: b, grid };
+  };
+  // `wave:<n>` scenarios give BOTH decks a wavering grid, independently phased so their rubato does
+  // not cancel — two records breathing differently is the normal case, not the exotic one.
+  const wave = scenario.startsWith("wave") ? Number(scenario.split(":")[1] || "0.02") : 0;
+  const A = mk(128, wave);
+  const B = mk(124, wave * 1.3);
+  eng.deckA.setBuffer(A.buf, A.grid as never);
+  eng.deckB.setBuffer(B.buf, B.grid as never);
+  eng.setCrossfade(0);
+  eng.deckA.play();
+  eng.deckB.play();
+  eng.toggleSync("B"); // B follows A
+  await new Promise((r) => setTimeout(r, 1500)); // let the loop acquire before sampling
+  const samples: { t: number; err: number | null; trim: number | null; sat: boolean }[] = [];
+  const t0 = performance.now();
+  let did = false;
+  while ((performance.now() - t0) / 1000 < seconds) {
+    const el = (performance.now() - t0) / 1000;
+    // The disturbance under test, applied once, a third of the way in.
+    if (!did && el > seconds / 3) {
+      did = true;
+      if (scenario === "loop") eng.deckB.setBeatLoop(4);
+      if (scenario === "loop-master") eng.deckA.setBeatLoop(4);
+      if (scenario === "tempo") eng.deckA.setTempo(0.03);
+      if (scenario === "seek") eng.deckB.seek(eng.deckB.position() + 17.3);
+    }
+    // …and released two thirds in, so the recovery is inside the window rather than after it.
+    if (did && el > (seconds * 2) / 3) {
+      if (scenario === "loop") eng.deckB.clearLoop();
+      if (scenario === "loop-master") eng.deckA.clearLoop();
+    }
+    const d = eng.syncDiag;
+    samples.push({ t: +el.toFixed(2), err: d.errBeats, trim: d.trim, sat: d.saturated });
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  eng.deckA.pause();
+  eng.deckB.pause();
+  const errs = samples.map((s) => s.err).filter((e): e is number => e != null);
+  const tail = errs.slice(-8);
+  await eng.ctx.close();
+  return {
+    scenario,
+    n: samples.length,
+    worstErr: errs.length ? Math.max(...errs.map(Math.abs)) : null,
+    finalErr: tail.length ? tail.reduce((a, b) => a + Math.abs(b), 0) / tail.length : null,
+    trimHeld: samples.filter((s) => s.trim != null && Math.abs(s.trim) > 1e-6).length,
+    saturatedTicks: samples.filter((s) => s.sat).length,
+    series: samples.filter((_, i) => i % 2 === 0).map((s) => `${s.t}s ${s.err == null ? "--" : s.err.toFixed(3)}`),
+  };
+};

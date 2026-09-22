@@ -76,6 +76,7 @@ function parseArgs(argv) {
       case "--snapshot-size": a.snapshotSize = true; break;
       case "--bypass-cost": a.bypassCost = true; break;
       case "--live-comp-prune": a.liveCompPrune = true; break;
+      case "--sync-drift": a.syncDrift = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -390,6 +391,36 @@ async function main() {
       );
       if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
       process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
+      return;
+    }
+
+    if (args.syncDrift) {
+      // Thread 42fa00eb, the operator's report. Phase error in BEATS between a synced pair, on the
+      // real engine, sampled from the loop's OWN diagnostic so instrument and controller agree on
+      // what "in sync" means. The disturbance is applied a third of the way in and released two
+      // thirds in, so recovery is inside the window.
+      const secs = 18;
+      const rows = [];
+      for (const sc of ["steady", "loop", "loop-master", "tempo", "seek", "wave:0.01", "wave:0.03", "wave:0.06"]) rows.push(await page.evaluate(([s, n]) => globalThis.fxlabSyncDrift(s, n), [sc, secs]));
+      console.log(`\n  SYNC DRIFT — beat-phase error between a SYNCED pair (128 vs 124 bpm, B follows A), ${secs}s each\n`);
+      for (const r of rows) {
+        console.log(
+          `   ${String(r.scenario).padEnd(12)} worst ${f(r.worstErr ?? NaN, 3).padStart(7)} beats   settled ${f(r.finalErr ?? NaN, 3).padStart(7)}   trim held ${String(r.trimHeld).padStart(3)}/${r.n} ticks   saturated ${r.saturatedTicks}`,
+        );
+      }
+      const steady = rows[0];
+      // The control: if the pair does not hold phase even UNDISTURBED, the rig is broken and every
+      // disturbed row below is measuring that instead of the disturbance.
+      if (steady.finalErr == null || steady.finalErr > 0.05) {
+        console.log("\n   \u2717 INCONCLUSIVE: the UNDISTURBED pair does not hold phase, so this rig is not measuring the disturbances \u2014 fix the baseline first.\n");
+        process.exitCode = 1;
+        return;
+      }
+      const bad = rows.filter((r) => (r.finalErr ?? 0) > 0.05);
+      console.log(`\n   ${bad.length ? `\u2717 ${bad.map((r) => r.scenario).join(", ")} do NOT return to phase within the window` : "\u2713 every scenario returns to phase after its disturbance"}\n`);
+      for (const r of rows) console.log(`   ${String(r.scenario).padEnd(12)} ${r.series.join("  ")}`);
+      console.log("");
+      process.exitCode = 0;
       return;
     }
 

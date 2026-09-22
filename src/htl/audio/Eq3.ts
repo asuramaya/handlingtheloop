@@ -219,7 +219,10 @@ export class Eq3 implements FxDevice {
   clearSolo() {
     if (this.route === "solo") this.setRoute("normal");
   }
-  setBypass(on: boolean) {
+  // EQ has no wet bus and no tail, so `hard` changes nothing here — but it is ACCEPTED rather than
+  // omitted, because an override that silently narrows the interface is what hid the same drop in
+  // four sibling devices. Taking the parameter and ignoring it says so on purpose.
+  setBypass(on: boolean, _hard = false) {
     this.setRoute(on ? "bypass" : "normal");
   }
   get bypassed() {

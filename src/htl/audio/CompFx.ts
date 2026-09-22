@@ -109,8 +109,13 @@ export class CompFx extends BaseFxDevice {
     super.setMix(v);
     this.applyDry();
   }
-  setBypass(on: boolean) {
-    super.setBypass(on);
+  // `hard` is FORWARDED, not dropped. The FxDevice interface declares setBypass(on, hard?) and the
+  // whole engine calls it with two — every snapshot restore, room intent and pad throw in Deck.ts
+  // passes `true` to mean "land this now, it is administrative, not a live toggle". An override
+  // taking one parameter is legal TypeScript (a narrower implementation is assignable), so nothing
+  // ever flagged it; the flag was simply discarded for this device while ModFx forwarded it.
+  setBypass(on: boolean, hard = false) {
+    super.setBypass(on, hard);
     this.applyDry();
   }
 

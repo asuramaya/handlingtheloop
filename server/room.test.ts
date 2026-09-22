@@ -923,3 +923,49 @@ describe("DjRoom publish log throttles repeats, not changes", () => {
     }
   });
 });
+
+// ★ WHAT AN ARRIVAL COSTS. Catch-up is the most expensive per-arrival work this room does — board,
+// automix, BOTH stem envelopes, BOTH lyric sets — and 3e2e6d6 gave every `join` one. That was right
+// (a joiner with no board was the defect) but it is not free, it scales with the crowd, and a
+// client-driven request-state pays it again with nothing rate-limiting it. The size was a number
+// nobody had.
+describe("DjRoom catch-up reports its size", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("counts every frame it serves, so a heavy room is visible before it is felt", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "aaa" }, B: { videoId: "bbb" } } } });
+    await h.send(host, { t: "stemview", deck: "A", view: { blob: "x".repeat(4000) } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let line = "";
+    try {
+      const friend = (await h.connect({ device: "g1", invited: true })).ws!;
+      await h.send(friend, { t: "join" });
+      line = warn.mock.calls.map((c: unknown[]) => String(c[0])).find((m) => m.includes("catch-up served")) ?? "";
+    } finally {
+      warn.mockRestore();
+    }
+    const bytes = Number(/bytes=(\d+)/.exec(line)?.[1] ?? 0);
+    expect(bytes, "a served stem envelope is thousands of bytes — the count must include it").toBeGreaterThan(4000);
+  });
+
+  it("control: an EMPTY room's catch-up costs nothing — the number reflects what was sent, not a constant", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let line = "";
+    try {
+      const friend = (await h.connect({ device: "g2", invited: true })).ws!;
+      await h.send(friend, { t: "join" });
+      line = warn.mock.calls.map((c: unknown[]) => String(c[0])).find((m) => m.includes("catch-up served")) ?? "";
+    } finally {
+      warn.mockRestore();
+    }
+    expect(line).toContain("bytes=0");
+  });
+});

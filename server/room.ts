@@ -1338,24 +1338,28 @@ export class DjRoom {
     // them a client-driven `request-state` that nothing rate-limits, so an unlabelled line could not
     // say whether that was five devices arriving or one socket being re-served sixteen times — and
     // those are different problems, one of them a fan-out cost that scales with the crowd.
-    console.warn(
-      `[htl-room] catch-up served: device=${this.deviceOf(ws) ?? "?"} why=${why} ${this.lastSnapshot === undefined ? "NO SNAPSHOT (the room has never held one)" : DjRoom.snapshotFingerprint(this.lastSnapshot)}`,
-    );
-    if (this.lastSnapshot !== undefined) {
-      ws.send(JSON.stringify({ t: "state", snapshot: this.lastSnapshot } satisfies ServerMsg));
-    }
-    if (this.lastAutomix !== undefined) {
-      ws.send(JSON.stringify({ t: "automix", state: this.lastAutomix } satisfies ServerMsg));
-    }
+    // ★ AND SAY WHAT IT COST. Catch-up is the most expensive thing this room does per arrival —
+    // the board, the automix state, BOTH stem envelopes and BOTH lyric sets — and 3e2e6d6 added a
+    // fifth caller by giving every `join` one, which was right (a joiner with no board is the bug it
+    // fixed) but not free. The size is a fact nobody had: it scales with the crowd, it is paid on
+    // every arrival AND on every client-driven request-state, and a stem envelope alone can run to
+    // tens of KB. Measured here rather than estimated, so a deploy decision has a number under it.
+    let bytes = 0;
+    const serve = (msg: ServerMsg): void => {
+      const body = JSON.stringify(msg);
+      bytes += body.length;
+      ws.send(body);
+    };
+    if (this.lastSnapshot !== undefined) serve({ t: "state", snapshot: this.lastSnapshot });
+    if (this.lastAutomix !== undefined) serve({ t: "automix", state: this.lastAutomix });
     for (const d of ["A", "B"] as const) {
-      if (this.lastStemView[d] !== undefined) {
-        ws.send(JSON.stringify({ t: "stemview", deck: d, view: this.lastStemView[d] } satisfies ServerMsg));
-      }
+      if (this.lastStemView[d] !== undefined) serve({ t: "stemview", deck: d, view: this.lastStemView[d] });
       const ly = this.lastLyrics[d];
-      if (ly) {
-        ws.send(JSON.stringify({ t: "lyrics", deck: d, videoId: ly.videoId, lines: ly.lines, source: ly.source } satisfies ServerMsg));
-      }
+      if (ly) serve({ t: "lyrics", deck: d, videoId: ly.videoId, lines: ly.lines, source: ly.source });
     }
+    console.warn(
+      `[htl-room] catch-up served: device=${this.deviceOf(ws) ?? "?"} why=${why} bytes=${bytes} ${this.lastSnapshot === undefined ? "NO SNAPSHOT (the room has never held one)" : DjRoom.snapshotFingerprint(this.lastSnapshot)}`,
+    );
   }
 
   // Count of distinct anonymous read-only (public) listeners — the crowd surfaced as

@@ -349,17 +349,125 @@ describe("every paged read resolves over a set proven unique", () => {
     .sort()
     .map((f) => [`server/db/${f}`, readFileSync(new URL(f, DIR), "utf8")] as const);
 
-  // Columns the schema makes unique per row. Primary keys and natural keys — `id`, `host_id` (one
-  // live room per host), `video_id` within a user's rows, `handle` (unique per user).
-  const UNIQUE = /\b(\w+\.)?id\b|\bhost_id\b|\bvideo_id\b|\bhandle\b/;
+  // ★ THE COLUMN LIST WAS A ROSTER TOO, and this is the turn of the screw Deckard named himself:
+  // "when you replace a hand-written list with a derivation, ask what the derivation is itself
+  // hand-written over." UNIQUE was a hand-written list of column NAMES — id, host_id, video_id,
+  // handle — and it is TABLE-BLIND. `video_id` is a single-column primary key in track_analysis and
+  // community_tracks, and HALF of a composite key in lyrics and in user_track_stats. So
+  // userdata.ts's `ORDER BY s.plays, s.last_played_at, s.video_id` passed as "ends in a unique
+  // column" when video_id is not unique in that table at all — the statement is correct only
+  // because `WHERE s.user_id = ?` pins the other half. That is the SAME predicate-relative
+  // uniqueness transcripts.ts was given a written exemption for: one was reasoned about, the other
+  // was waved through by a regex that overclaimed. The scan was right by luck on it.
+  //
+  // The schema is the authority, so it is read. A last term counts as total only when it is a
+  // SINGLE-column primary key OF THE TABLE THE STATEMENT ACTUALLY READS; everything else says why.
+  const MIG = new URL("../../migrations/", import.meta.url);
+  /** table → its primary-key columns, from the migrations rather than from memory. */
+  const PRIMARY_KEYS = (() => {
+    const out = new Map<string, string[]>();
+    for (const f of readdirSync(MIG).filter((n) => n.endsWith(".sql")).sort()) {
+      const sql = readFileSync(new URL(f, MIG), "utf8").replace(/--.*$/gm, "");
+      for (const m of sql.matchAll(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(([\s\S]*?)\n\s*\);/gi)) {
+        const [, table, body] = m;
+        const composite = body.match(/PRIMARY KEY\s*\(([^)]+)\)/i);
+        if (composite) out.set(table, composite[1].split(",").map((c) => c.trim().split(/\s+/)[0]));
+        else {
+          const inline = body.match(/^\s*(\w+)\s+[\w()]+[^,\n]*\bPRIMARY KEY/im);
+          if (inline) out.set(table, [inline[1]]);
+        }
+      }
+    }
+    return out;
+  })();
+
+  /** table → columns it declares, and table → columns the schema makes unique on their own. */
+  const COLUMNS = new Map<string, string[]>();
+  const UNIQUE_COLS = new Map<string, Set<string>>();
+  for (const f of readdirSync(MIG).filter((n) => n.endsWith(".sql")).sort()) {
+    const sql = readFileSync(new URL(f, MIG), "utf8").replace(/--.*$/gm, "");
+    for (const m of sql.matchAll(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(([\s\S]*?)\n\s*\);/gi)) {
+      const [, table, body] = m;
+      const cols: string[] = [];
+      const uniq = UNIQUE_COLS.get(table) ?? new Set<string>();
+      for (const line of body.split("\n")) {
+        const col = line.match(/^\s*(\w+)\s+(TEXT|INTEGER|REAL|BLOB|NUMERIC)\b/i);
+        if (!col) continue;
+        cols.push(col[1]);
+        if (/\bUNIQUE\b/i.test(line) || /\bPRIMARY KEY\b/i.test(line)) uniq.add(col[1]);
+      }
+      COLUMNS.set(table, [...(COLUMNS.get(table) ?? []), ...cols]);
+      UNIQUE_COLS.set(table, uniq);
+    }
+    // ALTER TABLE adds columns after the fact — users.handle arrives this way.
+    for (const m of sql.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)/gi)) {
+      COLUMNS.set(m[1], [...(COLUMNS.get(m[1]) ?? []), m[2]]);
+    }
+    for (const m of sql.matchAll(/CREATE UNIQUE INDEX(?:\s+IF NOT EXISTS)?\s+\w+\s+ON\s+(\w+)\s*\(([^)]+)\)/gi)) {
+      const cols = m[2].split(",").map((c) => c.trim().split(/\s+/)[0]);
+      if (cols.length !== 1) continue; // a composite unique index does not make one column total
+      const set = UNIQUE_COLS.get(m[1]) ?? new Set<string>();
+      set.add(cols[0]);
+      UNIQUE_COLS.set(m[1], set);
+    }
+  }
+  const isTotalIn = (table: string, col: string) => {
+    const pk = PRIMARY_KEYS.get(table);
+    if (pk && pk.length === 1 && pk[0] === col) return true;
+    return UNIQUE_COLS.get(table)?.has(col) ?? false;
+  };
+
+  /** alias (or table name) → table, for every table a statement brings into scope. */
+  function tablesInScope(sqlBefore: string): Map<string, string> {
+    const scope = new Map<string, string>();
+    for (const m of sqlBefore.matchAll(/\b(?:FROM|JOIN)\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?/gi)) {
+      const table = m[1];
+      const alias = m[2] && !/^(ON|WHERE|GROUP|ORDER|LEFT|INNER|JOIN|LIMIT|UNION)$/i.test(m[2]) ? m[2] : null;
+      scope.set(table, table);
+      if (alias) scope.set(alias, table);
+    }
+    return scope;
+  }
+
+  /** Is this ORDER BY's last term a single-column PK of the table it names? */
+  function lastTermIsTotal(orderBy: string, sqlBefore: string): boolean {
+    const terms = orderBy.split(",").map((t) => t.trim());
+    const last = terms[terms.length - 1].replace(/\s+(ASC|DESC)$/i, "").trim();
+    const dotted = last.includes(".");
+    const alias = dotted ? last.split(".")[0] : null;
+    const col = dotted ? last.split(".")[1] : last;
+    const scope = tablesInScope(sqlBefore);
+    if (alias) {
+      const table = scope.get(alias);
+      return !!table && isTotalIn(table, col);
+    }
+    // Unqualified: it binds to whichever table in scope declares it. Total only if EVERY candidate
+    // makes it total — and no candidate at all means the scan cannot see the subject, which fails.
+    const candidates = [...new Set(scope.values())].filter((t) => COLUMNS.get(t)?.includes(col));
+    return candidates.length > 0 && candidates.every((t) => isTotalIn(t, col));
+  }
 
   // Comments in these files DISCUSS ORDER BY at length — including the sentence that was wrong — so
   // strip them first. A scan that reads prose finds the claim instead of the code, which is the
   // exact confusion it exists to end.
   const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const statements = SRC.flatMap(([file, src]) =>
-    [...stripComments(src).matchAll(/ORDER BY([\s\S]*?)LIMIT/gi)].map((m) => ({ file, orderBy: m[1].replace(/\s+/g, " ").trim() })),
-  );
+  const statements = SRC.flatMap(([file, src]) => {
+    const clean = stripComments(src);
+    // Stop at a backtick: rooms.ts builds its ORDER BY in one template literal and takes its LIMIT
+    // in another, so a [\s\S] capture swallowed everything between and produced a "statement" that
+    // was really three. A capture that spans its own subject is not reading the subject.
+    return [...clean.matchAll(/ORDER BY([^`;]*?)LIMIT/gi)].map((m) => ({
+      file,
+      orderBy: m[1].replace(/\s+/g, " ").trim(),
+      // Enough of the statement before ORDER BY to see which tables it reads. A template that
+      // interpolates its own FROM does not resolve, and an unresolved statement FAILS rather than
+      // passes — a scan that cannot see its subject must not report health (ytclient-watch, 2c9a9d2).
+      // EVERYTHING before it in the file, not a fixed window: sets.ts and rooms.ts interpolate the
+      // FROM from a module constant declared far above, and a scan that cannot resolve the table
+      // falls back to guessing from the column name — which is the failure being removed here.
+      before: clean.slice(0, m.index ?? 0).replace(/\s+/g, " "),
+    }));
+  });
 
   // A non-total ordering is only a COIN FLIP where the boundary is served to someone. These are the
   // reads where it is not, each with the reason — an exemption has to say why, not just appear.
@@ -372,6 +480,36 @@ describe("every paged read resolves over a set proven unique", () => {
         "total for this query's rows. The scan cannot see that — uniqueness here is relative to a " +
         "predicate, not a property of the column — which is exactly what an exemption is for. If the " +
         "video_id filter is ever dropped, this stops holding and the exemption must go with it.",
+    },
+    {
+      file: "server/db/userdata.ts",
+      orderBy: /s\.video_id DESC$/,
+      why:
+        "user_track_stats' PK is (user_id, video_id) and `WHERE s.user_id = ?` pins the other half, so " +
+        "video_id is total for this query's rows. IDENTICAL IN KIND to the transcripts row above, and " +
+        "it used to pass silently: the old check accepted any column NAMED video_id because video_id " +
+        "is a single-column PK in track_analysis and community_tracks — two other tables entirely. " +
+        "Right answer, wrong reason. Ends if the user_id filter goes.",
+    },
+    {
+      file: "server/db/presence.ts",
+      orderBy: /u\.handle ASC$/,
+      why:
+        "★ `handle` IS NOT THE UNIQUE COLUMN — `handle_folded` is (0012_handles.sql, a UNIQUE index). " +
+        "The ordering is still total, by a derived argument the scan cannot make: two distinct rows " +
+        "cannot share a fold, and two distinct handles that folded the same could not both exist, so " +
+        "distinct rows have distinct handles; NULLs are excluded by `u.handle IS NOT NULL`. Written " +
+        "out because the old check asserted `handle` unique by name and that is simply not what the " +
+        "schema says. Ends if the NOT NULL filter goes, or if handle_folded stops being unique.",
+    },
+    {
+      file: "server/db/social.ts",
+      orderBy: /END, u\.handle$/,
+      why:
+        "Same derived argument as presence.ts: uniqueness lives on handle_folded, not on handle, and " +
+        "this query also filters `u.handle IS NOT NULL`. Two statements resting on one non-obvious " +
+        "property of a DIFFERENT column is exactly the thing that should be written down once and " +
+        "cited twice, rather than encoded as a column name in a regex.",
     },
   ];
 
@@ -391,13 +529,18 @@ describe("every paged read resolves over a set proven unique", () => {
     }
   });
 
-  test("every ORDER BY … LIMIT ends in a unique column, or is exempt with a reason", () => {
+  test("the primary keys are READ from migrations, not remembered (derivation guard)", () => {
+    // An empty or thin map would make lastTermIsTotal say "not total" about everything, and the
+    // exemption list would then paper over it one statement at a time until the scan meant nothing.
+    expect(PRIMARY_KEYS.size).toBeGreaterThanOrEqual(10);
+    expect(PRIMARY_KEYS.get("user_track_stats")).toEqual(["user_id", "video_id"]);
+    expect(PRIMARY_KEYS.get("track_analysis")).toEqual(["video_id"]);
+  });
+
+  test("every ORDER BY … LIMIT ends in a single-column PK of the table it reads, or is exempt with a reason", () => {
     const offenders = statements
       .filter((s) => !EXEMPT.some((e) => e.file === s.file && e.orderBy.test(s.orderBy)))
-      .filter((s) => {
-        const terms = s.orderBy.split(",").map((t) => t.trim());
-        return !UNIQUE.test(terms[terms.length - 1]);
-      })
+      .filter((s) => !lastTermIsTotal(s.orderBy, s.before))
       .map((s) => `${s.file} — ORDER BY ${s.orderBy}`);
     expect(offenders).toEqual([]);
   });

@@ -2813,11 +2813,12 @@ button.room-tog:hover {
   letter-spacing: 0.2px;
 }
 
-/* --- "Take control" lock over the stage for a listening guest --- */
-.stage {
+/* --- "Take control" lock over the CONTROLS for a listening guest --- */
+.decks-third {
   position: relative;
 }
-/* Invisible input shield: the deck stays fully visible, taps just don't reach it. */
+/* Invisible input shield over the control surface only — the waveform lanes stay live so a
+   listener can still choose which deck to watch, zoom and expand. Taps on a control don't land. */
 .stage-lock {
   position: absolute;
   inset: 0;

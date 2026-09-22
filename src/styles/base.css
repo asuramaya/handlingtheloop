@@ -95,9 +95,9 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Containing block for the .stage-lock overlay — without this its inset:0 resolves
-     against a higher ancestor and spills over the (full-screen, mobile) Library modal,
-     swallowing its touches for a watch-only remote. Keep the lock confined to the board. */
+  /* Kept a containing block: the .stage-lock overlay now lives on .decks-third (fx.css), but
+     this was the fix for its inset:0 spilling over the full-screen mobile Library modal and
+     swallowing a watch-only remote's touches, so the board stays a positioned ancestor. */
   position: relative;
 }
 

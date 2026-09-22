@@ -207,6 +207,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
       onDrop={(e) => {
         e.preventDefault();
         setDropActive(false);
+        // Watch-only: a drop loads a track, which is driving. Guarded HERE and not left to the
+        // input shield — the shield no longer covers the lanes, and a handler that only works
+        // because something else happens to sit over it is not guarded at all.
+        if (locked) return;
         // A dragged track row (full TrackMeta JSON) → load it to this deck.
         const raw = e.dataTransfer.getData(TRACK_DND_MIME);
         if (raw && onLoadTrack) {

@@ -3646,11 +3646,6 @@ function AppBody() {
           docks as centered modals. */}
       <div className="workspace">
       <main className="stage">
-        {/* Locked out (joined but not driving): the deck stays fully visible, we just
-            swallow pointer input. The "listening" marker lives in the session menu. */}
-        {room.enabled && !room.controlling && (
-          <div className="stage-lock" aria-hidden="true" />
-        )}
         <div className="lanes-flank">
         {/* The "gestalt of the song" rail — rekordbox's overview strip, rotated vertical, one
             per deck, spanning the FULL height of the stacked pair (not just its own deck's
@@ -3766,6 +3761,17 @@ function AppBody() {
         {/* Middle third: the A↔B crossfader across the top, then the two decks'
             button banks side by side beneath it. */}
         <div className="decks-third">
+        {/* Locked out (joined but not driving): the controls stay fully visible, we just swallow
+            pointer input over THEM. It used to cover the whole stage, which also swallowed the
+            two gestures that only LOOK: switching which deck is on screen, and zoom/expand. On a
+            phone the unfocused deck is display:none, so a listener was pinned to deck A with no
+            way to watch the host work the other one. Ruling 7ba93a22 separates the listener's
+            stream from the driver's by design — see everything, drive nothing — and looking is
+            the "see" half. The lanes police themselves: every driving gesture in DeckLane
+            early-returns on `locked`. */}
+        {room.enabled && !room.controlling && (
+          <div className="stage-lock" aria-hidden="true" />
+        )}
           <BoardBar
             master={{
               value: masterVol,

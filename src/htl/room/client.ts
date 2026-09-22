@@ -7,6 +7,7 @@ import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, S
 import { ENGINE_VERSION } from "./protocol";
 import { isSocketStale } from "./sessionFollow";
 import { republishSnapshot } from "./republish";
+import { event } from "../debug/trace";
 import { SetCapture, type CapturedSet } from "./setCapture";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
@@ -547,6 +548,11 @@ export class RoomClient {
         // not enough). A provider answers with the board as it stands RIGHT NOW, which is also more
         // truthful than a cached copy whenever the two differ.
         const snap = republishSnapshot(this.h.snapshot?.(), this.lastPublished);
+        // ★ SAY THAT THE ASK ARRIVED, AND WHETHER WE ANSWERED. Without this line the frame is
+        // unverifiable from outside: taking the anchor slot ALSO re-runs App's own publish effect,
+        // so the server sees a `state` either way and "it works" and "it does nothing" produce the
+        // same log. The ring is the only place that can tell an answered ask from a coincidence.
+        event("room.republish", { answered: snap !== undefined, from: this.h.snapshot?.() !== undefined ? "app" : "cache" });
         if (snap !== undefined) {
           this.lastPublished = snap;
           this.send({ t: "state", snapshot: snap });

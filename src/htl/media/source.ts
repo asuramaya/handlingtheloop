@@ -80,6 +80,47 @@ export async function fetchYouTubeAudio(
 // genuine "not playable" and stays fatal.
 class TransientAudioError extends Error {}
 
+/** No bytes for this long → the transfer is not slow, it is HUNG. See readStream. */
+export const STREAM_STALL_MS = 20_000;
+
+interface ChunkReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(reason?: unknown): Promise<void> | void;
+}
+
+/** Drain a byte stream, giving up if it goes SILENT rather than waiting forever.
+ *
+ *  ★ WHY A WATCHDOG AND NOT JUST THE ABORT SIGNAL. `reader.read()` on a half-open connection never
+ *  settles and never throws: no bytes, no error, no end. The load that awaits it therefore never
+ *  finishes and never reports — which is exactly the failure a listener hit on one deck while the
+ *  other adopted normally (ruling 92d04ef9): action=load, then nothing, no status, no error, for the
+ *  rest of the session. The abort signal cannot help, because nobody knows to abort. A timeout turns
+ *  an invisible hang into a TransientAudioError, which the caller already retries and, when the
+ *  retries are spent, surfaces as a visible failure on the deck.
+ *
+ *  The clock measures SILENCE, not total duration: a slow connection that keeps delivering is fine,
+ *  however long the track takes. */
+export async function readStream(reader: ChunkReader, onChunk: (value: Uint8Array) => void, stallMs = STREAM_STALL_MS): Promise<void> {
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new TransientAudioError(`Audio stream stalled (no data for ${Math.round(stallMs / 1000)}s)`)), stallMs);
+    });
+    try {
+      const { done, value } = await Promise.race([reader.read(), stalled]);
+      if (done) return;
+      if (value) onChunk(value);
+    } catch (e) {
+      // Let go of the socket before surfacing — a stalled reader left open holds the connection
+      // and, on a retry, the browser's per-host slots.
+      await Promise.resolve(reader.cancel(e)).catch(() => {});
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function fetchYouTubeAudioOnce(
   videoId: string,
   onProgress?: (p: FetchProgress) => void,
@@ -101,16 +142,14 @@ async function fetchYouTubeAudioOnce(
   const chunks: Uint8Array[] = [];
   let receivedBytes = 0;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    await readStream(reader, (value) => {
       chunks.push(value);
       receivedBytes += value.byteLength;
       onProgress?.({ receivedBytes, totalBytes });
-    }
+    });
   } catch (e) {
-    // The stream broke mid-transfer (edge re-resolve exhausted, or a network blip) — a
-    // retry of the whole fetch will pick up the now-cached track.
+    // The stream broke mid-transfer (edge re-resolve exhausted, a network blip, or the stall
+    // watchdog below) — a retry of the whole fetch will pick up the now-cached track.
     if (signal?.aborted || (e as { name?: string })?.name === "AbortError") throw e;
     throw new TransientAudioError(`Audio stream interrupted: ${(e as Error).message}`);
   }

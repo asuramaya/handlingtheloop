@@ -73,4 +73,44 @@ describe("the analysis worker says so when it is not being used", () => {
     expect(said[0]).toMatch(/died mid-flight/);
     expect(said[0]).not.toMatch(/could not be constructed/);
   });
+
+  it("a worker that goes SILENT does not hang the load — it is the failure with no event", async () => {
+    // Construction failure and onerror both announce themselves. This one does not: the worker
+    // accepts the message and never replies. App.tsx awaits this on the track-load path, so without
+    // a clock the deck never lands at all — no error, no fallback, no line.
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("Worker", class { onerror?: () => void; onmessage?: unknown; postMessage() { /* swallowed, forever */ } terminate() {} });
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const { analyzeTrackAsync } = await fresh();
+      const p = analyzeTrackAsync(buf());
+      await vi.advanceTimersByTimeAsync(31_000);
+      const a = await p;
+      expect(a).toBeTruthy(); // it LANDS, which is the whole point
+      const said = info.mock.calls.map((c) => String(c[0])).filter((s) => /analysis worker unavailable/.test(s));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(/stopped answering/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("one hang retires the worker, so the NEXT load does not pay the budget again", async () => {
+    vi.useFakeTimers();
+    try {
+      let constructed = 0;
+      vi.stubGlobal("Worker", class { onerror?: () => void; onmessage?: unknown; constructor() { constructed++; } postMessage() {} terminate() {} });
+      vi.spyOn(console, "info").mockImplementation(() => {});
+      const { analyzeTrackAsync } = await fresh();
+      const first = analyzeTrackAsync(buf());
+      await vi.advanceTimersByTimeAsync(31_000);
+      await first;
+      expect(constructed).toBe(1);
+      // The second load must resolve WITHOUT another 30 s wait — no timer advance here at all.
+      await analyzeTrackAsync(buf());
+      expect(constructed).toBe(1); // retired, never rebuilt
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

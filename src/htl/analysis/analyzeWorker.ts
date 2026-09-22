@@ -19,6 +19,29 @@ let seq = 0;
 // have different causes and different fixes. Metron's bc201e32 requires the same of the stems worker
 // before anyone may believe a green run from it; this is the live instance of that class, in the
 // worker that already exists.
+// ★ AND THE THIRD SHAPE, WHICH IS THE ONE THAT DOES NOT ANNOUNCE ITSELF. Construction failing and
+// `onerror` firing are failures that TELL you. A worker that accepts the message and never replies
+// does not: no error, no rejection, and the pending entry sits in the map forever. App.tsx awaits
+// this on the track-load critical path — setBuffer, the deck's grid and key, setLoaded are all
+// after it — so a silent worker is not a slow load, it is a deck that NEVER LANDS, with the
+// loadingVid claim still held. The realistic trigger is a browser reclaiming a worker under memory
+// pressure, which is the iOS case this repo's stem-paging history is entirely about.
+//
+// ★ WHY THIS RECOVERS RATHER THAN ONLY REPORTING. Metron proposed noticing without recovering, on
+// the sound argument that a timeout which acts has a tradeoff and one that only watches has none.
+// The reason to go further here is that the recovery is NOT a new mechanism: it is the same
+// `inline()` the other two failure modes already take, it always works, and the repo has already
+// ruled twice that a load which goes silent must FAIL rather than hang (3ea664e, 23f5367). The
+// asymmetry decides it — today the deck never lands at all; with a budget the worst case is a long
+// wait and then a correct load.
+//
+// The budget is deliberately generous, derived rather than picked: a full analyzeTrack measures
+// ~1.4 s for a five-minute track on this desktop, so ~5.5 s on a phone at 4x. 30 s is five times
+// that, which is slow enough that nothing legitimate is cut off and short enough that a dead worker
+// stops costing a deck. A late reply after the budget is already harmless — onmessage drops any id
+// it no longer holds.
+const WORKER_BUDGET_MS = 30_000;
+
 const told = new Set<string>();
 function fellBack(why: string): void {
   if (told.has(why)) return;
@@ -103,11 +126,26 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
   const id = ++seq;
   return new Promise<TrackAnalysis>((resolve, reject) => {
     pending.set(id, { resolve, reject });
+    // Silence is the failure mode with no event, so it needs a clock of its own.
+    setTimeout(() => {
+      if (!pending.has(id)) return; // answered in time
+      pending.delete(id);
+      // One hang means the worker is gone, not slow — retire it so the NEXT load goes straight
+      // inline instead of paying the budget again.
+      failed = true;
+      try {
+        worker?.terminate();
+      } catch {
+        /* already gone */
+      }
+      worker = null;
+      reject(new Error("analysis worker stopped answering"));
+    }, WORKER_BUDGET_MS);
     // Only the mix transfers — `grid` is small and structured-cloned (its Float32Arrays stay owned
     // by the caller, which needs the grid intact for its own use).
     w.postMessage({ id, ch0: mono, ch1: null, sampleRate, grid }, [mono.buffer]);
-  }).catch(() => {
-    fellBack("died mid-flight");
+  }).catch((e: unknown) => {
+    fellBack(String((e as Error)?.message).includes("stopped answering") ? "stopped answering" : "died mid-flight");
     return inline(); // re-read the intact source buffer
   });
 }

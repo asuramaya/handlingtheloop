@@ -77,9 +77,34 @@ function drivingHelpers(src: string): string[] {
   return out;
 }
 
-// A loop MUTATES if it calls a deck setter, emits an intent, or calls a helper that emits.
-const mutates = (body: string, drivers: string[]) =>
-  /\bdeck\.set[A-Z]\w*\(|\bemitRef\.current\(\{|\bemit\(\{/.test(body) ||
+// ★ WHAT COUNTS AS MUTATING A DECK IS READ FROM THE DECK, not from this file's memory of it.
+// The pattern here was `deck.set[A-Z]` — a hand-written list of one NAMING CONVENTION, which is the
+// same roster the rest of this scan was built to stop being. It could not see `deck.cuePoint = …`,
+// `deck.hotCues = […]`, `deck.seek(…)` or `deck.play()`, all of which are real deck mutations that
+// appear in this very file. Metron's rule, after four turns of this between us: EVERY LIST MUST BE
+// READ FROM THE ARTIFACT THAT OWNS THE FACT. Deck.ts owns what a deck can do, so Deck.ts is read.
+//
+// The split is the class's own declaration, not a judgement: a member declared `get` (or `readonly`)
+// is a READ; everything else public is treated as a WRITE. That errs toward firing — a plain method
+// that only reads will be called a mutation — and the safe direction for a guard is loud, with an
+// EXEMPT entry as the place to say otherwise.
+function deckWriters(): string[] {
+  const src = readFileSync(new URL("../htl/audio/Deck.ts", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("export class Deck"));
+  const writers = new Set<string>();
+  for (const m of body.matchAll(/^  (?!private |protected |\/\/|\*|\/\*)(readonly\s+|get\s+|set\s+)?([a-zA-Z_]\w*)\s*[(=:]/gm)) {
+    const [, kind, name] = m;
+    if (name === "constructor") continue;
+    if (kind?.startsWith("get") || kind?.startsWith("readonly")) continue; // a read, by the class's own word
+    writers.add(name);
+  }
+  return [...writers];
+}
+
+// A loop MUTATES if it touches a deck WRITER, emits an intent, or calls a helper that emits.
+const mutates = (body: string, drivers: string[], writers: string[]) =>
+  /\bemitRef\.current\(\{|\bemit\(\{/.test(body) ||
+  writers.some((w) => new RegExp(`\\bdeck\\.${w}\\s*[(=]`).test(body)) ||
   drivers.some((d) => new RegExp(`\\b${d}\\(`).test(body));
 // It is SAFE if it asks per deck whether we may drive, or if it only reads.
 const ASKS = /canDriveDeckRef\.current\(|canDriveDeck\(/;
@@ -103,6 +128,7 @@ const EXEMPT: { line: number; why: string }[] = [
 describe("an action that touches BOTH decks asks per deck whether it may", () => {
   const loops = bothDeckLoops(SRC);
   const drivers = drivingHelpers(SRC);
+  const writers = deckWriters();
 
   test("the scan found loops to check (vacuity guard)", () => {
     expect(loops.length).toBeGreaterThanOrEqual(3);
@@ -112,19 +138,28 @@ describe("an action that touches BOTH decks asks per deck whether it may", () =>
     expect(loops.some((l) => l.body.startsWith("for ("))).toBe(true);
   });
 
+  test("the deck-writer list is DERIVED from Deck.ts and covers the forms the old pattern missed", () => {
+    // An empty or thin list would make `mutates` say "no mutation" about everything and the whole
+    // scan would pass silently — the derivation guard is the only thing that notices.
+    expect(writers.length).toBeGreaterThanOrEqual(50);
+    for (const w of ["setTempo", "setPitch", "seek", "play", "cuePoint", "hotCues"]) expect(writers).toContain(w);
+    // …and a getter is NOT a writer: the class's own `get` is what says so.
+    expect(writers).not.toContain("stretchAttached");
+  });
+
   test("the driving-helper list is DERIVED and non-empty — an empty one silently weakens MUTATES", () => {
     expect(drivers.length).toBeGreaterThan(0);
     expect(drivers).toContain("fxKeyUp");
   });
 
   test("every exemption names a loop that is actually there and actually mutates", () => {
-    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers)));
+    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers, writers)));
     expect(stale.map((e) => `EXEMPT App.tsx:${e.line} no longer matches a mutating both-deck loop`)).toEqual([]);
   });
 
   test("every both-deck loop that mutates a deck gates per deck", () => {
     const offenders = loops
-      .filter((l) => mutates(l.body, drivers) && !ASKS.test(l.body))
+      .filter((l) => mutates(l.body, drivers, writers) && !ASKS.test(l.body))
       .filter((l) => !EXEMPT.some((e) => Math.abs(e.line - l.at) < 3))
       .map((l) => `App.tsx:${l.at} mutates both decks without asking canDriveDeck`);
     expect(offenders).toEqual([]);

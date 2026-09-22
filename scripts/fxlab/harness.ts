@@ -2627,3 +2627,58 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   }
   return rows;
 };
+
+// ★ WHAT A CAPTURE ACTUALLY RECORDS, take two. "master" used to tap the mix BEFORE the limiter, and
+// encodeWav clamps to ±1 — so a mix over 0 dBFS was heard as a controlled ceiling and written back
+// as hard clipping (fixed in 660cb4a, tap moved to the post-ceiling node).
+//
+// ★ THE FIRST VERSION OF THIS PROBE WAS DELETED because it could not fail: two decks at 0.9 through
+// the crossfade law summed BELOW 1, so the old pre-limiter tap passed the same assertion as the new
+// one. A control that cannot fail certifies anything. The fix is not a bigger tone — it is TRIM,
+// which is deliberately unclamped (Deck.setTrim), so the mix can be driven genuinely over the
+// ceiling the way a hot EQ-boosted DJ set does. The control now reports what it records, and the
+// runner FAILS if the control does not exceed the ceiling: the probe has to prove it can catch the
+// bug before its green means anything.
+(globalThis as unknown as { fxlabCaptureTap: (preLimiter?: boolean) => Promise<{ grDb: number; capturePeak: number; ceiling: number }> }).fxlabCaptureTap = async (preLimiter = false) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 250));
+  const sr = eng.ctx.sampleRate;
+  const mk = (hz: number) => {
+    const b = eng.ctx.createBuffer(2, Math.round(sr * 3), sr);
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (let i = 0; i < d.length; i++) d[i] = 0.9 * Math.sin((2 * Math.PI * hz * i) / sr);
+    }
+    return b;
+  };
+  for (const [id, hz] of [["A", 220], ["B", 330]] as const) {
+    eng.deck(id).setBuffer(mk(hz));
+    eng.deck(id).setTrim(2); // unclamped on purpose — this is the hot-set condition
+    eng.deck(id).setLevel(1);
+  }
+  eng.setCrossfade(0);
+  eng.deckA.play();
+  eng.deckB.play();
+  // The CONTROL re-creates the defect: record the pre-ceiling node, exactly as the old code did.
+  eng.startCapture("master", 5);
+  if (preLimiter) (eng as unknown as { recorder: { setSource: (n: AudioNode) => void }; master: AudioNode }).recorder.setSource((eng as unknown as { master: AudioNode }).master);
+  let gr = 0;
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    gr = Math.max(gr, eng.masterGr);
+  }
+  const take = await eng.stopCapture();
+  eng.deckA.pause();
+  eng.deckB.pause();
+  let peak = 0;
+  const buf = take?.buffer;
+  if (buf) for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = Math.round(sr * 0.3); i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+  }
+  await eng.ctx.close();
+  return { grDb: gr, capturePeak: peak, ceiling: Math.pow(10, -0.3 / 20) };
+};

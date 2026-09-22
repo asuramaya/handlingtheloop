@@ -70,6 +70,7 @@ function parseArgs(argv) {
       case "--master-duck": a.masterDuck = true; break;
       case "--sidechain-repatch": a.sidechainRepatch = true; break;
       case "--headroom-path": a.headroomPath = true; break;
+      case "--capture-tap": a.captureTap = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -357,6 +358,25 @@ async function main() {
       // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
       console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
       process.exitCode = worst < -100 ? 0 : 1;
+      return;
+    }
+
+    if (args.captureTap) {
+      const shipped = await page.evaluate(() => globalThis.fxlabCaptureTap(false));
+      const control = await page.evaluate(() => globalThis.fxlabCaptureTap(true));
+      console.log("\n  CAPTURE TAP — is a recorded take under the master ceiling, or clipped?\n");
+      console.log(`   shipped (post-ceiling tap)  GR ${f(shipped.grDb, 2)} dB   captured peak ${f(shipped.capturePeak, 4)}   ceiling ${f(shipped.ceiling, 4)}`);
+      console.log(`   CONTROL (pre-limiter tap)   GR ${f(control.grDb, 2)} dB   captured peak ${f(control.capturePeak, 4)}   \u2190 must EXCEED the ceiling`);
+      // THE CLAIM IS ABOUT THE ENCODER, NOT THE CEILING. encodeWav clamps at ±1, so "the take is
+      // clipped" means peak > 1 — that is the defect 660cb4a fixed and the only thing this probe
+      // should certify. Whether the limiter sits exactly on its own -0.3 dB ceiling is a separate
+      // question about the limiter, reported below rather than folded into this verdict.
+      const controlClips = control.capturePeak > 1;
+      const ok = controlClips && shipped.grDb > 0.5 && shipped.capturePeak > 0.01 && shipped.capturePeak <= 1;
+      console.log(`\n   ${!controlClips ? "\u2717 INCONCLUSIVE: the control did not clip, so this probe cannot catch the bug \u2014 ignore the shipped row" : ok ? "\u2713 the control CLIPS (>1, the encoder would clamp it) and the shipped take does not" : "\u2717 the shipped take would still be clamped by the encoder"}\n`);
+      const over = 20 * Math.log10(shipped.capturePeak / shipped.ceiling);
+      if (over > 0.02) console.log(`   note: the shipped take sits ${f(over, 2)} dB ABOVE the limiter's nominal -0.3 dB ceiling. Under 1 (so not clipped), but a brickwall that overshoots its own ceiling is a question about the LIMITER, unexplained and not chased here.\n`);
+      process.exitCode = ok ? 0 : 1;
       return;
     }
 

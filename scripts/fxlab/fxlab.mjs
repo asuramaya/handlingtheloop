@@ -71,6 +71,7 @@ function parseArgs(argv) {
       case "--sidechain-repatch": a.sidechainRepatch = true; break;
       case "--headroom-path": a.headroomPath = true; break;
       case "--capture-tap": a.captureTap = true; break;
+      case "--codec-overshoot": a.codecOvershoot = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -358,6 +359,24 @@ async function main() {
       // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
       console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
       process.exitCode = worst < -100 ? 0 : 1;
+      return;
+    }
+
+    if (args.codecOvershoot) {
+      // Thread 307cb25b: a take measured 0.06 dB ABOVE the master ceiling, which the limiter's code
+      // says cannot happen. This asks whether the RECORDER is the source, with the limiter removed
+      // from the question: a tone hard-capped in JavaScript, straight into the recorder's own tap.
+      const r = await page.evaluate(() => globalThis.fxlabCodecOvershoot());
+      console.log("\n  CODEC OVERSHOOT — does a capture read back above what was put in?\n");
+      console.log(`   encoder                ${r.mime}`);
+      console.log(`   cap (JS-clipped)       ${f(r.cap, 6)}   source peak ${f(r.sourcePeak, 6)}  \u2190 no node can raise this`);
+      console.log(`   decoded take peak      ${f(r.takePeak, 6)}   overshoot ${f(r.overshootDb, 3)} dB`);
+      console.log(`   lossless formats       ${r.lossless.length ? r.lossless.join(", ") : "none offered by this browser"}`);
+      console.log(`   headroom left to 1.0   ${f(20 * Math.log10(1 / r.takePeak), 3)} dB  \u2190 bufferToWav CLAMPS at \u00b11, so this is what a take has left`);
+      const overshoots = r.takePeak > r.cap;
+      console.log(`\n  ${overshoots ? "OVERSHOOT REPRODUCED" : "NO OVERSHOOT"} — a take is a lossy round trip, so a captured peak is ${overshoots ? "NOT" : "still"} a measurement of the mix.`);
+      if (!overshoots) console.log("  The recorder is exonerated; 307cb25b's 0.06 dB is still unexplained and the limiter is back under suspicion.");
+      process.exitCode = 0; // this probe REPORTS; it is not a pass/fail gate
       return;
     }
 

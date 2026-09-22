@@ -2682,3 +2682,66 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   await eng.ctx.close();
   return { grDb: gr, capturePeak: peak, ceiling: Math.pow(10, -0.3 / 20) };
 };
+
+// ★ WHAT A CAPTURED PEAK IS A MEASUREMENT OF — the control for thread 307cb25b.
+//
+// Metron measured a shipped take peaking 0.9723 where the master brickwall's ceiling is -0.3 dBFS
+// (0.96605), and logged it as unexplained: the worklet's LIMIT branch hard-clamps |y| to the ceiling
+// AFTER gain, so in principle nothing can leave above it. Reading the path agrees with him — the
+// clamp is the last thing that touches the sample, masterOut has exactly one input, and the dB
+// constant is right.
+//
+// The overshoot is not in the limiter. It is in the RECORDER: Recorder.start() constructs
+// `new MediaRecorder(stream)` with no mimeType, which in Chromium means webm/OPUS, and stop()
+// decodes that blob back to PCM. A take is therefore a LOSSY ROUND TRIP of the mix, and a decoded
+// lossy signal routinely sits a few hundredths of a dB above what went in — the codec reconstructs
+// a waveform, not the samples.
+//
+// This probe takes the limiter out of the question entirely: a tone HARD-CAPPED IN JAVASCRIPT at
+// exactly the ceiling, played through the same capture path. Nothing in the graph can raise it, so
+// whatever the decoded take reads above `cap` is the codec and nothing else. If this comes back at
+// or below the cap, my explanation is wrong and the limiter is back under suspicion.
+(globalThis as unknown as { fxlabCodecOvershoot: () => Promise<{ cap: number; sourcePeak: number; takePeak: number; overshootDb: number; mime: string; lossless: string[] }> }).fxlabCodecOvershoot = async () => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 250));
+  const sr = eng.ctx.sampleRate;
+  const cap = Math.pow(10, -0.3 / 20); // the same ceiling the master limiter enforces
+  // A tone clipped in JS at the cap: every sample is |x| <= cap BY CONSTRUCTION, before any node.
+  const b = eng.ctx.createBuffer(2, Math.round(sr * 3), sr);
+  let sourcePeak = 0;
+  for (let c = 0; c < 2; c++) {
+    const d = b.getChannelData(c);
+    for (let i = 0; i < d.length; i++) {
+      const v = 1.4 * Math.sin((2 * Math.PI * 220 * i) / sr); // deliberately over, then capped
+      d[i] = v > cap ? cap : v < -cap ? -cap : v;
+      if (Math.abs(d[i]) > sourcePeak) sourcePeak = Math.abs(d[i]);
+    }
+  }
+  const src = eng.ctx.createBufferSource();
+  src.buffer = b;
+  src.loop = true;
+  // Straight into the recorder's own tap — no decks, no master chain, no limiter.
+  const mime = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.("audio/webm;codecs=opus") ? "audio/webm;codecs=opus (default)" : "unknown";
+  // Is a LOSSLESS capture format even on the table here? Reported rather than assumed, because the
+  // obvious fix ("record PCM") is only a fix if the browser offers it.
+  const lossless = ["audio/webm;codecs=pcm", "audio/wav", "audio/x-wav", "audio/webm;codecs=flac", "audio/ogg;codecs=flac"].filter(
+    (t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.(t),
+  );
+  (eng as unknown as { recorder: { setSource: (n: AudioNode) => void; start: (s: number) => boolean; stop: () => Promise<{ buffer: AudioBuffer } | null> } }).recorder.setSource(src as unknown as AudioNode);
+  src.start();
+  (eng as unknown as { recorder: { start: (s: number) => boolean } }).recorder.start(5);
+  await new Promise((r) => setTimeout(r, 1500));
+  const take = await (eng as unknown as { recorder: { stop: () => Promise<{ buffer: AudioBuffer } | null> } }).recorder.stop();
+  src.stop();
+  let takePeak = 0;
+  const buf = take?.buffer;
+  if (buf) for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = Math.round(sr * 0.3); i < d.length; i++) takePeak = Math.max(takePeak, Math.abs(d[i]));
+  }
+  await eng.ctx.close();
+  return { cap, sourcePeak, takePeak, overshootDb: 20 * Math.log10(takePeak / cap), mime, lossless };
+};

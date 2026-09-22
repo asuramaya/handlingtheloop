@@ -1105,3 +1105,85 @@ describe("DjRoom under the DO value cap", () => {
     }
   });
 });
+
+// ★ DOES A GRANTED GUEST'S FX ACTUALLY REACH THE BOARD? — thread 93c2f4f2, measured.
+//
+// The gate itself (canDriveIntent) is pure and well covered in protocol.test.ts. What was NOT
+// covered is the path that USES it: DjRoom.canDrive reads the attachment off the sender's own
+// sockets, and nothing had checked that a grant puts the right decks there for an FX gesture, or
+// that a stage DJ holding ONE deck is stopped at the other one's FX. The thread wanted this on the
+// wire against a running worker; the DO is the thing the wire would be exercising, and in-process it
+// is deterministic and runs in CI, so it is measured here instead.
+//
+// FX intents are deck-scoped (fxParam/fxBypass/fxRack all carry `deck`), which is exactly why the
+// stage-DJ rows below can be asymmetric — and why "controlling" alone was never the right question.
+describe("DjRoom FX drive gate", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  const fx = (deck: "A" | "B") => ({ kind: "fxParam", deck, slot: 0, param: "mix", value: 0.8 });
+  const relayedFx = (ws: FakeWs) =>
+    ws.msgs().filter((m) => m.t === "intent").map((m) => (m.intent as { kind?: string; deck?: string } | undefined));
+  const sawFx = (ws: FakeWs, deck: "A" | "B") => relayedFx(ws).some((i) => i?.kind === "fxParam" && i?.deck === deck);
+
+  async function hostAndGrantedGuest() {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "grant", to: "g1", on: true });
+    return { host, guest };
+  }
+
+  it("a GRANTED guest drives FX on both decks, and the host sees it", async () => {
+    const { host, guest } = await hostAndGrantedGuest();
+    expect(guest.a.decks).toBe("AB"); // the precondition, stated rather than assumed
+    await h.send(guest, { t: "intent", intent: fx("A") });
+    await h.send(guest, { t: "intent", intent: fx("B") });
+    expect(sawFx(host, "A")).toBe(true);
+    expect(sawFx(host, "B")).toBe(true);
+  });
+
+  // The control that must fail: without the grant the identical gesture goes nowhere. If this ever
+  // passes, the rows above prove nothing — they would be measuring a room that relays everything.
+  it("…and an UNGRANTED guest's identical gesture is dropped", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    expect(guest.a.decks).toBe("");
+    await h.send(guest, { t: "intent", intent: fx("A") });
+    expect(sawFx(host, "A")).toBe(false);
+  });
+
+  it("a REVOKED guest stops driving FX — the grant is not a one-way door", async () => {
+    const { host, guest } = await hostAndGrantedGuest();
+    await h.send(guest, { t: "intent", intent: fx("A") });
+    expect(sawFx(host, "A")).toBe(true);
+    await h.send(host, { t: "grant", to: "g1", on: false });
+    await h.send(guest, { t: "intent", intent: fx("B") });
+    expect(sawFx(host, "B")).toBe(false); // B never arrived; A above is why this row can tell
+  });
+
+  // ★ THE ASYMMETRY THAT MAKES "controlling" THE WRONG QUESTION. A stage DJ holding deck A is
+  // `controlling` exactly as the granted guest is, and must still be refused deck B's FX.
+  it("a stage DJ on deck A drives A's FX and is refused B's", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true });
+    const lis = (await h.connect({ device: "L1", pub: true })).ws!;
+    await h.send(lis, { t: "stage", deck: "A" });
+    await h.send(host, { t: "stage-approve", to: "L1", deck: "A" });
+    expect(lis.a.controlling).toBe(true);
+    expect(lis.a.decks).toBe("A");
+    await h.send(lis, { t: "intent", intent: fx("A") });
+    await h.send(lis, { t: "intent", intent: fx("B") });
+    expect(sawFx(host, "A")).toBe(true);
+    expect(sawFx(host, "B")).toBe(false);
+  });
+});

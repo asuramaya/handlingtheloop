@@ -24,6 +24,10 @@ import type { StemStatus } from "../App";
 
 export interface SessionSyncDeps {
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
+  // Fill in a deck's name/artist/bpm/duration from the authoritative snapshot when ours are blank.
+  // A deck can arrive on a track with no name at all (the tick-resync loads from a videoId), and
+  // reconcile is the only moment that can put it right. See App/deckNameBackfill.ts.
+  nameDeckFromSnapshot: (id: DeckId, d: DeckSnapshot) => void;
   loadTrackToDeck: (id: DeckId, track: TrackMeta, restore?: DeckSnapshot) => Promise<unknown>;
   loaded: Record<DeckId, string | null>;
   setCrossfade: Dispatch<SetStateAction<number>>;
@@ -74,6 +78,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   const { engine, refresh, roomRef } = useSpine();
   const {
     setStatusFor,
+    nameDeckFromSnapshot,
     loadTrackToDeck,
     loaded,
     setCrossfade,
@@ -121,6 +126,11 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   const reconcileDeckState = useCallback(
     (id: DeckId, d: DeckSnapshot) => {
       const deck = engine.deck(id);
+      // ★ THE NAME IS PART OF THE STATE. This function applied every control field the snapshot
+      // carries and walked past `name` and `artist` sitting beside them, so a deck that arrived
+      // nameless — the tick-resync loads from a bare videoId — stayed nameless for the whole
+      // session while its duration, BPM and key were all correct (thread 47468bb9).
+      nameDeckFromSnapshot(id, d);
       deck.setTempo(d.tempo);
       deck.setTrim(d.trim);
       deck.setLevel(d.level);
@@ -176,7 +186,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // applying only `fx` here left a late-joining listener without the host's stem chains.
       applyDeckFxSnapshot(deck, d);
     },
-    [engine, setStatusFor],
+    [engine, setStatusFor, nameDeckFromSnapshot],
   );
 
   // Kick off a room-driven load with a SELF-HEALING dedupe guard. roomLoadTarget is set

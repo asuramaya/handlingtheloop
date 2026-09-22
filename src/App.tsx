@@ -120,6 +120,7 @@ import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline"
 import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
 import { shouldReleaseClaim } from "./App/loadClaim";
+import { deckNamePatch } from "./App/deckNameBackfill";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
@@ -823,6 +824,15 @@ function AppBody() {
   // …and WHICH load holds that claim. A videoId cannot answer that, because the case that matters
   // most reloads the SAME videoId: the tick-resync self-heal. See the release in loadTrackToDeck's
   // finally (ruling ab419a94) — comparing ids let a superseded load disarm its own successor.
+  // The board that owns a track says what it is called: fill a deck's blank name/artist/bpm/
+  // duration from the authoritative snapshot. Blanks only — a name already on screen is never
+  // overwritten by a snapshot echo. See App/deckNameBackfill.ts (thread 47468bb9).
+  const nameDeckFromSnapshot = useCallback((id: DeckId, d: DeckSnapshot) => {
+    setMeta((m) => {
+      const patch = deckNamePatch(m[id], d);
+      return patch ? { ...m, [id]: { ...m[id], ...patch } } : m;
+    });
+  }, []);
   const loadingSeq = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // When the current claim was made, so the resync can ask how old the IN-FLIGHT load is. Asking
   // the resync clock instead is what let a slow load be cancelled and restarted forever.
@@ -2233,6 +2243,7 @@ function AppBody() {
   const samplerApplyRef = useRef<((intent: Extract<Intent, { kind: "sample" }>) => void) | null>(null);
   const { runRoomLoad, applyRoomSnapshot, onRoomIntent, onRoomTick } = useSessionSync({
     setStatusFor,
+    nameDeckFromSnapshot,
     loadTrackToDeck,
     loaded,
     setCrossfade,

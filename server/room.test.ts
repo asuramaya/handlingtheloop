@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { DjRoom } from "./room";
 import type { Attachment, Ws, DurableObjectState } from "./roomState";
 import { DO_VALUE_CAP } from "../src/htl/room/doLimits";
+import { MAX_STEMVIEW_BYTES, MAX_STEMVIEW_RECORD_BYTES } from "../src/htl/audio/stemViewBudget";
 
 class FakeWs implements Ws {
   sent: string[] = [];
@@ -1222,5 +1223,79 @@ describe("DjRoom says when a board is too big to persist", () => {
     await h.send(host, { t: "join" });
     await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "SMALL" }, B: {} } } });
     expect(warns.filter((w) => w.includes("snapshot NOT persisted"))).toEqual([]);
+  });
+});
+
+// ★ WHAT A JOINER ACTUALLY COSTS — thread 54c64816, whose own numbers had gone stale.
+//
+// The row said "N joiners × up to 800 KB", written when room.ts bounded the envelope at a
+// hand-written 400_000 per deck. That constant is gone: MAX_STEMVIEW_BYTES is derived from the
+// client's own bucket clamp (stemViewBudget.ts), and the SAME gate admits to lastStemView and
+// relays — deliberately, because lastStemView is replayed to every arrival forever with no rate
+// limit, so one oversized frame passing once would tax every joiner after it.
+//
+// What nothing measured is what a joiner costs NOW. The amplification is real and by design: it is
+// linear in crowd size and bounded by the record cap. These rows pin the constant, so raising
+// MAX_BUCKETS shows up here as a bigger join rather than as a surprise in production.
+describe("stemview catch-up: what each arrival is handed", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  // A view at the admission ceiling: the largest thing a client can publish and have cached.
+  const fatView = () => ({ length: 9_000_000, sampleRate: 44100, bucket: 2048, pad: "x".repeat(MAX_STEMVIEW_BYTES - 200) });
+  const bytesReceived = (ws: FakeWs) => ws.sent.reduce((n, m) => n + m.length, 0);
+
+  async function liveRoomWithViews() {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "stemview", deck: "A", view: fatView() });
+    await h.send(host, { t: "stemview", deck: "B", view: fatView() });
+    return host;
+  }
+
+  it("a view at the ceiling is ADMITTED — otherwise the rows below measure an empty cache", async () => {
+    await liveRoomWithViews();
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    const views = guest.msgs().filter((m) => m.t === "stemview");
+    expect(views.map((v) => v.deck).sort()).toEqual(["A", "B"]);
+  });
+
+  it("each arrival is handed BOTH decks, once — bounded by the record cap, not by the crowd", async () => {
+    await liveRoomWithViews();
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    const cost = bytesReceived(guest);
+    expect(cost).toBeGreaterThan(MAX_STEMVIEW_BYTES); // both decks really arrived
+    expect(cost).toBeLessThanOrEqual(MAX_STEMVIEW_RECORD_BYTES + 8192); // and no more than the record
+  });
+
+  it("the cost is LINEAR in joiners and per-joiner flat — the amplification is the crowd, not the frame", async () => {
+    await liveRoomWithViews();
+    const costs: number[] = [];
+    for (const d of ["g1", "g2", "g3"]) {
+      const g = (await h.connect({ device: d, invited: true })).ws!;
+      await h.send(g, { t: "join" });
+      costs.push(bytesReceived(g));
+    }
+    // Each joiner pays the same; nobody pays for the joiners before them.
+    expect(Math.max(...costs) - Math.min(...costs)).toBeLessThan(2048);
+    expect(costs.length).toBe(3);
+  });
+
+  // The control that must fail: one byte over the gate and NOTHING is cached, so an arrival gets
+  // no stemview at all. It is the fail-closed direction stemViewBudget.ts argues for, and if this
+  // ever passes, the gate has stopped governing the cache and the rows above mean nothing.
+  it("a view one byte over the gate is cached for NOBODY — visibly absent, not silently stale", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "stemview", deck: "A", view: { pad: "x".repeat(MAX_STEMVIEW_BYTES + 1) } });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    expect(guest.msgs().some((m) => m.t === "stemview")).toBe(false);
   });
 });

@@ -2756,3 +2756,87 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   if (realSupported) MediaRecorder.isTypeSupported = realSupported as typeof MediaRecorder.isTypeSupported;
   return { cap, sourcePeak, takePeak, overshootDb: 20 * Math.log10(takePeak / cap), mime, lossless };
 };
+
+// ★ HOW MUCH ROOM A LOSSY TAKE ACTUALLY HAS — thread 3495e865.
+//
+// 7573d0b made a Chromium capture bit-exact, so the codec overshoot is moot there. On a browser
+// that offers NO lossless format (Safari/iOS gives mp4/AAC) the take is lossy by necessity, and
+// Recorder.stop() re-encodes it with bufferToWav, which CLAMPS at ±1. Deckard measured a capped
+// SINE coming back 0.079 dB short of that clamp, and named the obvious worry himself: a steady sine
+// is the easiest thing a codec ever sees. Dense broadband material overshoots by more.
+//
+// So this measures the thing neither of us had: a hot, broadband, limiter-worked mix through the
+// SAME capture path, lossless first and lossy second. The lossless take is the ground truth — it is
+// bit-exact now, demonstrated by --codec-overshoot — so whatever the lossy take reads above it is
+// the codec, with no estimator in the way. The stimulus is a seeded PRNG so both runs are the same
+// signal; if the two lossless peaks ever disagree across runs, this rig is not deterministic and
+// none of its numbers mean anything.
+(globalThis as unknown as { fxlabCodecMargin: (forceLossy?: boolean) => Promise<{ mime: string; takePeak: number; ceiling: number; grDb: number; clipped: number; fitGain: number }> }).fxlabCodecMargin = async (forceLossy = false) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const { pickRecorderMime } = await import("../../src/htl/audio/recorderFormat");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 250));
+  const sr = eng.ctx.sampleRate;
+  // Dense broadband with hard transients — the material a codec reconstructs worst, and the
+  // material a real set is made of. Seeded, so the lossy and lossless runs hear the same thing.
+  const mk = (seed: number, hz: number) => {
+    const b = eng.ctx.createBuffer(2, Math.round(sr * 3), sr);
+    let s = seed >>> 0;
+    const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0x100000000) * 2 - 1;
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      s = (seed + c * 7919) >>> 0;
+      for (let i = 0; i < d.length; i++) {
+        const t = i / sr;
+        const beat = t * 2; // 120 bpm
+        const env = Math.exp(-8 * (beat - Math.floor(beat))); // hard transient every half second
+        const kick = Math.sin(2 * Math.PI * 55 * t) * env;
+        d[i] = 0.6 * kick + 0.35 * rnd() * env + 0.25 * Math.sin((2 * Math.PI * hz * i) / sr);
+      }
+    }
+    return b;
+  };
+  for (const [id, seed, hz] of [["A", 12345, 220], ["B", 67890, 330]] as const) {
+    eng.deck(id).setBuffer(mk(seed, hz));
+    eng.deck(id).setTrim(2); // unclamped on purpose — the hot-set condition
+    eng.deck(id).setLevel(1);
+  }
+  eng.setCrossfade(0);
+  // The Safari/iOS path, exercised through Recorder's own picker rather than mocked.
+  const realSupported = MediaRecorder.isTypeSupported?.bind(MediaRecorder);
+  if (forceLossy && realSupported) {
+    MediaRecorder.isTypeSupported = ((t: string) => (/pcm|wav|flac/.test(t) ? false : realSupported(t))) as typeof MediaRecorder.isTypeSupported;
+  }
+  const mime = pickRecorderMime(MediaRecorder.isTypeSupported?.bind(MediaRecorder)) ?? "browser default (lossy)";
+  eng.deckA.play();
+  eng.deckB.play();
+  eng.startCapture("master", 5);
+  let gr = 0;
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+    gr = Math.max(gr, eng.masterGr);
+  }
+  const take = await eng.stopCapture();
+  eng.deckA.pause();
+  eng.deckB.pause();
+  let peak = 0;
+  let clipped = 0;
+  const buf = take?.buffer;
+  if (buf) for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = Math.round(sr * 0.3); i < d.length; i++) {
+      const v = Math.abs(d[i]);
+      if (v > peak) peak = v;
+      if (v > 1) clipped++; // samples bufferToWav would flatten against its ±1 clamp
+    }
+  }
+  // Recorder.stop() now FITS an over-full-scale take before encoding, so the peak above is the
+  // fitted one. lastFitGain is how far it had to come down — i.e. the raw codec overshoot, kept
+  // measurable instead of erased by the fix that answers it.
+  const fitGain = (eng as unknown as { recorder: { lastFitGain: number } }).recorder.lastFitGain;
+  await eng.ctx.close();
+  if (realSupported) MediaRecorder.isTypeSupported = realSupported as typeof MediaRecorder.isTypeSupported;
+  return { mime, takePeak: peak, ceiling: Math.pow(10, -0.3 / 20), grDb: gr, clipped, fitGain };
+};

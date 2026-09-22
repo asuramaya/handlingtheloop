@@ -7,6 +7,7 @@
 import { decodeAudio } from "./decode";
 import { bufferToWav } from "./encodeWav";
 import { pickRecorderMime } from "./recorderFormat";
+import { fitTakeToFullScale } from "./takeGain";
 
 export type RecordSource = AudioNode | null;
 
@@ -25,6 +26,8 @@ export class Recorder {
   private rec: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private _maxTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Gain the last take needed to fit the ±1 encoder (1 = none). Readable so the UI can say so. */
+  lastFitGain = 1;
 
   constructor(private readonly ctx: AudioContext) {
     this.input = ctx.createGain();
@@ -98,6 +101,11 @@ export class Recorder {
     this.chunks = [];
     try {
       const buffer = await decodeAudio(this.ctx, await blob.arrayBuffer());
+      // Where the capture had to be lossy (no lossless format on this browser), the decode can come
+      // back ABOVE full scale — 1.50 dB on a hot broadband mix — and bufferToWav clamps at ±1. Fit
+      // it first, so the saved file isn't distorted by an encoder the limiter never saw. A take
+      // that already fits is untouched; the pad and the upload get the SAME audio either way.
+      this.lastFitGain = fitTakeToFullScale(buffer);
       return { buffer, blob: bufferToWav(buffer) }; // re-encode to WAV so it reloads on any device
     } catch {
       return null;

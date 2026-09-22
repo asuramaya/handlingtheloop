@@ -72,6 +72,7 @@ function parseArgs(argv) {
       case "--headroom-path": a.headroomPath = true; break;
       case "--capture-tap": a.captureTap = true; break;
       case "--codec-overshoot": a.codecOvershoot = true; break;
+      case "--codec-margin": a.codecMargin = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -386,6 +387,45 @@ async function main() {
       );
       if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
       process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
+      return;
+    }
+
+    if (args.codecMargin) {
+      // Thread 3495e865: on a browser with no lossless capture (Safari/iOS) a take is lossy by
+      // necessity, and bufferToWav CLAMPS at ±1. Deckard's 0.079 dB of room was measured on a
+      // steady sine — the easiest thing a codec ever sees. This asks what a hot broadband mix has,
+      // and whether Recorder's fit keeps it out of the clamp.
+      const clean = await page.evaluate(() => globalThis.fxlabCodecMargin(false));
+      const lossy = await page.evaluate(() => globalThis.fxlabCodecMargin(true));
+      const repeat = await page.evaluate(() => globalThis.fxlabCodecMargin(false));
+      console.log("\n  CODEC MARGIN — does a LOSSY take survive the ±1 save clamp?\n");
+      console.log(`   limiter GR             ${f(clean.grDb, 2)} dB   ceiling ${f(clean.ceiling, 6)}  \u2190 the mix is working the brickwall`);
+      for (const [name, r] of [["lossless (truth)", clean], ["LOSSY (iOS path)", lossy]]) {
+        const raw = r.takePeak / (r.fitGain || 1);
+        console.log(
+          `   ${name.padEnd(17)} ${String(r.mime).padEnd(26)} decoded peak ${f(raw, 6)}   saved peak ${f(r.takePeak, 6)}   fit ${f(20 * Math.log10(r.fitGain), 3).padStart(7)} dB   clamped ${r.clipped}`,
+        );
+      }
+      // Determinism first: the lossless take is only ground truth if the rig repeats.
+      const drift = Math.abs(20 * Math.log10(repeat.takePeak / clean.takePeak));
+      console.log(`\n   rig determinism        lossless run twice: ${f(clean.takePeak, 6)} vs ${f(repeat.takePeak, 6)}  (${f(drift, 3)} dB apart)`);
+      if (drift > 0.01) {
+        console.log("\n   \u2717 INCONCLUSIVE: the two lossless runs disagree, so the lossless take is not ground truth and nothing below is measurable here.\n");
+        process.exitCode = 1;
+        return;
+      }
+      const rawLossy = lossy.takePeak / (lossy.fitGain || 1);
+      const overshootDb = 20 * Math.log10(rawLossy / clean.takePeak);
+      console.log(`   codec overshoot        ${f(overshootDb, 3)} dB on broadband, against ${f(20 * Math.log10(1 / clean.ceiling), 3)} dB of room  (a sine overshoots by 0.221 dB \u2014 this is why a sine was the wrong stimulus)`);
+      // The control must FAIL: if the lossy path did NOT need fitting on this material, the probe
+      // never reached the defect and the shipped row below proves nothing.
+      const defectReached = lossy.fitGain < 1;
+      const fixHolds = lossy.clipped === 0 && clean.fitGain === 1;
+      console.log(
+        `\n   ${!defectReached ? "\u2717 INCONCLUSIVE: the lossy take never exceeded full scale, so this material does not reach the clamp \u2014 ignore the rows above" : fixHolds ? "\u2713 the lossy take needed fitting and got it (0 clamped), and the lossless take was left untouched" : "\u2717 a take would still be clamped on save"}\n`,
+      );
+      console.log("   It says nothing about material louder or denser than this one.\n");
+      process.exitCode = defectReached && fixHolds ? 0 : 1;
       return;
     }
 

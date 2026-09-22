@@ -1,0 +1,78 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { analyzeChannels } from "./analyze";
+
+// THE WORKER IS SENT A MONO MIX, AND THAT IS ONLY SAFE WHILE NOTHING DOWNSTREAM WANTS STEREO.
+//
+// analyzeTrackAsync used to copy and transfer both channels. Every consumer downmixes first, with
+// the same expression — computePyramidFromChannels, the key chromagram, and beats.ts's decimateMono
+// each compute `(ch0[i] + ch1[i]) * 0.5` — so the second channel crossed the boundary purely to be
+// averaged away three times. Mixing on the near side halves the allocation and the transfer.
+//
+// That rests on a CLOSED-WORLD CLAIM about the consumers, which is the kind of sentence that is true
+// when written and quietly false later. So the scan below is the real test here: it reads the
+// analysis sources and fails if any consumer of channel 1 stops using that exact downmix — because
+// such a consumer would now be handed a mono mix and would silently measure the wrong thing. The
+// equivalence test above it is the cheaper half.
+
+describe("analysis is mono-safe", () => {
+  it("gives the same answer from a pre-mixed mono channel as from the stereo pair", () => {
+    const SR = 48000;
+    const SECS = 40;
+    const n = SR * SECS;
+    const a = new Float32Array(n);
+    const b = new Float32Array(n);
+    let s = 1;
+    const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    for (let t = 1; t < SECS - 1; t += 60 / 128) {
+      const at = Math.round(t * SR);
+      for (let i = 0; i < SR * 0.25 && at + i < n; i++) {
+        const u = i / SR;
+        const v = Math.exp(-u * 18) * Math.sin(2 * Math.PI * (52 + 60 * Math.exp(-u * 40)) * u);
+        a[at + i] += v;
+        b[at + i] += v * 0.92; // genuinely different channels, or the test proves nothing
+      }
+      const ha = Math.round((t + 0.234) * SR);
+      for (let i = 0; i < SR * 0.04 && ha + i < n; i++) {
+        const e = Math.exp(-(i / SR) * 90) * 0.2;
+        a[ha + i] += rnd() * e;
+        b[ha + i] += rnd() * e;
+      }
+    }
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) mono[i] = (a[i] + b[i]) * 0.5;
+
+    const st = analyzeChannels(a, b, SR);
+    const mo = analyzeChannels(mono, null, SR);
+    expect(mo.bpm).toBeCloseTo(st.bpm!, 6);
+    expect(mo.key?.camelot).toBe(st.key?.camelot);
+    expect(mo.energy).toBeCloseTo(st.energy, 6);
+    expect(mo.beatgrid?.downbeat).toBe(st.beatgrid?.downbeat);
+    expect(mo.beatgrid?.beats?.length).toBe(st.beatgrid?.beats?.length);
+    let worst = 0;
+    const p = st.beatgrid?.beats;
+    const q = mo.beatgrid?.beats;
+    if (p && q) for (let i = 0; i < p.length; i++) worst = Math.max(worst, Math.abs(p[i] - q[i]));
+    expect(worst).toBeLessThan(1e-4); // sub-0.1 ms; it measured exactly 0 on this material
+  }, 120_000);
+
+  it("no analysis consumer reads channel 1 except to average it", () => {
+    const dir = __dirname;
+    const offenders: string[] = [];
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".ts") && !x.includes(".test."))) {
+      const src = readFileSync(join(dir, f), "utf8");
+      for (const m of src.matchAll(/ch1\[[^\]]+\]/g)) {
+        const at = m.index ?? 0;
+        const around = src.slice(Math.max(0, at - 80), at + 40).replace(/\s+/g, " ");
+        // The one sanctioned shape, in either operand order.
+        if (/\(\s*ch0\[[^\]]+\]\s*\+\s*ch1\[[^\]]+\]\s*\)\s*\*\s*0\.5/.test(around)) continue;
+        offenders.push(`${f}: …${around.slice(-70)}`);
+      }
+    }
+    expect(
+      offenders,
+      `these read channel 1 some other way — analyzeTrackAsync now sends a MONO mix, so they would be measuring the wrong signal:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});

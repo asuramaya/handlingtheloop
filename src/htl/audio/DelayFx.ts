@@ -221,6 +221,19 @@ export class DelayFx extends BaseFxDevice {
     this.duckMeter.fftSize = 256;
     this.duckMeter.smoothingTimeConstant = 0; // already smoothed upstream (the 12Hz follower)
     this.duckMeterBuf = new Float32Array(this.duckMeter.fftSize);
+    // ★ AN ANALYSER IS A PATH, AND THIS ONE IS OUTSIDE THE ACTIVATION GATE. A live AudioContext
+    // keeps the ENTIRE upstream of an AnalyserNode scheduled even though the analyser itself
+    // reaches nothing — the defect that had every bypassed comp and reverb running its worklet at
+    // ~95% of active cost until 5b90ca3. BaseFxDevice's gate now cuts every edge out of `wet`, but
+    // this meter hangs off `duckScale`, which is on the SIDECHAIN side and the gate never sees it.
+    // So the duck follower (rect → smooth → duckEnv → clampShaper → duckScale) is scheduled for
+    // the life of this device, bypassed or not.
+    // LEFT AS IS, DELIBERATELY: those are five NATIVE nodes — a rectifier, a smoother, a shaper, two
+    // gains — with no worklet among them, orders below the FDN/delay-line this device's wet bus
+    // carries. The gate could take it (`duckScale.disconnect(this.duckMeter)` alongside the wet
+    // edges) if a measurement ever says it is worth the extra restore path; nothing measures native
+    // node cost today, so this is a judgement from the node list, and it is written down rather
+    // than silently assumed. Found by Deckard while fixing the wet-bus edge.
     this.duckScale.connect(this.duckMeter);
     // modulation: one LFO swings both delay times (added to the base time → vibrato).
     this.lfo.connect(this.modL);

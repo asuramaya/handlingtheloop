@@ -1407,6 +1407,7 @@ function AppBody() {
       aa: settings.stretchAa,
       tThresh: settings.stretchTThresh,
     });
+    engine.setMasterHeadroomDb(settings.masterHeadroomDb); // trim BEFORE the limiter — see masterHeadroom.ts
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
     // ACCENT is in the deps so a track change (new cover art) repaints the chrome too, not just
     // the waveform that happens to take it as a prop.

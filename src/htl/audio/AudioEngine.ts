@@ -12,6 +12,7 @@ import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 import { COMP_WORKLET_SRC } from "./compWorklet";
 import { TAPE_WORKLET_SRC } from "./tapeWorklet";
 import { makeMasterLimiter, type CompFx } from "./CompFx";
+import { headroomGain } from "./masterHeadroom";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
 import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
@@ -76,6 +77,7 @@ export class AudioEngine {
   private readonly xfadeB: GainNode;
   private readonly musicBus: GainNode; // decks + region samples sum here → master; the mic auto-duck modulates its gain
   private readonly master: GainNode;
+  private readonly headroom: GainNode;
   // ★ THE MASTER'S OWN METER TAP. Post master-volume, PRE-limiter: what you asked for, before the
   // ceiling takes any of it back — `masterGr` says how much it took, and the two together are the
   // whole story of the output. Its own analyser, so a master meter never has to reach into a deck's
@@ -143,7 +145,14 @@ export class AudioEngine {
     this.limiter.ratio.value = 20;
     this.limiter.attack.value = 0.003;
     this.limiter.release.value = 0.25;
-    this.master.connect(this.limiter);
+    // ★ HEADROOM SITS BETWEEN THE MASTER AND THE CEILING, at unity until someone asks otherwise.
+    // Measured (fxlab --master-duck, 489901b3): a mix summing over the limiter's ceiling lets one
+    // deck's kick pull the OTHER deck down 1.88 dB for 130 ms — the "punches from the other deck"
+    // report — and 3 dB of trim here removes it. Everything downstream (both limiters) takes its
+    // input from this node, so there is exactly one place the drive is decided.
+    this.headroom = this.ctx.createGain();
+    this.master.connect(this.headroom);
+    this.headroom.connect(this.limiter);
     this.limiter.connect(this.ctx.destination);
     this.masterMeter = this.ctx.createAnalyser();
     this.masterMeter.fftSize = 1024;
@@ -280,13 +289,13 @@ export class AudioEngine {
     if (this.masterLimiter) return;
     try {
       const lim = makeMasterLimiter(this.ctx);
-      this.master.disconnect(this.limiter); // retire the old soft "brick-wall-ish" compressor
+      this.headroom.disconnect(this.limiter); // retire the old soft "brick-wall-ish" compressor
       try {
         this.limiter.disconnect();
       } catch {
         /* wasn't connected */
       }
-      this.master.connect(lim.input);
+      this.headroom.connect(lim.input);
       lim.output.connect(this.ctx.destination);
       this.masterLimiter = lim;
     } catch (e) {
@@ -1355,6 +1364,11 @@ export class AudioEngine {
   }
   get masterVolume() {
     return this._masterVol;
+  }
+  /** Trim applied BEFORE the limiter (0 = unity, negative = headroom). See masterHeadroom.ts for
+   *  the measurement that motivates it. Ramped, because a step in a live master is a click. */
+  setMasterHeadroomDb(db: number) {
+    this.headroom.gain.setTargetAtTime(headroomGain(db), this.ctx.currentTime, 0.02);
   }
   setMasterMuted(muted: boolean) {
     this._masterMuted = muted;

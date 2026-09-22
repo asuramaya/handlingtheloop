@@ -436,6 +436,22 @@ export function AudioTab({
             step={0.1}
           />
         )}
+        {/* ★ MASTER HEADROOM — the gain-staging answer to "the compressor punches from the other
+            deck". Measured on the live FX harness (fxlab --master-duck): two decks summing past the
+            master limiter's ceiling let a kick on one deck pull the OTHER down 1.88 dB for 130 ms,
+            and no per-deck control can reach it, because the limiter sees the decks already summed.
+            3 dB of trim here took it to 0.02 dB. It defaults to 0 — the fix costs output level, so
+            it is offered, not imposed. */}
+        <Slider
+          label="Master headroom"
+          info="How far the master is pulled down before the limiter. At 0 a loud two-deck mix runs into the ceiling, and the limiter — which hears both decks at once — ducks the whole mix on every kick, so one deck appears to pump the other. Measured: 3 dB of headroom removes that almost entirely. The cost is output level; every dB here is a dB quieter, so turn the amp up instead."
+          hint={settings.masterHeadroomDb === 0 ? "none — loudest, may pump" : `${-settings.masterHeadroomDb} dB quieter`}
+          value={settings.masterHeadroomDb}
+          onChange={(v) => set({ masterHeadroomDb: v })}
+          min={-12}
+          max={0}
+          step={1}
+        />
         <div className="settings-row">
           <span className="settings-label">
             Anti-alias pitch-up

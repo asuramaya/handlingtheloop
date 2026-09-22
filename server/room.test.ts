@@ -434,10 +434,11 @@ describe("DjRoom crowd guard + requests", () => {
     const host = await liveHost();
     await h.send(host, { t: "lyrics", deck: "A", videoId: "v1", lines: [{ s: 0, w: "a" }], source: "t" });
     await h.send(host, { t: "lyrics", deck: "B", videoId: "v2", lines: [{ s: 0, w: "b" }], source: "t" });
-    const stored = h.state.store.get("lyrics") as Record<string, unknown> | undefined;
-    expect(stored).toBeDefined();
-    expect(stored!.A).toBeDefined();
-    expect(stored!.B).toBeDefined();
+    // Per-deck keys now (see "DjRoom persists lyrics per deck"): the throttle is per deck, so both
+    // still land inside one window — they just land in two records that cannot starve each other.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.state.store.get("lyrics:A")).toBeDefined();
+    expect(h.state.store.get("lyrics:B")).toBeDefined();
   });
 
   // ★ The stem request/ack pair is addressed to ONE device; the anonymous crowd must never get it.
@@ -1329,7 +1330,7 @@ describe("DjRoom says when a caption set is too big to persist", () => {
     expect(line).toBeTruthy();
     expect(line).toMatch(/cold restart will serve OLDER captions or none/);
     expect(line).toContain(String(DO_VALUE_CAP)); // the cap, so the reader can judge the number
-    expect(line).toMatch(/decks A/); // WHICH deck put it over — the first question a reader has
+    expect(line).toMatch(/for deck A/); // WHICH deck was refused — per-deck keys, so it is one deck, not a record
   });
 
   // The control, and the one that keeps this honest: a caption set that fits must stay silent.
@@ -1338,5 +1339,83 @@ describe("DjRoom says when a caption set is too big to persist", () => {
     await h.send(host, { t: "join" });
     await h.send(host, { t: "lyrics", deck: "A", videoId: "SMALL", lines: [{ start: 0, end: 3, text: "hi", words: words(20) }], source: "lrclib" });
     expect(warns.filter((w) => w.includes("lyrics NOT persisted"))).toEqual([]);
+  });
+});
+
+// ★ LYRICS: ONE DECK, ONE KEY, ONE BUDGET — the storage half of Deckard's caption measurement.
+//
+// Both decks used to persist under a single "lyrics" record measured against one 128 KiB cap. He
+// measured a real hip-hop track (Rap God, 1542 words) at 64.3 KB on ONE deck and 128.6 KB on BOTH
+// — 98.1% of the cap, passing with ~2.4 KB to spare — and nothing in the client bounds a word list.
+// Coupled, a wordy track on A could stop B's captions reaching disk for reasons that have nothing
+// to do with B. Split, the worst measured deck has 2.0x headroom.
+describe("DjRoom persists lyrics per deck", () => {
+  let h: ReturnType<typeof makeRoom>;
+  let warns: string[];
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    h = makeRoom();
+    warns = [];
+    spy = vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => void warns.push(a.map(String).join(" ")));
+  });
+  afterEach(() => spy.mockRestore());
+
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => ({ t: i * 0.4, w: `word${i}` }));
+  const say = (deck: "A" | "B", n: number) => ({ t: "lyrics", deck, videoId: `vid${deck}`, lines: lines(n), source: "lrclib" });
+
+  async function host() {
+    const ws = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(ws, { t: "join" });
+    await h.send(ws, { t: "control", on: true });
+    return ws;
+  }
+
+  it("writes lyrics:A and lyrics:B, not one shared record", async () => {
+    const ws = await host();
+    await h.send(ws, say("A", 40));
+    await h.send(ws, say("B", 40));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.state.store.has("lyrics:A")).toBe(true);
+    expect(h.state.store.has("lyrics:B")).toBe(true);
+    expect(h.state.store.has("lyrics")).toBe(false);
+  });
+
+  // ★ THE POINT OF THE SPLIT. Deck A carries a caption set over the cap; deck B is ordinary. B must
+  // still reach disk — under the old single record it could not, and nothing said why.
+  it("an oversized deck A no longer stops deck B's captions from persisting", async () => {
+    const ws = await host();
+    await h.send(ws, { t: "lyrics", deck: "A", videoId: "vidA", lines: "x".repeat(DO_VALUE_CAP), source: "lrclib" });
+    await h.send(ws, say("B", 40));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.state.store.has("lyrics:A")).toBe(false); // refused, and said so
+    expect(h.state.store.has("lyrics:B")).toBe(true); // unaffected by a neighbour it has nothing to do with
+    expect(warns.some((w) => w.includes("lyrics NOT persisted for deck A"))).toBe(true);
+  });
+
+  // The control: a caption set that fits must stay silent, or the log becomes noise and a real
+  // refusal gets filtered out with it.
+  it("says nothing about captions that fit", async () => {
+    const ws = await host();
+    await h.send(ws, say("A", 40));
+    expect(warns.filter((w) => w.includes("lyrics NOT persisted"))).toEqual([]);
+  });
+
+  it("migrates a legacy single record to per-deck keys, and only then drops it", async () => {
+    const legacy = { A: { videoId: "old-a", lines: lines(10), source: "lrclib" }, B: { videoId: "old-b", lines: lines(10), source: "lrclib" } };
+    h.state.store.set("lyrics", structuredClone(legacy));
+    const ws = await host(); // load() runs on the first request → reads the legacy record
+    await h.send(ws, say("A", 20)); // first successful per-deck write retires it
+    await new Promise((r) => setTimeout(r, 0)); // persistLyrics is fire-and-forget (`void`)
+    expect(h.state.store.has("lyrics")).toBe(false);
+    expect((h.state.store.get("lyrics:B") as { videoId: string }).videoId).toBe("old-b"); // B carried over untouched
+    expect((h.state.store.get("lyrics:A") as { videoId: string }).videoId).toBe("vidA"); // A is the fresh one
+  });
+
+  it("serves the migrated captions to a joiner — the migration is not just a file move", async () => {
+    h.state.store.set("lyrics", { A: { videoId: "old-a", lines: lines(10), source: "lrclib" } });
+    await host();
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    expect(guest.msgs().some((m) => m.t === "lyrics" && m.videoId === "old-a")).toBe(true);
   });
 });

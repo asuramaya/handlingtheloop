@@ -141,6 +141,8 @@ export class DjRoom {
   // most likely never to run.
   private stemAt: Record<string, number> = {};
   private lyricAt: Record<string, number> = {};
+  /** A legacy single-record `lyrics` value was loaded; the next successful per-deck write retires it. */
+  private lyricsNeedSplit = false;
   // Public-room hardening. MAX_LISTENERS caps the anonymous crowd one DO admits (the
   // single-threaded fan-out ceiling — beyond this a relay tier is needed). ANCHOR_GRACE_MS
   // holds the clock through a host network blip instead of yanking it (→ a frozen room +
@@ -235,7 +237,25 @@ export class DjRoom {
     this.anchorId = (await this.state.storage.get<string>("anchor")) ?? null;
     this.lastSnapshot = await this.state.storage.get("snapshot");
     this.lastStemView = (await this.state.storage.get<Record<string, unknown>>("stemviews")) ?? {};
-    this.lastLyrics = (await this.state.storage.get<Record<string, { videoId: string; lines: unknown; source: string }>>("lyrics")) ?? {};
+    // ★ LYRICS ARE PER-DECK KEYS NOW, with a one-read migration from the old single record.
+    // Both decks under one key coupled them: Deckard measured a real hip-hop track (Rap God, 1542
+    // words) at 64.3 KB on ONE deck and 128.6 KB on BOTH — 98.1% of the cap, passing with ~2.4 KB
+    // to spare. Nothing in the client bounds a word list, so that margin is a floor, not a budget.
+    // Split, the worst single deck has 2.0x headroom and one wordy track can no longer stop the
+    // OTHER deck's captions from persisting. The legacy record is read when neither new key exists
+    // and is deleted only after the split has been written, so a half-done migration loses nothing.
+    const lyricEntry = async (d: string) =>
+      await this.state.storage.get<{ videoId: string; lines: unknown; source: string }>(`lyrics:${d}`);
+    const perDeck = { A: await lyricEntry("A"), B: await lyricEntry("B") };
+    this.lastLyrics = {};
+    for (const [d, v] of Object.entries(perDeck)) if (v) this.lastLyrics[d] = v;
+    if (!perDeck.A && !perDeck.B) {
+      const legacy = await this.state.storage.get<Record<string, { videoId: string; lines: unknown; source: string }>>("lyrics");
+      if (legacy) {
+        this.lastLyrics = legacy;
+        this.lyricsNeedSplit = true; // written by the next persist, which then drops the old key
+      }
+    }
     this.grants = new Set((await this.state.storage.get<string[]>("grants")) ?? []);
     this.approved = new Set((await this.state.storage.get<string[]>("approved")) ?? []);
     this.isPublic = (await this.state.storage.get<boolean>("public")) ?? false;
@@ -322,19 +342,33 @@ export class DjRoom {
       // hip-hop set — and it currently fits, with about 2.4 KB to spare. That margin is the whole
       // finding: nothing in the client bounds a word list, real per-word timings are wordier than
       // the uniform ones measured here, and a longer or denser track walks straight through it.
-      const bytes = JSON.stringify(this.lastLyrics).length;
+      // ★ ONE DECK, ONE KEY, ONE BUDGET. This measured the WHOLE record and wrote the WHOLE record,
+      // so a wordy track on deck A could stop deck B's captions reaching disk — two decks sharing
+      // one cap with no relationship to each other. Per deck, the worst real case Deckard measured
+      // (Rap God, 64.3 KB) has 2.0x headroom instead of 1.02x.
+      const entry = this.lastLyrics[deck];
+      if (!entry) return; // nothing to write for this deck
+      const bytes = JSON.stringify(entry).length;
       if (bytes > DO_VALUE_CAP) {
         if (now - this.lyricTooBigAt >= 60_000) {
           this.lyricTooBigAt = now;
           console.warn(
-            `[htl-room] lyrics NOT persisted (${bytes} bytes, cap ${DO_VALUE_CAP}, decks ${Object.keys(this.lastLyrics).join("+") || "none"}): ` +
-              `captions are served from memory and a cold restart will serve OLDER captions or none —`,
+            `[htl-room] lyrics NOT persisted for deck ${deck} (${bytes} bytes, cap ${DO_VALUE_CAP}): ` +
+              `captions are served from memory and a cold restart will serve OLDER captions or none for that deck —`,
           );
         }
         return;
       }
       this.lyricAt[deck] = now;
-      await this.state.storage.put("lyrics", this.lastLyrics);
+      await this.state.storage.put(`lyrics:${deck}`, entry);
+      // The legacy record is retired only AFTER a split key has landed, so a migration interrupted
+      // between the two leaves the old value intact and the next boot simply migrates again.
+      if (this.lyricsNeedSplit) {
+        const other = deck === "A" ? "B" : "A";
+        if (this.lastLyrics[other]) await this.state.storage.put(`lyrics:${other}`, this.lastLyrics[other]);
+        await this.state.storage.delete("lyrics");
+        this.lyricsNeedSplit = false;
+      }
       this.lyricTooBigAt = 0; // a write landed → the next failure is news, not a repeat
     } catch {
       /* best-effort — never tear down a socket over a persist */

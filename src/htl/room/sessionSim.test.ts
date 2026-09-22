@@ -68,6 +68,7 @@ class Guest {
   loadSeq = 0; //                   monotonic per load, the claim's owner
   claimSeq = 0; //                  which load currently owns loadingVid
   superseded: { seq: number; vid: string; endsAt: number }[] = []; // loads still running after being replaced
+  inFlightVid = ""; //              the track this deck is ACTUALLY decoding right now
   lastRecvAt = 0;
   socketDead = false; // half-open: the live socket delivers nothing until a reconnect
   inbox: { at: number; msg: Msg }[] = [];
@@ -78,6 +79,7 @@ class Guest {
   // ruling ab419a94 went unmodelled while reproducing ~1 run in 3 on the real rig. A deck that keeps
   // cancelling its own load never lands, and every other invariant here stays green while it does.
   abortedInFlight = 0;
+  decisions: Record<string, number> = {}; // DIAG: how often each TickResync action was taken
   constructor(
     readonly fault: GuestFault,
     readonly rng: () => number,
@@ -102,10 +104,17 @@ class Guest {
     // Cancelling an in-flight load because the HOST moved to a different track is correct — that
     // load is for a track nobody wants any more. Cancelling a load for the track we are already
     // loading is the livelock, and nothing else is.
-    if (this.loadingVid === vid) this.abortedInFlight++;
+    //
+    // ★ ASK WHAT IS DECODING, NOT WHAT IS CLAIMED. This read `loadingVid` first, and the force-load
+    // path CLEARS that claim immediately before restarting ("defeat a stuck dedupe guard") — so the
+    // counter was blind to the single abort it exists to catch, and the sweep came back green under
+    // a control that was demonstrably force-loading. A counter that cannot see the defect it is
+    // named for is worse than no counter.
+    if (this.inFlightVid === vid) this.abortedInFlight++;
     if (this.loadingVid) this.superseded.push({ seq: this.loadSeq, vid: this.loadingVid, endsAt: this.loadDoneAt });
     this.loadSeq++;
     this.loadStartedAt = now;
+    this.inFlightVid = vid;
     this.roomLoadTarget = vid;
     this.loadingVid = vid;
     this.claimSeq = this.loadSeq;
@@ -133,6 +142,7 @@ class Guest {
     this.retireSuperseded(now); // a replaced load finishes and cleans up after itself
     // A finished load lands.
     if (this.loadingVid && now >= this.loadDoneAt) {
+      this.inFlightVid = "";
       this.loadedVid = this.loadingVid;
       this.loadingVid = "";
       this.roomLoadTarget = null;
@@ -187,6 +197,7 @@ class Guest {
       sinceResyncMs: this.resyncAt == null ? null : now - this.resyncAt,
       attempts: this.resyncTries,
     });
+    this.decisions[r] = (this.decisions[r] ?? 0) + 1;
     if (r === "drive") this.resyncTries = 0;
     if (r === "drive") {
       // SAFETY: when we drive, the deck we drive MUST hold the track the tick is for.
@@ -296,16 +307,13 @@ describe("session sim — fuzz (phone-host-4G + phone-guest-4G)", () => {
   // A follower whose loads take longer than the retry floor — the phone-on-4G population, which the
   // desktop-timed LOAD_MS above never reached.
   //
-  // ★ WHAT THIS DOES NOT PROVE, stated because I checked rather than assumed: it is NOT a
-  // regression guard for the livelock of ruling ab419a94. I reverted BOTH shipped rules (the claim's
-  // sequence ownership in App/loadClaim.ts and the in-flight guard in decideTickResync) and this
-  // file still passed, so the sim does not reproduce that failure even with the defects back in
-  // place — the message timing here never lines up the way the live room did. The discriminating
-  // guards are the unit tests: loadClaim.test.ts fails on the first revert, sessionFollow.test.ts on
-  // the second. Both were verified to fail. What this case DOES prove is convergence and no
-  // self-restart for a follower slower than the retry floor, which is worth having and is not the
-  // same claim. A simulation that has never been shown to fail is a decoration.
-  it("a follower slower than the retry floor still converges, and never restarts its own load (see the note above on what this does not prove)", () => {
+  // ★ THIS FILE NOW FAILS WHEN THE DEFECTS COME BACK, which it did not when it was written. Both
+  // single reverts were run: restoring the id-comparison claim rule (App/loadClaim.ts) turns 1 test
+  // red, restoring the old resync rule (decideTickResync) turns 4 red including the sweep below, at
+  // every offset. What made the difference was not more scenarios — it was fixing the abort counter,
+  // which was reading the dedupe CLAIM while the force-load path clears that claim before
+  // restarting, so it could not see the one abort it exists to catch.
+  it("a follower slower than the retry floor still converges, and never restarts its own load", () => {
     const { hostVid, guests } = simulate({
       guests: [{ dropP: 0, latencyMs: 120, halfOpenAt: null, faultsEndAt: 0 }],
       loadSchedule: [{ at: 500, vid: "slowTrack01" }],
@@ -316,6 +324,35 @@ describe("session sim — fuzz (phone-host-4G + phone-guest-4G)", () => {
     expect(guests[0].abortedInFlight).toBe(0);
     expect(guests[0].loadedVid).toBe(hostVid);
     expect(guests[0].droveMismatch).toBe(false);
+  });
+
+  // ★ THE OFFSET SWEEP — Metron's read on why this file could not fail, turned into a property.
+  //
+  // A livelock needs the retry to land INSIDE the window where the previous load is still running.
+  // A simulation advances time in discrete steps, so it only reproduces that if a step boundary
+  // happens to fall in the contested interval — my live case had deck A escaping by about 100 ms,
+  // a margin smaller than any sensible step. That is why reverting both shipped rules left this
+  // file green: it was not modelling a race, it was modelling ONE schedule.
+  //
+  // So sweep the phase instead of hunting the timing. Across a whole retry period of load
+  // durations, in 50 ms steps, EVERY alignment between a load finishing and a retry firing is
+  // visited — and the property is the same at every one of them: a deck must never start a second
+  // load for a track it is already loading, and it must end up on the host's track.
+  it("★ no alignment of load-completion against retry tick produces a second start while the first is live", () => {
+    const failures: string[] = [];
+    for (let offset = 0; offset < RESYNC_RETRY_MS; offset += STEP_MS) {
+      const { hostVid, guests } = simulate({
+        guests: [{ dropP: 0, latencyMs: 120, halfOpenAt: null, faultsEndAt: 0 }],
+        loadSchedule: [{ at: 500, vid: "sweepTrack1" }],
+        durationMs: 40000,
+        loadMs: SLOW_LOAD_MS + offset,
+      });
+      const g = guests[0];
+      if (g.abortedInFlight !== 0) failures.push(`offset ${offset}ms: restarted its own load ${g.abortedInFlight}x`);
+      if (g.loadedVid !== hostVid) failures.push(`offset ${offset}ms: never converged (holding ${g.loadedVid})`);
+      if (g.droveMismatch) failures.push(`offset ${offset}ms: drove a mismatched deck`);
+    }
+    expect(failures).toEqual([]);
   });
 
   it("every fault pattern converges and never drives the wrong track", () => {

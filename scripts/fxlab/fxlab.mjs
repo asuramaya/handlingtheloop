@@ -362,7 +362,9 @@ async function main() {
       const rows = await page.evaluate(() => globalThis.fxlabMasterDuck());
       console.log("\n  MASTER DUCK — how far deck A's 1 kHz tone moves when deck B's kick lands, with NO deck control engaged:\n");
       for (const r of rows) {
-        console.log(`   ${r.name.padEnd(18)} duck ${f(r.duckDb, 2).padStart(7)} dB   peak ${f(r.peak, 3)}${r.control ? "  \u2190 control, must be ~0" : ""}`);
+        console.log(
+          `   ${r.name.padEnd(18)} duck ${f(r.duckDb, 2).padStart(7)} dB   recover ${Number.isFinite(r.recoverMs) ? f(r.recoverMs, 0).padStart(4) + " ms" : "  >beat"}   peak ${f(r.peak, 3)}${r.control ? "  \u2190 control, must be ~0" : ""}`,
+        );
       }
       const worstControl = Math.max(...rows.filter((r) => r.control).map((r) => Math.abs(r.duckDb)));
       console.log(`\n   controls worst |duck| = ${f(worstControl, 2)} dB ${worstControl < 0.3 ? "\u2713 the probe reads the tone, not itself" : "\u2717 the probe is measuring its own stimulus \u2014 the numbers above mean nothing"}\n`);

@@ -547,12 +547,17 @@ export class RoomClient {
         // (Deckard caught this on the rig — my code did exactly what it said, and what it said was
         // not enough). A provider answers with the board as it stands RIGHT NOW, which is also more
         // truthful than a cached copy whenever the two differ.
-        const snap = republishSnapshot(this.h.snapshot?.(), this.lastPublished);
+        // ★ ASK THE APP ONCE. The provider builds a WHOLE session snapshot — both decks, both FX
+        // racks, every control — so calling it again just to label the log would double that work on
+        // every ask AND could disagree with the first call if anything changed in between, labelling
+        // an app answer as a cache one. An instrument must not re-run the thing it is measuring.
+        const fresh = this.h.snapshot?.();
+        const snap = republishSnapshot(fresh, this.lastPublished);
         // ★ SAY THAT THE ASK ARRIVED, AND WHETHER WE ANSWERED. Without this line the frame is
         // unverifiable from outside: taking the anchor slot ALSO re-runs App's own publish effect,
         // so the server sees a `state` either way and "it works" and "it does nothing" produce the
         // same log. The ring is the only place that can tell an answered ask from a coincidence.
-        event("room.republish", { answered: snap !== undefined, from: this.h.snapshot?.() !== undefined ? "app" : "cache" });
+        event("room.republish", { answered: snap !== undefined, from: fresh !== undefined ? "app" : snap !== undefined ? "cache" : "none" });
         if (snap !== undefined) {
           this.lastPublished = snap;
           this.send({ t: "state", snapshot: snap });

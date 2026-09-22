@@ -8,12 +8,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # --- pre-deploy gate: never ship red ---
-# `pnpm run build` below already runs the src typecheck (tsc -b), so here we add the
-# worker project's typecheck + the full test suite. Any failure aborts before the edge
-# is touched. Skip with SKIP_TESTS=1 ./deploy.sh only for a known-green hotfix.
+# This used to name the projects itself — "the src typecheck (tsc -b) … plus the worker
+# project's typecheck" — and ran `tsc -p tsconfig.node.json` directly. Then 747b4a0 added a
+# THIRD project (tsconfig.scripts.json, for the fxlab/joglab harnesses, which had been outside
+# every tsconfig) and this gate did not grow. A hand-listed roster in the LAST thing that runs
+# before shipping is the worst place for one: it fails silently, in the direction nobody checks,
+# at the moment nobody is looking. So the gate now calls the single source of truth — whatever
+# `pnpm typecheck` covers is what ships — and adding a project can no longer miss it.
+# Any failure aborts before the edge is touched. Skip with SKIP_TESTS=1 ./deploy.sh only for a
+# known-green hotfix.
 if [ "${SKIP_TESTS:-0}" != "1" ]; then
-  echo "› pre-deploy gate: worker typecheck + tests"
-  pnpm exec tsc -p tsconfig.node.json
+  echo "› pre-deploy gate: every typecheck project + tests"
+  pnpm typecheck
   pnpm test
 fi
 

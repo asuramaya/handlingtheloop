@@ -3108,14 +3108,38 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   // If the floor tracks the injected jitter, the link holds. If it does not, his explanation is
   // wrong and I say so.
   const jitter = scenario.startsWith("jitter") ? Number(scenario.split(":")[1] || "0.014") : 0;
-  const mkJitter = (bpm: number, rms: number, seed: number) => {
+  // ★ DOES THE SHAPE OF THE JITTER MATTER, OR ONLY ITS SIZE? Deckard's calibration turned up a real
+  // distinction while validating an estimator: at 128 bpm the grid has the LARGEST ground-truth
+  // position error of his four tempos and the SMALLEST second difference, which means its error is
+  // CORRELATED beat to beat rather than white — the same total error, differently shaped. A slow
+  // wander is trackable; white noise is not. My 0.82–0.87x linear law was measured with injected
+  // WHITE displacement, so if the same RMS delivered as a wander settles lower, the law needs a
+  // second axis. `wander:<rms>` is that control: identical RMS, correlated instead of white.
+  const wander = scenario.startsWith("wander") ? Number(scenario.split(":")[1] || "0.0232") : 0;
+  const mkJitter = (bpm: number, rms: number, seed: number, correlated = false) => {
     const secs = 240;
     const spb = 60 / bpm;
     const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
     let st = seed >>> 0;
     const rnd = () => ((st = (st * 1664525 + 1013904223) >>> 0) / 0x100000000) * 2 - 1;
+    const n = Math.ceil(secs / spb);
+    // Raw white displacement, then — for the wander case — one-pole smoothed and RESCALED to the
+    // SAME measured RMS, so the two runs differ in shape and in nothing else. Rescaling from the
+    // realised RMS rather than from the target is the whole point: a smoother with a nominal gain
+    // would quietly change the size as well and the comparison would answer nothing.
+    const raw: number[] = [];
+    for (let k = 0; k < n; k++) raw.push(rnd());
+    let seq = raw;
+    if (correlated) {
+      const sm: number[] = [];
+      let v = 0;
+      for (const x of raw) sm.push((v += 0.12 * (x - v)));
+      const r = Math.sqrt(sm.reduce((a2, b2) => a2 + b2 * b2, 0) / sm.length) || 1;
+      const r0 = Math.sqrt(raw.reduce((a2, b2) => a2 + b2 * b2, 0) / raw.length) || 1;
+      seq = sm.map((x) => (x / r) * r0);
+    }
     const beats: number[] = [];
-    for (let k = 0; k * spb < secs; k++) beats.push(k * spb + rnd() * rms * 1.732 * spb); // uniform → RMS
+    for (let k = 0; k < n; k++) beats.push(k * spb + seq[k] * rms * 1.732 * spb); // uniform → RMS
     for (let c = 0; c < 2; c++) {
       const d = b.getChannelData(c);
       for (const at0 of beats) {
@@ -3143,8 +3167,8 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     }
     return { buf: b, grid: { bpm: g.bpm, firstBeat: g.firstBeat, interval: g.interval, beats: Float32Array.from(beats), downbeat: g.downbeat, beatsPerBar: g.beatsPerBar } };
   };
-  const A = realGrids ? fromReal(realGrids.a) : jitter ? mkJitter(128, jitter, 11) : mk(128, wave);
-  const B = realGrids ? fromReal(realGrids.b) : jitter ? mkJitter(124, jitter, 977) : mk(124, wave * 1.3);
+  const A = realGrids ? fromReal(realGrids.a) : jitter || wander ? mkJitter(128, jitter || wander, 11, !!wander) : mk(128, wave);
+  const B = realGrids ? fromReal(realGrids.b) : jitter || wander ? mkJitter(124, jitter || wander, 977, !!wander) : mk(124, wave * 1.3);
   eng.deckA.setBuffer(A.buf, A.grid as never);
   eng.deckB.setBuffer(B.buf, B.grid as never);
   eng.setCrossfade(0);

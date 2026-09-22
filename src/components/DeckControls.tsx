@@ -271,7 +271,12 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     const el = fxBankRef.current?.children[activeFxIdx] as HTMLElement | undefined;
     el?.scrollIntoView({ inline: "nearest", block: "nearest" });
   }, [activeFxIdx, deck.padMode]);
+  // ★ THE CHOKEPOINT FOR THIS BANK'S BUTTONS. Every act() site drives — jog/beat-jump, SKIP,
+  // QUANTIZE, KEY, SYNC — and none of them looks, so the lock belongs here rather than repeated at
+  // five call sites. They were guarded only by `.bank.locked { pointer-events: none }` and the stage
+  // shield: the same "covered, not guarded" shape as the drops and the crossfader.
   const act = (fn: () => void) => () => {
+    if (locked) return; // watch-only
     fn();
     refresh();
   };
@@ -384,6 +389,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             title={deck.adjusting === "in" ? "Tap to exit loop-in adjust" : shift ? "Adjust loop-in — drag / scroll / arrow-key (snaps to grid when ⌗ is on)" : "Loop in"}
             onClick={(e) => {
               // Already armed → a plain tap disarms (no need to re-hold Shift to release).
+              if (locked) return; // watch-only: a loop is the host's to place
               if (shift || e.shiftKey || deck.adjusting === "in") deck.toggleAdjust("in");
               else { deck.loopIn(); emit({ kind: "loop", deck: id, action: "in" }); }
               refresh();
@@ -396,6 +402,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             title={deck.adjusting === "out" ? "Tap to exit loop-out adjust" : shift ? "Adjust loop-out — drag / scroll / arrow-key (snaps to grid when ⌗ is on)" : "Loop out"}
             onClick={(e) => {
               // Already armed → a plain tap disarms (no need to re-hold Shift to release).
+              if (locked) return; // watch-only
               if (shift || e.shiftKey || deck.adjusting === "out") deck.toggleAdjust("out");
               else { deck.loopOut(); emit({ kind: "loop", deck: id, action: "out" }); }
               refresh();
@@ -408,6 +415,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             disabled={!deck.loop}
             title={shift ? "Clear the loop" : deck.loop && !deck.loop.active ? "Reloop" : "Exit loop"}
             onClick={(e) => {
+              if (locked) return; // watch-only
               if (shift || e.shiftKey) {
                 deck.clearLoop();
                 emit({ kind: "loop", deck: id, action: "exit" });
@@ -475,6 +483,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerDown={(e) => {
                   // Rolling lives ONLY in ROLL mode now (no more shift-hold-roll in LOOP — that
                   // fought the LOOP→ROLL mode switch). Press engages the loop, release snaps back.
+                  if (locked) return; // watch-only
                   if (deck.padMode !== "roll") return;
                   e.preventDefault();
                   e.currentTarget.setPointerCapture(e.pointerId);
@@ -486,6 +495,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerUp={endRoll}
                 onPointerCancel={endRoll}
                 onClick={(e) => {
+                  if (locked) return; // watch-only
                   if (deck.padMode === "roll") return; // ROLL handled by the pointer events above
                   if (shift || e.shiftKey) return; // LOOP-mode pad+shift is freed (was roll) — no-op
                   // Re-clicking the ACTIVE size exits; a different size resizes; else set.
@@ -519,6 +529,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 data-cue={i + 1}
                 title={shift ? "Clear cue" : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to preview"}
                 onPointerDown={(e) => {
+                  if (locked) return; // watch-only
                   // Set hot-cue (not a loop, no shift): hold = momentary roll/preview.
                   if (shift || e.shiftKey || !set || isLoop) return;
                   const cuePos = deck.hotCues[i];
@@ -534,6 +545,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 onPointerUp={endPadHold}
                 onPointerLeave={endPadHold}
                 onClick={(e) => {
+                  if (locked) return; // watch-only
                   if (padSuppress.current) { padSuppress.current = false; return; } // a hold already handled it
                   const shiftNow = shift || e.shiftKey;
                   if (shiftNow) {
@@ -773,6 +785,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             pivot={1}
             kbd="⎵"
             onTap={() => {
+              if (locked) return; // watch-only
               if (shift) {
                 deck.setTempo(0);
                 deck.setFilter(0);
@@ -789,7 +802,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               }
               refresh();
             }}
-            onChange={(v) => { deck.setTrim(v); refresh(); emit({ kind: "control", deck: id, param: "trim", value: v }); }}
+            onChange={(v) => { if (locked) return; deck.setTrim(v); refresh(); emit({ kind: "control", deck: id, param: "trim", value: v }); }}
             format={(v) => `${Math.round(v * 100)}`}
           />
           <button
@@ -834,7 +847,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             max={tempoRange}
             step={0.05}
             pivot={0}
-            onChange={(v) => { deck.setTempo(v); refresh(); emit({ kind: "control", deck: id, param: "tempo", value: v }); }}
+            onChange={(v) => { if (locked) return; deck.setTempo(v); refresh(); emit({ kind: "control", deck: id, param: "tempo", value: v }); }}
             format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`}
             onTap={() => { onCycleTempoRange(); refresh(); }}
             kbd="F"
@@ -862,6 +875,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 : "Key lock OFF — pitch rides with tempo, vinyl-style. Tap to relock (or Z)."
             }
             onClick={() => {
+              if (locked) return; // watch-only
               const on = !deck.keylock;
               deck.setKeylock(on);
               emit({ kind: "toggle", deck: id, param: "keylock", value: on });
@@ -884,7 +898,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             // Tap/scroll still set the integer manual shift, but the READOUT shows the LIVE sounding
             // pitch (incl. the keylock-off Smart-Fader glide), so the cell isn't dead during a blend.
             className={Math.abs(deck.livePitchSemis - deck.pitch) > 0.05 ? "gliding" : ""}
-            onChange={(v) => { deck.setPitch(Math.round(v)); refresh(); emit({ kind: "control", deck: id, param: "pitch", value: Math.round(v) }); }}
+            onChange={(v) => { if (locked) return; deck.setPitch(Math.round(v)); refresh(); emit({ kind: "control", deck: id, param: "pitch", value: Math.round(v) }); }}
             format={() => {
               const live = deck.livePitchSemis;
               return Math.abs(live - deck.pitch) > 0.05
@@ -941,6 +955,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               max={1.5}
               reset={1}
               onTap={() => {
+                if (locked) return; // watch-only
                 if (shift) {
                   deck.soloStem(s.name); // Shift+tap = solo this stem (mute the rest)
                   STEM_CELLS.forEach((c) => emit({ kind: "stem", deck: id, stem: c.name, on: deck.stemActive(c.name) }));
@@ -950,7 +965,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 }
                 refresh();
               }}
-              onChange={(v) => { deck.setStemGain(s.name, v); refresh(); emit({ kind: "stemGain", deck: id, stem: s.name, value: v }); }}
+              onChange={(v) => { if (locked) return; deck.setStemGain(s.name, v); refresh(); emit({ kind: "stemGain", deck: id, stem: s.name, value: v }); }}
               format={(v) => `${Math.round(v * 100)}`}
             />
           ))}
@@ -986,7 +1001,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           gainDb={levelGainDb}
           label={id}
           mirror={id === "A"}
-          onLevel={(v) => { deck.setLevel(v); refresh(); emit({ kind: "control", deck: id, param: "level", value: v }); }}
+          onLevel={(v) => { if (locked) return; deck.setLevel(v); refresh(); emit({ kind: "control", deck: id, param: "level", value: v }); }}
         />
       </div>
     </div>

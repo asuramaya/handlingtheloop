@@ -1934,6 +1934,17 @@ function AppBody() {
             if (verdict.ok) suppliedGrid = deserializeGrid(stored!.grid);
             // The verdict also decides whether we may contribute — see mayContributeAnalysis.
             mayContribute = mayContributeAnalysis(verdict.why);
+            // ★ A CONTESTED TRACK IS NOW STABLE AND SILENT, AND SILENT IS THE HALF THAT NEEDS A
+            // WITNESS. fa6b9b6 stopped two devices overwriting each other's pooled row, correctly —
+            // but the survivor is whoever WROTE FIRST, with no tiebreak and no way to displace a row
+            // that is simply wrong for everyone else. This device then re-derives on every single
+            // load, forever, paying ~0.8–1.6 s each time, and nothing anywhere says why. One line,
+            // once per load, so "why does this one track always take a second to grid" is
+            // answerable from a console instead of from a guess.
+            if (verdict.why === "different-audio")
+              console.info(
+                `[htl] pooled grid declined for ${vid}: it describes ${stored?.duration?.toFixed(1)}s of audio and we decoded ${buffer.duration.toFixed(1)}s — deriving locally and NOT contributing, so the pooled row stays with whoever wrote it first`,
+              );
             storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;

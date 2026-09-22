@@ -67,6 +67,7 @@ function parseArgs(argv) {
       case "--shaper-latency": a.shaperLatency = true; break;
       case "--mod-width": a.modWidth = true; break;
       case "--gate-align": a.gateAlign = true; break;
+      case "--master-duck": a.masterDuck = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -354,6 +355,18 @@ async function main() {
       // The input assertion: a null test over a dead signal cancels perfectly and proves nothing.
       console.log(`\n   worst null (control excluded) = ${f(worst, 1)} dB  ${worst < -100 ? "✓ exact — float dust, the taps ARE the mix" : worst < -60 ? "~ audible-clean but NOT exact; look for an off-by-one" : "✗ the taps are not the mix"}\n`);
       process.exitCode = worst < -100 ? 0 : 1;
+      return;
+    }
+
+    if (args.masterDuck) {
+      const rows = await page.evaluate(() => globalThis.fxlabMasterDuck());
+      console.log("\n  MASTER DUCK — how far deck A's 1 kHz tone moves when deck B's kick lands, with NO deck control engaged:\n");
+      for (const r of rows) {
+        console.log(`   ${r.name.padEnd(18)} duck ${f(r.duckDb, 2).padStart(7)} dB   peak ${f(r.peak, 3)}${r.control ? "  \u2190 control, must be ~0" : ""}`);
+      }
+      const worstControl = Math.max(...rows.filter((r) => r.control).map((r) => Math.abs(r.duckDb)));
+      console.log(`\n   controls worst |duck| = ${f(worstControl, 2)} dB ${worstControl < 0.3 ? "\u2713 the probe reads the tone, not itself" : "\u2717 the probe is measuring its own stimulus \u2014 the numbers above mean nothing"}\n`);
+      process.exitCode = worstControl < 0.3 ? 0 : 1;
       return;
     }
 

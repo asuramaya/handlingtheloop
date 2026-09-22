@@ -16,7 +16,7 @@ import { ModFx } from "../../src/htl/audio/ModFx";
 import { GateFx } from "../../src/htl/audio/GateFx";
 import { NoiseFx } from "../../src/htl/audio/NoiseFx";
 import { Eq3 } from "../../src/htl/audio/Eq3";
-import { CompFx } from "../../src/htl/audio/CompFx";
+import { CompFx, makeMasterLimiter } from "../../src/htl/audio/CompFx";
 import { REVERB_WORKLET_SRC } from "../../src/htl/audio/reverbWorklet";
 import { CRUSH_WORKLET_SRC } from "../../src/htl/audio/crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "../../src/htl/audio/modDelayWorklet";
@@ -2355,4 +2355,105 @@ async function liveGestureStep(params: Record<string, number>, opts: Parameters<
   const cnt = Math.max(1, mix.length - s0);
   const mixRms = Math.sqrt(ms / cnt), residRms = Math.sqrt(rs / cnt);
   return { sr, mixPeak: mp, mixRms, residPeak: rp, residRms, nullDb: 20 * Math.log10((residRms + 1e-30) / (mixRms + 1e-30)), finite, diag };
+};
+
+// ★ MASTER DUCK — does one deck's kick pull the OTHER deck down, with every per-deck control off?
+//
+// The operator reported "the compressor punches from the other deck" while the deck's comp was
+// bypassed, its mix at zero, its sidechain off, and the whole rack disengaged — which rules the
+// deck's own compressor out and leaves the MASTER stage, where both decks are already summed.
+// AudioEngine's master brickwall (makeMasterLimiter: LIMIT, ∞:1, ceiling −0.3 dB) is the one
+// gain-reduction stage no deck control can reach.
+//
+// ★ IT IS A PAIRED NULL TEST, because the first version of this probe failed its own control. Deck
+// A is a steady 1 kHz tone; the same render runs WITH deck B's kick and WITHOUT it, and the number
+// is how much the TONE drops when the kick is present. A single render cannot answer that: the
+// kick's own transient leaks into any detector at 1 kHz and reads as a duck that is not there (0.49
+// dB with no limiter in the graph at all). Comparing two renders cancels the leak that is common to
+// both, and a Hann window on the detector suppresses what is left. The no-limiter pair is the
+// control: summing two sources is linear, so it MUST read 0.
+async function duckPair(opts: { limiter: boolean; aAmp: number; bAmp: number }): Promise<{ duckDb: number; peak: number }> {
+  const sr = 48000;
+  const seconds = 4;
+  const beat = 0.5; // 120 BPM
+  const render = async (withKick: boolean): Promise<Float32Array> => {
+    const ctx = new OfflineAudioContext(1, Math.round(seconds * sr), sr);
+    const url = URL.createObjectURL(new Blob([COMP_WORKLET_SRC], { type: "text/javascript" }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const n = Math.round(seconds * sr);
+    const buf = ctx.createBuffer(1, n, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) {
+      const t = i / sr;
+      let x = opts.aAmp * Math.sin(2 * Math.PI * 1000 * t); // DECK A: the steady tone under test
+      if (withKick) {
+        const ph = t % beat; // DECK B: a kick on every beat — 60 Hz with a fast decay
+        if (ph < 0.18) x += opts.bAmp * Math.sin(2 * Math.PI * 60 * ph) * Math.exp(-ph * 14);
+      }
+      d[i] = x;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    if (opts.limiter) {
+      const lim = makeMasterLimiter(ctx as unknown as AudioContext);
+      src.connect(lim.input);
+      lim.output.connect(ctx.destination);
+    } else {
+      src.connect(ctx.destination);
+    }
+    src.start(0);
+    return (await ctx.startRendering()).getChannelData(0);
+  };
+  // Hann-windowed quadrature detection at exactly 1 kHz: the tone's amplitude, window by window.
+  const win = Math.round(sr * 0.04);
+  const hop = Math.round(sr * 0.01);
+  const toneEnv = (out: Float32Array): number[] => {
+    const env: number[] = [];
+    for (let k = 0; k + win <= out.length; k += hop) {
+      let re = 0;
+      let im = 0;
+      let wsum = 0;
+      for (let i = 0; i < win; i++) {
+        const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (win - 1));
+        const t = (k + i) / sr;
+        re += out[k + i] * w * Math.cos(2 * Math.PI * 1000 * t);
+        im += out[k + i] * w * Math.sin(2 * Math.PI * 1000 * t);
+        wsum += w;
+      }
+      env.push(Math.hypot(re, im) / wsum);
+    }
+    return env;
+  };
+  const [withK, without] = [await render(true), await render(false)];
+  const eW = toneEnv(withK);
+  const eN = toneEnv(without);
+  // Skip the first beat: the insert's own dry/wet crossfade settles over ~50 ms at t=0, which is
+  // the device starting up, not a duck.
+  const perHop = beat / (hop / sr);
+  const drops: number[] = [];
+  for (let b = 1; (b + 1) * perHop < eW.length; b++) {
+    const k = Math.round(b * perHop); // the window that opens on the kick
+    if (eW[k] > 1e-6 && eN[k] > 1e-6) drops.push(20 * Math.log10(eN[k] / eW[k]));
+  }
+  drops.sort((x, y) => x - y);
+  let peak = 0;
+  for (const v of withK) peak = Math.max(peak, Math.abs(v));
+  return { duckDb: drops.length ? drops[Math.floor(drops.length / 2)] : 0, peak };
+}
+
+(globalThis as unknown as { fxlabMasterDuck: () => Promise<{ name: string; control: boolean; duckDb: number; peak: number }[]> }).fxlabMasterDuck = async () => {
+  const cases: { name: string; control: boolean; limiter: boolean; aAmp: number; bAmp: number }[] = [
+    { name: "two decks, hot", control: false, limiter: true, aAmp: 0.5, bAmp: 0.9 },
+    { name: "two decks, mid", control: false, limiter: true, aAmp: 0.3, bAmp: 0.5 },
+    { name: "two decks, quiet", control: false, limiter: true, aAmp: 0.1, bAmp: 0.2 },
+    { name: "NO limiter (hot)", control: true, limiter: false, aAmp: 0.5, bAmp: 0.9 },
+    { name: "limiter, no kick", control: true, limiter: true, aAmp: 0.5, bAmp: 0 },
+  ];
+  const out: { name: string; control: boolean; duckDb: number; peak: number }[] = [];
+  for (const c of cases) {
+    const r = await duckPair({ limiter: c.limiter, aAmp: c.aAmp, bAmp: c.bAmp });
+    out.push({ name: c.name, control: c.control, duckDb: r.duckDb, peak: r.peak });
+  }
+  return out;
 };

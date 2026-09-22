@@ -766,7 +766,17 @@ export abstract class BaseFxDevice implements FxDevice {
     this.wet.connect(this.output);
     this.wet.connect(this.wetMeter);
     this._wetConnected = true;
+    this.onGate(true);
   }
+  /** ★ THE GATE ONLY KNOWS ABOUT EDGES OUT OF `wet`, AND SOME TAPS ARE NOT ON IT. DelayFx and
+   *  ReverbFx hang an AnalyserNode off `duckScale`, which is on the SIDECHAIN side — so the duck
+   *  follower stayed scheduled for the life of the device, bypassed or not. That was written down
+   *  as a judgement ("five native nodes, orders below the delay lines") and then MEASURED at 26.4%
+   *  of a DelayFx's active cost (fxlab --duck-cost, 9326968), which is not orders below anything.
+   *  A subclass with a tap outside the wet bus cuts and restores it here. Called when the gate
+   *  opens, and again once a close has actually landed — never from the ramp, so a ring-out still
+   *  reads its own meter on the way down. */
+  protected onGate(_active: boolean) {}
   // pruneAfterMs: how long after the gain ramp starts before physically disconnecting. applyWet()
   // always uses the fast ~90ms default; scheduleBypassRingOut's own closing fade (see below) is
   // slower and passes a matching, longer delay so the disconnect lands after the fade actually
@@ -788,6 +798,7 @@ export abstract class BaseFxDevice implements FxDevice {
         /* already gone */
       }
       this._wetConnected = false;
+      this.onGate(false);
     }, pruneAfterMs);
   }
   /** Current wet amount (0..1) — for subclasses that briefly automate `wet` themselves

@@ -16,7 +16,7 @@
 
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp, clamp01 } from "../../util/math";
-import { makeRectifyCurve, makeClampCurve } from "./duckingHelper";
+import { makeRectifyCurve, makeClampCurve, DuckTap } from "./duckingHelper";
 import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
 
 // Mode labels (the worklet owns the per-style voicing table; this is just the UI labels +
@@ -58,6 +58,9 @@ export class ReverbFx extends BaseFxDevice {
   // htl-webaudio-footguns memory). Tap duckScale's own output instead — same fix, same reason.
   private readonly duckMeter: AnalyserNode;
   private readonly duckMeterBuf: Float32Array<ArrayBuffer>;
+  // The tap is live only while the gate is open AND the follower is wired; see DuckTap.
+  private duckTap!: DuckTap;
+  private _gateOpen = true;
 
   private _width = 1;
   // The commanded values of the params that GLIDE (see the params block). Their AudioParams chase
@@ -145,13 +148,19 @@ export class ReverbFx extends BaseFxDevice {
     // this meter hangs off `duckScale`, which is on the SIDECHAIN side and the gate never sees it.
     // So the duck follower (rect → smooth → duckEnv → clampShaper → duckScale) is scheduled for
     // the life of this device, bypassed or not.
-    // LEFT AS IS, DELIBERATELY: those are five NATIVE nodes — a rectifier, a smoother, a shaper, two
-    // gains — with no worklet among them, orders below the FDN/delay-line this device's wet bus
-    // carries. The gate could take it (`duckScale.disconnect(this.duckMeter)` alongside the wet
-    // edges) if a measurement ever says it is worth the extra restore path; nothing measures native
-    // node cost today, so this is a judgement from the node list, and it is written down rather
-    // than silently assumed. Found by Deckard while fixing the wet-bus edge.
+    // ★ THAT JUDGEMENT WAS WRONG, AND IT WAS WRONG BY A LOT. This used to read "LEFT AS IS,
+    // DELIBERATELY: those are five NATIVE nodes … orders below the delay lines this device's wet bus
+    // carries … nothing measures native node cost today, so this is a judgement from the node list."
+    // Now something measures it: fxlab --duck-cost puts the tap at 26.4% of this device's whole
+    // ACTIVE cost, with a bypassed DelayFx at 33.7% of active and 7.5% once the tap is cut. Not
+    // orders below — about a quarter of the device, and most of what a bypassed one still costs.
+    // It also ran with duck at ZERO, where setDuck has already severed both ends of the follower:
+    // the tap alone kept all five nodes scheduled. DuckTap now gates it on (gate open && follower
+    // wired). The honest part of the old comment was writing it down as a judgement instead of a
+    // fact, which is the only reason it was cheap to refute. Found by Deckard while fixing the wet-bus edge.
     this.duckScale.connect(this.duckMeter);
+    this.duckTap = new DuckTap(this.duckScale, this.duckMeter);
+    this.syncDuckTap(); // duck rests at 0, so the tap starts CUT rather than holding the follower
 
     // The FDN tank worklet. The module is registered at engine init; if it isn't ready (a
     // very early add) we degrade to the filtered signal so nothing crashes.
@@ -252,6 +261,13 @@ export class ReverbFx extends BaseFxDevice {
   }
 
   // Lazily-wired ducking sidechain (same pattern as the delay).
+  protected override onGate(active: boolean) {
+    this._gateOpen = active;
+    this.syncDuckTap();
+  }
+  private syncDuckTap() {
+    this.duckTap.sync(this._gateOpen && this._duckWired);
+  }
   private setDuck(amt: number) {
     this._duckAmt = amt;
     const now = this.ctx.currentTime;
@@ -260,6 +276,7 @@ export class ReverbFx extends BaseFxDevice {
       this.input.connect(this.rect);
       this.duckScale.connect(this.seriesDuck.gain);
       this._duckWired = true;
+      this.syncDuckTap();
     }
     this.duckScale.gain.setTargetAtTime(-amt, now, 0.02);
     if (amt <= 0 && this._duckWired) {
@@ -277,6 +294,7 @@ export class ReverbFx extends BaseFxDevice {
           /* already gone */
         }
         this._duckWired = false;
+        this.syncDuckTap();
       }, 120);
     }
   }
@@ -285,6 +303,9 @@ export class ReverbFx extends BaseFxDevice {
   // duckScale's OWN output is already envelope × −amount, the exact quantity added to
   // seriesDuck.gain, so its most-negative recent sample IS 1 − duckGain.
   get duckGain(): number {
+    // A cut tap is a severed path, not a quiet one — reading it would report whatever was in the
+    // buffer when it was cut. Nothing is ducking when the follower is unwired or the gate is shut.
+    if (!this.duckTap.on) return 1;
     this.duckMeter.getFloatTimeDomainData(this.duckMeterBuf);
     let min = 0; // duckScale's output is always ≤ 0
     for (const v of this.duckMeterBuf) if (v < min) min = v;

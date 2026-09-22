@@ -536,8 +536,13 @@ async function main() {
       console.log(`\n   ${N} active devices cost  ${f(span, 1)} ms over the empty graph`);
       console.log(`   bypassed still costs   ${f(byp - none, 1)} ms  (${f(((byp - none) / span) * 100, 1)}% of active)`);
       console.log(`   of which the duck tap  ${f(held, 1)} ms  (${f((held / span) * 100, 1)}% of active, ${f((held / N) * 1000, 1)} \u00b5s per device per ${runs[0].seconds}s render)`);
+      // \u2605 A NEAR-ZERO GAP HAS TWO READINGS AND THEY ARE OPPOSITE. Either the tap never mattered, or
+      // the product already cuts it and this row has nothing left to cut. Before the DuckTap fix the
+      // gap was 784 ms (26.4%); after it, both bypassed rows sit together near 7%. So the number to
+      // read is BYPASSED-vs-ACTIVE, and the gap is only evidence about who did the cutting.
+      const gated = Math.abs(held / span) < 0.02;
       console.log(
-        `\n   ${Math.abs(held / span) < 0.02 ? "\u2713 below 2% of active cost \u2014 the written judgement holds and this thread can close on a NUMBER" : "\u2717 material \u2014 the gate should cut duckScale\u2192duckMeter alongside the wet edges, and owes a restore path"}\n`,
+        `\n   ${gated ? (byp - none) / span < 0.12 ? "\u2713 the tap is ALREADY GATED by the device \u2014 cutting it here changes nothing because there is nothing left to cut" : "\u2717 the two bypassed rows agree, but bypassed is still expensive \u2014 the cost is somewhere OTHER than the duck tap and is unexplained" : "\u2717 material \u2014 the gate should cut duckScale\u2192duckMeter alongside the wet edges, and owes a restore path"}\n`,
       );
       console.log("   \u2605 SAME CAVEAT AS --bypass-cost: an OfflineAudioContext is not obliged to prune what a live one");
       console.log("   prunes, and offline render time is not audio-thread load. Only the RATIO is claimed, and the");

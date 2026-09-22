@@ -18,6 +18,9 @@
 //   3. our pinned version/UA/device fields DRIFT from upstream's → YouTube may already be rejecting
 //      what we send, with neither flag having moved. Found by doing the check by hand on
 //      2026-09-22: the two flags are not the whole exposure.
+//   4. a field becomes UNREADABLE on either side → the watch has gone blind and says so. A checker
+//      that goes quiet when it loses sight of its subject is worse than no checker, because the
+//      silence reads as health.
 //
 //   node scripts/ytclient-watch.mjs           # exit 0 = quiet, 1 = something to read
 //   node scripts/ytclient-watch.mjs --json
@@ -29,14 +32,25 @@ import { fileURLToPath } from "node:url";
 const SRC = "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/yt_dlp/extractor/youtube/_base.py";
 const OURS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "server", "youtube.ts");
 
-/** The visionos entry, sliced from the INNERTUBE_CLIENTS table by brace depth (no Python parser). */
+/** The visionos entry, sliced from the INNERTUBE_CLIENTS table by brace depth (no Python parser).
+ *  Braces inside STRING VALUES are skipped — a UA or device string containing one would otherwise
+ *  throw the depth count off and return the wrong block, which is the failure mode that looks like
+ *  a successful read (Metron's note on 60b7f28). */
 function visionosBlock(py) {
   const at = py.indexOf("'visionos':");
   if (at === -1) return null;
   let depth = 0;
+  let quote = null;
   for (let i = py.indexOf("{", at); i < py.length; i++) {
-    if (py[i] === "{") depth++;
-    else if (py[i] === "}" && --depth === 0) return py.slice(at, i + 1);
+    const c = py[i];
+    if (quote) {
+      if (c === "\\") i++; // escaped char inside the string — skip it
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return py.slice(at, i + 1);
   }
   return null;
 }
@@ -72,11 +86,24 @@ const poToken = /GVS_PO_TOKEN_POLICY/.test(block);
 const requiresJs = /'REQUIRE_JS_PLAYER':\s*True/.test(block);
 const jsKeyPresent = /'REQUIRE_JS_PLAYER'/.test(block);
 
+// ★ A WATCH THAT CANNOT SEE ITS SUBJECT MUST FIRE. The first version excluded a null from `drift`
+// (`mine[k] && up[k] && …`), so a regex that stopped matching server/youtube.ts produced null,
+// null was not a drift, and the script exited 0 — while PRINTING "★ DRIFT ours null". Two
+// instruments, opposite answers, neither wrong by its own code, and the exit code is the half a cron
+// reads. Worse, when a field went unreadable on BOTH sides, `null === null` printed "matches".
+// Caught by Metron on review and reproduced against an unmodified copy of the script.
+//
+// This is the same category as the fetch failure and the missing upstream entry, both of which the
+// first version already refused to treat as a pass — and it is the LIKELIER event, because nobody
+// edits youtube.ts intending to blind the watch. WHICH side went unreadable is reported, because
+// "ours" means our file moved and "upstream" means yt-dlp's table changed shape: different
+// problems, different next steps.
+const unreadable = Object.keys(mine).filter((k) => !mine[k] || !up[k]);
 const drift = Object.keys(mine).filter((k) => mine[k] && up[k] && mine[k] !== up[k]);
-const fired = poToken || requiresJs || drift.length > 0;
+const fired = poToken || requiresJs || drift.length > 0 || unreadable.length > 0;
 
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ fired, poToken, requiresJs, jsKeyPresent, drift, ours: mine, upstream: up }, null, 2));
+  console.log(JSON.stringify({ fired, poToken, requiresJs, jsKeyPresent, drift, unreadable, ours: mine, upstream: up }, null, 2));
   process.exit(fired ? 1 : 0);
 }
 
@@ -84,8 +111,19 @@ console.log("\n  YTCLIENT-WATCH — yt-dlp master, INNERTUBE_CLIENTS['visionos']
 console.log(`   GVS_PO_TOKEN_POLICY   ${poToken ? "★ PRESENT — the gate we fear" : "absent"}`);
 console.log(`   REQUIRE_JS_PLAYER     ${requiresJs ? "★ True — a JS player is now required" : jsKeyPresent ? "False (key present — a flip is one word)" : "absent"}`);
 for (const k of Object.keys(mine)) {
-  const same = mine[k] === up[k];
-  console.log(`   ${k.padEnd(12)}          ${same ? "matches" : `★ DRIFT  ours ${JSON.stringify(mine[k])}  upstream ${JSON.stringify(up[k])}`}`);
+  const blind = !mine[k] || !up[k];
+  const where = !mine[k] && !up[k] ? "BOTH sides" : !mine[k] ? "OURS (server/youtube.ts moved)" : "UPSTREAM (yt-dlp's table changed shape)";
+  const verdict = blind
+    ? `★ UNREADABLE — ${where}. This watch cannot answer for this field.`
+    : mine[k] === up[k]
+      ? "matches"
+      : `★ DRIFT  ours ${JSON.stringify(mine[k])}  upstream ${JSON.stringify(up[k])}`;
+  console.log(`   ${k.padEnd(12)}          ${verdict}`);
 }
-console.log(`\n  ${fired ? "SOMETHING TO READ — see above. CLIENT_CASCADE has ONE entry, so this is a design question, not a config change." : "QUIET — no gate, no drift. Nothing to do."}\n`);
+const verdict = fired
+  ? unreadable.length && !poToken && !requiresJs && !drift.length
+    ? "CANNOT ANSWER — a field went unreadable, so this run proves nothing about the fields it could not read. Fix the watch, then re-run."
+    : "SOMETHING TO READ — see above. CLIENT_CASCADE has ONE entry, so this is a design question, not a config change."
+  : "QUIET — no gate, no drift, every field readable. Nothing to do.";
+console.log(`\n  ${verdict}\n`);
 process.exit(fired ? 1 : 0);

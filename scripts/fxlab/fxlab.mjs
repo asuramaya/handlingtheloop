@@ -75,6 +75,7 @@ function parseArgs(argv) {
       case "--codec-margin": a.codecMargin = true; break;
       case "--snapshot-size": a.snapshotSize = true; break;
       case "--bypass-cost": a.bypassCost = true; break;
+      case "--duck-cost": a.duckCost = true; break;
       case "--live-comp-prune": a.liveCompPrune = true; break;
       case "--sync-drift": a.syncDrift = true; break;
       case "--stem-taps": a.stemTaps = true; break;
@@ -505,6 +506,42 @@ async function main() {
         `\n   ${r.bypassed === 0 ? "\u2713 PRUNED with the REAL device too \u2014 so the 92.6% was the OFFLINE RENDERER, not CompFx" : "\u2717 NOT pruned with the real device \u2014 the offline number was about CompFx, and setBypass's comment is wrong for it"}\n`,
       );
       process.exitCode = 0;
+      return;
+    }
+
+    if (args.duckCost) {
+      // Thread 7a98957f: the duck follower is never pruned on bypass, and the code says so in its
+      // own comment and then declines to act because "nothing measures native node cost today".
+      // This does. DelayFx is entirely native, so no worklet cost can hide inside the answer.
+      const N = 24;
+      const runs = [];
+      for (let pass = 0; pass < 2; pass++)
+        for (const mode of ["none", "active", "bypassed", "bypassed-noduck"]) runs.push(await page.evaluate(([n, m]) => globalThis.fxlabDuckCost(n, m), [N, mode]));
+      const best = (m) => Math.min(...runs.filter((r) => r.mode === m).map((r) => r.ms));
+      const none = best("none"), active = best("active"), byp = best("bypassed"), noDuck = best("bypassed-noduck");
+      console.log(`\n  DUCK FOLLOWER COST \u2014 is the never-pruned sidechain chain worth a restore path? (${N} DelayFx, ${runs[0].seconds}s offline)\n`);
+      for (const m of ["none", "active", "bypassed", "bypassed-noduck"]) {
+        const all = runs.filter((r) => r.mode === m).map((r) => f(r.ms, 1)).join(" / ");
+        console.log(`   ${m.padEnd(16)} ${f(best(m), 1).padStart(8)} ms   (runs: ${all})`);
+      }
+      const span = active - none;
+      // The control, first and blocking: if ACTIVE is not measurably dearer than an empty graph,
+      // this rig cannot see a DelayFx at all and the two bypassed rows below mean nothing.
+      if (span < none * 0.15) {
+        console.log("\n   \u2717 INCONCLUSIVE: active devices are not measurably dearer than an empty graph, so this rig cannot see device cost \u2014 ignore every row below.\n");
+        process.exitCode = 1;
+        return;
+      }
+      const held = byp - noDuck;
+      console.log(`\n   ${N} active devices cost  ${f(span, 1)} ms over the empty graph`);
+      console.log(`   bypassed still costs   ${f(byp - none, 1)} ms  (${f(((byp - none) / span) * 100, 1)}% of active)`);
+      console.log(`   of which the duck tap  ${f(held, 1)} ms  (${f((held / span) * 100, 1)}% of active, ${f((held / N) * 1000, 1)} \u00b5s per device per ${runs[0].seconds}s render)`);
+      console.log(
+        `\n   ${Math.abs(held / span) < 0.02 ? "\u2713 below 2% of active cost \u2014 the written judgement holds and this thread can close on a NUMBER" : "\u2717 material \u2014 the gate should cut duckScale\u2192duckMeter alongside the wet edges, and owes a restore path"}\n`,
+      );
+      console.log("   \u2605 SAME CAVEAT AS --bypass-cost: an OfflineAudioContext is not obliged to prune what a live one");
+      console.log("   prunes, and offline render time is not audio-thread load. Only the RATIO is claimed, and the");
+      console.log("   claim is a comparison between two rows that differ by exactly one severed edge.\n");
       return;
     }
 

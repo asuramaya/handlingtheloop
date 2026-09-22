@@ -3283,3 +3283,55 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
     series: samples.filter((_, i) => i % 2 === 0).map((s) => `${s.t}s ${s.err == null ? "--" : s.err.toFixed(3)}`),
   };
 };
+
+// ★ PUTTING A NUMBER ON A JUDGEMENT THAT WAS WRITTEN DOWN AS A JUDGEMENT (thread 7a98957f).
+// DelayFx and ReverbFx tap `duckScale` with an AnalyserNode so the UI can show the real duck depth.
+// That tap is on the SIDECHAIN side, and BaseFxDevice's bypass gate only cuts edges out of `wet` —
+// so the duck follower (rect → smooth → duckEnv → clampShaper → duckScale) stays scheduled for the
+// life of the device, bypassed or not. The code says so in its own comment and then declines to act:
+// five NATIVE nodes, orders below the delay lines the wet bus carries, "nothing measures native node
+// cost today, so this is a judgement from the node list". This measures it, so the next person
+// arguing about it is arguing with a number.
+//
+// DelayFx is the right subject: it is entirely native, so nothing here is a worklet's cost wearing
+// the follower's name. The only difference between the last two rows is one severed edge — and it is
+// severed from the SOURCE (`duckScale.disconnect(duckMeter)`), because an AnalyserNode has no
+// outputs and the other spelling silently measures nothing. That mistake is what 03439d6 was about.
+(globalThis as unknown as { fxlabDuckCost: (n: number, mode: string) => Promise<{ n: number; mode: string; ms: number; seconds: number }> }).fxlabDuckCost = async (n, mode) => {
+  const { DelayFx } = await import("../../src/htl/audio/DelayFx");
+  const sr = 48000;
+  const seconds = 20;
+  const ctx = new OfflineAudioContext(2, sr * seconds, sr);
+  const buf = ctx.createBuffer(2, sr * 2, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    let s = (c + 1) * 2654435761;
+    for (let i = 0; i < d.length; i++) {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      d[i] = ((s / 0x100000000) * 2 - 1) * 0.3;
+    }
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  let tail: AudioNode = src;
+  if (mode !== "none") {
+    for (let i = 0; i < n; i++) {
+      const d = new DelayFx(ctx as unknown as AudioContext);
+      d.setParam("duck", 0.7); // the follower has to be doing its job, or the active row is a lie
+      d.setBypass(mode.startsWith("bypassed"), true);
+      if (mode === "bypassed-noduck") {
+        const g = d as unknown as { duckScale: GainNode; duckMeter: AnalyserNode };
+        g.duckScale.disconnect(g.duckMeter);
+      }
+      tail.connect(d.input);
+      tail = d.output;
+    }
+  }
+  tail.connect(ctx.destination);
+  src.start();
+  const t0 = performance.now();
+  await ctx.startRendering();
+  const ms = performance.now() - t0;
+  return { n, mode, ms, seconds };
+};

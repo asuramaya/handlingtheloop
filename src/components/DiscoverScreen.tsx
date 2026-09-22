@@ -76,6 +76,10 @@ export function DiscoverScreen({
   const [cursor, setCursor] = useState<string | null>(null);
   const [more, setMore] = useState<LiveRoom[]>([]); // pages 2+ under "recent", appended in order
   const [setsCapped, setSetsCapped] = useState(false);
+  // Sets page the same way the `recent` rooms do, and for the same reason: `published_at` does not
+  // move once a set is published, so walking it is coherent. Unlike the rooms list there is no
+  // poll behind this, so nothing ever invalidates the pages already on screen.
+  const [setsCursor, setSetsCursor] = useState<string | null>(null);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
   const { query, roomsExpanded, friendsExpanded } = view;
   const setQuery = (q: string) => setView({ query: q });
@@ -92,6 +96,7 @@ export function DiscoverScreen({
         if (!alive) return;
         setSets(p.items);
         setSetsCapped(p.truncated);
+        setSetsCursor(p.nextCursor ?? null);
       })
       .catch(() => {});
     return () => {
@@ -144,10 +149,29 @@ export function DiscoverScreen({
     ) : (
       <div className="discover-section">
         <SetList sets={sets} onPlay={onPlaySet} showHost />
-        {/* Same rule as the rooms list: /api/sets/discover is capped server-side, and a list that
-            stops at the cap without saying so reads as the complete catalogue. */}
-        {setsCapped && (
-          <p className="discover-empty">Showing the {sets.length} newest. More have been published.</p>
+        {/* ★ THE NOTE WAS A DEAD END FOR AS LONG AS THERE WAS NOWHERE TO GO. /api/sets/discover is
+            capped server-side, and a list that stops at the cap without saying so reads as the
+            complete catalogue — so this said "showing the newest N" and stopped, which is the same
+            half-honesty the rooms list had before it got a way round its own wall. The server has
+            paged since 7972ad1; the client wrapper was discarding the cursor. Now the note only
+            appears when there is genuinely no further page, and otherwise you get the door. */}
+        {setsCursor ? (
+          <button
+            className="link-btn discover-more"
+            onClick={() => {
+              // Clearing the cursor is also the in-flight guard: this button only exists while
+              // one is held, so a second tap cannot append the same page twice.
+              setSetsCursor(null);
+              void fetchDiscoverSets({ cursor: setsCursor }).then((p) => {
+                setSets((prev) => [...prev, ...p.items]);
+                setSetsCursor(p.nextCursor ?? null);
+              });
+            }}
+          >
+            Load more
+          </button>
+        ) : (
+          setsCapped && <p className="discover-empty">Showing the {sets.length} newest. More have been published.</p>
         )}
       </div>
     );

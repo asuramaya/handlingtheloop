@@ -477,12 +477,27 @@ export async function fetchSet(id: string, signal?: AbortSignal): Promise<SetCar
 }
 
 /** The published-sets directory for Discover (newest first, with host identity). Public, and
- *  capped server-side — so it returns a PAGE carrying whether more exists behind the cap. */
-export async function fetchDiscoverSets(signal?: AbortSignal): Promise<DirectoryPage<SetCard>> {
-  const res = await fetch("/api/sets/discover", { signal, credentials: "same-origin" });
-  if (!res.ok) return { items: [], truncated: false, limit: 0 };
-  const b = (await res.json()) as { sets: SetCard[]; truncated?: boolean; limit?: number };
-  return { items: b.sets, truncated: !!b.truncated, limit: b.limit ?? b.sets.length, nextCursor: null };
+ *  capped server-side — so it returns a PAGE carrying whether more exists behind the cap, and a
+ *  cursor for reaching past it.
+ *
+ *  ★ THIS USED TO HARD-CODE `nextCursor: null`. The server has paged on (published_at, id) since
+ *  7972ad1 and answers with a cursor; this wrapper threw it away, so no caller could adopt paging
+ *  even by trying — the screen's only option was to say "showing the newest 60" and stop. A
+ *  capability with zero callers is three different diseases, and this one was the wrapper, not the
+ *  capability and not the consumer. Unlike the rooms directory's `busy` sort, a set's
+ *  `published_at` never moves, so this ordering pages coherently and the cursor is always real. */
+export async function fetchDiscoverSets(
+  opts: { cursor?: string | null; signal?: AbortSignal } = {},
+): Promise<DirectoryPage<SetCard>> {
+  const q = new URLSearchParams();
+  if (opts.cursor) q.set("cursor", opts.cursor);
+  const res = await fetch(`/api/sets/discover${q.size ? `?${q}` : ""}`, {
+    signal: opts.signal,
+    credentials: "same-origin",
+  });
+  if (!res.ok) return { items: [], truncated: false, limit: 0, nextCursor: null };
+  const b = (await res.json()) as { sets: SetCard[]; truncated?: boolean; limit?: number; nextCursor?: string | null };
+  return { items: b.sets, truncated: !!b.truncated, limit: b.limit ?? b.sets.length, nextCursor: b.nextCursor ?? null };
 }
 
 /** A @handle's PUBLISHED sets (their public profile history). Public. */

@@ -108,3 +108,43 @@ describe("fetchLiveRooms carries the sort and the cursor", () => {
     expect(p.nextCursor).toBeNull(); // otherwise "Load more" retries the same failing page forever
   });
 });
+
+// ★ AND THE SETS DIRECTORY, which had the whole mechanism except the last hop. The server has paged
+// on (published_at, id) since 7972ad1 and answers with a cursor; this wrapper hard-coded
+// `nextCursor: null` and threw it away, so the screen could only ever say "showing the newest 60".
+// A capability nobody calls has three different causes — dead code, a wrapper that drops it, a
+// consumer that never reaches for it — and naming the wrong one rebuilds something that worked.
+// These pin the hop that was missing.
+describe("fetchDiscoverSets pages", () => {
+  function capture(body: unknown) {
+    const f = vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+    vi.stubGlobal("fetch", f);
+    return f;
+  }
+
+  it("asks for the first page with no cursor at all", async () => {
+    const f = capture({ sets: [] });
+    await fetchDiscoverSets();
+    expect(f.mock.calls[0][0]).toBe("/api/sets/discover");
+  });
+
+  it("passes a cursor through, and hands the server's next one back", async () => {
+    const f = capture({ sets: [{ id: "s2" }], truncated: true, nextCursor: "1700000000:set-9" });
+    const p = await fetchDiscoverSets({ cursor: "1700000100:set-4" });
+    expect(String(f.mock.calls[0][0])).toContain(`cursor=${encodeURIComponent("1700000100:set-4")}`);
+    expect(p.nextCursor).toBe("1700000000:set-9");
+  });
+
+  it("an older server that sends no cursor is the end of the list, not a loop", async () => {
+    const p = await (capture({ sets: [{ id: "s1" }], truncated: true }), fetchDiscoverSets());
+    expect(p.truncated).toBe(true);
+    expect(p.nextCursor).toBeNull();
+  });
+
+  it("a failed request offers no cursor to retry on", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
+    const p = await fetchDiscoverSets({ cursor: "1:s" });
+    expect(p.items).toEqual([]);
+    expect(p.nextCursor).toBeNull(); // otherwise "Load more" retries the same failing page forever
+  });
+});

@@ -17,6 +17,8 @@ import {
   type FollowTickInput,
   type StemConvergeInput,
   type TickResyncInput,
+  resyncBackoffMs,
+  RESYNC_BACKOFF_CAP_MS,
 } from "./sessionFollow";
 
 // The follower's drift-correction core. These cases lock the exact thresholds and the hard-won
@@ -189,7 +191,7 @@ describe("decideStemConverge", () => {
 // follower whose deck holds a DIFFERENT track must stop driving it and self-heal. This is the core
 // of the "shared board, wrong song" fix — only a POSITIVE mismatch acts; ambiguity drives normally.
 describe("decideTickResync", () => {
-  const match: TickResyncInput = { tickVid: "trackA00001", loadedId: "trackA00001", loadingThisVid: false, sinceResyncMs: 99999 };
+  const match: TickResyncInput = { tickVid: "trackA00001", loadedId: "trackA00001", inFlightForMs: null, sinceResyncMs: 99999, attempts: 0 };
 
   it("drives when identity matches", () => {
     expect(decideTickResync(match)).toBe("drive");
@@ -204,30 +206,92 @@ describe("decideTickResync", () => {
   });
 
   describe("diverged (anchor on a different track than us)", () => {
-    const diverged = { tickVid: "anchorVid01", loadedId: "ourOldVid01", loadingThisVid: false, sinceResyncMs: 99999 };
+    const diverged: TickResyncInput = { tickVid: "anchorVid01", loadedId: "ourOldVid01", inFlightForMs: null, sinceResyncMs: 99999, attempts: 0 };
 
     it("starts a reload when nothing is loading the anchor's track and the throttle elapsed", () => {
       expect(decideTickResync(diverged)).toBe("load");
-      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS })).toBe("load"); // == throttle → fire
+      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS, attempts: 1 })).toBe("load"); // == throttle → fire
     });
 
     it("waits (holds, doesn't drive) within the retry throttle", () => {
-      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS - 1 })).toBe("wait");
-      expect(decideTickResync({ ...diverged, sinceResyncMs: 0 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, sinceResyncMs: RESYNC_RETRY_MS - 1, attempts: 1 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, sinceResyncMs: 0, attempts: 1 })).toBe("wait");
+    });
+
+    it("a NEVER-RESYNCED deck fires at once — an absence is not an age", () => {
+      // The old input carried `performance.now() − (resyncAt ?? 0)`, so "never" arrived as the tab's
+      // whole uptime: a very large number that crossed every threshold it met (thread 1d40b603).
+      expect(decideTickResync({ ...diverged, sinceResyncMs: null })).toBe("load");
+      // …and it is NOT treated as ancient when a load is running: the in-flight guard still wins.
+      expect(decideTickResync({ ...diverged, sinceResyncMs: null, inFlightForMs: 1600 })).toBe("wait");
     });
 
     it("a fresh divergence (loadedId null, never loaded) still triggers a load", () => {
       expect(decideTickResync({ ...diverged, loadedId: null })).toBe("load");
     });
 
-    it("waits while a load for the anchor's track is genuinely in flight (don't abort a slow 4G load)", () => {
-      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS - 1 })).toBe("wait");
-      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: 0 })).toBe("wait");
+    it("★ waits while a load is in flight NO MATTER how long since the last resync — the guard, not the clock", () => {
+      // This is the livelock (ruling ab419a94): a load slower than the retry interval used to be
+      // cancelled and restarted forever. The retry clock must not reach a running load at all.
+      expect(decideTickResync({ ...diverged, inFlightForMs: 10, sinceResyncMs: 99999, attempts: 9 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, inFlightForMs: RESYNC_STUCK_MS - 1, sinceResyncMs: 99999 })).toBe("wait");
     });
 
-    it("force-loads when an in-flight load has stalled past the stuck window (defeat a stuck guard)", () => {
-      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS })).toBe("force-load");
-      expect(decideTickResync({ ...diverged, loadingThisVid: true, sinceResyncMs: RESYNC_STUCK_MS + 1 })).toBe("force-load");
+    it("force-loads when THE LOAD ITSELF has stalled past the stuck window (defeat a stuck guard)", () => {
+      expect(decideTickResync({ ...diverged, inFlightForMs: RESYNC_STUCK_MS })).toBe("force-load");
+      expect(decideTickResync({ ...diverged, inFlightForMs: RESYNC_STUCK_MS + 1, sinceResyncMs: 0 })).toBe("force-load");
+    });
+
+    it("backs off per attempt and stops at the cap, so a fixed-rate retry can never re-form", () => {
+      expect(resyncBackoffMs(0)).toBe(RESYNC_RETRY_MS); // first attempt: the floor
+      expect(resyncBackoffMs(1)).toBe(RESYNC_RETRY_MS);
+      expect(resyncBackoffMs(2)).toBe(6000);
+      expect(resyncBackoffMs(3)).toBe(12000);
+      expect(resyncBackoffMs(4)).toBe(24000);
+      expect(resyncBackoffMs(5)).toBe(RESYNC_BACKOFF_CAP_MS);
+      expect(resyncBackoffMs(50)).toBe(RESYNC_BACKOFF_CAP_MS); // no overflow, no runaway
+      // …and the decision honours it: the 3rd attempt will not fire at the 3 s floor.
+      expect(decideTickResync({ ...diverged, sinceResyncMs: 3000, attempts: 3 })).toBe("wait");
+      expect(decideTickResync({ ...diverged, sinceResyncMs: 12000, attempts: 3 })).toBe("load");
+    });
+
+    it("★ a deck whose load always takes longer than the floor still LANDS — the ab419a94 scenario", () => {
+      // Simulated tick loop: a load takes 4 s, longer than the 3 s floor. Under the old rule every
+      // tick at +3 s started a new load and aborted the running one, forever. Assert two things:
+      // no start ever happens while a load is running, and the deck lands.
+      const LOAD_MS = 4000;
+      let now = 0;
+      let loadStarted: number | null = null;
+      let lastResync: number | null = null;
+      let attempts = 0;
+      let loaded: string | null = "ourOldVid01";
+      let starts = 0;
+      let abortedWhileRunning = 0;
+      for (let tick = 0; tick < 200 && loaded !== "anchorVid01"; tick++) {
+        now += 250;
+        if (loadStarted != null && now - loadStarted >= LOAD_MS) {
+          loaded = "anchorVid01"; // it landed
+          loadStarted = null;
+          break;
+        }
+        const action = decideTickResync({
+          tickVid: "anchorVid01",
+          loadedId: loaded,
+          inFlightForMs: loadStarted == null ? null : now - loadStarted,
+          sinceResyncMs: lastResync == null ? null : now - lastResync,
+          attempts,
+        });
+        if (action === "load" || action === "force-load") {
+          if (loadStarted != null) abortedWhileRunning++;
+          loadStarted = now;
+          lastResync = now;
+          attempts++;
+          starts++;
+        }
+      }
+      expect(loaded).toBe("anchorVid01");
+      expect(abortedWhileRunning).toBe(0); // nothing ever cancelled a live load
+      expect(starts).toBe(1); // and one load was all it took
     });
   });
 });

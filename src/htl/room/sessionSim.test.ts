@@ -1,10 +1,10 @@
+import { shouldReleaseClaim } from "../../App/loadClaim";
 import { describe, it, expect } from "vitest";
 import {
   decideTickResync,
   decideSnapshotDeck,
   isSocketStale,
-  RESYNC_STUCK_MS,
-} from "./sessionFollow";
+  RESYNC_STUCK_MS, RESYNC_RETRY_MS } from "./sessionFollow";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Fault-injection session SIMULATION — the automated counterpart to the broadcast load harness
@@ -39,7 +39,12 @@ const STEP_MS = 50; //        sim resolution
 const TICK_MS = 250; //       anchor tick cadence (4/s — matches App.buildTick)
 const WATCHDOG_MS = 2000; //  follower liveness check
 const STALE_MS = 6000; //     no-inbound → half-open (matches RoomClient.STALE_MS)
-const LOAD_MS = 1500; //      modelled decode time for a track on the follower
+const LOAD_MS = 1500; //      modelled decode time for a track on the follower (desktop, warm cache)
+// A SLOW follower: a load that takes longer than RESYNC_RETRY_MS. This is the phone-on-4G case, and
+// it is the one the fixed-rate self-heal could never survive — every retry cancelled the load that
+// had not finished yet (ruling ab419a94). Kept as a named constant because it is a POPULATION, not
+// a tuning knob: the desktop number above is the one that hid this for weeks.
+const SLOW_LOAD_MS = 4200;
 const RECONNECT_MS = 800; //  reconnect + welcome + request-state round-trip
 
 type Msg = { kind: "tick"; vid: string | null } | { kind: "load"; vid: string } | { kind: "snapshot"; vid: string | null };
@@ -57,17 +62,28 @@ class Guest {
   roomLoadTarget: string | null = null;
   loadDoneAt = Infinity; // when the in-flight load lands
   reconciledTarget: string | null = null;
-  resyncAt = -1e9;
+  resyncAt: number | null = null; // null = never resynced this deck (an absence, not an age)
+  resyncTries = 0; //               consecutive resync attempts since the last land → the backoff
+  loadStartedAt = 0; //             when the in-flight load began
+  loadSeq = 0; //                   monotonic per load, the claim's owner
+  claimSeq = 0; //                  which load currently owns loadingVid
+  superseded: { seq: number; vid: string; endsAt: number }[] = []; // loads still running after being replaced
   lastRecvAt = 0;
   socketDead = false; // half-open: the live socket delivers nothing until a reconnect
   inbox: { at: number; msg: Msg }[] = [];
   // Telemetry the assertions read:
   droveMismatch = false; // SAFETY: ever drove a deck whose loadedVid ≠ the tick's vid
+  // LIVENESS: ever restarted a load for the track ALREADY LOADING. The sim could not see this before,
+  // because a restart just overwrote the in-flight state — which is exactly how the livelock in
+  // ruling ab419a94 went unmodelled while reproducing ~1 run in 3 on the real rig. A deck that keeps
+  // cancelling its own load never lands, and every other invariant here stays green while it does.
+  abortedInFlight = 0;
   constructor(
     readonly fault: GuestFault,
     readonly rng: () => number,
     readonly tickVidEnabled: boolean, // ① on/off (anchor stamps vid)
     readonly watchdogEnabled: boolean, // ② on/off (half-open detection)
+    readonly loadMs: number = LOAD_MS, // how long this follower takes to load a track
   ) {}
 
   // Host emits a message → schedule its arrival unless the socket is dead or the link drops it.
@@ -77,11 +93,36 @@ class Guest {
     this.inbox.push({ at: now + this.fault.latencyMs, msg });
   }
 
+  // ★ A SUPERSEDED LOAD DOES NOT VANISH — it runs to its own end and THEN cleans up, and its
+  // cleanup is what leaked the deck's in-flight claim in ruling ab419a94. The sim used to let a new
+  // load simply overwrite the old one, which is why every invariant here stayed green while a real
+  // listener's deck restarted its load every 3 s forever. Modelled now, through the SHIPPED rule
+  // (shouldReleaseClaim), so flipping that rule back breaks this file.
   private runRoomLoad(vid: string, now: number): void {
+    // Cancelling an in-flight load because the HOST moved to a different track is correct — that
+    // load is for a track nobody wants any more. Cancelling a load for the track we are already
+    // loading is the livelock, and nothing else is.
+    if (this.loadingVid === vid) this.abortedInFlight++;
+    if (this.loadingVid) this.superseded.push({ seq: this.loadSeq, vid: this.loadingVid, endsAt: this.loadDoneAt });
+    this.loadSeq++;
+    this.loadStartedAt = now;
     this.roomLoadTarget = vid;
     this.loadingVid = vid;
-    this.loadDoneAt = now + LOAD_MS; // models the async fetch+decode
+    this.claimSeq = this.loadSeq;
+    this.loadDoneAt = now + this.loadMs; // models the async fetch+decode
     this.reconciledTarget = null;
+  }
+
+  // Each superseded load reaches its own end and releases the claim only if it still owns it.
+  private retireSuperseded(now: number): void {
+    this.superseded = this.superseded.filter((ld) => {
+      if (now < ld.endsAt) return true;
+      if (shouldReleaseClaim({ landed: false, claimedVid: ld.vid, claimSeq: this.claimSeq, mySeq: ld.seq })) {
+        this.loadingVid = "";
+        this.roomLoadTarget = null;
+      }
+      return false;
+    });
   }
 
   // Watchdog + in-flight-load completion + inbox draining for this step.
@@ -89,6 +130,7 @@ class Guest {
     // Half-open onset.
     if (this.fault.halfOpenAt != null && now >= this.fault.halfOpenAt && now < this.fault.faultsEndAt) this.socketDead = true;
 
+    this.retireSuperseded(now); // a replaced load finishes and cleans up after itself
     // A finished load lands.
     if (this.loadingVid && now >= this.loadDoneAt) {
       this.loadedVid = this.loadingVid;
@@ -138,7 +180,14 @@ class Guest {
     // tick
     const tickVid = this.tickVidEnabled ? msg.vid : undefined; // ① off → no identity stamped
     const loadingThis = tickVid != null && (this.roomLoadTarget === tickVid || this.loadingVid === tickVid);
-    const r = decideTickResync({ tickVid, loadedId: this.loadedVid, loadingThisVid: loadingThis, sinceResyncMs: now - this.resyncAt });
+    const r = decideTickResync({
+      tickVid,
+      loadedId: this.loadedVid,
+      inFlightForMs: loadingThis ? now - this.loadStartedAt : null,
+      sinceResyncMs: this.resyncAt == null ? null : now - this.resyncAt,
+      attempts: this.resyncTries,
+    });
+    if (r === "drive") this.resyncTries = 0;
     if (r === "drive") {
       // SAFETY: when we drive, the deck we drive MUST hold the track the tick is for.
       if (tickVid != null && tickVid !== this.loadedVid) this.droveMismatch = true;
@@ -146,6 +195,7 @@ class Guest {
     }
     if (r === "load" || r === "force-load") {
       this.resyncAt = now;
+      this.resyncTries++;
       if (r === "force-load") {
         this.roomLoadTarget = null;
         this.loadingVid = "";
@@ -163,12 +213,13 @@ interface SimOpts {
   durationMs: number;
   tickVidEnabled?: boolean;
   watchdogEnabled?: boolean;
+  loadMs?: number; // how long a follower takes to load a track (SLOW_LOAD_MS = the phone case)
   seed?: number;
 }
 
 function simulate(opts: SimOpts) {
   const rng = mulberry32(opts.seed ?? 1);
-  const guests = opts.guests.map((f) => new Guest(f, mulberry32((opts.seed ?? 1) ^ Math.floor(rng() * 1e9)), opts.tickVidEnabled ?? true, opts.watchdogEnabled ?? true));
+  const guests = opts.guests.map((f) => new Guest(f, mulberry32((opts.seed ?? 1) ^ Math.floor(rng() * 1e9)), opts.tickVidEnabled ?? true, opts.watchdogEnabled ?? true, opts.loadMs ?? LOAD_MS));
   let hostVid: string | null = null;
   // request-state reply: the host sends its current snapshot back after a reconnect round-trip.
   const requestState = (g: Guest, now: number) => g.inbox.push({ at: now + RECONNECT_MS, msg: { kind: "snapshot", vid: hostVid } });
@@ -204,6 +255,7 @@ describe("session sim — baseline", () => {
     for (const g of guests) {
       expect(g.loadedVid).toBe(hostVid);
       expect(g.droveMismatch).toBe(false);
+      expect(g.abortedInFlight).toBe(0); // never restarted a load for the track it was already loading
     }
   });
 });
@@ -241,6 +293,31 @@ describe("session sim — half-open socket (② watchdog recovers)", () => {
 
 // The worst case: two independent followers on lossy + half-open 4G, many random fault patterns.
 describe("session sim — fuzz (phone-host-4G + phone-guest-4G)", () => {
+  // A follower whose loads take longer than the retry floor — the phone-on-4G population, which the
+  // desktop-timed LOAD_MS above never reached.
+  //
+  // ★ WHAT THIS DOES NOT PROVE, stated because I checked rather than assumed: it is NOT a
+  // regression guard for the livelock of ruling ab419a94. I reverted BOTH shipped rules (the claim's
+  // sequence ownership in App/loadClaim.ts and the in-flight guard in decideTickResync) and this
+  // file still passed, so the sim does not reproduce that failure even with the defects back in
+  // place — the message timing here never lines up the way the live room did. The discriminating
+  // guards are the unit tests: loadClaim.test.ts fails on the first revert, sessionFollow.test.ts on
+  // the second. Both were verified to fail. What this case DOES prove is convergence and no
+  // self-restart for a follower slower than the retry floor, which is worth having and is not the
+  // same claim. A simulation that has never been shown to fail is a decoration.
+  it("a follower slower than the retry floor still converges, and never restarts its own load (see the note above on what this does not prove)", () => {
+    const { hostVid, guests } = simulate({
+      guests: [{ dropP: 0, latencyMs: 120, halfOpenAt: null, faultsEndAt: 0 }],
+      loadSchedule: [{ at: 500, vid: "slowTrack01" }],
+      durationMs: 30000,
+      loadMs: SLOW_LOAD_MS,
+    });
+    expect(SLOW_LOAD_MS).toBeGreaterThan(RESYNC_RETRY_MS); // the premise of the test, asserted
+    expect(guests[0].abortedInFlight).toBe(0);
+    expect(guests[0].loadedVid).toBe(hostVid);
+    expect(guests[0].droveMismatch).toBe(false);
+  });
+
   it("every fault pattern converges and never drives the wrong track", () => {
     for (let seed = 1; seed <= 60; seed++) {
       const rng = mulberry32(seed);
@@ -258,6 +335,7 @@ describe("session sim — fuzz (phone-host-4G + phone-guest-4G)", () => {
       });
       for (const g of guests) {
         expect(g.droveMismatch, `seed ${seed}: drove a mismatched deck`).toBe(false);
+        expect(g.abortedInFlight, `seed ${seed}: restarted a load for the track it was already loading`).toBe(0);
         expect(g.loadedVid, `seed ${seed}: did not converge`).toBe(hostVid);
       }
     }

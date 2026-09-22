@@ -41,7 +41,9 @@ export interface SessionSyncDeps {
   lastSnapshotRef: MutableRefObject<SessionSnapshot | null>;
   lastTickAt: MutableRefObject<Record<DeckId, number>>;
   followSeekAt: MutableRefObject<Record<DeckId, number>>;
-  resyncAt: MutableRefObject<Record<DeckId, number>>; // last divergence-reload attempt per deck (tick guard)
+  resyncAt: MutableRefObject<Record<DeckId, number | null>>; // last divergence-reload attempt per deck; null = never
+  resyncTries: MutableRefObject<Record<DeckId, number>>; //    consecutive attempts since this deck last landed
+  loadingSince: MutableRefObject<Record<DeckId, number>>; //   when the current in-flight claim was made
   scrubbing: MutableRefObject<Record<DeckId, boolean>>;
   stemTouch: MutableRefObject<Record<DeckId, Record<string, number>>>;
   snapFollowRef: MutableRefObject<boolean>;
@@ -89,6 +91,8 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     lastTickAt,
     followSeekAt,
     resyncAt,
+    resyncTries,
+    loadingSince,
     scrubbing,
     stemTouch,
     snapFollowRef,
@@ -400,10 +404,21 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // snapshot so the new track's cue/loop/fx land. See sessionFollow.decideTickResync.
         const vid = t.vid;
         const loadingThis = vid != null && (roomLoadTarget.current[id] === vid || loadingVid.current[id] === vid);
-        const resync = decideTickResync({ tickVid: vid, loadedId: latest.current.loaded[id], loadingThisVid: loadingThis, sinceResyncMs: now - (resyncAt.current[id] ?? 0) });
+        const lastResync = resyncAt.current[id];
+        const resync = decideTickResync({
+          tickVid: vid,
+          loadedId: latest.current.loaded[id],
+          // The age of the load itself, not of the last resync — "is THIS load stuck?" is a question
+          // only the load can answer (ruling ab419a94).
+          inFlightForMs: loadingThis ? now - (loadingSince.current[id] || now) : null,
+          sinceResyncMs: lastResync == null ? null : now - lastResync,
+          attempts: resyncTries.current[id],
+        });
+        if (resync === "drive") resyncTries.current[id] = 0; // landed on the anchor's track → backoff resets
         if (resync !== "drive") {
           if (resync === "load" || resync === "force-load") {
             resyncAt.current[id] = now;
+            resyncTries.current[id] += 1;
             if (resync === "force-load") {
               roomLoadTarget.current[id] = null; // defeat a stuck dedupe guard
               loadingVid.current[id] = "";

@@ -96,12 +96,30 @@ export function shouldStartOnDecode(p: JoinStartInput): boolean {
 }
 
 // ── Track-identity divergence (the "shared board, wrong song" guard) ──────────────────────────────
-// Between reload attempts while a deck is diverged and NOTHING is loading the anchor's track. The
-// first attempt is immediate (resyncAt starts at 0 → sinceResyncMs is large). Milliseconds.
+// The FLOOR between reload attempts while a deck is diverged and NOTHING is loading the anchor's
+// track. Each further attempt doubles (see resyncBackoffMs). Milliseconds.
 export const RESYNC_RETRY_MS = 3000;
+// The ceiling that doubling stops at. A diverged deck keeps trying forever, just not faster than
+// this. Milliseconds.
+export const RESYNC_BACKOFF_CAP_MS = 30000;
 // How long to tolerate an in-flight load of the anchor's track before assuming a stuck load-guard
 // and forcing a fresh attempt — long enough that a genuine slow-link (4G) load completes first. Ms.
+// Measured from the LOAD's own start, never from the last resync: the question is whether THIS load
+// is stuck, and the resync clock cannot answer it.
 export const RESYNC_STUCK_MS = 15000;
+
+/** How long to wait before the Nth consecutive resync attempt on one deck: 3 s, 6 s, 12 s, 24 s,
+ *  capped. A self-heal that retries at a FIXED rate forever is a livelock generator by
+ *  construction — if a load takes longer than the interval, every attempt cancels the one before it
+ *  and the deck never lands (ruling ab419a94, where that ran ~1 run in 3 on a desktop with a warm
+ *  cache; a phone on 4G with a cold cache is the population it would hurt most). Backing off is
+ *  correct on every device without knowing how long a load takes there, which is why it is the fix
+ *  rather than a bigger constant: no measurement taken on one machine can be trusted for the
+ *  machine this actually hurts. */
+export function resyncBackoffMs(attempts: number): number {
+  const n = Math.max(0, attempts - 1);
+  return Math.min(RESYNC_RETRY_MS * 2 ** Math.min(n, 20), RESYNC_BACKOFF_CAP_MS);
+}
 
 // A follower's per-deck action once the anchor stamps track identity on the tick (DeckTick.vid).
 // `tickVid` is the videoId the anchor holds on this deck; `loadedId` is what the follower actually
@@ -118,14 +136,28 @@ export type TickResync =
 export interface TickResyncInput {
   tickVid: string | null | undefined; // the anchor's loaded videoId for this deck (absent on old anchors)
   loadedId: string | null; //           what the follower currently holds
-  loadingThisVid: boolean; //           a load for tickVid is already in flight on this deck
-  sinceResyncMs: number; //             now − the last resync attempt for this deck
+  inFlightForMs: number | null; //      age of an in-flight load of tickVid on this deck; null = none
+  sinceResyncMs: number | null; //      now − the last resync attempt; null = never attempted
+  attempts: number; //                  consecutive resync attempts on this deck since it last landed
 }
 
+// ★ THE GUARD IS THE INVARIANT, NOT THE CLOCK. A live in-flight load of the anchor's track means
+// WAIT, whatever any interval says — the only thing that overrides it is that load being stuck, and
+// that is measured from the load's own start. The old shape asked "has the retry interval elapsed?"
+// while a load was running, and a load slower than the interval was cancelled and restarted forever
+// (ruling ab419a94). With ownership of the in-flight claim now honest (App/loadClaim.ts), this
+// question is answerable, and the retry constant stops being load-bearing: it only governs how soon
+// we try again after a load genuinely ENDED.
+//
+// ★ AND AN UNSET CLOCK IS "NEVER", NOT "ANCIENT". `sinceResyncMs` used to arrive as
+// `performance.now() − (resyncAt ?? 0)`, so a deck that had never resynced reported the tab's whole
+// uptime — an absence rendered as a very large number, which crossed every threshold it was
+// compared against (thread 1d40b603). null says the one thing the sentinel could not.
 export function decideTickResync(p: TickResyncInput): TickResync {
   if (p.tickVid == null || p.tickVid === p.loadedId) return "drive"; // identity matches / can't tell
-  if (!p.loadingThisVid) return p.sinceResyncMs >= RESYNC_RETRY_MS ? "load" : "wait";
-  return p.sinceResyncMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
+  if (p.inFlightForMs != null) return p.inFlightForMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
+  if (p.sinceResyncMs == null) return "load"; // never tried on this deck → first attempt is immediate
+  return p.sinceResyncMs >= resyncBackoffMs(p.attempts) ? "load" : "wait";
 }
 
 // ── Half-open socket detection (the 4G stall) ─────────────────────────────────────────────────────

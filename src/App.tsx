@@ -824,6 +824,9 @@ function AppBody() {
   // most reloads the SAME videoId: the tick-resync self-heal. See the release in loadTrackToDeck's
   // finally (ruling ab419a94) — comparing ids let a superseded load disarm its own successor.
   const loadingSeq = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // When the current claim was made, so the resync can ask how old the IN-FLIGHT load is. Asking
+  // the resync clock instead is what let a slow load be cancelled and restarted forever.
+  const loadingSince = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
@@ -862,7 +865,12 @@ function AppBody() {
   // a tick is about to seek to the live one).
   const followSeekAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const lastTickAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
-  const resyncAt = useRef<Record<DeckId, number>>({ A: 0, B: 0 }); // last tick-divergence reload attempt per deck
+  // Last tick-divergence reload attempt per deck. null = NEVER attempted, which is not the same as
+  // "attempted a very long time ago" — the 0 sentinel made an absence read as the tab's whole
+  // uptime and trip every threshold (thread 1d40b603).
+  const resyncAt = useRef<Record<DeckId, number | null>>({ A: null, B: null });
+  // Consecutive resync attempts per deck since it last landed the anchor's track → the backoff.
+  const resyncTries = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
 
   const cycleTempoRange = useCallback(() => {
     const i = TEMPO_RANGES.indexOf(settings.tempoRange);
@@ -1808,6 +1816,7 @@ function AppBody() {
         // Claim this deck's in-flight load so a concurrent room snapshot won't double-load it.
         loadingVid.current[id] = vid;
         loadingSeq.current[id] = seq; // whoever claimed LAST owns the claim, same id or not
+        loadingSince.current[id] = performance.now(); // so "is this load stuck?" is asked of the LOAD
         claimedVid = vid;
         // Lyrics: cache/pool → LRCLIB words (shown instantly, line-synced) → upgraded to
         // word-level by aligning to the neural vocal stem (CPU DSP, no GPU, contributed back)
@@ -2241,6 +2250,8 @@ function AppBody() {
     lastTickAt,
     followSeekAt,
     resyncAt,
+    resyncTries,
+    loadingSince,
     scrubbing,
     stemTouch,
     snapFollowRef,

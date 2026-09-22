@@ -64,7 +64,7 @@ export async function listNotifications(db: D1Database, userId: string, limit = 
               u.handle, u.display_name AS displayName, u.avatar_url AS avatar,
               EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = n.user_id AND f.followee_id = n.actor_id) AS followsBack
        FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
-       WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?`,
+       WHERE n.user_id = ? ORDER BY n.created_at DESC, n.id DESC LIMIT ?`,
     )
     .bind(userId, Math.max(1, Math.min(limit, 100)))
     .all<{ id: number; kind: string; createdAt: number; payload: string | null; handle: string | null; displayName: string | null; avatar: string | null; followsBack: number }>();

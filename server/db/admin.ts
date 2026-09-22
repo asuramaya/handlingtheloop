@@ -25,7 +25,7 @@ export async function logTakedown(
 /** Recent takedowns, newest first. */
 export async function listTakedowns(db: D1Database, limit = 100): Promise<Takedown[]> {
   const r = await db
-    .prepare("SELECT id, video_id, reason, by_email, purged, ts FROM takedowns ORDER BY ts DESC LIMIT ?")
+    .prepare("SELECT id, video_id, reason, by_email, purged, ts FROM takedowns ORDER BY ts DESC, id DESC LIMIT ?")
     .bind(Math.max(1, Math.min(limit, 500)))
     .all<Takedown>();
   return r.results ?? [];
@@ -81,7 +81,7 @@ export async function listUsers(db: D1Database, limit = 200): Promise<AdminUser[
       `SELECT u.id, u.email, u.name, u.created_at, u.last_login,
               COALESCE(GROUP_CONCAT(c.provider), '') AS providers
        FROM users u LEFT JOIN connections c ON c.user_id = u.id
-       GROUP BY u.id ORDER BY u.last_login DESC LIMIT ?`,
+       GROUP BY u.id ORDER BY u.last_login DESC, u.id DESC LIMIT ?`,
     )
     .bind(Math.max(1, Math.min(limit, 1000)))
     .all<AdminUser>();

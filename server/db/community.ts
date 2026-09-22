@@ -42,7 +42,7 @@ export async function upsertCommunityTrack(
 /** Newest-first page of the community catalog. */
 export async function listCommunityTracks(db: D1Database, limit: number): Promise<CommunityTrack[]> {
   const r = await db
-    .prepare("SELECT video_id, title, artist, duration, thumbnail FROM community_tracks ORDER BY cached_at DESC LIMIT ?")
+    .prepare("SELECT video_id, title, artist, duration, thumbnail FROM community_tracks ORDER BY cached_at DESC, video_id DESC LIMIT ?")
     .bind(Math.max(1, Math.min(limit, 5000)))
     .all<CommunityRow>();
   return (r.results ?? []).map((x) => ({

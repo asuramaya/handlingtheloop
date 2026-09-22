@@ -112,7 +112,7 @@ export async function listFollowRequests(db: D1Database, ownerId: string): Promi
     .prepare(
       `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM follow_requests fr JOIN users u ON u.id = fr.requester_id
-       WHERE fr.target_id=? AND u.handle IS NOT NULL ORDER BY fr.created_at DESC LIMIT 100`,
+       WHERE fr.target_id=? AND u.handle IS NOT NULL ORDER BY fr.created_at DESC, u.id DESC LIMIT 100`,
     )
     .bind(ownerId)
     .all<BaseRow>();
@@ -286,7 +286,7 @@ async function listGraph(
       `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM follows f JOIN users u ON u.id = ${joinCol}
        WHERE ${whereCol}=? AND u.handle IS NOT NULL${blockClause}
-       ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
+       ORDER BY f.created_at DESC, u.id DESC LIMIT ? OFFSET ?`,
     )
     .bind(...binds)
     .all<BaseRow>();
@@ -359,7 +359,7 @@ export async function suggestedUsers(db: D1Database, viewerId = "", limit = 12):
          AND u.id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?)
          AND u.id NOT IN (SELECT blocker_id FROM blocks WHERE blocked_id=?)
        GROUP BY u.id
-       ORDER BY via DESC LIMIT ?`,
+       ORDER BY via DESC, u.id DESC LIMIT ?`,
     )
     .bind(viewerId, viewerId, viewerId, viewerId, viewerId, limit)
     .all<BaseRow>();
@@ -389,7 +389,7 @@ async function popularUsers(db: D1Database, viewerId: string, limit: number, exc
       `SELECT u.id, u.handle, u.display_name AS displayName, u.avatar_url AS avatar
        FROM users u
        WHERE ${where}
-       ORDER BY (SELECT COUNT(*) FROM follows ff WHERE ff.followee_id=u.id) DESC, u.created_at DESC
+       ORDER BY (SELECT COUNT(*) FROM follows ff WHERE ff.followee_id=u.id) DESC, u.created_at DESC, u.id DESC
        LIMIT ?`,
     )
     .bind(...binds)

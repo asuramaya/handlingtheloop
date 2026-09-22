@@ -50,8 +50,8 @@ export async function fileReport(
 /** The moderation queue, newest first. Open-only by default; `all` includes resolved. */
 export async function listReports(db: D1Database, all = false, limit = 200): Promise<Report[]> {
   const sql = all
-    ? "SELECT * FROM reports ORDER BY ts DESC LIMIT ?"
-    : "SELECT * FROM reports WHERE resolved = 0 ORDER BY ts DESC LIMIT ?";
+    ? "SELECT * FROM reports ORDER BY ts DESC, id DESC LIMIT ?"
+    : "SELECT * FROM reports WHERE resolved = 0 ORDER BY ts DESC, id DESC LIMIT ?";
   const r = await db.prepare(sql).bind(Math.max(1, Math.min(limit, 500))).all<Report>();
   return r.results ?? [];
 }

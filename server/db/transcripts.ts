@@ -69,7 +69,7 @@ const MODEL_RANK = "CASE model WHEN 'aligned' THEN 3 WHEN 'estimated' THEN 2 WHE
 export async function getLyrics(db: D1Database, videoId: string): Promise<LyricsRow | null> {
   const row = await db
     .prepare(
-      `SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? AND ver >= ${FIRST_TRUSTWORTHY_VER} ORDER BY ver DESC, ${MODEL_RANK} DESC, created_at DESC LIMIT 1`,
+      `SELECT model, lang, conf, ver, lines FROM lyrics WHERE video_id = ? AND ver >= ${FIRST_TRUSTWORTHY_VER} ORDER BY ver DESC, ${MODEL_RANK} DESC, created_at DESC, model DESC LIMIT 1`,
     )
     .bind(videoId)
     .first<{ model: string; lang: string; conf: number; ver: number; lines: string }>();

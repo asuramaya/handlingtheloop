@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it, test } from "vitest";
 import { liveRooms, liveFollowedRooms } from "./rooms";
 
@@ -333,14 +333,25 @@ describe("the cursor is opaque in the sense it claims to be", () => {
 // requires each one's LAST term to be a column the schema makes unique. A fourth reader added
 // tomorrow is covered on the day it is written, and the vacuity guard means deleting the queries
 // cannot turn this green.
-describe("every paged directory read resolves over a set proven unique", () => {
-  const SRC = [
-    ["server/db/sets.ts", readFileSync(new URL("./sets.ts", import.meta.url), "utf8")],
-    ["server/db/rooms.ts", readFileSync(new URL("./rooms.ts", import.meta.url), "utf8")],
-  ] as const;
-  // Columns the schema makes unique per row: primary keys. `id` for sets, `host_id` for rooms
-  // (one live room per host — the rooms PK).
-  const UNIQUE = /\b(s\.)?id\b|\bhost_id\b|\br\.host_id\b/;
+describe("every paged read resolves over a set proven unique", () => {
+  // ★ THE FILE LIST IS DERIVED, because a hand-written one is the defect this file is about wearing
+  // different clothes. It used to name sets.ts and rooms.ts — the two I had just worked on — while
+  // TEN other modules in this directory carried an ORDER BY … LIMIT that nobody was checking. That
+  // is the same mistake as the header sentence this scan was written to replace ("Both now end in a
+  // primary key" — there were four), and I made it one level up while fixing it.
+  //
+  // Metron's sharpening of the same lesson on my other scan, hours later: a broad invariant matched
+  // by a narrow syntax is a roster wearing a regex. A hand-written list of FILES is the same thing
+  // as a hand-written list of STATEMENTS.
+  const DIR = new URL("./", import.meta.url);
+  const SRC = readdirSync(DIR)
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .sort()
+    .map((f) => [`server/db/${f}`, readFileSync(new URL(f, DIR), "utf8")] as const);
+
+  // Columns the schema makes unique per row. Primary keys and natural keys — `id`, `host_id` (one
+  // live room per host), `video_id` within a user's rows, `handle` (unique per user).
+  const UNIQUE = /\b(\w+\.)?id\b|\bhost_id\b|\bvideo_id\b|\bhandle\b/;
 
   // Comments in these files DISCUSS ORDER BY at length — including the sentence that was wrong — so
   // strip them first. A scan that reads prose finds the claim instead of the code, which is the
@@ -350,13 +361,45 @@ describe("every paged directory read resolves over a set proven unique", () => {
     [...stripComments(src).matchAll(/ORDER BY([\s\S]*?)LIMIT/gi)].map((m) => ({ file, orderBy: m[1].replace(/\s+/g, " ").trim() })),
   );
 
+  // A non-total ordering is only a COIN FLIP where the boundary is served to someone. These are the
+  // reads where it is not, each with the reason — an exemption has to say why, not just appear.
+  const EXEMPT: { file: string; orderBy: RegExp; why: string }[] = [
+    {
+      file: "server/db/transcripts.ts",
+      orderBy: /model DESC$/,
+      why:
+        "The lyrics PK is (video_id, model) and video_id is PINNED BY THE WHERE CLAUSE, so `model` is " +
+        "total for this query's rows. The scan cannot see that — uniqueness here is relative to a " +
+        "predicate, not a property of the column — which is exactly what an exemption is for. If the " +
+        "video_id filter is ever dropped, this stops holding and the exemption must go with it.",
+    },
+  ];
+
   test("the scan found statements to check (vacuity guard)", () => {
-    expect(statements.length).toBeGreaterThanOrEqual(3);
+    expect(statements.length).toBeGreaterThanOrEqual(8);
   });
 
-  test.each(statements.map((s) => [s.file, s.orderBy] as const))("%s — ORDER BY %s ends in a unique column", (_file, orderBy) => {
-    const terms = orderBy.split(",").map((t) => t.trim());
-    expect(terms[terms.length - 1]).toMatch(UNIQUE);
+  test("it reads the WHOLE directory, not the files someone remembered (roster guard)", () => {
+    expect(SRC.length).toBeGreaterThanOrEqual(10);
+    expect(SRC.map(([f]) => f)).toContain("server/db/analysis.ts");
+  });
+
+  test("every exemption still matches a real statement (a stale exemption is a hole)", () => {
+    for (const e of EXEMPT) {
+      expect(statements.some((s) => s.file === e.file && e.orderBy.test(s.orderBy)), `exemption for ${e.file} matches nothing`).toBe(true);
+      expect(e.why.length).toBeGreaterThan(40);
+    }
+  });
+
+  test("every ORDER BY … LIMIT ends in a unique column, or is exempt with a reason", () => {
+    const offenders = statements
+      .filter((s) => !EXEMPT.some((e) => e.file === s.file && e.orderBy.test(s.orderBy)))
+      .filter((s) => {
+        const terms = s.orderBy.split(",").map((t) => t.trim());
+        return !UNIQUE.test(terms[terms.length - 1]);
+      })
+      .map((s) => `${s.file} — ORDER BY ${s.orderBy}`);
+    expect(offenders).toEqual([]);
   });
 });
 

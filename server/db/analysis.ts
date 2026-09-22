@@ -184,7 +184,7 @@ export async function countAnalysis(db: D1Database): Promise<number> {
 /** Page of analysis rows (for the HF export). */
 export async function listAnalysis(db: D1Database, limit = 1000, offset = 0): Promise<TrackAnalysisRow[]> {
   const r = await db
-    .prepare("SELECT video_id, bpm, music_key, key_name, beat_offset, duration FROM track_analysis ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+    .prepare("SELECT video_id, bpm, music_key, key_name, beat_offset, duration FROM track_analysis ORDER BY updated_at DESC, video_id DESC LIMIT ? OFFSET ?")
     .bind(Math.max(1, Math.min(limit, 5000)), Math.max(0, offset))
     .all<TrackAnalysisRow>();
   return r.results ?? [];

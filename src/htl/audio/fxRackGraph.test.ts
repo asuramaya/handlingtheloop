@@ -60,7 +60,10 @@ function fakeDevice(kind: string, degraded = false): FxDevice {
     output,
     degraded,
     bypassed: false,
-    setBypass(on: boolean) {
+    // Takes `hard` like the real contract does, even though this stub has nothing to land. A double
+    // that narrows the interface cannot model the defect it exists to stand in for — five real
+    // devices were dropping this parameter and every call site typechecked (89902a4).
+    setBypass(on: boolean, _hard = false) {
       (this as { bypassed: boolean }).bypassed = on;
     },
     reset() {},

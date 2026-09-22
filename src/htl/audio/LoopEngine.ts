@@ -139,6 +139,18 @@ export class LoopEngine {
       const pos = this.host.position();
       if (pos < start || pos > end) this.host.seek(start);
     }
+    // ★ BROADCAST THE ABSOLUTE REGION TOO, because `beats` is not a portable quantity. The
+    // {kind:"loop", action:"beat"} intent carries a COUNT, and the receiver resolves it against ITS
+    // OWN beatgrid — so two devices holding different grids for the same track get different loop
+    // lengths and different start points from one press. That is not hypothetical: mayReuseGrid
+    // (94fe1f0) refuses a pooled grid whose stored duration does not match the decoded audio, so
+    // one device can be on the pooled grid while another re-derived locally, TODAY. A re-version
+    // rollout would make it the normal case rather than the edge one (Deckard, docs/
+    // analysis-reversioning.md).
+    // This fires the same callback loop fine-adjust already uses, so the session hears the region
+    // the DJ actually set rather than its own re-derivation of the count. Absolute wins because
+    // absolute is the only thing both devices agree about.
+    this.host.onLoopEdit();
   }
 
   // FLX4-style manual loop. With no active loop: tap IN to drop the entry point,

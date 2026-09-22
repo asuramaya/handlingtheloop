@@ -245,3 +245,42 @@ describe("applyLoop validity gate", () => {
     expect(lastLoop(calls)).toEqual({ active: false, start: 0, end: 0 });
   });
 });
+
+// ★ A BEAT COUNT IS NOT A PORTABLE QUANTITY. {kind:"loop", action:"beat"} carries a COUNT and the
+// receiver resolves it against ITS OWN grid, so two devices holding different grids for one track
+// get different loop lengths from a single press. Reachable today — mayReuseGrid refuses a pooled
+// grid whose stored duration does not match the decoded audio, so one device can be on the pooled
+// grid while another re-derived locally — and it becomes the normal case during a re-version
+// rollout. setBeatLoop now broadcasts the absolute region through the same callback loop
+// fine-adjust already uses, because absolute is the only thing both devices agree about.
+describe("setBeatLoop broadcasts the region it actually set", () => {
+  it("fires onLoopEdit, so a session receives seconds and not a beat count to re-derive", () => {
+    const { le, calls } = harness({ grid: GRID });
+    le.setBeatLoop(4);
+    expect(calls.loopEdit).toBeGreaterThan(0);
+    const r = lastLoop(calls);
+    expect(r.active).toBe(true);
+    expect(r.end).toBeGreaterThan(r.start);
+  });
+
+  // ★ THE ROW THAT SHOWS WHY THE COUNT IS NOT PORTABLE: the same press on two different grids gives
+  // two different regions. A receiver re-deriving the count lands here; a receiver handed the
+  // absolute region does not.
+  it("the same beat count is a different region on a different grid", () => {
+    const a = harness({ grid: GRID }); // 120 bpm
+    a.le.setBeatLoop(4);
+    const b = harness({ grid: { bpm: 128, firstBeat: 0, interval: 60 / 128, beatsPerBar: 4 } });
+    b.le.setBeatLoop(4);
+    const ra = lastLoop(a.calls);
+    const rb = lastLoop(b.calls);
+    expect(rb.end - rb.start).not.toBeCloseTo(ra.end - ra.start, 3);
+  });
+
+  // The control: if it fired unconditionally — on a deck with nothing loaded, say — a session would
+  // receive a region for a loop that does not exist.
+  it("says nothing when there is no track to loop", () => {
+    const { le, calls } = harness({ grid: GRID, load: false });
+    le.setBeatLoop(4);
+    expect(calls.loopEdit).toBe(0);
+  });
+});

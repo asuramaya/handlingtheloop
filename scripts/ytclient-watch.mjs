@@ -25,12 +25,13 @@
 //   node scripts/ytclient-watch.mjs           # exit 0 = quiet, 1 = something to read
 //   node scripts/ytclient-watch.mjs --json
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/yt_dlp/extractor/youtube/_base.py";
-const OURS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "server", "youtube.ts");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OURS = resolve(HERE, "..", "server", "youtube.ts");
 
 /** The visionos entry, sliced from the INNERTUBE_CLIENTS table by brace depth (no Python parser).
  *  Braces inside STRING VALUES are skipped — a UA or device string containing one would otherwise
@@ -101,6 +102,21 @@ const jsKeyPresent = /'REQUIRE_JS_PLAYER'/.test(block);
 const unreadable = Object.keys(mine).filter((k) => !mine[k] || !up[k]);
 const drift = Object.keys(mine).filter((k) => mine[k] && up[k] && mine[k] !== up[k]);
 const fired = poToken || requiresJs || drift.length > 0 || unreadable.length > 0;
+
+// ★ THE RECEIPT, because the thread's own "Last checked 2026-09-17" is a hand-written date and this
+// script exists precisely because hand-written watch state decays. `--record` writes what the run
+// actually found, next to the script, so the next reader learns WHEN it last ran and WHAT it said
+// from the run itself rather than from somebody's memory of it.
+//
+// Deliberately NOT wired into the test gate. A staleness check that fails `pnpm test` would block a
+// deploy on a non-problem at the worst possible moment, and deploy.sh runs the suite as its own
+// pre-deploy gate — a watch that breaks deploys is a worse instrument than one that decays. The
+// receipt is for reading; firing is still what exits non-zero.
+if (process.argv.includes("--record")) {
+  const receipt = { when: new Date().toISOString(), fired, poToken, requiresJs, jsKeyPresent, drift, unreadable, ours: mine, upstream: up };
+  writeFileSync(resolve(HERE, "ytclient-watch.last.json"), `${JSON.stringify(receipt, null, 2)}\n`);
+  console.log(`  recorded → scripts/ytclient-watch.last.json (${fired ? "FIRED" : "quiet"}, ${receipt.when})`);
+}
 
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify({ fired, poToken, requiresJs, jsKeyPresent, drift, unreadable, ours: mine, upstream: up }, null, 2));

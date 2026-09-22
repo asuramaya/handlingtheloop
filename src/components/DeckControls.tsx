@@ -297,6 +297,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // CUE-point action (set / jump-to-cue / START-on-shift). Shared by the plain CUE
   // button and — when a separate cue device is selected — the CUE fader's tap.
   const cueAction = () => {
+    // ★ THE SITE THE WATCH-ONLY SWEEP ABOVE MISSED. Every branch below changes what THIS device
+    // plays — seek(0), jumpToCue, setCue — which the note above changePadMode names as exactly the
+    // violation: local divergence between a performer and a listener. CUE was reachable only
+    // through `.bank.locked { pointer-events: none }` and the stage shield, and that note says in
+    // its own words that a class sitting over a handler is not a guard.
+    //
+    // It matters NOW rather than eventually, because the listener FX fix (thread 3a1da460) removes
+    // one of those two blockers by design. DeckLane's onDrop was the same shape and became live the
+    // moment the shield moved (d29dcd1); this one is guarded before that happens, not after.
+    if (locked) return; // watch-only: see the lock note above changePadMode
     if (shift) {
       deck.seek(0);
       emit({ kind: "transport", deck: id, action: "seek", position: 0 });
@@ -315,6 +325,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const cueHold = useRef<{ held: boolean; tmr: number } | null>(null);
   const cueSuppress = useRef(false);
   const cueDown = () => {
+    if (locked) return; // watch-only — the hold preview moves this device's playhead too
     if (shift || deck.playing) return; // tap-only path (START / jump-to-cue) resolves on click
     const rec = { held: false, tmr: 0 };
     rec.tmr = window.setTimeout(() => {

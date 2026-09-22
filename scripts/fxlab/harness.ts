@@ -310,6 +310,14 @@ function measure(buf: AudioBuffer, meta: { kind: string; signal: string; seconds
 
   const report: Report = {
     ok: true,
+    // ★ FAIL CLOSED. measure() cannot know what went IN — the stimulus is rendered separately and
+    // the assertion is written over these three afterwards. Seeding them as "no input" means a path
+    // that skips that block reports NO INPUT rather than reporting nothing, which is the direction
+    // the guard has to fail in. It was silently omitting them, which typed as a hole and read as
+    // `undefined` at the printer — and the printer tested `=== false`.
+    inputPeak: 0,
+    inputRms: 0,
+    inputOk: false,
     kind: meta.kind,
     signal: meta.signal,
     seconds: meta.seconds,
@@ -1254,7 +1262,21 @@ async function minStepOverRenders(
 // every reaper teardown ModFx performed during it.
 (globalThis as unknown as { fxlabModGestureRepeat: (params: Record<string, number>, param: string, to: number, n: number) => Promise<unknown> }).fxlabModGestureRepeat = async (params, param, to, n) => {
   const steps: number[] = [];
-  let worst: { step: number; at: number; win: number[]; teardowns: number[]; retiredAtSwitch: number } | null = null;
+  // The extra fields are part of what this dumps; the type said otherwise and the assignment was
+  // cast `as never` to make that go away — which also narrowed `worst` itself to never, and the
+  // read below could not see .step. A cast that silences one error and creates another.
+  let worst: {
+    step: number;
+    at: number;
+    win: number[];
+    teardowns: number[];
+    retiredAtSwitch: number;
+    before: number;
+    after1: number;
+    after2: number;
+    dryB: number;
+    dryA: number;
+  } | null = null;
   for (let i = 0; i < n; i++) {
     const teardowns: number[] = [];
     let retiredAtSwitch = -1;
@@ -1279,7 +1301,7 @@ async function minStepOverRenders(
       const after2 = rmsOf(r.out, Math.round(3.0 * r.sr), Math.round(3.9 * r.sr));
       const dryB = rmsOf(r.dry, Math.round(1.5 * r.sr), Math.round(1.95 * r.sr));
       const dryA = rmsOf(r.dry, Math.round(2.05 * r.sr), Math.round(2.3 * r.sr));
-      worst = { step, at: at / r.sr, win, teardowns, retiredAtSwitch, before, after1, after2, dryB, dryA } as never;
+      worst = { step, at: at / r.sr, win, teardowns, retiredAtSwitch, before, after1, after2, dryB, dryA };
     }
   }
   return { steps, worst };
@@ -1464,20 +1486,11 @@ function toneEnvelope(x: Float32Array, sr: number, hz: number, blockSec = 0.02):
   return { env, block };
 }
 
-/** Spectral centroid (Hz) of one slice — how HIGH the noise layer is sitting right now. */
-function centroid(x: Float32Array, from: number, n: number, sr: number): number {
-  const N = 4096;
-  const ps = powerSpectrum(x, N, from, Math.min(x.length, from + n));
-  let num = 0;
-  let den = 0;
-  for (let b = 1; b < ps.length; b++) {
-    const f = (b * sr) / N;
-    if (f < 40 || f > 18000) continue;
-    num += f * ps[b];
-    den += ps[b];
-  }
-  return den > 0 ? num / den : 0;
-}
+// The spectral-centroid helper that used to live here is RETIRED, not misplaced: the NOISE probe
+// stopped reading direction off the centroid and reads the low-band fraction instead, for the
+// reason stated at its call site — a broadband layer's centroid barely moves while its audible
+// weight moves a long way. Zero callers ever since that change, so it goes rather than lingering
+// as a plausible-looking thing a future probe might reach for.
 
 interface NoiseRender {
   sr: number;

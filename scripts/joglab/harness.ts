@@ -144,8 +144,11 @@ function buildHost(state: { pos: number; playing: boolean; duration: number; rat
     spawnSource: () => {},
     stopSource: () => {},
     clearBend: () => {},
-    scratchBuffer: () => state.buffer,
-    scratchWindow: () => Promise.resolve(null),
+    // scratchBuffer/scratchWindow USED to live here and are gone from JogHost entirely — the
+    // scratch path no longer asks the host for PCM (the worklet holds it, per the shared-PCM
+    // rearchitecture). This fake kept feeding both long after nothing read them; an excess member
+    // on an object literal IS a type error, and this file sat outside every tsconfig, so the drift
+    // was unreportable rather than tolerated.
     connectScratch: (node) => { node.connect(connectTo); },
     slipArm: () => {},
     slipArmForce: () => {},

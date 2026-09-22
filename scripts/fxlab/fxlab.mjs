@@ -196,7 +196,10 @@ function printReport(r, spec) {
   // ★ THE INPUT, FIRST AND UNMISSABLE. Everything below characterises the OUTPUT; if nothing went
   // in, every one of those numbers is float dust reported to four decimals. This line is the
   // difference between a measurement and a confident guess.
-  if (r.inputOk === false) {
+  // Tested as "not ok", not as "explicitly false": measure() now seeds these fail-closed, but a
+  // report that somehow arrives without them is an UNREAD input, not a good one, and `=== false`
+  // would have printed it as if the stimulus had been checked.
+  if (!r.inputOk) {
     console.log("");
     console.log(`  ⚠⚠ NO INPUT — stimulus peak ${r.inputPeak} (signal=${r.signal}). Nothing below is a`);
     console.log(`     measurement: an estimator with nothing to estimate estimates NOISE. Check`);

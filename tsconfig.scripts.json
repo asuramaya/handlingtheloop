@@ -1,0 +1,19 @@
+{
+  // THE THIRD PROJECT, and it exists because the other two could not see scripts/ at all
+  // (thread 89b720f4). `tsconfig.json` includes ["src"]; `tsconfig.node.json` includes
+  // ["server","worker","vite.config.ts"]. Every fxlab/joglab commit gated on "both tsc
+  // projects clean" was gated on a check that could not fail for the file being changed —
+  // and it was hiding a product defect, not harness noise (89902a4: five FX devices silently
+  // narrowing setBypass, visible ONLY from a call on a concrete device, which is what a
+  // harness does and an interface call site never can).
+  //
+  // It extends the APP project rather than widening the node one on purpose. These harnesses
+  // are BROWSER code — AudioContext, import.meta.env, DOM — so the worker/server project has
+  // the wrong lib and the wrong types for them, and widening it would make that project wrong
+  // for both populations instead of right for either.
+  "extends": "./tsconfig.json",
+  // src/vite-env.d.ts comes along because the harnesses import src modules that use
+  // import.meta.env; without it the ambient vite types are missing and the errors are the
+  // config's, not the code's.
+  "include": ["scripts", "src/vite-env.d.ts"]
+}

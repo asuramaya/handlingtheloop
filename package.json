@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit && tsc -p tsconfig.node.json",
+    "typecheck": "tsc -b --noEmit && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json",
     "worker": "vite build && rm -rf dist/models && wrangler dev",
     "worker:lan": "vite build && rm -rf dist/models && wrangler dev --ip 0.0.0.0",
     "worker:lan:https": "vite build && rm -rf dist/models && wrangler dev --ip 0.0.0.0 --local-protocol https",

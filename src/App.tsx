@@ -18,6 +18,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
+import { initialDock } from "./App/initialDock";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
 import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
@@ -487,7 +488,13 @@ function AppBody() {
   // Which right-dock panel was open last reload — restored DESKTOP-ONLY (like libOpen
   // below; on a phone the docks are full-screen modals that always start closed). The
   // three share one slot, so one string captures it.
-  const initRightDock = window.innerWidth >= 769 ? localStorage.getItem("htl:rightDock") : null;
+  // ★ A FOLLOWED @handle LINK OUTRANKS A REMEMBERED PANEL. With a dock restored here, the effect
+  // below ("opening any own-account dock leaves the public profile") fired at MOUNT and cleared
+  // the deep link before it could render — so a shared link to a live DJ landed on the board with
+  // no profile and no way to tune in (thread 3b2ea067, reproduced on the rig and fixed by clearing
+  // the stored key by hand). The decision is in App/initialDock.ts so the rule is testable; the
+  // stored value is left alone, so the next ordinary load restores it as before.
+  const initRightDock = initialDock(localStorage.getItem("htl:rightDock"), handleFromPath(), window.innerWidth >= 769);
   const [settingsOpen, setSettingsOpen] = useState(initRightDock === "settings");
   // ONE People dock replaces Profile + Discover + the notification bell; `peopleTab` says which
   // face of it is showing. The old per-surface open flags are gone — three booleans that had to

@@ -119,6 +119,7 @@ import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
 import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
+import { shouldReleaseClaim } from "./App/loadClaim";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
@@ -819,6 +820,10 @@ function AppBody() {
   // in flight for a track is never doubled. Cleared only on a genuine failure (so a retry
   // can proceed); on success it stays = the loaded id, which is exactly the right dedupe key.
   const loadingVid = useRef<Record<DeckId, string>>({ A: "", B: "" });
+  // …and WHICH load holds that claim. A videoId cannot answer that, because the case that matters
+  // most reloads the SAME videoId: the tick-resync self-heal. See the release in loadTrackToDeck's
+  // finally (ruling ab419a94) — comparing ids let a superseded load disarm its own successor.
+  const loadingSeq = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
@@ -1802,6 +1807,7 @@ function AppBody() {
         }
         // Claim this deck's in-flight load so a concurrent room snapshot won't double-load it.
         loadingVid.current[id] = vid;
+        loadingSeq.current[id] = seq; // whoever claimed LAST owns the claim, same id or not
         claimedVid = vid;
         // Lyrics: cache/pool → LRCLIB words (shown instantly, line-synced) → upgraded to
         // word-level by aligning to the neural vocal stem (CPU DSP, no GPU, contributed back)
@@ -1984,7 +1990,18 @@ function AppBody() {
         // whose successor bailed early stranded this claim → a later snapshot read it as "still
         // loading" and skipped the reload forever (the guest stayed on the wrong track). On a
         // successful land we KEEP the claim as the per-deck dedupe key.
-        if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
+        // ★ RELEASE ONLY IF THIS LOAD STILL OWNS THE CLAIM, and ownership is the SEQUENCE, not the
+        // id. This test used to be `loadingVid.current[id] === claimedVid`, whose comment said that
+        // proved no newer load had taken it over. It proves that only when a successor loads a
+        // DIFFERENT track — and the one path that matters reloads the SAME one. The follower's
+        // tick-resync re-requests the anchor's track, so a superseded load released the claim its
+        // live successor was holding; the next tick then read "nothing loading this vid", started
+        // another load, aborted the running one, and the new predecessor wiped the claim again.
+        // Deck B livelocked: a new load every ~3 s, none of them ever landing, no error, no status,
+        // the listener simply stuck on the wrong song (ruling ab419a94, caught on the rig at HEAD).
+        // Comparing sequences keeps what the id test was written for — a successor that dies before
+        // claiming leaves the claim owned by US, so we still release it and nothing is stranded.
+        if (shouldReleaseClaim({ landed, claimedVid, claimSeq: loadingSeq.current[id], mySeq: seq })) loadingVid.current[id] = "";
         // Every exit passes here, so this is where the line is guaranteed: a load that landed says
         // `landed`, and one that ended without landing and without throwing (an early `return` on a
         // stale sequence) — the quietest of all — says so too.

@@ -791,3 +791,46 @@ describe("DjRoom relays a later publish to a listener already tuned in", () => {
     expect(after, "the room must relay it — a listener that joined during the empty window converges on the next publish").toContain("REAL");
   });
 });
+
+// ★ THE SERVER IS THE ONLY HONEST WITNESS THAT A TUNE-IN HAPPENED. Browser-side evidence could not
+// tell one apart from a stale tab or a mis-aimed click (thread d4a56d30 — a selector that matched a
+// CAPTION containing "listening", and a listener tab that had never actually reloaded, both read as
+// success). A pub socket exists only after a tune-in — the client sets room=<handle> only when
+// listenHandle is set — so this line is the fact, and it names the device so a re-connecting old tab
+// is distinguishable from a fresh one.
+describe("DjRoom witnesses a tune-in", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("logs the device and the running count when a public listener arrives", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.connect({ device: "L-fresh", pub: true });
+      const line = warn.mock.calls.map((c: unknown[]) => String(c[0])).find((m) => m.includes("listener tuned in"));
+      expect(line).toBeTruthy();
+      expect(line).toContain("device=L-fresh");
+      expect(line).toContain("listeners=1");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("control: a PARTICIPANT joining is not a tune-in and must not be logged as one", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const friend = (await h.connect({ device: "g1", invited: true })).ws!;
+      await h.send(friend, { t: "join" });
+      expect(warn.mock.calls.map((c: unknown[]) => String(c[0])).filter((m) => m.includes("listener tuned in"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

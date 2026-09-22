@@ -405,6 +405,13 @@ export class DjRoom {
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
+    // ★ WHO ACTUALLY TUNED IN, named. A pub socket exists ONLY after a tune-in: the client sets
+    // `room=<handle>` only when listenHandle is set (client.ts:385), and the Worker turns that into
+    // pub=1. So this line is the unambiguous server-side witness that a listener arrived — and it
+    // names the DEVICE, which is what separates "my automation tuned in" from "a tab I left open
+    // an hour ago reconnected". Browser-side evidence could not make that distinction (thread
+    // d4a56d30: a click that hit a lyric, and a tab that had never reloaded, both read as success).
+    if (pub) console.warn(`[htl-room] listener tuned in: device=${device} listeners=${this.listenerCount()}`);
     server.send(JSON.stringify(welcomeFor(device, this.roomView(), pub, this.songRequests.list)));
     this.sendChatHistory(server); // recent chat backlog so a joiner has context
     // Hand a public listener the current board immediately so it can render without a round-trip.

@@ -308,6 +308,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           <button
             className="grid-btn"
             onClick={() => {
+              // Watch-only: the grid size is the beat-jump / loop-move resolution and the host's
+              // rides the wire (the `skip` intent), so changing it here would diverge this device
+              // from the board it is watching. Live since d29dcd1 narrowed the shield off the lane.
+              if (locked) return;
               deck.skipBeats = stepSkip(deck.skipBeats, -1);
               refresh();
             }}
@@ -319,6 +323,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           <button
             className="grid-btn"
             onClick={() => {
+              if (locked) return; // watch-only — see the − button above
               deck.skipBeats = stepSkip(deck.skipBeats, 1);
               refresh();
             }}

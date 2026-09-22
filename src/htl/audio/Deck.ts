@@ -4,6 +4,7 @@ import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
 import { isSameStemApply, stemApplyId } from "./stemApply";
 import { stemViewGeometryAgrees, type StemPick } from "./stemViewGeometry";
+import { stemLaneGeometryAgrees, type StemLane } from "./stemLaneGeometry";
 import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
@@ -1024,6 +1025,7 @@ export class Deck {
   setRemoteStemView(view: StemView): void {
     if (!view?.stems) return;
     const out = {} as Record<StemName, Pyramid>;
+    const lanes: StemLane[] = [];
     for (const name of STEM_NAMES) {
       const s = view.stems[name];
       if (!s) return;
@@ -1036,6 +1038,18 @@ export class Deck {
       const mid = b ? upsampleTo(b64ToF32(b.mid), min.length) : undefined;
       const high = b ? upsampleTo(b64ToF32(b.high), min.length) : undefined;
       out[name] = buildLodPyramid(min, max, view.length, view.sampleRate, view.bucket, low, mid, high);
+      lanes.push({ name, samples: min.length });
+    }
+    // The receiving half of the geometry question (stemLaneGeometry.ts): the host's own check runs
+    // before serialisation and cannot see what the wire did. REPORTS only — normalising a
+    // mis-described lane here would hide a host bug behind a receiver's repair.
+    const laneVerdict = stemLaneGeometryAgrees(lanes, { length: view.length, bucket: view.bucket });
+    if (!laneVerdict.agreed) {
+      console.warn(
+        `[htl] arrived stem lanes disagree — ${[...new Set([...laneVerdict.disagreeing, ...laneVerdict.shortOfClaim])].join(", ")} ` +
+          `against ${laneVerdict.expected ?? "?"} buckets claimed by length ${view.length} / bucket ${view.bucket}; ` +
+          `those lanes will run out of samples and flatten mid-track (thread f2b8f545)`,
+      );
     }
     this.markRemoteStems(true, true);
     this.stemPyramids = out; // markRemoteStems cleared it; set the real envelopes

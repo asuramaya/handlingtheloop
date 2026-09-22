@@ -83,6 +83,10 @@ class TransientAudioError extends Error {}
 /** No bytes for this long → the transfer is not slow, it is HUNG. See readStream. */
 export const STREAM_STALL_MS = 20_000;
 
+/** …and no RESPONSE for this long → the request never opened. Longer than the body window: the edge
+ *  may be resolving a fresh stream URL upstream before it can answer at all. */
+export const STREAM_OPEN_MS = 30_000;
+
 interface ChunkReader {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
   cancel(reason?: unknown): Promise<void> | void;
@@ -126,10 +130,35 @@ async function fetchYouTubeAudioOnce(
   onProgress?: (p: FetchProgress) => void,
   signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
-  const res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
-    signal,
-    headers: await ytStreamHeaders(),
-  });
+  // ★ THE HEADERS NEED A CLOCK TOO. readStream below watches the BODY for silence, which left the
+  // other half of the same hang open: a request whose response never begins — no headers, no error,
+  // no bytes to be silent — parks the load just as permanently, and with even less to see.
+  //
+  // NO AbortSignal.any HERE, deliberately: it is absent on the older iOS Safari this app still has
+  // to play on, and a TypeError inside the audio path would be a far worse failure than the hang it
+  // is meant to fix. Forwarding the caller's abort by hand costs one listener and works everywhere.
+  const openCtl = new AbortController();
+  const openTimer = setTimeout(
+    () => openCtl.abort(new TransientAudioError(`Audio request stalled (no response for ${Math.round(STREAM_OPEN_MS / 1000)}s)`)),
+    STREAM_OPEN_MS,
+  );
+  const forwardAbort = () => openCtl.abort(signal?.reason);
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  let res: Response;
+  try {
+    res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
+      signal: openCtl.signal,
+      headers: await ytStreamHeaders(),
+    });
+  } catch (e) {
+    // The caller's own abort stays an abort; OUR timeout becomes the transient error this module
+    // already retries. Distinguishing them matters: one is a user action, the other is a fault.
+    if (signal?.aborted) throw e;
+    throw openCtl.signal.reason instanceof TransientAudioError ? openCtl.signal.reason : e;
+  } finally {
+    clearTimeout(openTimer);
+    signal?.removeEventListener("abort", forwardAbort);
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     const msg = `Audio fetch failed (${res.status})${detail ? `: ${detail}` : ""}`;

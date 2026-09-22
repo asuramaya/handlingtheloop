@@ -111,6 +111,7 @@ export class DjRoom {
   private stemViewRate: Record<string, number> = {};
   // Last per-deck word-timed lyrics the host streamed, so a late guest's caption ribbon fills in.
   private lastLyrics: Record<string, { videoId: string; lines: unknown; source: string }> = {};
+  private lyricTooBigAt = 0; // last time an over-cap lyrics record was logged (rate limit)
   // Last auto-DJ queue + status the host streamed, so a joining guest sees what's coming.
   private lastAutomix: unknown;
   // Device ids the host has granted control. Persisted so a granted guest survives a
@@ -308,9 +309,33 @@ export class DjRoom {
       // in the client bounds a word list — so this cap is the ONLY thing bounding the record, and
       // an over-long track's captions simply stop persisting. That absence is a finding, not an
       // oversight of this line: there is no ceiling in the code to derive one from.
-      if (JSON.stringify(this.lastLyrics).length > DO_VALUE_CAP) return;
+      // ★ AND IT SAYS SO WHEN IT REFUSES. This returned in silence, which is the same defect the
+      // snapshot had (ddf28822): captions keep relaying perfectly from memory while disk holds an
+      // older set, so nothing looks wrong until a cold restart serves stale captions or none.
+      //
+      // MEASURED against real synced lyrics from the source the client itself uses (LRCLIB), built
+      // into the exact shape this record persists — BOTH DECKS UNDER ONE KEY:
+      //   Bohemian Rhapsody   372 words   16.3 KB      One More Time  383 words  19.6 KB
+      //   Rap God            1542 words   64.3 KB   ← a real track, 49.1% of the cap on ONE deck
+      //   Rap God on both decks          128.6 KB   ← 98.1% of the cap, and it PASSES
+      // Mean 45.6 bytes per word. So the realistic worst case is not a determined user, it is a
+      // hip-hop set — and it currently fits, with about 2.4 KB to spare. That margin is the whole
+      // finding: nothing in the client bounds a word list, real per-word timings are wordier than
+      // the uniform ones measured here, and a longer or denser track walks straight through it.
+      const bytes = JSON.stringify(this.lastLyrics).length;
+      if (bytes > DO_VALUE_CAP) {
+        if (now - this.lyricTooBigAt >= 60_000) {
+          this.lyricTooBigAt = now;
+          console.warn(
+            `[htl-room] lyrics NOT persisted (${bytes} bytes, cap ${DO_VALUE_CAP}, decks ${Object.keys(this.lastLyrics).join("+") || "none"}): ` +
+              `captions are served from memory and a cold restart will serve OLDER captions or none —`,
+          );
+        }
+        return;
+      }
       this.lyricAt[deck] = now;
       await this.state.storage.put("lyrics", this.lastLyrics);
+      this.lyricTooBigAt = 0; // a write landed → the next failure is news, not a repeat
     } catch {
       /* best-effort — never tear down a socket over a persist */
     }

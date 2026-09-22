@@ -1299,3 +1299,44 @@ describe("stemview catch-up: what each arrival is handed", () => {
     expect(guest.msgs().some((m) => m.t === "stemview")).toBe(false);
   });
 });
+
+// The same silence, one key over — and this one has no structural ceiling to fall back on.
+// MEASURED against real synced lyrics from LRCLIB (the source the client itself uses), built into
+// the exact record this persists, BOTH DECKS UNDER ONE KEY: Bohemian Rhapsody 372 words / 16.3 KB,
+// One More Time 383 / 19.6 KB, Rap God 1542 / 64.3 KB. Rap God on both decks is 128.6 KB against a
+// 131.07 KB cap — 98.1%, and it PASSES. So the realistic worst case is a hip-hop set rather than a
+// determined user, it currently fits with ~2.4 KB to spare, and nothing in the client bounds a word
+// list. That margin is why the silence mattered.
+describe("DjRoom says when a caption set is too big to persist", () => {
+  let h: ReturnType<typeof makeRoom>;
+  let warns: string[];
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    h = makeRoom();
+    warns = [];
+    spy = vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => void warns.push(a.map(String).join(" ")));
+  });
+  afterEach(() => spy.mockRestore());
+
+  const words = (n: number) => Array.from({ length: n }, (_, i) => ({ t: i * 0.3, w: "word", d: 0.3 }));
+  const fatLyrics = () => [{ start: 0, end: 3, text: "x", words: words(DO_VALUE_CAP / 20) }];
+
+  it("logs the size, the decks and what it costs, instead of returning in silence", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "lyrics", deck: "A", videoId: "FAT", lines: fatLyrics(), source: "lrclib" });
+    const line = warns.find((w) => w.includes("lyrics NOT persisted"));
+    expect(line).toBeTruthy();
+    expect(line).toMatch(/cold restart will serve OLDER captions or none/);
+    expect(line).toContain(String(DO_VALUE_CAP)); // the cap, so the reader can judge the number
+    expect(line).toMatch(/decks A/); // WHICH deck put it over — the first question a reader has
+  });
+
+  // The control, and the one that keeps this honest: a caption set that fits must stay silent.
+  it("says nothing at all about captions that fit", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "lyrics", deck: "A", videoId: "SMALL", lines: [{ start: 0, end: 3, text: "hi", words: words(20) }], source: "lrclib" });
+    expect(warns.filter((w) => w.includes("lyrics NOT persisted"))).toEqual([]);
+  });
+});

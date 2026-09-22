@@ -19,6 +19,7 @@ import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { initialDock } from "./App/initialDock";
+import { mayReuseGrid } from "./App/gridReuse";
 import { event } from "@htl/debug/trace";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
@@ -1911,15 +1912,20 @@ function AppBody() {
           if (stale()) return;
           // Cache-first (Metadata B): reuse a persisted beatgrid from the shared dataset instead of
           // re-running the expensive detector — but ONLY when the stored grid is a shape this build
-          // can read (deserializeGrid is epoch-gated) AND at least as new as what we'd produce
-          // (version >= ANALYSIS_VERSION). A behind / foreign-shaped / absent grid → derive locally,
-          // which re-contributes at OUR version below, upgrading the row: the pool converges to the
-          // newest detector as tracks get touched. Key by track.videoId (what postAnalysis writes).
+          // can read (deserializeGrid is epoch-gated), at least as new as what we'd produce, AND
+          // DESCRIBES THE AUDIO WE JUST DECODED (mayReuseGrid). That last one was missing: the gate
+          // asked about the algorithm and never about the recording, while `firstBeat` is an
+          // absolute time and analyzeTrack takes a supplied grid verbatim — so audio that starts
+          // even a little differently from the contributor's puts every beat in the track out by
+          // that much, permanently, and re-analysing cannot fix it because re-analysing is what
+          // this skips. A refused grid → derive locally, which re-contributes at OUR version below,
+          // upgrading the row: the pool converges to the newest detector as tracks get touched.
+          // Key by track.videoId (what postAnalysis writes).
           let suppliedGrid: Beatgrid | null = null;
           if (track.videoId) {
             const stored = await fetchAnalysisFull(track.videoId, ctrl.signal);
             if (stale()) return;
-            if (stored && stored.version >= ANALYSIS_VERSION) suppliedGrid = deserializeGrid(stored.grid);
+            if (mayReuseGrid(stored, buffer.duration, ANALYSIS_VERSION).ok) suppliedGrid = deserializeGrid(stored!.grid);
             storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;

@@ -74,6 +74,7 @@ function parseArgs(argv) {
       case "--codec-overshoot": a.codecOvershoot = true; break;
       case "--codec-margin": a.codecMargin = true; break;
       case "--snapshot-size": a.snapshotSize = true; break;
+      case "--bypass-cost": a.bypassCost = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -388,6 +389,55 @@ async function main() {
       );
       if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
       process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
+      return;
+    }
+
+    if (args.bypassCost) {
+      // Verifying BaseFxDevice.setBypass's claim that a cut wet->output lets the engine prune the
+      // whole subgraph. If true, an always-armed rack is free when idle; if false, every chain a DJ
+      // builds is a standing bill on the audio thread (f2b8f545's lag, one candidate).
+      const N = 24;
+      const runs = [];
+      // Each mode twice, interleaved, because a single timing is a measurement with nothing to
+      // disagree with — and the second pass also pays any JIT warm-up the first one bought.
+      for (let pass = 0; pass < 2; pass++)
+        for (const mode of ["none", "active", "bypassed", "bypassed-nometer"]) runs.push(await page.evaluate(([n, m]) => globalThis.fxlabBypassCost(n, m), [N, mode]));
+      const best = (m) => Math.min(...runs.filter((r) => r.mode === m).map((r) => r.ms));
+      const none = best("none"), active = best("active"), bypassed = best("bypassed"), noMeter = best("bypassed-nometer");
+      console.log(`\n  BYPASS COST — does a bypassed device still get rendered? (${N} comp devices in series, ${runs[0].seconds}s offline)\n`);
+      for (const m of ["none", "active", "bypassed", "bypassed-nometer"]) {
+        const all = runs.filter((r) => r.mode === m).map((r) => f(r.ms, 1)).join(" / ");
+        console.log(`   ${m.padEnd(10)} ${f(best(m), 1).padStart(8)} ms   (runs: ${all})`);
+      }
+      const span = active - none;
+      const share = span > 0 ? ((bypassed - none) / span) * 100 : 0;
+      console.log(`\n   ${N} active devices cost   ${f(span, 1)} ms over the empty graph`);
+      console.log(`   bypassed sits at         ${f(share, 1)}% of that`);
+      // The control: if ACTIVE is not measurably dearer than NONE, the rig cannot see device cost
+      // at all and the bypassed number below means nothing.
+      if (span < none * 0.15) {
+        console.log("\n   \u2717 INCONCLUSIVE: active devices are not measurably dearer than an empty graph, so this rig cannot see device cost \u2014 ignore the bypassed row.\n");
+        process.exitCode = 1;
+        return;
+      }
+      const meterShare = span > 0 ? ((noMeter - none) / span) * 100 : 0;
+      console.log(`   with the wet METER cut it sits at ${f(meterShare, 1)}% \u2014 the only difference between those two rows`);
+      console.log(
+        `\n   ${share < 25 ? "\u2713 a bypassed device is PRUNED here \u2014 setBypass's comment holds in this renderer" : "\u2717 a bypassed device is STILL RENDERED HERE \u2014 setBypass's pruning claim does NOT hold in this renderer"}`,
+      );
+      if (share >= 25) {
+        console.log(
+          `   ${meterShare < 25 ? "\u2605 AND THE WET-BUS AnalyserNode IS WHY: it is a sink, so everything upstream of it stays reachable and nothing is pruned." : "   the meter is NOT the cause \u2014 cutting it changes nothing, so the reachability is somewhere else and this is unexplained."}\n`,
+        );
+      } else console.log("");
+      // ★ WHAT THIS DOES NOT ESTABLISH, said here rather than left for the reader to remember.
+      console.log("\n   \u2605 READ THIS BEFORE ACTING ON THE ROWS ABOVE. The renderer is an OfflineAudioContext, and an");
+      console.log("   offline render is not obliged to prune the same graph a live one does \u2014 this harness already");
+      console.log("   documents one offline/live divergence (port messages never reach a processor offline). So the");
+      console.log("   finding is 'the offline renderer does not prune a bypassed device', and whether PRODUCTION pays");
+      console.log("   this is UNCONFIRMED. Confirm on a live context before changing any code on account of it.");
+      console.log("   Offline render time is also not real-time audio-thread load; only the RATIO is being claimed.\n");
+      process.exitCode = 0;
       return;
     }
 

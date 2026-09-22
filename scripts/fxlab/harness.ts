@@ -2917,3 +2917,66 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   await eng.ctx.close();
   return { chains, bytes, masterDevices, chainDevices, params };
 };
+
+// ★ DOES A BYPASSED DEVICE STILL COST ANYTHING? — verifying a load-bearing comment.
+//
+// BaseFxDevice.setBypass says: "once wet→output is cut below, the whole upstream chain (mute or
+// not) has no path to the destination and the engine prunes it regardless." That sentence is what
+// makes the always-armed rack affordable — a board can now carry 68 devices (measured,
+// --snapshot-size: chains own their devices, so four stem chains a side is 68), and if a bypassed
+// worklet still ran, a DJ who built chains would be paying for every one of them on the audio
+// thread. The operator's open report of "brutal lag spikes" (thread f2b8f545) is unattributed, and
+// this is one of the candidates.
+//
+// A comment that says "the engine prunes it" is a closed-world claim about the runtime, so it gets
+// checked rather than trusted. renderCapacity is not exposed in this Chromium, so the measurement
+// is OFFLINE RENDER TIME — not real-time audio-thread load, and the absolute numbers mean nothing.
+// The RATIO does: three rows from one rig, where `none` is the floor and `active` is what N running
+// devices cost. If bypassed lands on `none`, the comment is right. If it lands on `active`, it is
+// wrong and the always-armed design has a bill nobody has seen.
+(globalThis as unknown as { fxlabBypassCost: (n: number, mode: string) => Promise<{ n: number; mode: string; ms: number; seconds: number }> }).fxlabBypassCost = async (n, mode) => {
+  const { CompFx } = await import("../../src/htl/audio/CompFx");
+  const { COMP_WORKLET_SRC } = await import("../../src/htl/audio/compWorklet");
+  const sr = 48000;
+  const seconds = 20;
+  const ctx = new OfflineAudioContext(2, sr * seconds, sr);
+  const url = URL.createObjectURL(new Blob([COMP_WORKLET_SRC], { type: "text/javascript" }));
+  await ctx.audioWorklet.addModule(url);
+  // Broadband material so nothing is optimised away as silence, and every device has real work.
+  const buf = ctx.createBuffer(2, sr * 2, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    let s = (c + 1) * 2654435761;
+    for (let i = 0; i < d.length; i++) {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      d[i] = ((s / 0x100000000) * 2 - 1) * 0.3;
+    }
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  let tail: AudioNode = src;
+  const devices: InstanceType<typeof CompFx>[] = [];
+  if (mode !== "none") {
+    for (let i = 0; i < n; i++) {
+      const d = new CompFx(ctx as unknown as AudioContext);
+      // hard=true so a bypass takes effect immediately rather than ringing out into the render.
+      d.setBypass(mode.startsWith("bypassed"), true);
+      // ★ THE HYPOTHESIS, isolated. BaseFxDevice taps its own wet bus with an AnalyserNode so a UI
+      // can fade with the real signal during a ring-out. An AnalyserNode is a SINK: it has to
+      // analyse whatever reaches it, so everything upstream of it stays reachable — which would
+      // defeat exactly the pruning setBypass's comment relies on. Cutting the meter is the one
+      // difference between this row and the plain bypassed row.
+      if (mode === "bypassed-nometer") (d as unknown as { wetMeter: AnalyserNode }).wetMeter.disconnect();
+      tail.connect(d.input);
+      tail = d.output;
+      devices.push(d);
+    }
+  }
+  tail.connect(ctx.destination);
+  src.start();
+  const t0 = performance.now();
+  await ctx.startRendering();
+  const ms = performance.now() - t0;
+  return { n, mode, ms, seconds };
+};

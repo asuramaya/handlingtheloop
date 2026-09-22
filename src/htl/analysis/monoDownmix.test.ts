@@ -57,6 +57,36 @@ describe("analysis is mono-safe", () => {
     expect(worst).toBeLessThan(1e-4); // sub-0.1 ms; it measured exactly 0 on this material
   }, 120_000);
 
+  it("the scanned directory IS the whole consumer set — the scan's own population, checked", () => {
+    // ★ THE HOLE METRON'S ANALYSER SCAN HAD, ASKED OF MINE BEFORE IT BITES. His scan read
+    // src/htl/audio and src/components, so the one file where he had actually made the mistake —
+    // in scripts/ — was outside its population and it could not see it. The scan below reads
+    // src/htl/analysis. That is only sufficient while the analyzeTrack chain cannot reach a
+    // channel consumer living somewhere else, which is an assumption, and an unchecked assumption
+    // about a population is what this whole class of failure is made of.
+    //
+    // So it is checked: the chain's imports are enumerated, and anything leaving this directory has
+    // to be named here with the reason it cannot consume a channel pair. A new outside import fails
+    // this test and forces that question to be answered rather than inherited.
+    const OUTSIDE_OK: Record<string, string> = {
+      "../stems/fft": "takes plain Float32Arrays, never an AudioLike or a channel pair — it cannot read channel 1",
+    };
+    const offenders: string[] = [];
+    for (const f of ["analyze.ts", "beats.ts", "structure.ts"]) {
+      const src = readFileSync(join(__dirname, f), "utf8");
+      for (const m of src.matchAll(/^import\s+(?:type\s+)?.*?from\s+"([^"]+)"/gm)) {
+        const spec = m[1];
+        if (spec.startsWith("./")) continue; // inside the scanned directory
+        if (spec in OUTSIDE_OK) continue;
+        offenders.push(`${f} imports ${spec}`);
+      }
+    }
+    expect(
+      offenders,
+      `the analysis chain now reaches outside src/htl/analysis. If any of these can be handed an AudioLike or a channel pair, the downmix scan below is blind to it:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+
   it("no analysis consumer reads channel 1 except to average it", () => {
     const dir = __dirname;
     const offenders: string[] = [];

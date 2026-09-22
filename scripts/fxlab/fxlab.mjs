@@ -75,6 +75,7 @@ function parseArgs(argv) {
       case "--codec-margin": a.codecMargin = true; break;
       case "--snapshot-size": a.snapshotSize = true; break;
       case "--bypass-cost": a.bypassCost = true; break;
+      case "--live-comp-prune": a.liveCompPrune = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -392,6 +393,45 @@ async function main() {
       return;
     }
 
+    if (args.liveCompPrune) {
+      // b15e044d: my offline probe said a bypassed device costs 92.6%; Deckard's LIVE probe counted
+      // process() calls on a SYNTHETIC worklet and got 0. Two variables changed between them —
+      // renderer AND device. This changes one: his binary method, live, with a REAL CompFx.
+      const r = await page.evaluate(() => globalThis.fxlabLiveCompPrune());
+      console.log("\n  LIVE + REAL CompFx — is the upstream of a BYPASSED device still scheduled?\n");
+      const pct = (n) => (r.active ? `${((n / r.active) * 100).toFixed(1)}%` : "n/a");
+      console.log(`   active            ${String(r.active).padStart(5)} process() calls/s   (baseline, counter feeding the comp)`);
+      console.log(`   comp BYPASSED     ${String(r.bypassed).padStart(5)}   ${pct(r.bypassed)}  \u2190 setBypass(true), the real device`);
+      console.log(`   un-bypassed       ${String(r.reactivated).padStart(5)}   ${pct(r.reactivated)}  \u2190 the control: a zero that cannot come back is a broken probe`);
+      console.log(`   output severed    ${String(r.severed).padStart(5)}   ${pct(r.severed)}  \u2190 the REFERENCE: an unambiguously cut path`);
+      console.log(`   + wet meter cut   ${String(r.severedNoMeter).padStart(5)}   ${pct(r.severedNoMeter)}  \u2190 the AnalyserNode on the wet bus, also disconnected`);
+      // ★ THE RIG HAS TO PROVE IT CAN SEE A PRUNE BEFORE ITS "NOT PRUNED" MEANS ANYTHING. If
+      // severing the output does not zero the counter, this rig cannot observe pruning through a
+      // CompFx at all, and the bypassed row is unreadable rather than negative.
+      if (!(r.active > 0 && r.reactivated > 0)) {
+        console.log("\n   \u2717 INCONCLUSIVE: the counter never ran, or never came back \u2014 nothing here is a measurement.\n");
+        process.exitCode = 1;
+        return;
+      }
+      if (r.severed !== 0 && r.severedNoMeter !== 0) {
+        console.log("\n   \u2717 INCONCLUSIVE: even a SEVERED output keeps the counter running, so this rig cannot see a prune");
+        console.log("   through a CompFx. The bypassed row above is unreadable, not negative \u2014 do not conclude from it.\n");
+        process.exitCode = 1;
+        return;
+      }
+      if (r.severed !== 0 && r.severedNoMeter === 0) {
+        console.log("\n   \u2605 THE WET-BUS AnalyserNode is what keeps a CompFx's upstream scheduled: severing the output");
+        console.log("   alone changes nothing, and cutting the meter as well is what zeroes it.\n");
+        process.exitCode = 0;
+        return;
+      }
+      console.log(
+        `\n   ${r.bypassed === 0 ? "\u2713 PRUNED with the REAL device too \u2014 so the 92.6% was the OFFLINE RENDERER, not CompFx" : "\u2717 NOT pruned with the real device \u2014 the offline number was about CompFx, and setBypass's comment is wrong for it"}\n`,
+      );
+      process.exitCode = 0;
+      return;
+    }
+
     if (args.bypassCost) {
       // Verifying BaseFxDevice.setBypass's claim that a cut wet->output lets the engine prune the
       // whole subgraph. If true, an always-armed rack is free when idle; if false, every chain a DJ
@@ -436,7 +476,12 @@ async function main() {
       console.log("   documents one offline/live divergence (port messages never reach a processor offline). So the");
       console.log("   finding is 'the offline renderer does not prune a bypassed device', and whether PRODUCTION pays");
       console.log("   this is UNCONFIRMED. Confirm on a live context before changing any code on account of it.");
-      console.log("   Offline render time is also not real-time audio-thread load; only the RATIO is being claimed.\n");
+      console.log("   Offline render time is also not real-time audio-thread load; only the RATIO is being claimed.");
+      console.log("   \u2605 SETTLED SINCE: Deckard's scripts/liveprune.mjs counts process() calls on a LIVE context and");
+      console.log("   gets a clean 0 for a simple node chain \u2014 so pruning DOES work live and this offline result is a");
+      console.log("   renderer artefact for that case. What is still open is CompFx specifically: --live-comp-prune");
+      console.log("   cannot make even a SEVERED CompFx output stop scheduling its upstream, so that rig cannot see a");
+      console.log("   prune through this device and the question is unanswered rather than answered badly.\n");
       process.exitCode = 0;
       return;
     }

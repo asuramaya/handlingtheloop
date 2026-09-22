@@ -2980,3 +2980,58 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   const ms = performance.now() - t0;
   return { n, mode, ms, seconds };
 };
+
+// ★ IS IT THE RENDERER, OR IS IT THE DEVICE? — isolating b15e044d's two variables.
+//
+// My offline probe measured 24 real CompFx devices and found a bypassed one costing 92.6% of an
+// active one. Deckard's live probe counted process() calls on a SYNTHETIC worklet and found a clean
+// 0 — and concluded the offline renderer was the thing that was wrong. It might be. But the two
+// probes differ in TWO variables, renderer AND device, and attributing a disagreement to one of
+// them while the other also changed is the same error as crediting a fix for a number it did not
+// move.
+//
+// This changes one variable. Deckard's binary method — a processor that counts its own process()
+// calls — on a LIVE context, with a REAL CompFx in the path. The counter's ONLY route to the
+// destination is THROUGH the bypassed device, so if the bypass leaves its upstream reachable the
+// counter keeps running, and if the subgraph is genuinely pruned the counter stops. That is the
+// exact question Fx.setBypass's comment answers, asked of the real device.
+(globalThis as unknown as { fxlabLiveCompPrune: () => Promise<Record<string, number | string>> }).fxlabLiveCompPrune = async () => {
+  const { CompFx } = await import("../../src/htl/audio/CompFx");
+  const ctx = await liveContext();
+  const SRC = `class P extends AudioWorkletProcessor{constructor(){super();this.n=0}process(i,o){this.n++;if(this.n%20===0)this.port.postMessage(this.n);for(const ch of o[0])ch.fill(0);return true}}registerProcessor('countprune',P)`;
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([SRC], { type: "text/javascript" })));
+  const counter = new AudioWorkletNode(ctx, "countprune");
+  let last = 0;
+  counter.port.onmessage = (e) => {
+    last = e.data as number;
+  };
+  const comp = new CompFx(ctx);
+  const out = ctx.createGain();
+  out.gain.value = 0.00001; // inaudible: this measures scheduling, not sound
+  counter.connect(comp.input);
+  comp.output.connect(out);
+  out.connect(ctx.destination);
+  const sample = async (ms: number) => {
+    const a = last;
+    await new Promise((r) => setTimeout(r, ms));
+    return last - a;
+  };
+  await new Promise((r) => setTimeout(r, 500));
+  const active = await sample(1000);
+  comp.setBypass(true, true); // the real device's own bypass, hard so nothing rings out
+  const bypassed = await sample(1000);
+  comp.setBypass(false, true); // the control: does the counter come BACK?
+  const reactivated = await sample(1000);
+  // ★ THE REFERENCE ROW, and it is what decides whether this rig can see a prune AT ALL: cut the
+  // device's own output, which is unambiguously a severed path to the destination. If the counter
+  // does not go to zero HERE, the rig cannot observe pruning through a CompFx and no other row in
+  // this probe means anything.
+  comp.output.disconnect();
+  const severed = await sample(1000);
+  // …and then the wet-bus AnalyserNode as well. An AnalyserNode is a SINK: it must analyse whatever
+  // reaches it, so everything upstream of it stays reachable. If THIS is the row that finally
+  // zeroes, the meter is what keeps a CompFx's upstream scheduled.
+  (comp as unknown as { wetMeter: AnalyserNode }).wetMeter.disconnect();
+  const severedNoMeter = await sample(1000);
+  return { active, bypassed, reactivated, severed, severedNoMeter };
+};

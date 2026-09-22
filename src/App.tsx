@@ -19,6 +19,7 @@ import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { initialDock } from "./App/initialDock";
+import { event } from "@htl/debug/trace";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
 import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
@@ -1743,6 +1744,13 @@ function AppBody() {
       // new stem set briefly coexist on this deck (plus the other deck's set) and
       // OOM-reload iPhone Safari on a track switch. The stems get re-derived anyway.
       stemTrace(`load ${id}:start`, track.title?.slice(0, 40));
+      // ★ EVERY LOAD, NAMED, INCLUDING THE ONES THAT END IN SILENCE. A follower's deck B was
+      // observed deciding action=load from the host's snapshot and then never arriving (ruling
+      // 92d04ef9): the catch below returns WITHOUT a status when the load was aborted or
+      // superseded, and `loadTrackToDeck` aborts the previous load on the SAME deck — so a boot
+      // restore and a room snapshot racing each other on one deck can leave the loser invisible.
+      // The ring is the right home: the listener this happens to is on a phone with no console.
+      event("load.start", { deck: id, vid: track.videoId ?? null, seq });
       engine.deck(id).setStems(null);
       deriveGuard.current[id] = ""; // new load → allow a fresh derive even for the same track
       stemLoadedKey.current[id] = ""; // new track → the old deck stems are gone
@@ -1951,8 +1959,11 @@ function AppBody() {
         // Keyed by the resolved id so the R2 stem cache lines up with the stream.
         void deriveStems(id, vid, cached!.buffer, stale);
       } catch (e) {
+        const why = (e as Error).name === "AbortError" ? "aborted" : stale() ? "superseded" : "failed";
+        event("load.end", { deck: id, vid: claimedVid || (track.videoId ?? null), seq, landed, why });
         if ((e as Error).name === "AbortError" || stale()) return;
         setStatusFor(id, { phase: "failed", detail: (e as Error).message ?? String(e) });
+        return;
       } finally {
         if (!stale()) setLoading((l) => ({ ...l, [id]: false }));
         // Release the in-flight claim whenever it never landed AND it's still OURS — the
@@ -1962,6 +1973,9 @@ function AppBody() {
         // loading" and skipped the reload forever (the guest stayed on the wrong track). On a
         // successful land we KEEP the claim as the per-deck dedupe key.
         if (!landed && claimedVid && loadingVid.current[id] === claimedVid) loadingVid.current[id] = "";
+        // A load that ends without landing and without throwing (an early `return` on a stale
+        // sequence) is the quietest of all — say so here, where every exit passes.
+        if (!landed) event("load.end", { deck: id, vid: claimedVid || (track.videoId ?? null), seq, landed, why: stale() ? "stale" : "no-land" });
       }
     },
     [engine, library, setStatusFor, refresh, deriveStems],

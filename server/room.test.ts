@@ -658,3 +658,50 @@ describe("DjRoom state authority", () => {
     }
   });
 });
+
+// ★ EVERY DOOR INTO A SESSION MUST HAND OVER THE BOARD. Catch-up used to happen on exactly two
+// paths — a public listener at connect, and a guest at the moment the host approves it — so anyone
+// arriving through `join` (an approved guest returning after a refresh, an invited friend, the
+// host's own second device) received `welcome` and `role` and NO snapshot. Their decks kept whatever
+// they already held until the host next published, which is "a listener does not adopt the host's
+// board" (thread d4a56d30) on every re-entry.
+describe("DjRoom join hands over the board", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  const stateIds = (ws: FakeWs) =>
+    ws.sent.map((m) => JSON.parse(m)).filter((m) => m.t === "state").map((m) => m.snapshot?.decks?.A?.videoId);
+
+  it("an INVITED friend joining gets the current board", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "HOSTTRACK" } } } });
+    const friend = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(friend, { t: "join" });
+    expect(stateIds(friend)).toContain("HOSTTRACK");
+  });
+
+  it("an APPROVED guest RETURNING after a refresh gets it too — the case a real reload hits", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest1 = (await h.connect({ device: "g2" })).ws!;
+    await h.send(guest1, { t: "join" }); // knocks
+    await h.send(host, { t: "approve", to: "g2" }); // approved (persists)
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "LATERTRACK" } } } });
+    await h.close(guest1); // the tab reloads
+    const guest2 = (await h.connect({ device: "g2" })).ws!;
+    await h.send(guest2, { t: "join" }); // re-enters on the persisted approval
+    expect(stateIds(guest2)).toContain("LATERTRACK");
+  });
+
+  it("control: a KNOCKING guest gets nothing — the door is the gate, and catch-up must not leak past it", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "PRIVATE" } } } });
+    const stranger = (await h.connect({ device: "x1" })).ws!;
+    await h.send(stranger, { t: "join" }); // not approved → pending
+    expect(stateIds(stranger)).toEqual([]);
+  });
+});

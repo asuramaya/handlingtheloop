@@ -446,6 +446,16 @@ export class DjRoom {
         if (!aj) break;
         if (aj.host || this.approved.has(self) || aj.invited) {
           this.patch(ws, { joined: true, pending: false, joinedAt: aj.joinedAt || Date.now() });
+          // ★ HAND THE JOINER THE BOARD, exactly as "approve" does one case below. Only two paths
+          // used to: a PUBLIC listener at connect, and a guest at the moment the host approves it.
+          // Everyone arriving through THIS door — an already-approved guest returning after a
+          // refresh, an invited friend auto-joining, the host's own second device — got `welcome`
+          // and `role` and no snapshot at all, so their decks kept whatever they already held until
+          // the host happened to publish again. That is "a listener does not adopt the host's board"
+          // (thread d4a56d30) for every re-entry, and it is why approve's own comment exists: the
+          // display should fill in without waiting on a round-trip. Idempotent — a snapshot the
+          // client already has applies to the same state.
+          this.sendCatchUp(ws);
           await this.settle(self);
         } else {
           // A guest knocking. Mark pending (not joined) so the host's roster shows the

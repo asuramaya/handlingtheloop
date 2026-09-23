@@ -41,6 +41,7 @@ function parseArgs(argv) {
       case "--cpu": a.cpu = Number(v); i++; break;
       case "--slice": a.slice = Number(v); i++; break;
       case "--json": a.json = true; break;
+      case "--sweep": a.sweep = true; break;
       default: break;
     }
   }
@@ -123,10 +124,18 @@ async function main() {
     // as a state: the first run pays JIT, the first GC after a 1 MB encode, and a cold decoder.
     // Running sliced, whole, whole, sliced gives each condition one cold slot and one warm slot, so
     // an effect that follows the SLICING can be told apart from one that follows the POSITION.
-    const order = [args.slice, null, null, args.slice];
+    // ★ THE ORDER IS INTERLEAVED, NOT PAIRED — and that is Metron's correction, not a refinement.
+    // My first budget sweep ran each budget in its own process and its control climbed monotonically
+    // across them (244 → 256 → 289 ms): the SAME condition, drifting +18% in the same direction as
+    // the independent variable. The effect survived that easily; the SHAPE I read off it — a curve
+    // in budget that inverts at the unsliced boundary — is exactly what a drifting control
+    // manufactures. A difference large against the drift can survive it. A slope cannot.
+    const order = args.sweep
+      ? [128, 8, null, 32, 8, null, 128, 32]
+      : [args.slice, null, null, args.slice];
     const runs = [];
     for (const sliceMs of order) runs.push({ sliceMs, ...(await run(sliceMs)) });
-    const pick = (want) => runs.filter((r) => (want === null ? r.sliceMs === null : r.sliceMs !== null));
+    const pick = (want) => runs.filter((r) => (want === null ? r.sliceMs === null : r.sliceMs === want));
     const worst = (rs, k) => Math.max(...rs.map((r) => r[k]));
     const mean = (rs, k) => rs.reduce((a, r) => a + r[k], 0) / rs.length;
     const fold = (rs) => ({
@@ -138,7 +147,7 @@ async function main() {
       tbtMs: mean(rs, "tbtMs"),
       decodedSeconds: rs[0].decodedSeconds,
     });
-    const sliced = fold(pick(1));
+    const sliced = fold(pick(args.slice));
     const whole = fold(pick(null));
     const warmup = runs[0].wallMs / runs[3].wallMs; // same condition, cold slot vs warm slot
 
@@ -148,8 +157,16 @@ async function main() {
     }
     console.log(`\n  STEMLAB · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU · ${(sliced.bytes / 1024).toFixed(0)} KiB per stem\n`);
     console.log("                              wall      worst   >50ms  >100ms       TBT");
-    row(`sliced (${args.slice} ms)`, sliced);
-    row("unsliced (before)", whole);
+    if (args.sweep) {
+      for (const b of [8, 32, 128]) row(`sliced (${b} ms)`, fold(pick(b)));
+      row("unsliced (no sleep)", whole);
+      const ctrl = pick(null).map((r) => Math.round(r.maxFrameGapMs));
+      console.log(`\n  control repeats (same condition, interleaved): ${ctrl.join(", ")} ms` +
+        ` — a MONOTONIC control across a sweep means the runs are not independent and any SHAPE read off it is the drift`);
+    } else {
+      row(`sliced (${args.slice} ms)`, sliced);
+      row("unsliced (before)", whole);
+    }
     console.log(`\n  warm-up check: the same condition cost ${f(warmup, 2)}x in the cold slot vs the warm one` +
       `${warmup > 1.15 || warmup < 0.87 ? " — position matters here IN EITHER DIRECTION, which is why the order is ABBA" : ""}`);
     const ratio = whole.maxFrameGapMs / Math.max(1, sliced.maxFrameGapMs);

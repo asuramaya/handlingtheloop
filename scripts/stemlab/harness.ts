@@ -91,6 +91,12 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
       decodedSeconds += out.duration;
     }
     const wallMs = performance.now() - t0;
+    // ★ AND THE TRAILING EDGE, WHICH IS THE SAME BUG AS THE LEADING ONE. Stopping the instant the
+    // loop returns discards the LAST stem's block, because the rAF tick that would record it has
+    // not fired yet. That is why every configuration reported exactly THREE gaps over 50 ms for
+    // FOUR stems — I fixed the head of the window and left the tail, and the invariant count was
+    // still telling me so. Two frames of idle before stopping lets the final gap land.
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     const f = w.stop();
     return {
       stems,

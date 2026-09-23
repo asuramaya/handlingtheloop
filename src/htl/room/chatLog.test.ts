@@ -66,11 +66,55 @@ describe("★ the case that makes the naive merge WRONG — a restarted room", (
     expect(ids(out)).toEqual(ids(range(1, 40)));
   });
 
-  test("an id we cannot read makes us refuse to reason about ordering at all", () => {
-    // A future id format must not be silently ordered as 0, which would bury it at the top and
-    // claim a comparison we did not make.
+  test("a backlog with NO readable id at all has no life to compare — the backlog wins", () => {
     const out = mergeChatHistory(range(1, 5), [{ id: "x9", dev: "d", name: "n", text: "future" }]);
     expect(ids(out)).toEqual(["x9"]);
+  });
+});
+
+describe("★ one unreadable id must not collapse the whole fold", () => {
+  // Metron's catch: `ChatMsg.id` is typed `string`, and the fold's correctness rested on a
+  // convention no artifact owns — that every id is `c<n>`, true today because exactly one place
+  // mints one. The moment anything else posts a line (a system notice, a moderation message, a hype
+  // bridge), maxSeq returned null for the WHOLE list and every merge silently became a replace —
+  // the bug this module exists to fix, back through the front door, and only in rooms where such a
+  // line exists. Fixed by removing the dependency rather than the id: an unreadable id is carried,
+  // it simply does not vote on which life the backlog belongs to.
+  const sys = (n: number, text = `system ${n}`) => ({ id: `sys-${n}`, dev: "srv", name: "Room", text });
+
+  test("a system line in the BACKLOG does not turn the merge into a replace", () => {
+    // ★ AND MY FIRST VERSION OF THIS TEST WAS UNREALISTIC IN THE SAME WAY THE ORDERING ONE WAS.
+    // I wrote a backlog topping out at c38 while the device held c40, and it took the replace branch
+    // — correctly, because that IS a counter going backwards. It cannot happen in one life: the
+    // server is the source, so its newest is always at least ours. Twice now I have built a state
+    // the system cannot produce and read the refusal as a defect; it is the cross-product error in
+    // miniature, and the cheap check is to ask which component would have had to emit this.
+    const out = mergeChatHistory(range(1, 40), [m(38), sys(1), m(39), m(40), m(41)]);
+    expect(ids(out).filter((i) => i.startsWith("c"))).toEqual(ids(range(1, 41)));
+    expect(ids(out)).toContain("sys-1"); // carried, not dropped
+  });
+
+  test("a system line we ALREADY HOLD does not turn the merge into a replace either", () => {
+    const out = mergeChatHistory([...range(1, 40), sys(1)], range(38, 42));
+    expect(ids(out).filter((i) => i.startsWith("c"))).toEqual(ids(range(1, 42)));
+    expect(ids(out)).toContain("sys-1");
+  });
+
+  test("★ an unplaceable line is not sorted as ZERO — that buries it at the top", () => {
+    // A comparator using `seqOf(id) ?? 0` does not fail to order it, it CLAIMS a position, and the
+    // position it claims is above every real message. Partitioned instead: sequenced first, the
+    // rest in arrival order at the end, which in a chat log is the most-recent slot.
+    const out = mergeChatHistory([m(1), m(2)], [sys(9), m(3)]);
+    expect(ids(out)).toEqual(["c1", "c2", "c3", "sys-9"]);
+    expect(ids(out)[0], "an unsequenced line was buried above the conversation").not.toBe("sys-9");
+  });
+
+  test("the restart detector still fires with a system line present on both sides", () => {
+    // The unreadable ids must not mask a counter going backwards, which is the case they would be
+    // most likely to hide.
+    const out = mergeChatHistory([...range(1, 120), sys(1)], [m(1, "NEW"), sys(2)]);
+    expect(out).toHaveLength(2);
+    expect(out[0].text).toBe("NEW");
   });
 });
 

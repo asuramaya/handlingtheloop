@@ -28,38 +28,64 @@ import type { ChatMsg } from "./protocol";
  *  much scrollback this device keeps in memory. */
 export const CHAT_LOG_MAX = 120;
 
-/** The numeric part of a `c<seq>` id, or null when it is not that shape (a future id format must
- *  not be silently ordered as 0 — an unreadable id means we cannot compare lives, so say so). */
+/** The numeric part of a `c<seq>` id, or null when it is not that shape. */
 function seqOf(id: string): number | null {
   const m = /^c(\d+)$/.exec(id);
   return m ? Number(m[1]) : null;
 }
 
-const maxSeq = (msgs: readonly ChatMsg[]): number | null => {
+/** The highest sequence among the ids we CAN read, or null when none are readable.
+ *
+ *  ★ ONE UNREADABLE ID USED TO COLLAPSE THE WHOLE FOLD — Metron's catch, and it is the bug this
+ *  module exists to fix, reachable again through the front door. `ChatMsg.id` is typed `string`;
+ *  today exactly one place mints one (roomCrowd.ts:167, `c${++this.seq}`), so every id is readable.
+ *  But the moment anything else posts a line — a system notice, a moderation message, a hype bridge
+ *  — its id is not `c<n>`, this returned null, and EVERY merge became a replace, silently, and only
+ *  in rooms where such a line exists. The worst kind of intermittent.
+ *
+ *  His proposal was to brand the id so the type refuses a hand-built one. That constrains producers
+ *  in THIS repo and says nothing about what actually arrives over the wire, where the client parses
+ *  whatever it is sent. So the fold stops depending on the convention instead: unreadable ids are
+ *  carried, they simply do not vote on which life the backlog belongs to. */
+function maxSeq(msgs: readonly ChatMsg[]): number | null {
   let hi: number | null = null;
   for (const m of msgs) {
     const n = seqOf(m.id);
-    if (n === null) return null; // an id we cannot read → refuse to reason about ordering at all
-    if (hi === null || n > hi) hi = n;
+    if (n !== null && (hi === null || n > hi)) hi = n;
   }
   return hi;
-};
+}
 
 /** Fold a `chat-history` backlog into the log this device already holds.
  *  Returns the new log, capped, oldest first. */
 export function mergeChatHistory(existing: readonly ChatMsg[], incoming: readonly ChatMsg[], cap = CHAT_LOG_MAX): ChatMsg[] {
   if (!existing.length) return incoming.slice(-cap);
+  // An empty backlog is never SENT (sendChatHistory only fires when history.length), so this is the
+  // defensive end rather than a real state. Noted because it is the one case where we knowingly keep
+  // a possibly-dead life's lines: the client cannot tell "no backlog" from "empty room".
   if (!incoming.length) return existing.slice(-cap);
 
   const hiExisting = maxSeq(existing);
   const hiIncoming = maxSeq(incoming);
-  // Unreadable ids, or a counter that went BACKWARDS (a restarted room): our ids are from another
-  // life and cannot be compared with these. The server's backlog is the only trustworthy version.
+  // A counter that went BACKWARDS is a restarted room: our ids are from a previous life and the
+  // server's backlog is the only trustworthy version. Sound because the counter and the log SHARE A
+  // LIFETIME — roomCrowd.ts holds `log` and `seq` as two fields of one in-memory object, so a
+  // restart empties one and resets the other as a single act (Metron checked the path where they
+  // could diverge; it does not exist). If NEITHER side has a readable id there is no comparison to
+  // make at all, and the backlog wins for the same reason.
   if (hiExisting === null || hiIncoming === null || hiIncoming < hiExisting) return incoming.slice(-cap);
 
-  // Comparable lives → keep everything, in seq order, without duplicating what we already have.
+  // Comparable lives → keep everything, without duplicating what we already have.
   const seen = new Set(existing.map((m) => m.id));
-  const merged = [...existing, ...incoming.filter((m) => !seen.has(m.id))];
-  merged.sort((a, b) => (seqOf(a.id) ?? 0) - (seqOf(b.id) ?? 0));
-  return merged.slice(-cap);
+  const all = [...existing, ...incoming.filter((m) => !seen.has(m.id))];
+
+  // ★ SEQUENCED AND UNSEQUENCED ARE SORTED SEPARATELY, because a comparator that treats an
+  // unreadable id as 0 does not "fail to order" it — it claims a position, at the TOP, which for a
+  // chat log means burying a system notice above a conversation it came after. Partitioned rather
+  // than compared: the readable ids order by sequence, the rest keep the relative order they
+  // arrived in and sit at the end, which in a chat log is the most-recent position and the only
+  // honest default for a line we cannot place.
+  const sequenced = all.filter((x) => seqOf(x.id) !== null).sort((a, b) => seqOf(a.id)! - seqOf(b.id)!);
+  const unsequenced = all.filter((x) => seqOf(x.id) === null);
+  return [...sequenced, ...unsequenced].slice(-cap);
 }

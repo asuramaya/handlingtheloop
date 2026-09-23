@@ -461,41 +461,41 @@ export const FACTORY_PRESETS: Record<string, (FxLeaf | FxSep)[]> = {
     { name: "GLUE", sep: true },
     // Holding a finished mix together. Slow, gentle, and the sidechain HP is doing most of the
     // work — without it the kick drives the reduction and the whole track breathes with it.
-    { name: "Buss Glue", params: { mode: 0, threshold: -18, ratio: 4, attack: 10, release: 250, knee: 6, makeup: 0, auto: 1, scHp: 80, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Gentle Glue", params: { mode: 0, threshold: -14, ratio: 2, attack: 30, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 60, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Kick-Deaf Glue", params: { mode: 0, threshold: -16, ratio: 4, attack: 15, release: 300, knee: 8, makeup: 0, auto: 1, scHp: 200, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Buss Glue", params: { mode: 0, threshold: -18, ratio: 4, attack: 10, release: 250, knee: 6, makeup: 0, auto: 1, scHp: 80, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Gentle Glue", params: { mode: 0, threshold: -14, ratio: 2, attack: 30, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 60, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Kick-Deaf Glue", params: { mode: 0, threshold: -16, ratio: 4, attack: 15, release: 300, knee: 8, makeup: 0, auto: 1, scHp: 200, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
     { name: "PUNCH", sep: true },
     // Shaping the transient rather than the level. A SLOW attack is the whole trick: the hit gets
     // through untouched and the body behind it is clamped, which is what reads as punch.
-    { name: "Punch (slow attack)", params: { mode: 0, threshold: -20, ratio: 4, attack: 30, release: 120, knee: 3, makeup: 0, auto: 1, scHp: 100, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Let It Hit", params: { mode: 0, threshold: -24, ratio: 6, attack: 60, release: 150, knee: 2, makeup: 0, auto: 1, scHp: 80, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "FET Grab", params: { mode: 1, threshold: -22, ratio: 8, attack: 0.05, release: 120, knee: 2, makeup: 0, auto: 1, scHp: 60, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Punch (slow attack)", params: { mode: 0, threshold: -20, ratio: 4, attack: 30, release: 120, knee: 3, makeup: 0, auto: 1, scHp: 100, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Let It Hit", params: { mode: 0, threshold: -24, ratio: 6, attack: 60, release: 150, knee: 2, makeup: 0, auto: 1, scHp: 80, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "FET Grab", params: { mode: 1, threshold: -22, ratio: 8, attack: 0.05, release: 120, knee: 2, makeup: 0, auto: 1, scHp: 60, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
     { name: "SMASH", sep: true },
     // Compression as an EFFECT — you are meant to hear it. PUMP IT is the deliberate opposite of
     // KICK-DEAF GLUE: sidechain HP wide open and a long release, so the kick ducks the track and
     // it swells back between beats.
-    { name: "All Buttons", params: { mode: 1, threshold: -30, ratio: 20, attack: 0.02, release: 60, knee: 0, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Parallel Smash", params: { mode: 1, threshold: -34, ratio: 20, attack: 0.05, release: 90, knee: 0, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 0.45 } },
-    { name: "Pump It", params: { mode: 0, threshold: -30, ratio: 10, attack: 1, release: 900, knee: 2, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "All Buttons", params: { mode: 1, threshold: -30, ratio: 20, attack: 0.02, release: 60, knee: 0, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Parallel Smash", params: { mode: 1, threshold: -34, ratio: 20, attack: 0.05, release: 90, knee: 0, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 0.45 } },
+    { name: "Pump It", params: { mode: 0, threshold: -30, ratio: 10, attack: 1, release: 900, knee: 2, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
     { name: "LEVEL", sep: true },
     // One loudness, no character — the presets you leave ON. HAT-DEAF is the sidechain LOW-pass
     // earning its place: the detector cannot hear the cymbals, so they stop triggering it.
-    { name: "Opto Levelling", params: { mode: 2, threshold: -20, ratio: 3, attack: 10, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Vocal Ride", params: { mode: 2, threshold: -24, ratio: 3, attack: 10, release: 1400, knee: 18, makeup: 0, auto: 1, scHp: 100, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Hat-Deaf Level", params: { mode: 0, threshold: -20, ratio: 3, attack: 20, release: 400, knee: 10, makeup: 0, auto: 1, scHp: 0, scLp: 4000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Manual Makeup", params: { mode: 0, threshold: -20, ratio: 4, attack: 10, release: 250, knee: 6, makeup: 6, auto: 0, scHp: 80, scLp: 20000, scExt: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Opto Levelling", params: { mode: 2, threshold: -20, ratio: 3, attack: 10, release: 600, knee: 10, makeup: 0, auto: 1, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Vocal Ride", params: { mode: 2, threshold: -24, ratio: 3, attack: 10, release: 1400, knee: 18, makeup: 0, auto: 1, scHp: 100, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Hat-Deaf Level", params: { mode: 0, threshold: -20, ratio: 3, attack: 20, release: 400, knee: 10, makeup: 0, auto: 1, scHp: 0, scLp: 4000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Manual Makeup", params: { mode: 0, threshold: -20, ratio: 4, attack: 10, release: 250, knee: 6, makeup: 6, auto: 0, scHp: 80, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 0, ceiling: -0.3, mix: 1 } },
     { name: "DUCK", sep: true },
     // `scExt:1` hands the detector to the OTHER deck (or the mic), so something else drives the
     // reduction. The sidechain filters matter most here: band-limit the detector to what is
     // actually speaking and the duck follows the voice instead of the room.
-    { name: "Duck the Other Deck", params: { mode: 0, threshold: -26, ratio: 6, attack: 5, release: 220, knee: 4, makeup: 0, auto: 0, scHp: 120, scLp: 20000, scExt: 1, lookahead: 0, ceiling: -0.3, mix: 1 } },
-    { name: "Duck Under Mic", params: { mode: 1, threshold: -34, ratio: 8, attack: 1, release: 400, knee: 2, makeup: 0, auto: 0, scHp: 150, scLp: 8000, scExt: 1, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Duck the Other Deck", params: { mode: 0, threshold: -26, ratio: 6, attack: 5, release: 220, knee: 4, makeup: 0, auto: 0, scHp: 120, scLp: 20000, scExt: 1, scSrc: 1, lookahead: 0, ceiling: -0.3, mix: 1 } },
+    { name: "Duck Under Mic", params: { mode: 1, threshold: -34, ratio: 8, attack: 1, release: 400, knee: 2, makeup: 0, auto: 0, scHp: 150, scLp: 8000, scExt: 1, scSrc: 2, lookahead: 0, ceiling: -0.3, mix: 1 } },
     { name: "CEILING", sep: true },
     // LIMIT mode, where `ceiling` is the control and `lookahead` is what makes it true. The three
     // differ only in how much headroom they leave and how far ahead they look.
-    { name: "Brickwall", params: { mode: 3, threshold: -18, ratio: 20, attack: 0.2, release: 80, knee: 1, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, lookahead: 1.5, ceiling: -0.3, mix: 1 } },
-    { name: "Safe Ceiling", params: { mode: 3, threshold: -12, ratio: 20, attack: 0.2, release: 120, knee: 1, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, lookahead: 3, ceiling: -1, mix: 1 } },
-    { name: "Soft Cap", params: { mode: 3, threshold: -16, ratio: 20, attack: 0.5, release: 250, knee: 4, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, lookahead: 5, ceiling: -0.5, mix: 1 } },
+    { name: "Brickwall", params: { mode: 3, threshold: -18, ratio: 20, attack: 0.2, release: 80, knee: 1, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 1.5, ceiling: -0.3, mix: 1 } },
+    { name: "Safe Ceiling", params: { mode: 3, threshold: -12, ratio: 20, attack: 0.2, release: 120, knee: 1, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 3, ceiling: -1, mix: 1 } },
+    { name: "Soft Cap", params: { mode: 3, threshold: -16, ratio: 20, attack: 0.5, release: 250, knee: 4, makeup: 0, auto: 0, scHp: 0, scLp: 20000, scExt: 0, scSrc: 0, lookahead: 5, ceiling: -0.5, mix: 1 } },
   ],
   // SATURATOR — the 5 style curves (TUBE/TAPE/CLIP/FOLD/DIODE) crossed with the multiband drives
   // (drive0=low <250 Hz, drive1=mid, drive2=high >2.5 kHz) so a style becomes several sounds:

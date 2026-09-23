@@ -12,8 +12,14 @@ describe("sidechainSourceFor", () => {
   });
 
   it("keeps 0 meaning OFF — the whole backward-compatibility guarantee rests on it", () => {
-    // Every shipped preset carries scExt:0 and no scSrc at all. If 0 ever stopped meaning "off",
-    // loading any existing preset would silently start ducking from another source.
+    // If 0 ever stopped meaning "off", loading any preset or profile that omits scSrc would
+    // silently start ducking from another source.
+    //
+    // This comment used to add "every shipped preset carries scExt:0 and no scSrc at all". That was
+    // a closed-world claim about its own siblings, it went stale, and it went stale in the
+    // direction that mattered: two DUCK presets shipped carrying scExt:1 and still no scSrc, so
+    // their gate opened onto a detector input the engine had patched nothing into and both were
+    // INERT. The roster is pinned as a test in fxBank.test.ts now, not asserted in prose here.
     expect(SC_SOURCES[0]).toBe("off");
     expect(sidechainSourceFor(0)).toBe("off");
   });

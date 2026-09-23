@@ -336,3 +336,53 @@ describe("fx bank", () => {
     expect(isGroup(moved) && moved.name === name && moved.items.length === n).toBe(true);
   });
 });
+
+// ★ WHAT A PRESET LEAVES BEHIND. FxStrip.applyPreset sets only the keys a preset CARRIES — it does
+// not reset the device first — so every param a preset omits is inherited from whatever was loaded
+// before it. A bank whose presets carry different key sets therefore sounds different depending on
+// the order you browsed it in, and nothing in the UI, the types or the old tests said so.
+//
+// Found by fxlab --coverage, which reported exactly one never-moved param in 134 presets across
+// nine banks: COMP's `scSrc`. That single line was a live defect (below), and this is its
+// compiler-free twin, so the rule holds in CI without a Chromium.
+const KINDS = ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator", "comp"] as const;
+
+describe("a factory bank is COMPLETE — a preset never inherits from the one before it", () => {
+  for (const kind of KINDS) {
+    it(`${kind}: every preset carries the same params`, () => {
+      const bank = factoryFxPresets(kind);
+      expect(bank.length).toBeGreaterThan(0); // vacuity guard: an empty bank passes everything
+      const keys = new Set(bank.flatMap((p) => Object.keys(p.params)));
+      const short = bank
+        .filter((p) => Object.keys(p.params).length !== keys.size)
+        .map((p) => `${p.name}: missing ${[...keys].filter((k) => !(k in p.params)).join(", ")}`);
+      expect(short).toEqual([]);
+    });
+  }
+});
+
+describe("a DUCK preset names the source it ducks from", () => {
+  // `scExt` opens the worklet's external-detector gate; `scSrc` is what makes AudioEngine actually
+  // patch the other deck (or the mic) INTO that detector. CompFx's own comment warns that setting
+  // one without the other is how this feature previously sat "wired, correct, and unreachable" —
+  // and the two shipped DUCK presets did exactly that in the opposite direction: scExt:1 with no
+  // scSrc at all. The gate opened onto a sidechain input nothing was connected to, so both presets
+  // were INERT: no reduction, ever, on the only two presets in the bank that exist to duck.
+  const comp = factoryFxPresets("comp");
+
+  it("every comp preset states scSrc, so browsing the bank cannot leave a stale source patched", () => {
+    expect(comp.filter((p) => !("scSrc" in p.params)).map((p) => p.name)).toEqual([]);
+  });
+
+  it("the gate and the source agree in every preset — an open gate with no source is silence", () => {
+    const disagree = comp
+      .filter((p) => (Number(p.params.scExt) > 0) !== (Number(p.params.scSrc) > 0))
+      .map((p) => `${p.name}: scExt=${p.params.scExt} scSrc=${p.params.scSrc}`);
+    expect(disagree).toEqual([]);
+  });
+
+  it("the two DUCK presets ask for the sources their names promise", () => {
+    expect(comp.find((p) => p.name === "Duck the Other Deck")?.params.scSrc).toBe(1); // deck
+    expect(comp.find((p) => p.name === "Duck Under Mic")?.params.scSrc).toBe(2); // mic
+  });
+});

@@ -19,6 +19,7 @@
 //   node scripts/fxlab/fxlab.mjs --noise-audit                # the riser: snap / dir / curve / key / duck / impact / width
 //   node scripts/fxlab/fxlab.mjs --gate-align                 # does the GATE land on the beat
 //   node scripts/fxlab/fxlab.mjs --stem-taps                  # NULL TEST: do the 4 stem taps sum to the mix output
+//   node scripts/fxlab/fxlab.mjs --coverage                   # which knobs no factory preset ever moves, all 9 banks
 //
 // Flags: --kind --preset --params(json) --signal(impulse|burst|noise|tone|silence)
 //        --seconds --bpm --json (raw JSON only) --sweep-feedback
@@ -41,7 +42,7 @@ function parseArgs(argv) {
     const k = argv[i];
     const v = argv[i + 1];
     switch (k) {
-      case "--kind": a.kind = v; i++; break;
+      case "--kind": a.kind = v; a.kindExplicit = true; i++; break;
       case "--preset": a.preset = v; i++; break;
       case "--params": a.params = JSON.parse(v); i++; break;
       case "--signal": a.signal = v; i++; break;
@@ -901,16 +902,30 @@ async function main() {
     if (args.coverage) {
       // Which knobs does each bank never touch? A `dead` param is a capability of the effect that
       // no factory preset demonstrates.
-      const kinds = args.kind && args.kind !== "all" ? [args.kind] : ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator", "comp"];
+      //
+      // ★ COVERAGE DEFAULTS TO ALL NINE BANKS, and that is a fix rather than a preference. --kind
+      // defaults to "delay" for the single-render path, so `--coverage` with no --kind used to
+      // audit the DELAY bank alone and print a clean, complete-looking report about one ninth of
+      // the question. A coverage run that silently narrows its own population is the worst kind of
+      // instrument: correct output, wrong rows, and nothing in the report says so.
+      const kinds = args.kindExplicit && args.kind !== "all" ? [args.kind] : ["eq", "delay", "reverb", "mod", "crush", "gate", "noise", "saturator", "comp"];
       console.log("");
       for (const k of kinds) {
         const c = await page.evaluate((kk) => globalThis.fxlabCoverage(kk), k);
         const dead = c.params.filter((p) => p.dead || p.missing === c.presets);
         const flat = c.params.filter((p) => p.flat);
         const used = c.params.filter((p) => !p.dead && !p.flat && p.missing < c.presets);
+        // ★ AND THE LEAK LINE, which is where the bug actually lives. applyPreset sets only the keys
+        // a preset CARRIES (FxStrip.tsx) — it does not reset first — so any param some presets name
+        // and others omit is inherited from whatever was loaded before. The bank then sounds
+        // different depending on the order you browsed it in, and nothing anywhere reports that.
+        // A param missing from EVERY preset is not a leak (it is simply never touched: `dead`).
+        const leaks = c.params.filter((p) => p.missing > 0 && p.missing < c.presets);
         console.log(`  ${c.kind.toUpperCase().padEnd(10)} ${c.presets} presets · ${c.params.length} params · ${used.length} exercised`);
         if (dead.length) console.log(`     ✗ never moved:  ${dead.map((p) => `${p.id}=${f(p.def, 2)}`).join("  ")}`);
         if (flat.length) console.log(`     ~ one value:    ${flat.map((p) => `${p.id}=${f(p.min, 2)}`).join("  ")}`);
+        if (leaks.length) console.log(`     ⚠ leaks (set by some, omitted by others — sticky across a preset change):`);
+        for (const p of leaks) console.log(`        ${p.id.padEnd(12)} omitted by ${p.missing}/${c.presets}`);
         console.log(`     ✓ exercised:    ${used.map((p) => `${p.id}[${f(p.min, 2)}‥${f(p.max, 2)}]×${p.distinct}`).join("  ")}`);
         console.log("");
       }

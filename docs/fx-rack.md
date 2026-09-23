@@ -263,3 +263,27 @@ mids than the track it replaced).
 > These numbers are a **floor, not a verdict**. They say no preset is broken or
 > wildly out of line. They cannot say whether one sounds good, and the whole bank
 > is still un-ear-tested — see ROADMAP.
+
+## Preset-bank coverage (fxlab --coverage, 2026-09-22)
+
+`node scripts/fxlab/fxlab.mjs --coverage` audits all nine factory banks: 134 presets, 130 params.
+It answers two questions a listening test cannot.
+
+**Never moved** — a capability of the effect no preset demonstrates. Exactly one across the whole
+rack: COMP's `scSrc`, and it was a live defect rather than a gap. `scExt` opens the worklet's
+external-detector gate; `scSrc` is what makes AudioEngine patch the other deck (or the mic) *into*
+that detector. The two DUCK presets shipped with `scExt:1` and no `scSrc`, so the gate opened onto
+an input nothing was connected to. Measured: an open gate with no source renders **bit-for-bit
+identical to bypass** (burst, 4 s — peak 1.383, rms 0.0942 both ways), against −29.1 dB rms with
+the detector on its own audio. Both DUCK presets were pass-throughs. Every comp preset now states
+its source, and `fxBank.test.ts` pins gate ⇔ source.
+
+Note for anyone reading `compWorklet.ts:98`: the `scIn.length` guard there does **not** fire in
+Chromium — a disconnected worklet input arrives as a silent channel, not as an empty array — so it
+is not a safety net for a missing source. (Nor should it be: a quiet sidechain legitimately means
+"do not duck".)
+
+**Leaks** — params some presets set and others omit. `applyPreset` does not reset the device first,
+so an omitted param is inherited from whatever was loaded before, and the bank would sound
+different depending on the order you browsed it. Currently **zero** in all nine banks; the rule is
+pinned per-bank in `fxBank.test.ts` so it stays that way without a Chromium.

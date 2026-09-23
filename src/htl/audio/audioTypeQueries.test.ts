@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 import ts from "typescript";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bareAnalyserDisconnects } from "./analyserEdgeChecker";
+import { bareAnalyserDisconnects, unwatchedWorklets, workletConstructions } from "./audioTypeQueries";
 
 // ★ THE SAME RULE analyserEdgeScan.test.ts ENFORCES, ASKED OF THE CHECKER INSTEAD OF THE TEXT.
 // That file's three regexes are blind to four ways of holding an analyser — a class field with an
@@ -51,6 +51,33 @@ describe("no AnalyserNode is disconnected from the analyser side", () => {
   test("★ nobody calls disconnect() ON an analyser — it has no outputs, so it does nothing", () => {
     const hits = bareAnalyserDisconnects(prog, inSrc);
     const named = hits.map((h) => `${h.file.slice(h.file.indexOf("/src/") + 1)}:${h.line} — ${h.text}.disconnect() is a NO-OP; cut it as source.disconnect(${h.text})`);
+    expect(named.join("\n")).toBe("");
+  });
+});
+
+// ★ A COUNT IS NOT A PAIRING. workletWatch.test.ts asserts, per file, that `new AudioWorkletNode(`
+// occurrences equal `watchProcessor(` occurrences. Planted an UNWATCHED node beside a duplicate
+// watch of a node already watched: counts stayed equal, tsc silent, all nine of its tests green.
+//
+// It matters more than the analyser rule. An AudioWorkletProcessor that throws goes PERMANENTLY
+// SILENT — measured earlier in this codebase at 10 of 375 blocks, then nothing — and reports only
+// through `onprocessorerror`, which is exactly what watchProcessor wires. A count that is right
+// while a node goes unwatched loses the whole point of the guard.
+//
+// The count check STAYS: it is fast, it is per-file, and its failure message names the file. This
+// answers the different question — WHICH node, by symbol.
+describe("every worklet node is watched, matched by symbol rather than counted", () => {
+  test("the query finds worklet constructions at all (vacuity guard)", () => {
+    // ★ AN EMPTY `unwatchedWorklets` IS THE SAME ANSWER FOR TWO OPPOSITE FACTS — every node watched,
+    // or the constructor no longer resolving after a lib change or a rename. Only the total
+    // separates them, which is why `workletConstructions` exists at all.
+    const all = workletConstructions(prog, inSrc);
+    expect(all.length, "no `new AudioWorkletNode` resolved — this suite asserts nothing").toBeGreaterThanOrEqual(10);
+  });
+
+  test("★ no worklet node is left unwatched", () => {
+    const hits = unwatchedWorklets(prog, inSrc);
+    const named = hits.map((h) => `${h.file.slice(h.file.indexOf("/src/") + 1)}:${h.line} — \`${h.target}\` is never passed to watchProcessor; a processor that throws goes permanently silent`);
     expect(named.join("\n")).toBe("");
   });
 });

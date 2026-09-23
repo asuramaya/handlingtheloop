@@ -20,7 +20,8 @@ export interface AnalysisReadmeFacts {
   /** Rows shaped like the pre-`0` lookup lane. `null` = the count did not run, NOT zero. */
   unlabelledLookups: number | null;
   /** Non-null counts per published field. `null` = the count did not run, NOT "all rows carry it". */
-  coverage: { bpm: number; key: number; beatOffset: number; duration: number } | null;
+  /** Field counts AND the row total they were counted beside, from one statement. */
+  coverage: { total: number; bpm: number; key: number; beatOffset: number; duration: number } | null;
 }
 
 /** ★ THE HEADLINE PROMISED THREE FEATURES PER ROW AND THE DATA DOES NOT CARRY THEM UNIFORMLY. A
@@ -30,12 +31,24 @@ export interface AnalysisReadmeFacts {
  *  table is honest and an invented one is the defect this whole thread is about. */
 function coverageTable(f: AnalysisReadmeFacts): string {
   const c = f.coverage;
-  if (!c || !f.tracks) return "";
-  const pct = (n: number) => `${n} (${Math.round((n / f.tracks) * 1000) / 10}%)`;
+  if (!c || !c.total) return "";
+  // ★ AGAINST THE TOTAL FROM ITS OWN STATEMENT, NOT THE PUBLISHED ROW COUNT. `tracks` is the length
+  // of the paged read, which runs AFTER this count on a table that moves in both directions — a
+  // contribution lands on any play, and the admin panel beside this button deletes rows. Dividing
+  // by it could publish a coverage percentage above 100, which is the kind of number a reader uses
+  // to decide the whole file is untrustworthy.
+  const pct = (n: number) => `${n} (${Math.round((n / c.total) * 1000) / 10}%)`;
+  // When the two disagree the export straddled a write, and saying so is cheaper than explaining a
+  // near-miss later — the numbers are right, they are just of two instants.
+  const drift =
+    c.total === f.tracks
+      ? ""
+      : ` The table held ${c.total} rows when these were counted and ${f.tracks} were exported; ` +
+        `it changed during the export, so read the percentages against ${c.total}.`;
   return (
     `## Field coverage\n\nNot every row carries every field — the lookup lane supplies \`bpm\` and ` +
     `\`key\` only, so a row from it has no \`beat_offset\` and no \`duration\`. Counted at export ` +
-    `time, out of ${f.tracks} rows:\n\n` +
+    `time, out of ${c.total} rows:${drift}\n\n` +
     `| field | rows carrying it |\n|---|---|\n` +
     `| \`bpm\` | ${pct(c.bpm)} |\n| \`key\` | ${pct(c.key)} |\n` +
     `| \`beat_offset\` | ${pct(c.beatOffset)} |\n| \`duration\` | ${pct(c.duration)} |\n\n`

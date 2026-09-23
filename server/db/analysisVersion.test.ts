@@ -105,7 +105,7 @@ describe("the headline does not promise a field every row carries", () => {
   // promise about every row, and a lookup-lane row has bpm and key and nothing else — `beat_offset`
   // is null there BY CONSTRUCTION, because that lane supplies two fields. The provenance work fixed
   // a sentence asserting more than we knew; this one asserted more uniformity than the data has.
-  const cov = { bpm: 100, key: 90, beatOffset: 40, duration: 40 };
+  const cov = { total: 100, bpm: 100, key: 90, beatOffset: 40, duration: 40 };
 
   test("coverage is stated, per field, against the row count it was measured beside", () => {
     const md = analysisReadme({ tracks: 100, unlabelledLookups: 0, coverage: cov });

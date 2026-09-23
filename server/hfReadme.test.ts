@@ -44,3 +44,45 @@ describe("the published README describes the blind spot it actually measured", (
     expect(md).toMatch(/900 tracks/);
   });
 });
+
+// ★ THE NUMERATORS SHARED AN INSTANT AND THE DENOMINATOR DID NOT. a431619 made the four field
+// counts one statement so they could not disagree with each other across a write, then divided them
+// — here, in the README — by `tracks`, which is the length of the PAGED READ that runs afterwards.
+// Care taken inside the measurement made the gap between it and its denominator easier to miss.
+//
+// The table moves in both directions: a contribution lands on any play, and the admin panel beside
+// the export button deletes rows. A shrink publishes a percentage above 100, which is the kind of
+// number that makes a reader distrust the whole file.
+describe("field coverage is stated against the total it was actually counted beside", () => {
+  const cov = { total: 100, bpm: 100, key: 90, beatOffset: 40, duration: 40 };
+
+  test("a table that SHRANK during the export never publishes over 100%", () => {
+    // 100 rows when counted, 80 survived to be exported — a takedown mid-export.
+    const md = analysisReadme({ tracks: 80, unlabelledLookups: 0, coverage: cov });
+    expect(md).toMatch(/100 \(100%\)/);
+    // ★ PARSED, NOT PATTERN-MATCHED. The first version of this guard was /\(1[0-9][0-9](\.\d)?%\)/,
+    // which matches "(100%)" — a legitimate value — and so failed on the correct output it was
+    // written to protect. Reading the numbers out and comparing them is what the assertion actually
+    // means; a regex that approximates "greater than one hundred" is a second thing to get wrong.
+    const pcts = [...md.matchAll(/\((\d+(?:\.\d)?)%\)/g)].map((m) => Number(m[1]));
+    expect(pcts.length, "no percentages rendered at all — the table is missing").toBeGreaterThan(0);
+    expect(Math.max(...pcts), `published ${Math.max(...pcts)}%`).toBeLessThanOrEqual(100);
+  });
+
+  test("a table that GREW during the export does not understate coverage either", () => {
+    const md = analysisReadme({ tracks: 130, unlabelledLookups: 0, coverage: cov });
+    expect(md).toMatch(/90 \(90%\)/); // 90/100, not 90/130
+  });
+
+  test("the disagreement is stated rather than silently resolved", () => {
+    const md = analysisReadme({ tracks: 80, unlabelledLookups: 0, coverage: cov });
+    expect(md).toMatch(/changed during the export/);
+    expect(md).toMatch(/100 rows when these were counted and 80 were exported/);
+  });
+
+  test("the usual case — no drift — says nothing extra", () => {
+    const md = analysisReadme({ tracks: 100, unlabelledLookups: 0, coverage: cov });
+    expect(md).toMatch(/out of 100 rows:\n/);
+    expect(md).not.toMatch(/changed during the export/);
+  });
+});

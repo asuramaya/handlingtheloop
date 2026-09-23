@@ -281,14 +281,21 @@ export async function countUnlabelledLookups(db: D1Database): Promise<number | n
  *
  *  One query, so the four numbers are of the SAME table at the SAME instant: four counts taken
  *  separately could be read between writes and disagree with each other and with `tracks`. */
-export async function countFieldCoverage(db: D1Database): Promise<{ bpm: number; key: number; beatOffset: number; duration: number } | null> {
+export async function countFieldCoverage(db: D1Database): Promise<{ total: number; bpm: number; key: number; beatOffset: number; duration: number } | null> {
   try {
     const r = await db
       .prepare(
-        `SELECT COUNT(bpm) AS bpm, COUNT(music_key) AS key, COUNT(beat_offset) AS beatOffset, COUNT(duration) AS duration
+        // ★ THE DENOMINATOR RIDES IN THE SAME STATEMENT AS THE NUMERATORS. The four counts were
+        // already one query so they could not disagree with each other across a write — and were
+        // then divided, in the README, by a row count taken from the PAGED READ that runs after
+        // them. Care taken inside the measurement made the gap between it and its denominator
+        // easier to miss, not harder. This table is live: a contribution lands on any play and the
+        // admin panel beside this button DELETES rows, so it moves in both directions, and a
+        // shrink publishes a percentage above 100.
+        `SELECT COUNT(*) AS total, COUNT(bpm) AS bpm, COUNT(music_key) AS key, COUNT(beat_offset) AS beatOffset, COUNT(duration) AS duration
            FROM track_analysis`,
       )
-      .first<{ bpm: number; key: number; beatOffset: number; duration: number }>();
+      .first<{ total: number; bpm: number; key: number; beatOffset: number; duration: number }>();
     return r ?? null;
   } catch {
     return null; // never fail an export over its own footnote

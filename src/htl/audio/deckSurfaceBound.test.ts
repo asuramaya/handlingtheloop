@@ -114,14 +114,42 @@ describe("every module that declares its own deck surface is bounded by it", () 
     // EVERY interface the module declares, not the first one. fxWire declares two, and a scan that
     // read only the first would have checked its 1-member surface and ignored the other.
     for (const name of ifaces) {
+      // ★ THE ONE HOLE A LOCAL-TEXT COUNT CANNOT SEE, closed by forbidding it rather than by
+      // importing a compiler into the gate. `methodsOf` reads the members written between this
+      // interface's own braces. `export interface SnapshotDeck extends Deck` would inherit the
+      // entire wide surface while the local count stayed at 38, and every assertion here would
+      // still pass — the same laundering shape as shape B's `"remote"`, killed for being invisible
+      // to a scan.
+      //
+      // The checker resolves inheritance and WAS run against this file, to calibrate the numbers
+      // below (2.2s to build the program). It is not imported here because that cost lands on every
+      // gate run to close a hole a one-line ban closes exactly, and because the ban says the
+      // stronger thing: these surfaces are written out, not composed. scripts/deckscan/wide.ts is
+      // where the checker earns its keep — on the population this file cannot derive at all.
+      test(`${path}: ${name} is declared outright, not by extension`, () => {
+        expect(code, `${name} extends another type — the local member count no longer bounds it`).not.toMatch(
+          new RegExp(`interface\\s+${name}\\s+extends\\b`),
+        );
+      });
+
       test(`${path}: ${name} stays a small fraction of Deck's own surface`, () => {
         const named = methodsOf(code, name);
         expect(named.size, `${name} declares no methods — an empty surface passes every ratio`).toBeGreaterThan(0);
-        // ★ THE THRESHOLD IS SET FROM THE MEASUREMENT, NOT GUESSED, and it is stated per population:
-        // MEMBERS is every public member of Deck (the surface an annotation hands over). Measured
-        // when written: SnapshotDeck 73, FxRackDeck 3, FxWireDeck 1, IntentDeck 48 — the widest is
-        // 0.27. 0.40 is that plus real headroom. Deckard's first threshold here was 0.70, which let
-        // a planted 95-member widening pass and so asserted nothing.
+        // ★ THE THRESHOLD IS SET FROM THE MEASUREMENT, AND THE MEASUREMENT IS OF METHODS. Both sides
+        // of this ratio are method counts: `methodsOf` above, and MEMBERS below, which is every
+        // public member of Deck — the surface a `deck: Deck` annotation hands over.
+        //
+        // I published "SnapshotDeck 73 … the widest is 0.27" in the commit that added this file, and
+        // 73 is the wrong quantity: it is Deckard's count from deckApply.test.ts, which counted
+        // PROPERTIES. Asked of the TypeScript checker rather than a regex, SnapshotDeck is 73
+        // properties of which 38 are METHODS; IntentDeck is 51 and 48; FxRackDeck 2 and 2;
+        // FxWireDeck 1 and 1. So the widest ratio this test actually enforces is 38/271 = 0.14, not
+        // 0.27 — a number describing a different question than the one the code asks, which is the
+        // third time I have done that tonight and the second in a published figure.
+        //
+        // 0.40 stays: it is headroom over the real 0.14 and it is what a planted widening must beat.
+        // Deckard's first threshold here was 0.70, which let a planted 95-member widening pass and
+        // so asserted nothing.
         expect(named.size / MEMBERS.size).toBeLessThan(0.4);
       });
     }

@@ -120,18 +120,34 @@ describe("the coupling the agreement above silently rests on", () => {
     expect(offenders.join("\n")).toBe("");
   });
 
-  test("★ control and decks are written together — neither is ever set without the other", () => {
-    // Invariant 1 of `reachable`. If a patch ever sets `controlling: true` while leaving decks "",
-    // the client grants both decks and the server grants none: every control dead, silently.
+  test("★ control and decks are written together — NEITHER is ever set without the other", () => {
+    // Invariant 1 of `reachable`, and the scan that checks it had the defect it was checking for.
+    //
+    // ★ MY FIRST VERSION REQUIRED A `decks:` MATCH BEFORE IT LOOKED AT A LINE AT ALL, so a site
+    // writing `controlling: true` with no `decks` was invisible to it — which is the one direction
+    // that actually hurts: the client reads controlling=true, myDeck=null and permits BOTH decks,
+    // while the server resolves decks="" and permits none. Every control dead or, worse, every
+    // control moving this device only. The scan was guarding one side of a co-occurrence by
+    // requiring the other side to be present, which cannot ever fail in the dangerous direction.
+    //
+    // Metron's shape, three times tonight and now a fourth: the FIX was correct and its EDGE was
+    // assumed rather than exercised. Found by asking what my own instrument could not see, before
+    // he reviewed it.
     const offenders: string[] = [];
     room.split("\n").forEach((line, i) => {
       const d = line.match(/\bdecks:\s*([^,}]+)/);
       const c = line.match(/\bcontrolling:\s*([^,}]+)/);
-      if (!d || /^msg\.decks$/.test(d[1].trim())) return;
-      if (!c) return; // a patch touching only decks is covered by the stage scan below
-      const decksEmpty = /^""$/.test(d[1].trim());
-      const ctlFalse = /^false$/.test(c[1].trim());
-      if (decksEmpty !== ctlFalse) offenders.push(`server/room.ts:${i + 1} sets controlling=${c[1].trim()} beside decks=${d[1].trim()}`);
+      // `{ t: "tick", decks }` is the playback tick — a different `decks` entirely, no permission.
+      const permissionDecks = d && !/^msg\.decks$/.test(d[1].trim());
+      if (!permissionDecks && !c) return;
+      if (c && !permissionDecks) {
+        offenders.push(`server/room.ts:${i + 1} writes controlling=${c[1].trim()} with NO decks — the client would permit both decks while the server permits none`);
+        return;
+      }
+      if (permissionDecks && !c) return; // decks-only patches are covered by the stage scan below
+      const decksEmpty = /^""$/.test(d![1].trim());
+      const ctlFalse = /^false$/.test(c![1].trim());
+      if (decksEmpty !== ctlFalse) offenders.push(`server/room.ts:${i + 1} sets controlling=${c![1].trim()} beside decks=${d![1].trim()}`);
     });
     expect(offenders.join("\n")).toBe("");
   });

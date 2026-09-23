@@ -21,17 +21,37 @@ import type { Intent, DeckId } from "../htl/room/protocol";
 export type Focus = { pane: "deck"; deck: DeckId } | { pane: "fx"; deck: DeckId };
 
 export interface FocusPolicy {
-  /** A candidate must hold the host's attention this long before the listener's pane moves. */
+  /** A candidate must hold the host's attention this long before the listener's pane moves.
+   *  MUST BOUND: how long a host attends to a new target before the switch is worth a screen
+   *  change. Not calibrated — see the note below. */
   dwellMs: number;
-  /** After a switch, ignore candidates for this long — a screen that just changed is expensive. */
+  /** After a switch, ignore candidates for this long.
+   *  MUST BOUND: how soon a second switch stops reading as following and starts reading as
+   *  flicker. Not calibrated. */
   cooldownMs: number;
-  /** Intents older than this stop counting toward a candidate's dwell. */
+  /** Intents older than this stop counting toward a candidate's dwell.
+   *  MUST BOUND: how long a gesture remains evidence of where the host is looking. Not
+   *  calibrated. */
   windowMs: number;
 }
 
-// Deliberately slow. A listener is WATCHING, not operating: the cost of showing the wrong deck for
-// another second is far below the cost of a screen that flickers between two. These are the numbers
-// the operator should push back on, which is why they are named and not inlined.
+// ★ THESE THREE ARE UNCALIBRATED, AND THAT IS DIFFERENT FROM MISCALIBRATED. Practice 7830f717 says
+// a constant whose justification is TRUE but about a different quantity than the one it bounds is
+// worse than an unjustified one, because the justification stops the next reader from asking. So
+// each field above names the quantity it MUST bound, and none of them claims to be derived from it.
+// The rationale below is a rationale, not a measurement, and saying which is which is the whole
+// point of the practice.
+//
+// Deliberately slow: a listener is WATCHING, not operating, so showing the wrong deck for another
+// second costs far less than a screen that flickers between two.
+//
+// ★ WHAT WOULD ACTUALLY CALIBRATE THEM, recorded as a hypothesis rather than built on one: a DJ's
+// attention moves on MUSICAL time, not wall time — a transition is 16 or 32 bars, so the same
+// gesture pattern spans very different milliseconds at 90 bpm and at 174. If that holds, the policy
+// belongs in BEATS and the app already knows the tempo. It is not implemented, because it is a
+// plausible claim about human behaviour with no trace behind it, and no recorded intent stream
+// exists to check it against — that wants the live session that is still blocked. Building it now
+// would be inventing a quantity to feel calibrated, which is the same error one layer out.
 export const DEFAULT_POLICY: FocusPolicy = { dwellMs: 1200, cooldownMs: 2500, windowMs: 4000 };
 
 /** Which pane an intent is EVIDENCE FOR, or null when it says nothing about where the host is

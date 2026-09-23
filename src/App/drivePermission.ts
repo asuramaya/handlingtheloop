@@ -43,7 +43,13 @@ export function canDriveBoard(seat: SeatState, replayActive = false): boolean {
  *  Always. It is a property of the hardware in front of this person, not of the session, and a
  *  listener whose jog wheel feels wrong has been given a broken device rather than a safe one.
  *  A function rather than a constant so the call site READS as a different question from
- *  canDriveDeck, which is the whole point of separating them. */
+ *  canDriveDeck, which is the whole point of separating them.
+ *
+ *  ★ IT TAKES NO ARGUMENTS, SO IT CANNOT EXPRESS "THIS DEVICE" — and that is a boundary, not an
+ *  oversight (Metron). The moment local feel becomes conditional on anything — a phone listener
+ *  with no jog wheel, a device whose surface cannot express slip — this signature changes and the
+ *  test asserting `true` changes with it. The test pins a POLICY, not an invariant. Whoever meets
+ *  that case should read a red test there as the policy moving, never as a regression. */
 export function canSetLocalFeel(): boolean {
   return true;
 }

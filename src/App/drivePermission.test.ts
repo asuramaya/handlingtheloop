@@ -48,6 +48,10 @@ describe("per-deck drive permission", () => {
 });
 
 describe("local feel is NOT drive permission", () => {
+  // ★ THESE TWO PIN A POLICY, NOT AN INVARIANT. canSetLocalFeel takes no arguments, so it cannot
+  // express "this device". If local feel ever becomes conditional — a phone listener with no jog
+  // wheel — the signature changes and these change with it. A red test here is the policy moving,
+  // not a regression, and that distinction is the reason it is written down. (Metron's boundary.)
   it("every seat may set its own jog physics, vinyl speed and slip", () => {
     // The distinction Metron added to the accessor ruling. These are properties of the hardware in
     // front of this person, not of the session: a listener whose jog wheel feels wrong has been

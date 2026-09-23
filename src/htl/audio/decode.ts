@@ -12,6 +12,8 @@
 // context as long as the sample rate matches — which we guarantee by building the
 // decoder at `ctx.sampleRate`. One decoder is cached per sample rate.
 
+import { armDecode, disarmDecode } from "./decodeCrashGuard";
+
 let decoderByRate: { rate: number; ctx: OfflineAudioContext } | null = null;
 
 function decoderFor(sampleRate: number): BaseAudioContext {
@@ -26,9 +28,17 @@ function decoderFor(sampleRate: number): BaseAudioContext {
 
 export async function decodeAudio(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   if (data.byteLength === 0) throw new Error("File is empty (0 bytes).");
+  // ★ THE ONLY PLACE A TAB CAN DIE WITHOUT SAYING SO. decodeAudioData materialises the WHOLE
+  // float32 buffer — there is no chunked form of this call — so it is the single largest transient
+  // allocation in a track load, and an OOM here kills the process with no exception to catch.
+  // Armed here and disarmed on both exits, so the next boot can name what was in flight.
+  armDecode(data.byteLength);
   try {
-    return await decoderFor(ctx.sampleRate).decodeAudioData(data.slice(0));
+    const out = await decoderFor(ctx.sampleRate).decodeAudioData(data.slice(0));
+    disarmDecode();
+    return out;
   } catch {
+    disarmDecode(); // a THROWN decode failure is a codec problem, not a crash — do not report it as one
     throw new Error(
       "Couldn't decode this audio — the browser can't read its codec " +
         "(unsupported format, a video, or DRM-protected).",

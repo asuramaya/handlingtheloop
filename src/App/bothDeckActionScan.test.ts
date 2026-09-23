@@ -146,9 +146,19 @@ const ASKS = /canDriveDeckRef\.current\(|canDriveDeck\(/;
 
 // Loops that mutate both decks WITHOUT a per-deck gate, each with why it is allowed to.
 // A reason, never a name — and the reason has to survive being read by someone else.
-const EXEMPT: { line: number; why: string }[] = [
+// ★ KEYED BY AN ANCHOR IN THE LOOP, NOT BY A LINE NUMBER. It was `line: 1446` / `line: 1416`, and
+// an unrelated three-line insert 800 lines ABOVE them broke this suite — the exemptions had not
+// gone stale, the coordinates had. A line number is a roster entry that every edit above it
+// invalidates, which taxes the whole pair for edits that cannot possibly affect what is exempted.
+//
+// The scan was RIGHT to fail: it noticed, loudly, which is the half most instruments get wrong. It
+// simply noticed the wrong thing. An anchor is a substring of the loop's own body, so it moves with
+// the code it describes and goes stale only when that code actually changes — which is exactly when
+// an exemption SHOULD be re-read. Uniqueness is asserted below, because an anchor matching two
+// loops would exempt one nobody examined.
+const EXEMPT: { anchor: string; why: string }[] = [
   {
-    line: 1446,
+    anchor: "setVinylSpeed",
     why:
       "LOCAL PLAYBACK FEEL, not session state: vinyl speed, backspin length and slip are this " +
       "DEVICE's preferences, read from settings and applied to both decks. Nothing is emitted, so " +
@@ -159,7 +169,7 @@ const EXEMPT: { line: number; why: string }[] = [
       "proxy has a hole that syntax cannot close. See the ruling on the seventh turn.",
   },
   {
-    line: 1416,
+    anchor: "fxKeyUp(d === \"A\"",
     why:
       "FX pad key RELEASE, both decks. ★ RELEASE IS THE ASYMMETRIC CASE: you must always be able to " +
       "LET GO. Gating it on canDriveDeck would leave a pad latched on a deck whose grant was revoked " +
@@ -199,14 +209,19 @@ describe("an action that touches BOTH decks asks per deck whether it may", () =>
   });
 
   test("every exemption names a loop that is actually there and actually mutates", () => {
-    const stale = EXEMPT.filter((e) => !loops.some((l) => Math.abs(e.line - l.at) < 3 && mutates(l.body, drivers, writers, l.bound)));
-    expect(stale.map((e) => `EXEMPT App.tsx:${e.line} no longer matches a mutating both-deck loop`)).toEqual([]);
+    const stale = EXEMPT.filter((e) => !loops.some((l) => l.body.includes(e.anchor) && mutates(l.body, drivers, writers, l.bound)));
+    expect(stale.map((e) => `EXEMPT "${e.anchor}" no longer matches a mutating both-deck loop`)).toEqual([]);
+  });
+
+  test("each anchor names exactly ONE loop — two would exempt one nobody examined", () => {
+    const counts = EXEMPT.map((e) => ({ anchor: e.anchor, n: loops.filter((l) => l.body.includes(e.anchor)).length }));
+    expect(counts.filter((c) => c.n !== 1)).toEqual([]);
   });
 
   test("every both-deck loop that mutates a deck gates per deck", () => {
     const offenders = loops
       .filter((l) => mutates(l.body, drivers, writers, l.bound) && !ASKS.test(l.body))
-      .filter((l) => !EXEMPT.some((e) => Math.abs(e.line - l.at) < 3))
+      .filter((l) => !EXEMPT.some((e) => l.body.includes(e.anchor)))
       .map((l) => `App.tsx:${l.at} mutates both decks without asking canDriveDeck`);
     expect(offenders).toEqual([]);
   });

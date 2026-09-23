@@ -35,5 +35,6 @@ export {
   type SampleRoute,
   type PlayOpts,
 } from "./Sampler";
-export { getCachedTrack, setCachedTrack, getCachedMeta, dropCachedBuffer, type CachedTrack } from "./trackCache";
+export { getCachedTrack, setCachedTrack, getCachedMeta, dropCachedBuffer, cachedBytes, type CachedTrack } from "./trackCache";
 export { STRETCH_WORKLET_SRC } from "./stretchWorklet";
+export { initDecodeCrashGuard, armDecode, disarmDecode, type DecodeCrashRecord } from "./decodeCrashGuard";

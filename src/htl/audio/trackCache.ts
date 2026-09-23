@@ -55,6 +55,16 @@ export function setCachedTrack(videoId: string, value: CachedTrack): void {
 
 // BPM/Camelot for a track analysed this session — survives heavy-buffer eviction, so library
 // columns stay filled all session. Use this (not getCachedTrack) for display-only backfill.
+/** Total float32 bytes this cache is holding. NOTE WHAT IT DOES AND DOES NOT MEAN: a cached entry
+ *  is the SAME AudioBuffer reference a deck plays from, so for a track currently on a deck this is
+ *  not additional memory and evicting it would free nothing. It is additional only for entries no
+ *  deck holds. Report it beside the decks' own mixBytes rather than adding the two. */
+export function cachedBytes(): number {
+  let n = 0;
+  for (const v of cache.values()) n += v.buffer.length * v.buffer.numberOfChannels * 4;
+  return n;
+}
+
 export function getCachedMeta(videoId: string): { bpm: number | null; key: string | null } | undefined {
   return meta.get(videoId);
 }

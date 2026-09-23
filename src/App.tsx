@@ -46,6 +46,7 @@ import {
   decodeAudio,
   getCachedTrack,
   setCachedTrack,
+  initDecodeCrashGuard,
   useLibrary,
   useLibrarySync,
   type TrackMeta,
@@ -599,6 +600,11 @@ function AppBody() {
   // we keep the setter so the guard + re-enable flow stay wired.
   const [, setGpuCrashed] = useState(false);
   useEffect(() => {
+    // ★ DID THE TAB DIE MID-DECODE LAST TIME? The only failure in a track load that leaves no
+    // exception, no rejection and no onerror — the process is simply gone, and the next boot looks
+    // normal. Witness-only on purpose: a decode is not optional, so unlike the GPU guard below this
+    // one never blocks anything. It reports once and clears.
+    initDecodeCrashGuard();
     if (initGpuCrashGuard()) {
       setGpuCrashed(true);
       setSettings((s) => (getStemModel(s.stemModel).tier === "gpu" ? { ...s, stemModel: DEFAULT_STEM_MODEL } : s));
@@ -1964,6 +1970,9 @@ function AppBody() {
         }
         if (stale()) return;
         engine.deck(id).setBuffer(cached.buffer, cached.analysis.beatgrid);
+        // The resident audio bill, written next to the decode-crash guard's record so an iOS OOM
+        // has a measured number before it rather than arithmetic after it.
+        engine.reportAudioResident(`deck ${id} load`);
         engine.deck(id).key = cached.analysis.key;
         if (restore) applyDeckControls(engine.deck(id), restore);
         engine.reassertSync(id); // re-lock if this deck is in a sync pair

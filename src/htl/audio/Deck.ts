@@ -924,6 +924,16 @@ export class Deck {
   get hasStems(): boolean {
     return this.stemsLoaded;
   }
+  /** ★ THE FLOAT32 MIX THIS DECK IS STILL HOLDING, in bytes. The counterpart to stemBytes, and it
+   *  did not exist — so the one allocation that is ALWAYS present on the plain path was the one
+   *  nothing could count. 4 bytes per sample per channel: ~92 MB for a 4-minute 48 kHz stereo
+   *  track, ~230 MB for a ten-minute one, which is why "large tracks" is the operator's own
+   *  description of when the tab dies. releaseMixBuffer only frees this when the engine holds
+   *  STEMS (see its guard), so on an ordinary mobile load it is never released at all. */
+  get mixBytes(): number {
+    const b = this.buffer;
+    return b ? b.length * b.numberOfChannels * 4 : 0;
+  }
   /** The single invariant the whole session path keys on: this deck has its OWN local
    *  stems (real buffers / pyramids), NOT a mirrored host view. Snapshots advertise this
    *  (never remote-only stems), extractStemView only serialises this, and a guest only

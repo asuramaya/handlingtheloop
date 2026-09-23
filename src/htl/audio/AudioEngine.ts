@@ -1,6 +1,7 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, localTempoDev, nearestBeat, piTrim, slaveFoldTarget, smartKeyShift } from "../analysis/analyze";
 import { trace, event } from "../debug/trace";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
+import { cachedBytes } from "./trackCache";
 import { Sampler } from "./Sampler";
 import { MicInput, type MicRoute } from "./MicInput";
 import { Recorder, type RecordSource, type Take } from "./Recorder";
@@ -1038,6 +1039,27 @@ export class AudioEngine {
   // slave/master: ~1 = locked; ~2 or ~0.5 = the half/double DENSITY chase (err can never settle).
   // `saturated` = the requested trim exceeded the ±clamp (rubato the loop can't follow).
   private syncDiagState: SyncDiag = { active: false, slave: null, masterBpm: null, slaveBpm: null, fold: null, errBeats: null, trim: null, feedFwd: null, saturated: false };
+  /** ★ THE RESIDENT AUDIO BILL, REPORTED RATHER THAN COMPUTED IN AN ARGUMENT. The operator reports
+   *  iOS crashing on large tracks; nothing could say what was actually resident when it happened,
+   *  so the number was being derived from arithmetic in messages. This writes it into the flight
+   *  recorder on every load, next to the decode-crash guard's own record, and the two together
+   *  reconstruct the ceiling from two independent observations.
+   *
+   *  `cached` is deliberately NOT added into the total: a cached entry is the same AudioBuffer a
+   *  deck plays from, so for a loaded track it is not additional memory and evicting it frees
+   *  nothing. It is reported beside the total so the difference is visible instead of assumed. */
+  audioResident(): { mixA: number; mixB: number; stemsA: number; stemsB: number; cached: number; total: number } {
+    const mixA = this.deckA.mixBytes;
+    const mixB = this.deckB.mixBytes;
+    const stemsA = this.deckA.stemBytes;
+    const stemsB = this.deckB.stemBytes;
+    return { mixA, mixB, stemsA, stemsB, cached: cachedBytes(), total: mixA + mixB + stemsA + stemsB };
+  }
+  /** Write the bill to the ring. Called at each load, so a crash has a number before it. */
+  reportAudioResident(where: string): void {
+    event("audio-resident", { where, ...this.audioResident() });
+  }
+
   get syncDiag(): SyncDiag {
     return this.syncDiagState;
   }

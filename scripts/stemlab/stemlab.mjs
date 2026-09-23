@@ -45,6 +45,7 @@ function parseArgs(argv) {
       case "--sweep": a.sweep = true; break;
       case "--grid": a.grid = true; break;
       case "--idle-only": a.idleOnly = true; break;
+      case "--only": a.only = v.split(","); i++; break;
       case "--reps": a.reps = Number(v); i++; break;
       default: break;
     }
@@ -146,11 +147,20 @@ async function main() {
       const plan = [];
       for (let r = 0; r < reps; r++) {
         for (const competing of args.idleOnly ? [false] : [false, true]) {
-          for (const y of ["none", "timeout", "raf", "scheduler", "postTask-ub", "postTask-bg"]) plan.push({ y, competing });
+          for (const y of (args.only || ["none", "timeout", "raf", "scheduler", "postTask-ub", "postTask-bg"])) plan.push({ y, competing });
         }
       }
       // Interleave so a drifting machine cannot manufacture a ranking (the sweep's own lesson).
-      plan.sort((a, b) => (a.y + String(a.competing)).localeCompare(b.y + String(b.competing)) * 0 + (Math.random() < 0.5 ? -1 : 1));
+      // ★ FISHER-YATES, NOT A RANDOM COMPARATOR. `sort(() => Math.random() < 0.5 ? -1 : 1)` is the
+      // classic bad shuffle: the comparator is not a consistent ordering, so the permutation it
+      // produces is biased by the engine's sort algorithm rather than uniform — and the whole
+      // reason the plan is shuffled is to stop a drifting machine manufacturing a ranking. An
+      // instrument whose defence against bias is itself biased defends nothing. (Found reading my
+      // own harness, not from a failure: it would have kept producing plausible orderings forever.)
+      for (let i = plan.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [plan[i], plan[j]] = [plan[j], plan[i]];
+      }
       for (const { y, competing } of plan) {
         cells.push(await page.evaluate((o) => globalThis.stemlabGrid(o), {
           seconds: args.seconds, stems: args.stems, sliceMs: args.slice, yieldName: y, competing,

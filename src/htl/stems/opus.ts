@@ -106,8 +106,14 @@ export async function encodeStemOpus(buffer: AudioBuffer): Promise<ArrayBuffer> 
   return out.buffer;
 }
 
-/** Decode an htl-Opus blob back to an AudioBuffer. Throws on any failure (caller falls back). */
-export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
+/** Decode an htl-Opus blob back to an AudioBuffer. Throws on any failure (caller falls back).
+ *
+ *  `sliceMs` is the yield budget below, and it is a parameter for ONE reason: the claim that this
+ *  mitigation turned a freeze into a stutter was never re-measured after it shipped. Passing
+ *  Infinity runs the pre-mitigation shape through THIS code rather than through a reimplementation
+ *  of it, so the before/after comparison is of one decoder with one knob moved. Nothing in the app
+ *  passes it. (scripts/stemlab/stemlab.mjs) */
+export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer, sliceMs = 8): Promise<AudioBuffer> {
   const dv = new DataView(bytes);
   const sr = dv.getUint32(4, true);
   const ch = new Uint8Array(bytes)[8] || 2;
@@ -135,7 +141,7 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer):
   // The real repair is to decode off the main thread entirely (thread 6472479a). This makes the
   // stall divisible in the meantime, which is the difference between a board that pauses and a
   // board that stutters — and only one of those loses you the mix.
-  const SLICE_MS = 8; // under a frame, so a decode in flight cannot itself drop one
+  const SLICE_MS = sliceMs; // 8 ms by default: under a frame, so a decode in flight cannot drop one
   const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
   let slice = performance.now();
 

@@ -106,7 +106,13 @@ export async function encodeStemOpus(buffer: AudioBuffer): Promise<ArrayBuffer> 
   return out.buffer;
 }
 
-/** Decode an htl-Opus blob back to an AudioBuffer. Throws on any failure (caller falls back).
+/** Decode an htl-Opus blob back to an AudioBuffer on the CALLING thread. Throws on any failure.
+ *
+ *  ★ THE APP DOES NOT CALL THIS. Since e99f298 the stem path goes through
+ *  opusWorker.decodeStemOpusOffThread, which runs the decode in a worker and falls back to
+ *  decodeStemOpusPlanes here only when it cannot. This entry survives as stemlab's INLINE
+ *  comparison arm — the thing the worker is measured against — and grepping it will find no
+ *  production caller, which is correct rather than dead.
  *
  *  `opts` is MEASUREMENT SCAFFOLDING and nothing in the app passes it. The claim that this
  *  mitigation turned a freeze into a stutter was never re-measured after it shipped, and when it
@@ -152,20 +158,29 @@ export async function decodeStemOpusPlanes(
   });
   dec.configure({ codec: "opus", sampleRate: sr, numberOfChannels: ch });
 
-  // ★ THIS RUNS ON THE MAIN THREAD, SO IT HAS TO GIVE IT BACK. Four stems are decoded on every
-  // song load, and both loops here — feeding packets in, and copying planes out — used to run
-  // start to finish without once yielding. Measured with scripts/phonelab/laglab.mjs at 4x CPU
-  // with a real track loading, decodeStemOpus was the largest single piece of app code on the
-  // path and the song-load window carried a 1.4-SECOND frame: one frozen picture, mid-set.
+  // ★ THE SLICING BELOW IS NOW THE FALLBACK'S CONCERN ONLY, and this comment used to say otherwise.
+  // The app decodes through a WORKER (opusWorker.decodeStemOpusOffThread, e99f298); this function
+  // runs on whatever thread called it, which in production means the worker, and on the main thread
+  // only when the worker could not be constructed, died, or went silent. Off the main thread there
+  // is nothing to give back, so the worker passes sliceMs: Infinity.
+  //
+  // HISTORY, because the numbers are still the reason the yield exists at all: four stems decode on
+  // every song load, and both loops here — feeding packets in, copying planes out — used to run
+  // start to finish without once yielding. Measured at 4x CPU with a real track loading, this was
+  // the largest single piece of app code on the song-change path and the load window carried a
+  // 1.4-SECOND frame: one frozen picture, mid-set.
   //
   // Slicing on ELAPSED TIME rather than a packet or frame count is deliberate, for the reason
   // buildStemPyramidsLazy spells out: a fixed count is a guess about machine speed that is wrong
   // in the direction that hurts, because the slower the device the longer each fixed chunk blocks
   // it. A clock cuts the chunk down until it fits, on whatever hardware is actually running.
   //
-  // The real repair is to decode off the main thread entirely (thread 6472479a). This makes the
-  // stall divisible in the meantime, which is the difference between a board that pauses and a
-  // board that stutters — and only one of those loses you the mix.
+  // ★ AND THE 8 ms DEFAULT IS MEASURABLY THE WORST OF THE AVAILABLE YIELDS, kept anyway. stemlab
+  // showed setTimeout(0) costs ~3.5x the blocking of scheduler.yield or postTask(user-blocking),
+  // because those resume AHEAD of work queued during the sleep and a timer resumes behind it
+  // (b18a3dac). It is not switched because whether iOS — the only platform that reaches this
+  // fallback in anger — exposes either API is unmeasured, and the fallback from an absent API is
+  // this timer. Thread 9d03d3e1 carries that probe.
   const SLICE_MS = sliceMs; // 8 ms by default: under a frame, so a decode in flight cannot drop one
   const breathe = opts.yieldTo ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
   let slice = performance.now();

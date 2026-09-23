@@ -1,4 +1,5 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
+import { canArmAutoMix } from "./htl/automix/autoMixAuthority";
 import { canDriveDeck as canDriveDeckFor, canDriveBoard as canDriveBoardFor } from "./App/drivePermission";
 import type { StemAckState } from "./htl/room/protocol";
 // The requester's stall limit and the host's heartbeat are one invariant with two owners, so both
@@ -3031,15 +3032,29 @@ function AppBody() {
     }
   }, [mixqOpen]);
   // Auto-mix controls: drive the local mixer (host/solo) or send an intent (remote).
+  // ★ AUTO-MIX IS HOST ONLY — operator ruling 2026-09-23, thread cb9000d2, decision 34075fae.
+  //
+  // Auto-mix is a WHOLE-BOARD activity by construction: it drives both decks AND the crossfader.
+  // A seat that cannot move the board could never complete a transition, so the honest moment to
+  // say so is when the person asks, not halfway through one. The operator went further than
+  // "refuse a stage DJ" — any seat not on the session-owner's account is refused, which is a
+  // product call about whose rig this is and is not derivable from the audio graph.
+  //
+  // `room.controlling` was the wrong gate and had already failed once. A stepped-up listener holds
+  // controlling=true with ONE deck, so it sent the intent — and the server dropped it, because the
+  // automix intent carries no `deck` and canDriveIntent then demands BOTH. The control appeared to
+  // work and nothing happened, which is the silent-divergence shape one level up from the one
+  // 2e77ffb fixed in the crossfade mutator.
   const autoControl = useCallback(
     (action: "toggle" | "skip" | "mixnow" | "hold") => {
+      if (!canArmAutoMix(room)) return; // not this person's rig — refuse at the control
       if (autoIsRemote) {
-        if (room.controlling) room.sendIntent({ kind: "automix", action });
+        room.sendIntent({ kind: "automix", action }); // a host's OWN second device, driving its rig
         return;
       }
       autoMixerControlRef.current(action);
     },
-    [autoIsRemote, room.controlling, room.sendIntent],
+    [autoIsRemote, room.enabled, room.host, room.sendIntent],
   );
   const toggleAuto = useCallback(() => {
     autoControl("toggle");
@@ -3973,6 +3988,7 @@ function AppBody() {
           mirror: autoIsRemote ? remoteAutomix : null,
           edit: queueEdit,
           canEdit: queueCanEdit,
+          canAuto: canArmAutoMix(room), // host only — cb9000d2, decision 34075fae
           onToggle: toggleAuto,
           onToggleQueue: () => setMixqOpen((v) => !v),
           onMixNow: autoMixNow,

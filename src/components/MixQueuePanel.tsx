@@ -35,6 +35,11 @@ interface Props {
     move: (from: number, to: number) => void;
   };
   canEdit: boolean; // host/solo, or a controlling remote — may mutate the queue
+  /** May this device ARM auto-mix? Host only (operator ruling, thread cb9000d2). Auto-mix drives
+   *  both decks AND the crossfader, so a seat that cannot move the board could never complete a
+   *  transition — and the automix intent carries no deck, so the server refuses it outright. Say
+   *  so on the control rather than letting it look live and do nothing. */
+  canAuto: boolean;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   deckLoaded?: { A: string | null; B: string | null };
   deckColors?: { A: string; B: string };
@@ -67,7 +72,7 @@ function TrackRow({ t }: { t: TrackMeta }) {
   );
 }
 
-export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded }: Props) {
+export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded }: Props) {
   // `mirror` only chooses the DISPLAY source (a session renders the host's queue). Editing
   // is gated separately by `canEdit`: a controlling remote mutates the host's queue via
   // intents (routed through `edit`), so it can add/remove/move while still mirroring. Seed
@@ -216,7 +221,13 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, o
           carries AUTO and the sidebar tabs handle "back to songs" — so no extra chrome. */}
       {!embedded && (
         <header className="mixq-head">
-          <button className={`mixq-auto ${enabled ? "on" : ""}`} onClick={onToggleAuto} aria-pressed={enabled}>
+          <button
+            className={`mixq-auto ${enabled ? "on" : ""}`}
+            onClick={onToggleAuto}
+            aria-pressed={enabled}
+            disabled={!canAuto}
+            title={canAuto ? undefined : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
+          >
             AUTO
           </button>
           <button className="mixq-close" onClick={onClose} aria-label="Close">

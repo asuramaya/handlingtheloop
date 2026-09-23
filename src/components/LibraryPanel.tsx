@@ -54,6 +54,7 @@ interface LibraryPanelProps {
       move: (from: number, to: number) => void;
     };
     canEdit: boolean; // host/solo, or a controlling remote
+    canAuto: boolean; // host ONLY — auto-mix drives the whole board (cb9000d2, decision 34075fae)
     onToggle: () => void;
     onToggleQueue: () => void;
     onMixNow: () => void;
@@ -646,10 +647,17 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               </button>
               {auto && (
                 <div className="automix-bar">
+                  {/* ★ THE SECOND AUTO BUTTON. The floating panel has one and this header has
+                      another, so gating only the panel's would have left this one live — the
+                      caller-versus-mutator shape that cost us a crossfade guard tonight. tsc
+                      named this site the moment `canAuto` became required, which is the argument
+                      for threading a real prop rather than reading room state in two places. */}
                   <button
                     className={`automix-toggle ${auto.status.enabled ? "on" : ""}`}
                     onClick={auto.onToggle}
                     aria-pressed={auto.status.enabled}
+                    disabled={!auto.canAuto}
+                    title={auto.canAuto ? undefined : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
                   >
                     AUTO
                     {auto.status.enabled && auto.status.countdownSec != null && auto.status.phase !== "idle" && (
@@ -874,6 +882,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onLoad={onLoad}
             deckLoaded={deckLoaded}
             deckColors={deckColors}
+            canAuto={auto.canAuto}
             onToggleAuto={auto.onToggle}
             onMixNow={auto.onMixNow}
             onSkip={auto.onSkip}

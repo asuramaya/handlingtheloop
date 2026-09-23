@@ -42,9 +42,24 @@ const IFACE = /export interface (\w*Deck)\b/g;
  *  what a caller would otherwise have reached for on the wide Deck. This repo has been bitten by
  *  the naming-convention-as-derivation shape before (bothDeckActionScan's `deck.set[A-Z]`). */
 function methodsOf(code: string, name: string): Set<string> {
-  const body = code.slice(code.indexOf(`export interface ${name}`));
-  const inner = body.slice(body.indexOf("{") + 1, body.indexOf("\n}"));
-  return new Set([...inner.matchAll(/^\s+(?:readonly\s+)?([a-zA-Z_]\w*)\s*\(/gm)].map((m) => m[1]));
+  // ★ EVERY DECLARATION OF THAT NAME, not the first — TypeScript MERGES interfaces. Reading only
+  // `indexOf` made a second `export interface SnapshotDeck { … }` invisible: the language folds it
+  // into one type, but this counted the first block twice and passed twice. Measured with a plant
+  // that widened toward methods the real Deck HAS: tsc stayed silent (the merged type is still
+  // satisfied by Deck), this file reported 17 green, and the applier could then call
+  // `deck.releaseMixBuffer()` — a wide-surface method — with nothing objecting anywhere.
+  //
+  // That is the `extends` laundering one door along, and the ban below did not touch it. Counted
+  // here AND banned below, for the two different reasons: counting stops the measurement lying,
+  // the ban stops the composition.
+  const out = new Set<string>();
+  const decl = new RegExp(`export interface ${name}\\b`, "g");
+  for (let m = decl.exec(code); m; m = decl.exec(code)) {
+    const body = code.slice(m.index);
+    const inner = body.slice(body.indexOf("{") + 1, body.indexOf("\n}"));
+    for (const mm of inner.matchAll(/^\s+(?:readonly\s+)?([a-zA-Z_]\w*)\s*\(/gm)) out.add(mm[1]);
+  }
+  return out;
 }
 
 function sources(dir: string, out: string[] = []): string[] {
@@ -130,6 +145,15 @@ describe("every module that declares its own deck surface is bounded by it", () 
         expect(code, `${name} extends another type — the local member count no longer bounds it`).not.toMatch(
           new RegExp(`interface\\s+${name}\\s+extends\\b`),
         );
+      });
+
+      test(`${path}: ${name} is declared ONCE — TypeScript merges interfaces`, () => {
+        // The second composition route, and `extends` is not it. A merged second declaration is
+        // folded into one type by the language while reading as an unrelated block, and tsc stays
+        // silent when it widens toward methods Deck already has. Counted above so the ratio cannot
+        // lie either; banned here because the ban is what says these surfaces are written out.
+        const n = [...code.matchAll(new RegExp(`export interface ${name}\\b`, "g"))].length;
+        expect(n, `${name} is declared ${n} times — TS merges them, so the bound is the UNION`).toBe(1);
       });
 
       test(`${path}: ${name} stays a small fraction of Deck's own surface`, () => {

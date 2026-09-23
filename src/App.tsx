@@ -1599,9 +1599,18 @@ function AppBody() {
   // (loadStems), so no present or future call site can bypass the ruling by forgetting a check.
   const maySeparateRef = useRef(maySeparate);
   maySeparateRef.current = maySeparate;
-  useEffect(() => {
+  // ★ REGISTERED DURING THE FIRST RENDER, NOT IN AN EFFECT. This used to be a useEffect([]), which
+  // runs after paint and after the 58 effects declared above it — so there was a window in which
+  // the stems module's own default decided the question. That was survivable only because the
+  // default was permissive, and the permissive default is the defect (see stems/index.ts). With a
+  // deny default, a late registration would wrongly REFUSE a legitimate solo separation, so the
+  // window has to close rather than change sides. Setting it here is idempotent and closes over a
+  // ref, so re-running it costs nothing and a double render is harmless.
+  const authorityRegistered = useRef(false);
+  if (!authorityRegistered.current) {
+    authorityRegistered.current = true;
     setSeparationAuthority(() => maySeparateRef.current());
-  }, []);
+  }
 
   // In a session as a CONTROLLING remote (not the audio host/anchor) that can't make
   // these stems locally, ask the host to separate them and stream the 4-lane view back.

@@ -50,7 +50,11 @@ describe("separation authority", () => {
     );
     fetchMock.mockClear();
   });
-  afterEach(() => setSeparationAuthority(() => true)); // restore the permissive default
+  // The module default is DENY now, not allow (stems/index.ts). Restore the module to a KNOWN
+  // state rather than to "the default", because the point of the change is that an unregistered
+  // module refuses — a test that leaves it permissive would hand the next file a gate that is
+  // open for a reason nothing states.
+  afterEach(() => setSeparationAuthority(() => false));
 
   it("REFUSES to separate when this device is not the authority — and starts no work", async () => {
     setSeparationAuthority(() => false);

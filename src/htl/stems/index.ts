@@ -37,13 +37,28 @@ export class NotSeparationAuthority extends Error {
   }
 }
 
-// Whether THIS device may spend CPU/GPU separating. Module-level like setDemucsQuality, and
-// for the same reason: it is a cross-cutting property of the device, not of one call. Default
-// PERMISSIVE so a solo rig (and every test) separates exactly as before — App registers the
-// real predicate, which answers false for a guest, a listener, and anyone who is not the
-// session's anchor. A predicate rather than a boolean so it is read at decision time: the
-// anchor can move mid-session, and a stale snapshot of the role is the whole bug class.
-let separationAllowed: () => boolean = () => true;
+// Whether THIS device may spend CPU/GPU separating. Module-level like setDemucsQuality, and for
+// the same reason: it is a cross-cutting property of the device, not of one call. A predicate
+// rather than a boolean so it is read at decision time — the anchor can move mid-session, and a
+// stale snapshot of the role is the whole bug class.
+//
+// ★ THE DEFAULT IS DENY, AND IT USED TO BE ALLOW. The old default was justified as "so a solo rig
+// (and every test) separates exactly as before". The test half of that is measurably false: with
+// the default flipped to deny, a paired control/armed run of the whole suite gives 1946 passed and
+// 1946 passed — ZERO tests depend on it. (Measured paired and back-to-back on purpose: an earlier
+// unpaired attempt showed two failures that turned out to be a peer's in-flight commit in a shared
+// tree, not this change.)
+//
+// And the direction of the old default was wrong for the one thing this gate exists to prevent.
+// Fail-open means that if registration ever does not happen — a throw earlier in App's render, a
+// future entry point that forgets, a harness that mounts a subtree — a LISTENER separates in
+// someone else's session, burning CPU on a phone that is only watching. That is precisely what
+// obligation 0464dbda forbids. Fail-closed means separation does not start until the app has said
+// who this device is: a visible, local, recoverable failure instead of a silent wrong one.
+//
+// The app registers during its FIRST RENDER (App.tsx), not in an effect, so there is no window in
+// which the default decides anything for a real user.
+let separationAllowed: () => boolean = () => false;
 /** Register the app's separation-authority predicate. Called once, from App. */
 export function setSeparationAuthority(fn: () => boolean): void {
   separationAllowed = fn;

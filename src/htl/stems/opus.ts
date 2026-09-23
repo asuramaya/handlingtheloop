@@ -17,6 +17,8 @@ const MAGIC = 0x48544f31; // "HTO1"
 const OPUS_SR = 48000;
 const BITRATE = 128_000; // per stem; near-transparent, ~1 MB/min
 
+import { yieldToMain } from "../audio/yieldToMain";
+
 let _supported: Promise<boolean> | null = null;
 /** Whether this browser can both encode AND decode Opus via WebCodecs. Cached. */
 export function opusStemsSupported(): Promise<boolean> {
@@ -175,14 +177,18 @@ export async function decodeStemOpusPlanes(
   // in the direction that hurts, because the slower the device the longer each fixed chunk blocks
   // it. A clock cuts the chunk down until it fits, on whatever hardware is actually running.
   //
-  // ★ AND THE 8 ms DEFAULT IS MEASURABLY THE WORST OF THE AVAILABLE YIELDS, kept anyway. stemlab
+  // ★ THE DEFAULT YIELD IS NOW THE BEST ONE THIS ENGINE HAS, not unconditionally the worst. stemlab
   // showed setTimeout(0) costs ~3.5x the blocking of scheduler.yield or postTask(user-blocking),
   // because those resume AHEAD of work queued during the sleep and a timer resumes behind it
-  // (b18a3dac). It is not switched because whether iOS — the only platform that reaches this
-  // fallback in anger — exposes either API is unmeasured, and the fallback from an absent API is
-  // this timer. Thread 9d03d3e1 carries that probe.
+  // (b18a3dac). This used to say it was "not switched because whether iOS — the only platform that
+  // reaches this fallback in anger — exposes either API is unmeasured", and then, in the same
+  // sentence, "the fallback from an absent API is this timer". The second clause answers the first:
+  // which branch iOS takes was never needed to WRITE the branch, only to know what it bought. An
+  // engine with neither API lands on setTimeout(0), which is what shipped, so the unmeasured
+  // platform cannot regress. yieldToMain() owns the detection and yieldPrimitive() is the witness;
+  // thread 9d03d3e1's probe is now a confirmation rather than a gate.
   const SLICE_MS = sliceMs; // 8 ms by default: under a frame, so a decode in flight cannot drop one
-  const breathe = opts.yieldTo ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
+  const breathe = opts.yieldTo ?? yieldToMain;
   let slice = performance.now();
 
   let p = 12;

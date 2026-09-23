@@ -14,6 +14,7 @@ import { separateNeural } from "./separate";
 export { setDemucsQuality } from "./separate";
 import { getStemModel, deviceSupportsModel, isChromium, LEGACY_STEM_IDS, type StemModel } from "./models";
 import { opusStemsSupported, encodeStemOpus, isOpusStem } from "./opus";
+import { yieldToMain } from "../audio/yieldToMain";
 import { decodeStemOpusOffThread } from "./opusWorker";
 
 export * from "./models";
@@ -571,8 +572,4 @@ function packStemInt16Full(
   base[STEM_NAMES[gi]] = { min, max, low, mid, high, bucket: PACK_BUCKET };
 }
 
-// Yield control back to the browser (a macrotask, so it can paint / handle input
-// between chunks of heavy sample work — a microtask wouldn't unblock rendering).
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+

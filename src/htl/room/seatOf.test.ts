@@ -198,4 +198,14 @@ describe("the board lock reaches the handlers, not just the CSS", () => {
   test("the HARDWARE crossfader guards too — it had no board check at all", () => {
     expect(midi).toMatch(/boardLockedRef\.current/);
   });
+
+  test("★ the MUTATOR guards, not only the callers — seven AutoMixer sites reach it directly", () => {
+    // 5dd05b9 guarded dragCrossfade and claimed "at the mutator". dragCrossfade is a CALLER.
+    // applyCrossfade is the canonical path and the AutoMixer reaches it through autoDeps, so the
+    // guard on the visible fader bought nothing for the seven invisible entries. Asserting the
+    // mutator specifically, because a guard on every caller is a roster and the next caller joins
+    // ungated.
+    const apply = app.slice(app.indexOf("const applyCrossfade = useCallback"), app.indexOf("const dragCrossfade"));
+    expect(apply, "applyCrossfade no longer guards — a caller-side guard is one new caller from useless").toMatch(/boardLockedRef\.current/);
+  });
 });

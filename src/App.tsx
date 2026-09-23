@@ -2806,8 +2806,23 @@ function AppBody() {
   autoEnabledRef.current = autoStatus.enabled;
 
   // Apply a crossfade value through the one canonical path (engine + state + session).
+  //
+  // ★ THE GUARD IS HERE BECAUSE THIS IS THE MUTATOR, and 5dd05b9 put it on a CALLER. I guarded
+  // dragCrossfade — the on-screen fader, the one you can see — and wrote "guarded HERE, at the
+  // mutator" in the commit. dragCrossfade is a caller of this. The AutoMixer reaches this function
+  // directly through autoDeps (seven sites in autoMixer.ts), so a stage DJ with auto-mix running was
+  // still the exact divergence that commit exists to stop: the local engine crossfades, the intent
+  // goes out, and the server drops it because a crossfade carries no deck and canDriveIntent then
+  // demands both. Same seat, same predicate, a different door — Metron found it, and my own comment
+  // below names the bypass ("applyCrossfade stays pure so the AutoMixer, which also calls it…").
+  //
+  // A refusal here makes an auto-mix transition VISIBLY incomplete for a seat that may not move the
+  // board, which is worse than nothing and better than silent divergence — the failure mode is now
+  // audible instead of invisible. Whether a stage DJ should be able to ARM auto-mix at all is a
+  // product question, recorded rather than decided here.
   const applyCrossfade = useCallback(
     (x: number) => {
+      if (boardLockedRef.current) return;
       const v = x < -1 ? -1 : x > 1 ? 1 : x;
       setCrossfade(v);
       engine.setCrossfade(v);

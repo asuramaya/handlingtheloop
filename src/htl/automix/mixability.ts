@@ -31,7 +31,21 @@ export function camelotDistance(a: string | null | undefined, b: string | null |
 
 /** Tempo ratio b/a folded into [1/√2, √2] — i.e. octave-equivalent, matching the
  *  half/double folding the SYNC engine uses. 1 = identical tempo after folding.
- *  null if either BPM is missing. */
+ *  null if either BPM is missing.
+ *
+ *  ★ THIS FOLDING IS ALSO WHAT MAKES A WRONG-OCTAVE BPM HARMLESS TO THE SCORER, which is a second
+ *  job it does silently and which two of us argued about without checking. The third-party lookup
+ *  lane (/api/features) can supply a half-time BPM, and the old upsert defect flipped 128 → 64 on a
+ *  real row; the stated fear was a scorer ranking such a track as tempo-compatible and queueing it.
+ *  It cannot: 128 against 64 folds to exactly 1 and scores 1.000, the SAME as the true BPM, so a
+ *  wrong octave neither promotes nor demotes anything. Measured, not reasoned (ruling 5d7b9b66 said
+ *  the summary lane was "exposed" — right about the missing gate, wrong about the consequence).
+ *
+ *  So if anyone ever stops folding here — a decision about MIXING — they also make the analysis
+ *  pool's provenance gap matter for the first time. The two are one edit apart and nothing else
+ *  connects them. What is NOT covered either way: a non-octave error (128 vs 140 drops the score
+ *  1.000 → 0.570) and a wrong KEY, which keyScore does not fold at all. Both unmeasured for that
+ *  lane — thread 9185eef3. */
 export function bpmRatioFolded(a: number | null | undefined, b: number | null | undefined): number | null {
   if (!a || !b || a <= 0 || b <= 0) return null;
   let r = b / a;

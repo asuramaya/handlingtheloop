@@ -35,6 +35,19 @@ describe("camelotDistance", () => {
 });
 
 describe("bpmRatioFolded", () => {
+  it("★ a WRONG-OCTAVE bpm scores the same as the right one — the provenance gap's only shield", () => {
+    // The analysis pool carries third-party BPMs (/api/features) that can be half-time, and the old
+    // upsert defect flipped 128 → 64 on a real row. The stated fear was the scorer ranking such a
+    // track as tempo-compatible and queueing it. It cannot — the fold makes the two IDENTICAL, so a
+    // wrong octave neither promotes nor demotes. Pinned here because the folding is a decision about
+    // MIXING and this is a consequence for PROVENANCE: one edit separates them and nothing else
+    // connects them, so un-folding would silently make the pool's gap matter for the first time.
+    const t = (bpm: number) => ({ videoId: "x", title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm, key: "8A" }) as never;
+    expect(mixability(t(128), t(64)).score).toBeCloseTo(mixability(t(128), t(128)).score, 5);
+    // …and the residual the fold does NOT cover, so the shield's edge is visible too.
+    expect(mixability(t(128), t(140)).score).toBeLessThan(mixability(t(128), t(128)).score);
+  });
+
   it("folds double/half tempo to ~1", () => {
     expect(bpmRatioFolded(128, 128)).toBeCloseTo(1, 5);
     expect(bpmRatioFolded(128, 64)).toBeCloseTo(1, 5); // half-time mixes fine

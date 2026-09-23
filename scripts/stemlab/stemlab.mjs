@@ -84,7 +84,7 @@ function row(label, r) {
   console.log(
     `  ${label.padEnd(22)} ${f(r.wallMs, 0).padStart(7)} ms   ${f(r.maxFrameGapMs, 0).padStart(6)} ms   ` +
       `${String(r.gapsOver50).padStart(4)}  ${String(r.gapsOver100).padStart(5)}   ${f(r.tbtMs, 0).padStart(7)} ms   ` +
-      `${String(r.bursts).padStart(6)}  ${String(r.maxBurst).padStart(5)}  ${f(r.meanBurst, 1).padStart(6)}   ` +
+      `${String(r.bursts).padStart(6)}  ${String(r.maxBurst).padStart(5)}  ${f(r.maxBurstPos, 2).padStart(5)}  ${f(r.meanBurst, 1).padStart(6)}   ` +
       `${f(r.worstDropMB, 1).padStart(7)}  ${String(r.drops).padStart(5)}  ${f(r.biggestDropMB, 1).padStart(6)}`,
   );
 }
@@ -209,6 +209,7 @@ async function main() {
       biggestDropMB: worst(rs, "biggestDropMB"),
       bursts: Math.round(mean(rs.map((r) => r.delivery), "bursts")),
       maxBurst: worst(rs.map((r) => r.delivery), "maxBurst"),
+      maxBurstPos: mean(rs.map((r) => r.delivery), "maxBurstPos"),
       meanBurst: mean(rs.map((r) => r.delivery), "meanBurst"),
       dframes: rs[0].delivery.frames,
       decodedSeconds: rs[0].decodedSeconds,
@@ -222,7 +223,7 @@ async function main() {
       return;
     }
     console.log(`\n  STEMLAB · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU · ${(sliced.bytes / 1024).toFixed(0)} KiB per stem\n`);
-    console.log("                              wall      worst   >50ms  >100ms       TBT   bursts  maxB    avgB   dropMB@worst  >4MB  maxDrop");
+    console.log("                              wall      worst   >50ms  >100ms       TBT   bursts  maxB   pos    avgB   dropMB@worst  >4MB  maxDrop");
     if (args.sweep) {
       for (const b of [8, 32, 128]) row(`sliced (${b} ms)`, fold(pick(b)));
       row("unsliced (no sleep)", whole);

@@ -19,10 +19,15 @@ interface Delivery {
   maxBurst: number;
   meanBurst: number;
   frames: number;
+  // ★ WHERE THE BIGGEST BURST SITS INSIDE ITS STEM, 0..1. I called maxBurst ~3000-4000 "the flush()
+  // drain, structural" — interpreted, not measured, and I said so. Metron pointed out it is one
+  // field away from being measured: if it IS the flush it must land at the END of a stem in every
+  // condition. If it floats, it is not the flush and it is a difference I have been discounting.
+  maxBurstPos: number;
 }
 
 /** Wrap globalThis.AudioDecoder so every delivered frame is timestamped. Returns the reader. */
-function watchDeliveries(): () => Delivery {
+function watchDeliveries(): (bounds: { start: number; end: number }[]) => Delivery {
   const g = globalThis as unknown as { AudioDecoder: new (i: { output: (d: unknown) => void; error: (e: Error) => void }) => unknown };
   const Real = g.AudioDecoder;
   const at: number[] = [];
@@ -32,7 +37,7 @@ function watchDeliveries(): () => Delivery {
       return new Real(wrapped) as object;
     }
   } as unknown as typeof Real;
-  return () => {
+  return (bounds: { start: number; end: number }[]) => {
     g.AudioDecoder = Real;
     // A BURST is frames delivered with no task boundary between them. 2 ms is generous: a task
     // boundary at 4x CPU is never under that, and two frames of real decode work never that close.
@@ -47,11 +52,29 @@ function watchDeliveries(): () => Delivery {
       }
     }
     const big = sizes.filter((x) => x > 1);
+    // Re-walk to find WHERE the largest burst began, then locate that instant inside its own stem.
+    let bi = 0;
+    let best = -1;
+    let cur = 0;
+    let curStart = 0;
+    for (let i = 0; i < at.length; i++) {
+      if (cur === 0) curStart = at[i];
+      cur++;
+      if (i + 1 >= at.length || at[i + 1] - at[i] > GAP_MS) {
+        if (cur > best) {
+          best = cur;
+          bi = curStart;
+        }
+        cur = 0;
+      }
+    }
+    const owner = bounds.find((b) => bi >= b.start && bi <= b.end);
     return {
       bursts: big.length,
       maxBurst: sizes.length ? Math.max(...sizes) : 0,
       meanBurst: big.length ? big.reduce((a, x) => a + x, 0) / big.length : 0,
       frames: at.length,
+      maxBurstPos: owner && owner.end > owner.start ? (bi - owner.start) / (owner.end - owner.start) : -1,
     };
   };
 }
@@ -296,8 +319,11 @@ export interface Cell {
     const w = watchFrames();
     const t0 = performance.now();
     let decodedSeconds = 0;
+    const bounds: { start: number; end: number }[] = [];
     for (let i = 0; i < stems; i++) {
+      const s0 = performance.now();
       const out = await decodeStemOpus(ctx, blob.slice(0), { sliceMs: sliceMs == null ? Infinity : sliceMs });
+      bounds.push({ start: s0, end: performance.now() });
       decodedSeconds += out.duration;
     }
     const wallMs = performance.now() - t0;
@@ -308,7 +334,7 @@ export interface Cell {
     // still telling me so. Two frames of idle before stopping lets the final gap land.
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     const f = w.stop();
-    const delivery = readDeliveries();
+    const delivery = readDeliveries(bounds);
     return {
       stems,
       seconds,

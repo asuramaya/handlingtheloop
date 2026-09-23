@@ -28,6 +28,8 @@ export interface MidiRoutingDeps {
   onJogEnd: (id: DeckId) => void;
   emitJog: (id: DeckId, delta: number) => void;
   canDriveDeckRef: MutableRefObject<(id: DeckId) => boolean>;
+  /** The crossfader is a WHOLE-BOARD move — full control only, never a stage DJ (canDriveBoard). */
+  boardLockedRef: MutableRefObject<boolean>;
   eqStemModeRef: MutableRefObject<boolean>;
   fxSelRef: MutableRefObject<Record<DeckId, number>>;
   handlersRef: MutableRefObject<Record<string, (deck: Deck, id: DeckId, s: boolean) => void>>;
@@ -67,6 +69,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     onJogEnd,
     emitJog,
     canDriveDeckRef,
+    boardLockedRef,
     eqStemModeRef,
     fxSelRef,
     handlersRef,
@@ -237,6 +240,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             // Smart Fader armed → the fader scrubs the auto-transition (tempo morph + bass swap);
             // it drives engine.setCrossfade itself + manipulates both decks, so don't double-apply.
             // Gate on the live instance flag (always current), not the React-mirror ref.
+            // ★ THE BOARD LOCK, NOT `controlling`. A stepped-up listener holds controlling=true and
+            // one deck; the crossfader needs both, so the server drops the intent (canDriveIntent)
+            // while this line already moved the local engine. The on-screen fader guards at its
+            // mutator; the hardware fader never did.
+            if (boardLockedRef.current) break;
             if (smartFader.isArmed) {
               smartFader.onCrossfade(x);
               setCrossfade(x);

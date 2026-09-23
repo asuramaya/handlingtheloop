@@ -159,3 +159,58 @@ describe("the coupling the agreement above silently rests on", () => {
     expect(singleDeckGrants.length, "no single-deck grant found in room.ts — the scan above is vacuous").toBeGreaterThan(0);
   });
 });
+
+describe("a STAGE DJ and the whole board", () => {
+  // ★ THE READER SWEEP METRON HANDED ME FOUND A LIVE ONE, and it is the guard existing while nothing
+  // asks — shape 1b, from my own standing practices. canDriveBoard has said since it was written
+  // that the crossfader "needs FULL control — never a stage DJ, never a follower". Its only consumer
+  // was a `locked:` prop driving pointer-events, which App.tsx's own comment one screen away calls
+  // out as not a guard ("a control that works because something sits over it is not guarded").
+  //
+  // The handler guarded on `lockedRef` = (enabled && !controlling) || replay — the FOLLOWER lock. A
+  // stepped-up listener holds controlling=true, so it passed: the local engine moved and the server
+  // dropped the intent, because a crossfade carries no deck and canDriveIntent then demands BOTH.
+  // Silent divergence on the shared board, from the seat one role up (71277a23).
+  const stageDj = seatOf({ controlling: true, decks: "B", stage: true }, { enabled: true, floorListener: false });
+
+  test("holds their own deck", () => {
+    expect(canDriveDeck(stageDj, "B")).toBe(true);
+  });
+
+  test("★ is refused the crossfader — and the server agrees, which is the whole point", () => {
+    expect(canDriveBoard(stageDj)).toBe(false);
+    expect(canDriveIntent("B", boardIntent())).toBe(false);
+  });
+
+  test("the FOLLOWER lock would have let them through — it is a different question", () => {
+    // The predicate the handler actually used, reconstructed: (enabled && !controlling) || replay.
+    const followerLock = (seat: { enabled: boolean; controlling: boolean }, replay = false) => (seat.enabled && !seat.controlling) || replay;
+    expect(followerLock(stageDj)).toBe(false); // …so it did NOT lock, which is the defect
+    expect(canDriveBoard(stageDj)).toBe(false); // …while the board rule did.
+    // Both predicates are correct about their own question. Using one where the other belongs is
+    // what shipped, and no test could see it while the board rule had no caller but a CSS prop.
+  });
+
+  test("a full controller is refused nothing", () => {
+    const host = seatOf({ controlling: true, decks: "AB", stage: false }, { enabled: true, floorListener: false });
+    expect(canDriveBoard(host)).toBe(true);
+    expect(canDriveIntent("AB", boardIntent())).toBe(true);
+  });
+});
+
+describe("the board lock reaches the handlers, not just the CSS", () => {
+  // The defect was not the rule, it was that nothing asked it. So the assertion is about CALLERS —
+  // the same shape as duckTap.test.ts, which pins that a helper is CALLED rather than re-testing it.
+  const app = readFileSync(new URL("../../App.tsx", import.meta.url), "utf8");
+  const midi = readFileSync(new URL("../../App/useMidiRouting.ts", import.meta.url), "utf8");
+
+  test("the on-screen crossfader guards on the BOARD lock, not the follower lock", () => {
+    const drag = app.slice(app.indexOf("const dragCrossfade"), app.indexOf("const dragCrossfade") + 900);
+    expect(drag).toMatch(/boardLockedRef\.current/);
+    expect(drag, "dragCrossfade is back on the follower lock, which a stage DJ passes").not.toMatch(/if \(lockedRef\.current\) return;/);
+  });
+
+  test("the HARDWARE crossfader guards too — it had no board check at all", () => {
+    expect(midi).toMatch(/boardLockedRef\.current/);
+  });
+});

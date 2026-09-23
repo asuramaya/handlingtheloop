@@ -669,6 +669,13 @@ function AppBody() {
   // controller drives both decks, a stepped-up listener only their one deck. Read through a
   // ref so the input handlers see the live value without re-subscribing.
   const canDriveDeckRef = useRef<(id: DeckId) => boolean>(() => true);
+  // ★ AND THE BOARD-WIDE ONE, WHICH EXISTED AND NOTHING EVER ASKED. canDriveBoard has said since it
+  // was written that the crossfader "needs FULL control — never a stage DJ, never a follower", and
+  // its only consumer was a `locked:` prop driving pointer-events. dragCrossfade guarded on
+  // lockedRef, which is the FOLLOWER lock: a stepped-up listener holds controlling=true, so it
+  // passed, moved this device's crossfader, and emitted an intent the server drops (canDriveIntent
+  // needs BOTH decks). Silent divergence on the shared board — 71277a23, from the seat one role up.
+  const boardLockedRef = useRef(false);
   // Per-deck "current FX" index — the device selected in each deck's FX strip, mirrored up so
   // the gamepad's bypass-current action (R3) knows which device to flip.
   const fxSelRef = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
@@ -2584,6 +2591,7 @@ function AppBody() {
   // and during replay.
   const boardLocked = !canDriveBoardFor(seat, replay.active);
   canDriveDeckRef.current = canDriveDeck;
+  boardLockedRef.current = boardLocked;
   // Defer decode while we're a pure muted passenger — enabled but rendering no audio and
   // holding no authority. The moment any of those change (🔊 on, granted control, became
   // the clock) we render audio, so we decode the stashed session tracks (flush effect).
@@ -2660,6 +2668,7 @@ function AppBody() {
     onJogEnd,
     emitJog,
     canDriveDeckRef,
+    boardLockedRef,
     eqStemModeRef,
     fxSelRef,
     handlersRef,
@@ -2818,7 +2827,7 @@ function AppBody() {
       // control that works because something sits over it is not guarded. It also matters more than
       // most, because a listener who moves this hears a different mix from the host's — the operator's
       // rule is that performers and listeners stay synced.
-      if (lockedRef.current) return;
+      if (boardLockedRef.current) return; // NOT lockedRef: a stage DJ is `controlling` and must still be refused the board
       if (smartFader.isArmed) {
         const v = x < -1 ? -1 : x > 1 ? 1 : x;
         smartFader.onCrossfade(v);

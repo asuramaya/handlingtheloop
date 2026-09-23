@@ -220,12 +220,50 @@ export async function countAnalysis(db: D1Database): Promise<number> {
  *
  *  The ORDER BY is total — `video_id` is the table's primary key — so paging by OFFSET cannot repeat
  *  or skip a row when `updated_at` ties, which it does in bulk for rows written in the same second. */
-export async function listAnalysis(db: D1Database, limit = 1000, offset = 0): Promise<TrackAnalysisRow[]> {
+export interface ExportAnalysisRow extends TrackAnalysisRow {
+  /** NOT optional, unlike TrackAnalysisRow's. The column is `NOT NULL` and this query names it, so
+   *  the export never has to publish "absent" or "null" as a third, undocumented state of a field
+   *  whose whole job is to be trusted. Metron caught the `?? null` that would have allowed one. */
+  version: number;
+}
+
+export async function listAnalysis(db: D1Database, limit = 1000, offset = 0): Promise<ExportAnalysisRow[]> {
   const r = await db
     .prepare("SELECT video_id, bpm, music_key, key_name, beat_offset, duration, version FROM track_analysis ORDER BY updated_at DESC, video_id DESC LIMIT ? OFFSET ?")
     .bind(Math.max(1, Math.min(limit, 5000)), Math.max(0, offset))
-    .all<TrackAnalysisRow>();
+    .all<ExportAnalysisRow>();
   return r.results ?? [];
+}
+
+/** How many rows carry the SHAPE of the old third-party lane but not its label.
+ *
+ *  ★ THE PROVENANCE COLUMN HAS A BLIND SPOT AND THIS SIZES IT. /api/features wrote no `version` at
+ *  all until c22d16c, so it took migration 0004's column default of 1 — meaning an unknown number of
+ *  rows sitting at `version: 1` are public-database lookups, indistinguishable from a decoded-audio
+ *  measurement by the only column that distinguishes anything. THIRD_PARTY_ANALYSIS_VERSION labels
+ *  the lane going forward and can say nothing about what it already wrote.
+ *
+ *  The shape is the estimator: that lane supplied bpm/key and NOTHING else, so its rows carry no
+ *  key_name, no beat_offset and no duration. Metron's production census licenses it from the other
+ *  side — 0 of 662 decoded-audio pool rows lacked a duration, so a decoded row essentially always
+ *  has one and this filter's false-positive rate is low. A result he published for a different
+ *  question turns out to bound this one.
+ *
+ *  It is an ESTIMATE and the name says so. A pre-versioning row whose contributor crashed between
+ *  the summary write and the grid write would look the same, and nothing distinguishes them now. */
+export async function countUnlabelledLookups(db: D1Database): Promise<number | null> {
+  try {
+    const r = await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM track_analysis
+          WHERE version = 1 AND duration IS NULL AND beat_offset IS NULL AND key_name IS NULL
+            AND (bpm IS NOT NULL OR music_key IS NOT NULL)`,
+      )
+      .first<{ n: number }>();
+    return r?.n ?? 0;
+  } catch {
+    return null; // never fail an export over its own footnote
+  }
 }
 
 // ── ISRC → videoId resolution memo (auto-mix provider radio) ────────────────────────────────────

@@ -182,8 +182,24 @@ export class GateFx extends BaseFxDevice {
   // already written is honoured, because rewriting it is the splice.
   private static readonly LOOKAHEAD = 0.35;
   // The most a single cycle may be stretched/squeezed to chase the grid, as a fraction of its
-  // own length. 12% is under the ~5% that reads as a tempo wobble on a sustained tone, but still
-  // converges a worst-case half-cycle error in ~4 cycles.
+  // own length.
+  //
+  // ★ ITS OLD JUSTIFICATION WAS BORROWED FROM A DIFFERENT DEVICE AND WAS ARITHMETICALLY FALSE. It
+  // read "12% is under the ~5% that reads as a tempo wobble on a sustained tone" — 12 is not under
+  // 5, and more importantly a tempo wobble is a RATE artifact. This gate never touches rate: it
+  // drives gate.gain (see the topology at the top of this file), so it cannot wobble the pitch of a
+  // sustained tone however hard it pulls. The frame came from the sync engine's rate trim, which is
+  // named three lines up as the inspiration for pull-don't-jump — the ANALOGY travelled and the
+  // NUMBER travelled with it, into a place where the quantity it bounds does not exist.
+  //
+  // WHAT IS ACTUALLY CHECKABLE, and it is the half that was right all along: the LOWER bound. A
+  // worst-case error is half a cycle, so convergence takes 0.5 / PULL_MAX cycles — 4.2 at 12%,
+  // and 10 at 5%, which on a 1/8 division is more than a bar of the gate visibly walking. That
+  // arithmetic is pinned in gatePull.test.ts.
+  //
+  // THE UPPER BOUND IS UNCALIBRATED, and now says so rather than borrowing a reason. What limits
+  // it is how large a rhythmic displacement of the gate WINDOW is audible as a lurch, which is an
+  // ear question nobody has asked. 12% is a working value, not a measured one.
   private static readonly PULL_MAX = 0.12;
 
   /** Write any cycles that fall inside the lookahead. Idempotent — safe to call every frame. */

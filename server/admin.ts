@@ -13,6 +13,7 @@ import {
   countAnalysis,
   listAnalysis,
   countUnlabelledLookups,
+  countFieldCoverage,
   upsertCommunityTrack,
   logTakedown,
   listTakedowns,
@@ -118,6 +119,7 @@ async function exportToHf(env: AdminEnv): Promise<{ exported: number; repo: stri
   // learns how many rows the README's own caveat is about, without a second errand they would not
   // think to run.
   const unlabelledLookups = await countUnlabelledLookups(env.DB);
+  const coverage = await countFieldCoverage(env.DB);
   const rows = [];
   for (let offset = 0; ; offset += 5000) {
     const page = await listAnalysis(env.DB, 5000, offset);
@@ -146,7 +148,7 @@ async function exportToHf(env: AdminEnv): Promise<{ exported: number; repo: stri
         }),
       )
       .join("\n") + "\n";
-  const readme = analysisReadme({ tracks: rows.length, unlabelledLookups });
+  const readme = analysisReadme({ tracks: rows.length, unlabelledLookups, coverage });
   await hfCommit(env.HF_TOKEN, repo, [
     { path: "analysis.jsonl", content: jsonl },
     { path: "README.md", content: readme },

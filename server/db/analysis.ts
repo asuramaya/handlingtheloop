@@ -266,6 +266,35 @@ export async function countUnlabelledLookups(db: D1Database): Promise<number | n
   }
 }
 
+/** How many rows actually carry each published field.
+ *
+ *  ★ THE HEADLINE NAMES THREE FEATURES AND THE ROWS DO NOT UNIFORMLY CARRY THEM. "BPM, musical key
+ *  (Camelot), and beat-grid offset" reads as a promise about every row, and a lookup-lane row has
+ *  bpm and key and NOTHING else — `beat_offset` is null there by construction, because that lane
+ *  supplies two fields and the summary write stores what it is given.
+ *
+ *  This is the same overclaim as the one that started this file's provenance work, one field along:
+ *  a sentence asserting uniformity the data does not have. It is cheap to stop asserting it now that
+ *  the README is a pure function of measured facts rather than a literal — so the counts ride with
+ *  the export like the blind-spot count, and a consumer learns what fraction of rows carry what
+ *  before they download anything.
+ *
+ *  One query, so the four numbers are of the SAME table at the SAME instant: four counts taken
+ *  separately could be read between writes and disagree with each other and with `tracks`. */
+export async function countFieldCoverage(db: D1Database): Promise<{ bpm: number; key: number; beatOffset: number; duration: number } | null> {
+  try {
+    const r = await db
+      .prepare(
+        `SELECT COUNT(bpm) AS bpm, COUNT(music_key) AS key, COUNT(beat_offset) AS beatOffset, COUNT(duration) AS duration
+           FROM track_analysis`,
+      )
+      .first<{ bpm: number; key: number; beatOffset: number; duration: number }>();
+    return r ?? null;
+  } catch {
+    return null; // never fail an export over its own footnote
+  }
+}
+
 // ── ISRC → videoId resolution memo (auto-mix provider radio) ────────────────────────────────────
 // See migrations/0028_isrc_video.sql. A recording's ISRC is permanent, so this mapping never
 // expires: it exists purely to keep the TIDAL radio tier from spending a YouTube search per

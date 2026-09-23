@@ -12,6 +12,33 @@ export interface TrackAnalysisRow {
   energy?: number | null;
 }
 
+/** The version a contribution carries when it did NOT come from our detector — the /api/features
+ *  lane, which is a third-party ISRC lookup (MusicBrainz → AcousticBrainz) with bpm/key and nothing
+ *  else. It must sit BELOW the schema default (`version INTEGER NOT NULL DEFAULT 1`, migration
+ *  0004), and that is the whole point of the number.
+ *
+ *  ★ THE DON'T-DOWNGRADE GUARD IS `>=`, SO A TIE IS AN OVERWRITE, and this lane used to tie with
+ *  every default-version row by omitting `version` entirely. Measured on a real local D1 (wrangler
+ *  d1 execute --local), a single features call against a version-1 row that had been derived from
+ *  decoded audio: bpm 128 → 64, music_key 8A → 3A, and key_name / beat_offset / DURATION all set to
+ *  NULL, because the summary statement writes every column from `excluded` and this caller supplies
+ *  three of them. The `grid` column survived untouched — the grid write is skipped when no grid is
+ *  offered — so the row came out of it holding a beatgrid, a bpm that disagrees with that grid, and
+ *  no duration to check the grid against. A v4 row was untouched in the same run: the guard works
+ *  exactly where the versions differ and is a no-op where they tie.
+ *
+ *  Which bpm is the better number is a separate question nobody has measured. The defect does not
+ *  depend on the answer: the row ends up internally inconsistent either way, and the field that
+ *  matters most is the one nulled rather than the one replaced — `duration` is what mayReuseGrid
+ *  uses to decide whether a grid describes this audio at all (src/App/gridReuse.ts).
+ *
+ *  0 rather than a flag column because the guard already reads this axis. A row at 0 is behind every
+ *  reader's ANALYSIS_VERSION, so mayReuseGrid answers `behind-version`, the load derives locally and
+ *  re-contributes at the real version — the same lazy convergence the version gate was built for.
+ *  A fresh track still gets its third-party row: ON CONFLICT's WHERE gates the UPDATE branch only,
+ *  never the INSERT. */
+export const THIRD_PARTY_ANALYSIS_VERSION = 0;
+
 /** Contribute/refresh a track's analysis (BPM/key/grid). Idempotent per video.
  *  DON'T-DOWNGRADE: the row is overwritten only when the incoming `version` is >= the stored one,
  *  so an older client can never stomp a grid produced by a newer detector. Combined with the load

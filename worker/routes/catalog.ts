@@ -20,7 +20,7 @@ import { getValidToken } from "../../server/connections";
 import { tidalProbe } from "../../server/tidalData";
 import { makeProviderRadio } from "../../server/providerRadio";
 import { tidalClientToken, tidalClientTokenDebug, tidalCreds } from "../../server/tidalAuth";
-import { upsertAnalysis, getIdentity, upsertIdentity, getIsrcVideos, putIsrcVideos } from "../../server/db";
+import { upsertAnalysis, THIRD_PARTY_ANALYSIS_VERSION, getIdentity, upsertIdentity, getIsrcVideos, putIsrcVideos } from "../../server/db";
 import { allow } from "../../server/security";
 
 export async function handleCatalogRoutes(url: URL, req: Request, env: Env, ctx: ExecutionContext): Promise<Response | null> {
@@ -93,10 +93,14 @@ export async function handleCatalogRoutes(url: URL, req: Request, env: Env, ctx:
       const isrc = url.searchParams.get("isrc");
       if (!isrc) return json(400, { error: "missing ?isrc=" });
       const f = await featuresByIsrc(isrc);
-      // Cache to the shared dataset keyed by videoId when we know it.
+      // Cache to the shared dataset keyed by videoId when we know it. THIRD_PARTY_ANALYSIS_VERSION
+      // (not an omitted version, which defaults to 1 and TIES with every default-version row under a
+      // `>=` guard) — see the constant for what a tie was measured to do to such a row.
       const v = url.searchParams.get("v");
       if (f && (f.bpm != null || f.key != null) && v && isVideoId(v) && env.DB) {
-        ctx.waitUntil(upsertAnalysis(env.DB, { videoId: v, bpm: f.bpm, key: f.key }).catch(() => {}));
+        ctx.waitUntil(
+          upsertAnalysis(env.DB, { videoId: v, bpm: f.bpm, key: f.key, version: THIRD_PARTY_ANALYSIS_VERSION }).catch(() => {}),
+        );
       }
       return json(200, { features: f });
     }

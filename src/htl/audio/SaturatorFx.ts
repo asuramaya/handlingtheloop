@@ -31,6 +31,7 @@
 // would need a general N-way correction, not attempted here.
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp, clamp01, logMap, safeDisconnect } from "./fxDsp";
+import { watchProcessor } from "./workletWatch";
 
 export const SAT_STYLES = ["TUBE", "TAPE", "CLIP", "FOLD", "DIODE"] as const;
 export type SatStyle = (typeof SAT_STYLES)[number];
@@ -417,6 +418,7 @@ export class SaturatorFx extends BaseFxDevice {
     if (this._style[i] === TAPE_STYLE) {
       try {
         const node = new AudioWorkletNode(ctx, "tape", { numberOfInputs: 1, numberOfOutputs: 1 });
+        watchProcessor(node, "tape");
         align = ctx.createDelay(0.05);
         align.delayTime.value = SaturatorFx.SHAPER_LATENCY_SAMPLES / ctx.sampleRate; // exact samples
         this.shaperIns[i].connect(node);

@@ -17,6 +17,7 @@
 // worklet reads them all from the same knobs; the ballistics are what change.
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp } from "./fxDsp";
+import { watchProcessor } from "./workletWatch";
 
 export const COMP_MODES = ["GLUE", "FET", "OPTO", "LIMIT"] as const;
 export type CompMode = (typeof COMP_MODES)[number];
@@ -75,6 +76,7 @@ export class CompFx extends BaseFxDevice {
         channelCount: 2,
         channelCountMode: "explicit",
       });
+      watchProcessor(this.node, "comp", "the master brickwall runs this processor too");
       this.input.connect(this.node, 0, 0);
       this.sidechain.connect(this.node, 0, 1);
       this.node.connect(this.wet);

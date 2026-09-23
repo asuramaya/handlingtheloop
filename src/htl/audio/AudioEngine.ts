@@ -16,6 +16,7 @@ import { headroomGain } from "./masterHeadroom";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
 import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
+import { watchProcessor } from "./workletWatch";
 
 type DeckId = "A" | "B";
 
@@ -439,8 +440,16 @@ export class AudioEngine {
         // deckId (shared with the stretch node below) keys the PCM registry both
         // worklets read/write in their common AudioWorkletGlobalScope — see
         // scratchWorklet.ts's header comment.
-        if (!this.deckA.scratchAttached) this.deckA.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "A" } }));
-        if (!this.deckB.scratchAttached) this.deckB.attachScratchNode(new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "B" } }));
+        if (!this.deckA.scratchAttached) {
+          const n = new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "A" } });
+          watchProcessor(n, "scratch", "deck A");
+          this.deckA.attachScratchNode(n);
+        }
+        if (!this.deckB.scratchAttached) {
+          const n = new AudioWorkletNode(this.ctx, "scratch", { outputChannelCount: [2], processorOptions: { deckId: "B" } });
+          watchProcessor(n, "scratch", "deck B");
+          this.deckB.attachScratchNode(n);
+        }
       } catch (e) {
         console.warn("[htl] scratch node attach failed (will retry):", e);
       }
@@ -453,11 +462,19 @@ export class AudioEngine {
           // for them (Deck.setStemTaps → the worklet's taps flag); declaring them at
           // construction is the only way to have them at all, since a node's output count is
           // fixed for its lifetime and the PCM lives inside this node.
-          this.deckA.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "A" } }));
+          {
+            const n = new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "A" } });
+            watchProcessor(n, "stretch", "deck A — this processor holds the deck's PCM");
+            this.deckA.attachStretchNode(n);
+          }
           this.deckA.configureStretch(this.stretchCfg);
         }
         if (!this.deckB.stretchAttached) {
-          this.deckB.attachStretchNode(new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "B" } }));
+          {
+            const n = new AudioWorkletNode(this.ctx, "stretch", { numberOfOutputs: 5, outputChannelCount: [2, 2, 2, 2, 2], processorOptions: { deckId: "B" } });
+            watchProcessor(n, "stretch", "deck B — this processor holds the deck's PCM");
+            this.deckB.attachStretchNode(n);
+          }
           this.deckB.configureStretch(this.stretchCfg);
         }
       } catch (e) {
@@ -473,6 +490,7 @@ export class AudioEngine {
       try {
         const size = Math.floor(RING_SECONDS * this.ctx.sampleRate);
         const node = new AudioWorkletNode(this.ctx, "ringrec", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { size } });
+        watchProcessor(node, "ringrec");
         this.masterOut.connect(node); // the as-heard mix: post-crossfade AND post-ceiling
         this.ringKeep = this.ctx.createGain();
         this.ringKeep.gain.value = 0; // silent — only keeps the node in the pull graph

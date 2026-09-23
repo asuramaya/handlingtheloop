@@ -18,6 +18,7 @@
 // disconnect of a live wet chain is a hard splice, and STAGES fires one on every integer step.
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { logMap, SyncRate, MOD_DIVS, safeDisconnect } from "./fxDsp";
+import { watchProcessor } from "./workletWatch";
 
 export const MOD_MODES = ["CHORUS", "FLANGER", "PHASER", "BARBER"] as const;
 export const MOD_WAVES = ["SINE", "TRI", "SQUARE"] as const;
@@ -498,6 +499,7 @@ export class ModFx extends BaseFxDevice {
       voiceBases.forEach((voiceBase, k) => {
         try {
           const node = new AudioWorkletNode(ctx, "moddelay", { numberOfInputs: 2, numberOfOutputs: 3, outputChannelCount: [2, 1, 1], channelCount: 2, channelCountMode: "explicit" });
+          watchProcessor(node, "moddelay");
           feed.connect(node, 0, 0);
           link(this.envTap, node, 0, 1);
           node.connect(voicesOut, 0, 0);

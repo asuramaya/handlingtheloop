@@ -18,6 +18,7 @@ import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp, clamp01 } from "../../util/math";
 import { makeRectifyCurve, makeClampCurve, DuckTap } from "./duckingHelper";
 import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
+import { watchProcessor } from "./workletWatch";
 
 // Mode labels (the worklet owns the per-style voicing table; this is just the UI labels +
 // the index that rides the `style` param).
@@ -166,6 +167,7 @@ export class ReverbFx extends BaseFxDevice {
     // very early add) we degrade to the filtered signal so nothing crashes.
     try {
       this.node = new AudioWorkletNode(ctx, "reverbfdn", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit" });
+      watchProcessor(this.node, "reverbfdn");
       this.inLP.connect(this.node);
       this.node.connect(this.wSplit);
       for (const k in this.wp) this.node.port.postMessage({ k, v: this.wp[k] });

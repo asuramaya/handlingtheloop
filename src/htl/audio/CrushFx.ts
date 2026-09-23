@@ -6,6 +6,7 @@
 // the node is created on demand here, with a passthrough fallback if the module is missing.
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp01, logMap } from "./fxDsp";
+import { watchProcessor } from "./workletWatch";
 
 export const CRUSH_MODES = ["S&H", "ZERO", "VINTAGE", "JITTER"] as const;
 export type CrushMode = (typeof CRUSH_MODES)[number];
@@ -40,6 +41,7 @@ export class CrushFx extends BaseFxDevice {
     this.post.Q.value = resQdB(this._res);
     try {
       this.node = new AudioWorkletNode(ctx, "crush", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit" });
+      watchProcessor(this.node, "crush");
       this.input.connect(this.node).connect(this.post).connect(this.wet);
       this.pushAll();
     } catch {

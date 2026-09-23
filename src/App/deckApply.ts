@@ -20,6 +20,16 @@
 // OUT, and the check that it stays one is mechanical: if this file ever imports Deck, the bound is
 // gone and the move bought nothing. Nothing here may import from ../htl/audio.
 //
+// ★ WHERE THE BOUND IS ENFORCED: src/htl/audio/deckSurfaceBound.test.ts, and NOT here any more.
+// This module used to carry its own test asserting the property over a two-entry list. That was a
+// roster of one fixed by making it a roster of two — the module that gets this property tomorrow
+// still went unchecked, and nothing said so. Metron replaced it with a DERIVED population (every
+// module declaring a deck surface made of methods), which on its first run found a third module
+// that had had the property all along and was never protected: src/htl/room/fxWire.ts. It also
+// corrected the invariant my roster had encoded: fxWire only READS, so "an applying module declares
+// its own surface" was a property of the two modules I happened to be looking at. The rule is that
+// A MODULE DECLARING ITS OWN DECK SURFACE MUST NOT ALSO REACH FOR THE WIDE ONE.
+//
 // Metron's correction, kept because the reasoning is the useful part: I had claimed all 136
 // deck-mutation sites lived in App.tsx. That came from a scan that reads only App.tsx — true the
 // way "every fish I caught was in this lake" is true. Counted across src/, deck writers are touched

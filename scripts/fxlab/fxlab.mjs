@@ -78,6 +78,7 @@ function parseArgs(argv) {
       case "--bypass-cost": a.bypassCost = true; break;
       case "--duck-cost": a.duckCost = true; break;
       case "--deck-limiter": a.deckLimiter = true; break;
+      case "--resident": a.resident = true; break;
       case "--live-comp-prune": a.liveCompPrune = true; break;
       case "--sync-drift": a.syncDrift = true; break;
       case "--stem-taps": a.stemTaps = true; break;
@@ -508,6 +509,26 @@ async function main() {
         `\n   ${r.bypassed === 0 ? "\u2713 PRUNED with the REAL device too \u2014 so the 92.6% was the OFFLINE RENDERER, not CompFx" : "\u2717 NOT pruned with the real device \u2014 the offline number was about CompFx, and setBypass's comment is wrong for it"}\n`,
       );
       process.exitCode = 0;
+      return;
+    }
+
+    if (args.resident) {
+      // Thread 971d5eb2. The CRASH needs a phone; the PREMISE of the diagnosis does not.
+      console.log("\n  RESIDENT AUDIO after a plain load \u2014 is the float32 mix released once the worklet holds the PCM?\n");
+      let anyReleased = false;
+      for (const secs of [60, 240, 600]) {
+        const r = await page.evaluate((s) => globalThis.fxlabResident(s), secs);
+        const mb = (n) => `${(n / 1e6).toFixed(1)} MB`;
+        console.log(
+          `   ${String(secs).padStart(3)}s track   expected ${mb(r.expectedMixBytes).padStart(8)}   deck holds ${mb(r.mixWhilePlaying).padStart(8)} playing, ${mb(r.mixWhilePaused).padStart(8)} paused   stems ${mb(r.stemsWhilePlaying)}`,
+        );
+        if (!r.retainedAfterWorkletHasPcm) anyReleased = true;
+      }
+      console.log(
+        `\n   ${anyReleased ? "\u2713 the mix IS released somewhere \u2014 the diagnosis in 971d5eb2 is WRONG and the iOS ceiling is elsewhere" : "\u2717 the deck retains the FULL float32 mix after the worklet has the PCM \u2014 two copies resident, which is the premise 971d5eb2 rests on"}`,
+      );
+      console.log("\n   \u2605 WHAT THIS IS NOT: a crash, or a phone. It measures what a deck RETAINS, which is the half of");
+      console.log("   the diagnosis that never needed a device and which I had filed as though it did.\n");
       return;
     }
 

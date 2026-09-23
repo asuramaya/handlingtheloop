@@ -3403,3 +3403,45 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   }
   return rows;
 };
+
+// ★ TESTING MY OWN "BLOCKED ON A PHONE" CLAIM INSTEAD OF REPEATING IT (thread 971d5eb2). I filed
+// the iOS OOM as needing a device. The CRASH does. The PREMISE does not: my whole diagnosis rests
+// on "the float32 mix is never released on the plain mobile path, because releaseMixBuffer
+// early-returns unless the engine holds STEMS, and mobile never separates locally". That is a claim
+// about what a deck RETAINS after a normal load, and a headless engine can answer it today.
+//
+// If mixBytes falls to 0 after the stretch worklet has the PCM, my diagnosis is wrong and the iOS
+// ceiling is somewhere else entirely. If it stays at the full float32 size, the deck is holding the
+// buffer AND the worklet is holding its own copy, which is the arithmetic I have been quoting at
+// the operator without having run it.
+(globalThis as unknown as { fxlabResident: (seconds: number) => Promise<Record<string, number | boolean>> }).fxlabResident = async (seconds) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 250));
+  const sr = eng.ctx.sampleRate;
+  const buf = eng.ctx.createBuffer(2, Math.round(sr * seconds), sr);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < d.length; i++) d[i] = 0.3 * Math.sin((2 * Math.PI * 220 * i) / sr);
+  }
+  const expected = buf.length * buf.numberOfChannels * 4;
+  eng.deckA.setBuffer(buf);
+  eng.deckA.play();
+  await new Promise((r) => setTimeout(r, 800)); // let the stretch worklet take the PCM
+  const playing = eng.audioResident();
+  eng.deckA.pause();
+  await new Promise((r) => setTimeout(r, 200));
+  const paused = eng.audioResident();
+  await eng.ctx.close();
+  return {
+    seconds,
+    expectedMixBytes: expected,
+    mixWhilePlaying: playing.mixA,
+    mixWhilePaused: paused.mixA,
+    stemsWhilePlaying: playing.stemsA,
+    cached: playing.cached,
+    retainedAfterWorkletHasPcm: playing.mixA >= expected,
+  };
+};

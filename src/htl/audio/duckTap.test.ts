@@ -103,6 +103,31 @@ describe("duckTapWanted — both halves, each found at cost", () => {
   });
 });
 
+describe("the predicate is USED, not merely present", () => {
+  // ★ THE THREE CASES ABOVE ARE TAUTOLOGICAL AND CANNOT BE OTHERWISE. duckTapWanted is `a && b`;
+  // asserting its truth table pins arithmetic, not a decision. The decision being protected is that
+  // both devices ASK IT rather than spelling the && inline — because the two measurements that
+  // argued for each half live in its doc comment, and an inlined && discards them silently.
+  //
+  // So the failure this guards is precise: a later simplification writes
+  // `sync(this._gateOpen && this._duckWired)` at both call sites, duckTapWanted becomes uncalled,
+  // every test above still passes, and the reasons detach from the code with nothing objecting.
+  // That is capability-exists-unadopted pointed at a helper one commit old.
+  const devices = sourceFiles(join(__dirname, "..", "..")).filter((f) => /audio\/(DelayFx|ReverbFx)\.ts$/.test(f.path));
+
+  it("found both devices (vacuity guard)", () => {
+    expect(devices).toHaveLength(2);
+  });
+
+  it("each device syncs the tap THROUGH the predicate", () => {
+    const off = devices.filter((f) => !/duckTap\.sync\(\s*duckTapWanted\(/.test(stripComments(f.src)));
+    expect(
+      off.map((f) => f.path),
+      "these sync the duck tap without asking duckTapWanted — the two regressions it encodes (the 26% bypassed-device cost, and the duck-ZERO cost nobody predicted) are then only in a comment nothing reads",
+    ).toEqual([]);
+  });
+});
+
 describe("a cut tap is refused, not read", () => {
   // Both devices guard `duckGain` with `if (!this.duckTap.on) return 1`. A severed AnalyserNode
   // keeps whatever was in its buffer when the edge went, so reading it reports PHANTOM ducking —

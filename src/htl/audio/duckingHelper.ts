@@ -34,6 +34,25 @@ export function makeClampCurve(): Float32Array<ArrayBuffer> {
  *  Measured at 26.4% of a DelayFx's whole active cost (fxlab --duck-cost, 9326968), against a
  *  written judgement that called it "orders below" the delay lines. The edge is only severable
  *  from the SOURCE — an analyser has no outputs — which this owns so no caller can get it wrong. */
+/** ★ THE CONDITION, EXTRACTED SO IT CAN BE PINNED AND SO TWO DEVICES CANNOT DRIFT ON IT.
+ *
+ *  The tap is live only while BOTH halves hold, and each half was found separately and at cost:
+ *
+ *  GATE OPEN — because the bypass gate cuts edges out of `wet` and the tap hangs off `duckScale`,
+ *  on the sidechain side, where the gate never looks. Measured at 26.4% of a DelayFx's whole active
+ *  cost (fxlab --duck-cost); a bypassed delay went from 33.7% of active to 7.4% once this half was
+ *  added. Drop it and a bypassed device pays a quarter of its cost to feed a meter nobody reads.
+ *
+ *  FOLLOWER WIRED — because setDuck already severs BOTH ends of the follower when duck reaches 0,
+ *  and the tap alone kept all five native nodes scheduled anyway. This half is the one nobody
+ *  predicted: the cost was there at duck ZERO, where the feature is off.
+ *
+ *  Either half alone leaves one of those two regressions. Written as a named predicate rather than
+ *  an && at two call sites, because the reasons above are what a later simplification discards. */
+export function duckTapWanted(gateOpen: boolean, followerWired: boolean): boolean {
+  return gateOpen && followerWired;
+}
+
 export class DuckTap {
   private wired = true; // both devices connect the tap in their constructor
   constructor(

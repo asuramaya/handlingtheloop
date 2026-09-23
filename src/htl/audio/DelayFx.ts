@@ -19,7 +19,7 @@
 
 import { BaseFxDevice, type FxKind } from "./Fx";
 import { clamp } from "../../util/math";
-import { makeRectifyCurve, makeClampCurve, DuckTap } from "./duckingHelper";
+import { makeRectifyCurve, makeClampCurve, DuckTap, duckTapWanted } from "./duckingHelper";
 import { qToResDb, FLAT_RES_DB, RES_SPAN_DB } from "./fxDsp";
 
 export const DELAY_MAX_SECONDS = 2.0; // a whole bar at ≥120 BPM
@@ -461,7 +461,7 @@ export class DelayFx extends BaseFxDevice {
     this.syncDuckTap();
   }
   private syncDuckTap() {
-    this.duckTap.sync(this._gateOpen && this._duckWired);
+    this.duckTap.sync(duckTapWanted(this._gateOpen, this._duckWired));
   }
   private setDuck(amt: number) {
     this._duckAmt = amt;

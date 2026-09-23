@@ -112,9 +112,63 @@ imports the other, and the import itself is the declaration of intent.
 - Cost: lowest. Strength: the origin is legible per *module*, which matches how the code is
   actually split today.
 
-### What I would build, if forced to choose now
+## RULED: A, with C's module bound — and C's premise does not hold yet
 
-**A**, and add B's argument only for the writers an applier never touches. A is the only one whose
-cost lands mostly on sites that already have a gate one frame up, and its weakness (`as`) is the
-kind a scan *can* catch, unlike the weaknesses this thread has been failing to catch for seven
-turns. But this is a draft, and the point of it is for Metron to knock one down.
+Metron knocked B down, and not on the layering cost I asked him to price. **B's stated strength is
+false.** "No second type, no way to launder it" — the laundering is the word `"remote"`. An origin
+argument is a fact about the caller passed to the callee, so the callee trusts the caller to tell the
+truth about itself. An originating site writing `deck.setTempo(v, "remote")` bypasses the gate,
+compiles, type-checks and reads as deliberate. No cast, no `as`, nothing a scan can anchor on, because
+`"remote"` is a legitimate value at all 182 sites. A's weakness is an `as` — visible, greppable,
+scannable. **So B is strictly worse than A on the one axis B was supposed to win.**
+
+The layering cost is real too, and it is a trap this repo already sprang once: for `Deck` to consult a
+permission it needs session state, but `Deck` is constructed inside `AudioEngine` before any session
+exists. So the permission source is late-bound, and a late-bound permission has a default — default
+ALLOW is the fail-open fixed in the separation authority (`3268761`), default DENY refuses local
+writes before the session boots, which is why that registration moved from `useEffect` into first
+render. B reproduces that dilemma at 182 call sites instead of one.
+
+And a third cost, Metron's own: his probes construct `new AudioEngine()` and call `deckA.setBuffer` /
+`play` / `setTempo` with no session at all — `--sync-drift`, `--deck-limiter`, `--resident`. Under B
+each measurement rig would have to model room authority in order to measure audio. An instrument
+taking on its subject's unrelated complexity is how instruments get heavy without getting better.
+
+**Ruled: A, refined by C rather than compromised with B.** "A plus B's argument for the writers an
+applier never touches" is a second mechanism for a subset, and a subset boundary is a roster. Instead:
+A gives the compile error, and the module split bounds where a drive handle may be *obtained*. One
+mechanism, two levels. The `as` weakness then has a scan with a real population — any file that is not
+the drive-side module and mentions the handle type.
+
+### ★ The prerequisite neither of us named: there is no module split yet
+
+C's insight is that "the origin is already legible per module, because the code is split that way".
+**It is not.** Measured, not recalled — all 136 deck-mutation sites are in `src/App.tsx`:
+
+| | `src/App.tsx` |
+|---|---|
+| `deckSnapshot` | line 233 |
+| `applyDeckStems` | line 298 |
+| `applyDeckRack` | line 320 |
+| `applyDeckControls` | line 347 |
+| `AppBody` (the 91 originating sites) | line 388 |
+
+The appliers and the driving surface are separated by a *function* boundary in one file — and a
+function-level boundary is precisely what Metron's first knockdown killed: the same method is reached
+from both sides, so a function-level roster cannot separate them. A module bound over a split that is
+only a function split is the exemption list again.
+
+So A+C has a step in front of it: **extract the appliers into their own module** (`src/App/deckApply.ts`
+or similar). That step is cheap and safe in a way the rest of this work is not — they are top-level
+functions closing over nothing but module scope, so it is a MOVE, not a rewrite; it is
+behaviour-preserving, so it needs no live-run baseline; and it makes the distributive half smaller
+when that baseline does arrive. It is also the only part of this design that can be taken today.
+
+### What I would have built before the knockdown
+
+**A**, and add B's argument only for the writers an applier never touches — kept here rather than
+edited away, because the reason it was wrong is the useful part. I reached A on the grounds that its
+cost lands mostly on sites already gated one frame up. That was right about A and wrong about B: I
+had accepted B's "no way to launder it" at face value and only questioned its layering cost. The
+knockdown came from attacking the strength, not the cost. A subset boundary would also have been a
+roster, which I proposed one paragraph after agreeing rosters were the thing to avoid.

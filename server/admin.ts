@@ -3,6 +3,7 @@
 // Access (verified per-request in access.ts). Privileged control: browse the
 // community catalog, DMCA takedowns (drop the row + optionally purge the R2 bytes,
 // always audit-logged), reindex, and an accounts overview.
+import { analysisReadme } from "./hfReadme";
 import {
   type D1Database,
   listCommunityTracks,
@@ -145,25 +146,7 @@ async function exportToHf(env: AdminEnv): Promise<{ exported: number; repo: stri
         }),
       )
       .join("\n") + "\n";
-  const readme =
-    `---\nlicense: cc0-1.0\ntags: [music-information-retrieval, audio, bpm, key-detection]\n---\n\n` +
-    `# htl analysis\n\nCrowdsourced music-information features — BPM, musical key (Camelot), and beat-grid offset — ` +
-    `keyed by YouTube video id. Derived features (facts about recordings), no audio. Published by ` +
-    `[Handling The Loop](https://handlingtheloop.com) — most rows measured from decoded audio by ` +
-    `this project, some looked up in public databases; see \`version\` below before treating a ` +
-    `row as our own measurement. ${rows.length} tracks.\n\n` +
-    `## \`version\`\n\nThe algorithm that produced the row. \`0\` means the BPM/key were NOT derived ` +
-    `by this project: they were looked up in public databases (MusicBrainz → AcousticBrainz) by ` +
-    `recording identifier and cached. Above \`0\`, a higher number is a later detector. Filter on ` +
-    `it if you need one or the other — the two are different kinds of evidence and this dataset ` +
-    `carries both.\n\n` +
-    `### What \`version\` does NOT tell you\n\nThe third-party lookup lane did not stamp \`0\` ` +
-    `until partway through this dataset's life; before that it wrote no version at all and took ` +
-    `the column default of \`1\`. So an unknown number of rows at \`version: 1\` are third-party ` +
-    `lookups, not measurements from decoded audio. \`0\` is a reliable positive signal — a row ` +
-    `marked \`0\` really is a lookup — but \`1\` is not a guarantee of the opposite. Rows at ` +
-    `\`1\` carrying \`bpm\` or \`key\` with \`key_name\`, \`beat_offset\` and \`duration\` all ` +
-    `null have the shape of that older lookup lane, if you need a filter for it.\n`;
+  const readme = analysisReadme({ tracks: rows.length, unlabelledLookups });
   await hfCommit(env.HF_TOKEN, repo, [
     { path: "analysis.jsonl", content: jsonl },
     { path: "README.md", content: readme },
@@ -395,7 +378,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.que
 $('#q').oninput=()=>{clearTimeout(window._t);window._t=setTimeout(loadCommunity,250);};
 $('#reindex').onclick=async()=>{$('#reindex').textContent='Reindexing…';const r=await api('/api/reindex',{method:'POST'});$('#reindex').textContent='Reindex from R2';alert('Indexed '+r.indexed+' tracks');loadCommunity();stats();};
 $('#storagebtn').onclick=loadStorage;
-$('#export').onclick=async()=>{$('#export').textContent='Exporting…';const r=await api('/api/export',{method:'POST'});$('#export').textContent='Export → HF';if(r.exported!=null)alert('Exported '+r.exported+' tracks → huggingface.co/datasets/'+r.repo);else alert('Export failed: '+(r.error||''));};
+$('#export').onclick=async()=>{$('#export').textContent='Exporting…';const r=await api('/api/export',{method:'POST'});$('#export').textContent='Export → HF';if(r.exported!=null)alert('Exported '+r.exported+' tracks → huggingface.co/datasets/'+r.repo+'\\n\\nProvenance blind spot: '+(r.unlabelledLookups==null?'count failed to run (NOT zero)':r.unlabelledLookups+' rows at version 1 look like the pre-0 third-party lookup lane'));else alert('Export failed: '+(r.error||''));};
 $('#dmcabtn').onclick=()=>{const id=parseId($('#dmca').value);if(!id){alert('Could not find an 11-char video id in that input.');return;}takedown(id,true);$('#dmca').value='';};
 $('#dmca').addEventListener('keydown',e=>{if(e.key==='Enter')$('#dmcabtn').click();});
 stats();loadCommunity();

@@ -24,6 +24,20 @@ import type { AudioEngine } from "@htl/audio";
 const FLOOR_DB = -60;
 const DECAY = 1.1; // per-frame fall (instant attack, slow decay — VU ballistics)
 const GR_FULL_DB = 12;
+// ★ THE METER EXISTED AND ITS SCALE HID THE ONE THING IT WAS ASKED TO SHOW. The operator ruled that
+// the master limiter's gain reduction be SURFACED (their reasoning: their ears are relative to
+// speakers and to how loudly a track was mastered, so the CONDITION is the objective part). It was
+// already surfaced — here, rAF-driven, since before the ruling. What nobody checked is the RANGE.
+//
+// The reported phenomenon is the cross-deck punch, measured at 1.88 dB hot and 0.00 dB at mid mix
+// (489901b3). Linear against a 12 dB full scale, 1.88 dB is 16% of a band that is a few pixels
+// tall — so the meter was working correctly and could not show the defect it was pointed at. An
+// instrument whose range excludes its subject is tonight's family in a display rather than a test.
+//
+// A square-root map keeps 12 dB at the top (heavy limiting still has somewhere to go) while giving
+// the 0-3 dB region, where this defect lives, most of the width: 1.88 dB now reads 40% instead of
+// 16%. The mapping is pinned by masterGrMeter.test.ts, because "looks better" is not a measurement.
+export const grMeterFraction = (grDb: number): number => Math.sqrt(Math.max(0, Math.min(1, grDb / GR_FULL_DB)));
 
 export function MasterBand({ engine, value, onChange, disabled }: { engine: AudioEngine; value: number; onChange: (v: number) => void; disabled?: boolean }) {
   const lvlRef = useRef<HTMLSpanElement>(null);
@@ -46,7 +60,7 @@ export function MasterBand({ engine, value, onChange, disabled }: { engine: Audi
       peak = db >= peak ? db : peak - DECAY;
       const lvl = Math.max(0, Math.min(1, (peak - FLOOR_DB) / -FLOOR_DB));
       if (lvlRef.current) lvlRef.current.style.width = `${(lvl * 100).toFixed(1)}%`;
-      const gr = Math.max(0, Math.min(1, engine.masterGr / GR_FULL_DB));
+      const gr = grMeterFraction(engine.masterGr);
       if (grRef.current) grRef.current.style.width = `${(gr * 100).toFixed(1)}%`;
       raf = requestAnimationFrame(tick);
     };

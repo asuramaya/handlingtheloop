@@ -29,6 +29,18 @@ describe("watch-only board guards", () => {
     expect(callbackBody("dragCrossfade")).not.toBe("");
   });
   it("dragCrossfade refuses while the board is locked", () => {
-    expect(callbackBody("dragCrossfade")).toMatch(/if \(lockedRef\.current\) return/);
+    // ★ THE BOARD LOCK, NOT THE FOLLOWER LOCK, and this test pinned the weaker one. `lockedRef` is
+    // (enabled && !controlling) || replay — a stepped-up listener holds controlling=true and ONE
+    // deck, so it passed, moved this device's crossfader, and emitted an intent the server drops
+    // (a crossfade carries no deck, so canDriveIntent demands BOTH). canDriveBoard has always said
+    // "never a stage DJ"; nothing asked it but a pointer-events prop. See src/htl/room/seatOf.test.ts
+    // for the seat-level proof that the two predicates disagree on exactly that seat.
+    expect(callbackBody("dragCrossfade")).toMatch(/if \(boardLockedRef\.current\) return/);
+  });
+
+  it("★ and NOT the follower lock — the predicate that let a stage DJ through", () => {
+    // Asserted as an absence because the defect was using a correct predicate for the wrong
+    // question: a re-widening would read as perfectly sensible code at the call site.
+    expect(callbackBody("dragCrossfade")).not.toMatch(/if \(lockedRef\.current\) return/);
   });
 });

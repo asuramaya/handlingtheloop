@@ -33,6 +33,23 @@ describe("the FxDevice bypass contract", () => {
     expect(files.filter((f) => /extends BaseFxDevice/.test(f.src)).length).toBeGreaterThan(5);
   });
 
+  // ★ WHAT THIS CHECKS AND WHAT tsc ALREADY CHECKS — measured, because I nearly built the second
+  // half again. The hole I went looking for was an override that TAKES `hard` and then ignores it:
+  // the signature is right, the contract is broken, and a Shift-bypass silently becomes a soft one
+  // with the tail still ringing. Planted both forms against both instruments:
+  //
+  //    setBypass(on: boolean)                    tsc SILENT        this scan CAUGHT
+  //    setBypass(on, hard) with `hard` unused    tsc TS6133        this scan SILENT
+  //
+  // They are exactly complementary and neither is redundant. TypeScript permits an override to
+  // declare FEWER parameters — arity narrowing is legal and silent, which is the entire reason this
+  // file exists. And `noUnusedParameters` (tsconfig.json:21, in the gate) already owns the other
+  // half, so widening this scan to check USE would re-implement the compiler badly.
+  //
+  // `_hard` (Eq3, which has no tail to cut) opts out of TS6133 deliberately. That is the honest
+  // form: an underscore is a visible act in a diff, greppable, and it says the parameter is
+  // ignored on purpose — which is the whole argument for a weakness you can see over one you
+  // cannot.
   it("no device narrows setBypass to a single parameter", () => {
     const narrowed: string[] = [];
     for (const { path: f, src: raw } of files) {

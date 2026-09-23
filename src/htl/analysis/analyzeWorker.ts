@@ -56,6 +56,19 @@ const WORKER_BUDGET_MS = 30_000;
 let hangs = 0;
 const HANG_RETRIES = 1;
 
+// ★ AND THE COUNTER COUNTED VICTIMS, NOT INCIDENTS. Requests overlap here as a matter of course —
+// usePrefetch can have an analysis in flight when a user load starts, and two decks load
+// independently — and every request arms its OWN clock. One reclaimed worker therefore strands ALL
+// of them, each timer fires, and each one was incrementing `hangs`. Two overlapping loads made a
+// single reclamation retire the worker permanently on the spot, which is precisely the case the
+// retry above exists for: memory pressure on a phone, where a prefetch and a user load overlapping
+// is the normal shape rather than the unlucky one.
+//
+// So a hang is attributed to a worker GENERATION, which ENDS when the first victim retires it. That
+// victim counts the incident; every other request still waiting on the dead generation falls back
+// inline and counts nothing, because it is the same silence heard again, not a second failure.
+let gen = 0;
+
 const told = new Set<string>();
 function fellBack(why: string): void {
   if (told.has(why)) return;
@@ -131,6 +144,7 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
   // already said so. A distinct reason per SITE rather than per CAUSE is how one condition starts
   // reporting itself twice.
   if (!w) return Promise.resolve(inline());
+  const myGen = gen; // which worker this request is waiting on — see the note on `gen`
 
   const l = buffer.getChannelData(0);
   const r = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
@@ -144,16 +158,20 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
     setTimeout(() => {
       if (!pending.has(id)) return; // answered in time
       pending.delete(id);
-      hangs += 1;
-      const permanent = hangs > HANG_RETRIES;
-      failed = permanent; // a first hang may be a reclamation; a second is a broken worker
-      try {
-        worker?.terminate();
-      } catch {
-        /* already gone */
+      // Only the first victim of an incident retires the generation; a later one is the same
+      // silence heard again, and counting it would spend the retry on one reclamation.
+      if (myGen === gen) {
+        hangs += 1;
+        failed = hangs > HANG_RETRIES; // a first hang may be a reclamation; a second is a broken worker
+        try {
+          worker?.terminate();
+        } catch {
+          /* already gone */
+        }
+        worker = null;
+        gen++; // this generation is over — its other stranded requests must not count themselves
       }
-      worker = null;
-      reject(new Error(permanent ? "analysis worker stopped answering twice" : "analysis worker stopped answering"));
+      reject(new Error(failed ? "analysis worker stopped answering twice" : "analysis worker stopped answering"));
     }, WORKER_BUDGET_MS);
     // Only the mix transfers — `grid` is small and structured-cloned (its Float32Arrays stay owned
     // by the caller, which needs the grid intact for its own use).

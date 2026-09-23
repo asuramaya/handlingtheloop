@@ -95,6 +95,40 @@ describe("the analysis worker says so when it is not being used", () => {
     }
   });
 
+  it("two loads stranded by ONE reclamation are one incident, not two — the counter counts incidents", async () => {
+    // Requests overlap as a matter of course: usePrefetch can have an analysis in flight when a
+    // user load starts, and every request arms its own clock. One reclaimed worker strands both,
+    // both timers fire, and counting each victim spent the whole retry budget on a single
+    // reclamation — on a phone under memory pressure, which is the case the retry exists for.
+    vi.useFakeTimers();
+    try {
+      let constructed = 0;
+      vi.stubGlobal("Worker", class { onerror?: () => void; onmessage?: unknown; constructor() { constructed++; } postMessage() {} terminate() {} });
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const { analyzeTrackAsync } = await fresh();
+
+      const a = analyzeTrackAsync(buf());
+      const b = analyzeTrackAsync(buf()); // same worker, same silence
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(await a).toBeTruthy();
+      expect(await b).toBeTruthy();
+      expect(constructed).toBe(1);
+
+      // The retry must still be there: this is the FIRST incident, whatever it stranded.
+      const third = analyzeTrackAsync(buf());
+      expect(constructed).toBe(2);
+      await vi.advanceTimersByTimeAsync(31_000);
+      await third;
+
+      const said = info.mock.calls.map((c) => String(c[0])).filter((s) => /analysis worker unavailable/.test(s));
+      expect(said).toHaveLength(2);
+      expect(said[0]).toMatch(/will try once more/); // not "twice" — two victims, one incident
+      expect(said[1]).toMatch(/twice/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a FIRST hang buys one reconstruction — a reclaimed worker is transient, not broken", async () => {
     // The trigger for a hang is a browser reclaiming the worker under memory pressure, which is
     // transient: a backgrounded phone reclaims, returns, and would construct one fine. Retiring for

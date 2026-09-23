@@ -72,6 +72,11 @@ describe("every worklet node is watched", () => {
   // witness — exactly the state this whole change exists to leave behind. Counting is enough here:
   // the two numbers are small, they sit in one directory, and a mismatch names the files.
   //
+  // ★ AND .tsx TOO. The directory was widened before the EXTENSION was — `/\.ts$/` does not match
+  // "Foo.tsx", so every component file was still outside the population. Same closed-world claim,
+  // one axis over: nothing in src/ builds a worklet from a component TODAY (checked, zero matches),
+  // which is exactly the argument for including them before something does.
+  //
   // ★ IT SCANS ALL OF src/, NOT THIS DIRECTORY. The first version said the nodes "sit in one
   // directory", which was TRUE — verified, all ten are under src/htl/audio — and it is a
   // closed-world claim about siblings, the exact sentence a reader uses to decide where to stop
@@ -81,7 +86,7 @@ describe("every worklet node is watched", () => {
   const ROOT = join(__dirname, "..", "..");
   const walk = (d: string): string[] =>
     readdirSync(d, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? walk(join(d, e.name)) : /\.ts$/.test(e.name) && !/\.test\./.test(e.name) ? [join(d, e.name)] : [],
+      e.isDirectory() ? walk(join(d, e.name)) : /\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [join(d, e.name)] : [],
     );
   const counts = walk(ROOT)
     .filter((f) => !f.endsWith("workletWatch.ts"))

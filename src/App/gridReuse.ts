@@ -24,15 +24,41 @@
 // that could not be checked becomes one that can. The guard is self-healing in the direction of
 // more cache, not less.
 //
-// The stored duration is `Math.round(buffer.duration)` of a decoded buffer (App.tsx's contribution
-// path), so this compares like with like — one decoded length against another — and the tolerance
-// is for that rounding, not for the audio.
+// The stored duration is a decoded buffer's own length (App.tsx's contribution path), so this
+// compares like with like — one decoded length against another.
 
-/** Seconds of disagreement tolerated between the stored grid's audio and ours. Both numbers come
- *  from a decoded buffer and the stored one is rounded to a whole second, so a real match can
- *  differ by up to 1 s; 2 is that plus a margin. Anything past it is a different recording, not a
- *  rounding — and the failure this exists to stop needs only a few hundred ms to be total. */
+// ★ THE TOLERANCE WAS AN ORDER OF MAGNITUDE LARGER THAN THE FAILURE, and the guard's own comment
+// said so without either of us noticing: "the failure this exists to stop needs only a few hundred
+// ms to be total", above a tolerance of 2 SECONDS. A re-upload with a 250 ms leading offset shifts
+// the duration by 250 ms, sails through a 2 s gate, and displaces every beat by half a beat at
+// 120 bpm. The guard could not catch the case it was written for, for any offset under two seconds
+// — which is the entire realistic range.
+//
+// The 2 s was never about the audio. It was about the WRITE rounding to a whole second
+// (Math.round(buffer.duration)), so a genuine match could differ by up to 1 s and the gate had to
+// admit that. Fixing the write fixes the gate: contributions carry millisecond precision now, and a
+// row that HAS that precision is held to a tight tolerance.
+//
+// Legacy rows are told apart by the rounding itself — a stored integer is a pre-fix row (or a track
+// whose length happens to be exact, which only costs it a looser gate). No migration, no column, no
+// cutover: the pool converges as tracks are re-contributed, the same lazy shape as the version gate.
+
+/** Tolerated disagreement for a LEGACY row, whose duration was rounded to a whole second on write:
+ *  a real match can differ by up to 1 s, and 2 is that plus a margin. This is the old behaviour,
+ *  kept only for rows that cannot support better. */
 export const GRID_DURATION_TOLERANCE_S = 2;
+
+/** Tolerated disagreement for a row written with millisecond precision. Decoders differ slightly on
+ *  the same bytes (priming samples, resampling), so this is not zero — but it is far below the
+ *  ~250 ms that makes a grid as wrong as a grid can be, which is the number that has to bound it.
+ *  A false rejection costs one local analysis pass and re-contributes a precise row, so the
+ *  asymmetry points at tight. */
+export const GRID_DURATION_TOLERANCE_PRECISE_S = 0.1;
+
+/** Which tolerance applies to this stored duration. An integer is a rounded (legacy) write. */
+export function toleranceFor(storedDuration: number): number {
+  return Number.isInteger(storedDuration) ? GRID_DURATION_TOLERANCE_S : GRID_DURATION_TOLERANCE_PRECISE_S;
+}
 
 export type GridReuseWhy = "fits" | "no-row" | "behind-version" | "unknown-duration" | "different-audio";
 
@@ -50,7 +76,7 @@ export function mayReuseGrid(
   // CAN be checked next time, so declining converges the pool rather than permanently refusing it.
   if (stored.duration == null || !Number.isFinite(stored.duration)) return { ok: false, why: "unknown-duration" };
   if (!Number.isFinite(decodedDurationS) || decodedDurationS <= 0) return { ok: false, why: "unknown-duration" };
-  if (Math.abs(stored.duration - decodedDurationS) > GRID_DURATION_TOLERANCE_S) return { ok: false, why: "different-audio" };
+  if (Math.abs(stored.duration - decodedDurationS) > toleranceFor(stored.duration)) return { ok: false, why: "different-audio" };
   return { ok: true, why: "fits" };
 }
 

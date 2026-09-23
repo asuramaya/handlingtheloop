@@ -93,7 +93,7 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
           key: analysis.key?.camelot ?? null,
           keyName: analysis.key?.name ?? null,
           beatOffset: analysis.beatgrid?.firstBeat ?? null,
-          duration: Math.round(buffer.duration),
+          duration: Math.round(buffer.duration * 1000) / 1000, // ms precision: the reuse gate cannot be tighter than the write
           energy: analysis.energy,
           // Contribute the full grid + version too, uniform with the deck-load poster (Metadata B) —
           // so a prefetch primes the shared cache the same way and the convergence guard applies.

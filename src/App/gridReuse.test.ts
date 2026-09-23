@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GRID_DURATION_TOLERANCE_S, type GridReuseWhy, mayContributeAnalysis, mayReuseGrid } from "./gridReuse";
+import { GRID_DURATION_TOLERANCE_S, type GridReuseWhy, mayContributeAnalysis, mayReuseGrid, GRID_DURATION_TOLERANCE_PRECISE_S, toleranceFor } from "./gridReuse";
 
 const V = 4;
 
@@ -50,5 +50,44 @@ describe("mayContributeAnalysis", () => {
     // recordings" is the one where overwriting starts a fight the other device answers.
     const all: GridReuseWhy[] = ["fits", "no-row", "behind-version", "unknown-duration", "different-audio"];
     expect(all.filter((w) => !mayContributeAnalysis(w))).toEqual(["different-audio"]);
+  });
+});
+
+describe("the tolerance was an order of magnitude larger than the failure", () => {
+  // THE GUARD'S OWN COMMENT SAID IT: "the failure this exists to stop needs only a few hundred ms
+  // to be total" — written directly above a tolerance of TWO SECONDS. A re-upload with a 250 ms
+  // leading offset moves the duration by 250 ms, clears a 2 s gate, and displaces every beat by
+  // half a beat at 120 bpm. The guard could not catch the case it was written for, for any offset
+  // under two seconds, which is the whole realistic range.
+  //
+  // The 2 s was never about audio — it was about the WRITE rounding to a whole second. Contributions
+  // carry millisecond precision now, and a row that has it is held to a tight tolerance. Legacy rows
+  // are told apart by the rounding itself: a stored integer is a pre-fix write.
+  const V = 3;
+
+  it("★ a precise row disagreeing by 250 ms is REJECTED — this passed before", () => {
+    // The exact scenario the guard exists for, at the magnitude its own comment calls total.
+    expect(mayReuseGrid({ version: V, duration: 212.34 }, 212.09, V)).toEqual({ ok: false, why: "different-audio" });
+  });
+
+  it("a precise row agreeing to within decoder noise is still reused", () => {
+    // Decoders differ slightly on the same bytes (priming samples, resampling). Rejecting those
+    // would cost a re-derive every load and converge nothing.
+    expect(mayReuseGrid({ version: V, duration: 212.34 }, 212.36, V)).toEqual({ ok: true, why: "fits" });
+  });
+
+  it("a LEGACY row keeps the old 2 s tolerance — no migration, no cutover", () => {
+    // An integer duration is a pre-fix write. It cannot support a tight gate, so it keeps the loose
+    // one rather than being refused outright; the pool converges as tracks are re-contributed.
+    expect(mayReuseGrid({ version: V, duration: 212 }, 213.4, V)).toEqual({ ok: true, why: "fits" });
+    expect(mayReuseGrid({ version: V, duration: 212 }, 214.5, V)).toEqual({ ok: false, why: "different-audio" });
+  });
+
+  it("the precise tolerance is well below the error that makes a grid as wrong as it can be", () => {
+    // 250 ms is half a beat at 120 bpm. The bound has to sit under that with room, or the constant
+    // is decorative — which is exactly what the 2 s was.
+    expect(GRID_DURATION_TOLERANCE_PRECISE_S).toBeLessThan(0.25);
+    expect(toleranceFor(212.34)).toBe(GRID_DURATION_TOLERANCE_PRECISE_S);
+    expect(toleranceFor(212)).toBe(GRID_DURATION_TOLERANCE_S);
   });
 });

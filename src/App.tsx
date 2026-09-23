@@ -2050,7 +2050,7 @@ function AppBody() {
                   key: derived.analysis.key?.camelot ?? null,
                   keyName: derived.analysis.key?.name ?? null,
                   beatOffset: derived.analysis.beatgrid?.firstBeat ?? null,
-                  duration: Math.round(derived.buffer.duration),
+                  duration: Math.round(derived.buffer.duration * 1000) / 1000, // ms precision: the reuse gate cannot be tighter than the write
                   grid: derived.analysis.beatgrid ? serializeGrid(derived.analysis.beatgrid) : null,
                   palette: paletteStr,
                   energy: derived.analysis.energy, // the auto-mix arc's input — see trackEnergy

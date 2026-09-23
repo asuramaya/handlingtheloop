@@ -7,6 +7,7 @@ import { fetchMe, announceRoom, closeRoom, saveSet, type AccountUser } from "../
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
 import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { seatOf } from "./seatOf";
+import { mergeChatHistory, CHAT_LOG_MAX } from "./chatLog";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -272,8 +273,11 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
         if (total > 0) setReactionTick((t) => ({ counts, id: t.id + 1 }));
       },
       requests: (list) => setSongRequests(list),
-      chat: (m) => setChatLog((l) => [...l.slice(-119), m]),
-      chatHistory: (list) => setChatLog(list),
+      chat: (m) => setChatLog((l) => [...l, m].slice(-CHAT_LOG_MAX)),
+      // MERGED, not replaced: chat-history arrives on every socket accept AND every request-state
+      // (a routine resync), so a replace drops the conversation this device was reading for a reason
+      // that has nothing to do with chat. chatLog.ts explains why the naive id-merge is unsafe.
+      chatHistory: (list) => setChatLog((l) => mergeChatHistory(l, list)),
       chatSlow: (s) => setChatSlowState(s),
       chatFollowers: (on) => setChatFollowersState(on),
       muted: (on) => setIAmMuted(on),

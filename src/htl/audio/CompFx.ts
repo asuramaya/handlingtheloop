@@ -270,6 +270,27 @@ export class CompFx extends BaseFxDevice {
 /** Master-bus brickwall: the same worklet, in LIMIT mode, guaranteeing nothing leaves above the
  *  ceiling. With the EQ reaching +12 and the saturator driving +20, the stack needs an end-stop —
  *  otherwise every aggressive move is a gamble on the browser's clipping. */
+/** ★ A LIMITER FOR ONE DECK, BEFORE THE SUM — the structural half of the operator's ruling on the
+ *  cross-deck punch. The master brickwall hears BOTH decks at once, so deck A's kick asks it for
+ *  reduction that lands on deck B as well: measured 1.88 dB hot, 0.00 dB at mid mix (489901b3).
+ *  That is shared fate, and no amount of headroom removes it — headroom only moves the level at
+ *  which it starts. A limiter that hears one deck cannot duck the other; the coupling is gone
+ *  rather than made less likely.
+ *
+ *  Ceiling sits BELOW the master's -0.3 so a deck that is already controlled does not then trip the
+ *  master and re-couple the two. The cost is character: two independent limiters do not sound like
+ *  one bus limiter, which a measurement cannot adjudicate — so this ships behind a setting, off by
+ *  default, and the operator's ears decide whether it becomes the default. */
+export function makeDeckLimiter(ctx: AudioContext): CompFx {
+  const c = new CompFx(ctx);
+  c.setParam("mode", 3); // LIMIT
+  c.setParam("ceiling", -1); // under the master's -0.3, so a limited deck cannot re-trip the master
+  c.setParam("lookahead", 1.5);
+  c.setParam("mix", 1);
+  c.setParam("auto", 0); // a limiter must never invent makeup gain
+  return c;
+}
+
 export function makeMasterLimiter(ctx: AudioContext): CompFx {
   const c = new CompFx(ctx);
   c.setParam("mode", 3); // LIMIT

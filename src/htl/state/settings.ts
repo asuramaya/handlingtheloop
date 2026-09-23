@@ -100,6 +100,11 @@ export interface Settings {
   // both decks). The name is kept for the stored key; the UI calls it "Use shared stems".
   mobileStems: boolean;
   masterHeadroomDb: number; // trim before the master limiter (0 = unity, negative = headroom)
+  // ★ A LIMITER PER DECK, BEFORE THE SUM. The master brickwall hears both decks, so one deck's kick
+  // asks for reduction that lands on the other — measured 1.88 dB hot, 0.00 at mid mix (489901b3).
+  // Headroom only moves the level where that starts; a per-deck limiter removes the shared fate.
+  // OFF by default: it changes the character of the master, which no measurement can adjudicate.
+  perDeckLimiter: boolean;
   // ★ HOW HARD SYNC PULLS A DECK BACK ONTO THE BEAT. The phase-lock loop's P-gain, measured rather
   // than chosen: at the shipped 0.06 its own comment says "~8 s time constant", and a 17-second seek
   // leaves the pair 0.242 beats out (~113 ms at 128 bpm) taking ELEVEN SECONDS to decay to 0.018.
@@ -325,6 +330,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wirelessOutput: false, // auto-detect by default; the user forces it on for a Bluetooth/CarPlay output that skips
   autoEnhance: true, // desktop auto-upgrades DSP → cached neural; toggle off to stay on the picked model
   masterHeadroomDb: 0, // unity: no change to anyone's output level until it is deliberately set
+  perDeckLimiter: false, // nobody's master sounds different until they choose it
   syncPhaseGain: 0.06, // the shipped gentleness — nobody's sync feel changes until they choose it
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve

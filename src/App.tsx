@@ -1463,6 +1463,7 @@ function AppBody() {
       tThresh: settings.stretchTThresh,
     });
     engine.setMasterHeadroomDb(settings.masterHeadroomDb); // trim BEFORE the limiter — see masterHeadroom.ts
+    engine.setPerDeckLimiter(settings.perDeckLimiter); // idempotent: re-applying the same state rewires nothing
     engine.setSyncPhaseGain(settings.syncPhaseGain); // how hard SYNC pulls back onto the beat — see settings.ts
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
     // ACCENT is in the deps so a track change (new cover art) repaints the chrome too, not just

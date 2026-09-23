@@ -12,7 +12,7 @@ import { CRUSH_WORKLET_SRC } from "./crushWorklet";
 import { MOD_DELAY_WORKLET_SRC } from "./modDelayWorklet";
 import { COMP_WORKLET_SRC } from "./compWorklet";
 import { TAPE_WORKLET_SRC } from "./tapeWorklet";
-import { makeMasterLimiter, type CompFx } from "./CompFx";
+import { makeMasterLimiter, makeDeckLimiter, type CompFx } from "./CompFx";
 import { headroomGain } from "./masterHeadroom";
 import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
@@ -326,6 +326,56 @@ export class AudioEngine {
     }
     return peak > 1e-5 ? 20 * Math.log10(peak) : -100;
   }
+  // ★ PER-DECK LIMITING, the structural half of the operator's ruling on the cross-deck punch.
+  // deck.output → xfade is one edge per deck, so a limiter drops in without touching the cue tap,
+  // the record source or the sampler inject — all of which hang off nodes on either side of it.
+  // Built lazily on first enable, so a user who never turns it on pays for no extra worklets.
+  private deckLimiters: { A: CompFx | null; B: CompFx | null } = { A: null, B: null };
+  private perDeckLimiterOn = false;
+  /** OFF BY DEFAULT and it stays that way until the operator's ears rule. A measurement can show
+   *  the punch is gone (fxlab --master-duck's hot row must fall from 1.88 dB to ~0) and cannot show
+   *  that two independent limiters sound as good as one bus limiter. Idempotent: re-applying the
+   *  same state rewires nothing, because a redundant disconnect/connect would click. */
+  setPerDeckLimiter(on: boolean): void {
+    if (on === this.perDeckLimiterOn) return;
+    for (const id of ["A", "B"] as const) {
+      const deck = id === "A" ? this.deckA : this.deckB;
+      const xfade = id === "A" ? this.xfadeA : this.xfadeB;
+      if (on) {
+        let lim = this.deckLimiters[id];
+        if (!lim) {
+          try {
+            lim = makeDeckLimiter(this.ctx);
+          } catch (e) {
+            console.warn("[htl] per-deck limiter unavailable, leaving the deck direct:", e);
+            continue; // one deck failing must not leave the OTHER half-rewired
+          }
+          this.deckLimiters[id] = lim;
+        }
+        deck.output.disconnect(xfade);
+        deck.output.connect(lim.input);
+        lim.output.connect(xfade);
+      } else {
+        const lim = this.deckLimiters[id];
+        if (!lim) continue;
+        try {
+          deck.output.disconnect(lim.input);
+          lim.output.disconnect(xfade);
+        } catch {
+          /* already apart */
+        }
+        deck.output.connect(xfade);
+      }
+    }
+    this.perDeckLimiterOn = on;
+    event("per-deck-limiter", { on });
+  }
+  /** Live gain reduction on each deck's own limiter (dB ≥ 0), 0 when it is off. Same reading the
+   *  master meter takes, per deck — so "which deck is being limited" is answerable, not inferred. */
+  deckGr(id: "A" | "B"): number {
+    return (this.perDeckLimiterOn && this.deckLimiters[id]?.gainReduction) || 0;
+  }
+
   /** Live gain reduction on the master, in dB (≥ 0) — for the master meter's GR needle. */
   get masterGr(): number {
     return this.masterLimiter?.gainReduction ?? 0;

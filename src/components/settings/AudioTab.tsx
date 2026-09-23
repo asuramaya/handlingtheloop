@@ -456,6 +456,21 @@ export function AudioTab({
           max={0.3}
           step={0.02}
         />
+        <div className="settings-row">
+          <span className="settings-label">
+            Limit each deck
+            <InfoDot label="Limit each deck" text="The master limiter hears BOTH decks at once, so one deck's kick asks it for gain reduction that lands on the other — that is the 'one deck pumps the other' effect, measured at 1.88 dB on a hot mix and 0.00 dB at a moderate one. Master headroom only moves the level where that starts; limiting each deck BEFORE they are summed removes the shared limiter entirely, so the coupling cannot happen. The trade is character: two independent limiters do not sound like one bus limiter. Off by default — try it on a mix that pumps and keep it only if you prefer how it sounds." />
+          </span>
+          <button
+            className={`toggle ${settings.perDeckLimiter ? "on" : ""}`}
+            onClick={() => set({ perDeckLimiter: !settings.perDeckLimiter })}
+            role="switch"
+            aria-checked={settings.perDeckLimiter}
+            aria-label="Limit each deck"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
         <Slider
           label="Master headroom"
           info="How far the master is pulled down before the limiter. At 0 a loud two-deck mix runs into the ceiling, and the limiter — which hears both decks at once — ducks the whole mix on every kick, so one deck appears to pump the other. Measured: 3 dB of headroom removes that almost entirely. The cost is output level; every dB here is a dB quieter, so turn the amp up instead."

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchMe, announceRoom, closeRoom, saveSet, type AccountUser } from "../account";
 import { RoomClient, deviceId, deviceName, joinCodeFromUrl, type RoomStatus } from "./client";
 import type { Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
+import { seatOf } from "./seatOf";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
@@ -481,7 +482,12 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const host = floorListener ? false : (me?.host ?? false);
   hostRef.current = host; // gate the directory-announce heartbeat (above) to host devices only
   const onStage = me?.stage ?? false; // stepped up from the floor onto a deck
-  const myDeck: DeckId | null = onStage ? (me?.decks === "A" ? "A" : me?.decks === "B" ? "B" : null) : null;
+  // The client half of the drive rule, in seatOf.ts so it can be compared against the SERVER half
+  // it must agree with (canDriveIntent). Inline here, no test could reach it.
+  const myDeck: DeckId | null = seatOf(me ? { controlling, decks: me.decks ?? "", stage: onStage } : null, {
+    enabled: joined,
+    floorListener,
+  }).myDeck;
   // Once the host actually brings us up, the optimistic "pending" deck is resolved — clear it.
   // (Must sit AFTER `onStage` is declared — referencing it earlier is a TDZ crash on render.)
   useEffect(() => {

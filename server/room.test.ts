@@ -1420,3 +1420,62 @@ describe("DjRoom persists lyrics per deck", () => {
     expect(guest.msgs().some((m) => m.t === "lyrics" && m.videoId === "old-a")).toBe(true);
   });
 });
+
+describe("automix is HOST ONLY (operator ruling 34075fae)", () => {
+  // ★ THE RULING IS STRICTER THAN THE QUESTION THAT PROMPTED IT. cb9000d2 asked whether a STAGE DJ
+  // should be able to arm auto-mix; the operator answered "no, make it host only" — any seat not on
+  // the session owner's account, INCLUDING a fully-granted guest holding both decks. Metron's
+  // 55c0028 took the client control. This is the durable half: a client-side gate is a guard on the
+  // surface, which is the thing this whole line of work has been removing.
+  //
+  // There were TWO server doors and the handover named one.
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  async function grantedGuest() {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", host: false })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "approve", to: "g1" });
+    await h.send(host, { t: "grant", to: "g1", on: true }); // FULL control — decks "AB"
+    return { host, guest };
+  }
+  const gotAutomix = (ws: { sent: string[] }, from: number) =>
+    ws.sent.slice(from).map((m) => JSON.parse(m)).filter((m) => m.t === "automix");
+
+  it("a fully-granted guest holds both decks — the seat the ruling excludes", async () => {
+    const { guest } = await grantedGuest();
+    expect(guest.a.decks).toBe("AB");
+    expect(drivesAnything(guest.a)).toBe(true);
+  });
+
+  it("★ DOOR 2 — the automix STATE STREAM is refused for a granted guest (the door the handover missed)", async () => {
+    // It was gated on `isControlling(self) || self === this.anchorId`. isControlling is
+    // drivesAnything(), so "AB" passed — and the anchor clause admitted a NON-HOST anchor, because
+    // the clock preference puts "any controller" above "any host".
+    const { host, guest } = await grantedGuest();
+    const mark = host.sent.length;
+    await h.send(guest, { t: "automix", state: { on: true } as never });
+    expect(gotAutomix(host, mark)).toEqual([]);
+  });
+
+  it("the HOST still drives it — a gate that closed on everyone would pass the test above", async () => {
+    const { host, guest } = await grantedGuest();
+    const mark = guest.sent.length;
+    await h.send(host, { t: "automix", state: { on: true } as never });
+    expect(gotAutomix(guest, mark).length).toBeGreaterThan(0);
+  });
+
+  it("★ DOOR 1 — the automix INTENT is refused for a granted guest, not merely for a one-deck seat", async () => {
+    // canDriveIntent refuses this today only because the intent carries no `deck` and a deck-less
+    // move needs BOTH. Right answer, wrong reason: it ADMITS "AB".
+    const { host, guest } = await grantedGuest();
+    const mark = host.sent.length;
+    await h.send(guest, { t: "intent", intent: { kind: "automix", action: "toggle" } });
+    const relayed = host.sent.slice(mark).map((m) => JSON.parse(m)).filter((m) => m.t === "intent" && m.intent?.kind === "automix");
+    expect(relayed).toEqual([]);
+  });
+});

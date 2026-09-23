@@ -796,6 +796,13 @@ export class DjRoom {
         // sender already applied it locally; an out-of-lane intent is silently dropped here
         // so the authoritative board never moves under an unauthorised hand.
         if (!this.canDrive(self, msg.intent)) break;
+        // ★ AND AUTOMIX IS HOST ONLY ON TOP OF THAT (ruling 34075fae). canDriveIntent refuses this
+        // intent today only because it carries no `deck` and a deck-less move needs BOTH — which is
+        // the right answer for the wrong reason, and it ADMITS a granted guest holding "AB". The
+        // host bit is not expressible in canDriveIntent, whose whole input is a decks string, so the
+        // extra condition lives here beside the attachment that owns it rather than corrupting the
+        // shared pure rule with a field it cannot see.
+        if (msg.intent.kind === "automix" && !this.isHostDevice(self)) break;
         const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent } satisfies ServerMsg;
         // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
         // may be driving / mirroring the platter). skipListeners=true → non-pub only.
@@ -969,9 +976,18 @@ export class DjRoom {
         break;
       }
       case "automix": {
-        // The board's authority (controller / anchor) streams the auto-DJ queue + status.
-        // In-memory + relay only — it regenerates, so not worth the DO storage-cap risk.
-        if (this.isControlling(self) || self === this.anchorId) {
+        // ★ HOST ONLY — operator ruling 34075fae, and this is the SECOND door to it. Metron's
+        // 55c0028 took the client control and named the INTENT path; this is the state STREAM, and
+        // it admitted two seats the ruling excludes. `isControlling` is drivesAnything(), so a
+        // fully-granted guest holding "AB" passed it — the exact seat the operator called out
+        // beyond my own lean. And `self === this.anchorId` admitted a NON-HOST anchor: the clock
+        // preference is "a controlling DESKTOP › any controller › a host DESKTOP › …", so a granted
+        // guest outranks a host for the anchor and would have carried the auto-DJ with it.
+        //
+        // `a.host` is set un-forgeably by the Worker (see the fan-out note below), which is why the
+        // durable gate belongs here rather than on the surface — a client-side control is the thing
+        // this session has spent its length removing.
+        if (this.isHostDevice(self)) {
           this.lastAutomix = msg.state;
           this.relay(self, { t: "automix", state: msg.state });
         }

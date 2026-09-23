@@ -58,10 +58,25 @@ export class NotSeparationAuthority extends Error {
 //
 // The app registers during its FIRST RENDER (App.tsx), not in an effect, so there is no window in
 // which the default decides anything for a real user.
-let separationAllowed: () => boolean = () => false;
+//
+// ★ THE DEFAULT IS DEFINED ONCE. It used to be an inline arrow here and a second inline arrow in
+// the test's afterEach — two values obliged to agree with nothing holding them together, which is
+// the same defect as the `hangs`/`gen` pair in analyzeWorker. Change one and the other silently
+// disagrees. `resetSeparationAuthority` hands tests the module's OWN initial value by name instead
+// of asking them to restate it. (Metron's, on my file, after he declined to touch it.)
+const DENY_UNTIL_REGISTERED: () => boolean = () => false;
+let separationAllowed: () => boolean = DENY_UNTIL_REGISTERED;
 /** Register the app's separation-authority predicate. Called once, from App. */
 export function setSeparationAuthority(fn: () => boolean): void {
   separationAllowed = fn;
+}
+
+/** Tests only — restore the module's own initial predicate. Module state is shared within a vitest
+ *  worker, so a file that leaves a REGISTERED predicate behind hands the next file a gate whose
+ *  answer that file never chose. Restoring by name rather than by restating the value is what stops
+ *  the default living in two places. */
+export function resetSeparationAuthority(): void {
+  separationAllowed = DENY_UNTIL_REGISTERED;
 }
 
 export const STEM_NAMES = ["vocals", "drums", "bass", "other"] as const;

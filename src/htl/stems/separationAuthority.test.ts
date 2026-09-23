@@ -31,7 +31,7 @@ vi.mock("./models", async (orig) => ({
   deviceSupportsModel: () => true,
 }));
 
-import { loadStems, setSeparationAuthority, NotSeparationAuthority, STEM_NAMES } from "./index";
+import { loadStems, setSeparationAuthority, resetSeparationAuthority, NotSeparationAuthority, STEM_NAMES } from "./index";
 import { getStemModel } from "./models";
 
 // A desktop-capable neural model, so `deviceSupportsModel` is never the reason we stop —
@@ -50,11 +50,11 @@ describe("separation authority", () => {
     );
     fetchMock.mockClear();
   });
-  // The module default is DENY now, not allow (stems/index.ts). Restore the module to a KNOWN
-  // state rather than to "the default", because the point of the change is that an unregistered
-  // module refuses — a test that leaves it permissive would hand the next file a gate that is
-  // open for a reason nothing states.
-  afterEach(() => setSeparationAuthority(() => false));
+  // Restore the module's OWN initial predicate, by name. Writing `() => false` here would put the
+  // default in a second place and oblige two values to agree with nothing holding them together —
+  // and module state is shared within a vitest worker, so whatever this leaves behind is what the
+  // next file starts from, for a reason that file never states.
+  afterEach(() => resetSeparationAuthority());
 
   it("REFUSES to separate when this device is not the authority — and starts no work", async () => {
     setSeparationAuthority(() => false);

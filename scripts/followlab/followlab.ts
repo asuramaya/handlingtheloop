@@ -42,10 +42,13 @@ function transition(t0: number): Ev[] {
   return out;
 }
 
-const label = (f: Focus | null) => (f ? (f.pane === "fx" ? `FX ${f.deck}` : `DECK ${f.deck}`) : "—");
+const label = (f: Focus | null) => (f ? (f.fx ? `DECK ${f.deck} +FX` : `DECK ${f.deck}`) : "—");
+/** A SCREEN CHANGE is a deck swap or the FX layer opening/closing — the two are not the same size,
+ *  and the whole point of the two-axis rule is that they stopped being charged as if they were. */
+const differs = (a: Focus | null, b: Focus | null) => !!a && !!b && (a.deck !== b.deck || a.fx !== b.fx);
 
 function run(events: Ev[], policy: FocusPolicy, name: string): { switches: number; longestHold: number } {
-  console.log(`\n  ${name}   dwell ${policy.dwellMs} ms · cooldown ${policy.cooldownMs} ms · window ${policy.windowMs} ms\n`);
+  console.log(`\n  ${name}   dwell ${policy.dwellMs} ms · cooldown ${policy.cooldownMs} ms · window ${policy.windowMs} ms · fx hold ${policy.fxHoldMs} ms\n`);
   let s: FocusState = initialFocus();
   let switches = 0;
   let lastChange = events[0].at;
@@ -53,7 +56,7 @@ function run(events: Ev[], policy: FocusPolicy, name: string): { switches: numbe
   for (const e of events) {
     const before = s.current;
     s = nextFocus(s, e.i, e.at, policy);
-    const changed = !!before && !!s.current && (before.pane !== s.current.pane || before.deck !== s.current.deck);
+    const changed = differs(before, s.current);
     if (changed) {
       switches++;
       longestHold = Math.max(longestHold, e.at - lastChange);
@@ -80,7 +83,7 @@ function runNaive(events: Ev[]): void {
   for (const e of events) {
     const f = focusOf(e.i);
     if (!f) continue;
-    const changed = !!cur && (cur.pane !== f.pane || cur.deck !== f.deck);
+    const changed = differs(cur, f);
     cur = f;
     if (changed) switches++;
     if (changed || e.note) {
@@ -104,7 +107,24 @@ run(events, DEFAULT_POLICY, "SHIPPED POLICY");
 // "Follow the host, literally" is last-touched-wins, so that is what it runs.
 runNaive(events);
 // A twitchier setting, for the operator to compare against.
-run(events, { dwellMs: 600, cooldownMs: 1000, windowMs: 3000 }, "TWITCHIER");
+run(events, { dwellMs: 600, cooldownMs: 1000, windowMs: 3000, fxHoldMs: 1500 }, "TWITCHIER");
+
+// ★ THE SCENARIO THAT FOUND THE DEFECT, kept because the old one could not have found it. `transition`
+// above reaches for FX in a CLEAN block with nothing interleaved, which is not what riding an effect
+// looks like — a hand is on the fader at the same time. Under the old four-pane rule this produced 0
+// screen changes across the whole ride: the listener never saw the FX at all, because every fader
+// touch refreshed `deck:B` and blocked the `fx:B` candidate's dwell forever.
+console.log("\n  ── RIDING AN EFFECT: fx and the fader, interleaved, on the same deck ──");
+console.log("  The four-pane rule scored 0 screen changes here — the listener never saw the FX.");
+{
+  const e: Ev[] = [];
+  let t = 0;
+  for (let k = 0; k < 5; k++) e.push({ at: (t += 700), i: ctl("B") });
+  e.push({ at: (t += 500), i: fx("B"), note: "reaches for the effect, fader still in the other hand" });
+  for (let k = 0; k < 11; k++) e.push({ at: (t += 500), i: k % 2 ? ctl("B") : fx("B") });
+  for (let k = 0; k < 6; k++) e.push({ at: (t += 700), i: ctl("B"), note: k === 5 ? "lets go of the effect" : undefined });
+  run(e, DEFAULT_POLICY, "SHIPPED POLICY — riding an effect");
+}
 
 console.log("\n  The numbers in DEFAULT_POLICY are UNCALIBRATED — a rationale, not a measurement (ruling f103a5d0).");
 console.log("  This exists so they can be argued with as behaviour rather than as constants.\n");

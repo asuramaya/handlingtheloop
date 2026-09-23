@@ -3,6 +3,59 @@
 // two runs is decodeStemOpus's own slice budget.
 import { encodeStemOpus, decodeStemOpus } from "../../src/htl/stems/opus";
 
+// ★ MEASURE THE BACKLOG, NOT ITS SHADOW. The sweep died as a shape: interleaved, the worst gap is
+// flat in the slice budget (443/448/450 ms across a 16x range) and steps only between "some sleep"
+// and "no sleep". So the mechanism has to explain a STEP, and neither yield-count nor chunk-size
+// does. Metron's surviving reading is backpressure: decodeStemOpus is ALREADY async and already
+// awaits the decoder, so breathe() does not add yielding — it adds LATENCY between our consumption
+// steps, the native decoder runs on while we sleep, and the backlog drains in a burst.
+//
+// Inferring that from task lengths is reading the shadow. The decoder tells us directly if we ask:
+// wrap the output callback and timestamp every delivered frame. A burst is then a run of frames
+// delivered with no gap between them, and backpressure predicts the sliced runs carry bursts that
+// the unsliced one does not — whatever the budget.
+interface Delivery {
+  bursts: number;
+  maxBurst: number;
+  meanBurst: number;
+  frames: number;
+}
+
+/** Wrap globalThis.AudioDecoder so every delivered frame is timestamped. Returns the reader. */
+function watchDeliveries(): () => Delivery {
+  const g = globalThis as unknown as { AudioDecoder: new (i: { output: (d: unknown) => void; error: (e: Error) => void }) => unknown };
+  const Real = g.AudioDecoder;
+  const at: number[] = [];
+  g.AudioDecoder = class {
+    constructor(init: { output: (d: unknown) => void; error: (e: Error) => void }) {
+      const wrapped = { ...init, output: (d: unknown) => { at.push(performance.now()); init.output(d); } };
+      return new Real(wrapped) as object;
+    }
+  } as unknown as typeof Real;
+  return () => {
+    g.AudioDecoder = Real;
+    // A BURST is frames delivered with no task boundary between them. 2 ms is generous: a task
+    // boundary at 4x CPU is never under that, and two frames of real decode work never that close.
+    const GAP_MS = 2;
+    const sizes: number[] = [];
+    let n = 0;
+    for (let i = 0; i < at.length; i++) {
+      n++;
+      if (i + 1 >= at.length || at[i + 1] - at[i] > GAP_MS) {
+        sizes.push(n);
+        n = 0;
+      }
+    }
+    const big = sizes.filter((x) => x > 1);
+    return {
+      bursts: big.length,
+      maxBurst: sizes.length ? Math.max(...sizes) : 0,
+      meanBurst: big.length ? big.reduce((a, x) => a + x, 0) / big.length : 0,
+      frames: at.length,
+    };
+  };
+}
+
 export interface Run {
   stems: number;
   seconds: number;
@@ -14,6 +67,7 @@ export interface Run {
   tbtMs: number; // total blocking time: the part of each frame gap over 50 ms, summed
   frames: number;
   decodedSeconds: number;
+  delivery: Delivery;
 }
 
 /** A stem-shaped buffer: broadband, non-silent, non-periodic, so Opus cannot cheat the packet
@@ -83,6 +137,7 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
     const blob = await encodeStemOpus(makeStem(ctx, seconds, 2));
 
     // Measure the DECODE only — the encode is a fixture, and in the app it happens once, offline.
+    const readDeliveries = watchDeliveries();
     const w = watchFrames();
     const t0 = performance.now();
     let decodedSeconds = 0;
@@ -98,6 +153,7 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
     // still telling me so. Two frames of idle before stopping lets the final gap land.
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     const f = w.stop();
+    const delivery = readDeliveries();
     return {
       stems,
       seconds,
@@ -109,5 +165,6 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
       tbtMs: f.tbt,
       frames: f.n,
       decodedSeconds,
+      delivery,
     };
   };

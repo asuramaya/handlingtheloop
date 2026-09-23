@@ -80,7 +80,8 @@ const f = (n, d = 1) => (Number.isFinite(n) ? n.toFixed(d) : "—");
 function row(label, r) {
   console.log(
     `  ${label.padEnd(22)} ${f(r.wallMs, 0).padStart(7)} ms   ${f(r.maxFrameGapMs, 0).padStart(6)} ms   ` +
-      `${String(r.gapsOver50).padStart(4)}  ${String(r.gapsOver100).padStart(5)}   ${f(r.tbtMs, 0).padStart(7)} ms`,
+      `${String(r.gapsOver50).padStart(4)}  ${String(r.gapsOver100).padStart(5)}   ${f(r.tbtMs, 0).padStart(7)} ms   ` +
+      `${String(r.bursts).padStart(6)}  ${String(r.maxBurst).padStart(5)}  ${f(r.meanBurst, 1).padStart(6)}`,
   );
 }
 
@@ -145,6 +146,10 @@ async function main() {
       gapsOver50: Math.round(mean(rs, "gapsOver50")),
       gapsOver100: Math.round(mean(rs, "gapsOver100")),
       tbtMs: mean(rs, "tbtMs"),
+      bursts: Math.round(mean(rs.map((r) => r.delivery), "bursts")),
+      maxBurst: worst(rs.map((r) => r.delivery), "maxBurst"),
+      meanBurst: mean(rs.map((r) => r.delivery), "meanBurst"),
+      dframes: rs[0].delivery.frames,
       decodedSeconds: rs[0].decodedSeconds,
     });
     const sliced = fold(pick(args.slice));
@@ -156,7 +161,7 @@ async function main() {
       return;
     }
     console.log(`\n  STEMLAB · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU · ${(sliced.bytes / 1024).toFixed(0)} KiB per stem\n`);
-    console.log("                              wall      worst   >50ms  >100ms       TBT");
+    console.log("                              wall      worst   >50ms  >100ms       TBT   bursts  maxB    avgB");
     if (args.sweep) {
       for (const b of [8, 32, 128]) row(`sliced (${b} ms)`, fold(pick(b)));
       row("unsliced (no sleep)", whole);

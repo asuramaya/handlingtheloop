@@ -30,12 +30,20 @@ const boardIntent = (): Intent => ({ kind: "crossfade", value: 0.5 }) as Intent;
 // runs over the states that satisfy them. The scan is the load-bearing half: if a future commit
 // breaks an invariant, a new state becomes reachable and the scan says which line did it.
 
-/** The two things the server's own writes guarantee about an attachment. */
+/** What the server's own writes guarantee about an attachment.
+ *
+ *  ★ THIS USED TO HAVE TWO CLAUSES. The first was `a.controlling === (a.decks !== "")`, and the scan
+ *  that was meant to establish it compared `/^""$/` against `/^false$/` — so it only ever checked the
+ *  biconditional when BOTH values were literals, and every live write in room.ts is a ternary or a
+ *  variable. Measured against the scan's own body: an INVERTED pairing walked through. A regex cannot
+ *  evaluate an expression, so no sharper scan was going to close it.
+ *
+ *  `controlling` is derived from `decks` now (roomState.drivesAnything, seatOf), so clause 1 is not a
+ *  fact this filter has to assume — there is no second field to disagree with the first. What remains
+ *  is the one invariant that is still a real coupling between two fields. */
 const reachable = (a: Attachment): boolean =>
-  // 1. `controlling` and `decks` are written together: control iff some deck.
-  a.controlling === (a.decks !== "") &&
-  // 2. a single-deck grant always carries `stage: true` (room.ts:1348, the only such site).
-  (!(a.decks === "A" || a.decks === "B") || a.stage);
+  // a single-deck grant always carries `stage: true` (room.ts:1348, the only such site).
+  !(a.decks === "A" || a.decks === "B") || a.stage;
 
 describe("the client's permission and the server's cannot disagree", () => {
   test("★ they agree on every attachment the server can actually produce", () => {
@@ -43,8 +51,7 @@ describe("the client's permission and the server's cannot disagree", () => {
     let checked = 0;
     for (const decks of DECKS) {
       for (const stage of [false, true]) {
-        for (const controlling of [false, true]) {
-          const me: Attachment = { controlling, decks, stage };
+          const me: Attachment = { decks, stage };
           if (!reachable(me)) continue;
           checked++;
           const seat = seatOf(me, { enabled: true, floorListener: false });
@@ -53,12 +60,11 @@ describe("the client's permission and the server's cannot disagree", () => {
           for (const id of ["A", "B"] as DeckId[]) {
             const client = canDriveDeck(seat, id);
             const server = canDriveIntent(decks, deckIntent(id));
-            if (client !== server) mismatches.push(`decks="${decks}" stage=${stage} controlling=${controlling} deck ${id}: client ${client}, server ${server}`);
+            if (client !== server) mismatches.push(`decks="${decks}" stage=${stage} deck ${id}: client ${client}, server ${server}`);
           }
           const clientBoard = canDriveBoard(seat);
           const serverBoard = canDriveIntent(decks, boardIntent());
-          if (clientBoard !== serverBoard) mismatches.push(`decks="${decks}" stage=${stage} controlling=${controlling} BOARD: client ${clientBoard}, server ${serverBoard}`);
-        }
+          if (clientBoard !== serverBoard) mismatches.push(`decks="${decks}" stage=${stage} BOARD: client ${clientBoard}, server ${serverBoard}`);
       }
     }
     // ★ NOT `toHaveLength(0)` — the message IS the finding. A bare count would say "they disagree"
@@ -70,7 +76,7 @@ describe("the client's permission and the server's cannot disagree", () => {
   });
 
   test("a floor listener with no roster entry drives nothing, whatever the wire says", () => {
-    const seat = seatOf({ controlling: true, decks: "AB", stage: true }, { enabled: true, floorListener: true });
+    const seat = seatOf({ decks: "AB", stage: true }, { enabled: true, floorListener: true });
     expect(canDriveDeck(seat, "A")).toBe(false);
     expect(canDriveBoard(seat)).toBe(false);
   });
@@ -92,7 +98,7 @@ describe("the coupling the agreement above silently rests on", () => {
 
   test("here is what the collapse would cost, if the coupling were ever broken", () => {
     // Not hypothetical prose: the actual divergence, measured through both real predicates.
-    const bad: Attachment = { controlling: true, decks: "B", stage: false };
+    const bad: Attachment = { decks: "B", stage: false };
     const seat = seatOf(bad, { enabled: true, floorListener: false });
     expect(seat.myDeck).toBeNull(); // the collapse
     expect(canDriveDeck(seat, "A")).toBe(true); // the client would allow deck A…
@@ -120,37 +126,16 @@ describe("the coupling the agreement above silently rests on", () => {
     expect(offenders.join("\n")).toBe("");
   });
 
-  test("★ control and decks are written together — NEITHER is ever set without the other", () => {
-    // Invariant 1 of `reachable`, and the scan that checks it had the defect it was checking for.
-    //
-    // ★ MY FIRST VERSION REQUIRED A `decks:` MATCH BEFORE IT LOOKED AT A LINE AT ALL, so a site
-    // writing `controlling: true` with no `decks` was invisible to it — which is the one direction
-    // that actually hurts: the client reads controlling=true, myDeck=null and permits BOTH decks,
-    // while the server resolves decks="" and permits none. Every control dead or, worse, every
-    // control moving this device only. The scan was guarding one side of a co-occurrence by
-    // requiring the other side to be present, which cannot ever fail in the dangerous direction.
-    //
-    // Metron's shape, three times tonight and now a fourth: the FIX was correct and its EDGE was
-    // assumed rather than exercised. Found by asking what my own instrument could not see, before
-    // he reviewed it.
-    const offenders: string[] = [];
-    room.split("\n").forEach((line, i) => {
-      const d = line.match(/\bdecks:\s*([^,}]+)/);
-      const c = line.match(/\bcontrolling:\s*([^,}]+)/);
-      // `{ t: "tick", decks }` is the playback tick — a different `decks` entirely, no permission.
-      const permissionDecks = d && !/^msg\.decks$/.test(d[1].trim());
-      if (!permissionDecks && !c) return;
-      if (c && !permissionDecks) {
-        offenders.push(`server/room.ts:${i + 1} writes controlling=${c[1].trim()} with NO decks — the client would permit both decks while the server permits none`);
-        return;
-      }
-      if (permissionDecks && !c) return; // decks-only patches are covered by the stage scan below
-      const decksEmpty = /^""$/.test(d![1].trim());
-      const ctlFalse = /^false$/.test(c![1].trim());
-      if (decksEmpty !== ctlFalse) offenders.push(`server/room.ts:${i + 1} sets controlling=${c![1].trim()} beside decks=${d![1].trim()}`);
-    });
-    expect(offenders.join("\n")).toBe("");
-  });
+  // ★ THE CO-OCCURRENCE SCAN THAT STOOD HERE IS GONE, and not because it was tidied away: the fact
+  // it checked can no longer be false. It asserted `controlling` and `decks` are written together,
+  // by comparing /^""$/ against /^false$/ — which is the biconditional only when BOTH values are
+  // literals, and every live write in room.ts is a ternary or a variable. Run against its own body,
+  // an INVERTED pairing (`controlling: !on, decks: on ? "AB" : ""`) passed, as did both real lines,
+  // for the same syntactic reason. Its green said nothing about any line it protected.
+  //
+  // `controlling` is derived from `decks` now (roomState.drivesAnything), so there is no second
+  // field to keep in step and nothing for a scan to check. A regex could not evaluate an expression;
+  // deleting the expression worked.
 
   test("the scan has something to find (vacuity guard)", () => {
     // If room.ts stops writing a single-deck grant at all, the test above passes by emptiness and
@@ -171,7 +156,7 @@ describe("a STAGE DJ and the whole board", () => {
   // stepped-up listener holds controlling=true, so it passed: the local engine moved and the server
   // dropped the intent, because a crossfade carries no deck and canDriveIntent then demands BOTH.
   // Silent divergence on the shared board, from the seat one role up (71277a23).
-  const stageDj = seatOf({ controlling: true, decks: "B", stage: true }, { enabled: true, floorListener: false });
+  const stageDj = seatOf({ decks: "B", stage: true }, { enabled: true, floorListener: false });
 
   test("holds their own deck", () => {
     expect(canDriveDeck(stageDj, "B")).toBe(true);
@@ -192,7 +177,7 @@ describe("a STAGE DJ and the whole board", () => {
   });
 
   test("a full controller is refused nothing", () => {
-    const host = seatOf({ controlling: true, decks: "AB", stage: false }, { enabled: true, floorListener: false });
+    const host = seatOf({ decks: "AB", stage: false }, { enabled: true, floorListener: false });
     expect(canDriveBoard(host)).toBe(true);
     expect(canDriveIntent("AB", boardIntent())).toBe(true);
   });

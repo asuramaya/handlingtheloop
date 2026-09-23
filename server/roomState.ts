@@ -39,7 +39,6 @@ export interface Attachment {
   host: boolean; // a device on the session-owner's account (set by the Worker, un-forgeable)
   joined: boolean; // a participant — STICKY: only `leave`/disconnect clears it
   listening: boolean; // rendering its own audio stream
-  controlling: boolean; // allowed to drive the decks (shared); guests need a host grant
   pending: boolean; // a guest who knocked and is waiting on the host's approval (the handshake)
   pub: boolean; // a PUBLIC anon read-only listener (broadcast plane): hears the mix, never drives, never anchors, not in the roster
   decks: string; // which decks this device may DRIVE: "" | "A" | "B" | "AB" ("AB" = full — host/granted). The per-deck gate.
@@ -53,6 +52,21 @@ export interface Attachment {
   invited: boolean; // a push-invite grant was consumed on connect (Worker-set, un-forgeable) → auto-admit on join, skipping the knock. SERVER-ONLY, never in a Peer.
 }
 
+/** Does this device drive anything at all?
+ *
+ *  ★ DERIVED, NOT STORED — and that is the whole point. `controlling` used to be a second field
+ *  beside `decks`, and their agreement was a convention no artifact owned: the server wrote both in
+ *  one literal at six sites, a test filter assumed `controlling === (decks !== "")`, and a scan over
+ *  room.ts was supposed to establish it. The scan compared `/^""$/` against `/^false$/`, so it only
+ *  ever checked the biconditional when BOTH values were literals — and every live write is a ternary
+ *  or a variable. Measured: an INVERTED pairing (`controlling: !on, decks: on ? "AB" : ""`), the
+ *  worst form of the bug it existed to catch, walked straight through it.
+ *
+ *  No better regex closes that, because a regex cannot evaluate an expression. Removing the field
+ *  does: the two can no longer disagree, because there is only one of them. The Peer wire keeps
+ *  `controlling` — computed here at serialization — so no client changes and no migration. */
+export const drivesAnything = (a: { decks?: string } | null | undefined): boolean => !!a?.decks;
+
 // The single derived "what is this device" — used for the roster, debugging, and tests. host
 // is reported separately (it's orthogonal to the role). Keeps the flag checks in ONE place so
 // a new feature can't quietly invent a sixth interpretation of the flags.
@@ -62,7 +76,7 @@ export function roleOf(a: Attachment): Role {
   if (a.stage) return "stage";
   if (a.pending) return "pending";
   if (!a.joined) return "present";
-  return a.controlling ? "controller" : "listener";
+  return drivesAnything(a) ? "controller" : "listener";
 }
 
 // The ClientMsg kinds an anonymous (pub) crowd listener may send. Everything else is a
@@ -96,7 +110,7 @@ export function peerOf(a: Attachment, anchorId: string | null): Peer {
     host: !!a.host,
     joined: !!a.joined,
     listening: !!a.listening,
-    controlling: !!a.controlling,
+    controlling: drivesAnything(a), // derived; see drivesAnything
     anchor: a.device === anchorId,
     pending: !!a.pending,
     decks: a.decks || "",

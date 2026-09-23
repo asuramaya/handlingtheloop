@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { DjRoom } from "./room";
 import type { Attachment, Ws, DurableObjectState } from "./roomState";
+import { drivesAnything } from "./roomState";
 import { DO_VALUE_CAP } from "../src/htl/room/doLimits";
 import { MAX_STEMVIEW_BYTES, MAX_STEMVIEW_RECORD_BYTES } from "../src/htl/audio/stemViewBudget";
 
@@ -144,7 +145,7 @@ describe("DjRoom membership", () => {
     expect(ws.a.joined).toBe(true);
     expect(ws.a.host).toBe(true);
     await h.send(ws, { t: "control", on: true });
-    expect(ws.a.controlling).toBe(true);
+    expect(drivesAnything(ws.a)).toBe(true);
     expect(ws.a.decks).toBe("AB");
   });
 
@@ -158,7 +159,7 @@ describe("DjRoom membership", () => {
     await h.send(host, { t: "approve", to: "g1" });
     expect(guest.a.joined).toBe(true);
     expect(guest.a.listening).toBe(true);
-    expect(guest.a.controlling).toBe(false); // approval ≠ control
+    expect(drivesAnything(guest.a)).toBe(false); // approval ≠ control
   });
 
   it("an INVITED guest auto-joins (skips the knock), no host approval needed", async () => {
@@ -168,7 +169,7 @@ describe("DjRoom membership", () => {
     await h.send(friend, { t: "join" });
     expect(friend.a.pending).toBe(false); // no knock
     expect(friend.a.joined).toBe(true); // straight in
-    expect(friend.a.controlling).toBe(false); // admitted ≠ control (still needs a host grant)
+    expect(drivesAnything(friend.a)).toBe(false); // admitted ≠ control (still needs a host grant)
   });
 
   // #48: /internal/ismember authorizes a session GUEST fetching the HOST's global sample clip.
@@ -213,10 +214,10 @@ describe("DjRoom membership", () => {
     await h.send(guest, { t: "join" });
     await h.send(host, { t: "approve", to: "g1" });
     await h.send(guest, { t: "control", on: true });
-    expect(guest.a.controlling).toBe(false); // self-grant refused
+    expect(drivesAnything(guest.a)).toBe(false); // self-grant refused
     expect(guest.got("error")).toBe(true);
     await h.send(host, { t: "grant", to: "g1", on: true });
-    expect(guest.a.controlling).toBe(true);
+    expect(drivesAnything(guest.a)).toBe(true);
     expect(guest.a.decks).toBe("AB");
     await h.send(host, { t: "grant", to: "g1", on: false });
     expect(guest.a.decks).toBe("");
@@ -265,7 +266,7 @@ describe("DjRoom public lobby + stage gate", () => {
     await h.send(host, { t: "stage-approve", to: "L1", deck: "A" });
     expect(lis.a.pub).toBe(false);
     expect(lis.a.stage).toBe(true);
-    expect(lis.a.controlling).toBe(true);
+    expect(drivesAnything(lis.a)).toBe(true);
     expect(lis.a.decks).toBe("A");
   });
 
@@ -301,7 +302,7 @@ describe("DjRoom public lobby + stage gate", () => {
     expect(lis.a.stage).toBe(true);
     await h.send(lis, { t: "stage", deck: null });
     expect(lis.a.pub).toBe(true);
-    expect(lis.a.controlling).toBe(false);
+    expect(drivesAnything(lis.a)).toBe(false);
     expect(lis.a.decks).toBe("");
   });
 
@@ -314,9 +315,9 @@ describe("DjRoom public lobby + stage gate", () => {
     await h.send(friend, { t: "join" });
     expect(friend.a.joined).toBe(true);
     expect(friend.a.pub).toBe(false); // in the roster, not the anonymous crowd count
-    expect(friend.a.controlling).toBe(false); // hears the mix, doesn't drive yet
+    expect(drivesAnything(friend.a)).toBe(false); // hears the mix, doesn't drive yet
     await h.send(host, { t: "grant", to: "F", on: true }); // host hands them the decks
-    expect(friend.a.controlling).toBe(true);
+    expect(drivesAnything(friend.a)).toBe(true);
   });
 });
 
@@ -1181,7 +1182,7 @@ describe("DjRoom FX drive gate", () => {
     const lis = (await h.connect({ device: "L1", pub: true })).ws!;
     await h.send(lis, { t: "stage", deck: "A" });
     await h.send(host, { t: "stage-approve", to: "L1", deck: "A" });
-    expect(lis.a.controlling).toBe(true);
+    expect(drivesAnything(lis.a)).toBe(true);
     expect(lis.a.decks).toBe("A");
     await h.send(lis, { t: "intent", intent: fx("A") });
     await h.send(lis, { t: "intent", intent: fx("B") });

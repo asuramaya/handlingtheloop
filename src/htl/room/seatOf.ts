@@ -22,9 +22,14 @@ import type { DeckId } from "./protocol";
 // silently drops it. The test scans for exactly that.
 
 export interface Attachment {
-  /** Granted control of the decks at all. */
-  controlling: boolean;
-  /** Which decks the SERVER says this device may drive: "" | "A" | "B" | "AB". */
+  /** Which decks the SERVER says this device may drive: "" | "A" | "B" | "AB".
+   *
+   *  ★ THE ONLY GRANT FIELD. `controlling` used to sit beside this one, and their agreement —
+   *  `controlling === (decks !== "")` — was a convention no artifact owned. The server wrote both in
+   *  one literal at six sites; a test filter assumed the biconditional; a scan over room.ts was meant
+   *  to establish it and could only compare string literals, so every live write (all ternaries and
+   *  variables) passed it unexamined, including a measured INVERTED pairing. The two cannot disagree
+   *  now, because there is only one of them. */
   decks: string;
   /** Stepped up from the floor onto a deck. */
   stage: boolean;
@@ -42,5 +47,5 @@ export function seatOf(me: Attachment | null | undefined, opts: { enabled: boole
   if (opts.floorListener || !me) return { enabled: opts.enabled, controlling: false, myDeck: null };
   const onStage = me.stage;
   const myDeck: DeckId | null = onStage ? (me.decks === "A" ? "A" : me.decks === "B" ? "B" : null) : null;
-  return { enabled: opts.enabled, controlling: me.controlling, myDeck };
+  return { enabled: opts.enabled, controlling: me.decks !== "", myDeck };
 }

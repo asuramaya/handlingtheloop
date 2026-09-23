@@ -5,7 +5,7 @@ import { type Attachment, roleOf, pubMayChange, PUB_ALLOWED, peerOf, welcomeFor,
 function att(over: Partial<Attachment>): Attachment {
   return {
     device: "d1", name: "Dev", kind: "Mac", host: false, joined: false, listening: false,
-    controlling: false, pending: false, pub: false, decks: "", stageReq: "", stage: false,
+    pending: false, pub: false, decks: "", stageReq: "", stage: false,
     joinedAt: 0, color: "", ev: 0, follows: false, acct: "", invited: false, ...over,
   };
 }
@@ -13,15 +13,15 @@ function att(over: Partial<Attachment>): Attachment {
 describe("roleOf", () => {
   it("maps the flags to exactly one role", () => {
     expect(roleOf(att({ pub: true, joined: true, listening: true }))).toBe("crowd");
-    expect(roleOf(att({ stage: true, joined: true, controlling: true, decks: "A" }))).toBe("stage");
+    expect(roleOf(att({ stage: true, joined: true, decks: "A" }))).toBe("stage");
     expect(roleOf(att({ pending: true }))).toBe("pending");
     expect(roleOf(att({}))).toBe("present");
-    expect(roleOf(att({ joined: true, controlling: true, decks: "AB" }))).toBe("controller");
+    expect(roleOf(att({ joined: true, decks: "AB" }))).toBe("controller");
     expect(roleOf(att({ joined: true, listening: true }))).toBe("listener");
   });
   it("pub and stage win over the joined/controlling flags they also set", () => {
     // a stage device IS joined+controlling, but its role is 'stage' (anchor-ineligible etc.)
-    expect(roleOf(att({ stage: true, joined: true, controlling: true, decks: "B", listening: true }))).toBe("stage");
+    expect(roleOf(att({ stage: true, joined: true, decks: "B", listening: true }))).toBe("stage");
     expect(roleOf(att({ pub: true, joined: true, listening: true }))).toBe("crowd");
   });
 });
@@ -45,8 +45,8 @@ describe("PUB_ALLOWED / pubMayChange", () => {
 
 describe("peerOf", () => {
   it("carries the per-deck + stage fields and marks the anchor", () => {
-    const p = peerOf(att({ device: "d2", joined: true, controlling: true, decks: "B", stage: true }), "d2");
-    expect(p).toMatchObject({ id: "d2", joined: true, controlling: true, decks: "B", stage: true, anchor: true });
+    const p = peerOf(att({ device: "d2", joined: true, decks: "B", stage: true }), "d2");
+    expect(p).toMatchObject({ id: "d2", joined: true, decks: "B", stage: true, anchor: true });
     expect(peerOf(att({ device: "d3" }), "d2").anchor).toBe(false);
   });
 });

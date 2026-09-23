@@ -484,7 +484,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const onStage = me?.stage ?? false; // stepped up from the floor onto a deck
   // The client half of the drive rule, in seatOf.ts so it can be compared against the SERVER half
   // it must agree with (canDriveIntent). Inline here, no test could reach it.
-  const myDeck: DeckId | null = seatOf(me ? { controlling, decks: me.decks ?? "", stage: onStage } : null, {
+  const myDeck: DeckId | null = seatOf(me ? { decks: me.decks ?? "", stage: onStage } : null, {
     enabled: joined,
     floorListener,
   }).myDeck;

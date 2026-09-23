@@ -26,6 +26,7 @@ import {
   peerOf,
   welcomeFor,
   presenceFor,
+  drivesAnything,
 } from "./roomState";
 import { Reactions, Requests, Chat } from "./roomCrowd";
 
@@ -464,8 +465,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, controlling: false, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct, invited: false }
-      : { device, name, kind, host, joined: false, listening: false, controlling: granted, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct, invited };
+      ? { device, name, kind, host: false, joined: true, listening: true, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct, invited: false }
+      : { device, name, kind, host, joined: false, listening: false, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct, invited };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 
@@ -548,7 +549,7 @@ export class DjRoom {
           break;
         }
         // A host's own drive = FULL control (both decks); off clears the permission.
-        this.patch(ws, { controlling: !!msg.on, decks: msg.on ? "AB" : "" });
+        this.patch(ws, { decks: msg.on ? "AB" : "" }); // `controlling` is derived from `decks` now — one field, nothing to keep in step
         await this.settle(self);
         break;
       }
@@ -566,7 +567,7 @@ export class DjRoom {
         const target = (msg.to || "").slice(0, 64);
         if (!target || !this.isLive(target) || !this.isJoined(target)) break;
         // A host grant = FULL control (both decks), same as a host's own drive.
-        for (const t of this.state.getWebSockets(target)) this.patch(t, { controlling: !!msg.on, decks: msg.on ? "AB" : "" });
+        for (const t of this.state.getWebSockets(target)) this.patch(t, { decks: msg.on ? "AB" : "" });
         if (msg.on) this.grants.add(target);
         else this.grants.delete(target);
         await this.saveGrants();
@@ -782,7 +783,7 @@ export class DjRoom {
         break;
       }
       case "leave": {
-        this.patch(ws, { controlling: false, listening: false, joined: false, decks: "", stage: false, stageReq: "" });
+        this.patch(ws, { listening: false, joined: false, decks: "", stage: false, stageReq: "" });
         // A full leave drops any granted drive right too — the host re-grants on return.
         if (this.grants.delete(self)) await this.saveGrants();
         await this.settle(self);
@@ -1255,7 +1256,7 @@ export class DjRoom {
   private isControlling(device: string): boolean {
     for (const ws of this.state.getWebSockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (a?.joined && a?.controlling) return true;
+      if (a?.joined && drivesAnything(a)) return true;
     }
     return false;
   }
@@ -1268,7 +1269,7 @@ export class DjRoom {
     let decks = "";
     for (const ws of this.state.getWebSockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
-      if (a?.joined && a?.controlling && a.decks.length > decks.length) decks = a.decks;
+      if (a?.joined && drivesAnything(a) && a.decks.length > decks.length) decks = a.decks;
     }
     return canDriveIntent(decks, intent);
   }
@@ -1299,7 +1300,7 @@ export class DjRoom {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!a || !a.joined || a.device === except || a.pub || a.stage) continue; // a public listener / stepped-up guest never anchors
       const mobile = isMobileKind(a.kind);
-      if (a.controlling) {
+      if (drivesAnything(a)) {
         if (!mobile && !ctrlDesktop) ctrlDesktop = a.device;
         if (!ctrlAny) ctrlAny = a.device;
       }
@@ -1345,7 +1346,7 @@ export class DjRoom {
     for (const t of this.state.getWebSockets(device)) {
       const a = t.deserializeAttachment() as Attachment | null;
       if (!a?.pub) continue; // only a floor listener steps up
-      this.patch(t, { pub: false, joined: true, listening: true, controlling: true, decks: deck, stage: true, stageReq: "", joinedAt: Date.now() });
+      this.patch(t, { pub: false, joined: true, listening: true, decks: deck, stage: true, stageReq: "", joinedAt: Date.now() });
       // Hand them the full board as a driver — they had only the curated digest as a listener.
       this.sendCatchUp(t, "stage-promote");
       promoted = true;
@@ -1383,7 +1384,7 @@ export class DjRoom {
     for (const ws of this.state.getWebSockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!a) continue;
-      this.patch(ws, { pub: true, joined: true, listening: true, controlling: false, decks: "", stage: false, stageReq: "" });
+      this.patch(ws, { pub: true, joined: true, listening: true, decks: "", stage: false, stageReq: "" });
     }
     if (this.grants.delete(device)) void this.saveGrants();
     // A stage device should never have been the anchor, but reassign defensively if so.

@@ -278,10 +278,22 @@ identical to bypass** (burst, 4 s — peak 1.383, rms 0.0942 both ways), against
 the detector on its own audio. Both DUCK presets were pass-throughs. Every comp preset now states
 its source, and `fxBank.test.ts` pins gate ⇔ source.
 
-Note for anyone reading `compWorklet.ts:98`: the `scIn.length` guard there does **not** fire in
-Chromium — a disconnected worklet input arrives as a silent channel, not as an empty array — so it
-is not a safety net for a missing source. (Nor should it be: a quiet sidechain legitimately means
-"do not duck".)
+Note for anyone reading `compWorklet.ts:98`: the `scIn.length` guard there cannot fire **in this
+graph**, and the reason is ours, not Chromium's. `CompFx` creates `sidechain` as a GainNode and
+connects it to input 1 *unconditionally* (`CompFx.ts:81`), so the edge always exists whether or not
+AudioEngine has patched a source into that gain. `inputs[1].length` answers "is there an edge",
+which is always yes, and never the question it is standing in for — "is a source patched in". An
+unpatched detector therefore arrives as **silence**, not as absence.
+
+(Measured by Metron with the answer encoded in the output signal, since port messages never reach a
+processor offline: 1.0 when `inputs[1]` is empty, 0.5 when a channel is present. Disconnected read
+1.0 — so the platform is honest and reports an empty array, exactly as the spec says. My first
+write-up here blamed Chromium; it was our own parked node.)
+
+The transferable rule, narrowed: `inputs[i].length` is a fact about the **graph**, never about the
+signal, and one permanently-connected intermediate node makes it constant. A conditional edge can
+be tested this way; an edge with a gain parked on it cannot. And where the app already knows the
+answer — `scSrc` — asking the audio graph instead is the mistake, whichever way it answers.
 
 **Leaks** — params some presets set and others omit. `applyPreset` does not reset the device first,
 so an omitted param is inherited from whatever was loaded before, and the bank would sound

@@ -81,7 +81,8 @@ function row(label, r) {
   console.log(
     `  ${label.padEnd(22)} ${f(r.wallMs, 0).padStart(7)} ms   ${f(r.maxFrameGapMs, 0).padStart(6)} ms   ` +
       `${String(r.gapsOver50).padStart(4)}  ${String(r.gapsOver100).padStart(5)}   ${f(r.tbtMs, 0).padStart(7)} ms   ` +
-      `${String(r.bursts).padStart(6)}  ${String(r.maxBurst).padStart(5)}  ${f(r.meanBurst, 1).padStart(6)}`,
+      `${String(r.bursts).padStart(6)}  ${String(r.maxBurst).padStart(5)}  ${f(r.meanBurst, 1).padStart(6)}   ` +
+      `${f(r.worstDropMB, 1).padStart(7)}  ${String(r.drops).padStart(5)}  ${f(r.biggestDropMB, 1).padStart(6)}`,
   );
 }
 
@@ -95,7 +96,7 @@ async function main() {
   process.stderr.write("stemlab: bundling harness…\n");
   const code = await bundleHarness();
   process.stderr.write(`stemlab: launching Chromium (${exe})\n`);
-  const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"] });
+  const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--enable-precise-memory-info", "--js-flags=--expose-gc"] });
   try {
     const page = await browser.newPage();
     page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") process.stderr.write(`[page:${m.type()}] ${m.text()}\n`); });
@@ -113,6 +114,16 @@ async function main() {
       console.error("stemlab: this Chromium has no Opus AudioDecoder — nothing measured. (Absence here is unreadable, not negative.)");
       process.exit(3);
     }
+
+    // ★ THE INSTRUMENT MUST FAIL ON PURPOSE BEFORE ITS SILENCE MEANS ANYTHING (c5932a5f). Force a
+    // collection at a known moment and check the frame watcher registers a heap DROP and a gap. If
+    // it cannot see a GC we caused, "the heap did not move across the worst gap" says nothing.
+    const ctrl = await page.evaluate(() => globalThis.stemlabGcControl());
+    console.log(
+      `\n  GC control: forced=${ctrl.forced}  heapReadable=${ctrl.heapRead}  ` +
+        `drop seen ${f(ctrl.seenDropMB, 1)} MB, gap ${f(ctrl.gapMs, 0)} ms` +
+        `${!ctrl.heapRead || ctrl.seenDropMB < 4 ? "   ⚠ THE WATCHER CANNOT SEE A COLLECTION IT CAUSED — heap readings below are NON-READINGS" : "   ✓ the watcher sees a collection"}`,
+    );
 
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: args.cpu });
@@ -146,6 +157,9 @@ async function main() {
       gapsOver50: Math.round(mean(rs, "gapsOver50")),
       gapsOver100: Math.round(mean(rs, "gapsOver100")),
       tbtMs: mean(rs, "tbtMs"),
+      worstDropMB: worst(rs, "worstDropMB"),
+      drops: Math.round(mean(rs, "drops")),
+      biggestDropMB: worst(rs, "biggestDropMB"),
       bursts: Math.round(mean(rs.map((r) => r.delivery), "bursts")),
       maxBurst: worst(rs.map((r) => r.delivery), "maxBurst"),
       meanBurst: mean(rs.map((r) => r.delivery), "meanBurst"),
@@ -161,7 +175,7 @@ async function main() {
       return;
     }
     console.log(`\n  STEMLAB · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU · ${(sliced.bytes / 1024).toFixed(0)} KiB per stem\n`);
-    console.log("                              wall      worst   >50ms  >100ms       TBT   bursts  maxB    avgB");
+    console.log("                              wall      worst   >50ms  >100ms       TBT   bursts  maxB    avgB   dropMB@worst  >4MB  maxDrop");
     if (args.sweep) {
       for (const b of [8, 32, 128]) row(`sliced (${b} ms)`, fold(pick(b)));
       row("unsliced (no sleep)", whole);

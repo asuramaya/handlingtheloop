@@ -68,6 +68,10 @@ export interface Run {
   frames: number;
   decodedSeconds: number;
   delivery: Delivery;
+  worstDropMB: number;
+  drops: number;
+  biggestDropMB: number;
+  heapRead: boolean; // false → performance.memory is absent, so every drop above is a non-reading
 }
 
 /** A stem-shaped buffer: broadband, non-silent, non-periodic, so Opus cannot cheat the packet
@@ -91,20 +95,36 @@ function makeStem(ctx: BaseAudioContext, seconds: number, ch: number): AudioBuff
 
 /** Frame gaps across a window, sampled by rAF — the measure that survives when longtask does not
  *  fire, and the one that corresponds to what a person sees. */
-function watchFrames(): { stop: () => { max: number; over50: number; over100: number; tbt: number; n: number } } {
+const heapMB = (): number => {
+  const m = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+  return m?.usedJSHeapSize ? m.usedJSHeapSize / 1048576 : 0;
+};
+
+function watchFrames(): { stop: () => { max: number; over50: number; over100: number; tbt: number; n: number; worstDropMB: number; drops: number; biggestDropMB: number } } {
   // ★ THE CLOCK STARTS ON THE FIRST TICK, NOT ON THE CALL. The first version measured from
   // watchFrames() to the first rAF and then threw that sample away as "the time before the window
   // opened" — but the decode begins immediately, so that sample was mostly stem 1's block. It
   // showed up as every configuration reporting exactly THREE gaps over 50 ms for FOUR stems, which
   // is the tell: a count that never varies is a structure, not a measurement. Anchoring on the
   // first tick loses only the ~16 ms before it and keeps all four stems.
+  // ★ AND THE HEAP AT EVERY TICK. The shape that survived — flat across a 16x budget range, a large
+  // STEP the moment any sleep exists — is not an accumulation's signature; accumulations scale with
+  // what accumulates. It is a ONE-OFF event whose size is indifferent to our budget, and the
+  // obvious one-off is a major collection. Sampling used heap beside the gap costs one read per
+  // frame and is decisive either way: if the worst gap sits in an interval where the heap DROPPED
+  // by megabytes it is GC; if the heap did not move across it, GC is out. (Metron's call, after his
+  // own backpressure reading lost its only distinguishing prediction.)
   const gaps: number[] = [];
+  const heap: number[] = [];
   let last = -1;
   let live = true;
   const tick = () => {
     if (!live) return;
     const now = performance.now();
-    if (last >= 0) gaps.push(now - last);
+    if (last >= 0) {
+      gaps.push(now - last);
+      heap.push(heapMB());
+    }
     last = now;
     requestAnimationFrame(tick);
   };
@@ -113,16 +133,47 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
     stop: () => {
       live = false;
       const g = gaps;
+      // The heap DROP across each interval: sample before it minus sample after it.
+      const drop = (i: number) => (i > 0 ? heap[i - 1] - heap[i] : 0);
+      let wi = 0;
+      for (let i = 1; i < g.length; i++) if (g[i] > g[wi]) wi = i;
+      let biggest = 0;
+      let drops = 0;
+      for (let i = 1; i < g.length; i++) {
+        const d = drop(i);
+        if (d > biggest) biggest = d;
+        if (d > 4) drops++; // a major collection moves megabytes; 4 MB is well clear of noise
+      }
       return {
         max: g.length ? Math.max(...g) : 0,
         over50: g.filter((x) => x > 50).length,
         over100: g.filter((x) => x > 100).length,
         tbt: g.reduce((a, x) => a + Math.max(0, x - 50), 0),
         n: g.length,
+        worstDropMB: g.length ? drop(wi) : 0, // the heap change across the WORST gap specifically
+        drops,
+        biggestDropMB: biggest,
       };
     },
   };
 }
+
+// ★ THE POSITIVE CONTROL, on tonight's rule: if the instrument cannot see a collection we CAUSED,
+// its silence about one we did not cause says nothing. Allocates hard, forces a collection at a
+// known moment, and reports whether the watcher registered a drop and a gap.
+(globalThis as unknown as { stemlabGcControl: () => Promise<{ seenDropMB: number; gapMs: number; forced: boolean; heapRead: boolean }> }).stemlabGcControl =
+  async () => {
+    const g = globalThis as unknown as { gc?: () => void };
+    const w = watchFrames();
+    let junk: number[][] | null = [];
+    for (let i = 0; i < 400; i++) junk.push(new Array(20_000).fill(i));
+    await new Promise<void>((r) => setTimeout(r, 300));
+    junk = null;
+    g.gc?.();
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const f = w.stop();
+    return { seenDropMB: f.biggestDropMB, gapMs: f.max, forced: typeof g.gc === "function", heapRead: heapMB() > 0 };
+  };
 
 (globalThis as unknown as { stemlabSupported: () => Promise<boolean> }).stemlabSupported = async () => {
   const g = globalThis as unknown as { AudioDecoder?: { isConfigSupported: (c: unknown) => Promise<{ supported: boolean }> } };
@@ -166,5 +217,9 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
       frames: f.n,
       decodedSeconds,
       delivery,
+      worstDropMB: f.worstDropMB,
+      drops: f.drops,
+      biggestDropMB: f.biggestDropMB,
+      heapRead: heapMB() > 0,
     };
   };

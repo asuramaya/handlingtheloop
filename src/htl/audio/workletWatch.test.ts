@@ -104,3 +104,45 @@ describe("every worklet node is watched", () => {
     expect(off).toEqual([]);
   });
 });
+
+describe("a dead processor is REPORTED, never touched", () => {
+  // ★ THE DELIBERATE NON-RECOVERY, PINNED — because it is a REASON that lived only in a comment,
+  // and a reason in a comment is one well-meaning edit from being reversed with nothing noticing.
+  // The comment says it: "It REPORTS and does not repair. A dead processor cannot be revived, and
+  // rebuilding the master bus mid-performance on an automatic trigger is a bigger decision than an
+  // observability fix should make."
+  //
+  // That is exactly the kind of restraint a later reader undoes in good faith — "why don't we just
+  // rebuild it?" — so the test asserts the SHAPE of the restraint rather than its wording: the only
+  // thing this module may ever do to a node is attach one handler. Any disconnect, reconnect,
+  // rebuild or parameter touch would show up here as an extra property access.
+  //
+  // (Taken from Metron's own flag that the worklet watch's reasons live in comments while its
+  // behaviours live in tests. His file; his rationale; the pin is the part that was missing.)
+  it("attaching and firing touches exactly one property on the node — onprocessorerror", () => {
+    const touched: string[] = [];
+    const target = { onprocessorerror: null } as ProcessorErrorTarget;
+    const node = new Proxy(target, {
+      get(t, p, r) {
+        touched.push(`get:${String(p)}`);
+        return Reflect.get(t, p, r);
+      },
+      set(t, p, v, r) {
+        touched.push(`set:${String(p)}`);
+        return Reflect.set(t, p, v, r);
+      },
+    });
+    watchProcessor(node, "comp", "the master brickwall");
+    target.onprocessorerror?.(new Event("error") as ErrorEvent);
+    const props = [...new Set(touched.map((s) => s.split(":")[1]))];
+    expect(props).toEqual(["onprocessorerror"]);
+  });
+
+  it("the handler does not throw — a dying processor must not take its caller with it", () => {
+    // onprocessorerror is dispatched by the audio thread's plumbing. A throw here would surface as
+    // an unhandled rejection in whatever is pumping it, turning one silent failure into two.
+    const n = { onprocessorerror: null } as ProcessorErrorTarget;
+    watchProcessor(n, "stretch", "deck A");
+    expect(() => n.onprocessorerror?.(new Event("error") as ErrorEvent)).not.toThrow();
+  });
+});

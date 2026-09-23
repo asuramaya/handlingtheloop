@@ -225,7 +225,19 @@ async function fixture(ctx: BaseAudioContext, seconds: number): Promise<ArrayBuf
 // quietly substituted setTimeout, the grid would report a tie between two names for one thing — the
 // unreadable-absence error this session has now made three times. So it returns null and the runner
 // says so.
-export type YieldName = "timeout" | "raf" | "scheduler" | "none";
+// ★ THE 2-1 SPLIT IS THE AXIS. setTimeout(0) and requestAnimationFrame have almost nothing in
+// common as schedulers — different queues, different priorities, different relationship to the
+// paint — and they landed within 1 ms of each other (482 vs 483). When two primitives that differ
+// in every way you were reasoning about give the SAME answer, the variable is what they SHARE.
+// What they share is that both put the continuation at the BACK of something, behind whatever
+// arrived while we slept. scheduler.yield does not: it resumes AHEAD of newly-queued work.
+//
+// Metron's prediction, added here to be falsified rather than believed: postTask at
+// user-blocking should behave like yield (fast), postTask at background like setTimeout (slow).
+// Same API, same feature detection, ONE axis moved. Both fast → position is not the variable and
+// something specific to yield() is. Both slow → likewise. A split → the first mechanism all night
+// that explains the whole grid rather than one column.
+export type YieldName = "timeout" | "raf" | "scheduler" | "postTask-ub" | "postTask-bg" | "none";
 function yieldFor(name: YieldName): (() => Promise<void>) | null {
   const g = globalThis as unknown as { scheduler?: { yield?: () => Promise<void>; postTask?: (f: () => void, o: unknown) => Promise<void> } };
   switch (name) {
@@ -234,9 +246,13 @@ function yieldFor(name: YieldName): (() => Promise<void>) | null {
     case "raf":
       return () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     case "scheduler":
-      if (g.scheduler?.yield) return () => g.scheduler!.yield!();
-      if (g.scheduler?.postTask) return () => g.scheduler!.postTask!(() => {}, { priority: "background" });
-      return null; // absent, and the caller must be told rather than handed a substitute
+      // yield() ONLY — no postTask fallback here, or this cell would silently become one of the
+      // two below and the grid would report a tie between two names for one thing.
+      return g.scheduler?.yield ? () => g.scheduler!.yield!() : null;
+    case "postTask-ub":
+      return g.scheduler?.postTask ? () => g.scheduler!.postTask!(() => {}, { priority: "user-blocking" }) : null;
+    case "postTask-bg":
+      return g.scheduler?.postTask ? () => g.scheduler!.postTask!(() => {}, { priority: "background" }) : null;
     case "none":
       return null;
   }

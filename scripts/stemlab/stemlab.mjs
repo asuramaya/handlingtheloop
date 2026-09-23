@@ -44,6 +44,7 @@ function parseArgs(argv) {
       case "--json": a.json = true; break;
       case "--sweep": a.sweep = true; break;
       case "--grid": a.grid = true; break;
+      case "--idle-only": a.idleOnly = true; break;
       case "--reps": a.reps = Number(v); i++; break;
       default: break;
     }
@@ -144,8 +145,8 @@ async function main() {
       const cells = [];
       const plan = [];
       for (let r = 0; r < reps; r++) {
-        for (const competing of [false, true]) {
-          for (const y of ["none", "timeout", "raf", "scheduler"]) plan.push({ y, competing });
+        for (const competing of args.idleOnly ? [false] : [false, true]) {
+          for (const y of ["none", "timeout", "raf", "scheduler", "postTask-ub", "postTask-bg"]) plan.push({ y, competing });
         }
       }
       // Interleave so a drifting machine cannot manufacture a ranking (the sweep's own lesson).

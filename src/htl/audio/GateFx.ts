@@ -186,11 +186,19 @@ export class GateFx extends BaseFxDevice {
   //
   // ★ ITS OLD JUSTIFICATION WAS BORROWED FROM A DIFFERENT DEVICE AND WAS ARITHMETICALLY FALSE. It
   // read "12% is under the ~5% that reads as a tempo wobble on a sustained tone" — 12 is not under
-  // 5, and more importantly a tempo wobble is a RATE artifact. This gate never touches rate: it
-  // drives gate.gain (see the topology at the top of this file), so it cannot wobble the pitch of a
-  // sustained tone however hard it pulls. The frame came from the sync engine's rate trim, which is
-  // named three lines up as the inspiration for pull-don't-jump — the ANALOGY travelled and the
-  // NUMBER travelled with it, into a place where the quantity it bounds does not exist.
+  // 5, and more importantly a tempo wobble is a PLAYBACK-rate artifact. This gate touches no
+  // playback rate at all (grep: no playbackRate, no detune); it drives gate.gain, per the topology
+  // at the top of this file, so it cannot wobble the pitch of a sustained tone however hard it
+  // pulls. Say PLAYBACK rate and not "rate", because `this.rate` DOES exist here a dozen times —
+  // it is the gate's own LFO rate — and a reader checking this claim by grepping "rate" would find
+  // it and conclude the correction is wrong. (Deckard's catch on review.)
+  //
+  // So pulling a cycle by 12% IS a wobble of a rate, just not the one whose audibility threshold
+  // was borrowed. The frame came from the sync engine's rate trim, named three lines up as the
+  // inspiration for pull-don't-jump: the ANALOGY travelled and the NUMBER travelled with it. What
+  // it crossed is not device but PERCEPT — the borrowed 5% answers "when does pitch stop sounding
+  // stable", and the quantity here is "when does rhythmic placement read as a lurch". Two different
+  // ears, two different thresholds, and no reason the first should bound the second.
   //
   // WHAT IS ACTUALLY CHECKABLE, and it is the half that was right all along: the LOWER bound. A
   // worst-case error is half a cycle, so convergence takes 0.5 / PULL_MAX cycles — 4.2 at 12%,
@@ -198,8 +206,8 @@ export class GateFx extends BaseFxDevice {
   // arithmetic is pinned in gatePull.test.ts.
   //
   // THE UPPER BOUND IS UNCALIBRATED, and now says so rather than borrowing a reason. What limits
-  // it is how large a rhythmic displacement of the gate WINDOW is audible as a lurch, which is an
-  // ear question nobody has asked. 12% is a working value, not a measured one.
+  // it is how large a rhythmic displacement of the gate WINDOW is audible as a lurch — the percept
+  // named above, which nobody has asked about. 12% is a working value, not a measured one.
   private static readonly PULL_MAX = 0.12;
 
   /** Write any cycles that fall inside the lookahead. Idempotent — safe to call every frame. */

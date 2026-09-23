@@ -71,12 +71,29 @@ describe("every worklet node is watched", () => {
   // The drift guard. An eleventh AudioWorkletNode added without a watch is a silent failure with no
   // witness — exactly the state this whole change exists to leave behind. Counting is enough here:
   // the two numbers are small, they sit in one directory, and a mismatch names the files.
-  const DIR = join(__dirname);
-  const files = readdirSync(DIR).filter((f) => /\.ts$/.test(f) && !/\.test\./.test(f) && f !== "workletWatch.ts");
-  const counts = files.map((f) => {
-    const src = readFileSync(join(DIR, f), "utf8");
-    return { f, nodes: (src.match(/new AudioWorkletNode\(/g) ?? []).length, watched: (src.match(/watchProcessor\(/g) ?? []).length };
-  });
+  //
+  // ★ IT SCANS ALL OF src/, NOT THIS DIRECTORY. The first version said the nodes "sit in one
+  // directory", which was TRUE — verified, all ten are under src/htl/audio — and it is a
+  // closed-world claim about siblings, the exact sentence a reader uses to decide where to stop
+  // looking. A worklet built anywhere else would be unwatched AND uncounted, and the guard would
+  // stay green while the roster it guards was wrong. Widening it changes nothing today, which is
+  // the point: it costs one walk and it cannot go stale by someone putting a file elsewhere.
+  const ROOT = join(__dirname, "..", "..");
+  const walk = (d: string): string[] =>
+    readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(join(d, e.name)) : /\.ts$/.test(e.name) && !/\.test\./.test(e.name) ? [join(d, e.name)] : [],
+    );
+  const counts = walk(ROOT)
+    .filter((f) => !f.endsWith("workletWatch.ts"))
+    .map((f) => {
+      const src = readFileSync(f, "utf8");
+      return {
+        f: f.slice(ROOT.length + 1),
+        nodes: (src.match(/new AudioWorkletNode\(/g) ?? []).length,
+        watched: (src.match(/watchProcessor\(/g) ?? []).length,
+      };
+    })
+    .filter((c) => c.nodes || c.watched);
 
   it("found worklet nodes to check (vacuity guard)", () => {
     expect(counts.reduce((a, c) => a + c.nodes, 0)).toBeGreaterThanOrEqual(10);

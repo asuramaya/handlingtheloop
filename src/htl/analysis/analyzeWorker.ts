@@ -15,7 +15,7 @@ let seq = 0;
 // nowhere near the cause.
 //
 // So each distinct reason says itself ONCE per session. Once, because this runs per track load and a
-// line per load is noise nobody reads; distinct, because "could not construct" and "died mid-flight"
+// line per load is noise nobody reads; distinct, because "could not construct" and "threw mid-flight"
 // have different causes and different fixes. Metron's bc201e32 requires the same of the stems worker
 // before anyone may believe a green run from it; this is the live instance of that class, in the
 // worker that already exists.
@@ -53,7 +53,6 @@ const WORKER_BUDGET_MS = 30_000;
 // So a hang buys exactly ONE reconstruction. The worst case is paying the budget a second time,
 // once; after that it really is retired. (Found by Metron, and it is the inverse of the distinction
 // one level down: the witness separates per-CAUSE, and this flag was merging two causes.)
-let hangs = 0;
 const HANG_RETRIES = 1;
 
 // ★ AND THE COUNTER COUNTED VICTIMS, NOT INCIDENTS. Requests overlap here as a matter of course —
@@ -67,6 +66,11 @@ const HANG_RETRIES = 1;
 // So a hang is attributed to a worker GENERATION, which ENDS when the first victim retires it. That
 // victim counts the incident; every other request still waiting on the dead generation falls back
 // inline and counts nothing, because it is the same silence heard again, not a second failure.
+//
+// `gen` IS the incident count — a generation ends only by being retired by a hang — so there is one
+// counter here rather than two that have to stay in lockstep. A request's own `myGen` therefore also
+// says which incident stranded it, which is what lets its message describe THAT incident instead of
+// reading whatever the shared state has since become (Metron, on the first version).
 let gen = 0;
 
 const told = new Set<string>();
@@ -91,7 +95,11 @@ function getWorker(): Worker | null {
       else p.resolve(analysis);
     };
     worker.onerror = () => {
-      // Reject everything in flight; each call's .catch falls back inline.
+      // Reject everything in flight; each call's .catch falls back inline. The worker is NOT retired
+      // here, and that is measured rather than assumed: Metron probed this repo's own Chromium and a
+      // Worker that throws an uncaught error fires onerror, drops that one message, and answers the
+      // very next one normally. Retiring it would throw away a healthy worker. (A worklet is the
+      // opposite — see workletWatch.ts — which is why the same word for both is a trap.)
       for (const [id, p] of pending) {
         pending.delete(id);
         p.reject(new Error("analysis worker error"));
@@ -161,17 +169,18 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
       // Only the first victim of an incident retires the generation; a later one is the same
       // silence heard again, and counting it would spend the retry on one reclamation.
       if (myGen === gen) {
-        hangs += 1;
-        failed = hangs > HANG_RETRIES; // a first hang may be a reclamation; a second is a broken worker
+        gen++; // this generation is over — its other stranded requests must not count themselves
+        failed = gen > HANG_RETRIES; // a first hang may be a reclamation; a second is a broken worker
         try {
           worker?.terminate();
         } catch {
           /* already gone */
         }
         worker = null;
-        gen++; // this generation is over — its other stranded requests must not count themselves
       }
-      reject(new Error(failed ? "analysis worker stopped answering twice" : "analysis worker stopped answering"));
+      // Derived from this request's OWN generation, not from module state: a victim stranded by the
+      // first incident whose timer lands after a second one must still report the first.
+      reject(new Error(myGen + 1 > HANG_RETRIES ? "analysis worker stopped answering twice" : "analysis worker stopped answering"));
     }, WORKER_BUDGET_MS);
     // Only the mix transfers — `grid` is small and structured-cloned (its Float32Arrays stay owned
     // by the caller, which needs the grid intact for its own use).
@@ -184,7 +193,7 @@ export function analyzeTrackAsync(buffer: AudioBuffer, grid?: Beatgrid | null): 
         ? "stopped answering twice — staying on the main thread for this session"
         : m.includes("stopped answering")
           ? "stopped answering — will try once more on the next load"
-          : "died mid-flight",
+          : "threw mid-flight — it survives and answers the next load, this one fell back",
     );
     return inline(); // re-read the intact source buffer
   });

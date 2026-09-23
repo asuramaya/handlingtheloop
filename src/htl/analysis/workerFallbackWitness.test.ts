@@ -49,7 +49,7 @@ describe("the analysis worker says so when it is not being used", () => {
     expect(said).toHaveLength(1); // a line per load is noise nobody reads
   });
 
-  it("distinguishes a worker that DIED from one that never existed — different causes, different fixes", async () => {
+  it("distinguishes a worker that THREW from one that never existed — different causes, different fixes", async () => {
     let live: { onerror?: () => void } | null = null;
     vi.stubGlobal(
       "Worker",
@@ -70,7 +70,10 @@ describe("the analysis worker says so when it is not being used", () => {
     expect(a).toBeTruthy();
     const said = info.mock.calls.map((c) => String(c[0])).filter((s) => /analysis worker unavailable/.test(s));
     expect(said).toHaveLength(1);
-    expect(said[0]).toMatch(/died mid-flight/);
+    // Measured, not assumed: a Worker SURVIVES an uncaught error — it fires onerror, drops that one
+    // message, and answers the next normally. The line must not claim it died, because it did not.
+    expect(said[0]).toMatch(/threw mid-flight/);
+    expect(said[0]).toMatch(/survives/);
     expect(said[0]).not.toMatch(/could not be constructed/);
   });
 

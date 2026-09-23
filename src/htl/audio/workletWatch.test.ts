@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sourceFiles } from "../testing/sourceScan";
 import { watchProcessor, resetWorkletWatch, type ProcessorErrorTarget } from "./workletWatch";
 import { clearRing, dumpRing } from "../debug/trace";
 
@@ -83,21 +83,16 @@ describe("every worklet node is watched", () => {
   // looking. A worklet built anywhere else would be unwatched AND uncounted, and the guard would
   // stay green while the roster it guards was wrong. Widening it changes nothing today, which is
   // the point: it costs one walk and it cannot go stale by someone putting a file elsewhere.
-  const ROOT = join(__dirname, "..", "..");
-  const walk = (d: string): string[] =>
-    readdirSync(d, { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? walk(join(d, e.name)) : /\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) ? [join(d, e.name)] : [],
-    );
-  const counts = walk(ROOT)
-    .filter((f) => !f.endsWith("workletWatch.ts"))
-    .map((f) => {
-      const src = readFileSync(f, "utf8");
-      return {
-        f: f.slice(ROOT.length + 1),
-        nodes: (src.match(/new AudioWorkletNode\(/g) ?? []).length,
-        watched: (src.match(/watchProcessor\(/g) ?? []).length,
-      };
-    })
+  // The walk itself now lives in src/htl/testing/sourceScan — recursive, .ts AND .tsx, tests
+  // excluded. This file had two of the three narrowings that produced it (mine by directory, then
+  // by extension), so it has no business keeping a fourth private copy of the same loop.
+  const counts = sourceFiles(join(__dirname, "..", ".."))
+    .filter((f) => !f.path.endsWith("workletWatch.ts"))
+    .map((f) => ({
+      f: f.path,
+      nodes: (f.src.match(/new AudioWorkletNode\(/g) ?? []).length,
+      watched: (f.src.match(/watchProcessor\(/g) ?? []).length,
+    }))
     .filter((c) => c.nodes || c.watched);
 
   it("found worklet nodes to check (vacuity guard)", () => {

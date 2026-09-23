@@ -94,6 +94,27 @@ class Comp extends AudioWorkletProcessor {
 
     // The DETECTOR's source: the audio itself, or the external sidechain when one is patched in
     // (deck B ducking deck A, or the mic ducking the music).
+    //
+    // ★ THE scIn.length FALLBACK CANNOT FIRE IN THIS GRAPH, and knowing WHY matters more than the
+    // fact. It reads like a safety net — "no sidechain connected, fall back to our own audio" — and
+    // it is dead here, which is why both DUCK presets shipping with scExt:1 and no scSrc were
+    // silent pass-throughs rather than ordinary compressors (Deckard, 07435bbc).
+    //
+    // The reason is NOT that Chromium delivers a disconnected input as a silent channel. Measured
+    // directly, with the answer encoded in the output signal because port messages never reach a
+    // processor offline: a worklet with numberOfInputs 2 and nothing connected to input 1 sees
+    // 'inputs[1].length === 0', exactly as the spec says. The platform is honest.
+    //
+    // It is CompFx: 'this.sidechain' is a GainNode created in the constructor and connected to
+    // input 1 unconditionally (CompFx.ts:81). The EDGE therefore always exists, whether or not
+    // AudioEngine has patched a source into that gain. So 'inputs[1].length' answers "is there an
+    // edge" — which is always yes — and never the question it is standing in for, "is a source
+    // patched in". An unpatched external detector arrives as SILENCE, not as absence, and a
+    // detector fed silence asks for no gain reduction at all.
+    //
+    // The general rule, stated narrowly enough to be true: inputs[i].length tells you about the
+    // GRAPH, never about the signal, and one permanently-connected intermediate node makes it
+    // constant. Only the main thread knows whether a patch exists; that is what 'scSrc' is for.
     const scIn = inputs[1];
     const sc = this.scExt && scIn && scIn.length ? scIn : inp;
 

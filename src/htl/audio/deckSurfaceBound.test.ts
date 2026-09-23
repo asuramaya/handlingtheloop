@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { stripComments } from "../testing/sourceScan";
 
 // ★ THE POPULATION IS DERIVED, NOT LISTED — which is the whole difference between this and a
@@ -114,14 +114,33 @@ describe("every module that declares its own deck surface is bounded by it", () 
 
   for (const { path, code, ifaces } of MODULES) {
     test(`${path} imports nothing from the audio layer`, () => {
+      // ★ RESOLVED, NOT MATCHED AS A SUBSTRING — the substring version had a hole and a barrel file
+      // opened it. `src/htl/audio/index.ts` re-exports Deck, so from src/htl/room the specifier is
+      // `"../audio"`, which contains no "htl/audio" and sailed through. Planted `import type { Deck
+      // as D } from "../audio"` in applyIntent: tsc silent, all three bans green, the wide type
+      // named inside a bounded module.
+      //
+      // The fix is exact rather than a compiler, per the boundary Metron drew on his analyser scan:
+      // this approximates "does this import reach the audio directory", which is a PATH fact a path
+      // resolver answers exactly. "What type is this expression" is the one with no text encoding,
+      // and that is what scripts/deckscan/wide.ts is for.
       const imports = [...code.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1]);
-      expect(imports.filter((i) => /htl\/audio|\/Deck$|\/AudioEngine$/.test(i))).toEqual([]);
+      const audioDir = join(root, "src/htl/audio");
+      const reaches = imports.filter((spec) => {
+        if (!spec.startsWith(".")) return false; // a bare package cannot be our audio layer
+        const abs = resolve(dirname(join(root, path)), spec);
+        return abs === audioDir || abs.startsWith(`${audioDir}/`);
+      });
+      expect(reaches, `${path} imports from the audio layer — the bound is gone`).toEqual([]);
     });
 
     test(`${path} never USES the wide Deck type`, () => {
       // A USE, not a spelling: DeckId, DeckSnapshot and DeckMeta are ordinary data types and have
       // nothing to do with the surface being bounded.
-      expect(code).not.toMatch(/\bimport\b[^;]*\bDeck\s*[,}]/);
+      // `Deck as D` is an import of Deck, and the old `Deck\s*[,}]` did not see it — the alias was
+      // the second half of the same plant. Any import CLAUSE naming Deck counts, however it is
+      // rebound locally.
+      expect(code).not.toMatch(/\bimport\b[^;]*\bDeck\b\s*(?:as\s+\w+\s*)?[,}]/);
       expect(code).not.toMatch(/:\s*Deck\b(?![A-Za-z])/);
       expect(code).not.toMatch(/<\s*Deck\b(?![A-Za-z])/);
     });

@@ -21,6 +21,7 @@ import { STEM_KEYS } from "./useStemPipeline";
 import { useSpine } from "./spine";
 import { event } from "@htl/debug/trace";
 import type { StemStatus } from "../App";
+import { applyQueueIntent, type QueueTarget } from "../htl/room/queueIntent";
 
 export interface SessionSyncDeps {
   setStatusFor: (id: DeckId, st: StemStatus | null) => void;
@@ -330,18 +331,10 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         board: (deckId, id, phase, arg) => {
           applyBoardAction(engine.deck(deckId), id, phase, arg);
         },
+        // The authority rule and the four actions live in htl/room/queueIntent.ts — pure, so the
+        // "a mirroring remote must NOT apply" decision is testable instead of readable.
         queue: (q) => {
-          // Only the queue AUTHORITY (the device running the auto-mixer + broadcasting the
-          // automix stream) mutates the canonical queue; it then re-streams so everyone
-          // converges 1:1. A mirroring remote ignores it — its local queue is unused, and
-          // applying here would fork a second copy. The seed/mode stay host-owned (radio
-          // engine); remotes only add/remove/move individual tracks.
-          const queue = mixQueueRef.current;
-          if (autoIsRemoteRef.current || !queue) return;
-          if (q.action === "add") queue.enqueue(q.track as TrackMeta);
-          else if (q.action === "addNext") queue.enqueueNext(q.track as TrackMeta);
-          else if (q.action === "remove") queue.remove(q.videoId);
-          else if (q.action === "move") queue.moveById(q.videoId, q.to); // id-based: the right track even if from-index was stale
+          applyQueueIntent(q, mixQueueRef.current as unknown as QueueTarget | null, { mirroring: autoIsRemoteRef.current });
         },
         sample: (s) => samplerApplyRef.current?.(s),
         crossfade: (v) => setCrossfade(v),

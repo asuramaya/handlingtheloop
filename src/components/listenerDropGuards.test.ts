@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sourceFiles } from "../htl/testing/sourceScan";
 
 // ★ A WATCH-ONLY DEVICE MUST NOT BE ABLE TO LOAD A DECK, and what used to enforce that was an
 // invisible shield over the whole stage — not a guard, a cover. When the shield was narrowed to the
@@ -15,7 +15,13 @@ import { join } from "node:path";
 // that knows what `locked` means must check it in every drop path it has. It also EXTENDS ITSELF:
 // a new drop target in any lock-aware component is covered the moment it is written, which is the
 // failure mode here (the guard was missing in the component nobody edited).
-const DIR = __dirname;
+// ★ ALL OF src/, BOTH EXTENSIONS. This scanned `readdirSync(__dirname).filter(endsWith(".tsx"))`,
+// which is the same closed-world claim twice over: one directory, one extension. Every real drop
+// target is a .tsx in src/components today — checked, and the only other file naming the hook is
+// where it is DEFINED (src/htl/state/touchDrag.ts) — so widening changes nothing now, which is the
+// argument for doing it rather than against. The invariant is about any file that knows what
+// `locked` means, and the LOCK_AWARE filter below already says which those are.
+const ROOT = join(__dirname, "..");
 const LOCK_AWARE = /\blocked[,:]/; // takes `locked` as a prop / destructures it
 const DROP_OPEN = /(onDrop=\{\(e\) => \{|useTouchDropTarget\()/g;
 // ★ THE WINDOW ENDS AT THE NEXT HANDLER, NOT AT A FIXED WIDTH. A fixed slice reaches into whatever
@@ -26,9 +32,8 @@ const DROP_OPEN = /(onDrop=\{\(e\) => \{|useTouchDropTarget\()/g;
 const WINDOW_CAP = 700;
 
 function lockAwareComponents(): { file: string; src: string }[] {
-  return readdirSync(DIR)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((file) => ({ file, src: readFileSync(join(DIR, file), "utf8") }))
+  return sourceFiles(ROOT)
+    .map(({ path, src }) => ({ file: path, src }))
     .filter((c) => LOCK_AWARE.test(c.src));
 }
 
@@ -36,7 +41,7 @@ describe("watch-only drop guards", () => {
   const comps = lockAwareComponents();
 
   it("finds the lock-aware components at all (a zero here would make every case below vacuous)", () => {
-    expect(comps.map((c) => c.file)).toEqual(expect.arrayContaining(["DeckLane.tsx", "SongOverview.tsx"]));
+    expect(comps.map((c) => c.file)).toEqual(expect.arrayContaining(["components/DeckLane.tsx", "components/SongOverview.tsx"]));
   });
 
   for (const { file, src } of comps) {

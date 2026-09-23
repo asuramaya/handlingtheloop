@@ -1,6 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { sourceFiles, stripComments } from "../testing/sourceScan";
 
 // EVERY setBypass OVERRIDE MUST ACCEPT `hard`, BECAUSE TYPESCRIPT WILL NEVER ASK FOR IT.
 //
@@ -18,19 +18,25 @@ import { describe, expect, it } from "vitest";
 // This is a source scan rather than a behaviour test on purpose: the defect is in the SIGNATURE, and
 // a behaviour test would have to know which devices care about `hard` today. They all have to take
 // it; what they do with it is theirs.
-const DIR = join(__dirname);
+// ★ IT SCANS ALL OF src/, NOT THIS DIRECTORY. Every BaseFxDevice subclass lives in src/htl/audio
+// today — checked, zero outside — and that is a closed-world claim about its own siblings, which is
+// the sentence a reader uses to decide where to stop looking. A device defined anywhere else would
+// have been uncounted AND unchecked with this green. Widening costs one walk and nothing else; the
+// declaration pattern is anchored at line start, so a CALLER (fxPads.ts, autoMixer.ts) is not a
+// match. See sourceScan.ts for why the walk lives in one place.
+const ROOT = join(__dirname, "..", "..");
 
 describe("the FxDevice bypass contract", () => {
-  const files = readdirSync(DIR).filter((f) => f.endsWith(".ts") && !f.includes(".test."));
+  const files = sourceFiles(ROOT);
 
   it("scans the real device files (a zero here would make this vacuous)", () => {
-    expect(files.length).toBeGreaterThan(8);
+    expect(files.filter((f) => /extends BaseFxDevice/.test(f.src)).length).toBeGreaterThan(5);
   });
 
   it("no device narrows setBypass to a single parameter", () => {
     const narrowed: string[] = [];
-    for (const f of files) {
-      const src = readFileSync(join(DIR, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    for (const { path: f, src: raw } of files) {
+      const src = stripComments(raw);
       for (const m of src.matchAll(/^\s*(?:public\s+)?setBypass\s*\(([^)]*)\)/gm)) {
         const params = m[1].split(",").filter((p) => p.trim().length);
         if (params.length < 2) narrowed.push(`${f}: setBypass(${m[1].trim()})`);

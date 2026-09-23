@@ -123,6 +123,21 @@ export async function decodeStemOpus(
   bytes: ArrayBuffer,
   opts: { sliceMs?: number; yieldTo?: () => Promise<void> } = {},
 ): Promise<AudioBuffer> {
+  const { planes, sampleRate } = await decodeStemOpusPlanes(bytes, opts);
+  return planesToBuffer(ctx, planes, sampleRate);
+}
+
+/** The decode itself, with NO AudioContext anywhere in it — planes of f32 PCM and their rate.
+ *
+ *  ★ THIS SPLIT IS FORCED, NOT CHOSEN (task #132). AudioDecoder and Opus work inside a Worker;
+ *  AudioContext and OfflineAudioContext do not exist there. So the expensive half — feeding packets
+ *  and copying ~12,000 frames' planes per stem — can move off the main thread, and only the cheap
+ *  assembly (createBuffer + a resample when the context rate differs) has to stay on it. Everything
+ *  below this line is deliberately free of `ctx`. */
+export async function decodeStemOpusPlanes(
+  bytes: ArrayBuffer,
+  opts: { sliceMs?: number; yieldTo?: () => Promise<void> } = {},
+): Promise<{ planes: Float32Array[]; sampleRate: number }> {
   const sliceMs = opts.sliceMs ?? 8;
   const dv = new DataView(bytes);
   const sr = dv.getUint32(4, true);
@@ -173,7 +188,8 @@ export async function decodeStemOpus(
   dec.close();
 
   const totalFrames = frames.reduce((a, d) => a + d.numberOfFrames, 0);
-  const out = ctx.createBuffer(ch, Math.max(1, totalFrames), sr);
+  const planes: Float32Array[] = [];
+  for (let c = 0; c < ch; c++) planes.push(new Float32Array(Math.max(1, totalFrames)));
   // ★ COPY STRAIGHT INTO THE DESTINATION, not via a scratch array per frame. Opus decodes in
   // small frames, so a 4-minute stem is on the order of 12,000 of them — and the old shape
   // allocated a Float32Array and made a SECOND copy for every one of them, per channel. That is
@@ -183,7 +199,7 @@ export async function decodeStemOpus(
   // what the subarray bounds give it.)
   slice = performance.now();
   for (let c = 0; c < ch; c++) {
-    const dest = out.getChannelData(c);
+    const dest = planes[c];
     let o = 0;
     for (const d of frames) {
       d.copyTo(dest.subarray(o, o + d.numberOfFrames), { planeIndex: c, format: "f32-planar" });
@@ -195,6 +211,14 @@ export async function decodeStemOpus(
     }
   }
   for (const d of frames) d.close();
+  return { planes, sampleRate: sr };
+}
+
+/** Wrap decoded planes as an AudioBuffer for THIS context — the only part that needs one. */
+export async function planesToBuffer(ctx: BaseAudioContext, planes: Float32Array[], sr: number): Promise<AudioBuffer> {
+  const ch = planes.length;
+  const out = ctx.createBuffer(ch, Math.max(1, planes[0]?.length ?? 1), sr);
+  for (let c = 0; c < ch; c++) out.getChannelData(c).set(planes[c]);
   // Opus is ALWAYS stored at OPUS_SR (48 kHz). The stretch engine plays every PCM source at
   // the AudioContext's sample rate — the mix gets there via decodeAudioData — so if the
   // context runs at a different rate, these stems would play pitched + sped by

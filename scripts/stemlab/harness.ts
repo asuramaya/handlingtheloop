@@ -2,6 +2,7 @@
 // main thread was doing while they ran. Not a reimplementation: the only knob moved between the
 // two runs is decodeStemOpus's own slice budget.
 import { encodeStemOpus, decodeStemOpus } from "../../src/htl/stems/opus";
+import { decodeStemOpusOffThread, lastDecodePath, resetStemDecodeWitness } from "../../src/htl/stems/opusWorker";
 
 // ★ MEASURE THE BACKLOG, NOT ITS SHADOW. The sweep died as a shape: interleaved, the worst gap is
 // flat in the slice budget (443/448/450 ms across a 16x range) and steps only between "some sleep"
@@ -368,4 +369,33 @@ export interface Cell {
       biggestDropMB: f.biggestDropMB,
       heapRead: heapMB() > 0,
     };
+  };
+
+// ★ THE MEASUREMENT OBLIGATION bc201e32 EXISTS FOR. A worker whose fallback is silent produces a
+// green table whether or not it ran off-thread, so this reports the PATH beside the numbers and the
+// runner refuses to believe a table that says "inline". "Seems faster" is unfalsifiable otherwise.
+export interface WorkerRun {
+  path: string | null;
+  wallMs: number;
+  tbtMs: number;
+  maxFrameGapMs: number;
+  decodedSeconds: number;
+}
+
+(globalThis as unknown as { stemlabWorkerRun: (o: { seconds: number; stems: number }) => Promise<WorkerRun> }).stemlabWorkerRun =
+  async ({ seconds, stems }) => {
+    const ctx = new OfflineAudioContext(2, 128, 48000);
+    const blob = await fixture(ctx, seconds);
+    resetStemDecodeWitness();
+    const w = watchFrames();
+    const t0 = performance.now();
+    let decodedSeconds = 0;
+    for (let i = 0; i < stems; i++) {
+      const out = await decodeStemOpusOffThread(ctx, blob.slice(0));
+      decodedSeconds += out.duration;
+    }
+    const wallMs = performance.now() - t0;
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const f = w.stop();
+    return { path: lastDecodePath(), wallMs, tbtMs: f.tbt, maxFrameGapMs: f.max, decodedSeconds };
   };

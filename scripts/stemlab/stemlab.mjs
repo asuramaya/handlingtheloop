@@ -44,6 +44,7 @@ function parseArgs(argv) {
       case "--json": a.json = true; break;
       case "--sweep": a.sweep = true; break;
       case "--grid": a.grid = true; break;
+      case "--worker": a.worker = true; break;
       case "--idle-only": a.idleOnly = true; break;
       case "--only": a.only = v.split(","); i++; break;
       case "--reps": a.reps = Number(v); i++; break;
@@ -69,15 +70,29 @@ function findChromium() {
   return null;
 }
 
+// ★ THE BUNDLE HAS MORE THAN ONE FILE NOW, AND THAT IS WHY THE FIRST WORKER RUN WENT INLINE.
+// `new Worker(new URL("./opus.worker.ts", import.meta.url))` is rewritten by vite to a SEPARATE
+// emitted asset (/assets/opus.worker-<hash>.js). The harness page is a routed stub serving nothing
+// but an injected <script>, so that URL 404'd, the worker never started, and the decode fell back
+// to the main thread — correctly, and silently as far as the numbers were concerned.
+//
+// The path assertion caught it before a single figure was printed, which is the entire point of
+// bc201e32. The fix is to serve what the bundle emitted: every chunk, at its own path.
 async function bundleHarness() {
   const out = await build({
     configFile: false,
     logLevel: "error",
     build: { write: false, minify: false, target: "esnext", lib: { entry: HARNESS, formats: ["iife"], name: "stemlab", fileName: () => "stemlab.js" } },
   });
-  const chunk = (Array.isArray(out) ? out[0] : out).output.find((o) => o.type === "chunk");
+  const output = (Array.isArray(out) ? out[0] : out).output;
+  const chunk = output.find((o) => o.type === "chunk" && o.isEntry) || output.find((o) => o.type === "chunk");
   if (!chunk) throw new Error("stemlab: bundle produced no chunk");
-  return chunk.code;
+  const assets = new Map();
+  for (const o of output) {
+    if (o === chunk) continue;
+    assets.set(`/${o.fileName}`, o.type === "chunk" ? o.code : o.source); // fileName already carries assets/
+  }
+  return { code: chunk.code, assets };
 }
 
 const f = (n, d = 1) => (Number.isFinite(n) ? n.toFixed(d) : "—");
@@ -99,7 +114,7 @@ async function main() {
     process.exit(2);
   }
   process.stderr.write("stemlab: bundling harness…\n");
-  const code = await bundleHarness();
+  const { code, assets } = await bundleHarness();
   process.stderr.write(`stemlab: launching Chromium (${exe})\n`);
   const browser = await chromium.launch({ executablePath: exe, args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--enable-precise-memory-info", "--js-flags=--expose-gc"] });
   try {
@@ -111,6 +126,12 @@ async function main() {
     await page.route("https://stemlab.local/", (route) =>
       route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><meta charset=utf-8><title>stemlab</title>" }),
     );
+    // Serve the worker chunk (and anything else the bundle split out) from the same origin.
+    for (const [path, body] of assets) {
+      await page.route(`https://stemlab.local${path}`, (route) =>
+        route.fulfill({ status: 200, contentType: "text/javascript", body: String(body) }),
+      );
+    }
     await page.goto("https://stemlab.local/");
     await page.addScriptTag({ content: code });
 
@@ -132,6 +153,25 @@ async function main() {
 
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: args.cpu });
+
+    if (args.worker) {
+      // TASK #132's ANSWER, and bc201e32's condition on believing it: the PATH is asserted before
+      // any number is printed. A silently-degraded worker decodes correctly on the main thread and
+      // produces a table that looks like a result.
+      const off = await page.evaluate((o) => globalThis.stemlabWorkerRun(o), { seconds: args.seconds, stems: args.stems });
+      const on = await page.evaluate((o) => globalThis.stemlabRun(o), { seconds: args.seconds, stems: args.stems, sliceMs: 8 });
+      console.log(`\n  STEMLAB WORKER · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU\n`);
+      if (off.path !== "worker") {
+        console.error(`  ✗ THE DECODE RAN "${off.path}", NOT IN A WORKER — no numbers printed, because they would not be about the thing being measured.`);
+        process.exitCode = 4;
+        return;
+      }
+      console.log("                        wall        TBT     worst");
+      console.log(`  worker (off-thread) ${f(off.wallMs, 0).padStart(7)} ms ${f(off.tbtMs, 0).padStart(7)} ms ${f(off.maxFrameGapMs, 0).padStart(6)} ms   ← path: ${off.path}`);
+      console.log(`  main thread (8 ms)  ${f(on.wallMs, 0).padStart(7)} ms ${f(on.tbtMs, 0).padStart(7)} ms ${f(on.maxFrameGapMs, 0).padStart(6)} ms`);
+      console.log(`\n  main-thread blocking is ${f(on.tbtMs / Math.max(1, off.tbtMs), 1)}x lower off-thread (TBT, the statistic that does not wobble).\n`);
+      return;
+    }
 
     if (args.grid) {
       // ★ THIS TESTS A FIX, NOT AN EXPLANATION, which is why it is worth running after four

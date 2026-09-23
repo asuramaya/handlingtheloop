@@ -13,7 +13,8 @@ import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
 import { separateNeural } from "./separate";
 export { setDemucsQuality } from "./separate";
 import { getStemModel, deviceSupportsModel, isChromium, LEGACY_STEM_IDS, type StemModel } from "./models";
-import { opusStemsSupported, encodeStemOpus, isOpusStem, decodeStemOpus } from "./opus";
+import { opusStemsSupported, encodeStemOpus, isOpusStem } from "./opus";
+import { decodeStemOpusOffThread } from "./opusWorker";
 
 export * from "./models";
 export * from "./trace";
@@ -22,7 +23,7 @@ export * from "./trace";
 // or WAV (universal fallback). The magic header self-describes, so old WAV caches
 // and new Opus caches both round-trip with no manifest coupling.
 async function decodeStemBlob(ctx: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
-  if (isOpusStem(bytes)) return decodeStemOpus(ctx, bytes);
+  if (isOpusStem(bytes)) return decodeStemOpusOffThread(ctx, bytes);
   return decodeAudio(ctx, bytes);
 }
 

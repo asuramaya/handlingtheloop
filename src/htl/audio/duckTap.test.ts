@@ -83,23 +83,24 @@ describe("DuckTap", () => {
 // loss and nothing in the repo would object. These are the duck tap's equivalents: not what the
 // code does, but the two decisions a later reader would undo in good faith.
 
-describe("duckTapWanted — both halves, each found at cost", () => {
+// ★ THESE THREE WERE TAUTOLOGICAL AND CLAIMED OTHERWISE, which is worse than not having them.
+// duckTapWanted is `a && b`, so its truth table is true by construction — no edit to this codebase
+// can make these rows fail. They were titled as if they protected the 26% bypassed-device cost and
+// the duck-ZERO cost, and they could not: a reader deleting either half of the condition does not
+// touch this function. (Deckard, reviewing 0fc8f6b.)
+//
+// Retitled to say what they actually are — the semantics of the predicate, documented — and the
+// protection that was missing now lives in "the predicate is USED, not merely present" below, which
+// is the test that can fail. The general rule we both arrived at: when you extract a decision into
+// a named thing so its REASONS survive, the test that matters is that the thing is CALLED. The
+// computation is trivial — that is why it was safe to extract — and a trivial function with a
+// passing test is exactly what a later simplification leaves behind when it inlines the body.
+describe("duckTapWanted semantics (arithmetic only — cannot fail, see the adoption scan)", () => {
   it("is live only when the gate is open AND the follower is wired", () => {
     expect(duckTapWanted(true, true)).toBe(true);
     expect(duckTapWanted(true, false)).toBe(false);
     expect(duckTapWanted(false, true)).toBe(false);
     expect(duckTapWanted(false, false)).toBe(false);
-  });
-
-  it("dropping the GATE half is the 26% regression: a BYPASSED device would tap again", () => {
-    // Measured: a bypassed DelayFx sat at 33.7% of its active cost with the tap live, 7.4% without.
-    expect(duckTapWanted(false, true)).toBe(false);
-  });
-
-  it("dropping the WIRED half is the duck-ZERO regression, the one nobody predicted", () => {
-    // setDuck severs both ends of the follower at 0, and the tap alone kept all five nodes
-    // scheduled anyway — cost with the feature switched OFF.
-    expect(duckTapWanted(true, false)).toBe(false);
   });
 });
 

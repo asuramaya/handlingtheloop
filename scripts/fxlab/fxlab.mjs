@@ -77,6 +77,7 @@ function parseArgs(argv) {
       case "--snapshot-size": a.snapshotSize = true; break;
       case "--bypass-cost": a.bypassCost = true; break;
       case "--duck-cost": a.duckCost = true; break;
+      case "--deck-limiter": a.deckLimiter = true; break;
       case "--live-comp-prune": a.liveCompPrune = true; break;
       case "--sync-drift": a.syncDrift = true; break;
       case "--stem-taps": a.stemTaps = true; break;
@@ -507,6 +508,35 @@ async function main() {
         `\n   ${r.bypassed === 0 ? "\u2713 PRUNED with the REAL device too \u2014 so the 92.6% was the OFFLINE RENDERER, not CompFx" : "\u2717 NOT pruned with the real device \u2014 the offline number was about CompFx, and setBypass's comment is wrong for it"}\n`,
       );
       process.exitCode = 0;
+      return;
+    }
+
+    if (args.deckLimiter) {
+      // Thread 1a58bf38: per-deck limiting shipped UNVERIFIED because duckRunLive sums both decks
+      // into one buffer and cannot see the difference. This runs the REAL engine with two real
+      // decks and toggles the setting, twice each, interleaved.
+      const rows = await page.evaluate(() => globalThis.fxlabDeckLimiter());
+      console.log("\n  PER-DECK LIMITING \u2014 does the master still have to reduce? (deck A hot tone, deck B kick, both audible)\n");
+      for (const r of rows) {
+        console.log(`   ${r.name.padEnd(24)} master GR ${f(r.masterGr, 2).padStart(6)} dB   deck A ${f(r.deckGrA, 2).padStart(5)}   deck B ${f(r.deckGrB, 2).padStart(5)}`);
+      }
+      const off = rows.filter((r) => !r.perDeck);
+      const on = rows.filter((r) => r.perDeck);
+      const worstOff = Math.max(...off.map((r) => r.masterGr));
+      const worstOn = Math.max(...on.map((r) => r.masterGr));
+      // THE CONTROL COMES FIRST. If the shared-limiter rows show no master reduction at all, there
+      // is no coupling in this run to remove, and the treatment rows below say nothing whatever.
+      if (worstOff < 0.2) {
+        console.log("\n   \u2717 INCONCLUSIVE: the SHARED limiter is barely reducing, so this stimulus never creates the coupling the fix removes \u2014 drive it harder before reading the row below.\n");
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`\n   shared limiter reduces ${f(worstOff, 2)} dB on the master; with per-deck limiting it reduces ${f(worstOn, 2)} dB`);
+      console.log(
+        `   ${worstOn < worstOff * 0.25 ? "\u2713 the master is no longer doing the work \u2014 with no master reduction there is no gain change for the two decks to SHARE, which is the coupling itself" : "\u2717 the master is STILL reducing with per-deck limiting on \u2014 the decks are still sharing a gain stage and the fix does not do what it claims"}`,
+      );
+      console.log("\n   \u2605 WHAT THIS DOES NOT SHOW: how any of it SOUNDS. Two independent limiters do not sound like one");
+      console.log("   bus limiter, no number here can adjudicate that, and that is why the setting ships OFF by default.\n");
       return;
     }
 

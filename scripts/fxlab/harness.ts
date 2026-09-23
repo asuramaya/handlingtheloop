@@ -3335,3 +3335,71 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   const ms = performance.now() - t0;
   return { n, mode, ms, seconds };
 };
+
+// ★ THE MEASUREMENT 7e062e7 OWED, AND THE REASON THE OLD ONE COULD NOT TAKE IT. duckRunLive
+// synthesises ONE buffer — a 1 kHz tone plus a kick, summed in the sample loop — and feeds a single
+// source through a single limiter. Both "decks" are already summed before anything limits them, so
+// that rig cannot distinguish pre-sum from post-sum limiting whatever it prints. Naming that was
+// worth more than any number it would have produced.
+//
+// This uses the REAL ENGINE with its two real decks, rather than re-implementing the topology in the
+// harness: deckA gets the tone, deckB gets the kick, and the only thing that changes between rows is
+// engine.setPerDeckLimiter(). An instrument that rebuilds its subject measures the rebuild.
+//
+// WHAT IT READS, and it is the mechanism rather than a proxy for it: the cross-deck punch exists
+// because ONE limiter hears BOTH decks, so deck B's kick asks for reduction that lands on deck A.
+// If the master limiter is not reducing, it cannot couple them — there is no gain change to share.
+// So masterGr going to ~0 while deckGr(B) picks up the work IS the structural claim, directly.
+//
+// WHAT IT DOES NOT SHOW, said here rather than left for a reader to assume: how any of it SOUNDS.
+// Two independent limiters do not sound like one bus limiter and no number here can adjudicate that,
+// which is why the setting ships off by default.
+(globalThis as unknown as { fxlabDeckLimiter: () => Promise<{ name: string; perDeck: boolean; masterGr: number; deckGrA: number; deckGrB: number }[]> }).fxlabDeckLimiter = async () => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const rows: { name: string; perDeck: boolean; masterGr: number; deckGrA: number; deckGrB: number }[] = [];
+  for (const perDeck of [false, true, false, true]) {
+    const eng = new AudioEngine();
+    await eng.ensureWorklets();
+    eng.resume();
+    await new Promise((r) => setTimeout(r, 250));
+    const sr = eng.ctx.sampleRate;
+    const secs = 2;
+    // DECK A: a steady hot tone — the thing that must NOT be ducked by the other deck.
+    const a = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    for (let c = 0; c < 2; c++) {
+      const d = a.getChannelData(c);
+      for (let i = 0; i < d.length; i++) d[i] = 0.5 * Math.sin((2 * Math.PI * 1000 * i) / sr);
+    }
+    // DECK B: a kick on every beat at 120 BPM — the thing that drives the master into reduction.
+    const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (let i = 0; i < d.length; i++) {
+        const ph = (i / sr) % 0.5;
+        d[i] = ph < 0.18 ? 0.9 * Math.sin(2 * Math.PI * 60 * ph) * Math.exp(-ph * 14) : 0;
+      }
+    }
+    eng.deckA.setBuffer(a);
+    eng.deckB.setBuffer(b);
+    eng.setPerDeckLimiter(perDeck);
+    eng.setCrossfade(0.5); // both decks audible — the whole point is that they are summed
+    eng.deckA.play();
+    eng.deckB.play();
+    // The worklet posts GR back roughly every 85 ms, so one glance could land between reports and
+    // read 0 for the wrong reason. Take the WORST over a second of real playback.
+    let mg = 0;
+    let ga = 0;
+    let gb = 0;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      mg = Math.max(mg, eng.masterGr);
+      ga = Math.max(ga, eng.deckGr("A"));
+      gb = Math.max(gb, eng.deckGr("B"));
+    }
+    eng.deckA.pause();
+    eng.deckB.pause();
+    rows.push({ name: perDeck ? "per-deck limiting ON" : "shared master limiter", perDeck, masterGr: mg, deckGrA: ga, deckGrB: gb });
+    await eng.ctx.close();
+  }
+  return rows;
+};

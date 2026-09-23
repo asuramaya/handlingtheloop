@@ -270,21 +270,35 @@ export class CompFx extends BaseFxDevice {
 /** Master-bus brickwall: the same worklet, in LIMIT mode, guaranteeing nothing leaves above the
  *  ceiling. With the EQ reaching +12 and the saturator driving +20, the stack needs an end-stop —
  *  otherwise every aggressive move is a gamble on the browser's clipping. */
-/** ★ A LIMITER FOR ONE DECK, BEFORE THE SUM — the structural half of the operator's ruling on the
- *  cross-deck punch. The master brickwall hears BOTH decks at once, so deck A's kick asks it for
- *  reduction that lands on deck B as well: measured 1.88 dB hot, 0.00 dB at mid mix (489901b3).
- *  That is shared fate, and no amount of headroom removes it — headroom only moves the level at
- *  which it starts. A limiter that hears one deck cannot duck the other; the coupling is gone
- *  rather than made less likely.
+/** ★ A LIMITER FOR ONE DECK, BEFORE THE SUM — and the measurement says the free win it looked like
+ *  does not exist. Built for the operator's (c) ruling on the cross-deck punch: the master brickwall
+ *  hears BOTH decks, so deck B's kick asks for reduction that lands on deck A (1.88 dB hot, 0.00 dB
+ *  at mid mix, 489901b3). The reasoning was that a limiter hearing ONE deck cannot duck the other.
  *
- *  Ceiling sits BELOW the master's -0.3 so a deck that is already controlled does not then trip the
- *  master and re-couple the two. The cost is character: two independent limiters do not sound like
- *  one bus limiter, which a measurement cannot adjudicate — so this ships behind a setting, off by
- *  default, and the operator's ears decide whether it becomes the default. */
+ *  That reasoning is right about the COUPLING and was wrong about the OUTCOME, which only a
+ *  two-deck measurement could show (fxlab --deck-limiter, on the real engine, both decks audible):
+ *
+ *    shared master limiter            master GR 2.86 dB   deck A 0.00   deck B 0.00
+ *    per-deck, ceiling -1 dB          master GR 4.58 dB   deck A 0.89   deck B 2.63   ← WORSE
+ *    per-deck, ceiling -7 dB          master GR 0.79 dB   deck A 6.55   deck B 8.42   ← works
+ *
+ *  A limiter does not lower a signal, it caps it — so a ceiling just under the master's pushes each
+ *  deck UP to that cap, and two decks at -1 dBFS sum well above it. The master then reduces HARDER
+ *  than before and the decks are coupled through it exactly as they were. The mechanism only
+ *  decouples when the per-deck ceiling is low enough that the SUM clears the master's, which costs
+ *  6-8 dB of reduction per deck.
+ *
+ *  SO PER-DECK LIMITING IS NOT AN ALTERNATIVE TO HEADROOM — IT IS HEADROOM, taken per deck and
+ *  shaped by a limiter instead of by a fader. The operator's own instinct on the headroom question
+ *  ("my sound is relative to speakers and to how loud the track was mastered") turns out to govern
+ *  this too: the level has to come from somewhere, and no topology change conjures it.
+ *
+ *  -7 dB is therefore the honest ceiling: the value at which the thing actually works. It ships
+ *  behind a setting, OFF by default, and what it costs in level is the decision, not a detail. */
 export function makeDeckLimiter(ctx: AudioContext): CompFx {
   const c = new CompFx(ctx);
   c.setParam("mode", 3); // LIMIT
-  c.setParam("ceiling", -1); // under the master's -0.3, so a limited deck cannot re-trip the master
+  c.setParam("ceiling", -7); // measured: -1 makes the master reduce MORE, -7 is where it stops
   c.setParam("lookahead", 1.5);
   c.setParam("mix", 1);
   c.setParam("auto", 0); // a limiter must never invent makeup gain

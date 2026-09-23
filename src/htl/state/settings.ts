@@ -102,7 +102,9 @@ export interface Settings {
   masterHeadroomDb: number; // trim before the master limiter (0 = unity, negative = headroom)
   // ★ A LIMITER PER DECK, BEFORE THE SUM. The master brickwall hears both decks, so one deck's kick
   // asks for reduction that lands on the other — measured 1.88 dB hot, 0.00 at mid mix (489901b3).
-  // Headroom only moves the level where that starts; a per-deck limiter removes the shared fate.
+  // MEASURED (fxlab --deck-limiter): this is not a free alternative to headroom. It decouples only
+  // when each deck's ceiling is low enough that their SUM clears the master's, which costs 6-8 dB per
+  // deck. A limiter caps rather than lowers, so a ceiling just under the master's makes things WORSE.
   // OFF by default: it changes the character of the master, which no measurement can adjudicate.
   perDeckLimiter: boolean;
   // ★ HOW HARD SYNC PULLS A DECK BACK ONTO THE BEAT. The phase-lock loop's P-gain, measured rather

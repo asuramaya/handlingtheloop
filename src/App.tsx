@@ -1,4 +1,5 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
+import { canDriveDeck as canDriveDeckFor, canDriveBoard as canDriveBoardFor } from "./App/drivePermission";
 import type { StemAckState } from "./htl/room/protocol";
 // The requester's stall limit and the host's heartbeat are one invariant with two owners, so both
 // live in protocol.ts — a local copy here could drift from the heartbeat that keeps it alive.
@@ -2694,11 +2695,15 @@ function AppBody() {
   // purely visual zoom + expand — a listener can still inspect either waveform. Replay locks
   // both decks (it's driving them). (Without the !enabled bypass, EVERY local control surface —
   // keyboard, MIDI, gamepad — goes dead off-session, since `controlling` is false with no rig.)
-  const canDriveDeck = (id: DeckId) => !room.enabled || (room.controlling && (room.myDeck === null || room.myDeck === id));
-  const deckLocked = (id: DeckId) => (room.enabled && !canDriveDeck(id)) || replay.active;
+  // The rule itself lives in App/drivePermission.ts — pure, so it is TESTED rather than read. It
+  // was three inline arrows here, consulted through a ref by three key handlers and by the whole
+  // control surface, with nothing able to reach it from a test.
+  const seat = { enabled: room.enabled, controlling: room.controlling, myDeck: room.myDeck };
+  const canDriveDeck = (id: DeckId) => canDriveDeckFor(seat, id);
+  const deckLocked = (id: DeckId) => !canDriveDeckFor(seat, id, replay.active);
   // A whole-board move (the crossfader) needs FULL control — locked for a stage DJ, any follower,
   // and during replay.
-  const boardLocked = (room.enabled && !(room.controlling && room.myDeck === null)) || replay.active;
+  const boardLocked = !canDriveBoardFor(seat, replay.active);
   canDriveDeckRef.current = canDriveDeck;
   // Defer decode while we're a pure muted passenger — enabled but rendering no audio and
   // holding no authority. The moment any of those change (🔊 on, granted control, became

@@ -108,12 +108,22 @@ export async function encodeStemOpus(buffer: AudioBuffer): Promise<ArrayBuffer> 
 
 /** Decode an htl-Opus blob back to an AudioBuffer. Throws on any failure (caller falls back).
  *
- *  `sliceMs` is the yield budget below, and it is a parameter for ONE reason: the claim that this
- *  mitigation turned a freeze into a stutter was never re-measured after it shipped. Passing
- *  Infinity runs the pre-mitigation shape through THIS code rather than through a reimplementation
- *  of it, so the before/after comparison is of one decoder with one knob moved. Nothing in the app
- *  passes it. (scripts/stemlab/stemlab.mjs) */
-export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer, sliceMs = 8): Promise<AudioBuffer> {
+ *  `opts` is MEASUREMENT SCAFFOLDING and nothing in the app passes it. The claim that this
+ *  mitigation turned a freeze into a stutter was never re-measured after it shipped, and when it
+ *  finally was, it went the other way — so both knobs exist so the comparison runs through THIS
+ *  code rather than through a reimplementation of it (scripts/stemlab).
+ *
+ *  `sliceMs` = the yield budget; Infinity is the pre-mitigation shape, no sleep at all.
+ *  `yieldTo`  = HOW it gives the thread back. The default is setTimeout(0), and that is the thing
+ *  under suspicion: a timer task is DUE, so the browser runs it before it paints — a yield that
+ *  does not rank below rendering can starve the very frames the slicing exists to protect. If a
+ *  rAF-shaped yield wins the grid, it stops being a parameter and becomes the implementation. */
+export async function decodeStemOpus(
+  ctx: BaseAudioContext,
+  bytes: ArrayBuffer,
+  opts: { sliceMs?: number; yieldTo?: () => Promise<void> } = {},
+): Promise<AudioBuffer> {
+  const sliceMs = opts.sliceMs ?? 8;
   const dv = new DataView(bytes);
   const sr = dv.getUint32(4, true);
   const ch = new Uint8Array(bytes)[8] || 2;
@@ -142,7 +152,7 @@ export async function decodeStemOpus(ctx: BaseAudioContext, bytes: ArrayBuffer, 
   // stall divisible in the meantime, which is the difference between a board that pauses and a
   // board that stutters — and only one of those loses you the mix.
   const SLICE_MS = sliceMs; // 8 ms by default: under a frame, so a decode in flight cannot drop one
-  const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+  const breathe = opts.yieldTo ?? (() => new Promise<void>((r) => setTimeout(r, 0)));
   let slice = performance.now();
 
   let p = 12;

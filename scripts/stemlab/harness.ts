@@ -182,10 +182,114 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
   return !!d.supported;
 };
 
+// The encoded fixture is deterministic per length and costs seconds to build. Cache it so a grid of
+// sixteen runs pays for it once — and so the thing being compared is the decode, not the encode.
+const fixtures = new Map<number, ArrayBuffer>();
+async function fixture(ctx: BaseAudioContext, seconds: number): Promise<ArrayBuffer> {
+  const hit = fixtures.get(seconds);
+  if (hit) return hit;
+  const blob = await encodeStemOpus(makeStem(ctx, seconds, 2));
+  fixtures.set(seconds, blob);
+  return blob;
+}
+
+// ★ THE YIELD PRIMITIVES. setTimeout(0) is the shipped one and the suspect: a timer task is DUE, so
+// the browser runs it before it paints. rAF ranks BELOW rendering by construction — it IS the
+// rendering step — so a rAF-shaped yield cannot starve a frame the way a timer can. scheduler.yield
+// is the purpose-built one where it exists.
+//
+// ★ AN ABSENT PRIMITIVE MUST READ AS ABSENT, NOT AS A FALLBACK. If scheduler.yield is missing and we
+// quietly substituted setTimeout, the grid would report a tie between two names for one thing — the
+// unreadable-absence error this session has now made three times. So it returns null and the runner
+// says so.
+export type YieldName = "timeout" | "raf" | "scheduler" | "none";
+function yieldFor(name: YieldName): (() => Promise<void>) | null {
+  const g = globalThis as unknown as { scheduler?: { yield?: () => Promise<void>; postTask?: (f: () => void, o: unknown) => Promise<void> } };
+  switch (name) {
+    case "timeout":
+      return () => new Promise<void>((r) => setTimeout(r, 0));
+    case "raf":
+      return () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+    case "scheduler":
+      if (g.scheduler?.yield) return () => g.scheduler!.yield!();
+      if (g.scheduler?.postTask) return () => g.scheduler!.postTask!(() => {}, { priority: "background" });
+      return null; // absent, and the caller must be told rather than handed a substitute
+    case "none":
+      return null;
+  }
+}
+
+/** A competing rAF animation doing real per-frame work — the thing the slicing exists to protect.
+ *  Without one, "does the yield starve rendering" cannot be asked at all. */
+function competingAnimation(): () => number {
+  let live = true;
+  let painted = 0;
+  const cv = document.createElement("canvas");
+  cv.width = 320;
+  cv.height = 120;
+  const g2 = cv.getContext("2d");
+  const tick = () => {
+    if (!live) return;
+    painted++;
+    if (g2) {
+      g2.clearRect(0, 0, 320, 120);
+      for (let i = 0; i < 120; i++) {
+        g2.fillStyle = `hsl(${(painted + i) % 360} 70% 50%)`;
+        g2.fillRect(i * 2.5, (i * 7 + painted) % 120, 2, 8);
+      }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return () => {
+    live = false;
+    return painted;
+  };
+}
+
+export interface Cell {
+  yieldName: YieldName;
+  competing: boolean;
+  available: boolean; // false → the primitive does not exist here; every number below is a non-reading
+  wallMs: number;
+  tbtMs: number;
+  maxFrameGapMs: number;
+  paintedFps: number; // the competing animation's achieved frame rate — 0 when not running
+}
+
+(globalThis as unknown as { stemlabGrid: (o: { seconds: number; stems: number; sliceMs: number; yieldName: YieldName; competing: boolean }) => Promise<Cell> }).stemlabGrid =
+  async ({ seconds, stems, sliceMs, yieldName, competing }) => {
+    const ctx = new OfflineAudioContext(2, 128, 48000);
+    const blob = await fixture(ctx, seconds);
+    const yieldTo = yieldFor(yieldName);
+    if (yieldName !== "none" && !yieldTo) {
+      return { yieldName, competing, available: false, wallMs: 0, tbtMs: 0, maxFrameGapMs: 0, paintedFps: 0 };
+    }
+    const stopAnim = competing ? competingAnimation() : null;
+    const w = watchFrames();
+    const t0 = performance.now();
+    for (let i = 0; i < stems; i++) {
+      await decodeStemOpus(ctx, blob.slice(0), yieldName === "none" ? { sliceMs: Infinity } : { sliceMs, yieldTo: yieldTo! });
+    }
+    const wallMs = performance.now() - t0;
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const f = w.stop();
+    const painted = stopAnim ? stopAnim() : 0;
+    return {
+      yieldName,
+      competing,
+      available: true,
+      wallMs,
+      tbtMs: f.tbt,
+      maxFrameGapMs: f.max,
+      paintedFps: painted ? (painted / wallMs) * 1000 : 0,
+    };
+  };
+
 (globalThis as unknown as { stemlabRun: (o: { seconds: number; stems: number; sliceMs: number | null }) => Promise<Run> }).stemlabRun =
   async ({ seconds, stems, sliceMs }) => {
     const ctx = new OfflineAudioContext(2, 128, 48000);
-    const blob = await encodeStemOpus(makeStem(ctx, seconds, 2));
+    const blob = await fixture(ctx, seconds);
 
     // Measure the DECODE only — the encode is a fixture, and in the app it happens once, offline.
     const readDeliveries = watchDeliveries();
@@ -193,7 +297,7 @@ function watchFrames(): { stop: () => { max: number; over50: number; over100: nu
     const t0 = performance.now();
     let decodedSeconds = 0;
     for (let i = 0; i < stems; i++) {
-      const out = await decodeStemOpus(ctx, blob.slice(0), sliceMs == null ? Infinity : sliceMs);
+      const out = await decodeStemOpus(ctx, blob.slice(0), { sliceMs: sliceMs == null ? Infinity : sliceMs });
       decodedSeconds += out.duration;
     }
     const wallMs = performance.now() - t0;

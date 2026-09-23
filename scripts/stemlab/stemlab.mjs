@@ -16,6 +16,7 @@
 //   node scripts/stemlab/stemlab.mjs --cpu 1             # desktop baseline
 //   node scripts/stemlab/stemlab.mjs --seconds 120       # shorter stems
 //   node scripts/stemlab/stemlab.mjs --slice 16          # a different budget
+//   node scripts/stemlab/stemlab.mjs --grid            # yield primitive x competing animation
 //   node scripts/stemlab/stemlab.mjs --json
 //
 // Needs: playwright-core + a Chromium.
@@ -42,6 +43,8 @@ function parseArgs(argv) {
       case "--slice": a.slice = Number(v); i++; break;
       case "--json": a.json = true; break;
       case "--sweep": a.sweep = true; break;
+      case "--grid": a.grid = true; break;
+      case "--reps": a.reps = Number(v); i++; break;
       default: break;
     }
   }
@@ -127,6 +130,50 @@ async function main() {
 
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: args.cpu });
+
+    if (args.grid) {
+      // ★ THIS TESTS A FIX, NOT AN EXPLANATION, which is why it is worth running after four
+      // mechanisms died. Four proposed, four eliminated — yield count, chunk size, backlog, GC —
+      // and the step between "some sleep" and "no sleep" is untouched. If a rAF-shaped yield
+      // removes it, we do not need the mechanism.
+      //
+      // TBT AND ACHIEVED FPS ARE THE READOUTS, not max gap: worst-gap is a single order statistic
+      // and four rounds of argument were built on its noise. TBT showed the same step every time
+      // without the wobble.
+      const reps = args.reps || 2;
+      const cells = [];
+      const plan = [];
+      for (let r = 0; r < reps; r++) {
+        for (const competing of [false, true]) {
+          for (const y of ["none", "timeout", "raf", "scheduler"]) plan.push({ y, competing });
+        }
+      }
+      // Interleave so a drifting machine cannot manufacture a ranking (the sweep's own lesson).
+      plan.sort((a, b) => (a.y + String(a.competing)).localeCompare(b.y + String(b.competing)) * 0 + (Math.random() < 0.5 ? -1 : 1));
+      for (const { y, competing } of plan) {
+        cells.push(await page.evaluate((o) => globalThis.stemlabGrid(o), {
+          seconds: args.seconds, stems: args.stems, sliceMs: args.slice, yieldName: y, competing,
+        }));
+      }
+      const key = (c) => `${c.yieldName}/${c.competing ? "anim" : "idle"}`;
+      const groups = new Map();
+      for (const c of cells) {
+        if (!groups.has(key(c))) groups.set(key(c), []);
+        groups.get(key(c)).push(c);
+      }
+      console.log(`\n  STEMLAB GRID · ${args.stems} stems x ${args.seconds}s · ${args.cpu}x CPU · slice ${args.slice} ms · ${reps} reps, interleaved\n`);
+      console.log("  yield / competing        wall        TBT     worst    anim fps");
+      for (const [k, cs] of groups) {
+        if (!cs[0].available) { console.log(`  ${k.padEnd(22)} — primitive NOT AVAILABLE in this browser (absent, not equal)`); continue; }
+        const m = (f2) => cs.reduce((a, c) => a + f2(c), 0) / cs.length;
+        console.log(
+          `  ${k.padEnd(22)} ${f(m((c) => c.wallMs), 0).padStart(7)} ms ${f(m((c) => c.tbtMs), 0).padStart(7)} ms ` +
+            `${f(m((c) => c.maxFrameGapMs), 0).padStart(6)} ms ${f(m((c) => c.paintedFps), 1).padStart(8)}`,
+        );
+      }
+      console.log("");
+      return;
+    }
 
     const run = (sliceMs) =>
       page.evaluate((o) => globalThis.stemlabRun(o), { seconds: args.seconds, stems: args.stems, sliceMs });

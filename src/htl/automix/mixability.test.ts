@@ -35,6 +35,35 @@ describe("camelotDistance", () => {
 });
 
 describe("bpmRatioFolded", () => {
+  it("★ the commonest KEY confusions are nearly free — the wheel's geometry, not an accident", () => {
+    // Metron's surviving concern from the provenance work: keyScore folds NOTHING, so unlike a
+    // wrong-octave bpm a wrong third-party key really does move the score. Measured rather than
+    // feared, against a correct 8A (baseline 1.000):
+    //
+    //   8B relative major/minor   0.919      3A tritone off        0.631
+    //   9A / 7A a fifth off       0.919      no key at all         0.775
+    //
+    // The two errors a key detector actually makes — relative major/minor, and a fifth — cost 0.081,
+    // because camelotDistance already treats a cross-ring distance of 0 as "relative (compatible)".
+    // That is the partial analogue of the octave fold, and it is why the key gap is bounded.
+    const t = (key: string | null) => ({ videoId: "x", title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm: 128, key }) as never;
+    const right = mixability(t("8A"), t("8A")).score;
+    for (const near of ["8B", "9A", "7A"]) expect(right - mixability(t("8A"), t(near)).score).toBeLessThan(0.1);
+    expect(right - mixability(t("8A"), t("3A")).score).toBeGreaterThan(0.3); // …and a far one is not free
+  });
+
+  it("★ a WRONG key scores WORSE than NO key — which is what makes not gating the right call", () => {
+    // Non-obvious and load-bearing. A far-wrong key (0.631) scores BELOW an honest unknown (0.775),
+    // so suppressing an untrusted third-party key would only pay if such keys were far-wrong more
+    // than ~43% of the time — unmeasured, and a high bar. That arithmetic is the whole reason the
+    // analysis read path is NOT gated on `version` (ruling fdf66bed). If the unknown default ever
+    // moves, the arithmetic moves with it and this test is where that shows up.
+    const t = (key: string | null) => ({ videoId: "x", title: "", artist: "", duration: 0, thumbnail: null, views: null, bpm: 128, key }) as never;
+    const wrong = mixability(t("8A"), t("3A")).score;
+    const unknown = mixability(t("8A"), t(null)).score;
+    expect(wrong).toBeLessThan(unknown);
+  });
+
   it("★ a WRONG-OCTAVE bpm scores the same as the right one — the provenance gap's only shield", () => {
     // The analysis pool carries third-party BPMs (/api/features) that can be half-time, and the old
     // upsert defect flipped 128 → 64 on a real row. The stated fear was the scorer ranking such a

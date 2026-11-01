@@ -11,6 +11,7 @@ import { usePhone } from "../htl/state/usePhone";
 import { TRACK_DND_MIME } from "./TrackTable";
 import { fmtTime } from "../util/format";
 import type { StemBadge, StemStatus } from "../App";
+import { isStemBusy, stemProcText } from "./stemProcText";
 
 export interface DeckMeta {
   name: string;
@@ -148,16 +149,13 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
-  const stemBusy =
-    stemStatus != null &&
-    (stemStatus.phase === "separating" || (stemStatus.phase === "downloading" && !!stemStatus.src));
+  const stemBusy = isStemBusy(stemStatus);
   // GPU-job tells live in the deck HEADER now (no floating bubbles): stem separation/fetch %
   // takes the slot first (it gates lyrics), then the lyric transcription %. Both are plain
-  // header text with a small spinner dot, on the SAME axis as BPM/key/grid.
-  const procText = stemBusy && stemStatus
-    ? `${stemStatus.phase === "separating" ? "Separating" : "Fetching stems"}${stemStatus.pct != null ? ` ${Math.round(stemStatus.pct)}%` : "…"}`
-    : lyricStatus || null;
-  const procTitle = stemBusy && stemStatus ? stemStatus.detail : lyricStatus || undefined;
+  // header text with a small spinner dot, on the SAME axis as BPM/key/grid. The stem wording is
+  // stemProcText's, which names the download / GPU-setup stages instead of a frozen "0%".
+  const procText = stemProcText(stemStatus) ?? (lyricStatus || null);
+  const procTitle = stemBusy ? stemStatus.detail : lyricStatus || undefined;
   // Highlight the lane while a library/search track row is dragged over it.
   const [dropActive, setDropActive] = useState(false);
 

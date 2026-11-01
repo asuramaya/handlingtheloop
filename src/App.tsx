@@ -177,6 +177,11 @@ export interface StemStatus {
   detail: string;
   src?: string; // short engine label for the persistent chip ("Demucs" / "Open-Unmix")
   of?: "track"; // a TRACK-load write sharing this slot, never stem work (see App/stemWork.ts)
+  /** WHICH part of a fresh on-device separation is running, before the first inference window
+   *  reports. Without it the header read "Separating 0%" through a one-time ~170 MB model download
+   *  AND the GPU session setup — several seconds, or forever if setup hangs — so "downloading",
+   *  "warming up" and "stuck" all looked identical (decision 7b5a5bfd). Absent once windows report. */
+  step?: "model" | "prep";
 }
 
 // One labelled group of live diagnostics for the Settings → Debug tab (audio engine,

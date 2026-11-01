@@ -30,6 +30,7 @@ import {
 } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { StemStatus, StemPhase } from "../App";
+import { onModelLoading } from "../htl/stems/separate";
 import { whenIdle } from "../util/idle";
 import { useSpine } from "./spine";
 
@@ -458,13 +459,38 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       // everywhere else deviceSupportsModel already said no and we never get here.)
       const gpuSeparate = !cached && model.tier === "gpu";
       if (gpuSeparate) armGpu(model.id);
-      setStatusFor(id, { phase, pct: 0, detail: `${verb} ${model.label}…` });
+      // ★ A FRESH SEPARATION STARTS IN "prep", NOT AT "0%". Before the first inference window
+      // reports there may be a one-time model download and always a GPU session setup; neither
+      // moves the window percentage, so a literal 0% read as "stuck" for the whole of both
+      // (decision 7b5a5bfd). The worker DOES report the download (onModelLoading) — it was only
+      // ever wired to the host-answers-a-remote path — so subscribe here for the life of the job.
+      // The listener set is per worker session, so a second deck queued behind this one sees the
+      // same shared download, which is true: it needs those weights too.
+      let windowsReporting = false;
+      const unsubModel = cached
+        ? () => {}
+        : onModelLoading((p) => {
+            if (windowsReporting || stale?.()) return;
+            setStatusFor(
+              id,
+              p < 100
+                ? { phase, step: "model", pct: p, detail: `Downloading the ${model.label} model (one-time)… ${p}%` }
+                : { phase, step: "prep", detail: `Preparing ${model.label} on the GPU…` },
+            );
+          });
+      setStatusFor(
+        id,
+        cached
+          ? { phase, pct: 0, detail: `${verb} ${model.label}…` }
+          : { phase, step: "prep", detail: `Starting ${model.label}…` },
+      );
       try {
         // Share one job per (track, model): a model toggle, a StrictMode re-fire,
         // or both decks on the same track reuse it instead of stacking heavy work.
         let job = stemJobs.current.get(key);
         if (!job) {
           job = loadStems(engine.ctx, videoId, mix, model, (pct) => {
+            windowsReporting = true;
             const p = Math.round(pct * 100);
             setStatusFor(id, { phase, pct: p, detail: `${verb} ${model.label}… ${p}%` });
           });
@@ -489,6 +515,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         setStatusFor(id, { phase: "failed", detail: `${model.label} failed — playing the mix. See console for details.` });
         setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
       } finally {
+        unsubModel();
         if (gpuSeparate) disarmGpu();
       }
     },

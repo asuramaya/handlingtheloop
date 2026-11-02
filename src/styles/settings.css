@@ -2372,7 +2372,7 @@
    selected setting"): at a glance the list says where you are, the way the chin buttons do. */
 .settings-nav-item.on,
 .settings-nav-item.on:hover {
-  color: #0b0710;
+  color: #fff;
   background: var(--neon-purple);
 }
 
@@ -2506,4 +2506,60 @@
 
 .color-mode-hint {
   margin: -2px 0 6px;
+}
+
+/* ── Settings search: a box at the top of the content; results are the real sections, filtered. ── */
+.settings-search {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 2px 0 8px;
+  background: var(--panel, var(--bg));
+}
+.settings-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.settings-search input:focus {
+  outline: none;
+  border-color: var(--neon-purple);
+}
+.search-group {
+  margin-bottom: 12px;
+}
+.search-group-title {
+  display: block;
+  margin: 4px 0 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--neon-purple);
+  font: 700 12px/1 ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.search-group-title:hover {
+  text-decoration: underline;
+}
+.search-miss {
+  display: none !important;
+}
+
+/* A narrow dock: the head carries the section name, the ☰ and the profile picker in ~300px, and
+   "Settings /" was what pushed the section name off the end. The panel is plainly Settings. */
+.settings-panel {
+  container-type: inline-size;
+  container-name: settings-panel;
+}
+@container settings-panel (max-width: 420px) {
+  .settings-crumb {
+    display: none;
+  }
 }

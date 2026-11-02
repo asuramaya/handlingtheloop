@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { applySearch } from "./settings/settingsSearch";
 import { type PanelPlacement, type Settings } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { type UseMidi } from "@htl/midi";
@@ -47,6 +48,8 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "debug", label: "Debug" },
   { key: "about", label: "About" },
 ];
+// Debug (live polling) and About (prose) are destinations, not settings: search skips them.
+const SEARCHABLE: Tab[] = ["interface", "controls", "turntable", "midi", "audio", "stems", "lyrics"];
 
 // Settings modal, organised into tabs: Color (theme), Deck (feel), Accounts
 // (sign-in), Info (about), FAQ (how it works & privacy).
@@ -107,6 +110,60 @@ export function SettingsPanel({
   const centerZ = useCenterZIndex(dockMode, true);
   const zIndex = panelZIndex(dockMode, "settings", settings.panelOrder, centerZ);
 
+  // ★ SEARCH STATE. Results are every searchable section rendered at once, filtered in the DOM
+  // (settingsSearch.ts), re-filtered whenever a section's own content changes under it (a toggle
+  // revealing a row, a device list arriving), so what matches is always what is really there.
+  const [query, setQuery] = useState("");
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const [hits, setHits] = useState(-1);
+  useLayoutEffect(() => {
+    const root = resultsRef.current;
+    if (!root || !query.trim()) return;
+    const run = () => setHits(applySearch(root, query));
+    run();
+    const mo = new MutationObserver(run);
+    mo.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => mo.disconnect();
+  }, [query]);
+
+  const renderTab = (t: Tab) => {
+    switch (t) {
+      case "interface":
+        return (
+          <>
+            <ColorTab settings={settings} set={set} />
+            <PanelPlacementSection settings={settings} set={set} onePanel={onePanel} />
+          </>
+        );
+      case "controls":
+        return <ControlsTab settings={settings} set={set} />;
+      case "turntable":
+        return <TurntableTab settings={settings} set={set} />;
+      case "midi":
+        return midi ? <MidiPanel midi={midi} settings={settings} onChange={onChange} /> : null;
+      case "audio":
+        return <AudioTab settings={settings} set={set} outputSupported={outputSupported} />;
+      case "stems":
+        return (
+          <StemsTab
+            settings={settings}
+            set={set}
+            loadedVideoIds={loadedVideoIds}
+            loadedDecks={loadedDecks}
+            stemStatus={stemStatus}
+            onReanalyze={onReanalyze}
+            onGpuReenable={onGpuReenable}
+          />
+        );
+      case "lyrics":
+        return <LyricsSettings settings={settings} onChange={onChange} decks={lyricDecks} onRetranscribe={onRetranscribe} />;
+      case "debug":
+        return <DebugTab midi={midi} debug={debug} />;
+      case "about":
+        return <AboutTab />;
+    }
+  };
+
   return (
     <div className={`modal-backdrop dock-${dockMode}`} style={{ zIndex }} onPointerDown={onClose}>
       <DockPlacementResizer mode={dockMode} />
@@ -122,7 +179,10 @@ export function SettingsPanel({
           >
             <span className="settings-nav-icon" aria-hidden="true">☰</span>
             <h2>
-              Settings <span className="settings-nav-sep">/</span> {current.label}
+              <span className="settings-crumb">
+                Settings <span className="settings-nav-sep">/</span>{" "}
+              </span>
+              {query.trim() ? "Search" : current.label}
             </h2>
           </button>
           {/* Absent on Debug / About, which have nothing to save. A control that is present but
@@ -153,38 +213,49 @@ export function SettingsPanel({
           )}
 
         <div className="settings-body">
-          {tab === "interface" && (
-            <>
-              <ColorTab settings={settings} set={set} />
-              <PanelPlacementSection settings={settings} set={set} onePanel={onePanel} />
-            </>
-          )}
-
-          {tab === "controls" && <ControlsTab settings={settings} set={set} />}
-
-          {tab === "turntable" && <TurntableTab settings={settings} set={set} />}
-
-          {tab === "midi" && midi && <MidiPanel midi={midi} settings={settings} onChange={onChange} />}
-
-          {tab === "audio" && <AudioTab settings={settings} set={set} outputSupported={outputSupported} />}
-
-          {tab === "stems" && (
-            <StemsTab
-              settings={settings}
-              set={set}
-              loadedVideoIds={loadedVideoIds}
-              loadedDecks={loadedDecks}
-              stemStatus={stemStatus}
-              onReanalyze={onReanalyze}
-              onGpuReenable={onGpuReenable}
+          {/* ★ SEARCH, at the top of the content rather than in the ☰ list: the list overlays the
+              content in a narrow dock, so a box inside it would hide the very results it found. */}
+          <div className="settings-search">
+            <input
+              type="search"
+              placeholder="Search settings"
+              aria-label="Search settings"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                // In a narrow dock the open list OVERLAYS the content, i.e. the results; get it out
+                // of the way the moment there is something to show.
+                if (navOpen && (frameRef.current?.offsetWidth ?? 0) < NAV_OVERLAY_BELOW) setNavOpen(() => false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && query) {
+                  e.stopPropagation();
+                  setQuery("");
+                }
+              }}
             />
+          </div>
+          {query.trim() ? (
+            <div ref={resultsRef} className="settings-search-results">
+              {SEARCHABLE.filter((t) => t !== "midi" || midi).map((t) => (
+                <section key={t} className="search-group">
+                  <button
+                    className="search-group-title"
+                    onClick={() => {
+                      setTab(t);
+                      setQuery("");
+                    }}
+                  >
+                    {TABS.find((x) => x.key === t)!.label} ›
+                  </button>
+                  <div className="search-group-body">{renderTab(t)}</div>
+                </section>
+              ))}
+              {hits === 0 && <p className="settings-hint search-none">No settings match “{query.trim()}”.</p>}
+            </div>
+          ) : (
+            renderTab(tab)
           )}
-
-          {tab === "lyrics" && <LyricsSettings settings={settings} onChange={onChange} decks={lyricDecks} onRetranscribe={onRetranscribe} />}
-
-          {tab === "debug" && <DebugTab midi={midi} debug={debug} />}
-
-          {tab === "about" && <AboutTab />}
         </div>
         </div>
       </div>

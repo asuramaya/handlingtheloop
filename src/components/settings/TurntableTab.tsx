@@ -19,7 +19,9 @@ import { Slider } from "./Slider";
 import { ToggleRow } from "./ControlsTab";
 import { peak, platterCurves, ringCurve, settleTime, SPAN_S, type Curve } from "./platterCurves";
 
-const fmtS = (s: number) => (s <= 0.0001 ? "instant" : `${s.toFixed(2)}s`);
+// An instant gesture still lands one simulation step later (DT ≈ 8 ms): that is "instant", not
+// "0.01s" — the readout rounds a single step away.
+const fmtS = (s: number) => (s <= 0.0101 ? "instant" : `${s.toFixed(2)}s`);
 
 /** A value the tile edits: its range, so the graph can be dragged as well as the slider. */
 interface Knob {

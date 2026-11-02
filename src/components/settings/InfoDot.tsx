@@ -135,6 +135,7 @@ export function InfoDot({ text, label }: { text: string; label?: string }) {
     <span
       className="info-wrap"
       ref={wrap}
+      data-search={text} /* Settings search matches explanations too (the bubble is not in the DOM until opened) */
       onPointerEnter={(e) => {
         if (e.pointerType === "mouse") show();
       }}

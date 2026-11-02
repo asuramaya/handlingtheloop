@@ -29,9 +29,23 @@ export const SCRATCH_WORKLET_SRC = `
 // machinery entirely (see stretchWorklet.ts's loadPcm handler, the writer side).
 if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 
-// One render quantum. Below this an update carries a newer position but no usable timing — the
-// worklet has not run in between, so nothing has actually elapsed that we could measure against.
-const MIN_INTERVAL = 128;
+// The shortest stretch of wall clock a re-pace may measure speed over. Shorter updates still move
+// the TARGET (the chase always aims at the newest position); they just bank their time.
+//
+// ★ IT WAS ONE RENDER QUANTUM (128 samples, ~2.7 ms), AND THAT IS WHAT MADE A JOG "TRIP OVER
+// ITSELF". Operator: "smeared and trips over itself... not nearly as bad on touch, noticeably
+// worse on mouse, and super bad on board". A DDJ-FLX4 moves in whole 720/rev ticks (2.5 ms of
+// audio each) on a 1 ms USB clock, so a 2.7 ms window holds 0, 1 or 2 ticks and the speed snapped
+// between ~0×, 0.93× and 1.85× during a steady 0.35× drag. Touch never saw it: its updates are
+// 16.7 ms apart, already longer than the window. Measured by driving THIS source with one hand
+// motion through three input shapes (scripts/joglab/scratchreplay.mjs):
+//   window      board roughness   board lag   board trips   touch / mouse
+//   128 (2.7ms)      0.239           2.7 ms        26        unchanged
+//   512 (10.7ms)     0.044          13.3 ms        11        unchanged
+//   768 (16ms)       0.052          21.3 ms        19        unchanged
+// 512 brings the board level with touch (0.048) at a lag still far under touch's own ~37 ms, and
+// costs pointer input nothing (their gaps already exceed it). Longer starts losing again.
+const MIN_INTERVAL = 512;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();

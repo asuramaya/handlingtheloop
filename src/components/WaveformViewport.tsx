@@ -5,6 +5,7 @@ import { hexRGB, bandRamp, tiltLuma, debrick, sampleBands } from "@htl/analysis"
 import { deckShades } from "../htl/state/randomPalette";
 import { GRID_ALPHA, GRID_W, gridLod } from "./gridLod";
 import { pickLevel, envelope } from "./waveformEnvelope";
+import { perfWork } from "@htl/debug/perfCapture";
 
 interface WaveformViewportProps {
   // The deck is read LIVE inside an imperative rAF (position, beatgrid, loop,
@@ -195,6 +196,12 @@ export function shape(v: number): number {
 // two of continued travel before the next draft), and how long the motion must be still before
 // the full 3×-wide, glowing layer is rebuilt. See rebuildWave.
 const DRAFT_SPAN = 1.3;
+// ...at half the column density, from the LOD pyramid rather than raw PCM: a frame-long motion
+// blur, measured headless at the operator geometry as ~12 ms (p95 18) per draft before this.
+const DRAFT_DENSITY = 0.5;
+// The full layer is refined in slices of REFINE_SLICE columns, at most REFINE_BUDGET_MS a frame.
+const REFINE_SLICE = 256;
+const REFINE_BUDGET_MS = 4;
 const DRAFT_SETTLE_MS = 130;
 
 interface WaveMeta {
@@ -645,7 +652,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
         const py = stems[name];
         if (!py) continue;
         const ssr = py.sampleRate;
-        const raw = secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
+        const raw = !draftRaster.current && secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
         // Brightness tracks the stem's KNOB level (muted/0 → dim, unity → full).
         const amp = deck.stemActive(name) ? deck.stemLevel(name) : 0;
         const alpha = 0.16 + 0.84 * Math.min(1, amp);
@@ -666,7 +673,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // pyramid's sample rate + LOD-only render when the mix buffer has been released
       // (mobile, stems active) — so the trace still draws from the LOD.
       const bsr = deck.buffer?.sampleRate ?? p.pyramid.sampleRate;
-      const raw = deck.buffer && secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
+      const raw = !draftRaster.current && deck.buffer && secPerPx * bsr < RAW_SPP ? deck.buffer.getChannelData(0) : null;
       const raw1 = raw && deck.buffer!.numberOfChannels > 1 ? deck.buffer!.getChannelData(1) : null;
       if (p.freqColors) {
         // rekordbox-style 3-band colour of the mix — full height, so it layers unless the
@@ -692,9 +699,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   // skip the glow; once the motion has been still for DRAFT_SETTLE_MS, one full rebuild restores
   // the 3× runway and the bloom.
   const rebuildWave = (left: number, tw: number, secPerPx: number, win: number, w: number, h: number, draft = false) => {
-    const p = view.current;
-    const stems = deck.stemPyramids;
-    const mask = stemMask(deck, stems);
+    const tStart = performance.now();
     const span = draft ? tw * DRAFT_SPAN : tw * 3;
     const waveLeft = left - (span - tw) / 2;
     // The offscreen wave is GPU-blitted (scaled) into the lane, so it doesn't need full
@@ -707,7 +712,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // The canvas keeps the FULL 3× allocation either way (a draft uses its first `ow` columns), so
     // switching between draft and full never reallocates the backing store.
     const fullOw = Math.max(2, Math.round(w * 3 * waveQ));
-    const ow = draft ? Math.max(2, Math.round((fullOw * DRAFT_SPAN) / 3)) : fullOw;
+    const ow = draft ? Math.max(2, Math.round(((fullOw * DRAFT_SPAN) / 3) * DRAFT_DENSITY)) : fullOw;
     const colSec = span / ow;
     let wc = waveRef.current;
     if (!wc) {
@@ -724,11 +729,78 @@ export function WaveformViewport(props: WaveformViewportProps) {
     draftRaster.current = draft;
     rasterize(wctx, waveLeft, colSec, ow, h);
     draftRaster.current = false;
-    waveMeta.current = { draft, cols: ow, left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    perfWork(draft ? "wave.draft" : "wave.full", performance.now() - tStart);
+    waveMeta.current = metaFor(draft, ow, waveLeft, span, win, secPerPx, colSec, w, h);
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
     }
+    refine.current = null; // whatever was being refined is for a layer that no longer exists
+  };
+
+  const metaFor = (draft: boolean, cols: number, left: number, span: number, win: number, secPerPx: number, colSec: number, w: number, h: number): WaveMeta => {
+    const p = view.current;
+    const stems = deck.stemPyramids;
+    return { draft, cols, left, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask: stemMask(deck, stems), strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+  };
+
+  // ★ REFINE: THE FULL LAYER IS BUILT IN SLICES, NOT IN ONE FRAME. After a draft (motion) or a zoom,
+  // the crisp 3×-wide glowing layer cost ~30 ms in one go at the operator's geometry: a visible
+  // hitch at the END of every drag, seek and zoom ("zoom in/out during playback occasionally causes
+  // performance degradations"). Now it is rasterised into a second canvas a few column-slices per
+  // frame (≤ REFINE_BUDGET_MS), while the current layer keeps being shown, and swapped in when done.
+  // Each slice is drawn PAD columns wider on both sides and clipped, so the glow is continuous
+  // across slice seams exactly as in a one-shot build.
+  const refine = useRef<{ meta: WaveMeta; next: number } | null>(null);
+  const refineWanted = useRef(false);
+  const refineCanvas = useRef<HTMLCanvasElement | null>(null);
+  const startRefine = (left: number, tw: number, secPerPx: number, win: number, w: number, h: number) => {
+    const waveQ = Math.min(1, 1.5 / sizeRef.current.dpr);
+    const ow = Math.max(2, Math.round(w * 3 * waveQ));
+    const span = tw * 3;
+    let rc = refineCanvas.current;
+    if (!rc) rc = refineCanvas.current = document.createElement("canvas");
+    if (rc.width !== ow || rc.height !== h) {
+      rc.width = ow;
+      rc.height = h;
+    }
+    rc.getContext("2d")?.clearRect(0, 0, ow, h);
+    refine.current = { meta: metaFor(false, ow, left - tw, span, win, secPerPx, span / ow, w, h), next: 0 };
+  };
+  /** One frame's worth of refine work. Returns true when the refined layer was swapped in. */
+  const stepRefine = (): boolean => {
+    const r = refine.current;
+    const rc = refineCanvas.current;
+    if (!r || !rc) return false;
+    const ctx = rc.getContext("2d");
+    if (!ctx) {
+      refine.current = null;
+      return false;
+    }
+    const m = r.meta;
+    const t0 = performance.now();
+    while (r.next < m.cols && performance.now() - t0 < REFINE_BUDGET_MS) {
+      const c0 = r.next;
+      const c1 = Math.min(m.cols, c0 + REFINE_SLICE);
+      const a = Math.max(0, c0 - PAD);
+      const b = Math.min(m.cols, c1 + PAD);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(c0, 0, c1 - c0, m.h);
+      ctx.clip();
+      ctx.translate(a, 0);
+      rasterize(ctx, m.left + a * m.colSec, m.colSec, b - a, m.h);
+      ctx.restore();
+      r.next = c1;
+    }
+    perfWork("wave.refine", performance.now() - t0);
+    if (r.next < m.cols) return false;
+    // Done: swap the canvases (the old layer's canvas becomes the next refine target).
+    refineCanvas.current = waveRef.current;
+    waveRef.current = rc;
+    waveMeta.current = m;
+    refine.current = null;
+    return true;
   };
 
   // Keep the cached layer centred on the moving view by SHIFTING it and rasterising only the
@@ -754,6 +826,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (Math.abs(shiftCols) >= ow - PAD) return false; // a jump, not a scroll → let caller rebuild
     const wctx = wc.getContext("2d");
     if (!wctx) return false;
+    const tShift = performance.now();
 
     // Shift existing pixels via a scratch copy (robust vs. overlapping self-blit). Forward play
     // (shiftCols > 0) moves content LEFT; a backward seek moves it right.
@@ -786,6 +859,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     draftRaster.current = false;
     wctx.restore();
     m.left = newLeft;
+    perfWork("wave.shift", performance.now() - tShift);
     return true;
   };
 
@@ -902,17 +976,20 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // SETTLES (re-arm only while the signature keeps changing) — keeps zoom + deck
       // A/B focus snappy without starving the rebuild.
       if (geomChanging) {
+        refine.current = null; // a refine in flight is for the geometry we just left
         if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
         rebuildTimer.current = window.setTimeout(() => {
-          waveMeta.current = null;
+          rebuildTimer.current = 0;
+          refineWanted.current = true;
           dirty.current = true;
         }, 130);
       }
     } else if (geomStale) {
       // Geometry changed AND the stale layer no longer covers the view (zoomed wider than
-      // the layer, or playback scrolled off it before the debounce fired) — rebuild NOW so
-      // we never present a blank/partial frame.
-      rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
+      // the layer, or playback scrolled off it before the debounce fired): never present a
+      // blank/partial frame, so draw NOW — as a draft (a zoom-out gesture lands here on every
+      // notch past the layer; a full 3× build per notch was the zoom hitch), refined after.
+      motionRebuild();
     } else if (deck.jogging) {
       // ACTIVE SCRUB/SCRATCH: the platter sweeps the playhead fast, which the `jumped` test
       // below misreads as a cue/seek discontinuity and FULL-rebuilds the 3×-wide layer EVERY
@@ -937,9 +1014,19 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // LAST draft (a continuous search keeps pushing it back).
       rebuildTimer.current = window.setTimeout(() => {
         rebuildTimer.current = 0;
-        waveMeta.current = null;
+        refineWanted.current = true;
         dirty.current = true;
       }, DRAFT_SETTLE_MS);
+    }
+    // Settled: build the crisp layer a slice at a time (see REFINE), keeping frames coming until
+    // it is swapped in. A geometry still mid-gesture waits for its own timer.
+    if (refineWanted.current && !geomChanging && !rebuildTimer.current) {
+      refineWanted.current = false;
+      startRefine(left, trackWindow, secPerPx, curWin, w, h);
+    }
+    if (refine.current) {
+      stepRefine();
+      dirty.current = true;
     }
     const m = waveMeta.current;
     const wc = waveRef.current;
@@ -1191,7 +1278,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const loop = () => {
       if (deck.visualPlaying || deck.jogging || deck.adjusting || dirty.current) {
         dirty.current = false;
+        const t = performance.now();
         draw();
+        perfWork("wave.frame", performance.now() - t);
       }
       raf = requestAnimationFrame(loop);
     };

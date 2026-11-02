@@ -111,3 +111,12 @@ if (au.length) {
   }
 }
 if (c.marks.length) console.log(`\nMARKS  ${c.marks.map((m) => `@${(m.t / 1000).toFixed(1)}s ${m.label}`).join("  ")}`);
+
+// Timed app work (waveform rebuilds etc.), if this build recorded it.
+if (c.work) {
+  console.log("\nAPP WORK (ms per call)");
+  for (const [k, xs] of Object.entries(c.work).sort()) {
+    const d = xs.map((x) => x[1]);
+    console.log(`  ${k.padEnd(12)} ×${String(d.length).padStart(5)}  p50 ${q(d, 0.5).toFixed(2)}  p95 ${q(d, 0.95).toFixed(2)}  max ${Math.max(...d).toFixed(2)}  total ${sum(d).toFixed(0)}`);
+  }
+}

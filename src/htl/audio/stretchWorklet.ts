@@ -269,6 +269,20 @@ class Stretch extends AudioWorkletProcessor {
     if (this.pvOlaL) { this.pvOlaL.fill(0); this.pvOlaR.fill(0); }
     if (this.pvPrevMag) this.pvPrevMag.fill(0);
     this.pvInit = false; this.pvEMA = 0;
+    // ★ PV PRE-ROLL. The vocoder's output at a re-seat is an overlap-add that starts EMPTY: the
+    // first N − Rs output samples are a fade-in of partial frames, so whatever sits just after the
+    // seat comes out late and smeared. Measured on this worklet with a click 10 ms after a restart:
+    // PV hifi delivered it 88 ms late at 1% of its level, PV balanced 41 ms late at 12%; WSOLA 1.7
+    // ms late at 85%. A playing deck re-seats on EVERY jog release, which is the operator's
+    // "micro jogs ... sound slurry" on a PV setting. So start the analysis that much EARLIER and
+    // skip the warm-up in the FIFO: the first sample read is already a full overlap.
+    if (this.engineMode === 'pv' && this.pvWin && !this.taps && this.pvN > this.Rs) {
+      const ratio = Math.max(0.05, (this.speedTarget || 1) / (this.pitchTarget || 1)); // input per synthesis sample
+      const preIn = Math.min(this.idealPos, (this.pvN - this.Rs) * ratio);
+      this.idealPos -= preIn;
+      this.grainStart = this.naturalNext = this.idealPos;
+      this.rHead = preIn / ratio; // the FIFO samples that are only warm-up are never read
+    }
     this.refreshTarget();
   }
   // mono(idx): gain-weighted L+R sum across groups, bounds-clamped to silence.

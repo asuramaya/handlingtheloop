@@ -38,6 +38,8 @@ export interface PerfCapture {
   events: Array<{ t: number; name: string; d: number; wait: number; proc: number; target: string }>;
   samples: Array<{ t: number; heapMb?: number; audio?: AudioProbe }>;
   marks: Array<{ t: number; label: string }>;
+  /** Timed app work (e.g. waveform rebuilds): kind → [t, ms] pairs. Filled via perfWork(). */
+  work?: Record<string, Array<[number, number]>>;
 }
 
 let audioProbe: (() => AudioProbe) | null = null;
@@ -64,6 +66,15 @@ export function perfCaptureSeconds(): number {
 }
 
 /** Drop a labelled moment into the recording (e.g. "scratching now"). */
+/** Record one timed piece of app work while a capture runs (a no-op otherwise, so callers can
+ *  time unconditionally). Bounded per kind. */
+export function perfWork(kind: string, ms: number): void {
+  if (!cur) return;
+  const w = (cur.work ??= {});
+  const xs = (w[kind] ??= []);
+  if (xs.length < 20000) xs.push([r1(performance.now() - t0), Math.round(ms * 100) / 100]);
+}
+
 export function perfMark(label: string): void {
   if (cur) cur.marks.push({ t: r1(performance.now() - t0), label });
 }

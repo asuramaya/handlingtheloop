@@ -37,13 +37,11 @@ export interface Settings {
   tempoRange: number; // tempo fader half-range (±%)
   pitchRange: number; // KEY knob half-range (± semitones)
   jumpBeats: number; // beat-jump / loop-move "skip" resolution, in beats
-  jogWeight: number; // platter inertia, 0 = featherweight/snappy … 1 = heavy flywheel
-  jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
-  jogSensitivity: number; // MIDI jog scratch/search scale (0.25..4, 1 = 33⅓ rpm vinyl default)
+  jogWeight: number; // Settings ▸ Platter "Mass": 0 = featherweight/snappy … 1 = heavy flywheel; drag derives from it (platterDrag)
+  jogSensitivity: number; // hardware jog SHIFT-SEARCH speed only (0.25..4); scratching is always 1:1 with the platter
   jogBendStrength: number; // MIDI jog pitch-bend push scale (0.25..2, 1 = default)
-  vinylSpeed: boolean; // Vinyl Speed Adjust: motor brake/soft-start ramps on play/pause + touch (off = instant)
-  vinylBrakeTime: number; // 0..1 — pause-brake + platter-touch decel time (rekordbox Touch/Brake)
-  vinylStartTime: number; // 0..1 — play soft-start spin-up time (rekordbox Release/Start)
+  vinylBrakeTime: number; // 0..1 — Pause's motor spin-down; 0 = instant (there is no separate on/off any more)
+  vinylStartTime: number; // 0..1 — Play's motor spin-up; 0 = instant
   backSpinLength: number; // 0..1 — spinback length + strength (Short … Long)
   slip: boolean; // Slip mode: a scrub/hold returns to the live (shadow) position on release (off = stay where you scratched)
   wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
@@ -296,12 +294,10 @@ export const DEFAULT_SETTINGS: Settings = {
   pitchRange: 12,
   jumpBeats: 4,
   jogWeight: 0.4,
-  jogDrag: 0.4,
   jogSensitivity: 1,
   jogBendStrength: 1,
-  vinylSpeed: false,
-  vinylBrakeTime: 0.22,
-  vinylStartTime: 0.18,
+  vinylBrakeTime: 0, // instant, as the old default (motor toggle off) was
+  vinylStartTime: 0,
   backSpinLength: 0.5,
   slip: false,
   wheelSeeks: false,
@@ -440,8 +436,23 @@ export const ACCENT_PRESETS = [
 const store = new Store<Settings>("settings", DEFAULT_SETTINGS, 1);
 migrateLegacyKey("htl.settings", store); // pre-versioned key
 
+/** Stored or synced settings from before Settings ▸ Platter (2026-11-02) carry a motor on/off
+ *  toggle and a separate drag. The toggle is now "Start / Brake at 0 = instant", so a stored OFF
+ *  must zero both times or everyone who had the motor off would suddenly get one; drag is now
+ *  derived from mass. Idempotent: a migrated object passes through unchanged. */
+export function migrateSettings<T extends Partial<Settings>>(raw: T): T {
+  const s = raw as T & { vinylSpeed?: boolean; jogDrag?: number };
+  if (s.vinylSpeed === false) {
+    s.vinylBrakeTime = 0;
+    s.vinylStartTime = 0;
+  }
+  delete s.vinylSpeed;
+  delete s.jogDrag;
+  return s;
+}
+
 export function loadSettings(): Settings {
-  const s = store.get();
+  const s = migrateSettings(store.get());
   // The onnx rip: demucs is the ONLY separator. A stored "htdemucs-onnx" resolves to
   // "htdemucs" via getStemModel's legacy map — persist the mapped id so the raw string
   // never resurfaces in debug UIs. Anything else that isn't in the registry (umx*,

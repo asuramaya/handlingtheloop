@@ -123,6 +123,7 @@ import {
   type AutoMixMirror,
   seedMicChain,
 } from "@htl";
+import { platterDrag } from "@htl/audio/JogEngine";
 import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
@@ -1373,12 +1374,12 @@ function AppBody() {
     document.documentElement.style.setProperty("--neon-cyan", ACCENT.A);
     document.documentElement.style.setProperty("--neon-pink", ACCENT.B);
     saveSettings(settings);
-    engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
-    engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
+    engine.deckA.setJogPhysics(settings.jogWeight, platterDrag(settings.jogWeight));
+    engine.deckB.setJogPhysics(settings.jogWeight, platterDrag(settings.jogWeight));
     engine.deckA.setBendStrength(settings.jogBendStrength);
     engine.deckB.setBendStrength(settings.jogBendStrength);
     for (const d of [engine.deckA, engine.deckB]) {
-      d.setVinylSpeed(settings.vinylSpeed, settings.vinylBrakeTime, settings.vinylStartTime);
+      d.setVinylSpeed(true, settings.vinylBrakeTime, settings.vinylStartTime); // a time of 0 = instant
       d.setBackSpinLength(settings.backSpinLength);
       d.setSlip(settings.slip); // Slip is a scrub behaviour now, driven from Controls (not a per-deck button)
     }

@@ -2274,3 +2274,163 @@
   color: var(--neon-lime);
 }
 
+
+/* ── Settings menu (☰). Replaces the equal-width tab strip: a list grows downward, a strip
+   only gets narrower. The head button names where you are; the list opens under it. ── */
+.settings-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 4px 6px 4px 0;
+  cursor: pointer;
+  min-width: 0;
+}
+.settings-nav-btn h2 {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-nav-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 15px;
+  color: var(--muted);
+}
+.settings-nav-btn:hover .settings-nav-icon,
+.settings-nav-btn.open .settings-nav-icon {
+  color: var(--text);
+  border-color: var(--neon-purple);
+}
+.settings-nav-sep {
+  color: var(--muted);
+  font-weight: 400;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 10px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.settings-nav-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--muted);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-nav-item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.settings-nav-item.on {
+  color: var(--text);
+  border-left-color: var(--neon-purple);
+}
+
+/* ── Settings ▸ Platter: four small speed-over-time panels, drawn by the deck's physics. ── */
+.platter-curves {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+@media (max-width: 520px) {
+  .platter-curves {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.platter-curve {
+  margin: 0;
+  padding: 6px 6px 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.platter-curve.lit {
+  border-color: var(--accent);
+}
+.platter-curve.dim {
+  opacity: 0.4;
+}
+.platter-curve figcaption {
+  font: 700 10px/1 ui-monospace, monospace;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.platter-curve svg {
+  display: block;
+  width: 100%;
+  height: 52px;
+  overflow: visible;
+}
+.platter-curve .ref {
+  stroke: var(--line);
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+.platter-curve .zero {
+  stroke: var(--line);
+  vector-effect: non-scaling-stroke;
+}
+.platter-curve .trace {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+/* The second trace (Let go on a paused deck) is told apart by SHAPE, not hue: the accent varies
+   per deck and per theme, and a second colour could land right next to it. */
+.platter-curve .trace.alt {
+  stroke: var(--text);
+  stroke-dasharray: 3 2;
+  opacity: 0.8;
+}
+.platter-curve-val {
+  margin-top: 4px;
+  font: 600 10.5px/1.3 ui-monospace, monospace;
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+.platter-curve-val .trace-key {
+  color: var(--accent);
+}
+.platter-curve-val .trace-key {
+  white-space: nowrap;
+}
+.platter-curve-val .trace-key.alt {
+  color: var(--text);
+  opacity: 0.8;
+}
+.platter-curve-val .trace-key.alt::before {
+  content: "- - ";
+  letter-spacing: -1px;
+}
+.platter-group {
+  margin: 12px 0 2px;
+  font: 700 10px/1 ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}

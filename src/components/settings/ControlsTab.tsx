@@ -1,5 +1,5 @@
-// Settings ▸ Controls — jog feel, hardware jog wheel, Vinyl Speed Adjust motor, keyboard
-// profiles + the key map. Pure render of (settings, set); no local state.
+// Settings ▸ Controls — waveform wheel, Auto-DJ flourish, panel placement and the key map (the
+// jog's controls live in Settings ▸ Platter). Pure render of (settings, set); no local state.
 //
 // ★ Written in the shared settings grammar (see the block comment atop settings.css): a CARD
 // per group, a ROW per control (`label ⓘ ......... [value] [control]`), and every explanation
@@ -23,7 +23,7 @@ const PANEL_DOCK_FIELD: Record<PanelKey, "libraryDock" | "settingsDock" | "peopl
 
 // A switch row in the shared grammar. Every toggle on this tab was the same nine lines of JSX
 // with three words changed; the repetition is what let their labels and titles drift apart.
-function ToggleRow({
+export function ToggleRow({
   label,
   info,
   on,
@@ -105,40 +105,15 @@ export function ControlsTab({
 }) {
   return (
     <>
+      {/* The jog's own controls moved to Settings ▸ Platter (one card, drawn). This one is NOT a
+          jog setting — it is what the scroll wheel does over a waveform — so it stays here. */}
       <div className="settings-section">
         <div className="settings-section-head">
-          <span className="settings-label">Jog feel</span>
-          <InfoDot
-            text="How the platter responds when you grab it and let go, by mouse or touch. Play, Pause and Spinback have their own timing under Vinyl Speed Adjust."
-            label="Jog feel"
-          />
-          <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4 })}>
-            reset
-          </button>
+          <span className="settings-label">Waveform</span>
         </div>
-        <Slider
-          label="Weight"
-          hint={settings.jogWeight < 0.2 ? "feather" : settings.jogWeight > 0.7 ? "heavy" : "balanced"}
-          value={settings.jogWeight}
-          onChange={(v) => set({ jogWeight: v })}
-          info="A released platter's inertia. Heavier takes longer both to settle to a stop and to catch back up to play."
-        />
-        <Slider
-          label="Drag"
-          hint={settings.jogDrag < 0.2 ? "long glide" : settings.jogDrag > 0.7 ? "quick stop" : "balanced"}
-          value={settings.jogDrag}
-          onChange={(v) => set({ jogDrag: v })}
-          info="How quickly a platter grips still. Only matters when a release settles to a stop, which means the deck is paused, or the release was too gentle to catch back up to play."
-        />
-        <ToggleRow
-          label="Slip mode"
-          info="Scratch, hold or loop over the track without losing your place. On release, playback snaps to where it would have been, on the beat, skipping the coast that Weight and Drag would otherwise give it. Toggle key: Z."
-          on={settings.slip}
-          onToggle={() => set({ slip: !settings.slip })}
-        />
         <ToggleRow
           label="Mouse-wheel scrub"
-          info="What the scroll wheel does over a waveform, not the jog wheel above. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
+          info="What the scroll wheel does over a waveform. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
           on={settings.wheelSeeks}
           onToggle={() => set({ wheelSeeks: !settings.wheelSeeks })}
         />
@@ -179,83 +154,6 @@ export function ControlsTab({
             reverb in it, or a delay, or three things, and set them however you like. AUTO only
             routes a stem into it for the length of a transition. Editing an effect from a settings
             tab meant leaving the instrument to adjust the instrument. */}
-      </div>
-
-      {/* Its own card, not a paragraph in the middle of the one above. These two sliders apply
-          to hardware only, and a mid-card sentence saying so both broke the row grammar and was
-          easy to read as applying to whatever you happened to be looking at. A card boundary
-          states the same scope structurally, which is harder to misread and impossible to skip. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Hardware jog wheel</span>
-          <InfoDot
-            text="MIDI jog wheels only. Scratching with a mouse or a finger ignores both of these and uses Jog feel above."
-            label="Hardware jog wheel"
-          />
-          <button className="link-btn" onClick={() => set({ jogSensitivity: 1, jogBendStrength: 1 })}>
-            reset
-          </button>
-        </div>
-        <Slider
-          label="Sensitivity"
-          hint={settings.jogSensitivity < 0.95 ? "fine" : settings.jogSensitivity > 1.05 ? "fast" : "vinyl"}
-          value={settings.jogSensitivity}
-          onChange={(v) => set({ jogSensitivity: v })}
-          min={0.25}
-          max={4}
-          step={0.05}
-          info="How far the track moves per encoder tick when you scratch or search on a hardware jog wheel."
-        />
-        <Slider
-          label="Bend strength"
-          hint={settings.jogBendStrength < 0.95 ? "gentle" : settings.jogBendStrength > 1.05 ? "strong" : "default"}
-          value={settings.jogBendStrength}
-          onChange={(v) => set({ jogBendStrength: v })}
-          min={0.25}
-          max={2}
-          step={0.05}
-          info="How hard a turn of the jog wheel's outer edge nudges pitch, without touching the top. The push-to-bend feel."
-        />
-      </div>
-
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Vinyl Speed Adjust</span>
-          <InfoDot
-            text="How Play, Pause and Spinback spin the platter up and down like a real motor. Grabbing the jog wheel is separate, under Jog feel."
-            label="Vinyl Speed Adjust"
-          />
-          <button className="link-btn" onClick={() => set({ vinylSpeed: true, vinylBrakeTime: 0.22, vinylStartTime: 0.18, backSpinLength: 0.5 })}>
-            reset
-          </button>
-        </div>
-        <ToggleRow
-          label="Turntable motor"
-          info="On, Play spins up and Pause brakes to a stop like a turntable. Off, both are instant. Spinback works either way: it is a gesture, not a motor setting."
-          on={settings.vinylSpeed}
-          onToggle={() => set({ vinylSpeed: !settings.vinylSpeed })}
-        />
-        <Slider
-          label="Start"
-          hint={settings.vinylStartTime < 0.1 ? "instant" : settings.vinylStartTime > 0.6 ? "slow spin-up" : "turntable"}
-          value={settings.vinylStartTime}
-          onChange={(v) => set({ vinylStartTime: v })}
-          info="The Play button's spin-up, and only that: a motor catching the platter up to speed. Releasing a grabbed jog wheel back into play uses Weight instead."
-        />
-        <Slider
-          label="Brake / touch"
-          hint={settings.vinylBrakeTime < 0.1 ? "instant" : settings.vinylBrakeTime > 0.6 ? "slow stop" : "turntable"}
-          value={settings.vinylBrakeTime}
-          onChange={(v) => set({ vinylBrakeTime: v })}
-          info="The Pause button's spin-down, and only that: a hand stopping the platter. Letting go of a grabbed jog wheel uses Weight and Drag instead."
-        />
-        <Slider
-          label="Back spin length"
-          hint={settings.backSpinLength < 0.34 ? "short" : settings.backSpinLength > 0.66 ? "long" : "normal"}
-          value={settings.backSpinLength}
-          onChange={(v) => set({ backSpinLength: v })}
-          info="How far back it throws, and how long the motor takes to catch it up to play again. Applies to both the Spinback key or pad and a hard backward flick-release of the jog wheel."
-        />
       </div>
 
       {/* The "Keyboard profiles" card was here. It is the panel-header control now — the same

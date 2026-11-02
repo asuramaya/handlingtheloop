@@ -110,6 +110,24 @@ export function brakeFriction(state: BrakeState, dt: number, tau: number): Brake
   return { v: next, z };
 }
 
+// --- The knob → time-constant mappings, exported so Settings ▸ Platter can draw the deck's own
+// curves with the deck's own numbers (servoStep/brakeFriction above + these). One definition; a
+// graph that re-derived them would be a second copy free to drift.
+export const platterTaus = {
+  /** Released while playing: the servo's settle time back up to play speed. */
+  catchUp: (weight: number) => lerp(0.025, 0.12, weight),
+  /** Released and settling to a stop (paused, or too gentle to catch up): friction time. */
+  glide: (weight: number, drag: number) => lerp(0.6, 0.1, drag) * lerp(0.7, 1.3, weight),
+  brake: (b: number) => lerp(0.02, 0.5, b),
+  start: (s: number) => lerp(0.02, 0.45, s),
+  backSpin: (b: number) => lerp(0.12, 0.6, b),
+  backSpinStrength: (b: number) => lerp(4, 14, b),
+};
+/** Settings ▸ Platter has ONE "mass" knob (operator, 2026-11-02: weight and drag merged). A heavier
+ *  platter both catches up slower AND glides longer, so drag falls as mass rises; 0.8 − mass keeps
+ *  the long-standing default (0.4 / 0.4) exactly where it was. */
+export const platterDrag = (mass: number) => Math.max(0, Math.min(1, 0.8 - mass));
+
 // --- Release classification (Phase B: extracted for its own sake, prep for Phase C) ---
 // What happens when the finger lifts is a real, bug-prone decision — three distinct outcomes
 // depending on how the platter was moving — but it lived inline inside scrubEnd(), entangled
@@ -271,16 +289,16 @@ export class JogEngine {
   }
   // Motor ramp time-constants / strength from the 0..1 knobs.
   private brakeTau() {
-    return lerp(0.02, 0.5, this._vinylBrake);
+    return platterTaus.brake(this._vinylBrake);
   }
   private startTau() {
-    return lerp(0.02, 0.45, this._vinylStart);
+    return platterTaus.start(this._vinylStart);
   }
   private backSpinTau() {
-    return lerp(0.12, 0.6, this._backSpin);
+    return platterTaus.backSpin(this._backSpin);
   }
   private backSpinStrength() {
-    return lerp(4, 14, this._backSpin);
+    return platterTaus.backSpinStrength(this._backSpin);
   }
 
   // --- state readers (Deck forwards these) ---
@@ -638,7 +656,7 @@ export class JogEngine {
       // Catch back up to play speed (jog release, soft-start, or a spinback's recovery): a
       // motor servo, not friction — servoStep, not brakeFriction.
       const rate = this.host.rate();
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.025, 0.12, this._jogWeight);
+      const tau = this._coastTau > 0 ? this._coastTau : platterTaus.catchUp(this._jogWeight);
       const next = servoStep({ v: this.jogVel, a: this._servoA }, rate, dt, tau);
       this.jogVel = next.v;
       this._servoA = next.a;
@@ -659,7 +677,7 @@ export class JogEngine {
     } else {
       // Friction glide / brake: drag sets the strength, or _coastTau the motor brake time.
       // A hand (or the jog pad) gripping the platter to a stop — brakeFriction, not a servo.
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
+      const tau = this._coastTau > 0 ? this._coastTau : platterTaus.glide(this._jogWeight, this._jogDrag);
       const next = brakeFriction({ v: this.jogVel, z: this._brakeZ }, dt, tau);
       this.jogVel = next.v;
       this._brakeZ = next.z;

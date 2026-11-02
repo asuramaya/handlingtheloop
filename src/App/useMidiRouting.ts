@@ -173,10 +173,12 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
       // Stem-volume knob curve: bottom = 0%, CENTRE = 100% (unity), top = 150% (overdrive).
       const stemKnobGain = (v: number) => (v <= 0.5 ? v * 2 : 1 + (v - 0.5));
-      // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
-      const SEC_PER_TICK = 0.0025 * settings.jogSensitivity;
-      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
-      // track to find a cue (Mixxx uses ~×150 vs scratch; we ride sensitivity too).
+      // 33⅓ rpm: 720 ticks = one turn = 1.8 s of record. ALWAYS 1:1 — a hand on the platter moves
+      // the record exactly as far as vinyl would (operator, 2026-11-02: the scratch half of the old
+      // sensitivity knob was cut; a scratch that is not 1:1 with the platter is not a scratch).
+      const SEC_PER_TICK = 0.0025;
+      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole track to find
+      // a cue (Mixxx uses ~×150 vs scratch). Settings ▸ Platter ▸ Search speed scales this alone.
       const SEARCH_SEC_PER_TICK = 0.05 * settings.jogSensitivity;
       // Jog (platter or ring) editing a loop edge. GRID LOCK on → integrate the motion and
       // spend it one beat at a time via adjustStep (a per-tick adjustBy snaps to the same

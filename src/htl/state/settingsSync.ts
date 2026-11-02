@@ -5,7 +5,7 @@
 // and on load whichever side (local vs remote) is newer wins.
 import { useEffect, useRef } from "react";
 import { fetchMe } from "../account";
-import { DEFAULT_SETTINGS, type Settings } from "./settings";
+import { DEFAULT_SETTINGS, migrateSettings, type Settings } from "./settings";
 
 const LOCAL_TS_KEY = "htl:settingsUpdatedAt";
 const PUSH_DEBOUNCE = 800;
@@ -106,7 +106,7 @@ export function useSettingsSync(settings: Settings, setSettings: (s: Settings) =
         if (remote && remote.updatedAt > localTs()) {
           // Remote is newer — adopt it (merged over defaults for forward-compat).
           stampLocal(remote.updatedAt);
-          const merged = { ...DEFAULT_SETTINGS, ...remote.data };
+          const merged = migrateSettings({ ...DEFAULT_SETTINGS, ...remote.data });
           lastSynced.current = JSON.stringify(merged);
           setSettings(merged);
         } else {
@@ -148,7 +148,7 @@ export function useSettingsSync(settings: Settings, setSettings: (s: Settings) =
       void pullRemote().then((remote) => {
         if (!remote || remote.updatedAt <= localTs()) return;
         stampLocal(remote.updatedAt);
-        const merged = { ...DEFAULT_SETTINGS, ...remote.data };
+        const merged = migrateSettings({ ...DEFAULT_SETTINGS, ...remote.data });
         const json = JSON.stringify(merged);
         if (json === lastSynced.current) return; // newer stamp, identical value — clock adopted, nothing to apply
         lastSynced.current = json;

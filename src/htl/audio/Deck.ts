@@ -1714,6 +1714,14 @@ export class Deck {
   get jogging() {
     return this.jog.jogging;
   }
+  /** The gripped platter's smoothed velocity (track-sec per sec) — see JogEngine.handVelocity. */
+  get jogVelocity() {
+    return this.jog.handVelocity;
+  }
+  /** Whether releasing the platter would return to play — see JogEngine.returnsToPlay. */
+  get jogReturnsToPlay() {
+    return this.jog.returnsToPlay;
+  }
   /** True while a momentary pitch-bend is decaying — pauses the sync phase-lock so the
    *  corrector doesn't chase a transient ear-nudge. */
   get bending() {

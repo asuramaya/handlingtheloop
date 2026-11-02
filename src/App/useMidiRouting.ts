@@ -2,7 +2,8 @@
 // agent owns this file instead of contending on App. PURE RELOCATION: the body is verbatim from
 // App (sed-extracted); the App spine arrives via `deps`, destructured to the original names so the
 // closure + its useCallback dep array are unchanged. Consumed by useMidi + useGamepad in App.
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { decideSpinFollow } from "./jogSpinFollow";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import { EQ_MIN_DB, EQ_MAX_DB, type Deck, type DeckId, type SmartFader } from "@htl";
 import { useRoom } from "@htl/room";
@@ -94,6 +95,68 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
 
   // onMidiEvent-private accumulators (moved verbatim from App — used only by the dispatcher).
   const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
+  // FREE-SPIN FOLLOW (App/jogSpinFollow.ts). After a vinyl-mode touch-up the physical platter
+  // keeps turning; while this holds a record for a deck, that deck's grab is still alive and its
+  // CC 0x21 (jogBend) ticks drive the platter instead of bending/seeking. `released`/`lastTick` are
+  // performance.now() ms. One shared checker timer ends a follow when the platter goes still.
+  const spinFollow = useRef<Record<DeckId, { released: number; lastTick: number } | null>>({ A: null, B: null });
+  const spinTimer = useRef<number | null>(null);
+  // The latest jog callbacks/engine, for the timer (which outlives any one render's closure).
+  const spinDeps = useRef({ engine, onJogEnd });
+  spinDeps.current = { engine, onJogEnd };
+  // End a follow: release the grab for real. The platter has settled, so JogEngine's coast starts
+  // from the platter's actual (small or play-speed) velocity instead of a stale hand fling.
+  const endSpinFollow = useCallback((id: DeckId) => {
+    if (!spinFollow.current[id]) return;
+    spinFollow.current[id] = null;
+    const deck = spinDeps.current.engine.deck(id);
+    if (deck.grabbing) {
+      deck.scrubEnd();
+      spinDeps.current.onJogEnd(id);
+    }
+    if (!spinFollow.current.A && !spinFollow.current.B && spinTimer.current != null) {
+      clearInterval(spinTimer.current);
+      spinTimer.current = null;
+    }
+  }, []);
+  // Ask the rule whether a following deck has settled; hand it back if so.
+  const checkSpinFollow = useCallback(
+    (id: DeckId) => {
+      const f = spinFollow.current[id];
+      if (!f) return;
+      const deck = spinDeps.current.engine.deck(id);
+      if (!deck.grabbing) {
+        // Something else ended the grab (a transport action, a load): nothing left to hand back.
+        spinFollow.current[id] = null;
+        return;
+      }
+      const now = performance.now();
+      const action = decideSpinFollow({
+        returnsToPlay: deck.jogReturnsToPlay,
+        vel: deck.jogVelocity,
+        rate: deck.rate,
+        msSinceTick: now - f.lastTick,
+        msSinceRelease: now - f.released,
+      });
+      if (action === "handoff") endSpinFollow(id);
+    },
+    [endSpinFollow],
+  );
+  // The checker runs only while some deck is following; ~15 ms is well inside the 60 ms still
+  // window, so a stopped platter is handed back promptly.
+  const ensureSpinTimer = useCallback(() => {
+    if (spinTimer.current != null) return;
+    spinTimer.current = window.setInterval(() => {
+      checkSpinFollow("A");
+      checkSpinFollow("B");
+    }, 15);
+  }, [checkSpinFollow]);
+  useEffect(
+    () => () => {
+      if (spinTimer.current != null) clearInterval(spinTimer.current);
+    },
+    [],
+  );
   const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const knobAcc = useRef<Record<string, number>>({});
 
@@ -452,10 +515,23 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const deck = engine.deck(ev.deck);
           jogTouched.current[ev.deck] = ev.down;
           if (ev.down) {
-            if (jogVinyl.current[ev.deck]) {
+            if (spinFollow.current[ev.deck] && deck.grabbing) {
+              // The hand caught the still-spinning platter: the grab never ended, so just stop
+              // following. A fresh scrubBegin would re-announce a jog start with no end.
+              spinFollow.current[ev.deck] = null;
+            } else if (jogVinyl.current[ev.deck]) {
+              spinFollow.current[ev.deck] = null;
               deck.scrubBegin();
               onJogStart(ev.deck);
             }
+          } else if (deck.grabbing && jogVinyl.current[ev.deck]) {
+            // Vinyl-mode release: the platter is still the record (App/jogSpinFollow.ts). Keep the
+            // grab, let the free-spin ticks drive it, and hand back once it settles. A release
+            // with the hand held still hands back on this very check, so it adds no latency.
+            const now = performance.now();
+            spinFollow.current[ev.deck] = { released: now, lastTick: now };
+            ensureSpinTimer();
+            checkSpinFollow(ev.deck);
           } else if (deck.scrubbing) {
             deck.scrubEnd();
             onJogEnd(ev.deck);
@@ -514,6 +590,19 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             loopAdjustJog(deck, ev.deck, ev.delta * SEC_PER_TICK);
             break;
           }
+          // ★ ON THE FLX4 THIS STREAM IS MOSTLY NOT A RING. Measured: CC 0x21 arrives 0% while the
+          // top plate is touched and overwhelmingly in the seconds after a touch-up, i.e. it is the
+          // platter still turning after the hand left (decision 8283a6e8). While a free-spin follow
+          // is live, that turning IS the record moving, so it drives the platter like a scratch.
+          // Outside a follow it stays what it was: a nudge (playing) or a frame-search (paused).
+          if (spinFollow.current[ev.deck] && deck.grabbing) {
+            const sec = ev.delta * SEC_PER_TICK;
+            deck.scrubMove(sec);
+            emitJog(ev.deck, sec);
+            spinFollow.current[ev.deck]!.lastTick = performance.now();
+            checkSpinFollow(ev.deck);
+            break;
+          }
           deck.bend(ev.delta * SEC_PER_TICK);
           break;
         }
@@ -555,7 +644,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, ensureSpinTimer, checkSpinFollow],
   );
 
   return { onMidiEvent };

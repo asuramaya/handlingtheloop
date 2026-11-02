@@ -304,6 +304,16 @@ export class JogEngine {
   get ramping() {
     return this._ramping;
   }
+  /** The gripped platter's smoothed velocity in track-seconds per second (1 = play speed at
+   *  rate 1). Read by the MIDI layer to decide when a physically free-spinning jog has settled
+   *  enough to hand back to play (App/jogSpinFollow.ts). Meaningful only while grabbing. */
+  get handVelocity() {
+    return this.handVel;
+  }
+  /** Whether a release would spin back up to play (the deck was playing when gripped). */
+  get returnsToPlay() {
+    return this.jogReturnToPlay;
+  }
 
   // --- scrubbing (jog-wheel / vinyl feel) ---
   //

@@ -211,15 +211,26 @@ export function mobileGpuEligible(): boolean {
 // error — both mean the tab survived). If a fresh page load finds the flag still
 // armed, the previous attempt took the tab down → BLOCK GPU separation until the
 // user explicitly re-enables it. Safe across reloads, self-healing on opt-in.
+//
+// ★ IT NO LONGER DECIDES ALONE. The block used to be SILENT and STICKY: a crash flipped
+// htl:gpuBlocked and also bounced the user's stem model to "off", and the only trace was a
+// banner inside Settings ▸ Stems. Weeks later stems were simply "off" with nobody having turned
+// them off. The operator: "crash guard is silent and annoying, make it a prompt at reload".
+// The block still lands at boot, before anything can re-run the crashing job, so the loop is
+// still broken; but App now ASKS on every load while it stands (App/crashPrompt.ts), and the
+// model setting is never touched. `gpuCrashModel()` names what was running when the tab died.
 const GPU_ARM_KEY = "htl:gpuArm";
 const GPU_BLOCK_KEY = "htl:gpuBlocked";
 let gpuBlocked = false;
+let gpuCrashModelId: string | null = null;
 
 // Call once at startup. Returns true if the last GPU attempt crashed the tab.
 export function initGpuCrashGuard(): boolean {
   try {
     if (localStorage.getItem(GPU_BLOCK_KEY) === "1") gpuBlocked = true;
-    if (localStorage.getItem(GPU_ARM_KEY)) {
+    const armed = localStorage.getItem(GPU_ARM_KEY);
+    if (armed) {
+      gpuCrashModelId = armed; // armGpu stores the model id it was about to run
       localStorage.removeItem(GPU_ARM_KEY);
       localStorage.setItem(GPU_BLOCK_KEY, "1");
       gpuBlocked = true;
@@ -246,6 +257,11 @@ export function disarmGpu(): void {
 }
 export function isGpuBlocked(): boolean {
   return gpuBlocked;
+}
+/** The model id that was mid-separation when the tab died THIS boot, or null (no crash this boot,
+ *  or a block carried over from an earlier session, whose model was never recorded). */
+export function gpuCrashModel(): string | null {
+  return gpuCrashModelId;
 }
 // User opt-in to try GPU again after a crash auto-disabled it.
 export function unblockGpu(): void {

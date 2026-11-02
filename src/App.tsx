@@ -100,11 +100,15 @@ import {
   isIOSDevice,
   isChromium,
   initGpuCrashGuard,
+  isGpuBlocked,
+  unblockGpu,
+  gpuCrashModel,
+  resetStemGuard,
+  STEM_MODELS,
   armGpu,
   disarmGpu,
   initStemCrashGuard,
   stemTrace,
-  DEFAULT_STEM_MODEL,
   type Stems,
   type StemModel,
   useMixQueue,
@@ -126,6 +130,8 @@ import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline"
 import { deckSnapshot, applyDeckStems, applyDeckRack, applyDeckControls } from "./App/deckApply";
 import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
+import { crashPrompts, type CrashPrompt } from "./App/crashPrompt";
+import { CrashGuardPrompt } from "./components/CrashGuardPrompt";
 import { shouldReleaseClaim } from "./App/loadClaim";
 import { deckNamePatch } from "./App/deckNameBackfill";
 import { publishedDeckId } from "./App/publishedDeckId";
@@ -479,29 +485,33 @@ function AppBody() {
       .then((m) => setMe((prev) => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m)))
       .catch(() => {});
   }, [profileOpen]);
-  // WebGPU crash-loop guard: if the last GPU separation took the tab down, disable
-  // GPU separation and bounce the selected model back to a safe one so a reload
-  // doesn't immediately crash again. `gpuCrashed` drives a one-time notice.
-  // The value isn't read here (the Settings ▸ Stems banner gates on isGpuBlocked());
-  // we keep the setter so the guard + re-enable flow stay wired.
-  const [, setGpuCrashed] = useState(false);
+  // CRASH GUARDS ASK, THEY DO NOT DECIDE. If the last GPU separation (desktop) or stem download
+  // (phone) took the tab down, the guard blocks that job at boot so a reload cannot crash straight
+  // back into it, and then a prompt ASKS on every load while the block stands (App/crashPrompt.ts).
+  // ★ THIS USED TO BE SILENT: the GPU guard also bounced the selected stem model to "off" and said
+  // nothing outside a Settings banner, so stems were later just off with nobody having turned them
+  // off. The model is no longer touched; the block alone breaks the loop.
+  const [crashAsks, setCrashAsks] = useState<CrashPrompt[]>([]);
   useEffect(() => {
     // ★ DID THE TAB DIE MID-DECODE LAST TIME? The only failure in a track load that leaves no
     // exception, no rejection and no onerror — the process is simply gone, and the next boot looks
     // normal. Witness-only on purpose: a decode is not optional, so unlike the GPU guard below this
     // one never blocks anything. It reports once and clears.
     initDecodeCrashGuard();
-    if (initGpuCrashGuard()) {
-      setGpuCrashed(true);
-      setSettings((s) => (getStemModel(s.stemModel).tier === "gpu" ? { ...s, stemModel: DEFAULT_STEM_MODEL } : s));
-    }
-    // Mobile stem-load crash guard. ★ CURRENTLY INERT — see the note at initStemCrashGuard:
-    // nothing has ARMED it since 3a5d512 (2026-07-15) removed its only two call sites, so it can
-    // never observe a crash, and nothing branches on the level it reports anyway. Kept as the
-    // reading half of a mechanism awaiting a decision to rewire or retire. The old wording here
-    // ("the next loads stay on the safe DSP split") was doubly wrong: no split since f2004f2,
-    // and no downgrade behaviour was ever implemented.
-    initStemCrashGuard();
+    const gpuCrashedNow = initGpuCrashGuard();
+    // Mobile stem-download crash guard. LIVE: useStemPipeline arms it around a phone's cached-set
+    // download+decode (the 2026-09-10 redesign). The note that used to sit here called it inert;
+    // that stopped being true when the redesign re-wired the arming, and the note was left behind.
+    const stemFailLevelNow = initStemCrashGuard();
+    const crashedModel = gpuCrashModel();
+    setCrashAsks(
+      crashPrompts({
+        gpuBlocked: isGpuBlocked(),
+        gpuCrashedNow,
+        gpuModelLabel: crashedModel ? getStemModel(crashedModel).label : null,
+        stemFailLevel: stemFailLevelNow,
+      }),
+    );
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2165,6 +2175,38 @@ function AppBody() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.stemModel, settings.autoEnhance]);
+
+  // Re-run stems for whatever is on the decks once a crash guard lifts — the same deliberate
+  // re-derive a model change does, so a "Try again" takes effect on the tracks already loaded.
+  const rederiveLoaded = () => {
+    for (const id of ["A", "B"] as DeckId[]) {
+      const vid = latest.current.loaded[id];
+      const deck = engine.deck(id);
+      if (!vid || !deck.buffer) continue;
+      deriveGuard.current[id] = "";
+      void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
+    }
+  };
+  // The answer to a boot-time crash prompt. "Keep off" leaves the block standing for this load, and
+  // the prompt returns on the next one. "Try again" lifts it. For the GPU guard it also restores a
+  // GPU model if the setting is not on one: older builds bounced the setting to "off" when they
+  // blocked, so a lifted block on an "off" setting would otherwise change nothing the user can see.
+  const answerCrash = (id: CrashPrompt["id"], tryAgain: boolean) => {
+    setCrashAsks((asks) => asks.filter((p) => p.id !== id));
+    if (!tryAgain) return;
+    if (id === "stems") {
+      resetStemGuard();
+      rederiveLoaded();
+      return;
+    }
+    unblockGpu();
+    const gpuModel = gpuCrashModel() ?? STEM_MODELS.find((m) => m.tier === "gpu")?.id;
+    if (gpuModel && getStemModel(settings.stemModel).tier !== "gpu") {
+      setSettings((s) => ({ ...s, stemModel: gpuModel })); // the model-change effect above re-derives
+    } else {
+      rederiveLoaded();
+    }
+  };
 
   // Restore the previous session once on startup: mixer + zoom immediately, then
   // re-hydrate each deck's track (IndexedDB-cached → instant) with its controls.
@@ -4035,7 +4077,7 @@ function AppBody() {
             }))}
           onRetranscribe={(deck) => reprocessLyrics(deck)}
           onGpuReenable={() => {
-            setGpuCrashed(false);
+            setCrashAsks((asks) => asks.filter((p) => p.id !== "gpu")); // answered in Settings instead
             refresh();
           }}
           outputSupported={engine.canSetSink}
@@ -4129,6 +4171,7 @@ function AppBody() {
         </div>
       )}
 
+      <CrashGuardPrompt prompts={crashAsks} onAnswer={answerCrash} />
     </div>
   );
 }

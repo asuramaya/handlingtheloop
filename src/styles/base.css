@@ -756,6 +756,47 @@ body {
   border-color: color-mix(in srgb, #ff5470 55%, var(--line));
   background: color-mix(in srgb, #ff5470 12%, var(--panel));
 }
+/* Crash-guard question at boot (components/CrashGuardPrompt). Same surface language as a warn
+   toast, but it waits for an answer, so it sits at the TOP, clear of the self-dismissing stack.
+   BELOW the chin, not at 12px: the chin (z 5000) painted over the card's first line, so the very
+   first build showed a question with its title missing — measured in the browser, not guessed.
+   --chin-h is not set anywhere today (docks read it with a fallback too), so the 41px fallback,
+   the chin's measured height, is what actually applies. */
+.crash-prompts {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--chin-h, 41px) + max(8px, env(safe-area-inset-top, 0px)));
+  transform: translateX(-50%);
+  z-index: 210;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100vw - 24px));
+}
+.crash-prompt {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, #ff5470 55%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, #ff5470 12%, var(--panel));
+  box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.8);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  animation: toast-in 0.16s ease-out both;
+}
+.crash-prompt-title { font-weight: 700; margin-bottom: 4px; }
+.crash-prompt-body { overflow-wrap: anywhere; }
+.crash-prompt-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.crash-prompt-actions button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.crash-prompt-accept { border-color: color-mix(in srgb, var(--text) 35%, var(--line)); font-weight: 700; }
 /* A cluster popover holds its amounts side by side, inside the shared menu's width cap. */
 .io-pop-row {
   display: flex;

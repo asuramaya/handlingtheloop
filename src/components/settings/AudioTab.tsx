@@ -503,7 +503,9 @@ export function AudioTab({
 
       {isGpuBlocked() && (
         <div className="stem-blocked-banner">
-          <span>GPU stem separation crashed and was disabled. CPU models and cached results still work.</span>
+          {/* No "CPU models still work": CPU separation was removed, so a blocked GPU means no
+              on-device separation at all. Cached stems still download. */}
+          <span>GPU stem separation is paused after it crashed the page. Cached stems still load; nothing new separates until you re-enable it.</span>
           <button
             className="link-btn"
             onClick={() => {

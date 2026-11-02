@@ -7,9 +7,6 @@ import { FxBankSettings } from "./FxBankSettings";
 import { InfoDot } from "./InfoDot";
 import {
   type Settings,
-  type StretchQuality,
-  type StretchEngine,
-  STRETCH_PRESETS,
   type StemQuality,
   STEM_PRESETS,
   STEM_MODELS,
@@ -357,105 +354,22 @@ export function AudioTab({
         </div>
       )}
 
+      {/* The stretch engine and sync pull moved to Settings ▸ Turntable ▸ Tempo (how a deck moves
+          and how its tempo sounds, in one place). What stayed is the master bus. */}
       <div className="settings-section">
         <div className="settings-section-head">
-          <span className="settings-label">Stretch engine</span>
+          <span className="settings-label">Master</span>
           <InfoDot
-            text="How a track is sped up or slowed down without changing its pitch. WSOLA works in the time domain: lightest on CPU and crispest on drums, but it can sound metallic on a dense mix. The phase-locked vocoder works in the frequency domain: cleanest on full mixes with no metallic edge, at more CPU. Quality trades latency for grain size, and the number beside it is the real latency you are choosing."
-            label="Stretch engine"
+            text="The summed output of both decks: how much room it leaves before the limiter, and whether each deck is limited on its own first."
+            label="Master"
           />
         </div>
-        {/* Both of these were a bare `.seg` floating with a paragraph under it — a control with no
-            label, explained afterwards. They are rows now: the question on the left, the answer on
-            the right, and the reading (latency, grain) in the shared value slot. */}
-        <div className="settings-row">
-          <span className="settings-label">Algorithm</span>
-          <span className="settings-control">
-            <span className="seg-group">
-              {([
-                ["wsola", "WSOLA"],
-                ["pv", "Phase-locked"],
-              ] as [StretchEngine, string][]).map(([e, label]) => (
-                <button
-                  key={e}
-                  className={`hw-btn small ${settings.stretchEngine === e ? "on" : ""}`}
-                  onClick={() => set({ stretchEngine: e })}
-                >
-                  {label}
-                </button>
-              ))}
-            </span>
-          </span>
-        </div>
-        <div className="settings-row">
-          <span className="settings-label">Quality</span>
-          <span className="settings-control">
-            <span className="settings-value">
-              ~{STRETCH_PRESETS[settings.stretchQuality].latencyMs} ms
-            </span>
-            <span className="seg-group">
-              {(Object.keys(STRETCH_PRESETS) as StretchQuality[]).map((q) => (
-                <button
-                  key={q}
-                  className={`hw-btn small ${settings.stretchQuality === q ? "on" : ""}`}
-                  onClick={() => set({ stretchQuality: q })}
-                >
-                  {STRETCH_PRESETS[q].label}
-                </button>
-              ))}
-            </span>
-          </span>
-        </div>
-        <div className="settings-row">
-          <span className="settings-label">
-            Transient preservation
-            <InfoDot
-              text="Copy attacks through intact instead of stretching them with everything else, so kicks and snares keep their edge at a changed tempo. WSOLA copies the grain 1:1; the vocoder resets phase at the hit."
-              label="Transient preservation"
-            />
-          </span>
-          <button
-            className={`toggle ${settings.stretchTransient ? "on" : ""}`}
-            onClick={() => set({ stretchTransient: !settings.stretchTransient })}
-            role="switch"
-            aria-checked={settings.stretchTransient}
-            aria-label="Transient preservation"
-          >
-            <span className="toggle-knob" />
-          </button>
-        </div>
-        {settings.stretchTransient && (
-          <Slider
-            label="Transient threshold"
-            info="How eager the attack detector is. Sensitive catches soft hits but can mistake a busy passage for one; strict only fires on a clear transient."
-            hint={settings.stretchTThresh <= 1.7 ? "sensitive" : settings.stretchTThresh >= 3 ? "strict" : "balanced"}
-            value={settings.stretchTThresh}
-            onChange={(v) => set({ stretchTThresh: v })}
-            min={1.3}
-            max={4}
-            step={0.1}
-          />
-        )}
         {/* ★ MASTER HEADROOM — the gain-staging answer to "the compressor punches from the other
             deck". Measured on the live FX harness (fxlab --master-duck): two decks summing past the
             master limiter's ceiling let a kick on one deck pull the OTHER down 1.88 dB for 130 ms,
             and no per-deck control can reach it, because the limiter sees the decks already summed.
             3 dB of trim here took it to 0.02 dB. It defaults to 0 — the fix costs output level, so
             it is offered, not imposed. */}
-        {/* ★ SYNC RESPONSIVENESS — measured, not chosen. The shipped 0.06 leaves a seek 0.242 beats
-            out (~113 ms at 128 bpm) and takes eleven seconds to decay to 0.018; 0.18 settles the
-            same seek to 0.005 in a fraction of that, at 4.19% peak rate trim instead of 1.47%.
-            Defaults to the shipped value: nobody's sync feel changes until they ask for it. */}
-        <Slider
-          label="Sync responsiveness"
-          info="How hard SYNC pulls a following deck back onto the beat after it drifts or you nudge it. Low is gentle and inaudible but slow — measured, a seek takes about eleven seconds to come fully back. High re-locks in a fraction of that, at the cost of a briefly larger tempo trim, which is a small pitch move when keylock is off. It does not affect two tracks whose beatgrids simply breathe differently."
-          hint={settings.syncPhaseGain <= 0.07 ? "gentle — slow to recover" : settings.syncPhaseGain >= 0.15 ? "tight — snaps back" : "balanced"}
-          value={settings.syncPhaseGain}
-          onChange={(v) => set({ syncPhaseGain: v })}
-          min={0.02}
-          max={0.3}
-          step={0.02}
-        />
         <div className="settings-row">
           <span className="settings-label">
             Limit each deck
@@ -481,24 +395,6 @@ export function AudioTab({
           max={0}
           step={1}
         />
-        <div className="settings-row">
-          <span className="settings-label">
-            Anti-alias pitch-up
-            <InfoDot
-              text="Resample with a windowed-sinc filter when pitching up, instead of the cheap interpolation. It keeps attacks crisp under a big tempo stretch and removes the fizz you otherwise hear on a key-up. WSOLA only."
-              label="Anti-alias pitch-up"
-            />
-          </span>
-          <button
-            className={`toggle ${settings.stretchAa ? "on" : ""}`}
-            onClick={() => set({ stretchAa: !settings.stretchAa })}
-            role="switch"
-            aria-checked={settings.stretchAa}
-            aria-label="Anti-alias pitch-up"
-          >
-            <span className="toggle-knob" />
-          </button>
-        </div>
       </div>
 
       {isGpuBlocked() && (

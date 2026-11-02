@@ -1,8 +1,10 @@
-// What Settings ▸ Platter draws: the platter's SPEED over time for each gesture, computed by the
-// deck's own physics (servoStep / brakeFriction) with the deck's own knob mappings (platterTaus,
-// platterDrag). Nothing here is a hand-drawn approximation: if the curve on screen and the deck
-// disagree, one of those exported functions changed and this follows it.
+// What Settings ▸ Turntable draws: how the platter (and the ring's tempo push) moves over time for
+// each gesture, computed by the deck's own physics (servoStep / brakeFriction / stepBend) with the
+// deck's own knob mappings (platterTaus, platterDrag, RING_BEND). Nothing here is a hand-drawn
+// approximation: if a curve on screen and the deck disagree, one of those exports changed and
+// this follows it.
 import { brakeFriction, platterDrag, platterTaus, servoStep } from "@htl/audio/JogEngine";
+import { RING_BEND, stepBend } from "@htl/audio/bendPhysics";
 
 export interface PlatterKnobs {
   mass: number; // jogWeight
@@ -11,14 +13,17 @@ export interface PlatterKnobs {
   backSpin: number; // backSpinLength
 }
 
-export type CurveKey = "play" | "pause" | "letGo" | "backSpin";
+export type CurveKey = "play" | "pause" | "letGo" | "backSpin" | "ring";
 export interface Curve {
   key: CurveKey;
   title: string;
-  /** One or two speed traces (× realtime), sampled every DT seconds. */
+  /** One or two traces, sampled every DT seconds. */
   lines: { label: string; v: number[] }[];
   yMin: number;
   yMax: number;
+  /** The value the gesture settles to (for the duration readout and the reference line). */
+  rest: number;
+  unit: "×" | "%";
 }
 
 export const DT = 1 / 120;
@@ -28,7 +33,7 @@ const n = Math.round(SPAN_S / DT);
 
 /** A motor (or release) spinning the platter up to `target`: the deck's catch-up servo. */
 function servo(v0: number, target: number, tau: number): number[] {
-  if (tau <= 0) return new Array(n).fill(target);
+  if (tau <= 0) return [v0, ...new Array(n - 1).fill(target)];
   const out: number[] = [];
   let s = { v: v0, a: 0 };
   for (let i = 0; i < n; i++) {
@@ -59,16 +64,20 @@ export function platterCurves(k: PlatterKnobs): Curve[] {
     {
       key: "play",
       title: "Play",
-      lines: [{ label: "spin-up", v: k.start > 0 ? servo(0, 1, platterTaus.start(k.start)) : servo(0, 1, 0) }],
+      lines: [{ label: "spin-up", v: servo(0, 1, k.start > 0 ? platterTaus.start(k.start) : 0) }],
       yMin: 0,
       yMax: 1.15,
+      rest: 1,
+      unit: "×",
     },
     {
       key: "pause",
       title: "Pause",
-      lines: [{ label: "spin-down", v: k.brake > 0 ? brake(1, platterTaus.brake(k.brake)) : brake(1, 0) }],
+      lines: [{ label: "spin-down", v: brake(1, k.brake > 0 ? platterTaus.brake(k.brake) : 0) }],
       yMin: 0,
       yMax: 1.15,
+      rest: 0,
+      unit: "×",
     },
     {
       key: "letGo",
@@ -81,6 +90,8 @@ export function platterCurves(k: PlatterKnobs): Curve[] {
       ],
       yMin: 0,
       yMax: FLING * 1.08,
+      rest: 1,
+      unit: "×",
     },
     {
       key: "backSpin",
@@ -88,8 +99,28 @@ export function platterCurves(k: PlatterKnobs): Curve[] {
       lines: [{ label: "throw + catch", v: servo(-strength, 1, platterTaus.backSpin(k.backSpin)) }],
       yMin: -14.5,
       yMax: 2,
+      rest: 1,
+      unit: "×",
     },
   ];
+}
+
+/** Ring bend: the outer ring turned gently (RING_TURN rate-seconds per second) for RING_HOLD_S,
+ *  then let go. The deck's own stepBend + RING_BEND, so the push and its ease-out are the deck's.
+ *  Traced as tempo offset in % (0 = the set tempo). */
+export const RING_TURN = 0.1;
+export const RING_HOLD_S = 0.4;
+export function ringCurve(strength: number): Curve {
+  const p = { gain: RING_BEND.gain * strength, decay: RING_BEND.decay, max: RING_BEND.max };
+  const v: number[] = [];
+  let s = { bend: 0, ringVel: 0 };
+  for (let i = 0; i < n; i++) {
+    v.push(s.bend * 100);
+    s = stepBend(s, i * DT < RING_HOLD_S ? RING_TURN * DT : 0, DT, p);
+  }
+  // Scaled to the STRONGEST setting's push (strength 2), not to the clamp: against the clamp a
+  // normal push drew as a flat bump, and the curve barely moved with its own slider.
+  return { key: "ring", title: "Ring bend", lines: [{ label: "push", v }], yMin: 0, yMax: RING_SCALE, rest: 0, unit: "%" };
 }
 
 /** Seconds until a trace first comes within `tol` of `target` (and stays): the number printed
@@ -98,3 +129,17 @@ export function settleTime(v: number[], target: number, tol = 0.03): number {
   for (let i = v.length - 1; i >= 0; i--) if (Math.abs(v[i] - target) > tol) return Math.min(SPAN_S, (i + 1) * DT);
   return 0;
 }
+
+export const peak = (v: number[]) => v.reduce((m, x) => (Math.abs(x) > Math.abs(m) ? x : m), 0);
+
+/** The ring tile's fixed vertical scale: the peak push at the strongest Ring bend (×2), + 10%. */
+const RING_SCALE = (() => {
+  const p = { gain: RING_BEND.gain * 2, decay: RING_BEND.decay, max: RING_BEND.max };
+  let s = { bend: 0, ringVel: 0 };
+  let m = 0;
+  for (let i = 0; i < n; i++) {
+    s = stepBend(s, i * DT < RING_HOLD_S ? RING_TURN * DT : 0, DT, p);
+    m = Math.max(m, s.bend * 100);
+  }
+  return m * 1.1;
+})();

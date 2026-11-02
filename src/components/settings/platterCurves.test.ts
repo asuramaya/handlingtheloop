@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { platterCurves, settleTime } from "./platterCurves";
+import { peak, platterCurves, ringCurve, settleTime } from "./platterCurves";
 import { platterDrag } from "@htl/audio/JogEngine";
 import { migrateSettings } from "@htl/state/settings";
 
@@ -8,7 +8,7 @@ const curve = (k: Partial<typeof base>, key: string) => platterCurves({ ...base,
 
 describe("platterCurves: the graph says what the deck will do", () => {
   it("Start and Brake at 0 are INSTANT (that is what replaced the motor on/off toggle)", () => {
-    expect(curve({ start: 0 }, "play").lines[0].v[0]).toBe(1);
+    expect(curve({ start: 0 }, "play").lines[0].v[1]).toBe(1);
     expect(curve({ brake: 0 }, "pause").lines[0].v[1]).toBe(0);
   });
 
@@ -32,6 +32,14 @@ describe("platterCurves: the graph says what the deck will do", () => {
   it("back spin throws harder and longer as its knob rises", () => {
     const bs = (x: number) => curve({ backSpin: x }, "backSpin").lines[0].v;
     expect(Math.min(...bs(1))).toBeLessThan(Math.min(...bs(0)));
+  });
+});
+
+describe("ringCurve: the ring bend tile", () => {
+  it("a stronger Ring bend pushes harder, and the push eases back to the set tempo after the turn", () => {
+    expect(peak(ringCurve(2).lines[0].v)).toBeGreaterThan(peak(ringCurve(0.5).lines[0].v));
+    const v = ringCurve(1).lines[0].v;
+    expect(v.at(-1)!).toBeLessThan(peak(v) * 0.1);
   });
 });
 

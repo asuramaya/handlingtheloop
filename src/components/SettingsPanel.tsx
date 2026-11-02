@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { type PanelPlacement, type Settings } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { type UseMidi } from "@htl/midi";
@@ -11,7 +11,7 @@ import { AudioTab } from "./settings/AudioTab";
 import type { LyricDeck } from "./LyricsSettings";
 import { ColorTab } from "./settings/ColorTab";
 import { ControlsTab } from "./settings/ControlsTab";
-import { PlatterTab } from "./settings/PlatterTab";
+import { TurntableTab } from "./settings/TurntableTab";
 import { DebugTab } from "./settings/DebugTab";
 // Account & connections moved to the full-screen Profile (see ProfileScreen).
 
@@ -34,11 +34,11 @@ interface SettingsPanelProps {
 }
 
 
-type Tab = "color" | "controls" | "platter" | "midi" | "audio" | "debug" | "about";
+type Tab = "color" | "controls" | "turntable" | "midi" | "audio" | "debug" | "about";
 const TABS: { key: Tab; label: string }[] = [
   { key: "color", label: "Color" },
   { key: "controls", label: "Controls" },
-  { key: "platter", label: "Platter" },
+  { key: "turntable", label: "Turntable" },
   { key: "midi", label: "MIDI" },
   { key: "audio", label: "Audio" },
   { key: "debug", label: "Debug" },
@@ -66,11 +66,31 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
   const [tab, setTab] = useState<Tab>("color");
-  // ★ A MENU, NOT A STRIP. Operator, 2026-11-02: "instead of the tabs being carded on the top
-  // header, make them list down in a hamburger giving us more granularity". Six equal-width tabs
-  // already crowded a docked panel; a seventh (Platter) would have made every label smaller, and
-  // splitting a tab further was off the table for the same reason. A list grows downward.
-  const [navOpen, setNavOpen] = useState(false);
+  // ★ A LEFT-SIDE MENU, NOT A STRIP. Operator, 2026-11-02: "instead of the tabs being carded on
+  // the top header, make them list down in a hamburger giving us more granularity", then: "it has
+  // to be a hamburger on the left side" (the first cut dropped a list down from the header, and
+  // in the side docks that header sat under the chin). Same shape as the Library: ☰ at the left
+  // of the head, the sections down the left edge. Beside the content when the panel is wide; over
+  // it, closing on pick, when the panel is a narrow dock. Remembered across opens.
+  const [navOpen, setNavOpenRaw] = useState(() => {
+    try {
+      return localStorage.getItem("htl:setNav") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setNavOpen = (f: (o: boolean) => boolean) =>
+    setNavOpenRaw((o) => {
+      const v = f(o);
+      try {
+        localStorage.setItem("htl:setNav", v ? "1" : "0");
+      } catch {
+        /* private mode: just not remembered */
+      }
+      return v;
+    });
+  const frameRef = useRef<HTMLDivElement>(null);
+  const NAV_OVERLAY_BELOW = 520; // px of panel width under which the list overlays the content
   const current = TABS.find((t) => t.key === tab)!;
   // ★ ONE SAVE/SHARE/MANAGE CONTROL, IN THE HEADER, FOR THE WHOLE PANEL. It used to be an
   // inline bar per tab — Color, Controls and MIDI each grew their own, and Audio, the tab whose
@@ -93,7 +113,7 @@ export function SettingsPanel({
             className={`settings-nav-btn ${navOpen ? "open" : ""}`}
             onClick={() => setNavOpen((o) => !o)}
             aria-expanded={navOpen}
-            aria-haspopup="menu"
+            aria-controls="settings-nav"
             aria-label={`Settings sections, now ${current.label}`}
           >
             <span className="settings-nav-icon" aria-hidden="true">☰</span>
@@ -108,31 +128,32 @@ export function SettingsPanel({
           )}
         </div>
 
-        {navOpen && (
-          <nav className="settings-nav" role="menu">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                role="menuitem"
-                className={`settings-nav-item ${tab === t.key ? "on" : ""}`}
-                aria-current={tab === t.key ? "page" : undefined}
-                onClick={() => {
-                  setTab(t.key);
-                  setNavOpen(false);
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </nav>
-        )}
+        <div ref={frameRef} className={`settings-frame ${navOpen ? "nav-open" : ""}`}>
+          {navOpen && (
+            <nav id="settings-nav" className="settings-nav" aria-label="Settings sections">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  className={`settings-nav-item ${tab === t.key ? "on" : ""}`}
+                  aria-current={tab === t.key ? "page" : undefined}
+                  onClick={() => {
+                    setTab(t.key);
+                    // Overlaying the content (a narrow dock)? Get out of the way once picked.
+                    if ((frameRef.current?.offsetWidth ?? 0) < NAV_OVERLAY_BELOW) setNavOpen(() => false);
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+          )}
 
         <div className="settings-body">
           {tab === "color" && <ColorTab settings={settings} set={set} />}
 
           {tab === "controls" && <ControlsTab settings={settings} set={set} onePanel={onePanel} />}
 
-          {tab === "platter" && <PlatterTab settings={settings} set={set} />}
+          {tab === "turntable" && <TurntableTab settings={settings} set={set} />}
 
           {tab === "midi" && midi && <MidiPanel midi={midi} settings={settings} onChange={onChange} />}
 
@@ -156,6 +177,7 @@ export function SettingsPanel({
           {tab === "debug" && <DebugTab midi={midi} debug={debug} />}
 
           {tab === "about" && <AboutTab />}
+        </div>
         </div>
       </div>
     </div>

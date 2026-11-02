@@ -31,6 +31,10 @@ export interface BendParams {
   max: number; // Deck.BEND_MAX: clamp, fraction of tempo
 }
 
+/** The deck's ring-bend tuning: gain (push per unit ring velocity, × the user's Ring bend
+ *  strength), decay (ease-back seconds) and clamp (fraction of tempo). */
+export const RING_BEND = { gain: 6, decay: 0.18, max: 0.6 } as const;
+
 /** The ring's inertia: how quickly a change in turning speed shows up in the velocity estimate.
  *  Long enough to absorb a 1 ms-clock tick burst, short enough to feel immediate. */
 export const RING_TAU = 0.035;

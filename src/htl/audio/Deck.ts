@@ -114,7 +114,7 @@ import { CrushFx } from "./CrushFx";
 import { ModFx } from "./ModFx";
 import { GateFx } from "./GateFx";
 import { NoiseFx } from "./NoiseFx";
-import { stepBend } from "./bendPhysics";
+import { RING_BEND, stepBend } from "./bendPhysics";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -387,9 +387,8 @@ export class Deck {
   private _bendAcc = 0; // roll distance banked since the last physics frame (bendPhysics.ts)
   private _ringVel = 0; // the ring's smoothed velocity (bendPhysics.ts)
   private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
-  private static readonly BEND_GAIN = 6; // ticks→push: how hard a turn bends the tempo
-  private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
-  private static readonly BEND_MAX = 0.6; // cap the push at ±60% of the set tempo
+  // Gain / decay / clamp of the ring bend live in bendPhysics (RING_BEND), shared with the
+  // Settings ▸ Turntable graph so the curve drawn there is this deck's own.
   private static readonly BEND_SEARCH = 6; // paused: scale a bend nudge into a frame-search seek
   // --- continuous beat-sync phase-lock (driven by AudioEngine.phaseCorrect) ---
   // A tiny rate trim the SYNC slave rides to null residual beat-phase drift. Tempo-match
@@ -1846,9 +1845,9 @@ export class Deck {
       const live = this._playing && !this.jog.jogging;
       if (live && dt > 0) {
         const next = stepBend({ bend: this._bend, ringVel: this._ringVel }, this._bendAcc, dt, {
-          gain: Deck.BEND_GAIN * this._bendScale,
-          decay: Deck.BEND_DECAY,
-          max: Deck.BEND_MAX,
+          gain: RING_BEND.gain * this._bendScale,
+          decay: RING_BEND.decay,
+          max: RING_BEND.max,
         });
         this._bendAcc = 0;
         this._ringVel = next.ringVel;

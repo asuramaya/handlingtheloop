@@ -43,9 +43,15 @@ if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 //   128 (2.7ms)      0.239           2.7 ms        26        unchanged
 //   512 (10.7ms)     0.044          13.3 ms        11        unchanged
 //   768 (16ms)       0.052          21.3 ms        19        unchanged
-// 512 brings the board level with touch (0.048) at a lag still far under touch's own ~37 ms, and
-// costs pointer input nothing (their gaps already exceed it). Longer starts losing again.
-const MIN_INTERVAL = 512;
+// 512 brought the synthetic board level with touch (0.048) at a lag far under touch's own ~37 ms,
+// and costs pointer input nothing (their gaps already exceed it).
+// THEN A REAL CAPTURE (operator's FLX4, 2026-11-02, 18.3 s, replayed through this source) moved it
+// to 640 together with the granular threshold below: real scratching scored roughness 1.698 at 128,
+// 0.569 at 512, and 0.194 at 640 once the granular threshold stopped firing on ordinary fast
+// strokes; the synthetic board stays at 0.044 with its fewest false reversals (10). (That
+// recorder stores whole milliseconds, which adds jitter longer windows average away, so the real
+// capture is biased toward longer windows; 640 rather than its preferred 768 is the hedge.)
+const MIN_INTERVAL = 640;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -166,13 +172,21 @@ class Scratch extends AudioWorkletProcessor {
         if (s > 32) s = 32; else if (s < -32) s = -32; // continuous resampler clamp
         this.step = s;
         // Switch to granular when the finger outruns continuous playback (hysteresis
-        // so it doesn't flutter at the boundary). Below ~8× a hand move still sounds
-        // like vinyl; above it the continuous pointer would lag into a multi-second spin.
+        // so it doesn't flutter at the boundary).
+        // ★ THE TRIGGER WAS 8× AND THAT IS THE "POORLY DONE FF/RW" A JOG SCRATCH SOUNDED LIKE.
+        // reqSpeed is the CATCH-UP speed (target − pos over the interval), which overshoots the
+        // hand whenever the read head trails it, so ordinary fast strokes crossed 8× and played
+        // as 45 ms needle-search grains: 14.5% of the operator's real hands-on scratching at the
+        // old window, 8.6% at the new one. A record chirps like vinyl well past 8×; granular is
+        // for zoomed-out waveform drags covering MINUTES, which run far faster than any hand on a
+        // platter. Entering at 24× (leaving at 16×) took real scratching to 0% granular while
+        // those drags still get grains. The continuous resampler is clamped at 32× and
+        // anti-aliased, so 8–24× is within what it was built for.
         const reqSpeed = this.stepRaw < 0 ? -this.stepRaw : this.stepRaw;
-        if (!this.granular && reqSpeed > 8) {
+        if (!this.granular && reqSpeed > 24) {
           this.granular = true;
           this.phaseA = 0; this.startA = this.pos; this.startB = this.pos; this.curRaw = this.stepRaw;
-        } else if (this.granular && reqSpeed < 5) {
+        } else if (this.granular && reqSpeed < 16) {
           this.granular = false; this.curStep = 0;
         }
         // Adapt the pitch-smoothing time constant to the ACTUAL update interval:

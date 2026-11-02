@@ -191,7 +191,15 @@ export function shape(v: number): number {
 
 // What the offscreen waveform layer currently holds — rebuilt only when one of
 // these changes (zoom/track/stems/mute/size/colour) or the view scrolls off it.
+// Motion-draft layer width, in view windows (1 = exactly the view; the margin absorbs a frame or
+// two of continued travel before the next draft), and how long the motion must be still before
+// the full 3×-wide, glowing layer is rebuilt. See rebuildWave.
+const DRAFT_SPAN = 1.3;
+const DRAFT_SETTLE_MS = 130;
+
 interface WaveMeta {
+  draft?: boolean; // a motion-time layer: view-wide only, no glow (see rebuildWave)
+  cols: number; // columns of the layer canvas in use (a draft uses fewer than its width)
   left: number;
   span: number;
   win: number; // the VIEW window (zoom) this layer was built for — RATE-INDEPENDENT, so a
@@ -244,6 +252,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const prevPos = useRef<number>(Number.NaN); // last frame's playhead, to detect a seek/cue JUMP
   const geomKey = useRef(""); // last frame's zoom/size signature — so a zoom DEBOUNCE settles
   const rebuildTimer = useRef(0); // debounced crisp rebuild after a zoom settles
+  const draftRaster = useRef(false); // rasterize() skips the glow while this is set
   const localWin = useRef<number | null>(null); // live zoom during a gesture (avoids App re-renders)
   const zoomCommit = useRef(0);
   const view = useRef(props); // latest React-controlled inputs, read by the rAF
@@ -384,7 +393,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       stemCols[n] = bandRamp(laneBase ? laneBase[i] : p.stemColors[n] || STEM_COLORS[n] || p.accent);
     });
     const viv = p.vividness; // band saturation
-    const glow = p.glow; // deck-coloured bloom behind the wave
+    const glow = p.glow && !draftRaster.current; // deck-coloured bloom behind the wave (not in a motion draft)
 
     // ONE signed-envelope renderer, used identically for the mix and every stem lane. The
     // shape is the same at all zooms — it just compresses sideways as you zoom out and
@@ -674,12 +683,20 @@ export function WaveformViewport(props: WaveformViewportProps) {
 
   // Rasterise a fresh offscreen layer (3× viewport wide) centred on the view.
   // This is the only place the heavy per-pixel loop runs.
-  const rebuildWave = (left: number, tw: number, secPerPx: number, win: number, w: number, h: number) => {
+  // ★ DRAFT: a rebuild forced by MOTION (a seek, a shift-search, a scratch that left the layer) is
+  // thrown away next frame, because the view has already moved off it again. The operator's own
+  // capture (2026-11-02, two decks × four stems, dpr 1.5) had frames dropping to ~8 fps exactly
+  // there, with most of the cost outside script — the glow's shadow blur over a 3×-wide layer, per
+  // lane, per deck, per frame. Reproduced headless by dragging the overview: glow on 152 slow
+  // frames of 751, glow off 31. So while moving, rasterise only the VIEW (plus a small margin) and
+  // skip the glow; once the motion has been still for DRAFT_SETTLE_MS, one full rebuild restores
+  // the 3× runway and the bloom.
+  const rebuildWave = (left: number, tw: number, secPerPx: number, win: number, w: number, h: number, draft = false) => {
     const p = view.current;
     const stems = deck.stemPyramids;
     const mask = stemMask(deck, stems);
-    const span = tw * 3;
-    const waveLeft = left - tw;
+    const span = draft ? tw * DRAFT_SPAN : tw * 3;
+    const waveLeft = left - (span - tw) / 2;
     // The offscreen wave is GPU-blitted (scaled) into the lane, so it doesn't need full
     // device-pixel column density — render it at ~1.5 columns per CSS pixel regardless of
     // DPR. On a dpr-2/3 phone this is the dominant rebuild saving (fewer columns → fewer
@@ -687,22 +704,27 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // res). `colSec` (seconds per offscreen column) drives the blit so the math is exact
     // whatever the column count; at dpr 1 waveQ is 1 → desktop is unchanged.
     const waveQ = Math.min(1, 1.5 / sizeRef.current.dpr);
-    const ow = Math.max(2, Math.round(w * 3 * waveQ));
+    // The canvas keeps the FULL 3× allocation either way (a draft uses its first `ow` columns), so
+    // switching between draft and full never reallocates the backing store.
+    const fullOw = Math.max(2, Math.round(w * 3 * waveQ));
+    const ow = draft ? Math.max(2, Math.round((fullOw * DRAFT_SPAN) / 3)) : fullOw;
     const colSec = span / ow;
     let wc = waveRef.current;
     if (!wc) {
       wc = document.createElement("canvas");
       waveRef.current = wc;
     }
-    if (wc.width !== ow || wc.height !== h) {
-      wc.width = ow;
+    if (wc.width !== fullOw || wc.height !== h) {
+      wc.width = fullOw;
       wc.height = h;
     }
     const wctx = wc.getContext("2d");
     if (!wctx) return;
-    wctx.clearRect(0, 0, ow, h);
+    wctx.clearRect(0, 0, fullOw, h);
+    draftRaster.current = draft;
     rasterize(wctx, waveLeft, colSec, ow, h);
-    waveMeta.current = { left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    draftRaster.current = false;
+    waveMeta.current = { draft, cols: ow, left: waveLeft, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask, strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
     if (rebuildTimer.current) {
       clearTimeout(rebuildTimer.current);
       rebuildTimer.current = 0;
@@ -723,7 +745,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const shiftToCover = (left: number, trackWindow: number, m: WaveMeta): boolean => {
     const wc = waveRef.current;
     if (!wc) return false;
-    const ow = wc.width;
+    const ow = m.cols;
     const h = wc.height;
     // Target: re-centre the view inside the layer so there's symmetric runway both directions.
     const wantLeft = left - (m.span - trackWindow) / 2;
@@ -740,16 +762,16 @@ export function WaveformViewport(props: WaveformViewportProps) {
       sc = document.createElement("canvas");
       scratchRef.current = sc;
     }
-    if (sc.width !== ow || sc.height !== h) {
-      sc.width = ow;
+    if (sc.width !== wc.width || sc.height !== h) {
+      sc.width = wc.width;
       sc.height = h;
     }
     const sctx = sc.getContext("2d");
     if (!sctx) return false;
     sctx.clearRect(0, 0, ow, h);
-    sctx.drawImage(wc, 0, 0);
+    sctx.drawImage(wc, 0, 0, ow, h, 0, 0, ow, h);
     wctx.clearRect(0, 0, ow, h);
-    wctx.drawImage(sc, -shiftCols, 0);
+    wctx.drawImage(sc, 0, 0, ow, h, -shiftCols, 0, ow, h);
 
     // Re-rasterise the now-uncovered band (+ PAD on the preserved side so glow joins seamlessly).
     const newStart = shiftCols > 0 ? ow - shiftCols : 0;
@@ -759,7 +781,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
     wctx.clearRect(c0, 0, c1 - c0, h);
     wctx.save();
     wctx.translate(c0, 0);
+    draftRaster.current = !!m.draft; // a draft's edge strips match its body (no glow)
     rasterize(wctx, newLeft + c0 * m.colSec, m.colSec, c1 - c0, h);
+    draftRaster.current = false;
     wctx.restore();
     m.left = newLeft;
     return true;
@@ -856,7 +880,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // uncovered side draws BLANK.) Used to bail out of the deferred-rebuild path the
     // instant a stale layer stops covering the scrolling view.
     const covers = (mm: WaveMeta | null): boolean => {
-      const wcw = waveRef.current?.width ?? 0;
+      const wcw = mm && waveRef.current ? mm.cols : 0;
       if (!mm || !wcw) return false;
       const sX = (left - mm.left) / mm.colSec;
       return sX >= -0.5 && sX + trackWindow / mm.colSec <= wcw + 0.5;
@@ -897,11 +921,25 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // around its centre, so a scratch's back-and-forth is covered — just BLIT it at the new
       // `srcX` offset (below). Only rebuild when the scrub actually leaves the layer's span,
       // which re-centres it (and a contained scratch then never rebuilds at all).
-      if (!covers(m0)) rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
-    } else if (m0 && (jumped || ratioOff || !shiftToCover(left, trackWindow, m0))) {
-      // A discontinuous JUMP (cue/seek/loop — short-circuits before the shift), a tempo that
-      // coarsened the layer (ratioOff), or a scroll past the shiftable range — rebuild fresh.
+      if (!covers(m0)) motionRebuild();
+    } else if (m0 && ratioOff) {
+      // A tempo that coarsened the layer: a resolution change, not motion — full quality now.
       rebuildWave(left, trackWindow, secPerPx, curWin, w, h);
+    } else if (m0 && (jumped || !shiftToCover(left, trackWindow, m0))) {
+      // A discontinuous JUMP (cue/seek/loop/shift-search — short-circuits before the shift) or a
+      // scroll past the shiftable range: the view moved off the layer, so a DRAFT now and one full
+      // rebuild once the motion stops.
+      motionRebuild();
+    }
+    function motionRebuild() {
+      rebuildWave(left, trackWindow, secPerPx, curWin, w, h, true);
+      // rebuildWave cleared any pending timer; re-arm so the full rebuild lands only after the
+      // LAST draft (a continuous search keeps pushing it back).
+      rebuildTimer.current = window.setTimeout(() => {
+        rebuildTimer.current = 0;
+        waveMeta.current = null;
+        dirty.current = true;
+      }, DRAFT_SETTLE_MS);
     }
     const m = waveMeta.current;
     const wc = waveRef.current;

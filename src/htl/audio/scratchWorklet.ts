@@ -119,6 +119,7 @@ class Scratch extends AudioWorkletProcessor {
         this.interval = this.nominal;
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
+        this.onset = 0; // samples of first-motion window left (see the move handler)
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -151,7 +152,32 @@ class Scratch extends AudioWorkletProcessor {
         // position — so take the position and bank the time, and recompute the step only once a
         // real interval has actually elapsed. Numerator and denominator then always describe the
         // same stretch of wall clock, which is the property both broken versions gave up.
-        {
+        // ★ BUT A MOVE FROM REST HAS NOTHING TO WAIT FOR. Operator: micro jogs "feel laggy on first
+        // touch". The banking above held the first tick after a still platter until MIN_INTERVAL
+        // of input time had passed, i.e. until the next ~60 Hz settle post, and only THEN chased
+        // over that whole interval: 30-48 ms to cover half of a 1-4 tick nudge (measured on this
+        // worklet). From rest there is no previous pace to protect, so pace it at once over
+        // MIN_INTERVAL; the following posts re-pace from real timing as usual.
+        const fromRest =
+          (this.step < 0 ? -this.step : this.step) < 1e-3 &&
+          (this.curStep < 0 ? -this.curStep : this.curStep) < 1e-3 &&
+          Math.abs(this.target - this.pos) < 1 &&
+          Math.abs(d.pos - this.target) >= 1;
+        // Inside that first MIN_INTERVAL (the ONSET) every tick re-aims at once too: a nudge is
+        // usually a burst of 3-8 ticks inside a few ms, and banking ticks 2..n left the head chasing
+        // only the first one until the next settle post.
+        const dtIn = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
+        if (fromRest) {
+          this.interval = MIN_INTERVAL;
+          this.accDt = 0;
+          this.onset = MIN_INTERVAL;
+          this.repace = true;
+        } else if (this.onset > 0 && (this.onset -= dtIn) > 0) {
+          this.interval = MIN_INTERVAL;
+          this.accDt = 0;
+          this.repace = true;
+        } else {
+          this.onset = 0;
           const dtSamples = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
           this.accDt += dtSamples > 0 ? dtSamples : (this.since > 0 ? this.since : 0);
           if (this.accDt >= MIN_INTERVAL || this.interval <= 0) {
@@ -193,7 +219,9 @@ class Scratch extends AudioWorkletProcessor {
         // dense (high-rate, per-input) updates need almost no smoothing → snappy;
         // sparse ~60 Hz updates need more to bridge the gap without a stair-step.
         // Clamp 1…8 ms. (Updates now arrive at the mouse's full report rate.)
-        const tau = Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
+        // During the onset the head starts from standstill: a short tau, or the smoothing alone
+        // spends ~8 ms ramping up to a speed the nudge only needs for ~13.
+        const tau = this.onset > 0 ? 0.002 : Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
         this.kStep = 1 - Math.exp(-1 / (tau * sampleRate));
       } else if (d.type === 'ramp') {
         // Begin an audio-rate motor ramp. vel = initial read velocity (samples/output-sample,

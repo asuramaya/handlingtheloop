@@ -87,8 +87,15 @@ function LaneTime({ deck, duration }: { deck: Deck; duration: number }) {
   const [, bump] = useState(0);
   useEffect(() => {
     let raf = 0;
+    // Re-render only when the TEXT changes (about once a second), not every frame: a React
+    // commit per frame per deck for a readout that shows whole seconds was pure overhead.
+    let shown = "";
     const loop = () => {
-      if (deck.visualPlaying || deck.jogging) bump((n) => n + 1);
+      const now = fmtTime(deck.visualPosition());
+      if ((deck.visualPlaying || deck.jogging) && now !== shown) {
+        shown = now;
+        bump((n) => n + 1);
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);

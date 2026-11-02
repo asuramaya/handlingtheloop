@@ -220,11 +220,21 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   // Imperative draw loop.
   useEffect(() => {
     let raf = 0;
+    const eqSigOf = () =>
+      deck.eqLow + deck.eqMid * 7 + deck.eqHigh * 13 + deck.eqLowFreq + deck.eqMidFreq * 3 + deck.eqHighFreq * 5 + deck.eqMidQ * 17 + deck.eqHpFreq + deck.eqLpFreq + deck.eqOut * 23 + (deck.eqBypassed ? 1e6 : 0);
+    // ★ THE CURVE ONLY CHANGES WHEN THE EQ DOES. While either deck plays this panel redraws every
+    // frame for the live spectrum, and it used to re-ask the filter chain for its whole frequency
+    // response (getFrequencyResponse per pixel column, every filter) on each of those frames: the
+    // largest single main-thread cost in a headless profile of one playing deck, for a curve that
+    // had not moved. Cached against the params signature and the buffer it filled (the buffer is
+    // re-made on resize). The node dots' DOM writes are skipped the same way.
+    let magSig = NaN;
+    let magFor: Float32Array | null = null;
+    let dotsKey = "";
     const tick = () => {
       // While paused the spectrum is static, so also redraw when the EQ params change
       // (a MIDI knob / sync-copy moves the curve with no pointer event or playback).
-      const sig =
-        deck.eqLow + deck.eqMid * 7 + deck.eqHigh * 13 + deck.eqLowFreq + deck.eqMidFreq * 3 + deck.eqHighFreq * 5 + deck.eqMidQ * 17 + deck.eqHpFreq + deck.eqLpFreq + deck.eqOut * 23 + (deck.eqBypassed ? 1e6 : 0);
+      const sig = eqSigOf();
       if (deck.playing || otherDeck.playing || dirty.current || sig !== eqSig.current) {
         draw();
         dirty.current = false;
@@ -326,7 +336,12 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       // zero is; filling to it means the shaded area reads as the EQ's SHAPING, independent of
       // how loud the whole curve was pushed. (Fill to a hard 0 dB and a flat curve trimmed +6
       // would show a solid block of "boost" that isn't shaping anything.)
-      deck.eqMagnitude(freqs.current, magBuf.current);
+      const sigNow = eqSigOf();
+      if (sigNow !== magSig || magFor !== magBuf.current) {
+        deck.eqMagnitude(freqs.current, magBuf.current);
+        magSig = sigNow;
+        magFor = magBuf.current;
+      }
       const y0 = yFromDb(deck.eqOut, h);
       const curveY = (x: number) => clamp(yFromDb(magBuf.current[x], h), -6, h + 6);
       ctx.beginPath();
@@ -419,7 +434,10 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
         outEl.classList.toggle("trimmed", Math.abs(o) > 0.05);
       }
 
-      // reposition node dots to match the live filter
+      // reposition node dots to match the live filter (only when the filter or the box moved)
+      const dk = `${sigNow}:${w}:${h}`;
+      if (dk === dotsKey) return;
+      dotsKey = dk;
       for (let i = 0; i < NODES.length; i++) {
         const el = handleRefs.current[i];
         if (!el) continue;

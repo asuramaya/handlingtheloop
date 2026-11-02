@@ -23,6 +23,7 @@ import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileS
 import { initialDock } from "./App/initialDock";
 import { mayContributeAnalysis, mayReuseGrid } from "./App/gridReuse";
 import { event } from "@htl/debug/trace";
+import { setPerfAudioProbe } from "@htl/debug/perfCapture";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
 import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
@@ -132,6 +133,7 @@ import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
 import { crashPrompts, type CrashPrompt } from "./App/crashPrompt";
 import { CrashGuardPrompt } from "./components/CrashGuardPrompt";
+import { PerfRecChip } from "./components/PerfCaptureControl";
 import { shouldReleaseClaim } from "./App/loadClaim";
 import { deckNamePatch } from "./App/deckNameBackfill";
 import { publishedDeckId } from "./App/publishedDeckId";
@@ -366,6 +368,28 @@ function AppBody() {
   const [lyricStatus, setLyricStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
 
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  // Settings ▸ Debug ▸ Performance capture reads audio health + the engine-shaping settings
+  // through these (the recorder is module-level so it keeps running with Settings closed).
+  const settingsForPerf = useRef(settings);
+  settingsForPerf.current = settings;
+  useEffect(() => {
+    setPerfAudioProbe(() => {
+      const ah = engine.audioHealth();
+      const s = settingsForPerf.current;
+      return {
+        underruns: ah.underruns,
+        outputLatencyMs: ah.outputLatencyMs,
+        baseLatencyMs: Math.round((engine.ctx.baseLatency ?? 0) * 1000),
+        state: ah.state,
+        playing: ah.playing,
+        reserveMs: ah.reserveMs,
+        stems: `${engine.deck("A").hasStems ? "A" : ""}${engine.deck("B").hasStems ? "B" : ""}`,
+        stemModel: s.stemModel,
+        stretch: `${s.stretchEngine}/${s.stretchQuality}`,
+      };
+    });
+    return () => setPerfAudioProbe(null);
+  }, [engine]);
   // ★ THE PRESET BANKS' SYNC BRIDGE, both legs. OUTBOUND: every bank write announces itself and is
   // mirrored into settings.fxBanks, which is what syncs to the account. Installed once.
   useEffect(() => {
@@ -4172,6 +4196,7 @@ function AppBody() {
       )}
 
       <CrashGuardPrompt prompts={crashAsks} onAnswer={answerCrash} />
+      <PerfRecChip />
     </div>
   );
 }

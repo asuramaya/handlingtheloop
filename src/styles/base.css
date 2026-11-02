@@ -944,3 +944,20 @@ body {
 .fx-bank-row .btn {
   flex: 0 0 auto;
 }
+
+/* Settings ▸ Debug ▸ Performance capture: the recording runs with Settings closed, so this chip is
+   the one thing on screen that says so, and stopping it is one tap. Bottom-left, clear of the
+   prompts at the top and the toasts. */
+.perf-rec-chip {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  z-index: 210;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #ff4d5e;
+  background: rgba(20, 6, 10, 0.92);
+  color: #ff8a96;
+  font: 700 12px ui-monospace, monospace;
+  cursor: pointer;
+}

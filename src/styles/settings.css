@@ -2356,7 +2356,6 @@
   text-align: left;
   background: transparent;
   border: none;
-  border-left: 2px solid transparent;
   color: var(--muted);
   padding: 9px 12px;
   font-size: 13px;
@@ -2369,9 +2368,12 @@
   color: var(--text);
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
-.settings-nav-item.on {
-  color: var(--text);
-  border-left-color: var(--neon-purple);
+/* The selected section is FILLED, not edged (operator, 2026-11-02: "a full highlight color of the
+   selected setting"): at a glance the list says where you are, the way the chin buttons do. */
+.settings-nav-item.on,
+.settings-nav-item.on:hover {
+  color: #0b0710;
+  background: var(--neon-purple);
 }
 
 /* ── Settings ▸ Turntable tiles: a gesture's curve, its readout and its control(s), together. ── */
@@ -2500,4 +2502,8 @@
   .tt-tempo .settings-row > .toggle {
     margin-left: auto;
   }
+}
+
+.color-mode-hint {
+  margin: -2px 0 6px;
 }

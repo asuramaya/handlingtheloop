@@ -1,5 +1,6 @@
-// Settings ▸ Controls — waveform wheel, Auto-DJ flourish, panel placement and the key map (the
-// jog's controls live in Settings ▸ Platter). Pure render of (settings, set); no local state.
+// Settings ▸ Controls — waveform wheel, Auto-DJ flourish and the key map (the jog lives in
+// Settings ▸ Turntable; panel placement in Settings ▸ Interface, exported from here as
+// PanelPlacementSection). Pure render of (settings, set); no local state.
 //
 // ★ Written in the shared settings grammar (see the block comment atop settings.css): a CARD
 // per group, a ROW per control (`label ⓘ ......... [value] [control]`), and every explanation
@@ -95,13 +96,9 @@ function PlacementRow({
 export function ControlsTab({
   settings,
   set,
-  onePanel = false,
 }: {
   settings: Settings;
   set: (patch: Partial<Settings>) => void;
-  /** This viewport has ONE panel slot (see htl/state/usePhone ▸ ONE_PANEL_QUERY). The panel
-   *  placement controls are hidden rather than shown-and-inert — see the block below. */
-  onePanel?: boolean;
 }) {
   return (
     <>
@@ -160,6 +157,45 @@ export function ControlsTab({
           one Color, MIDI and Audio use, which is the point: a keymap and a colour theme are the
           same KIND of thing, and three tabs each drawing their own save bar said they were not. */}
 
+      {/* THE key map, and now the only one. The chin's "?" button opened a modal whose whole
+          content was this same <KeyMap> over these same bindings; it is gone. This card was
+          headless, which was fine while a second door existed and is not now — it is the
+          destination, so it says what it is. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Key map</span>
+          <InfoDot
+            text="Every keyboard action, with its key. Click a key chip and press a new key to rebind it; each action also has a second, empty slot if you want two keys for it. Keys are stored by physical position, so a map made on one keyboard layout still works on another. The keys drive whichever deck has focus."
+            label="Key map"
+          />
+        </div>
+        <ToggleRow
+          label="On-button key hints"
+          info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
+          on={settings.keyHints}
+          onToggle={() => set({ keyHints: !settings.keyHints })}
+        />
+        <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
+      </div>
+    </>
+  );
+}
+
+/** Settings ▸ Interface ▸ Panel placement (moved out of Controls, operator 2026-11-02: placement is
+ *  about the interface, not about how the decks are played). */
+export function PanelPlacementSection({
+  settings,
+  set,
+  onePanel = false,
+}: {
+  settings: Settings;
+  set: (patch: Partial<Settings>) => void;
+  /** This viewport has ONE panel slot (see htl/state/usePhone ▸ ONE_PANEL_QUERY). The placement
+   *  controls are hidden rather than shown-and-inert — see the block below. */
+  onePanel?: boolean;
+}) {
+  return (
+    <>
       {/* Where each floating panel sits. Every option is an overlay — none of them push or
           resize the board, unlike the old single left/right docks (which used to squeeze the
           stage, flipped by a chin ⇄ button that's gone now that each panel picks its own
@@ -230,26 +266,6 @@ export function ControlsTab({
         )}
       </div>
 
-      {/* THE key map, and now the only one. The chin's "?" button opened a modal whose whole
-          content was this same <KeyMap> over these same bindings; it is gone. This card was
-          headless, which was fine while a second door existed and is not now — it is the
-          destination, so it says what it is. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Key map</span>
-          <InfoDot
-            text="Every keyboard action, with its key. Click a key chip and press a new key to rebind it; each action also has a second, empty slot if you want two keys for it. Keys are stored by physical position, so a map made on one keyboard layout still works on another. The keys drive whichever deck has focus."
-            label="Key map"
-          />
-        </div>
-        <ToggleRow
-          label="On-button key hints"
-          info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
-          on={settings.keyHints}
-          onToggle={() => set({ keyHints: !settings.keyHints })}
-        />
-        <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
-      </div>
     </>
   );
 }

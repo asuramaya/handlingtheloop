@@ -8,9 +8,10 @@ import { ProfileBar } from "./ProfileBar";
 import { profilesForTab } from "./settings/profileAdapters";
 import { AboutTab } from "./settings/AboutTab";
 import { AudioTab } from "./settings/AudioTab";
-import type { LyricDeck } from "./LyricsSettings";
+import { StemsTab } from "./settings/StemsTab";
+import { LyricsSettings, type LyricDeck } from "./LyricsSettings";
 import { ColorTab } from "./settings/ColorTab";
-import { ControlsTab } from "./settings/ControlsTab";
+import { ControlsTab, PanelPlacementSection } from "./settings/ControlsTab";
 import { TurntableTab } from "./settings/TurntableTab";
 import { DebugTab } from "./settings/DebugTab";
 // Account & connections moved to the full-screen Profile (see ProfileScreen).
@@ -34,13 +35,15 @@ interface SettingsPanelProps {
 }
 
 
-type Tab = "color" | "controls" | "turntable" | "midi" | "audio" | "debug" | "about";
+type Tab = "interface" | "controls" | "turntable" | "midi" | "audio" | "stems" | "lyrics" | "debug" | "about";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "color", label: "Color" },
+  { key: "interface", label: "Interface" },
   { key: "controls", label: "Controls" },
   { key: "turntable", label: "Turntable" },
   { key: "midi", label: "MIDI" },
   { key: "audio", label: "Audio" },
+  { key: "stems", label: "Stems" },
+  { key: "lyrics", label: "Lyrics" },
   { key: "debug", label: "Debug" },
   { key: "about", label: "About" },
 ];
@@ -65,7 +68,7 @@ export function SettingsPanel({
   onePanel = false,
 }: SettingsPanelProps) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
-  const [tab, setTab] = useState<Tab>("color");
+  const [tab, setTab] = useState<Tab>("interface");
   // ★ A LEFT-SIDE MENU, NOT A STRIP. Operator, 2026-11-02: "instead of the tabs being carded on
   // the top header, make them list down in a hamburger giving us more granularity", then: "it has
   // to be a hamburger on the left side" (the first cut dropped a list down from the header, and
@@ -97,7 +100,8 @@ export function SettingsPanel({
   // setup most wants carrying between machines, had none. Three copies of one idea plus a hole.
   // Now it lives on the title line and simply changes what it operates on with the tab, which is
   // also what made Audio's missing profiles a two-line fix instead of a fourth bar.
-  const tabProfiles = profilesForTab(tab, settings, onChange, midi);
+  // Interface: its saved profiles are the colour themes (placement is not part of a theme).
+  const tabProfiles = profilesForTab(tab === "interface" ? "color" : tab, settings, onChange, midi);
   // This component only exists in the DOM while open (App conditionally mounts it), so mount
   // itself IS "just opened" — no separate open/close transition to track like Library's.
   const centerZ = useCenterZIndex(dockMode, true);
@@ -149,30 +153,34 @@ export function SettingsPanel({
           )}
 
         <div className="settings-body">
-          {tab === "color" && <ColorTab settings={settings} set={set} />}
+          {tab === "interface" && (
+            <>
+              <ColorTab settings={settings} set={set} />
+              <PanelPlacementSection settings={settings} set={set} onePanel={onePanel} />
+            </>
+          )}
 
-          {tab === "controls" && <ControlsTab settings={settings} set={set} onePanel={onePanel} />}
+          {tab === "controls" && <ControlsTab settings={settings} set={set} />}
 
           {tab === "turntable" && <TurntableTab settings={settings} set={set} />}
 
           {tab === "midi" && midi && <MidiPanel midi={midi} settings={settings} onChange={onChange} />}
 
-          {tab === "audio" && (
-            <AudioTab
+          {tab === "audio" && <AudioTab settings={settings} set={set} outputSupported={outputSupported} />}
+
+          {tab === "stems" && (
+            <StemsTab
               settings={settings}
               set={set}
-              onChange={onChange}
-              outputSupported={outputSupported}
               loadedVideoIds={loadedVideoIds}
               loadedDecks={loadedDecks}
               stemStatus={stemStatus}
               onReanalyze={onReanalyze}
-              lyricDecks={lyricDecks}
-              onRetranscribe={onRetranscribe}
               onGpuReenable={onGpuReenable}
             />
           )}
 
+          {tab === "lyrics" && <LyricsSettings settings={settings} onChange={onChange} decks={lyricDecks} onRetranscribe={onRetranscribe} />}
 
           {tab === "debug" && <DebugTab midi={midi} debug={debug} />}
 

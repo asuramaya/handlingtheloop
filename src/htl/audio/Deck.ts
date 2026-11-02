@@ -114,6 +114,7 @@ import { CrushFx } from "./CrushFx";
 import { ModFx } from "./ModFx";
 import { GateFx } from "./GateFx";
 import { NoiseFx } from "./NoiseFx";
+import { stepBend } from "./bendPhysics";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -383,6 +384,8 @@ export class Deck {
   // eases home to the set tempo. NEVER a re-seek (that would glitch at the tick rate).
   private _bend = 0;
   private bendRaf = 0;
+  private _bendAcc = 0; // roll distance banked since the last physics frame (bendPhysics.ts)
+  private _ringVel = 0; // the ring's smoothed velocity (bendPhysics.ts)
   private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
   private static readonly BEND_GAIN = 6; // ticks→push: how hard a turn bends the tempo
   private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
@@ -871,6 +874,8 @@ export class Deck {
       this.bendRaf = 0;
     }
     this._bend = 0;
+    this._bendAcc = 0;
+    this._ringVel = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.lastAppliedStemId = undefined; // INVALIDATION: the engine gets the plain mix
     this.stemsLoaded = false;
@@ -1725,7 +1730,7 @@ export class Deck {
   /** True while a momentary pitch-bend is decaying — pauses the sync phase-lock so the
    *  corrector doesn't chase a transient ear-nudge. */
   get bending() {
-    return this._bend !== 0;
+    return this._bend !== 0 || this._ringVel !== 0; // a turning ring counts before its push builds
   }
 
   /** Apply the SYNC phase-lock rate trim (AudioEngine drives this each correction tick).
@@ -1802,12 +1807,11 @@ export class Deck {
       this.needleDrop(deltaSec * Deck.BEND_SEARCH);
       return;
     }
-    // Convert the roll distance into a push relative to the set tempo (so it feels the
-    // same at any pitch-fader setting), accumulate, and clamp.
-    const push = (deltaSec / Math.max(0.05, this._rate)) * Deck.BEND_GAIN * this._bendScale;
-    this.reanchorClock(); // freeze position() at the OLD rate before the rate changes
-    this._bend = Math.max(-Deck.BEND_MAX, Math.min(Deck.BEND_MAX, this._bend + push));
-    this.pushRate();
+    // Bank the roll distance (relative to the set tempo, so it feels the same at any pitch-fader
+    // setting). The physics loop turns it into a velocity once per FRAME (bendPhysics.ts), so a
+    // burst of ticks is distance rather than a stack of instant pushes — the old per-tick push is
+    // what made a jog ring's bend move in steps with "missing physics".
+    this._bendAcc += deltaSec / Math.max(0.05, this._rate);
     this.startBendDecay();
   }
 
@@ -1839,14 +1843,23 @@ export class Deck {
       const now = this.ctx.currentTime;
       const dt = Math.min(0.05, Math.max(0, now - last));
       last = now;
-      const live = this._bend !== 0 && this._playing && !this.jog.jogging;
-      if (live) {
-        this.reanchorClock();
-        this._bend *= Math.exp(-dt / Deck.BEND_DECAY);
-        if (Math.abs(this._bend) < 1e-3) this._bend = 0;
-        this.pushRate();
+      const live = this._playing && !this.jog.jogging;
+      if (live && dt > 0) {
+        const next = stepBend({ bend: this._bend, ringVel: this._ringVel }, this._bendAcc, dt, {
+          gain: Deck.BEND_GAIN * this._bendScale,
+          decay: Deck.BEND_DECAY,
+          max: Deck.BEND_MAX,
+        });
+        this._bendAcc = 0;
+        this._ringVel = next.ringVel;
+        if (next.bend !== this._bend) {
+          this.reanchorClock(); // freeze position() at the OLD rate before the rate changes
+          this._bend = next.bend;
+          this.pushRate();
+        }
       }
-      if (this._bend !== 0 && this._playing && !this.jog.jogging) {
+      const moving = this._bend !== 0 || this._ringVel !== 0 || this._bendAcc !== 0;
+      if (moving && this._playing && !this.jog.jogging) {
         this.bendRaf = requestAnimationFrame(tick);
       }
     };
@@ -1859,6 +1872,8 @@ export class Deck {
       if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
       this.bendRaf = 0;
     }
+    this._bendAcc = 0;
+    this._ringVel = 0;
     if (this._bend !== 0) {
       this.reanchorClock();
       this._bend = 0;

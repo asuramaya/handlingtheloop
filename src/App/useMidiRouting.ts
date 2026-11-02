@@ -99,7 +99,9 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
   // keeps turning; while this holds a record for a deck, that deck's grab is still alive and its
   // CC 0x21 (jogBend) ticks drive the platter instead of bending/seeking. `released`/`lastTick` are
   // performance.now() ms. One shared checker timer ends a follow when the platter goes still.
-  const spinFollow = useRef<Record<DeckId, { released: number; lastTick: number } | null>>({ A: null, B: null });
+  // `search` marks a PAUSED-ring search rather than a post-release spin: its cap counts from the
+  // latest tick, so a long deliberate search is not cut off mid-turn.
+  const spinFollow = useRef<Record<DeckId, { released: number; lastTick: number; search?: boolean } | null>>({ A: null, B: null });
   const spinTimer = useRef<number | null>(null);
   // The latest jog callbacks/engine, for the timer (which outlives any one render's closure).
   const spinDeps = useRef({ engine, onJogEnd });
@@ -595,11 +597,28 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // platter still turning after the hand left (decision 8283a6e8). While a free-spin follow
           // is live, that turning IS the record moving, so it drives the platter like a scratch.
           // Outside a follow it stays what it was: a nudge (playing) or a frame-search (paused).
+          // ★ PAUSED, THE RING IS A SEARCH YOU CAN HEAR. It used to call deck.bend → a silent
+          // needleDrop seek per tick, with no screen refresh on this path, so the operator saw
+          // "when paused it does nothing in real time then skips the time when main wheel touched
+          // again or played". Now a paused turn grips the platter like a light touch: the ticks
+          // drive it audibly and visibly (scratch resampler, 1:1 like the platter), and it lets go
+          // once the ring has been still for the follow's still window (jogSpinFollow.ts), resting
+          // where it stopped. SHIFT + jog remains the coarse fast search.
+          if (!spinFollow.current[ev.deck] && !deck.playing && !deck.jogging) {
+            deck.scrubBegin();
+            onJogStart(ev.deck);
+            const now = performance.now();
+            spinFollow.current[ev.deck] = { released: now, lastTick: now, search: true };
+            ensureSpinTimer();
+          }
           if (spinFollow.current[ev.deck] && deck.grabbing) {
             const sec = ev.delta * SEC_PER_TICK;
             deck.scrubMove(sec);
             emitJog(ev.deck, sec);
-            spinFollow.current[ev.deck]!.lastTick = performance.now();
+            const f = spinFollow.current[ev.deck]!;
+            f.lastTick = performance.now();
+            if (f.search) f.released = f.lastTick;
+            refresh(); // the playhead moves now, not on the next unrelated repaint
             checkSpinFollow(ev.deck);
             break;
           }

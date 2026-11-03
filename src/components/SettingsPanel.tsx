@@ -141,7 +141,7 @@ export function SettingsPanel({
           </>
         );
       case "controls":
-        return <ControlsTab settings={settings} set={set} />;
+        return <ControlsTab settings={settings} set={set} searching={!!query.trim()} />;
       case "turntable":
         return <TurntableTab settings={settings} set={set} />;
       case "midi":

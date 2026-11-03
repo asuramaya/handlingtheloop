@@ -2629,3 +2629,9 @@
 .color-row.is-fallback .settings-value {
   opacity: 0.45;
 }
+
+/* Touch-only device: the key map is folded behind this (ControlsTab ▸ useFinePointer). */
+.keymap-unfold {
+  align-self: flex-start;
+  margin: 2px 0 8px;
+}

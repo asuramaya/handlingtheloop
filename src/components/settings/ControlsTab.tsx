@@ -11,6 +11,8 @@ import type { DockMode, PanelKey, Settings } from "@htl";
 import { KeyMap } from "../KeyHelp";
 import { Slider } from "./Slider";
 import { InfoDot } from "./InfoDot";
+import { useState } from "react";
+import { useFinePointer } from "../../htl/state/usePhone";
 
 const DOCK_MODES: DockMode[] = ["left", "right", "center", "bottom"];
 
@@ -96,25 +98,38 @@ function PlacementRow({
 export function ControlsTab({
   settings,
   set,
+  searching = false,
 }: {
   settings: Settings;
   set: (patch: Partial<Settings>) => void;
+  /** Settings search is filtering this render: show everything so the filter can find it. */
+  searching?: boolean;
 }) {
+  // ★ ON A TOUCH-ONLY DEVICE the wheel and keyboard settings can do nothing, so they do not take
+  // the top of the screen. Wheel scrub is hidden (there is no wheel). The key map is folded, not
+  // hidden: a phone can pair a Bluetooth keyboard and the map is how you would find out what it
+  // does. Same reasoning as Panel placement's onePanel: a control present but inert teaches people
+  // to stop trusting the panel it is in.
+  const fine = useFinePointer();
+  const [keysOpen, setKeysOpen] = useState(false);
+  const showKeys = fine || keysOpen || searching;
   return (
     <>
       {/* The jog's own controls moved to Settings ▸ Platter (one card, drawn). This one is NOT a
           jog setting — it is what the scroll wheel does over a waveform — so it stays here. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Waveform</span>
+      {fine && (
+        <div className="settings-section">
+          <div className="settings-section-head">
+            <span className="settings-label">Waveform</span>
+          </div>
+          <ToggleRow
+            label="Mouse-wheel scrub"
+            info="What the scroll wheel does over a waveform. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
+            on={settings.wheelSeeks}
+            onToggle={() => set({ wheelSeeks: !settings.wheelSeeks })}
+          />
         </div>
-        <ToggleRow
-          label="Mouse-wheel scrub"
-          info="What the scroll wheel does over a waveform. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
-          on={settings.wheelSeeks}
-          onToggle={() => set({ wheelSeeks: !settings.wheelSeeks })}
-        />
-      </div>
+      )}
 
       {/* AUTO's taste, not its competence. The structural half of a transition — beatmatch, bass
           swap, gain staging, where the mix starts and ends — is not on this dial and never will
@@ -169,14 +184,22 @@ export function ControlsTab({
             label="Key map"
           />
         </div>
-        <ToggleRow
-          label="On-button key hints"
-          info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
-          on={settings.keyHints}
-          onToggle={() => set({ keyHints: !settings.keyHints })}
-        />
+        {!showKeys && (
+          <button className="hw-btn small keymap-unfold" onClick={() => setKeysOpen(true)} aria-expanded={false}>
+            Show keyboard shortcuts
+          </button>
+        )}
+        {fine && (
+          <ToggleRow
+            label="On-button key hints"
+            info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
+            on={settings.keyHints}
+            onToggle={() => set({ keyHints: !settings.keyHints })}
+          />
+        )}
         {/* Fixed navigation keys (not rebindable, so not rows in the map below). They have to be
             written down somewhere or they do not exist for anyone who did not build them. */}
+        {showKeys && (<>
         <div className="keynav">
           <div className="keynav-title">Navigation</div>
           {NAV_KEYS.map(([k, what]) => (
@@ -187,6 +210,7 @@ export function ControlsTab({
           ))}
         </div>
         <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
+        </>)}
       </div>
     </>
   );

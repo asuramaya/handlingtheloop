@@ -28,7 +28,10 @@ export function InfoDot({ text, label }: { text: string; label?: string }) {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+        setOpen(false);
+      }
     };
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);

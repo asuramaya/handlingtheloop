@@ -81,7 +81,11 @@ export function ProfileBar<P extends ProfileLike, Payload>({
     const onDown = (e: PointerEvent) => {
       if (!(e.target as HTMLElement)?.closest?.(".profilebar-menu-wrap")) setMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+      setMenuOpen(false);
+    };
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
@@ -242,7 +246,10 @@ export function ProfileBar<P extends ProfileLike, Payload>({
         aria-label={asking === "save" ? `Name this ${noun}` : `Rename ${noun}`}
         onKeyDown={(e) => {
           if (e.key === "Enter") commitName((e.target as HTMLInputElement).value);
-          if (e.key === "Escape") setAsking(null);
+          if (e.key === "Escape") {
+            e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+            setAsking(null);
+          }
         }}
       />
       <button className="hw-btn small" onClick={() => commitName(nameRef.current?.value ?? "")}>OK</button>

@@ -175,11 +175,31 @@ export function ControlsTab({
           on={settings.keyHints}
           onToggle={() => set({ keyHints: !settings.keyHints })}
         />
+        {/* Fixed navigation keys (not rebindable, so not rows in the map below). They have to be
+            written down somewhere or they do not exist for anyone who did not build them. */}
+        <div className="keynav">
+          <div className="keynav-title">Navigation</div>
+          {NAV_KEYS.map(([k, what]) => (
+            <div key={k} className="keynav-row">
+              <kbd>{k}</kbd>
+              <span>{what}</span>
+            </div>
+          ))}
+        </div>
         <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
       </div>
     </>
   );
 }
+
+const NAV_KEYS: [string, string][] = [
+  ["Esc", "Close the top panel; with nothing open, open Settings"],
+  ["Alt", "Open / close the Library"],
+  ["↑ ↓", "Library open: move the cursor"],
+  ["← →", "Library open: playlists / tracks"],
+  ["Enter", "Library open: load onto the focused deck"],
+  ["Shift + Enter", "Library open: load onto the other deck"],
+];
 
 /** Settings ▸ Interface ▸ Panel placement (moved out of Controls, operator 2026-11-02: placement is
  *  about the interface, not about how the decks are played). */

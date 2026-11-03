@@ -72,6 +72,7 @@ export interface LibraryHandle {
   browse: (delta: number) => void; // rotate: step the track cursor, OR the source if nav-mode
   load: (deck: "A" | "B") => void; // load the cursor row onto a deck
   toggleSourceNav: () => void; // encoder PRESS: jump the cursor between track list and sources
+  setSourceNav: (on: boolean) => void; // keyboard ← / →: put the cursor on the sources / the tracks
 }
 
 export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(function LibraryPanel({
@@ -402,6 +403,10 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         onOpenChange(true);
         setSourceNav((v) => !v);
       },
+      setSourceNav: (on: boolean) => {
+        onOpenChange(true);
+        setSourceNav(on);
+      },
     }),
     [onOpenChange, sourceNav, browseSources, view, auto],
   );
@@ -462,7 +467,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   useEffect(() => {
     if (!plMenu) return;
     const close = () => setPlMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPlMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+      setPlMenu(null);
+    };
     window.addEventListener("scroll", close, true);
     window.addEventListener("keydown", onKey);
     return () => {

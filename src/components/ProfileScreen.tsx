@@ -354,7 +354,10 @@ function HandleEditor({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && canSave) void save();
-            if (e.key === "Escape") onCancel();
+            if (e.key === "Escape") {
+              e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+              onCancel();
+            }
           }}
         />
         <span className={`handle-status ${status.kind}`}>

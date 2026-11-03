@@ -2563,3 +2563,32 @@
     display: none;
   }
 }
+
+/* Controls ▸ Key map ▸ Navigation: the fixed keys (Esc, Alt, library browsing). */
+.keynav {
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.keynav-title {
+  font: 700 10px/1 ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.keynav-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.keynav-row kbd {
+  flex: none;
+  min-width: 92px;
+  font: 700 11px/1.4 ui-monospace, monospace;
+  color: var(--text);
+}

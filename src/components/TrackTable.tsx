@@ -366,7 +366,11 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+      setMenu(null);
+    };
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     window.addEventListener("keydown", onKey);

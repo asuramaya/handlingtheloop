@@ -24,6 +24,8 @@ import { initialDock } from "./App/initialDock";
 import { mayContributeAnalysis, mayReuseGrid } from "./App/gridReuse";
 import { event } from "@htl/debug/trace";
 import { setPerfAudioProbe } from "@htl/debug/perfCapture";
+import { escapeAction, trackOpenOrder } from "./App/escapeKey";
+import { libraryKeyAction } from "./App/libraryKeys";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
 import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
@@ -544,6 +546,8 @@ function AppBody() {
   // there, so it's a layout preference). On mobile they're full-screen modals, so we
   // always start closed regardless of what was stored.
   const [libOpen, setLibOpen] = useState(() => window.innerWidth >= 769 && localStorage.getItem("htl:libOpen") === "1");
+  const libOpenRef = useRef(libOpen); // read by the keyboard handler (library keys, App/libraryKeys.ts)
+  libOpenRef.current = libOpen;
   // Imperative handle into the library so a hardware browse encoder (FLX4 wheel) can step
   // a row cursor and the LOAD A/B buttons load it — see the browse/load cases in onMidiEvent.
   const libRef = useRef<LibraryHandle>(null);
@@ -639,6 +643,44 @@ function AppBody() {
       return next;
     });
   };
+  // ★ ESCAPE (App/escapeKey.ts): close the most recently opened panel, or open Settings when
+  // nothing is open. Its own listener, deferred one task so every other handler of this keydown
+  // has run: anything that consumed Escape (dialog, menu, ⓘ bubble, key rebind, text field)
+  // marks it with preventDefault, and the board then leaves it alone.
+  const openOrder = useRef<PanelKey[]>([]);
+  useEffect(() => {
+    openOrder.current = trackOpenOrder(openOrder.current, { library: libOpen, settings: settingsOpen, people: profileOpen, session: socialOpen });
+  }, [libOpen, settingsOpen, profileOpen, socialOpen]);
+  // ★ A CLICKED CONTROL DOES NOT KEEP THE KEYBOARD. Measured headless: click the Settings gear,
+  // press Enter, and Settings closed again — the button kept focus and Enter re-pressed it; click
+  // the crossfader, press ↑, and the deck jumped while the fader ignored it. On an instrument the
+  // keys belong to the board, so once a POINTER click lands, the control lets go of focus.
+  // Keyboard activation (Tab + Enter/Space: detail === 0) keeps focus, so tabbing still works,
+  // and a text field is never blurred (it is not in the selector, and focus sits on it, not on
+  // an ancestor).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (e.detail === 0) return;
+      const el = (e.target as Element | null)?.closest?.('button, [role="button"], [role="switch"], a[href], input[type="range"], input[type="checkbox"], input[type="radio"], select, [tabindex]');
+      if (el instanceof HTMLElement && document.activeElement === el && el.tagName !== "SELECT") el.blur();
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
+  const escapeActsRef = useRef({ close: (_p: PanelKey) => {}, openSettings: () => {} });
+  escapeActsRef.current = { close: (p) => PANEL_CLOSERS[p](), openSettings: toggleSettings };
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      setTimeout(() => {
+        const a = escapeAction(e.defaultPrevented, openOrder.current);
+        if (a.kind === "close") escapeActsRef.current.close(a.panel);
+        else if (a.kind === "openSettings") escapeActsRef.current.openSettings();
+      }, 0);
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, []);
   const [shiftLatched, setShiftLatched] = useState(false);
   const [shiftHeld, setShiftHeld] = useState(false);
   // A controller SHIFT button is held, per deck (the FLX4 has one SHIFT per side).
@@ -1311,6 +1353,27 @@ function AppBody() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // A watch-only participant (control revoked) can't drive the decks.
       if (lockedRef.current) return;
+
+      // ★ THE LIBRARY, FROM THE KEYBOARD. Operator, 2026-11-02: "problems with basic interaction
+      // and navigation using the shortcuts and the playlist". The FLX4's browse knob and LOAD
+      // buttons drove the library through libRef; the keyboard reached none of it, so a track could
+      // only be loaded with the mouse. While the Library is OPEN the arrows and Enter browse it
+      // (libraryKeys.ts): ↑/↓ move the cursor, ← / → put it on the playlists / the tracks, Enter
+      // loads onto the focused deck and Shift+Enter onto the other one. Closed, they are the board's
+      // again. Loading is a deck action, so it respects canDriveDeck like any other.
+      const libAct = libraryKeyAction(e.code, e.shiftKey, libOpenRef.current);
+      if (libAct) {
+        e.preventDefault();
+        const lib = libRef.current;
+        if (!lib) return;
+        if (libAct.kind === "browse") lib.browse(libAct.delta);
+        else if (libAct.kind === "sources") lib.setSourceNav(libAct.on);
+        else {
+          const target: DeckId = libAct.toOther ? (focused === "A" ? "B" : "A") : focused;
+          if (canDriveDeckRef.current(target)) lib.load(target);
+        }
+        return;
+      }
 
       const actionId = keyIndex.get(e.code);
       if (!actionId) return;

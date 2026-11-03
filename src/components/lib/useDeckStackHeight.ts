@@ -21,13 +21,32 @@ import { useEffect, useLayoutEffect } from "react";
  * height is the sum of a dozen rows whose own heights move with device metrics, pad mode, and
  * whether the stems row is showing a placeholder. Any literal here would be wrong on some phone.
  */
+/** The stack's NATURAL height: what its rows need, with the published floor switched off for the
+ *  measurement.
+ *
+ *  ★ IT USED TO READ `scrollHeight` WITH THE FLOOR STILL APPLIED, and the floor is this very value
+ *  (`.bank-main { min-height: var(--deck-stack-h) }`). An element's scrollHeight is never less than
+ *  its own height, so the measurement could only ever go UP: one taller moment (a resize that
+ *  wrapped rows, a placeholder row, the FX page) and the deck kept that height for good, with the
+ *  surplus sitting as dead space between the stem knobs and the bottom bar — the operator's
+ *  screenshot, 2026-11-02. Reproduced headless: a stale 520px stack never returned to its real
+ *  369px through re-renders or resizes. Clearing min-height for the read (same frame, layout only,
+ *  never painted) measures the rows themselves, so the number can shrink as well as grow. */
+export function naturalStackHeight(el: HTMLElement): number {
+  const prev = el.style.minHeight;
+  el.style.minHeight = "0px";
+  const h = el.scrollHeight;
+  el.style.minHeight = prev;
+  return h;
+}
+
 export function useDeckStackHeight(el: HTMLElement | null, isPerform: boolean) {
   // Layout effect, no dep array: the row heights change with the same renders that change the
   // controls (pad mode, stems arriving, SHIFT), and this must land before paint or the deck
   // resizes a frame late — which reads as exactly the jiggle it exists to prevent.
   useLayoutEffect(() => {
     if (!el || !isPerform) return; // ★ only the MIX page defines the height; the FX page inherits it
-    const h = el.scrollHeight;
+    const h = naturalStackHeight(el);
     if (h > 0) el.closest<HTMLElement>(".bank")?.style.setProperty("--deck-stack-h", `${h}px`);
   });
 
@@ -36,7 +55,7 @@ export function useDeckStackHeight(el: HTMLElement | null, isPerform: boolean) {
     if (!el) return;
     const publish = () => {
       if (!isPerform) return;
-      const h = el.scrollHeight;
+      const h = naturalStackHeight(el);
       if (h > 0) el.closest<HTMLElement>(".bank")?.style.setProperty("--deck-stack-h", `${h}px`);
     };
     const ro = new ResizeObserver(publish);

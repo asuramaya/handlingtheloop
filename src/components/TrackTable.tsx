@@ -342,23 +342,27 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     },
     [rowH],
   );
+  // One cursor step, shared by the hardware browse knob, the keyboard (via the handle) and the
+  // filter box's ↓ / ↑ below.
+  const stepCursor = (delta: number) => {
+    if (view.length === 0) return;
+    const cur = cursorRef.current;
+    const next = cur < 0 ? (delta > 0 ? 0 : view.length - 1) : Math.max(0, Math.min(view.length - 1, cur + delta));
+    cursorRef.current = next;
+    setCursor(next);
+    scrollCursorIntoView(next);
+  };
   useImperativeHandle(
     ref,
     () => ({
-      moveCursor: (delta: number) => {
-        if (view.length === 0) return;
-        const cur = cursorRef.current;
-        const next = cur < 0 ? (delta > 0 ? 0 : view.length - 1) : Math.max(0, Math.min(view.length - 1, cur + delta));
-        cursorRef.current = next;
-        setCursor(next);
-        scrollCursorIntoView(next);
-      },
+      moveCursor: (delta: number) => stepCursor(delta),
       loadCursor: (deck: "A" | "B") => {
         const t = view[cursorRef.current];
         if (t) onLoad(deck, t);
       },
       hasRows: () => view.length > 0,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [view, onLoad, scrollCursorIntoView],
   );
 
@@ -473,6 +477,14 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                 if (e.key === "Enter") {
                   if (searchMode) onSubmitSearch!(query.trim());
                   e.currentTarget.blur(); // hand the keyboard back to the decks after committing
+                }
+                // ★ ↓ / ↑ LEAVE THE FILTER FOR THE RESULTS. Type to filter, ↓ to the first match, Enter
+                // to load: without this the filter box kept the arrows (they only moved its text
+                // cursor) and the results could only be reached with the mouse.
+                if (!searchMode && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                  stepCursor(e.key === "ArrowDown" ? 1 : -1);
                 }
               }}
             />

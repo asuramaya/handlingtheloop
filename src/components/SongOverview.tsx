@@ -261,7 +261,24 @@ export function SongOverview(props: SongOverviewProps) {
     // gone) or — worse — at a different marker, lighting up something the pointer is nowhere near.
     hoverRef.current = null;
     markersRef.current = [];
-    if (!py || !py.levels.length || !(dur > 0)) return;
+    // ★ AN EMPTY DECK DRAWS AN EMPTY SLOT, not a blank column. With nothing loaded the rail was a
+    // flat background strip that read as dead layout (seen on iPad and phone landscape), yet it is
+    // still a DROP TARGET for loading a track. A faint dashed frame in the deck's accent plus the
+    // centre spine says "a track goes here" without competing with a loaded deck beside it.
+    if (!(dur > 0)) {
+      const { dpr } = sizeRef.current;
+      const inset = 4 * dpr;
+      ctx.save();
+      ctx.strokeStyle = rgba(p.accent, 0.28);
+      ctx.lineWidth = 1 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.strokeRect(inset + 0.5, inset + 0.5, Math.max(0, w - 2 * inset - 1), Math.max(0, h - 2 * inset - 1));
+      ctx.restore();
+      ctx.fillStyle = rgba(p.selectorColor, 0.08);
+      ctx.fillRect(w / 2 - 0.5 * dpr, inset * 3, 1 * dpr, Math.max(0, h - inset * 6));
+      return;
+    }
+    if (!py || !py.levels.length) return;
     const chSr = py.sampleRate;
     const secPerRow = dur / h;
     const lod = pickLevel(py, secPerRow * chSr);

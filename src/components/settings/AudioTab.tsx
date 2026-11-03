@@ -121,9 +121,12 @@ export function AudioTab({
                 </option>
               ))}
             </select>
+            {/* ★ ONE NOTE FOR ONE GRANT. The same permission reveals output, cue and microphone
+                names (revealOutputNames re-lists all three), and the note used to print under all
+                three cards, so a phone screen read the same sentence and link three times. */}
             {outputNeedsPerm && (
               <p className="settings-note">
-                Device names stay hidden until you grant audio permission once.{" "}
+                Device names stay hidden until you grant audio permission once. One grant names outputs, headphones and microphones.{" "}
                 <button className="link-btn" onClick={revealOutputNames}>
                   Show device names
                 </button>
@@ -199,14 +202,6 @@ export function AudioTab({
               </p>
             ) : null;
           })()}
-          {outputNeedsPerm && (
-            <p className="settings-note">
-              Device names stay hidden until you grant audio permission once.{" "}
-              <button className="link-btn" onClick={revealOutputNames}>
-                Show device names
-              </button>
-            </p>
-          )}
         </div>
       )}
 
@@ -238,7 +233,7 @@ export function AudioTab({
           {settings.audioInputId === MIC_NONE && (
             <p className="settings-note">No microphone selected, so talkover, ducking and monitoring are off the board.</p>
           )}
-          {inputs.length > 0 && inputs.every((d) => !d.label) && (
+          {!(outputSupported && outputNeedsPerm) && inputs.length > 0 && inputs.every((d) => !d.label) && (
             <p className="settings-note">
               Device names stay hidden until you grant audio access once.{" "}
               <button className="link-btn" onClick={revealOutputNames}>

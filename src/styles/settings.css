@@ -2635,3 +2635,26 @@
   align-self: flex-start;
   margin: 2px 0 8px;
 }
+
+/* A slider row WRAPS when label + value + slider do not fit: the control drops to its own line,
+   right-aligned, instead of being laid over the label. Seen at 390px on Audio ▸ Master headroom,
+   where the value text ("none — loudest, may pump") printed across the label and its ⓘ. Wrapping
+   uses each item's content width, so a row that fits is unchanged. */
+.settings-row.slider-row {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.settings-row.slider-row > .settings-control {
+  margin-left: auto;
+  max-width: 100%;
+}
+.settings-row.slider-row > .settings-label {
+  flex-basis: auto;
+}
+.settings-row.slider-row > .settings-control {
+  min-width: 0;
+}
+.settings-row.slider-row .settings-value {
+  flex: 0 1 auto;
+  min-width: 0;
+}

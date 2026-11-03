@@ -364,7 +364,12 @@ export function StemsTab({
                   : isChromium()
                     ? "WebGPU not available here — cached stems still load"
                     : "Separation needs a Chromium WebGPU browser — cached stems still load here"
-            : "Plain mix · no stem separation";
+            : // ★ SINGLE IS NOT "NO STEMS" WHILE AUTO-ENHANCE IS ON: a track whose neural stems are in the
+              // shared cache downloads them anyway (that is what Auto-enhance means), so the old
+              // "no stem separation" sat directly under a status row reading "Enhancing with Demucs 75%".
+              settings.autoEnhance
+              ? "No separation here · cached stems still load"
+              : "Plain mix · no stem separation";
           return (
             <div className={`stem-device ${onGpu ? "gpu" : "none"}`}>
               <span className="stem-device-tag">GPU</span>

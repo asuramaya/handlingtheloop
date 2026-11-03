@@ -529,7 +529,10 @@
   pointer-events: none;
   display: none;
 }
-@media (min-width: 769px) {
+/* Width alone was the gate, so a phone turned to landscape (844px wide) crossed it and printed key
+   letters over its own labels ("LOOP" with an O through it, "SYNC" cut to "SYN") on a device with no
+   keyboard. A key hint needs a real pointer + hover, i.e. a desktop. */
+@media (min-width: 769px) and (hover: hover) and (pointer: fine) {
   body.show-keys .kbd {
     display: block;
   }

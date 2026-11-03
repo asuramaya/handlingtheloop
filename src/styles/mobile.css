@@ -269,6 +269,14 @@
   .lane-time {
     white-space: nowrap;
   }
+  /* Each deck's controls get ~205px here (both decks side by side), and SYNC's letter-spacing cut it
+     to "SYN" in the pitch row's 1/5 column. Tighter text in that row only. */
+  .stage .pitch-row .hw-btn {
+    letter-spacing: 0;
+    font-size: 11px;
+    padding-left: 2px;
+    padding-right: 2px;
+  }
   /* The chin is a fixed cost on a screen with 390px to spend — tighten it, do not remove it:
      it is the only way back to Library and Settings. */
   .chin {

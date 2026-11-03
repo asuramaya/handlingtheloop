@@ -68,12 +68,12 @@ export function waveModePatch(m: WaveMode): Partial<Settings> {
 }
 
 export function ColorTab({ settings, set }: { settings: Settings; set: (patch: Partial<Settings>) => void }) {
-  const swatch = (t: ColorTarget, after?: ReactNode) => {
+  const swatch = (t: ColorTarget, after?: ReactNode, fallback = false) => {
     const value = settings[t.key] || t.def || settings.accentA;
     return (
       // The row stays a <label> so a press anywhere on it opens the wheel, which stays anchored
       // to the input beside the swatch (see `.color-row > input` in settings.css).
-      <label key={t.key} className="settings-row color-row" title={`${t.label} — ${value}`}>
+      <label key={t.key} className={`settings-row color-row${fallback ? " is-fallback" : ""}`} title={`${t.label} — ${value}`}>
         <input type="color" value={value} aria-label={t.label} onChange={(e) => set({ [t.key]: e.target.value } as Partial<Settings>)} />
         <span className="settings-label">{t.label}</span>
         <span className="settings-control">
@@ -116,14 +116,17 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           <span className="settings-label color-group-title">Decks</span>
           <InfoDot label="Decks" text="The colour that identifies each deck. It runs through that deck's waveform, buttons, faders and meter." />
         </div>
-        {swatch({ key: "accentA", label: "Deck A" })}
-        {swatch({ key: "accentB", label: "Deck B" })}
+        {/* ★ THE OVERRIDE COMES FIRST, and when it is on the fixed colours say they are the fallback.
+            Before, "Deck A #00E5FF" sat above a cover-art toggle that was ON, so the row named a cyan
+            deck while the board painted it orange — the setting looked broken. */}
         <ToggleRow
           label="From cover art"
-          info="Each deck takes its colour from the cover art of whatever is loaded, instead of the fixed Deck A and Deck B colours above."
+          info="Each deck takes its colour from the cover art of whatever is loaded. The Deck A and Deck B colours below are used when a track has no art."
           on={settings.deckArtAccent}
           onToggle={() => set({ deckArtAccent: !settings.deckArtAccent })}
         />
+        {swatch({ key: "accentA", label: settings.deckArtAccent ? "Deck A · no art" : "Deck A" }, undefined, settings.deckArtAccent)}
+        {swatch({ key: "accentB", label: settings.deckArtAccent ? "Deck B · no art" : "Deck B" }, undefined, settings.deckArtAccent)}
         <ToggleRow
           label="Match the room"
           info="In a shared session you take on the host's colour, so the room looks the same to everyone in it. Your own comes back when you leave."

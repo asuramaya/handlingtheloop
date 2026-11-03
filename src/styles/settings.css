@@ -2622,3 +2622,10 @@
   font-size: 12px;
   color: var(--muted);
 }
+
+/* A deck colour that "From cover art" is overriding: still editable (it is what a track with no
+   art gets), but dimmed so the row stops claiming to be the colour on the board. */
+.color-row.is-fallback .color-swatch,
+.color-row.is-fallback .settings-value {
+  opacity: 0.45;
+}

@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { applySearch } from "./settings/settingsSearch";
+import { SECTION_KEYS, changedKeys, resetPatch, type SectionKey } from "./settings/settingsSections";
+import { ConfirmModal } from "./Dialog";
 import { type PanelPlacement, type Settings } from "@htl";
 import type { StemStatus, DebugSection } from "../App";
 import { type UseMidi } from "@htl/midi";
@@ -114,6 +116,9 @@ export function SettingsPanel({
   // (settingsSearch.ts), re-filtered whenever a section's own content changes under it (a toggle
   // revealing a row, a device list arriving), so what matches is always what is really there.
   const [query, setQuery] = useState("");
+  // ★ CHANGED-FROM-DEFAULT. A dot on each ☰ entry whose settings differ from the defaults, and a
+  // reset for the section you are in (settingsSections.ts; a test keeps every setting placed).
+  const [confirmReset, setConfirmReset] = useState<SectionKey | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [hits, setHits] = useState(-1);
   useLayoutEffect(() => {
@@ -207,6 +212,9 @@ export function SettingsPanel({
                   }}
                 >
                   {t.label}
+                  {t.key in SECTION_KEYS && changedKeys(settings, t.key as SectionKey).length > 0 && (
+                    <span className="settings-nav-dot" title={`${changedKeys(settings, t.key as SectionKey).length} changed from default`} aria-label="changed from default" />
+                  )}
                 </button>
               ))}
             </nav>
@@ -254,7 +262,28 @@ export function SettingsPanel({
               {hits === 0 && <p className="settings-hint search-none">No settings match “{query.trim()}”.</p>}
             </div>
           ) : (
-            renderTab(tab)
+            <>
+              {renderTab(tab)}
+              {tab in SECTION_KEYS && changedKeys(settings, tab as SectionKey).length > 0 && (
+                <div className="settings-reset-bar">
+                  <span>
+                    {changedKeys(settings, tab as SectionKey).length} setting{changedKeys(settings, tab as SectionKey).length > 1 ? "s" : ""} here differ from the defaults
+                  </span>
+                  <button className="link-btn" onClick={() => setConfirmReset(tab as SectionKey)}>
+                    Reset {current.label}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          {confirmReset && (
+            <ConfirmModal
+              title={`Reset ${TABS.find((x) => x.key === confirmReset)!.label}?`}
+              message={`${changedKeys(settings, confirmReset).length} setting(s) go back to their defaults${confirmReset === "controls" && changedKeys(settings, "controls").includes("keyBindings") ? ", including your custom key bindings" : ""}. Saved profiles are kept.`}
+              confirmLabel="Reset"
+              onConfirm={() => onChange({ ...settings, ...resetPatch(settings, confirmReset) })}
+              onClose={() => setConfirmReset(null)}
+            />
           )}
         </div>
         </div>

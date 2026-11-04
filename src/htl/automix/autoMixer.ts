@@ -1,5 +1,5 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
-import { foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
+import { beatTimeOffset, foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
 import type { TrackMeta } from "../library/types";
 import { bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
@@ -289,6 +289,7 @@ export class AutoMixer {
   private holdLoop: DeckId | null = null; // deck currently held in a loop-extend, if any
   private stutterFired = false; // the showy one-bar stutter fires once per transition
   private unlocked = false; // this transition's pair cannot be beat-matched (caps.lock false)
+  private fineTimer: ReturnType<typeof setInterval> | null = null; // the 16 ms loop around a moment
   private incPending = false; // unmatched pair: the incoming starts at the cut, not at mix start
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
   // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
@@ -441,6 +442,7 @@ export class AutoMixer {
     this.useStems = false;
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
+    this.stopFine();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1716,20 +1718,29 @@ export class AutoMixer {
       return;
     }
 
-    // Progress on wall-clock PLAYING time, so jogging/scratching the deck can't
-    // scramble the fade. Pauses simply freeze it.
-    if (live.playing) this.mixElapsed += dt;
+    // Progress in the LIVE TRACK'S time while it plays (elapsed × its tempo), so a jog or a scratch
+    // cannot scramble the fade and a pause freezes it — and so bar k of the transition IS bar k of
+    // the music. It counted wall seconds against a length measured in track seconds: under the
+    // tempo glide a 32-bar blend at +5 % ran ~1.6 bars ahead of the phrase it was written for.
+    if (live.playing) this.mixElapsed += dt * (live.rate > 0 ? live.rate : 1);
     const p = clamp(this.mixElapsed / Math.max(0.001, this.barsSeconds), 0, 1);
+    const cutK = cutBar(this.plan.style, this.plan.bars);
+    const cutFrac = cutK / Math.max(1, this.plan.bars);
+    const cutDone = this.atBar(live, cutK, p);
 
     // AN UNMATCHED PAIR STARTS THE INCOMING AT THE CUT, on the one — not at the top of the
     // transition, where it would run unsynced under the outgoing (muted, but out of phase with the
     // downbeat it is meant to land on).
-    if (this.incPending && p >= cutPoint(this.plan.style, this.plan.bars)) {
+    if (this.incPending && cutDone) {
       this.incPending = false;
       inc.play();
     }
     const liveSign = this.liveId === "A" ? -1 : 1;
-    const x = faderX(this.plan.style, p, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
+    // A cut moves the fader at the BAR LINE (atBar: the live track's own downbeat), not when the
+    // progress fraction happens to cross it on a 150 ms tick.
+    const steps = this.unlocked || this.plan.style === "cut";
+    const px = steps ? (cutDone ? Math.max(p, cutFrac) : Math.min(p, cutFrac - 1e-6)) : p;
+    const x = faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
     const cfv = lerp(liveSign, -liveSign, x);
     this.deps.applyCrossfade(cfv);
     this.lastXfade = cfv;
@@ -1743,10 +1754,9 @@ export class AutoMixer {
     // the transition started.
     this.raceStems(live, inc, idle, p);
 
-    const swapStart = this.plan.style === "cut" ? 0 : this.plan.bassSwapBar / Math.max(1, this.plan.bars);
-    // One BEAT, starting on the swap bar's downbeat (was a whole bar): a DJ swaps the bass on the one.
-    const swapSpan = 1 / Math.max(1, this.plan.bars * 4);
-    const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
+    // The bass swap: one BEAT from the swap bar's downbeat, measured on the live track's playhead
+    // (so the fine loop draws it smoothly, on the beat) — see swapProgress.
+    const s = this.swapProgress(live, p);
     if (this.useStems) {
       const raw = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
       const xg = crossfadeGains(cfv);
@@ -1780,12 +1790,12 @@ export class AutoMixer {
       // tempos do NOT agree, which is exactly when a beatmatched blend is the wrong idea.
       const rev = this.borrowedFx?.saved.find((x) => x.device.kind === "reverb")?.device;
       const wet = clamp((p - 0.1) / 0.5, 0, 1);
-      rev?.setParam("mix", this.unlocked && p >= cutPoint("washOut", this.plan.bars) ? 1 : wet * 0.8);
+      rev?.setParam("mix", this.unlocked && cutDone ? 1 : wet * 0.8);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setFilter(lerp(0, 0.7, wet)); // the dry body thins as the wet swells
       // A freeze on the tail turns the last swell into a pad the incoming walks in over — thrown
       // ON THE DOWNBEAT of the last two bars, not at whatever fraction happens to be near it.
-      if (barsLeft(p, this.plan.bars) <= 2) rev?.setParam("freeze", 1);
+      if (this.atBar(live, this.freezeBar(), p)) rev?.setParam("freeze", 1);
     } else if (this.plan.style === "gateChop") {
       // THE GATE CHOP. The outgoing is cut into tempo-synced slices that get deeper as it leaves,
       // so it stops sounding like a track being faded and starts sounding like a rhythmic device
@@ -1812,19 +1822,19 @@ export class AutoMixer {
       // dry level away and let the wet tail carry.
       const wet = clamp((p - 0.25) / 0.45, 0, 1);
       const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
-      dly?.setParam("mix", this.unlocked && p >= cutPoint("echoOut", this.plan.bars) ? 1 : wet * 0.75);
+      dly?.setParam("mix", this.unlocked && cutDone ? 1 : wet * 0.75);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setEqHigh(lerp(0, -6, wet));
       live.setFilter(lerp(0, 0.5, wet));
       // Freeze the repeats at the end: the outgoing is gone but its last phrase keeps ringing over
       // the incoming, which is the whole point of throwing it in the first place. On the downbeat
       // of the last two bars — a delay freezing off the grid smears the very thing it captured.
-      if (barsLeft(p, this.plan.bars) <= 2) dly?.setParam("freeze", 1);
+      if (this.atBar(live, this.freezeBar(), p)) dly?.setParam("freeze", 1);
     } else if (this.plan.style === "spinOut") {
       // THE SPIN OUT. A clash that no blend can fix, made deliberate: the outgoing keeps its full
       // body right up to the last bar and is then spun down (fired once, at the trigger point) as
       // the incoming lands on its "1". Everything before that is just holding steady.
-      if (!this.spinFired && p >= 0.72) {
+      if (!this.spinFired && cutDone) {
         this.spinFired = true;
         live.spinback();
       }
@@ -1865,7 +1875,96 @@ export class AutoMixer {
     // Done when the ramp finishes, the outgoing track runs out, or the user kills
     // the outgoing deck (a deliberate "drop the old track" move → finish on incoming).
     // (A hand on the outgoing platter is not that — see playingOrHeld.)
-    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !playingOrHeld(live)) this.settle();
+    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !playingOrHeld(live)) {
+      this.settle();
+      return;
+    }
+    this.updateFine(live);
+  }
+
+  // ── THE AUDIO CLOCK ────────────────────────────────────────────────────────────────────────────
+  //
+  // The mixer ticks every 150 ms — a third of a beat at 128 BPM. Every DISCRETE moment of a
+  // transition (the bass swap, a cut, a freeze, a spinback) used to wait for the first tick past
+  // its fraction of the progress, so "on the one" meant up to a 16th note late, every time. Now
+  // each moment is a BAR LINE of the live track (its own beat grid, counted from the mix-out
+  // downbeat), tested against the playhead — which reads the AudioContext clock — and for the
+  // ~third of a second around each one the mixer redraws every 16 ms. The moment lands within a
+  // frame of the beat; the rest of the transition costs what it always did.
+
+  /** The live track's position of the k-th bar line after the mix-out downbeat. Null without a grid. */
+  private barPos(live: Deck, k: number): number | null {
+    const g = live.beatgrid;
+    if (!g?.beats?.length || this.mixOutTime == null) return null;
+    // +10 ms: inside the downbeat's own interval, so float32 grid storage cannot read the beat
+    // before it as "at or before" (beatTimeOffset counts from the beat at-or-before its anchor).
+    return beatTimeOffset(g, this.mixOutTime + 0.01, Math.max(0, k) * BEATS_PER_BAR);
+  }
+
+  /** Has the live track reached the k-th bar line? Without a grid, the progress fraction decides. */
+  private atBar(live: Deck, k: number, p: number): boolean {
+    const pos = this.barPos(live, k);
+    if (pos == null || !this.plan) return p >= k / Math.max(1, this.plan?.bars ?? 1);
+    return live.position() >= pos - 0.004;
+  }
+
+  /** The bar an echo/wash freezes on: the cut for an unmatched pair, else the last two bars. */
+  private freezeBar(): number {
+    if (!this.plan) return 0;
+    return this.unlocked ? cutBar(this.plan.style, this.plan.bars) : Math.max(0, this.plan.bars - 2);
+  }
+
+  /** The bass swap's progress 0..1: one beat from the swap bar's downbeat, on the playhead. */
+  private swapProgress(live: Deck, p: number): number {
+    if (!this.plan) return 0;
+    const k = this.plan.style === "cut" ? 0 : this.plan.bassSwapBar;
+    const start = this.barPos(live, k);
+    const g = live.beatgrid;
+    if (start == null || !g) {
+      const swapStart = k / Math.max(1, this.plan.bars);
+      return clamp((p - swapStart) / Math.max(0.001, 1 / Math.max(1, this.plan.bars * 4)), 0, 1);
+    }
+    const beat = beatTimeOffset(g, start + 0.01, 1) - start;
+    return clamp((live.position() - start) / Math.max(0.05, beat), 0, 1);
+  }
+
+  /** The bar lines this transition does something exact on. */
+  private moments(): number[] {
+    if (!this.plan) return [];
+    const out: number[] = [];
+    const style = this.plan.style;
+    if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
+    if (this.unlocked || style === "cut" || style === "spinOut") out.push(cutBar(style, this.plan.bars));
+    if (style === "echoOut" || style === "washOut") out.push(this.freezeBar());
+    return out;
+  }
+
+  /** Run the 16 ms loop while any moment is within FINE_AHEAD_S ahead (or its beat is still being
+   *  drawn), and stop it otherwise. */
+  private updateFine(live: Deck): void {
+    const rate = Math.max(0.25, live.effectiveRate || live.rate || 1);
+    const g = live.beatgrid;
+    const now = live.position();
+    let near = false;
+    for (const k of this.moments()) {
+      const pos = this.barPos(live, k);
+      if (pos == null) continue;
+      const beat = g ? beatTimeOffset(g, pos + 0.01, 1) - pos : 0.5;
+      const until = (pos - now) / rate;
+      if (until <= FINE_AHEAD_S && until >= -(beat / rate) - 0.05) near = true;
+    }
+    if (near && !this.fineTimer) {
+      this.fineTimer = setInterval(() => {
+        if (!this.enabled || this.phase !== "mixing" || this.ticking) return;
+        this.tickMixing(0); // dt 0: the continuous ramps hold; the moments read the playhead
+        this.emit(false);
+      }, FINE_MS);
+    } else if (!near) this.stopFine();
+  }
+
+  private stopFine(): void {
+    if (this.fineTimer) clearInterval(this.fineTimer);
+    this.fineTimer = null;
   }
 
   // ── THE INCOMING HALF OF THE TRANSITION ──────────────────────────────────────────────────────
@@ -1901,6 +2000,7 @@ export class AutoMixer {
     this.useStems = false;
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
+    this.stopFine();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1970,6 +2070,7 @@ export class AutoMixer {
     this.useStems = false;
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
+    this.stopFine();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -2321,10 +2422,22 @@ export function stemBlend(
  *  downbeat and the fader moves only then. Echo/wash cut half-way (two bars of throw, two of tail
  *  over the new track); the spin when the spinback fires; a drop or a cut on the last bar. */
 export function cutPoint(style: TransitionStyle, bars: number): number {
-  if (style === "echoOut" || style === "washOut") return 0.5;
-  if (style === "spinOut") return 0.72;
-  return bars > 1 ? 1 - 1 / bars : 0.75;
+  return cutBar(style, bars) / Math.max(1, bars);
 }
+
+/** The BAR (counted from the mix-out downbeat) an unmatched pair's cut lands on — and a locked
+ *  cut's, and the spinback's. Echo/wash half-way; everything else on the last bar's downbeat (the
+ *  spinback used to fire at 72 %, which is no bar line at all). */
+export function cutBar(style: TransitionStyle, bars: number): number {
+  const b = Math.max(1, bars);
+  if (style === "echoOut" || style === "washOut") return Math.max(1, Math.round(b / 2));
+  return b > 1 ? b - 1 : 0;
+}
+
+/** How far ahead (s) a discrete moment switches the mixer to its fine 16 ms render loop, and how
+ *  long after it the loop keeps going (a one-beat bass swap has to be drawn all the way through). */
+const FINE_AHEAD_S = 0.35;
+const FINE_MS = 16;
 
 const smooth = (x: number) => {
   const t = clamp(x, 0, 1);

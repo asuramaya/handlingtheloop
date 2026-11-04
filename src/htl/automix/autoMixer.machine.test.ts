@@ -1653,3 +1653,51 @@ describe("AutoMixer machine — a pair too far apart to beat-match", () => {
     expect(r.phase).not.toBe("manual"); // a deliberately stopped incoming is not a user stop
   });
 });
+
+// ── the audio clock (2026-11-04): discrete moments are BAR LINES of the live track, read off its
+// playhead, not fractions of a progress counter polled every 150 ms ──
+describe("AutoMixer machine — moments land on the live track's bar lines", () => {
+  async function toMixing(r: Rig) {
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    r.autoAdvance = false;
+  }
+
+  test("an unmatched pair's cut fires when the PLAYHEAD reaches the bar line, whatever the counter says", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    await toMixing(r);
+    const st = r.mixer.getStatus();
+    const bar = (4 * 60) / 88;
+    const plan = st.plan!;
+    const k = plan.style === "echoOut" || plan.style === "washOut" ? 2 : 3;
+    const line = st.mixOutTime! + k * bar;
+    r.setPos("A", line - 0.03);
+    await r.tick(1);
+    expect(r.engine.B.playing).toBe(false); // 30 ms early: not yet
+    r.setPos("A", line + 0.002);
+    await r.tick(1); // 1 ms of counter: the progress fraction has barely moved
+    expect(r.engine.B.playing).toBe(true); // …but the bar line is here, so the new track is in
+  });
+
+  test("progress counts the live track's own time (tempo), so bar k of the blend is bar k of the music", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 122, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    await toMixing(r);
+    const p0 = r.mixer.getStatus().mixProgress ?? 0;
+    r.engine.A.rate = 1.1; // the deck running 10 % fast
+    for (let i = 0; i < 10; i++) await r.tick(500);
+    const p1 = r.mixer.getStatus().mixProgress ?? 0;
+    const bars = r.mixer.getStatus().plan!.bars;
+    const barsSeconds = (bars * 4 * 60) / 120;
+    expect(p1 - p0).toBeCloseTo((5 * 1.1) / barsSeconds, 3); // 5 s of wall clock = 5.5 s of track
+  });
+});

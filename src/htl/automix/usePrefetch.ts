@@ -5,6 +5,7 @@ import { fetchFeaturesByIsrc, fetchYouTubeAudio, identifyTrack, postAnalysis } f
 import { fingerprintBuffer } from "../fingerprint";
 import type { TrackMeta } from "../library/types";
 import type { MixQueue } from "./queue";
+import { whenGpuClear } from "../stems/gpuQueue";
 
 // Background pre-compute for the auto-mix queue: quietly fetch + decode + analyze the
 // NEXT couple of queued tracks that have no key/BPM yet, so harmonic matching engages
@@ -91,14 +92,25 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
         idTried.current.add(videoId);
         if (!job.full) return;
 
+        // ★ NOT DURING A TRANSITION. Everything below is heavy MAIN-THREAD work — decoding a whole
+        // track, a 2-minute chromaprint (~250 ms in one block, measured in a real AUTO mix), a full
+        // analysis — and this loop used to run it whenever a row was due, mid-blend included: one of
+        // the lag spikes at the time of auto mixing (operator, 2026-11-04). AUTO holds the quiet
+        // window from cueing to settle; the prefetch waits it out like stem separation already does.
+        await whenGpuClear();
+        if (cancelled) return;
         // 3) Novel track: decode once. (Also warms the deck load + shares to D1.)
         const data = await fetchYouTubeAudio(videoId, undefined, ctrl.signal);
+        if (cancelled) return;
+        await whenGpuClear(); // the download can outlast the gap between two transitions
         if (cancelled) return;
         const buffer = await decodeAudio(ctx, data);
         if (cancelled) return;
 
         // 4) Fingerprint → AcoustID → ISRC (the global id), when not yet identified.
         if (!isrc && probe?.needsFingerprint !== false) {
+          await whenGpuClear();
+          if (cancelled) return;
           const fp = await fingerprintBuffer(buffer);
           if (!cancelled) {
             const id = await identifyTrack(videoId, fp, Math.round(buffer.duration));
@@ -114,6 +126,8 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
         }
 
         // 5) Fallback: local analysis for key/BPM (and keep the ISRC if we got one).
+        await whenGpuClear();
+        if (cancelled) return;
         const analysis = await analyzeTrackAsync(buffer);
         if (cancelled) return;
         setCachedTrack(videoId, { buffer, analysis });

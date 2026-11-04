@@ -2,6 +2,7 @@
 // file instead of contending on App.tsx. PURE RELOCATION: the two function bodies below are
 // verbatim from App; the App spine arrives via `deps` (destructured to the original names so the
 // closures are unchanged). The type-only `../App` import is erased at build (no runtime cycle).
+import { whenGpuClear } from "@htl/stems/gpuQueue";
 // See htl-refactor-monoliths.
 import { useCallback, useRef } from "react";
 import type { MutableRefObject } from "react";
@@ -570,8 +571,14 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         }
         const stored = await getAudio(videoId);
         const data = stored ? stored.bytes : await fetchYouTubeAudio(videoId, () => {});
+        // ★ A WARM IS SPECULATION; A TRANSITION IS NOW. The copy into IndexedDB, the decode and the
+        // stem install below are whole-track main-thread work, and a warm started while armed used to
+        // land them in the middle of the next blend (profiled: a 400 ms frame 1 s into an AUTO mix).
+        // Wait out AUTO's quiet window first, like separation already does.
+        await whenGpuClear();
         if (!stored) void putAudio(videoId, data.slice(0));
         const mix = await decodeAudio(engine.ctx, data);
+        await whenGpuClear();
         // Re-check: the decode took time, and a deck may have claimed this track meanwhile.
         if (stemJobs.current.has(key)) return;
         const job = loadStems(engine.ctx, videoId, mix, model, () => {});

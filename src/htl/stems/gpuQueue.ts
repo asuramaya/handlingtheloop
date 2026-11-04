@@ -66,6 +66,13 @@ export function gpuHeld(): boolean {
   return holds > 0;
 }
 
+/** Resolves when no hold is up — i.e. not during an AUTO transition. Exported for other
+ *  heavy background work (the queue prefetch's decode / fingerprint / analysis) that must not land
+ *  on the main thread while a mix is playing out. */
+export function whenGpuClear(): Promise<void> {
+  return whenClear();
+}
+
 function whenClear(): Promise<void> {
   if (holds <= 0) return Promise.resolve();
   return new Promise<void>((r) => waiters.push(r));

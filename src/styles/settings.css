@@ -112,14 +112,18 @@
 .settings-panel {
   /* --center-w-settings (CenterResizeHandles) — only actually consumed in "center" mode; the
      edge/bottom dock overrides below force width:100% regardless, same as before. */
-  width: clamp(var(--center-w-min, 360px), var(--center-w-settings, min(460px, 94vw)), var(--center-w-max, 1200px));
+  width: clamp(var(--center-w-min, 360px), var(--center-w-settings, min(720px, 94vw)), var(--center-w-max, 1200px));
   /* FIXED, not max-height: a max-height still SHRINKS to whatever a shorter tab's content
      needs, so switching Color (tall) → Debug (short) → MIDI (tall again) visibly resized the
      whole window every tab change — disorienting on a "center" placement, where nothing else
      on screen anchors it. A firm height means the window never moves; a short tab just leaves
      empty space below it, and a tall one scrolls inside `.settings-body` (flex:1, its own
      overflow-y) same as before. */
-  height: 50dvh;
+  /* ★ 50dvh WAS A KEYHOLE (operator, 2026-11-04: "keep working on settings overall ui and ux"): at
+     900px tall it left ~330px of list, one and a half Turntable tiles. Still FIXED (see above), but
+     most of the window: 78dvh, capped so a tall monitor does not get a 1400px column of settings.
+     The default width went 460 → 720 so, with the section list open beside it, the drawn tiles still sit two across. */
+  height: min(78dvh, 820px);
   padding: 16px 18px;
 }
 /* A keycap chip used in the help overlay + intro text. */

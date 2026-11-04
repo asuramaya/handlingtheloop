@@ -11,6 +11,7 @@ import { LoopEngine } from "./LoopEngine";
 export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
 import { pcmMark, pcmResident } from "./pcmMeter";
+import { ENGINE_RATE_MAX, ENGINE_RATE_MIN } from "./stretchWorklet";
 
 // Per-deck id for the PCM meter breadcrumbs (iOS OOM hunt) — "0"/"1" for A/B.
 let _deckMeterSeq = 0;
@@ -1510,8 +1511,8 @@ export class Deck {
   private effRate(): number {
     // A follower runs at the ANCHOR's streamed rate (folds in the host's bend + sync-trim,
     // which never cross as intents) so audio + clock stay in lockstep instead of drifting.
-    if (this._followRate != null && this._followRate > 0) return this._followRate;
-    return this._rate * (1 + this._bend) * (1 + this._syncTrim);
+    if (this._followRate != null && this._followRate > 0) return clampEngineRate(this._followRate);
+    return clampEngineRate(this._rate * (1 + this._bend) * (1 + this._syncTrim));
   }
   /** The effective sounding rate (tempo·bend·sync-trim) — the anchor publishes this in its tick
    *  so followers can match it. */
@@ -1882,7 +1883,10 @@ export class Deck {
 
   setTempo(tempoPercent: number) {
     this.clearBend(); // a deliberate tempo move supersedes any momentary bend
-    const rate = 1 + tempoPercent / 100;
+    // Clamped to what the engine can play (ENGINE_RATE_MIN): at the bottom of a ±100% fader this is
+    // 0.25, not 0, so the BPM readout and every rate reader agree with what you hear. _tempo keeps
+    // the fader's own position.
+    const rate = clampEngineRate(1 + tempoPercent / 100);
     if (this._playing) {
       this.startOffset = this.position();
       this.startedAt = this.ctx.currentTime;
@@ -3102,4 +3106,11 @@ export class Deck {
     this.running = false;
     this.stretchNode?.port.postMessage({ type: "stop", fade: Deck.FADE });
   }
+}
+
+/** The rate the clock may run at = the rate the stretch engine will actually play (its clamp).
+ *  Exported for the test. See ENGINE_RATE_MIN. */
+export function clampEngineRate(r: number): number {
+  if (!Number.isFinite(r)) return 1;
+  return Math.max(ENGINE_RATE_MIN, Math.min(ENGINE_RATE_MAX, r));
 }

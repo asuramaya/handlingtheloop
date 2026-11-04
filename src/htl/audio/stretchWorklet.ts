@@ -24,6 +24,14 @@
 // mono sum) is applied to all stems, which are mixed during overlap-add.
 //
 // Loaded via a Blob URL so it works regardless of bundler (see AudioEngine).
+/** The playback-rate range the stretch engine honours. ONE definition, used by the worklet's
+ *  clamp below AND by Deck.effRate(), so the transport clock can never run at a rate the audio is
+ *  not playing at. Operator, 2026-11-03: with the ±100% tempo range, the fader's bottom is rate 0;
+ *  the clock stopped (visuals froze) while the worklet read `0 || 1` as "no value" and played at
+ *  NORMAL speed. Between 0 and 0.25 the two also disagreed (clock slower than the audio). */
+export const ENGINE_RATE_MIN = 0.25;
+export const ENGINE_RATE_MAX = 4;
+
 export const STRETCH_WORKLET_SRC = `
 const RING = 8192;          // intermediate FIFO length (> max FS + margin)
 const RMASK = RING - 1;     // RING is a power of two
@@ -198,8 +206,10 @@ class Stretch extends AudioWorkletProcessor {
   }
   onMsg(d) {
     if (d.type === 'config') { this.applyConfig(d); return; }
-    if (d.type === 'speed') { this.speedTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
-    if (d.type === 'pitch') { this.pitchTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
+    // A missing/NaN value means "no change → 1"; a real 0 is the slowest rate, NOT 1 (\`0 || 1\`
+    // was exactly the full-speed-at-the-bottom-of-the-fader bug).
+    if (d.type === 'speed') { const v = Number.isFinite(d.value) ? d.value : 1; this.speedTarget = Math.max(${ENGINE_RATE_MIN}, Math.min(${ENGINE_RATE_MAX}, v)); return; }
+    if (d.type === 'pitch') { const v = Number.isFinite(d.value) ? d.value : 1; this.pitchTarget = Math.max(${ENGINE_RATE_MIN}, Math.min(${ENGINE_RATE_MAX}, v)); return; }
     if (d.type === 'loadPcm') {
       // gL/gR are one typed array per group (1 = mix, 4 = stems), transferred. Mobile
       // sends Int16Arrays (half the memory → fits a phone) rescaled by INV16 at output;

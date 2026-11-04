@@ -83,6 +83,8 @@ export class MidiEngine {
   private msb = new Map<number, number>(); // cc14 MSB store, keyed by addr(status,msbData)
   private lsb = new Map<number, number>();
   private shiftHeld: Record<DeckId, boolean> = { A: false, B: false }; // each deck's SHIFT button
+  private selectorTimer: ReturnType<typeof setTimeout> | null = null; // pending browse-press HOLD (see dispatchNote)
+  static readonly SELECTOR_HOLD_MS = 500;
   private keepAlive: ReturnType<typeof setInterval> | null = null;
   private learnArmed = false;
   private lastFb: Partial<Record<DeckId, DeckFeedback>> = {};
@@ -431,7 +433,26 @@ export class MidiEngine {
       this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank });
       return;
     }
-    if (!pressed) return; // the remaining note controls (focus / beatjump / load / selector) act on press only
+    // ★ THE BROWSE ENCODER'S PRESS HAS A HOLD (operator, 2026-11-03: board-only library navigation
+    // had "no way to exit it", "maybe a hold or double press?"). A tap still acts on the press, as
+    // before (tracks ↔ sources). Held for SELECTOR_HOLD_MS it also sends selectorHold, which closes
+    // the library. The release only cancels the pending hold, so a controller that never sends a
+    // note-off would turn every press into a hold: the FLX4 does send one (note-on, velocity 0).
+    if (c.kind === "selector") {
+      if (pressed) {
+        this.opts.onEvent({ type: "selector" });
+        if (this.selectorTimer != null) clearTimeout(this.selectorTimer);
+        this.selectorTimer = setTimeout(() => {
+          this.selectorTimer = null;
+          this.opts.onEvent({ type: "selectorHold" });
+        }, MidiEngine.SELECTOR_HOLD_MS);
+      } else if (this.selectorTimer != null) {
+        clearTimeout(this.selectorTimer);
+        this.selectorTimer = null;
+      }
+      return;
+    }
+    if (!pressed) return; // the remaining note controls (focus / beatjump / load) act on press only
     if (c.kind === "focus") {
       this.opts.onEvent({ type: "focus", deck: c.deck });
       return;
@@ -440,8 +461,6 @@ export class MidiEngine {
       this.opts.onEvent({ type: "beatjump", deck: b.deck, beats: c.beats, shift });
     } else if (c.kind === "load" && b.deck) {
       this.opts.onEvent({ type: "load", deck: b.deck });
-    } else if (c.kind === "selector") {
-      this.opts.onEvent({ type: "selector" });
     }
   }
 

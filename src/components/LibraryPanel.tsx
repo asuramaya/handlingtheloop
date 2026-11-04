@@ -174,6 +174,19 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       /* ignore */
     }
   }, [navOpen]);
+  // ★ THE ENCODER'S SOURCE MODE SHOWS THE SOURCES. Pressing the browse encoder moves the cursor to
+  // the sidebar, but a collapsed sidebar (a phone's default, or one the user hid) left that mode
+  // invisible: the encoder now changed sources nobody could see. Entering source mode opens the
+  // sidebar; leaving it on a narrow library (where the sidebar covers the tracks) closes it again,
+  // the same rule as a tap on a source (see the aside's onClick). Transitions only, never on mount.
+  const prevSourceNav = useRef(sourceNav);
+  const libDivRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (prevSourceNav.current === sourceNav) return;
+    prevSourceNav.current = sourceNav;
+    if (sourceNav) setNavOpen(true);
+    else if ((libDivRef.current?.clientWidth ?? 9999) < 640) setNavOpen(false);
+  }, [sourceNav]);
   // Collapsible sidebar sections (PLAYLISTS / MY YOUTUBE / MY SPOTIFY / MY TIDAL) — the
   // header row toggles; persisted so a tidied sidebar stays tidied across reloads.
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
@@ -387,13 +400,29 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       browse: (delta: number) => {
         onOpenChange(true); // a spin on a closed library opens it so the cursor is visible
         if (sourceNav) {
-          // Cycle the source list and apply it live; the main table re-mounts under the cursor.
-          const i = browseSources.findIndex((s) => sameView(s, view));
-          const next = Math.max(0, Math.min(browseSources.length - 1, (i < 0 ? 0 : i) + (delta > 0 ? 1 : -1)));
-          setSearchView(false);
+          // Cycle the sources IN SIDEBAR ORDER and apply each live; the main table re-mounts under
+          // the cursor.
+          // ★ QUEUE AND SEARCH ARE IN THE CYCLE (operator, 2026-11-03: "collection wont scrol
+          // backwards"). The cycle used to start AT Collection, so turning back from it clamped and
+          // did nothing, though the sidebar shows Queue and Search above it; and from either of
+          // those the first turn jumped to Collection whichever way it went.
+          type Src = "queue" | "search" | View;
+          const order: Src[] = [...(auto ? (["queue"] as Src[]) : []), "search", ...browseSources];
+          const cur: Src = auto?.queueOpen ? "queue" : searchView ? "search" : view;
+          const i = order.findIndex((s) => (s === "queue" || s === "search" || cur === "queue" || cur === "search" ? s === cur : sameView(s as View, cur as View)));
+          const next = order[Math.max(0, Math.min(order.length - 1, (i < 0 ? 0 : i) + (delta > 0 ? 1 : -1)))];
           setSyncOpen(false);
-          if (auto?.queueOpen) auto.onToggleQueue();
-          setView(browseSources[next]);
+          if (next === "queue") {
+            setSearchView(false);
+            if (!auto?.queueOpen) auto?.onToggleQueue();
+          } else if (next === "search") {
+            if (auto?.queueOpen) auto.onToggleQueue();
+            setSearchView(true);
+          } else {
+            if (auto?.queueOpen) auto.onToggleQueue();
+            setSearchView(false);
+            setView(next);
+          }
         } else {
           activeTableRef.current?.moveCursor(delta);
         }
@@ -408,7 +437,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         setSourceNav(on);
       },
     }),
-    [onOpenChange, sourceNav, browseSources, view, auto],
+    [onOpenChange, sourceNav, browseSources, view, auto, searchView],
   );
 
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -680,7 +709,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
               {/* No ✕: the Library is a dock you close with its chin button (this matches
                   Settings/Profile/Session + the embedded tabs — exit by opening another). */}
             </div>
-            <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
+            <div ref={libDivRef} className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
             <>
             <aside

@@ -122,6 +122,7 @@ export type MidiEvent =
   | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform
   | { type: "load"; deck: DeckId }
   | { type: "selector" } // browse-encoder press
+  | { type: "selectorHold" } // browse-encoder HELD (~0.5 s): close the library
   | { type: "library" }; // toggle the library dock open/closed (gamepad Guide → crate-dig mode)
 
 // Per-deck button state used to drive LED feedback.

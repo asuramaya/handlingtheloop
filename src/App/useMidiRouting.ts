@@ -37,6 +37,7 @@ export interface MidiRoutingDeps {
   handlersRef: MutableRefObject<Record<string, (deck: Deck, id: DeckId, s: boolean) => void>>;
   libRef: RefObject<LibraryHandle>;
   toggleLibrary: () => void;
+  closeLibrary: () => void;
   lockedRef: MutableRefObject<boolean>;
   micVolSetRef: MutableRefObject<((v: number) => void) | null>;
   xfaderEnabledRef: MutableRefObject<boolean>;
@@ -77,6 +78,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     handlersRef,
     libRef,
     toggleLibrary,
+    closeLibrary,
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,
@@ -168,7 +170,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
       if (lockedRef.current) return; // a watch-only participant can't drive the decks
       // A stepped-up listener may drive ONLY their own deck — block control aimed at the
       // other one (navigation/zoom stay free). A deck-less control event targets `focused`.
-      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector" || ev.type === "library";
+      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector" || ev.type === "selectorHold" || ev.type === "library";
       if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
@@ -667,6 +669,13 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // open/close the library (the chin's Library button / Alt already do that).
           libRef.current?.toggleSourceNav();
           break;
+        case "selectorHold":
+          // HOLD the browse encoder → close the library and hand the board back to the decks. The
+          // press that started the hold already flipped tracks↔sources; reset that so the library
+          // reopens on the track list, where the next spin is expected to land.
+          libRef.current?.setSourceNav(false);
+          closeLibrary();
+          break;
         case "browse":
           // Browse encoder → step the library row cursor (opens the panel if it was shut).
           libRef.current?.browse(ev.delta);
@@ -683,7 +692,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, ensureSpinTimer, checkSpinFollow],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, closeLibrary, ensureSpinTimer, checkSpinFollow],
   );
 
   return { onMidiEvent };

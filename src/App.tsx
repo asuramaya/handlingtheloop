@@ -2817,6 +2817,7 @@ function AppBody() {
     handlersRef,
     libRef,
     toggleLibrary: toggleLib,
+    closeLibrary: () => setLibOpen(false),
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,

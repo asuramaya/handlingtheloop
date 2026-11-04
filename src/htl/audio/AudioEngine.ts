@@ -1,5 +1,6 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, localTempoDev, nearestBeat, piTrim, slaveFoldTarget, smartKeyShift } from "../analysis/analyze";
 import { phaseAlignedStart } from "./syncAlign";
+import { SYNC_INTEGRAL_K, SYNC_PHASE_K, SYNC_TICK_MS } from "./syncLoop";
 import { trace, event } from "../debug/trace";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { cachedBytes } from "./trackCache";
@@ -1071,10 +1072,10 @@ export class AudioEngine {
   private slaveId: DeckId | null = null;
   private propagating = false; // guards the master→slave tempo echo from recursing
   private syncCorrectTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
+  private static readonly SYNC_TICK_MS = SYNC_TICK_MS; // phase-lock poll period (syncLoop.ts: shared with Settings ▸ Sync pull)
   /** Default P-gain: rate trim per beat of phase error (gentle, ~8 s time constant). Overridable —
    *  see settings.syncPhaseGain and setSyncPhaseGain; the measurement is recorded beside the setting. */
-  private static readonly SYNC_PHASE_K = 0.06;
+  private static readonly SYNC_PHASE_K = SYNC_PHASE_K;
   private syncPhaseK = AudioEngine.SYNC_PHASE_K;
   /** How hard SYNC pulls a deck back onto the beat. Clamped to a range that is measured, not
    *  guessed: below the shipped value the loop is slower than the eleven seconds already reported as
@@ -1082,7 +1083,7 @@ export class AudioEngine {
   setSyncPhaseGain(k: number) {
     this.syncPhaseK = Number.isFinite(k) ? Math.max(0.02, Math.min(0.3, k)) : AudioEngine.SYNC_PHASE_K;
   }
-  private static readonly SYNC_INTEGRAL_K = 0.003; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
+  private static readonly SYNC_INTEGRAL_K = SYNC_INTEGRAL_K; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
   private static readonly SYNC_FF_SMOOTH = 0.25; // one-pole smoothing on the rubato feed-forward (~0.28 s @ 80 ms tick) so the rate never STEPS as the beat window advances
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
   private syncFF = 0; // smoothed rubato feed-forward (master local-tempo dev − slave's); reset with the integral

@@ -5,6 +5,7 @@
 // this follows it.
 import { brakeFriction, platterDrag, platterTaus, servoStep } from "@htl/audio/JogEngine";
 import { RING_BEND, stepBend } from "@htl/audio/bendPhysics";
+import { simulateSyncRecovery, SYNC_TRIM_MAX } from "@htl/audio/syncLoop";
 
 export interface PlatterKnobs {
   mass: number; // jogWeight
@@ -13,7 +14,7 @@ export interface PlatterKnobs {
   backSpin: number; // backSpinLength
 }
 
-export type CurveKey = "play" | "pause" | "letGo" | "backSpin" | "ring";
+export type CurveKey = "play" | "pause" | "letGo" | "backSpin" | "ring" | "sync";
 export interface Curve {
   key: CurveKey;
   title: string;
@@ -143,3 +144,31 @@ const RING_SCALE = (() => {
   }
   return m * 1.1;
 })();
+
+/** Seconds shown on the Sync pull tile, and the jump it recovers from (beats). */
+export const SYNC_SPAN_S = 12;
+export const SYNC_JUMP_BEATS = 0.25;
+
+/** Settings ▸ Turntable ▸ Sync pull: the SYNC phase-lock pulling a pair back from a quarter-beat jump
+ *  (a drift, a nudge), by the engine's own loop (syncLoop.ts). Solid: the phase error in beats.
+ *  Dashed: the speed bend it costs, drawn so the clamp is the height of the jump; the readout gives
+ *  it in %. */
+export function syncCurve(kp: number): Curve & { settleS: number; peakTrim: number } {
+  const r = simulateSyncRecovery(kp, SYNC_JUMP_BEATS, 128, SYNC_SPAN_S);
+  const step = Math.max(1, Math.floor(r.err.length / 120));
+  const pick = (a: number[]) => a.filter((_, i) => i % step === 0);
+  return {
+    key: "sync",
+    title: "Sync pull",
+    lines: [
+      { label: "phase", v: pick(r.err) },
+      { label: "bend", v: pick(r.trim.map((t) => (Math.abs(t) / SYNC_TRIM_MAX) * SYNC_JUMP_BEATS)) },
+    ],
+    yMin: -0.02,
+    yMax: SYNC_JUMP_BEATS + 0.02,
+    rest: 0,
+    unit: "%",
+    settleS: r.settleS,
+    peakTrim: r.peakTrim,
+  };
+}

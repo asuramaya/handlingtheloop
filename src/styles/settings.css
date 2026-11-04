@@ -2679,3 +2679,9 @@
 .search-group-body .wave-preview {
   position: static;
 }
+
+/* A single drawn tile in a card (Tempo ▸ Sync pull): full width, not half a grid. */
+.tt-tiles.tt-tiles-one {
+  grid-template-columns: 1fr;
+  margin-bottom: 4px;
+}

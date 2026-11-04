@@ -17,7 +17,7 @@ import { STRETCH_PRESETS, type Settings, type StretchEngine, type StretchQuality
 import { InfoDot } from "./InfoDot";
 import { Slider } from "./Slider";
 import { ToggleRow } from "./ControlsTab";
-import { peak, platterCurves, ringCurve, settleTime, SPAN_S, type Curve } from "./platterCurves";
+import { peak, platterCurves, ringCurve, settleTime, SPAN_S, SYNC_JUMP_BEATS, SYNC_SPAN_S, syncCurve, type Curve } from "./platterCurves";
 
 // An instant gesture still lands one simulation step later (DT ≈ 8 ms): that is "instant", not
 // "0.01s" — the readout rounds a single step away.
@@ -108,6 +108,7 @@ export function TurntableTab({ settings, set }: { settings: Settings; set: (patc
     [settings.jogWeight, settings.vinylStartTime, settings.vinylBrakeTime, settings.backSpinLength],
   );
   const ring = useMemo(() => ringCurve(settings.jogBendStrength), [settings.jogBendStrength]);
+  const sync = useMemo(() => syncCurve(settings.syncPhaseGain), [settings.syncPhaseGain]);
   const [play, pause, letGo, back] = curves;
   const knob = (label: string, key: keyof Settings, min = 0, max = 1, step = 0.01): Knob => ({
     label,
@@ -236,16 +237,21 @@ export function TurntableTab({ settings, set }: { settings: Settings; set: (patc
             </span>
           </span>
         </div>
-        <Slider
-          label="Sync pull"
-          info="How hard SYNC pulls a following deck back onto the beat after it drifts or you nudge it. Gentle is inaudible but slow (a seek takes about eleven seconds to come fully back); tight re-locks in a fraction of that, at the cost of a briefly larger tempo trim."
-          hint={settings.syncPhaseGain <= 0.07 ? "gentle" : settings.syncPhaseGain >= 0.15 ? "tight" : "balanced"}
-          value={settings.syncPhaseGain}
-          onChange={(v) => set({ syncPhaseGain: v })}
-          min={0.02}
-          max={0.3}
-          step={0.02}
-        />
+        {/* ★ DRAWN, like the platter (operator, 2026-11-03: item 7). The curve is the engine's own
+            phase-lock loop (syncLoop.ts) pulling a pair back from a quarter-beat jump. */}
+        <div className="tt-tiles tt-tiles-one">
+          <Tile
+            c={sync}
+            readout={
+              <>
+                <span className="trace-key">{sync.settleS === Infinity ? `> ${SYNC_SPAN_S} s` : `back in ${sync.settleS.toFixed(1)} s`}</span>
+                <span className="trace-key alt">bend {(sync.peakTrim * 100).toFixed(1)}%</span>
+              </>
+            }
+            knob={knob("Sync pull", "syncPhaseGain", 0.02, 0.3, 0.02)}
+            info={`How hard SYNC pulls a following deck back onto the beat when it drifts or is nudged. Solid line: a pair a quarter of a beat out (about ${Math.round((SYNC_JUMP_BEATS * 60000) / 128)} ms at 128 bpm) coming back over ${SYNC_SPAN_S} seconds. Dashed: how far the follower's speed is bent to do it; with key-lock off that bend is a pitch change you can hear. Left is gentle and slow, right is tight and quick. A synced deck already STARTS in phase (play, cue jumps), so this is about drift and nudges.`}
+          />
+        </div>
         <button className="link-btn tt-more" onClick={() => setShowTempoDetail((o) => !o)} aria-expanded={showTempoDetail}>
           {showTempoDetail ? "Fewer options" : "More options"}
         </button>

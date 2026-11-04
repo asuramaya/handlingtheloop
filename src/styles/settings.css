@@ -2661,18 +2661,25 @@
 
 /* Interface ▸ live waveform preview (WaveformPreview). Sticky inside the settings scroller so
    it stays visible while the swatches below it are edited. */
+/* ★ PINNED AS A HEADER, NOT FLOATING OVER THE LIST (operator, 2026-11-04: "lets fix this scroll
+   bug"). It was a card-coloured band with no edge: cards slid under it and showed sliced through,
+   which read as broken rendering. Now: the PANEL's own colour (it matched nothing before:
+   --panel-2 against the panel's --panel), a hairline + soft shadow on its bottom edge so content
+   visibly goes UNDER a header, and above every row's own stacking. */
 .wave-preview {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 5;
   margin: 0 0 12px;
-  padding: 6px 0;
-  background: var(--panel-2, #0a0a0f);
+  padding: 8px 0 10px;
+  background: var(--panel, #0b0b11);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: 0 10px 12px -10px rgba(0, 0, 0, 0.75);
 }
 .wave-preview-canvas {
   display: block;
   width: 100%;
-  height: 96px;
+  height: 80px;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }

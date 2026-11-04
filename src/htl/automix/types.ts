@@ -80,6 +80,10 @@ export interface StyleCapabilities {
   fx: boolean;
   incomingBody: boolean; // the incoming has a detected body section to cut to
   grid: boolean; // both decks have a beatgrid (needed for anything rhythmic)
+  /** The pair can be BEAT-MATCHED: tempos within BEATLOCK_MAX once octave-folded (analysis
+   *  tempoLockable). The long overlapping blends need it; without it they are two records fighting.
+   *  Optional so an older caller that never set it keeps its behaviour (undefined = lockable). */
+  lock?: boolean;
 }
 
 /** Where the queue draws its next tracks from. */

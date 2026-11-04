@@ -211,7 +211,9 @@ function stylePreference(score: number, confident: boolean): TransitionStyle[] {
 function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
   switch (style) {
     case "stemswap":
-      return caps.stems; // the only gesture that needs separation
+      return caps.stems && caps.lock !== false; // needs separation AND two rhythms that can lock
+    case "blend":
+      return caps.lock !== false; // 12-24 bars of both rhythms at once: only for a matchable pair
     case "echoOut":
     case "washOut":
       return caps.fx;

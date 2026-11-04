@@ -13,6 +13,8 @@ export {
   detectBeatgrid,
   detectKey,
   foldTempoOctave,
+  tempoLockable,
+  BEATLOCK_MAX,
   harmonicDistance,
   localTempoDev,
   piTrim,

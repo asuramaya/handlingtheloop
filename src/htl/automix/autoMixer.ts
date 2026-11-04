@@ -1,5 +1,5 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
-import { foldTempoOctave, nearestBeat } from "../analysis";
+import { foldTempoOctave, nearestBeat, tempoLockable } from "../analysis";
 import type { TrackMeta } from "../library/types";
 import { pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
@@ -1237,6 +1237,7 @@ export class AutoMixer {
       fx: !!this.findFx(liveId),
       incomingBody: !!incSections && firstBodySection(incSections) != null,
       grid: !!live.beatgrid && !!inc.beatgrid,
+      lock: tempoLockable(live.effectiveBpm ?? live.beatgrid?.bpm, inc.beatgrid?.bpm),
     };
   }
 
@@ -1589,10 +1590,16 @@ export class AutoMixer {
       inc.setEqLow(0);
     }
     tl = lap("prep", tl);
-    if (engine.syncRole(idle) !== "slave") engine.toggleSync(idle);
-    if (this.plan.keyMatch && engine.keyRole(idle) !== "slave") engine.toggleKey(idle);
+    // ★ SYNC ONLY A PAIR THAT CAN LOCK. Syncing 130 BPM under 88 played the incoming ~30 % slow for
+    // the whole blend and snapped it at settle; the glide dragged the outgoing the other way. An
+    // unmatchable pair keeps both tempos and gets a gesture that does not need a beat-match
+    // (resolveStyle never offers blend / stemswap without caps.lock).
+    if (caps.lock) {
+      if (engine.syncRole(idle) !== "slave") engine.toggleSync(idle);
+      if (this.plan.keyMatch && engine.keyRole(idle) !== "slave") engine.toggleKey(idle);
+    }
     tl = lap("sync", tl);
-    this.beginGlide(live, inc);
+    if (caps.lock) this.beginGlide(live, inc);
     tl = lap("glide", tl);
     inc.play();
     lap("play", tl);

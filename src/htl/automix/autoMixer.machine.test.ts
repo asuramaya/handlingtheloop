@@ -1612,3 +1612,21 @@ describe("AutoMixer machine — the jog under AUTO", () => {
     expect(r.phase).toBe("mixing");
   });
 });
+
+describe("AutoMixer machine — a pair too far apart to beat-match", () => {
+  test("88 → 130 BPM: no SYNC, no tempo glide, and not a long blend", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.engine.syncRole("B")).toBe("off"); // was: slaved — B played ~30 % slow
+    expect(r.engine.commandedRamp).toBe(false); // no glide dragging A toward 130
+    const label = (r.mixer.getStatus().planLabel ?? "").toLowerCase();
+    expect(label.startsWith("blend") || label.startsWith("stem")).toBe(false);
+  });
+});

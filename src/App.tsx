@@ -2971,9 +2971,11 @@ function AppBody() {
       const v = x < -1 ? -1 : x > 1 ? 1 : x;
       setCrossfade(v);
       engine.setCrossfade(v);
+      // Not the smart fader's own move (AUTO, mostly): its next throw re-reads the decks.
+      smartFader.noteExternalCrossfade();
       if (room.controlling) room.sendIntent({ kind: "crossfade", value: v });
     },
-    [engine, room],
+    [engine, room, smartFader],
   );
   // The ON-SCREEN crossfader drag: when Smart Fader is armed it scrubs the auto-transition
   // (same as the hardware fader); otherwise it's a plain crossfade. (applyCrossfade stays pure so

@@ -509,6 +509,25 @@ export function foldTempoOctave(target: number, ref: number): number | null {
   return t;
 }
 
+/** The widest tempo move (as a fraction, after octave folding) that a beat-matched transition may
+ *  ask of a deck. Beyond it the pair is not beat-matched at all.
+ *
+ *  ★ WHY A LIMIT (operator, 2026-11-04: the smart fader "sometimes works completely against it
+ *  because it cannot sync tempo/bpm so it ends up being counter productive"). Folding alone always
+ *  finds an octave within √2, so every pair "matched": 120 → 174 morphed the outgoing down 27.5 %
+ *  to 87 BPM, 124 → 174 dragged it UP 40 %, and the incoming started 30 % slow under SYNC and
+ *  snapped to its own tempo at the end. A DJ's pitch fader is ±8 %; past ~10 % the stretch is
+ *  audible and the result is two records fighting, which is worse than an honest crossfade. */
+export const BEATLOCK_MAX = 0.1;
+
+/** Can two tempos be beat-matched musically — within BEATLOCK_MAX of each other once folded into
+ *  the same octave? False on a missing/degenerate tempo (nothing to lock to). */
+export function tempoLockable(a: number | null | undefined, b: number | null | undefined, max = BEATLOCK_MAX): boolean {
+  if (!(a && b && a > 0 && b > 0)) return false;
+  const folded = foldTempoOctave(b, a);
+  return folded != null && Math.abs(folded / a - 1) <= max;
+}
+
 /** The SYNC slave's tempo target (BPM) that keeps it beat-density-locked to a master running at
  *  `masterEff`, plus the octave `factor` (a power of 2 = target/masterEff) used to get there.
  *

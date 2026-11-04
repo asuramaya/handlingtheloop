@@ -2,9 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import type { TrackMeta } from "@htl/library";
 import { searchYouTube, fetchMeta, parseVideoId, parsePlaylistId } from "@htl/media";
 import { loadSearchState, saveSearchState } from "@htl/state";
-import { TrackTable } from "./TrackTable";
+import { TrackTable, type TrackTableHandle } from "./TrackTable";
+import type { Ref } from "react";
 
 interface ExplorerProps {
+  /** The library's handle on the visible table: the board's browse encoder and LOAD buttons reach
+   *  search results through it (without it they did nothing in Search). */
+  tableRef?: Ref<TrackTableHandle>;
   onLoad: (deckId: "A" | "B", track: TrackMeta) => void;
   onQueue?: (track: TrackMeta) => void;
   onQueueNext?: (track: TrackMeta) => void;
@@ -24,7 +28,7 @@ interface ExplorerProps {
 // there's no arbitrary-URL import, so nothing untrusted gets fetched. Results render
 // through the shared TrackTable (same look/sort/columns as the library + queue); this
 // component just owns the search request + the persisted dig session.
-export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors }: ExplorerProps) {
+export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors, tableRef }: ExplorerProps) {
   const saved = useRef(loadSearchState()).current;
   const [results, setResults] = useState<TrackMeta[]>(saved.results);
   const [searching, setSearching] = useState(false);
@@ -78,6 +82,7 @@ export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, on
 
   return (
     <TrackTable
+      ref={tableRef}
       tracks={results}
       onLoad={onLoad}
       onQueue={onQueue}

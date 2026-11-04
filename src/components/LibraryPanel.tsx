@@ -926,6 +926,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           // The auto-mix queue takes over the song-list area (embedded, not floating).
           <MixQueuePanel
             embedded
+            tableRef={activeTableRef}
             queue={auto.queue}
             status={auto.status}
             mirror={auto.mirror}
@@ -946,6 +947,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           // Search baked into the library: the Explorer (its own search bar + results)
           // takes over the content area — no separate dock anymore.
           <Explorer
+            tableRef={activeTableRef}
             onLoad={onLoad}
             onQueue={queueAdd}
             onQueueNext={queueNext}

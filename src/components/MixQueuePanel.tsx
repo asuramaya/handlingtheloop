@@ -12,7 +12,8 @@ import {
   transitionLabel,
   planTier,
 } from "@htl";
-import { TRACK_DND_MIME, TrackTable } from "./TrackTable";
+import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
+import type { Ref } from "react";
 
 // The auto-mix "up next" panel: curate the queue, see how each pair will transition,
 // and drive the auto-DJ (mix now / skip / hold). Radio mode tops itself up from the
@@ -50,6 +51,9 @@ interface Props {
   onHold: () => void;
   onClose: () => void;
   embedded?: boolean; // rendered inside the library content area (not a floater)
+  /** The library's handle on the visible table, so the board's browse encoder and LOAD buttons
+   *  work on the queue too (they reach the table through this). */
+  tableRef?: Ref<TrackTableHandle>;
 }
 
 function fmtCountdown(sec: number): string {
@@ -73,7 +77,7 @@ function TrackRow({ t }: { t: TrackMeta }) {
   );
 }
 
-export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded }: Props) {
+export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded, tableRef }: Props) {
   // `mirror` only chooses the DISPLAY source (a session renders the host's queue). Editing
   // is gated separately by `canEdit`: a controlling remote mutates the host's queue via
   // intents (routed through `edit`), so it can add/remove/move while still mirroring. Seed
@@ -237,6 +241,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         </header>
       )}
       <TrackTable
+        ref={tableRef}
         tracks={upcoming}
         onLoad={onLoad}
         deckLoaded={deckLoaded}

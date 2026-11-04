@@ -297,6 +297,16 @@ describe("isEligible", () => {
   test("accepts a genuinely new track", () => {
     expect(isEligible(t("fresh000001", { title: "Something Else" }), bans)).toBe(true);
   });
+
+  // The 19:59 "LANY - Stuck (Lyrics)" upload the radio once queued: a known length outside a song's
+  // range is rejected; an unknown one is not (provider rows often carry none).
+  test("rejects a known duration over 12 minutes or under 60 seconds, admits unknown", () => {
+    expect(isEligible(t("long0000001", { title: "LANY - Stuck (Lyrics)", duration: 1199 }), bans)).toBe(false);
+    expect(isEligible(t("short000001", { title: "a clip", duration: 45 }), bans)).toBe(false);
+    expect(isEligible(t("ok000000002", { title: "a song", duration: 215 }), bans)).toBe(true);
+    expect(isEligible(t("edge0000001", { title: "edge", duration: 720 }), bans)).toBe(true);
+    expect(isEligible(t("unknown0001", { title: "no length", duration: 0 }), bans)).toBe(true);
+  });
 });
 
 // ★ REGRESSIONS FROM A LIVE RUN. With "Teardrop" playing, the radio queued "AURORA covers Massive

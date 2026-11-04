@@ -6,7 +6,7 @@ import { analysisState, lookupAnalysis } from "../media/analysisStatus";
 import { d1EnrichTargets, isrcEnrichTargets, patchPool } from "./poolEnrich";
 import { smartSortChain, songCore } from "./mixability";
 import { type Candidate, isEligible, pickBest, radioSeeds, targetEnergy } from "./selector";
-import type { EnergyArc, MixMode, RadioContext } from "./types";
+import type { EnergyArc, MixMode, QueueItem, QueueSource, RadioContext } from "./types";
 import { trace } from "../debug/trace";
 
 // The auto-mix queue: the ordered list of tracks the AutoMixer will play next.
@@ -36,8 +36,14 @@ import { trace } from "../debug/trace";
 export interface MixQueue {
   mode: MixMode;
   current: TrackMeta | null;
-  upcoming: TrackMeta[];
+  /** Upcoming tracks, each tagged with who put it there (see QueueSource). */
+  upcoming: QueueItem[];
   smartSort: boolean;
+  /** A loaded playlist ran out and the queue fell back to radio (seeded from what was playing).
+   *  Cleared by loading a playlist, choosing Radio, or clearing. */
+  playlistEnded: boolean;
+  /** A radio fetch is in flight right now. */
+  isFilling: () => boolean;
   augment: boolean; // playlist mode: top up with provider radio when it runs low
   setMode: (m: MixMode) => void;
   setSmartSort: (on: boolean) => void;
@@ -45,19 +51,20 @@ export interface MixQueue {
   loadTracks: (tracks: TrackMeta[], opts?: { smartSort?: boolean; mode?: MixMode }) => void;
   setCurrent: (t: TrackMeta | null) => void;
   getCurrent: () => TrackMeta | null;
-  advance: () => TrackMeta | null;
-  peekNext: () => TrackMeta | null;
+  advance: () => QueueItem | null;
+  peekNext: () => QueueItem | null;
   /** Ensure the queue is topped up, given what the radio should sound like right now.
    *  Returns the next track. Passing null skips the radio entirely (playlist mode). */
-  ensureNext: (ctx: RadioContext | null) => Promise<TrackMeta | null>;
+  ensureNext: (ctx: RadioContext | null) => Promise<QueueItem | null>;
   /** The energy shape the radio aims for. */
   arc: EnergyArc;
   setArc: (a: EnergyArc) => void;
   /** Patch known BPM/key/ISRC onto a queued/current track (from background precompute
    *  + fingerprint identification). */
   patchAnalysis: (videoId: string, a: { bpm?: number | null; key?: string | null; isrc?: string | null; energy?: number | null }) => void;
-  /** Radio mode: drop the upcoming suggestions (they were for the OLD seed) so the
-   *  queue re-fills from the now-current track. No-op in playlist mode. */
+  /** Radio mode: drop the upcoming RADIO suggestions (they were for the OLD seed) so the queue
+   *  re-fills from the now-current track. Rows the user (or a playlist) put there stay. No-op in
+   *  playlist mode. */
   reseedRadio: () => void;
   enqueue: (t: TrackMeta) => void;
   enqueueNext: (t: TrackMeta) => void;
@@ -85,6 +92,17 @@ const POOL_LOW = 20; // refill when the pool drops below this — NOT every song
 // framing — "if radio is suggesting 4 songs, analyze them ahead of time" — is the size of this.
 const ISRC_ENRICH = 4;
 
+/** The rows a radio refresh may NOT drop: everything except radio-drawn suggestions. A row with no
+ *  source (from an older peer) is treated as the user's — losing a user's pick is the worse error. */
+export function keepNonRadio(items: readonly QueueItem[]): QueueItem[] {
+  return items.filter((t) => t.source !== "radio");
+}
+
+/** Tag a track with its provenance (a copy — never mutate a caller's TrackMeta). */
+export function tagged(t: TrackMeta, source: QueueSource): QueueItem {
+  return { ...t, source };
+}
+
 export function dedupeByVideoId(list: TrackMeta[]): TrackMeta[] {
   const seen = new Set<string>();
   const out: TrackMeta[] = [];
@@ -104,7 +122,8 @@ export function useMixQueue(): MixQueue {
   const [mode, setModeState] = useState<MixMode>("radio");
   const [smartSort, setSmartSortState] = useState(false);
   const [augment, setAugmentState] = useState(true); // on by default — "super smart" blend
-  const [items, setItems] = useState<TrackMeta[]>([]);
+  const [items, setItems] = useState<QueueItem[]>([]);
+  const [playlistEnded, setPlaylistEndedState] = useState(false);
   const [current, setCurrentState] = useState<TrackMeta | null>(null);
 
   const [arc, setArcState] = useState<EnergyArc>("ride");
@@ -128,8 +147,26 @@ export function useMixQueue(): MixQueue {
   const lastSeed = useRef<string | null>(null); // signature of the seed SET the queue was last filled from
   const manualSeed = useRef<TrackMeta | null>(null); // a user-queued "play next" pick — the freshest seed until it plays
   const playlistLoaded = useRef(false); // a fixed playlist is the source (don't auto-refresh it)
-  const itemsRef = useRef(items);
+  const itemsRef = useRef<QueueItem[]>(items);
   itemsRef.current = items;
+  // EVERY write goes through here, and updates the ref SYNCHRONOUSLY. The AutoMixer reads the queue
+  // through refs between renders (peekNext right after remove/advance); a functional setItems left
+  // the ref stale until React re-rendered, so two calls inside one tick saw the old head.
+  const write = (fn: (cur: QueueItem[]) => QueueItem[]): void => {
+    const next = fn(itemsRef.current);
+    if (next === itemsRef.current) return;
+    itemsRef.current = next;
+    setItems(next);
+  };
+  const playlistEndedRef = useRef(false);
+  const setPlaylistEnded = (v: boolean) => {
+    playlistEndedRef.current = v;
+    setPlaylistEndedState(v);
+  };
+  // Does the radio top this queue up? Radio mode always; playlist mode only once the playlist is
+  // not a fixed list any more (augment over an empty load, or the playlist ran out).
+  const isDynamic = (): boolean =>
+    modeRef.current === "radio" || ((augmentRef.current || playlistEndedRef.current) && !playlistLoaded.current);
   const currentRef = useRef(current);
   currentRef.current = current;
   const modeRef = useRef(mode);
@@ -146,15 +183,13 @@ export function useMixQueue(): MixQueue {
   // kept: those candidates are still valid, they just need re-scoring against the new target.
   const setArc = useCallback((a: EnergyArc) => {
     setArcState(a);
-    if (modeRef.current === "radio" || augmentRef.current) {
-      const keep = manualSeed.current ? [manualSeed.current] : [];
-      setItems(keep);
-    }
+    // Only the RADIO rows go — a track the user queued is not the arc's to drop.
+    if (isDynamic()) write(keepNonRadio);
   }, []);
 
   const setSmartSort = useCallback((on: boolean) => {
     setSmartSortState(on);
-    if (on) setItems((cur) => smartSortChain(cur));
+    if (on) write((cur) => smartSortChain(cur));
   }, []);
 
   // Patch known BPM/key onto queued/current tracks (best-effort) so the UI badges
@@ -169,7 +204,7 @@ export function useMixQueue(): MixQueue {
       if (!a) return t;
       return { ...t, bpm: t.bpm ?? a.bpm, key: t.key ?? a.key, energy: t.energy ?? a.energy ?? null };
     };
-    setItems((cur) => cur.map(patch));
+    write((cur) => cur.map(patch));
     setCurrentState((c) => (c ? patch(c) : c));
   }, []);
 
@@ -188,8 +223,14 @@ export function useMixQueue(): MixQueue {
       // all failed to resolve, or a cleared queue, must fall back to radio rather than strand AUTO
       // on a source that can never produce a track.
       if (opts?.mode) setModeState(tracks.length === 0 ? "radio" : opts.mode);
+      setPlaylistEnded(false);
       setCurrentState(null);
-      setItems(sort ? smartSortChain(tracks) : tracks.slice());
+      // The user's own picks survive a source change: "Radio" from the menu (an empty load) used to
+      // wipe them along with the suggestions. They stay at the front; the new source follows.
+      const keep = itemsRef.current.filter((t) => t.source === "user");
+      const keepIds = new Set(keep.map((t) => t.videoId));
+      const rows = (sort ? smartSortChain(tracks) : tracks.slice()).filter((t) => !keepIds.has(t.videoId)).map((t) => tagged(t, "playlist"));
+      write(() => [...keep, ...rows]);
       // Fill in any missing key/BPM so smart-sort + badges are meaningful.
       void enrichAnalysis(tracks.filter((t) => t.bpm == null || t.key == null).map((t) => t.videoId));
     },
@@ -219,17 +260,18 @@ export function useMixQueue(): MixQueue {
   }, []);
 
   const getCurrent = useCallback((): TrackMeta | null => currentRef.current, []);
+  const isFilling = useCallback((): boolean => filling.current, []);
 
-  const advance = useCallback((): TrackMeta | null => {
+  const advance = useCallback((): QueueItem | null => {
     const next = itemsRef.current[0] ?? null;
     if (!next) return null;
     markPlayed(next);
-    setItems((cur) => cur.slice(1));
+    write((cur) => cur.slice(1));
     setCurrentState(next);
     return next;
   }, []);
 
-  const peekNext = useCallback((): TrackMeta | null => itemsRef.current[0] ?? null, []);
+  const peekNext = useCallback((): QueueItem | null => itemsRef.current[0] ?? null, []);
 
   // Merge freshly-fetched radio results into the standing pool. Relatedness is taken as a MAX
   // across seeds, never a sum: summing rewarded tracks that appear in several seeds' radios, which
@@ -353,8 +395,7 @@ export function useMixQueue(): MixQueue {
 
       poolRef.current = poolRef.current.filter((c) => c.track.videoId !== best.candidate.track.videoId);
       const t = best.candidate.track;
-      setItems((cur) => (cur.some((x) => x.videoId === t.videoId) ? cur : [...cur, t]));
-      itemsRef.current = [...itemsRef.current, t]; // keep the loop's view current within this pass
+      write((cur) => (cur.some((x) => x.videoId === t.videoId) ? cur : [...cur, tagged(t, "radio")]));
       drawn++;
       trace("automix.pick", {
         id: t.videoId,
@@ -369,9 +410,16 @@ export function useMixQueue(): MixQueue {
     return drawn;
   };
 
-  const ensureNext = useCallback(async (ctx?: RadioContext | null): Promise<TrackMeta | null> => {
-    const radioDynamic = modeRef.current === "radio" || (augmentRef.current && !playlistLoaded.current);
-    if (!radioDynamic || !ctx) return itemsRef.current[0] ?? null; // a fixed playlist plays itself
+  const ensureNext = useCallback(async (ctx?: RadioContext | null): Promise<QueueItem | null> => {
+    // A PLAYLIST THAT RAN OUT falls back to radio, seeded from what is playing (its last track),
+    // instead of leaving AUTO with no next track and the music stopping at the end of the set.
+    if (ctx && modeRef.current === "playlist" && playlistLoaded.current && itemsRef.current.length === 0) {
+      playlistLoaded.current = false;
+      setPlaylistEnded(true);
+      lastSeed.current = null;
+      trace("automix.playlistEnded", { current: ctx.current?.videoId ?? null });
+    }
+    if (!isDynamic() || !ctx) return itemsRef.current[0] ?? null; // a fixed playlist plays itself
 
     // TWO STABLE SEEDS, not a sliding window over the last three plays: the vibe anchor (decaying)
     // and what is playing. See selector.radioSeeds for why the old scheme amplified its own
@@ -445,7 +493,7 @@ export function useMixQueue(): MixQueue {
               energy: t.energy ?? a.energy ?? null,
             }
           : t;
-      setItems((cur) => cur.map(apply));
+      write((cur) => cur.map(apply));
       setCurrentState((c) => (c ? apply(c) : c));
       // The pool too: a candidate that gets analysed while it waits becomes fully scoreable, which
       // is the whole reason the pool is a standing structure rather than a per-song fetch.
@@ -456,8 +504,7 @@ export function useMixQueue(): MixQueue {
 
   const reseedRadio = useCallback(() => {
     // Only when dynamic — never nuke a curated playlist the user loaded.
-    const dynamic = modeRef.current === "radio" || (augmentRef.current && !playlistLoaded.current);
-    if (!dynamic) return;
+    if (!isDynamic()) return;
     lastFill.current = 0;
     lastSeed.current = null; // force a fresh fill from the new seed on the next tick
     // The POOL survives a reseed on purpose. It is expensive to rebuild, and dropping it left a
@@ -465,24 +512,27 @@ export function useMixQueue(): MixQueue {
     // being scored against the new context, outrank the stale ones on their own merits; anything
     // that never wins is aged out by POOL_MAX.
     // Drop the manual pick as the radio SEED (suggestions re-anchor to the new deck), but KEEP
-    // the user's explicitly queued "play next" track — nuking the whole queue on a deck change
-    // silently lost a track the user had deliberately lined up.
-    const keep = manualSeed.current ? [manualSeed.current] : [];
+    // every row the user lined up — not just the last "play next" (the old rule), which silently
+    // lost any track they had added or dragged in. Only radio suggestions are replaced.
     manualSeed.current = null;
-    setItems(keep);
+    write(keepNonRadio);
   }, []);
 
   const enqueue = useCallback((t: TrackMeta) => {
-    setItems((cur) => (cur.some((x) => x.videoId === t.videoId) ? cur : [...cur, t]));
+    // Already queued as a radio suggestion → the user just adopted it; mark it theirs.
+    write((cur) =>
+      cur.some((x) => x.videoId === t.videoId)
+        ? cur.map((x) => (x.videoId === t.videoId ? { ...x, source: "user" as const } : x))
+        : [...cur, tagged(t, "user")],
+    );
   }, []);
 
   const enqueueNext = useCallback((t: TrackMeta) => {
-    setItems((cur) => [t, ...cur.filter((x) => x.videoId !== t.videoId)]);
+    write((cur) => [tagged(t, "user"), ...cur.filter((x) => x.videoId !== t.videoId)]);
     // In dynamic radio, the manual pick becomes the FRESHEST seed: pin it at the front and
     // refill the tail to flow from it (option A — suggestions follow your pick until a deck
     // changes). In playlist mode it's just an insertion, no reseed.
-    const dynamic = modeRef.current === "radio" || (augmentRef.current && !playlistLoaded.current);
-    if (dynamic) {
+    if (isDynamic()) {
       manualSeed.current = t;
       lastSeed.current = null; // force the refill below to reseed from the new pick
       void ensureNextRef.current();
@@ -490,11 +540,11 @@ export function useMixQueue(): MixQueue {
   }, []);
 
   const remove = useCallback((videoId: string) => {
-    setItems((cur) => cur.filter((t) => t.videoId !== videoId));
+    write((cur) => (cur.some((t) => t.videoId === videoId) ? cur.filter((t) => t.videoId !== videoId) : cur));
   }, []);
 
   const reorder = useCallback((from: number, to: number) => {
-    setItems((cur) => {
+    write((cur) => {
       if (from < 0 || from >= cur.length || to < 0 || to >= cur.length || from === to) return cur;
       const next = cur.slice();
       const [moved] = next.splice(from, 1);
@@ -504,7 +554,7 @@ export function useMixQueue(): MixQueue {
   }, []);
 
   const moveById = useCallback((videoId: string, to: number) => {
-    setItems((cur) => {
+    write((cur) => {
       const from = cur.findIndex((t) => t.videoId === videoId);
       if (from < 0) return cur; // already advanced/removed under us → drop the stale move
       const dest = Math.max(0, Math.min(to, cur.length - 1));
@@ -527,8 +577,9 @@ export function useMixQueue(): MixQueue {
     // Radio keeps topping itself up from the decks; only a real fixed playlist freezes
     // auto-refresh — otherwise the adopted radio queue would never refill again.
     playlistLoaded.current = m === "playlist" && tracks.length > 0;
+    setPlaylistEnded(false);
     setModeState(m);
-    setItems(tracks.slice());
+    write(() => tracks.slice()); // rows keep whatever `source` the host's mirror carried
     setCurrentState(cur);
   }, []);
 
@@ -541,7 +592,8 @@ export function useMixQueue(): MixQueue {
     lastSeed.current = null;
     manualSeed.current = null;
     playlistLoaded.current = false;
-    setItems([]);
+    setPlaylistEnded(false);
+    write(() => []);
     setCurrentState(null);
   }, []);
 
@@ -550,6 +602,8 @@ export function useMixQueue(): MixQueue {
     current,
     upcoming: items,
     smartSort,
+    playlistEnded,
+    isFilling,
     augment,
     arc,
     setArc,

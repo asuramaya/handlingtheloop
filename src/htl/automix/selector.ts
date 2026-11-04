@@ -267,6 +267,19 @@ export function anchorWeight(age: number): number {
   return Math.max(0.25, 1 - Math.max(0, age) / 8);
 }
 
+/** Radio candidates outside this length are not songs a set can use: under a minute is a clip, a
+ *  short or an intro; over twelve is a mix, a full album, a lyric video looped to fill 20 minutes.
+ *  The radio surfaces both (watch-next especially), and the selector used to admit them. */
+export const MIN_TRACK_SEC = 60;
+export const MAX_TRACK_SEC = 12 * 60;
+
+/** A known duration inside [MIN_TRACK_SEC, MAX_TRACK_SEC]. An UNKNOWN duration (0/null/NaN) passes:
+ *  plenty of provider rows carry none, and rejecting them would starve the pool. */
+export function plausibleLength(duration: number | null | undefined): boolean {
+  if (duration == null || !Number.isFinite(duration) || duration <= 0) return true;
+  return duration >= MIN_TRACK_SEC && duration <= MAX_TRACK_SEC;
+}
+
 /** Reject a candidate outright, before scoring: already played, already queued, currently on a
  *  deck, or just another upload of a song we already know about. Song-level identity uses
  *  `songCore`, so "Danza Kuduro" cannot come back as "Danza Kuduro (Original Mix)". */
@@ -275,6 +288,7 @@ export function isEligible(
   bans: { played: ReadonlySet<string>; ids: ReadonlySet<string>; cores: ReadonlySet<string> },
 ): boolean {
   if (!t.videoId) return false;
+  if (!plausibleLength(t.duration)) return false;
   if (bans.played.has(t.videoId) || bans.ids.has(t.videoId)) return false;
   const core = songCore(t.title);
   if (core && bans.cores.has(core)) return false;

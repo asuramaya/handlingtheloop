@@ -9,6 +9,8 @@ import type { AutoFxSettings, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
 import { clamp, lerp } from "../../util/math";
 import { event } from "../debug/trace";
+import { perfWork } from "../debug/perfCapture";
+import { crossfadeGains } from "../audio/crossfadeCurve";
 import { holdGpu } from "../stems/gpuQueue";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
@@ -1547,7 +1549,17 @@ export class AutoMixer {
       loopExtend: !!this.plan.loopExtend,
     });
 
+    // ★ TIMED (operator, 2026-11-04: "a huge lag spike at the time of auto mixing"). Every step of
+    // the start runs in one tick; the event names the slow one in the flight recorder and a capture.
+    const t0 = performance.now();
+    const cost: Record<string, number> = {};
+    const lap = (k: string, from: number) => {
+      cost[k] = Math.round((performance.now() - from) * 10) / 10;
+      return performance.now();
+    };
+    let tl = t0;
     this.armGesture(style, this.liveId);
+    tl = lap("gesture", tl);
     // ★ THE TAIL NEEDS ONE DECK, NOT TWO. This used to sit inside the `useStems` branch below,
     // which meant the user's AUTO chain only ever engaged on a full stem swap — and a stem swap
     // needs BOTH decks separated. But the tail routes an OUTGOING stem and touches the incoming
@@ -1557,6 +1569,7 @@ export class AutoMixer {
     // every gesture: an echo-out or a filter over a separated outgoing track now dissolves its
     // vocal through whatever the user has dialled, the same way a stem swap already did.
     this.beginVocalTail(this.liveId);
+    tl = lap("tail", tl);
     if (this.useStems) {
       // The incoming enters as DRUMS + BASS only — its melody (other) and vocal come in
       // LATER in the blend (beats → melody → vocal), so nothing stacks on the way in.
@@ -1575,10 +1588,17 @@ export class AutoMixer {
     } else if (this.plan.style === "spinOut") {
       inc.setEqLow(0);
     }
+    tl = lap("prep", tl);
     if (engine.syncRole(idle) !== "slave") engine.toggleSync(idle);
     if (this.plan.keyMatch && engine.keyRole(idle) !== "slave") engine.toggleKey(idle);
+    tl = lap("sync", tl);
     this.beginGlide(live, inc);
+    tl = lap("glide", tl);
     inc.play();
+    lap("play", tl);
+    const total = performance.now() - t0;
+    perfWork("automix.start", total);
+    event("automix.startCost", { ms: Math.round(total * 10) / 10, ...cost });
     this.cuedIdle = idle; // still ours through the mix
     this.mixStarted = true;
     this.mixElapsed = 0;
@@ -1690,7 +1710,12 @@ export class AutoMixer {
     const swapSpan = 1 / Math.max(1, this.plan.bars);
     const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
     if (this.useStems) {
-      const g = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      const raw = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      const xg = crossfadeGains(cfv);
+      const g = {
+        live: faderCompensated(raw.live, this.liveId === "A" ? xg.A : xg.B),
+        inc: faderCompensated(raw.inc, this.liveId === "A" ? xg.B : xg.A),
+      };
       for (const k of AutoMixer.STEMS) {
         live.setStemGain(k, g.live[k]);
         inc.setStemGain(k, g.inc[k]);
@@ -2023,8 +2048,13 @@ export class AutoMixer {
     event("automix.gpu", { at: "resume" });
   }
 
+  private lastPhase: AutoMixPhase | null = null;
   private emit(force: boolean): void {
     const s = this.getStatus();
+    if (s.phase !== this.lastPhase) {
+      this.lastPhase = s.phase;
+      event("automix.phase", { phase: s.phase });
+    }
     // Everything the UI draws, at the resolution it draws it: whole seconds of countdown, 5% steps
     // of mix progress — so a mixing tick re-renders a few times a second, not on every 150 ms tick
     // for nothing.
@@ -2223,14 +2253,37 @@ export function stemBlend(
   const liveOther = km ? clamp((p - 0.55) / 0.45, 0, 1) : clamp((p - 0.5) / 0.2, 0, 1);
   return {
     live: {
-      drums: rhythmOut,
+      // Drums swap EQUAL-POWER over their bar: two different kits add as power, so the straight
+      // trade the bass uses (one low end, never two) dropped the swap bar ~3 dB in its middle.
+      drums: Math.cos((s * Math.PI) / 2),
       bass: rhythmOut,
-      // Disjoint vocal windows: outgoing out over [0, 0.45], incoming in over [0.6, 1].
-      vocals: lerp(1, 0, clamp(p / 0.45, 0, 1)),
+      // Disjoint vocal windows: the outgoing SINGS ON until the new groove is in, leaves over
+      // [0.3, 0.5]; the incoming's voice arrives over [0.55, 0.8]. The old windows faded the
+      // outgoing vocal from the first beat (gone by 0.45) and brought the incoming's in only at
+      // 0.6 — a track losing its singer while nothing replaced it, then ~4 bars of 24 with no voice
+      // at all: half of the "dead spaces" in stem transitions (operator, 2026-11-04).
+      vocals: lerp(1, 0, clamp((p - 0.3) / 0.2, 0, 1)),
       other: lerp(1, 0, liveOther),
     },
-    inc: { drums: rhythmIn, bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.6) / 0.4, 0, 1)), other: incOther },
+    inc: { drums: Math.sin((s * Math.PI) / 2), bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.55) / 0.25, 0, 1)), other: incOther },
   };
+}
+
+/** Highest stem level the deck accepts (Deck.setStemGain clamps to it). */
+export const STEM_GAIN_MAX = 1.5;
+
+/** THE STEM LEVELS ARE THE CROSSFADE. In a stem swap stemBlend already says how loud each part of
+ *  each deck should be; the crossfader moving across the same blend took a second bite out of the
+ *  same signal. The equal-power fader sits both decks at −3 dB in the middle, exactly where the
+ *  outgoing has lost its vocal and the incoming has not yet brought its parts in, and the sum fell
+ *  4.5–5 dB for a third of the blend (measured, stemLevel.test.ts) — the "dead spaces" in stem
+ *  transitions (operator, 2026-11-04). Dividing each stem by the fader gain it is about to pass
+ *  through makes what you HEAR equal stemBlend's numbers; the fader still moves, so the screen,
+ *  the handoff detection and a grab all behave as before. Capped at the deck's ceiling: where the
+ *  fader has a deck almost shut, a stem cannot make that back, and it is on its way out anyway. */
+export function faderCompensated(g: StemGains, fader: number): StemGains {
+  const c = (v: number) => (v <= 0 ? 0 : fader <= 1e-3 ? STEM_GAIN_MAX : Math.min(STEM_GAIN_MAX, v / fader));
+  return { drums: c(g.drums), bass: c(g.bass), vocals: c(g.vocals), other: c(g.other) };
 }
 
 export function other(id: DeckId): DeckId {

@@ -1,4 +1,5 @@
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
+import { perfWork } from "../debug/perfCapture";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
@@ -1270,6 +1271,7 @@ export class Deck {
       )
     )
       return;
+    const applyT0 = performance.now();
     this.lastAppliedStemId = stems ? stemApplyId(stems) : undefined;
     this.stems = stems;
     this.stemsLoaded = !!stems;
@@ -1299,6 +1301,9 @@ export class Deck {
     this.loadEnginePcm();
     for (const name of STEM_NAMES) this.rampStem(name); // re-assert current stem gains
     if (this._playing) this.spawnSource(this.position());
+    // Applying a set copies every stem to the engine on THIS thread (hundreds of MB on desktop):
+    // time it, so a capture can tell a stem landing from anything else that stalls a frame.
+    perfWork("stems.apply", performance.now() - applyT0);
     if (this.pendingStemBase) {
       // Mobile: loadEnginePcm already computed the base envelopes in its pack pass.
       // Build the (cheap, downsampled) LOD ladders from them, publish, and FREE the raw

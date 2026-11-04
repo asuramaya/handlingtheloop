@@ -9,6 +9,7 @@
 //    streaming anything to a server. High-frequency `trace()` (per-fader-move) does NOT enter the
 //    ring — only `event()` — so the ring stays small and relevant.
 const DEV = Boolean(import.meta.env?.DEV);
+import { perfMark } from "./perfCapture";
 
 let buf: string[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -54,6 +55,12 @@ export function event(ch: string, data: Record<string, unknown>): void {
   try {
     ring.push({ t: Math.round(performance.now()), ch, ...data });
     if (ring.length > RING_CAP) ring.splice(0, ring.length - RING_CAP);
+    // AUTO's moments land in a running perf capture too, so a recording of "it lags when it mixes"
+    // shows WHERE the mix started next to the long frames (operator, 2026-11-04). A no-op unarmed.
+    if (ch.startsWith("automix.") || ch.startsWith("stems.")) {
+      const tag = data.phase ?? data.style ?? data.at ?? data.deck ?? "";
+      perfMark(tag !== "" ? `${ch} ${String(tag)}` : ch);
+    }
   } catch {
     /* ignore — recording must never break the app */
   }

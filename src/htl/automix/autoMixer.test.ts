@@ -273,6 +273,17 @@ describe("stemBlend — the arrangement-aware swap", () => {
     }
   });
 
+  test("standard: the outgoing keeps its voice until the new groove is in, and the gap is short", () => {
+    expect(std(0.25, 0.25).live.vocals).toBe(1); // no thinning before anything has arrived
+    let silent = 0;
+    for (let i = 0; i <= 100; i++) {
+      const g = std(i / 100, i / 100);
+      expect(Math.min(g.live.vocals, g.inc.vocals)).toBe(0); // never two voices at once
+      if (g.live.vocals === 0 && g.inc.vocals === 0 && i < 100) silent++;
+    }
+    expect(silent).toBeLessThanOrEqual(6); // ≤ 6% of the blend without a voice (was 15%)
+  });
+
   test("standard: a dissonant pair swaps its melody TIGHTER than a key-matched one", () => {
     // At the midpoint the un-matched pair is already most of the way through its handover; the
     // key-matched one is still overlapping on purpose.

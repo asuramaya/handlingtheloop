@@ -1,4 +1,5 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, localTempoDev, nearestBeat, piTrim, slaveFoldTarget, smartKeyShift } from "../analysis/analyze";
+import { crossfadeGains } from "./crossfadeCurve";
 import { phaseAlignedStart } from "./syncAlign";
 import { SYNC_INTEGRAL_K, SYNC_PHASE_K, SYNC_TICK_MS } from "./syncLoop";
 import { trace, event } from "../debug/trace";
@@ -1533,10 +1534,10 @@ export class AudioEngine {
    *  to ~20Hz — see the room digest roll-up) glides instead of zippering. 15ms is below the
    *  perceptual threshold, so a local DJ's own fader feels instant. */
   setCrossfade(position: number) {
-    const x = (Math.max(-1, Math.min(1, position)) + 1) / 2; // -> [0,1]
+    const g = crossfadeGains(position);
     const t = this.ctx.currentTime;
-    this.xfadeA.gain.setTargetAtTime(Math.cos((x * Math.PI) / 2), t, 0.015);
-    this.xfadeB.gain.setTargetAtTime(Math.cos(((1 - x) * Math.PI) / 2), t, 0.015);
+    this.xfadeA.gain.setTargetAtTime(g.A, t, 0.015);
+    this.xfadeB.gain.setTargetAtTime(g.B, t, 0.015);
   }
 
   // Master output is two independent things multiplied: the DJ's own volume fader (_masterVol,

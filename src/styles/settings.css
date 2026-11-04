@@ -2658,3 +2658,24 @@
   flex: 0 1 auto;
   min-width: 0;
 }
+
+/* Interface ▸ live waveform preview (WaveformPreview). Sticky inside the settings scroller so
+   it stays visible while the swatches below it are edited. */
+.wave-preview {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 0 12px;
+  padding: 6px 0;
+  background: var(--panel-2, #0a0a0f);
+}
+.wave-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 96px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.search-group-body .wave-preview {
+  position: static;
+}

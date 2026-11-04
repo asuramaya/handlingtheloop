@@ -17,6 +17,7 @@ import { Slider } from "./Slider";
 import { InfoDot } from "./InfoDot";
 import { ToggleRow } from "./ControlsTab";
 import { randomTheme, randomMono } from "../../htl/state/randomPalette";
+import { WaveformPreview } from "./WaveformPreview";
 
 type ColorKey =
   | "accentA"
@@ -100,6 +101,10 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           </button>
         </div>
       </div>
+
+      {/* Live sample of the wave in these colours. Pinned to the top of the scroll area so it
+          stays in view while you work down the swatches below it. */}
+      <WaveformPreview settings={settings} />
 
       {warns.length > 0 && (
         <div className="color-warnings">

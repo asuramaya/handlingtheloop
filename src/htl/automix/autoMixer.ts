@@ -1,5 +1,60 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
 import { beatTimeOffset, foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
+
+/** The widest tempo gap (folded, from the slower side) the tempoBridge will ride on a loop. Past
+ *  ~30 % a looped bar stretched that far stops sounding like the same record (DJ TechTools'
+ *  loop-out move; forum consensus caps a ramp at 10-15 % per phrase, which the bridge doubles by
+ *  giving it four bars of a loop rather than a moving track). */
+export const BRIDGE_MAX = 0.3;
+
+/** THE TEMPO BRIDGE, bar by bar (counted in the live track's own time: with a 1-bar loop every
+ *  bar is one pass of the loop). The loop is caught on bar 0's downbeat. */
+export const BRIDGE = {
+  bars: 8,
+  rampEnd: 4, // bars 0-4: the looped bar glides to the incoming's tempo
+  roll: [4, 5, 5.5] as const, // the build: the loop halves on each of these bar lines
+  breath: 5.75, // the last beat before the drop: dry out, echo frozen — the inhale
+  drop: 6, // the incoming lands, on its body section, on the one
+};
+
+/** Where the bridge is at bars-elapsed `b` (0..8): the outgoing's shaping, as plain numbers. Pure,
+ *  so a test can walk the whole gesture. `tempoT` is the 0..1 smoothstep of the ramp. */
+export function bridgeShape(b: number, showy: boolean): {
+  tempoT: number;
+  filter: number; // outgoing one-knob filter (+ = high-pass)
+  eqLow: number; // outgoing low shelf, dB
+  delayMix: number;
+  reverbMix: number;
+  freeze: boolean;
+  rollBeats: number; // 0 = leave the base loop alone
+  dropped: boolean;
+  fader: number; // 0 = outgoing … 1 = incoming
+} {
+  const ss = (x: number) => {
+    const t = clamp(x, 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+  const tempoT = ss(b / BRIDGE.rampEnd);
+  const build = clamp((b - BRIDGE.rampEnd) / (BRIDGE.drop - BRIDGE.rampEnd), 0, 1);
+  const dropped = b >= BRIDGE.drop;
+  const breath = showy && b >= BRIDGE.breath && !dropped;
+  let rollBeats = 0;
+  if (showy) for (const [i, at] of BRIDGE.roll.entries()) if (b >= at) rollBeats = [2, 1, 0.5][i];
+  return {
+    tempoT,
+    // A slow rise across the ramp, then the climb of the build.
+    filter: dropped ? 0.6 : lerp(0, 0.3, tempoT) + lerp(0, showy ? 0.5 : 0.35, build),
+    eqLow: dropped ? EQ_KILL : lerp(0, EQ_KILL, build), // the bass is PULLED before the drop
+    delayMix: dropped || breath ? 1 : lerp(0, 0.3, tempoT) + lerp(0, 0.3, build),
+    reverbMix: lerp(0, 0.2, tempoT) + lerp(0, showy ? 0.35 : 0.2, build),
+    freeze: breath || dropped,
+    rollBeats,
+    dropped,
+    // Nothing of the incoming before the drop; on it, the new track all but full and the old one's
+    // frozen echo under it, gone by the end.
+    fader: dropped ? 0.8 + 0.2 * ss((b - BRIDGE.drop) / (BRIDGE.bars - BRIDGE.drop)) : 0,
+  };
+}
 import type { TrackMeta } from "../library/types";
 import { bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
@@ -290,6 +345,7 @@ export class AutoMixer {
   private stutterFired = false; // the showy one-bar stutter fires once per transition
   private unlocked = false; // this transition's pair cannot be beat-matched (caps.lock false)
   private fineTimer: ReturnType<typeof setInterval> | null = null; // the 16 ms loop around a moment
+  private bridge: { baseBeats: number; fromPct: number; toPct: number; keylock: boolean } | null = null;
   private incPending = false; // unmatched pair: the incoming starts at the cut, not at mix start
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
   // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
@@ -443,6 +499,7 @@ export class AutoMixer {
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
     this.stopFine();
+    this.endBridge();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1178,7 +1235,11 @@ export class AutoMixer {
     // A hand on the outgoing platter (or a pause) holds the mix: starting the incoming under a
     // scratch is not a transition. It goes the moment the deck is playing again.
     if (!live.playing) return;
-    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.05) {
+    if (this.mixOutTime != null) {
+      const until = (this.mixOutTime - live.position()) / Math.max(0.25, live.rate || 1);
+      if (until <= FINE_AHEAD_S && until > -0.5) this.startFine();
+    }
+    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.004) {
       // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
       this.stemHold = this.shouldHoldForStems(live, idle);
@@ -1252,6 +1313,7 @@ export class AutoMixer {
       incomingBody: !!incSections && firstBodySection(incSections) != null,
       grid: !!live.beatgrid && !!inc.beatgrid,
       lock: tempoLockable(live.effectiveBpm ?? live.beatgrid?.bpm, inc.beatgrid?.bpm),
+      bridge: tempoLockable(live.effectiveBpm ?? live.beatgrid?.bpm, inc.beatgrid?.bpm, BRIDGE_MAX),
     };
   }
 
@@ -1330,6 +1392,19 @@ export class AutoMixer {
       reverb.setParam("size", 0.85);
       reverb.setParam("decay", 0.8);
       reverb.setParam("mix", 0);
+    } else if (style === "tempoBridge") {
+      const { delay, reverb } = this.borrowFx(liveId, ["delay", "reverb"]);
+      if (delay) {
+        delay.setParam("sync", 1);
+        delay.setParam("div", 2); // 1/8: the roll's own subdivision, so the echo and the loop agree
+        delay.setParam("feedback", 0.68);
+        delay.setParam("mix", 0);
+      }
+      if (reverb) {
+        reverb.setParam("size", 0.9);
+        reverb.setParam("decay", 0.85);
+        reverb.setParam("mix", 0);
+      }
     } else if (style === "gateChop") {
       const { gate } = this.borrowFx(liveId, ["gate"]);
       if (!gate) return;
@@ -1544,6 +1619,7 @@ export class AutoMixer {
     // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
     this.plan.entry = caps.lock ? resolveEntry(style, caps, shape) : "open"; // a cut lands whole
     this.unlocked = !caps.lock;
+    if (style === "tempoBridge") this.beginBridge(live, inc);
     // The acapella hold, when the harmony actually permits it. keyKnown is the load-bearing half:
     // pickTransition reports keyMatch:true for an UNKNOWN pair too (a neutral guess), and holding
     // a lead vocal over a bed on that guess is the way this move goes badly wrong. Unknown is not
@@ -1731,7 +1807,7 @@ export class AutoMixer {
     // AN UNMATCHED PAIR STARTS THE INCOMING AT THE CUT, on the one — not at the top of the
     // transition, where it would run unsynced under the outgoing (muted, but out of phase with the
     // downbeat it is meant to land on).
-    if (this.incPending && cutDone) {
+    if (this.incPending && cutDone && this.plan.style !== "tempoBridge") {
       this.incPending = false;
       inc.play();
     }
@@ -1740,7 +1816,10 @@ export class AutoMixer {
     // progress fraction happens to cross it on a 150 ms tick.
     const steps = this.unlocked || this.plan.style === "cut";
     const px = steps ? (cutDone ? Math.max(p, cutFrac) : Math.min(p, cutFrac - 1e-6)) : p;
-    const x = faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
+    const x =
+      this.plan.style === "tempoBridge"
+        ? bridgeShape(p * BRIDGE.bars, this.perf() !== "subtle").fader
+        : faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
     const cfv = lerp(liveSign, -liveSign, x);
     this.deps.applyCrossfade(cfv);
     this.lastXfade = cfv;
@@ -1768,6 +1847,8 @@ export class AutoMixer {
         live.setStemGain(k, g.live[k]);
         inc.setStemGain(k, g.inc[k]);
       }
+    } else if (this.plan.style === "tempoBridge") {
+      this.tickBridge(live, inc, p);
     } else if (this.plan.style === "dropSwap") {
       // THE DROP SWAP. Not a blend at all: the outgoing COLLAPSES — its bass is pulled and a
       // high-pass climbs until only a thin ghost of it is left — and then it is simply gone, with
@@ -1857,7 +1938,7 @@ export class AutoMixer {
       live.setFilter(lerp(0, 0.6, clamp((p - 0.5) / 0.5, 0, 1)));
     }
     // …and the INCOMING half, once, for every gesture — see applyEntry.
-    if (!this.useStems) this.applyEntry(inc, p, s);
+    if (!this.useStems && this.plan.style !== "tempoBridge") this.applyEntry(inc, p, s);
 
     // Flourishes ride ON TOP of whatever gesture just ran, so they go last — a lift written before
     // the style's own setEqHigh would simply be overwritten.
@@ -1880,6 +1961,77 @@ export class AutoMixer {
       return;
     }
     this.updateFine(live);
+  }
+
+  // ── THE TEMPO BRIDGE ─────────────────────────────────────────────────────────────────────────
+  //
+  // A pair too far apart to beat-match (past the Beat-match range) but within BRIDGE_MAX. A DJ does
+  // not crossfade that, and does not just cut it either when there is a bar of runway: they CATCH
+  // the outgoing record in a loop, ride the tempo fader to the new track's BPM while the same bar
+  // goes round (key-lock on, so it speeds up rather than chipmunks), build it — the loop halving,
+  // a filter climbing, the bass pulled — take one beat of breath, and drop the new track on its
+  // first real downbeat. The old record leaves as its own frozen echo. See bridgeShape for the
+  // numbers and BRIDGE for the bar map.
+  private beginBridge(live: Deck, inc: Deck): void {
+    if (!this.plan) return;
+    const liveBpm = live.beatgrid?.bpm ?? 0;
+    const incBpm = inc.beatgrid?.bpm ?? 0;
+    const target = foldTempoOctave(incBpm, live.effectiveBpm ?? liveBpm);
+    if (!liveBpm || !target) return;
+    const gap = Math.max(target / liveBpm, liveBpm / target) - 1;
+    this.plan = { ...this.plan, bars: BRIDGE.bars, bassSwapBar: 0 };
+    this.barsSeconds = barsToSeconds(BRIDGE.bars, liveBpm); // in the live track's time: loop passes
+    this.bridge = {
+      baseBeats: gap > 0.2 ? 8 : 4, // a wider ride gets a 2-bar loop: more music to hear it on
+      fromPct: live.tempo ?? 0,
+      toPct: (target / liveBpm - 1) * 100,
+      keylock: live.keylock,
+    };
+    live.setKeylock(true);
+    this.loopRoll(live, this.bridge.baseBeats, false); // CAUGHT, on this downbeat
+    // The incoming lands on its body section — the drop — not wherever the blend cue left it.
+    const s = this.sectionsOf(inc);
+    const body = s ? firstBodySection(s) : null;
+    if (body != null && s) inc.seek(nearestDownbeat(inc.beatgrid!, s.starts[body]));
+    inc.setEqLow(0);
+    inc.setFilter(0);
+    this.incPending = true; // started on the drop (tickBridge), never at the top
+    event("automix.bridge", { from: Math.round(liveBpm), to: Math.round(target), gap: Math.round(gap * 100), loop: this.bridge.baseBeats });
+  }
+
+  private tickBridge(live: Deck, inc: Deck, p: number): void {
+    const br = this.bridge;
+    if (!br) return;
+    const showy = this.perf() !== "subtle";
+    const b = p * BRIDGE.bars;
+    const sh = bridgeShape(b, showy);
+    live.setTempo(lerp(br.fromPct, br.toPct, sh.tempoT));
+    live.setFilter(sh.filter);
+    live.setEqLow(sh.eqLow);
+    const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
+    const rev = this.borrowedFx?.saved.find((x) => x.device.kind === "reverb")?.device;
+    dly?.setParam("mix", sh.delayMix);
+    rev?.setParam("mix", sh.reverbMix);
+    if (sh.freeze) dly?.setParam("freeze", 1);
+    // The roll keeps the base loop's in-point (LoopEngine anchors a resize), so the halving
+    // tightens onto the same downbeat the loop was caught on.
+    this.loopRoll(live, sh.rollBeats > 0 ? Math.min(sh.rollBeats, br.baseBeats) : br.baseBeats, false);
+    if (sh.dropped && this.incPending) {
+      this.incPending = false;
+      inc.play(); // ON THE ONE: the fine loop has the clock within a frame of this bar line
+      event("automix.drop", { at: +b.toFixed(3) });
+    }
+  }
+
+  private endBridge(): void {
+    const br = this.bridge;
+    this.bridge = null;
+    if (!br || !this.liveId) return;
+    try {
+      this.deps.engine.deck(this.liveId).setKeylock(br.keylock); // the user's own setting back
+    } catch {
+      /* deck gone */
+    }
   }
 
   // ── THE AUDIO CLOCK ────────────────────────────────────────────────────────────────────────────
@@ -1931,6 +2083,7 @@ export class AutoMixer {
   /** The bar lines this transition does something exact on. */
   private moments(): number[] {
     if (!this.plan) return [];
+    if (this.plan.style === "tempoBridge") return [...BRIDGE.roll, BRIDGE.breath, BRIDGE.drop];
     const out: number[] = [];
     const style = this.plan.style;
     if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
@@ -1946,20 +2099,43 @@ export class AutoMixer {
     const g = live.beatgrid;
     const now = live.position();
     let near = false;
+    const looped = this.plan?.style === "tempoBridge";
+    const barTrack = this.plan ? this.barsSeconds / Math.max(1, this.plan.bars) : 0;
     for (const k of this.moments()) {
+      if (looped) {
+        // The playhead wraps inside the loop, so a bridge moment is counted in progress (track
+        // time) — exact now that the fine loop advances it with real time.
+        const until = (k * barTrack - this.mixElapsed) / rate;
+        if (until <= FINE_AHEAD_S && until >= -0.3) near = true;
+        continue;
+      }
       const pos = this.barPos(live, k);
       if (pos == null) continue;
       const beat = g ? beatTimeOffset(g, pos + 0.01, 1) - pos : 0.5;
       const until = (pos - now) / rate;
       if (until <= FINE_AHEAD_S && until >= -(beat / rate) - 0.05) near = true;
     }
-    if (near && !this.fineTimer) {
-      this.fineTimer = setInterval(() => {
-        if (!this.enabled || this.phase !== "mixing" || this.ticking) return;
-        this.tickMixing(0); // dt 0: the continuous ramps hold; the moments read the playhead
-        this.emit(false);
-      }, FINE_MS);
-    } else if (!near) this.stopFine();
+    if (near) this.startFine();
+    else this.stopFine();
+  }
+
+  /** The 16 ms loop. It advances the transition with REAL elapsed time (and moves the main tick's
+   *  reference along with it, so nothing is counted twice) — the bridge counts its bars in that
+   *  progress, and the continuous ramps draw smoothly through the moment as a bonus. */
+  private startFine(): void {
+    if (this.fineTimer) return;
+    this.fineTimer = setInterval(() => {
+      if (!this.enabled || this.ticking || (this.phase !== "mixing" && this.phase !== "cueing")) {
+        if (this.phase !== "mixing" && this.phase !== "cueing") this.stopFine();
+        return;
+      }
+      const t = this.deps.now();
+      const dt = this.lastTickMs == null ? 0 : Math.min(0.5, (t - this.lastTickMs) / 1000);
+      this.lastTickMs = t;
+      if (this.phase === "mixing") this.tickMixing(dt);
+      else this.tickCueing();
+      this.emit(false);
+    }, FINE_MS);
   }
 
   private stopFine(): void {
@@ -2001,6 +2177,7 @@ export class AutoMixer {
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
     this.stopFine();
+    this.endBridge();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -2071,6 +2248,7 @@ export class AutoMixer {
     this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
     this.incPending = false;
     this.stopFine();
+    this.endBridge();
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();

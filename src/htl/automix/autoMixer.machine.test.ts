@@ -1643,13 +1643,18 @@ describe("AutoMixer machine — a pair too far apart to beat-match", () => {
     expect(r.mixer.getStatus().plan?.bars).toBe(4); // one short gesture
     expect(r.engine.B.playing).toBe(false); // not yet: it would run unsynced under A
     expect(r.xfade).toBe(-1); // fader still all on A
-    let startedAt: number | null = null;
+    // The cut is a BAR LINE of A (half-way through an echo/wash, the last bar otherwise).
+    const st = r.mixer.getStatus();
+    const k = st.plan!.style === "echoOut" || st.plan!.style === "washOut" ? 2 : 3;
+    const line = st.mixOutTime! + k * ((4 * 60) / 88);
+    let startedAtPos: number | null = null;
     for (let i = 0; i < 40 && r.phase === "mixing"; i++) {
       await r.tick(500);
-      if (startedAt == null && r.engine.B.playing) startedAt = r.mixer.getStatus().mixProgress ?? null;
+      if (startedAtPos == null && r.engine.B.playing) startedAtPos = r.engine.A.position();
     }
-    expect(startedAt).not.toBeNull();
-    expect(startedAt!).toBeGreaterThanOrEqual(0.5); // the cut, not the top of the transition
+    expect(startedAtPos).not.toBeNull();
+    expect(startedAtPos!).toBeGreaterThanOrEqual(line - 0.005); // never before the bar line
+    expect(startedAtPos!).toBeLessThan(line + 0.51); // and on the first tick at/after it (0.5 s steps here)
     expect(r.phase).not.toBe("manual"); // a deliberately stopped incoming is not a user stop
   });
 });
@@ -1699,5 +1704,46 @@ describe("AutoMixer machine — moments land on the live track's bar lines", () 
     const bars = r.mixer.getStatus().plan!.bars;
     const barsSeconds = (bars * 4 * 60) / 120;
     expect(p1 - p0).toBeCloseTo((5 * 1.1) / barsSeconds, 3); // 5 s of wall clock = 5.5 s of track
+  });
+});
+
+describe("AutoMixer machine — the tempo bridge (124 → 145 BPM: 17 % apart)", () => {
+  test("catches A in a loop, rides it to 145 with key-lock on, drops B on bar 6, gives everything back", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 124, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 145, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.engine.A.keylock = false; // the user's own setting, to be handed back
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.mixer.getStatus().plan?.style).toBe("tempoBridge");
+    expect(r.mixer.getStatus().plan?.bars).toBe(8);
+    expect(r.engine.A.loopBeats).toBe(4); // caught: a one-bar loop
+    expect(r.engine.A.keylock).toBe(true); // rides in tempo, not in pitch
+    expect(r.engine.B.playing).toBe(false);
+    expect(r.engine.syncRole("B")).toBe("off");
+
+    let tempoAt4: number | null = null;
+    let droppedAtBar: number | null = null;
+    let loopMin = 4;
+    for (let i = 0; i < 200 && r.phase === "mixing"; i++) {
+      await r.tick(250);
+      const bars = (r.mixer.getStatus().mixProgress ?? 0) * 8;
+      if (r.engine.A.loopBeats > 0) loopMin = Math.min(loopMin, r.engine.A.loopBeats);
+      if (tempoAt4 == null && bars >= 4.05) tempoAt4 = r.engine.A.tempo;
+      if (droppedAtBar == null && r.engine.B.playing) droppedAtBar = bars;
+    }
+    expect(tempoAt4!).toBeCloseTo((145 / 124 - 1) * 100, 0); // A is AT B's tempo before the build
+    expect(loopMin).toBe(0.5); // the roll went all the way down
+    expect(droppedAtBar!).toBeGreaterThanOrEqual(6); // B lands on the drop bar
+    expect(droppedAtBar!).toBeLessThan(6.2); // …on it, not bars later
+    // settled onto B; A paused, its tempo and the user's key-lock back, nothing looping
+    expect(r.live).toBe("B");
+    expect(r.engine.A.tempo).toBe(0);
+    expect(r.engine.A.keylock).toBe(false);
+    expect(r.engine.A.loopBeats).toBe(0);
   });
 });

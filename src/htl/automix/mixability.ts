@@ -201,6 +201,7 @@ export function transitionLabel(p: TransitionPlan): string {
   if (p.style === "stemswap") return `Stems ${p.bars}`;
   if (p.style === "cut") return "Cut";
   if (p.style === "spinOut") return "Spin";
+  if (p.style === "tempoBridge") return "Bridge";
   if (p.style === "echoOut") return `Echo ${p.bars}`;
   if (p.style === "washOut") return `Wash ${p.bars}`;
   if (p.style === "gateChop") return "Gate";
@@ -239,12 +240,16 @@ function stylePreference(score: number, confident: boolean): TransitionStyle[] {
  *  The only honest moves for a pair too far apart to beat-match (the echo-out / cut-on-the-one that
  *  hip-hop and open-format DJs use; Vande Veire & De Bie's auto-DJ cues on whole phrases for the
  *  same reason). Everything else overlaps the two rhythms for bars. */
-export const UNLOCKED_STYLES: readonly TransitionStyle[] = ["echoOut", "washOut", "spinOut", "dropSwap", "cut"];
+export const UNLOCKED_STYLES: readonly TransitionStyle[] = ["tempoBridge", "echoOut", "washOut", "spinOut", "dropSwap", "cut"];
 
 /** Is this style possible right now? */
 function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
   if (caps.lock === false && !UNLOCKED_STYLES.includes(style)) return false;
   switch (style) {
+    case "tempoBridge":
+      // Only for a pair that is NOT beat-matchable as it stands but can be ridden there (a locked
+      // pair just blends), and only on a grid: the whole move is bar-counted.
+      return caps.lock === false && !!caps.bridge && caps.grid;
     case "stemswap":
       return caps.stems && caps.lock !== false; // needs separation AND two rhythms that can lock
     case "blend":

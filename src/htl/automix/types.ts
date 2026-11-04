@@ -28,7 +28,8 @@ export type TransitionStyle =
   | "gateChop"
   | "loopChop"
   | "dropSwap"
-  | "spinOut";
+  | "spinOut"
+  | "tempoBridge";
 
 /** ★ THE OTHER HALF OF A TRANSITION.
  *
@@ -84,6 +85,9 @@ export interface StyleCapabilities {
    *  tempoLockable). The long overlapping blends need it; without it they are two records fighting.
    *  Optional so an older caller that never set it keeps its behaviour (undefined = lockable). */
   lock?: boolean;
+  /** Too far apart to beat-match, but close enough (≤ BRIDGE_MAX once folded) to RIDE the outgoing
+   *  to the incoming's tempo on a loop — the tempoBridge. */
+  bridge?: boolean;
 }
 
 /** Where the queue draws its next tracks from. */

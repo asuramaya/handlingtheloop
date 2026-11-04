@@ -229,7 +229,13 @@ export function StemsTab({
                       {m.kind !== "dsp" && <span className={`stem-badge ${badge.cls}`}>{badge.text}</span>}
                       {cached && <span className="stem-badge cached">✓ cached for loaded track</span>}
                     </span>
-                    <span className="stem-model-note">{m.note}</span>
+                    {/* Single + Auto-enhance still loads a track's cached stems, so "plain mix only"
+                        would contradict the status row above it. Say what actually happens. */}
+                    <span className="stem-model-note">
+                      {m.id === "off" && settings.autoEnhance
+                        ? "Never separates here, lightest on memory. A track with stems in the shared cache still gets them (Auto-enhance)."
+                        : m.note}
+                    </span>
                   </button>
                 );
               })}

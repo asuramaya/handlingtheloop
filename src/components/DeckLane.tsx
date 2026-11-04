@@ -161,8 +161,12 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   // takes the slot first (it gates lyrics), then the lyric transcription %. Both are plain
   // header text with a small spinner dot, on the SAME axis as BPM/key/grid. The stem wording is
   // stemProcText's, which names the download / GPU-setup stages instead of a frozen "0%".
-  const procText = stemProcText(stemStatus) ?? (lyricStatus || null);
-  const procTitle = stemBusy ? stemStatus.detail : lyricStatus || undefined;
+  // ★ LYRICS ARE NOT IN THE HEADER ANY MORE. The caption bar under the waveform is always rendered
+  // and always shows the lyric state, so the header fallback printed it twice per deck ("No lyrics
+  // found" in the header AND the bar) and cost a row on a short screen (operator, 2026-11-03: fix
+  // the double). The header keeps the stem tell, which has no other home.
+  const procText = stemProcText(stemStatus);
+  const procTitle = stemBusy ? stemStatus.detail : undefined;
   // Highlight the lane while a library/search track row is dragged over it.
   const [dropActive, setDropActive] = useState(false);
 

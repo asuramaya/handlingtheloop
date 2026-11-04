@@ -1,5 +1,5 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
-import { foldTempoOctave, nearestBeat, nearestDownbeat, tempoLockable } from "../analysis";
+import { foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
 import type { TrackMeta } from "../library/types";
 import { bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
@@ -288,6 +288,8 @@ export class AutoMixer {
   private rollBeats = 0; // current loop-roll length during a dropSwap build (0 = not rolling)
   private holdLoop: DeckId | null = null; // deck currently held in a loop-extend, if any
   private stutterFired = false; // the showy one-bar stutter fires once per transition
+  private unlocked = false; // this transition's pair cannot be beat-matched (caps.lock false)
+  private incPending = false; // unmatched pair: the incoming starts at the cut, not at mix start
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
   // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
   // stem separation starts while two waveforms are scrolling and the crossfader is sweeping — see
@@ -437,6 +439,8 @@ export class AutoMixer {
       this.abandonCue();
     }
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1082,6 +1086,10 @@ export class AutoMixer {
       const inc = this.deps.engine.deck(idle);
       this.plan = pickTransition(deckDescriptor(live, this.deps.queue.getCurrent()), deckDescriptor(inc, next));
       const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+      if (!tempoLockable(bpm, inc.beatgrid?.bpm)) {
+        // Too far apart to beat-match: a 4-bar gesture with one cut (see faderX / cutPoint).
+        this.plan = { ...this.plan, bars: 4, bassSwapBar: 0 };
+      }
       {
         const banded = bandBars(bpm, this.plan.bars);
         if (banded !== this.plan.bars) this.plan = { ...this.plan, bars: banded, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(banded) : 0 };
@@ -1532,7 +1540,8 @@ export class AutoMixer {
     const style = resolveStyle(this.plan, caps, this.lastStyle, { shape });
     this.plan.style = style;
     // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
-    this.plan.entry = resolveEntry(style, caps, shape);
+    this.plan.entry = caps.lock ? resolveEntry(style, caps, shape) : "open"; // a cut lands whole
+    this.unlocked = !caps.lock;
     // The acapella hold, when the harmony actually permits it. keyKnown is the load-bearing half:
     // pickTransition reports keyMatch:true for an UNKNOWN pair too (a neutral guess), and holding
     // a lead vocal over a bed on that guess is the way this move goes badly wrong. Unknown is not
@@ -1605,7 +1614,8 @@ export class AutoMixer {
     tl = lap("sync", tl);
     if (caps.lock) this.beginGlide(live, inc);
     tl = lap("glide", tl);
-    inc.play();
+    if (caps.lock) inc.play();
+    else this.incPending = true; // starts on the cut's downbeat (tickMixing)
     lap("play", tl);
     const total = performance.now() - t0;
     perfWork("automix.start", total);
@@ -1635,7 +1645,15 @@ export class AutoMixer {
     // phase-lock rides pure PI with the full ±SYNC_TRIM_MAX headroom (the same signal the Smart
     // Fader sets on arm; endGlide clears it). Without this every auto-transition wobbled.
     this.deps.engine.setCommandedRamp(true);
-    if (!this.plan?.keyMatch) {
+    // KEY-LOCK STAYS ON through the glide unless the pair is within 2 %. Real DJs leave master tempo
+    // on (Kim et al.: only 2.5 % of tracks in 1,557 mixes were transposed at all); a vinyl ride over
+    // a 10 % gap is a 1.6-semitone pitch bend of both records mid-blend.
+    const near = (() => {
+      const f = foldTempoOctave(inc.beatgrid?.bpm ?? 0, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
+      const a = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+      return f != null && a > 0 && Math.max(f / a, a / f) - 1 <= 0.02;
+    })();
+    if (!this.plan?.keyMatch && near) {
       this.glideKeylock = { A: this.deps.engine.deck("A").keylock, B: this.deps.engine.deck("B").keylock };
       // PIN keylock off (not just setKeylock(false)) for the vinyl pitch ride: pinning also stops
       // setPitch from silently re-engaging keylock on a user KEY-nudge mid-glide (Deck.setPitch),
@@ -1693,7 +1711,7 @@ export class AutoMixer {
     }
     // The user stopped the incoming deck → hand off rather than fight. A hand on its platter (a
     // nudge, a quick scratch) is not a stop — see playingOrHeld.
-    if (!playingOrHeld(inc)) {
+    if (!this.incPending && !playingOrHeld(inc)) {
       this.handoffToManual();
       return;
     }
@@ -1703,8 +1721,16 @@ export class AutoMixer {
     if (live.playing) this.mixElapsed += dt;
     const p = clamp(this.mixElapsed / Math.max(0.001, this.barsSeconds), 0, 1);
 
+    // AN UNMATCHED PAIR STARTS THE INCOMING AT THE CUT, on the one — not at the top of the
+    // transition, where it would run unsynced under the outgoing (muted, but out of phase with the
+    // downbeat it is meant to land on).
+    if (this.incPending && p >= cutPoint(this.plan.style, this.plan.bars)) {
+      this.incPending = false;
+      inc.play();
+    }
     const liveSign = this.liveId === "A" ? -1 : 1;
-    const cfv = lerp(liveSign, -liveSign, p);
+    const x = faderX(this.plan.style, p, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
+    const cfv = lerp(liveSign, -liveSign, x);
     this.deps.applyCrossfade(cfv);
     this.lastXfade = cfv;
 
@@ -1718,7 +1744,8 @@ export class AutoMixer {
     this.raceStems(live, inc, idle, p);
 
     const swapStart = this.plan.style === "cut" ? 0 : this.plan.bassSwapBar / Math.max(1, this.plan.bars);
-    const swapSpan = 1 / Math.max(1, this.plan.bars);
+    // One BEAT, starting on the swap bar's downbeat (was a whole bar): a DJ swaps the bass on the one.
+    const swapSpan = 1 / Math.max(1, this.plan.bars * 4);
     const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
     if (this.useStems) {
       const raw = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
@@ -1753,7 +1780,7 @@ export class AutoMixer {
       // tempos do NOT agree, which is exactly when a beatmatched blend is the wrong idea.
       const rev = this.borrowedFx?.saved.find((x) => x.device.kind === "reverb")?.device;
       const wet = clamp((p - 0.1) / 0.5, 0, 1);
-      rev?.setParam("mix", wet * 0.8);
+      rev?.setParam("mix", this.unlocked && p >= cutPoint("washOut", this.plan.bars) ? 1 : wet * 0.8);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setFilter(lerp(0, 0.7, wet)); // the dry body thins as the wet swells
       // A freeze on the tail turns the last swell into a pad the incoming walks in over — thrown
@@ -1785,7 +1812,7 @@ export class AutoMixer {
       // dry level away and let the wet tail carry.
       const wet = clamp((p - 0.25) / 0.45, 0, 1);
       const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
-      dly?.setParam("mix", wet * 0.75);
+      dly?.setParam("mix", this.unlocked && p >= cutPoint("echoOut", this.plan.bars) ? 1 : wet * 0.75);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setEqHigh(lerp(0, -6, wet));
       live.setFilter(lerp(0, 0.5, wet));
@@ -1807,11 +1834,11 @@ export class AutoMixer {
       // leaves through a high-pass in the back half. Bass still swaps so lows don't
       // stack. The filter masks an unproven pairing — sounds deliberate.
       live.setFilter(lerp(0, 0.85, clamp((p - 0.45) / 0.55, 0, 1)));
-      live.setEqLow(lerp(0, EQ_KILL, s));
+      live.setEqLow(bassSwapDb(s).out);
     } else {
       // EQ3 blend: bass swap, plus duck the OUTGOING highs in the last third so the
       // hats/cymbals don't clash on the way out — a 3-band handover, not just lows.
-      live.setEqLow(lerp(0, EQ_KILL, s));
+      live.setEqLow(bassSwapDb(s).out);
       live.setEqHigh(lerp(0, -10, clamp((p - 0.6) / 0.4, 0, 1)));
       // Contextual one-knob filter motion layered on the EQ: the INCOMING slides in from
       // under a gentle low-pass over the first half, the OUTGOING ghosts out through a
@@ -1828,13 +1855,17 @@ export class AutoMixer {
     // The stutter window: a fast tremolo on the outgoing's filter, driven off transition progress
     // (not a timer) so pausing freezes it along with everything else.
     if (this.mixElapsed < this.stutterUntil) {
-      const phase = Math.sin(this.mixElapsed * Math.PI * 16); // ~8 Hz — a bar of 16ths at 120bpm
+      // A 16th-note tremolo AT THIS TRACK'S TEMPO (was a fixed 8 Hz: right at 120 BPM only, and
+      // drifting off the grid at any other tempo).
+      const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 120;
+      const phase = Math.sin(2 * Math.PI * (bpm / 15) * this.mixElapsed);
       live.setFilter(clamp(0.55 + 0.45 * phase, 0, 1));
     }
 
     // Done when the ramp finishes, the outgoing track runs out, or the user kills
     // the outgoing deck (a deliberate "drop the old track" move → finish on incoming).
-    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !live.playing) this.settle();
+    // (A hand on the outgoing platter is not that — see playingOrHeld.)
+    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !playingOrHeld(live)) this.settle();
   }
 
   // ── THE INCOMING HALF OF THE TRANSITION ──────────────────────────────────────────────────────
@@ -1868,6 +1899,8 @@ export class AutoMixer {
     }
     this.cuedIdle = null;
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1935,6 +1968,8 @@ export class AutoMixer {
     inc.setTempo(0);
     inc.setPitch(0);
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -2015,7 +2050,8 @@ export class AutoMixer {
     const baseDown =
       grid.beats && grid.beats.length && grid.downbeat != null ? grid.beats[grid.downbeat] ?? firstBeat : firstBeat;
     const t = chooseMixIn(s, barsSeconds, baseDown);
-    return t <= baseDown ? baseDown : Math.max(baseDown, nearestBeat(grid, t));
+    // On a BAR LINE: the incoming starts on its own "one", which is what lands on the outgoing's.
+    return t <= baseDown ? baseDown : Math.max(baseDown, nearestDownbeat(grid, t));
   }
 
   // Raise / lower the GPU quiet window. Raising twice is a no-op (one hold per transition); the
@@ -2108,10 +2144,10 @@ export function entryRamp(
     // The blend's arrival: in from under a gentle low-pass over the first half, bass on the plan's
     // swap schedule.
     case "sweep":
-      return { filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)), eqLow: lerp(EQ_KILL, 0, s) };
+      return { filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)), eqLow: bassSwapDb(s).in };
     // The filter style's arrival: further down, and opening across the WHOLE blend.
     case "sweepWide":
-      return { filter: lerp(-0.85, 0, p), eqLow: lerp(EQ_KILL, 0, s) };
+      return { filter: lerp(-0.85, 0, p), eqLow: bassSwapDb(s).in };
     // Sits under the outgoing's tightening loop and opens as it does. Bass is already free — the
     // loop chop kills the outgoing low separately, so there is nothing to swap with.
     case "underLoop":
@@ -2279,6 +2315,59 @@ export function stemBlend(
     },
     inc: { drums: Math.sin((s * Math.PI) / 2), bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.55) / 0.25, 0, 1)), other: incOther },
   };
+}
+
+/** Where in the transition (0..1) an UNMATCHED pair's single cut happens: the incoming starts on that
+ *  downbeat and the fader moves only then. Echo/wash cut half-way (two bars of throw, two of tail
+ *  over the new track); the spin when the spinback fires; a drop or a cut on the last bar. */
+export function cutPoint(style: TransitionStyle, bars: number): number {
+  if (style === "echoOut" || style === "washOut") return 0.5;
+  if (style === "spinOut") return 0.72;
+  return bars > 1 ? 1 - 1 / bars : 0.75;
+}
+
+const smooth = (x: number) => {
+  const t = clamp(x, 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/** THE FADER, as a function of the transition. 0 = all outgoing, 1 = all incoming.
+ *
+ *  • A BEAT-MATCHED blend (blend / filter / stemswap) comes IN EARLY and goes OUT LATE: the incoming
+ *    reaches the middle over the first quarter, both sit there, and the outgoing leaves over the
+ *    final phrase (the later of the bass swap and the last 8 bars). That is the shape Kim, Yang &
+ *    Nam measured from 50,742 real transitions (DAFx 2022): incoming fader up early, outgoing held
+ *    to the end. A straight line from 0 to 1 is a fade — the outgoing loses level from bar one.
+ *  • A CUT is a cut: nothing until its last bar's downbeat, then all of it.
+ *  • An UNMATCHED pair moves the fader once, at cutPoint — before it the incoming is silent (it is
+ *    not even playing), so two unsynced beats never overlap; the echo/wash tail is the only overlap.
+ *  • Every other gesture keeps the straight line its own shaping was written against. */
+export function faderX(style: TransitionStyle, p: number, bars: number, swapBar: number, lock: boolean): number {
+  if (!lock) {
+    const cut = cutPoint(style, bars);
+    if (p < cut) return 0;
+    if (style === "echoOut" || style === "washOut") return 0.5 + 0.5 * smooth((p - cut) / Math.max(1e-3, 1 - cut));
+    return 1;
+  }
+  if (style === "cut") return p < cutPoint("cut", bars) ? 0 : 1;
+  if (style === "blend" || style === "filter" || style === "stemswap") {
+    const b = Math.max(1, bars);
+    const inEnd = 0.25;
+    const outStart = Math.max(swapBar / b, 1 - Math.min(8, b / 2) / b);
+    if (p < inEnd) return 0.5 * smooth(p / inEnd);
+    if (p < outStart) return 0.5;
+    return 0.5 + 0.5 * smooth((p - outStart) / Math.max(1e-3, 1 - outStart));
+  }
+  return clamp(p, 0, 1);
+}
+
+/** An EQUAL-POWER low-end handover in dB: the outgoing's low shelf follows cos, the incoming's sin,
+ *  floored at the kill. The old ramp was linear in DECIBELS, which put both basses at −13 dB in the
+ *  middle — about 10 dB under one full bass for half the swap: a hole in the low end. */
+export function bassSwapDb(s: number): { out: number; in: number } {
+  const db = (g: number) => (g <= 1e-4 ? EQ_KILL : Math.max(EQ_KILL, 20 * Math.log10(g)));
+  const t = clamp(s, 0, 1);
+  return { out: db(Math.cos((t * Math.PI) / 2)), in: db(Math.sin((t * Math.PI) / 2)) };
 }
 
 /** Highest stem level the deck accepts (Deck.setStemGain clamps to it). */

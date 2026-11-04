@@ -1629,4 +1629,27 @@ describe("AutoMixer machine — a pair too far apart to beat-match", () => {
     const label = (r.mixer.getStatus().planLabel ?? "").toLowerCase();
     expect(label.startsWith("blend") || label.startsWith("stem")).toBe(false);
   });
+
+  test("88 → 130 BPM: the incoming starts AT the cut, on the one — silent and stopped before it", async () => {
+    const r = new Rig("showy");
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.mixer.getStatus().plan?.bars).toBe(4); // one short gesture
+    expect(r.engine.B.playing).toBe(false); // not yet: it would run unsynced under A
+    expect(r.xfade).toBe(-1); // fader still all on A
+    let startedAt: number | null = null;
+    for (let i = 0; i < 40 && r.phase === "mixing"; i++) {
+      await r.tick(500);
+      if (startedAt == null && r.engine.B.playing) startedAt = r.mixer.getStatus().mixProgress ?? null;
+    }
+    expect(startedAt).not.toBeNull();
+    expect(startedAt!).toBeGreaterThanOrEqual(0.5); // the cut, not the top of the transition
+    expect(r.phase).not.toBe("manual"); // a deliberately stopped incoming is not a user stop
+  });
 });

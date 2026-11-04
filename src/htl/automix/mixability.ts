@@ -234,8 +234,16 @@ function stylePreference(score: number, confident: boolean): TransitionStyle[] {
   return ["gateChop", "loopChop", "dropSwap", "spinOut", "cut"];
 }
 
+/** The gestures that never put two unsynced beats on top of each other: the outgoing leaves through
+ *  its own tail (echo, wash, spin) or collapses, and the incoming starts ON THE ONE at a single cut.
+ *  The only honest moves for a pair too far apart to beat-match (the echo-out / cut-on-the-one that
+ *  hip-hop and open-format DJs use; Vande Veire & De Bie's auto-DJ cues on whole phrases for the
+ *  same reason). Everything else overlaps the two rhythms for bars. */
+export const UNLOCKED_STYLES: readonly TransitionStyle[] = ["echoOut", "washOut", "spinOut", "dropSwap", "cut"];
+
 /** Is this style possible right now? */
 function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
+  if (caps.lock === false && !UNLOCKED_STYLES.includes(style)) return false;
   switch (style) {
     case "stemswap":
       return caps.stems && caps.lock !== false; // needs separation AND two rhythms that can lock
@@ -351,7 +359,10 @@ export function resolveStyle(
   const { shape } = opts;
   // "journey" means keep it moving, so it gets a wider net to dodge a repeat into.
   const tolerance = opts.tolerance ?? (shape?.arc === "journey" ? 2 : 1);
-  const available = stylePreference(plan.score, plan.confident).filter((s) => styleAvailable(s, caps));
+  // A pair that cannot be beat-matched gets the echo-out / cut-on-the-one family in THAT order,
+  // whatever its score: the research's first answer for mismatched tempos is the echo out.
+  const ranked = caps.lock === false ? [...UNLOCKED_STYLES] : stylePreference(plan.score, plan.confident);
+  const available = ranked.filter((s) => styleAvailable(s, caps));
   if (!available.length) return "cut"; // always possible, and an honest answer for a hopeless pair
   // Stable re-rank: equal adjusted ranks keep preference order, so with no shape this is identity.
   const prefs = shape

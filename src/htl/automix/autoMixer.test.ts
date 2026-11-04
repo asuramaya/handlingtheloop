@@ -2,7 +2,7 @@ import { describe, test, expect } from "vitest";
 // autoMixer.ts imports cleanly in a plain-node test env (no AudioContext/DOM is
 // touched at module load — the engine is only reached through the injected deps),
 // so its pure module-level helpers can be unit-tested directly.
-import { barsLeft, barsToSeconds, decideLive, entryRamp, gainTrim, other, rollLadder, stemBlend } from "./autoMixer";
+import { barsLeft, barsToSeconds, decideLive, entryRamp, gainTrim, other, rollLadder, stemBlend, bassSwapDb } from "./autoMixer";
 
 
 describe("gainTrim — AUTO's channel gain staging", () => {
@@ -167,20 +167,32 @@ describe("entryRamp — how the incoming track arrives", () => {
     }
   });
 
-  test("`sweep` matches the blend's historical incoming ramp exactly", () => {
+  // The filter halves are the historical ramps; the bass half is now the EQUAL-POWER swap
+  // (bassSwapDb) — the old lerp in dB left both lows at −13 dB mid-swap.
+  test("`sweep`: the blend's historical filter ramp, bass on the equal-power swap", () => {
     for (const p of [0, 0.25, 0.5, 0.75, 1]) {
       const s = clamp(p * 1.3, 0, 1); // any s — the eqLow term is a function of s alone
       expect(entryRamp("sweep", p, s)).toEqual({
         filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)),
-        eqLow: lerp(EQ_KILL, 0, s),
+        eqLow: bassSwapDb(s).in,
       });
     }
   });
 
-  test("`sweepWide` matches the filter style's historical incoming ramp exactly", () => {
+  test("the bass swap has no hole: both lows together stay within 3 dB of one", () => {
+    for (let i = 0; i <= 20; i++) {
+      const { out, in: inc } = bassSwapDb(i / 20);
+      const power = 10 ** (out / 10) + 10 ** (inc / 10);
+      expect(10 * Math.log10(power)).toBeGreaterThan(-3.1);
+    }
+    expect(bassSwapDb(0)).toEqual({ out: 0, in: EQ_KILL });
+    expect(bassSwapDb(1).in).toBeCloseTo(0, 6);
+  });
+
+  test("`sweepWide`: the filter style's historical filter ramp, bass on the equal-power swap", () => {
     for (const p of [0, 0.25, 0.5, 0.75, 1]) {
       const s = clamp(p * 1.3, 0, 1);
-      expect(entryRamp("sweepWide", p, s)).toEqual({ filter: lerp(-0.85, 0, p), eqLow: lerp(EQ_KILL, 0, s) });
+      expect(entryRamp("sweepWide", p, s)).toEqual({ filter: lerp(-0.85, 0, p), eqLow: bassSwapDb(s).in });
     }
   });
 

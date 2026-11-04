@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { faderCompensated, stemBlend, STEM_GAIN_MAX } from "./autoMixer";
+import { faderCompensated, faderX, stemBlend, STEM_GAIN_MAX } from "./autoMixer";
 import { crossfadeGains } from "../audio/crossfadeCurve";
 
 // THE LEVEL THROUGH A STEM SWAP (operator, 2026-11-04: "when it uses stems there is some dead
@@ -9,9 +9,13 @@ import { crossfadeGains } from "../audio/crossfadeCurve";
 const STEMS = ["drums", "bass", "vocals", "other"] as const;
 
 function levelDb(p: number, bars: number, swapBar: number, keyMatch: boolean, acapella: boolean, compensate: boolean): number {
-  const s = Math.min(1, Math.max(0, (p - swapBar / bars) / (1 / bars)));
+  // The mixer's swap: one BEAT from the swap bar's downbeat (the old path swapped over a bar).
+  const span = compensate ? 1 / (bars * 4) : 1 / bars;
+  const s = Math.min(1, Math.max(0, (p - swapBar / bars) / span));
   const raw = stemBlend(p, s, { keyMatch, acapella });
-  const xg = crossfadeGains(-1 + 2 * p); // live = A (−1) → incoming = B (+1)
+  // The old path drove the fader on a straight line; the mixer now drives it with faderX.
+  const x = compensate ? faderX("stemswap", p, bars, swapBar, true) : p;
+  const xg = crossfadeGains(-1 + 2 * x); // live = A (−1) → incoming = B (+1)
   const live = compensate ? faderCompensated(raw.live, xg.A) : raw.live;
   const inc = compensate ? faderCompensated(raw.inc, xg.B) : raw.inc;
   let P = 0;
@@ -20,9 +24,10 @@ function levelDb(p: number, bars: number, swapBar: number, keyMatch: boolean, ac
 }
 
 const PLANS = [
-  { name: "24-bar key-matched blend", bars: 24, swap: 8, km: true, aca: false },
-  { name: "16-bar unmatched blend", bars: 16, swap: 6, km: false, aca: false },
-  { name: "24-bar acapella hold", bars: 24, swap: 8, km: true, aca: true },
+  { name: "32-bar key-matched blend", bars: 32, swap: 16, km: true, aca: false },
+  { name: "16-bar key-clash blend", bars: 16, swap: 8, km: false, aca: false },
+  { name: "8-bar blend", bars: 8, swap: 4, km: true, aca: false },
+  { name: "32-bar acapella hold", bars: 32, swap: 16, km: true, aca: true },
 ];
 
 describe("stem swap level", () => {

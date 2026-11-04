@@ -161,6 +161,17 @@ export function ControlsTab({
           </span>
         </div>
 
+        <Slider
+          label="Beat-match range"
+          hint={settings.beatlockRangePct >= 41 ? "Any pair" : `±${Math.round(settings.beatlockRangePct)}%`}
+          value={settings.beatlockRangePct}
+          min={4}
+          max={41}
+          step={1}
+          onChange={(v) => set({ beatlockRangePct: v })}
+          info="How far AUTO and the Smart Fader will bend a track's tempo to beat-match the next one (after half- and double-time). Pairs further apart than this are crossfaded with both tempos left alone, and AUTO picks a transition that does not need a beat-match. 10% is about a DJ's pitch fader. At the top, Any pair, every pair is beat-matched — the genre-bridging morph, which can slow or speed a track by up to 40%."
+        />
+
         {/* The auto-DJ's transition EFFECT is deliberately not here. It lives in a chain named
             AUTO in each deck's own rack, where every other effect in this app is dialled — put a
             reverb in it, or a delay, or three things, and set them however you like. AUTO only

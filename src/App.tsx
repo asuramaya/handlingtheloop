@@ -1,5 +1,6 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
 import { canArmAutoMix } from "./htl/automix/autoMixAuthority";
+import { setBeatlockMax, BEATLOCK_ANY } from "./htl/analysis";
 import { canDriveDeck as canDriveDeckFor, canDriveBoard as canDriveBoardFor } from "./App/drivePermission";
 import type { StemAckState } from "./htl/room/protocol";
 // The requester's stall limit and the host's heartbeat are one invariant with two owners, so both
@@ -1464,6 +1465,8 @@ function AppBody() {
     engine.setMasterHeadroomDb(settings.masterHeadroomDb); // trim BEFORE the limiter — see masterHeadroom.ts
     engine.setPerDeckLimiter(settings.perDeckLimiter); // idempotent: re-applying the same state rewires nothing
     engine.setSyncPhaseGain(settings.syncPhaseGain); // how hard SYNC pulls back onto the beat — see settings.ts
+    // Which pairs AUTO / Smart Fader beat-match. The slider's top (41) is "Any pair": exactly √2.
+    setBeatlockMax(settings.beatlockRangePct >= 41 ? BEATLOCK_ANY : settings.beatlockRangePct / 100);
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
     // ACCENT is in the deps so a track change (new cover art) repaints the chrome too, not just
     // the waveform that happens to take it as a prop.

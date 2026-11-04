@@ -519,13 +519,26 @@ export function foldTempoOctave(target: number, ref: number): number | null {
  *  snapped to its own tempo at the end. A DJ's pitch fader is ±8 %; past ~10 % the stretch is
  *  audible and the result is two records fighting, which is worse than an honest crossfade. */
 export const BEATLOCK_MAX = 0.1;
+/** At or above this the setting means "any pair" — every pair folds to within √2 (41.4 %). */
+export const BEATLOCK_ANY = Math.SQRT2 - 1;
+let beatlockMax = BEATLOCK_MAX;
+/** The user's Beat-match range (Settings ▸ Controls ▸ Auto-DJ), as a fraction. Process-wide like
+ *  the sync gain: AUTO and the Smart Fader both ask tempoLockable, so one setter covers both. */
+export function setBeatlockMax(fraction: number): void {
+  beatlockMax = Number.isFinite(fraction) && fraction > 0 ? fraction : BEATLOCK_MAX;
+}
+export function getBeatlockMax(): number {
+  return beatlockMax;
+}
 
 /** Can two tempos be beat-matched musically — within BEATLOCK_MAX of each other once folded into
  *  the same octave? False on a missing/degenerate tempo (nothing to lock to). */
-export function tempoLockable(a: number | null | undefined, b: number | null | undefined, max = BEATLOCK_MAX): boolean {
+export function tempoLockable(a: number | null | undefined, b: number | null | undefined, max = beatlockMax): boolean {
   if (!(a && b && a > 0 && b > 0)) return false;
   const folded = foldTempoOctave(b, a);
-  return folded != null && Math.abs(folded / a - 1) <= max;
+  // Compared on the octave-folded RATIO both ways round, with a hair of slack, so "any pair" at
+  // the top of the range really admits the worst case (exactly √2 apart).
+  return folded != null && Math.max(folded / a, a / folded) - 1 <= max + 1e-9;
 }
 
 /** The SYNC slave's tempo target (BPM) that keeps it beat-density-locked to a master running at

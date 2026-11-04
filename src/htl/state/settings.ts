@@ -124,6 +124,11 @@ export interface Settings {
   // gestures whenever they fit. This is deliberately NOT a quality setting — none of these makes
   // the mix better, they make it more present.
   autoPerformance: AutoPerformance;
+  /** BEAT-MATCH RANGE, in percent: the widest tempo move (after half/double folding) AUTO and the
+   *  Smart Fader will make to beat-match two tracks. Past it they crossfade with both tempos left
+   *  alone. 10 = a DJ's pitch fader plus a little. 41 (the top) = any pair: every pair folds to
+   *  within √2, so this restores the old "bridge two genres" morph (operator, 2026-11-04). */
+  beatlockRangePct: number;
   /** Where AUTO routes a stem during a transition — see AutoFxSettings. The EFFECT itself lives
    *  in the deck's rack, in a chain named AUTO, not here. */
   autoFx: AutoFxSettings;
@@ -332,6 +337,7 @@ export const DEFAULT_SETTINGS: Settings = {
   syncPhaseGain: 0.06, // the shipped gentleness — nobody's sync feel changes until they choose it
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
+  beatlockRangePct: 10, // beat-match only pairs a pitch fader could match; see analyze.ts BEATLOCK_MAX
   autoFx: { stem: "vocals", seeded: false }, // vocals: the stem that otherwise stops dead
   micFxSeeded: false, // the MIC chain has not been offered yet; the mic lands on the sum until it is
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour

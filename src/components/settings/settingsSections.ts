@@ -16,7 +16,7 @@ export const SECTION_KEYS: Record<SectionKey, (keyof Settings)[]> = {
     "markerThickness", "uiContrast", "inheritRoomColor", "deckArtAccent",
     "libraryDock", "settingsDock", "peopleDock", "sessionDock", "panelOrder", "panelDim",
   ],
-  controls: ["wheelSeeks", "keyHints", "keyBindings", "autoPerformance"],
+  controls: ["wheelSeeks", "keyHints", "keyBindings", "autoPerformance", "beatlockRangePct"],
   turntable: [
     "jogWeight", "jogSensitivity", "jogBendStrength", "vinylBrakeTime", "vinylStartTime", "backSpinLength", "slip",
     "stretchEngine", "stretchQuality", "stretchTransient", "stretchAa", "stretchTThresh", "syncPhaseGain",

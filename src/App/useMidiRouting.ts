@@ -10,6 +10,7 @@ import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
+import { pickupStep } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
@@ -361,11 +362,26 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
           const ctl = emitRef.current;
+          // ★ A SYNCED FOLLOWER IGNORES ITS HARDWARE TEMPO SLIDER (operator, 2026-11-03: "sync
+          // problems when using sync/master"). SYNC moves the follower's tempo; the FLX4's slider does
+          // not move with it. Any reading from that slider (a brush, or the fader's own noise) went
+          // straight to setTempo, which RELEASES the lock (onDeckTempo: the user took the follower
+          // off the leash) and jumped the tempo to wherever the slider sat. A CDJ ignores a synced
+          // deck's tempo slider; so does this. Press SYNC to let go. The pickup state is reset, so
+          // after release the slider has to come to the deck's tempo before it takes over.
+          if (ev.target === "tempo" && engine.syncRole(id) === "slave") {
+            knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
+            break;
+          }
           // Soft-takeover for an ABSOLUTE pickup knob (Starrypad): don't move the param
           // until the knob value sweeps THROUGH its current value — so switching focus /
           // first touch never jumps. Once caught it tracks 1:1 (and reaches 0/max).
-          if (ev.pickup) {
+          // ★ AND EVERY HARDWARE TEMPO SLIDER. Its position and the deck's tempo part company whenever
+          // something else sets the tempo (SYNC, the screen, a keyboard nudge, the auto-mixer), and the
+          // next touch used to JUMP the tempo to the slider. Keyed per deck (the FLX4 has two).
+          if (ev.pickup || ev.target === "tempo") {
             const t = ev.target;
+            const key = t === "tempo" ? `${id}:tempo` : t;
             let cur01: number | null = null;
             if (t === "level") cur01 = deck.level / 2;
             else if (t === "trim") cur01 = deck.trim / 2;
@@ -378,9 +394,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             else if (t === "filterHp") cur01 = deck.hpAmount;
             else if (t === "filterLp") cur01 = deck.lpAmount;
             if (cur01 != null) {
-              const st = knobPickup.current[t];
-              const caught = st?.caught === true || (st != null && ((st.last <= cur01 && ev.value >= cur01) || (st.last >= cur01 && ev.value <= cur01)));
-              knobPickup.current[t] = { caught, last: ev.value };
+              // A caught TEMPO slider lets go when the tempo was moved by anything else since its
+              // last reading (SYNC, the screen, the keyboard): it has to pick up afresh (relatch).
+              const next = pickupStep(knobPickup.current[key], cur01, ev.value, t === "tempo");
+              knobPickup.current[key] = next;
+              const caught = next.caught;
               if (!caught) break; // not caught yet → ignore so it never jumps
             }
           }

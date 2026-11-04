@@ -349,7 +349,14 @@ function AppBody() {
   // grids on screen, not just in the audio.
   const doSync = useCallback(
     (id: DeckId) => {
-      engine.toggleSync(id);
+      // ★ PRESSING THE BUTTON THAT READS "MASTER" RELEASES SYNC (operator, 2026-11-03: "sync
+      // problems when using sync/master"). The engine's toggle FLIPS a master into the follower,
+      // which the auto-mixer and Smart Fader rely on, but from the button it meant: press the deck
+      // you are playing out, labelled MASTER, and ITS tempo jumps to follow the other deck. Now the
+      // lit button on either deck lets go, and nothing's tempo moves. To swap who leads, press SYNC
+      // on the deck that should follow.
+      if (engine.syncRole(id) === "master") engine.releaseSync();
+      else engine.toggleSync(id);
       if (engine.syncRole(id) === "slave") {
         const other: DeckId = id === "A" ? "B" : "A";
         setZoom((z) => ({ ...z, [id]: z[other] }));

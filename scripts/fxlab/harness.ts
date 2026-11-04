@@ -3284,6 +3284,136 @@ async function duckRunLive(opts: { limiter: boolean; aAmp: number; bAmp: number;
   };
 };
 
+// ★ SYNC START (operator, 2026-11-03: "sync problems when using sync/master"). fxlabSyncDrift engages
+// SYNC on two decks that are ALREADY playing and measures holding. The everyday DJ moves are
+// different: engage SYNC while the next track waits at its cue, then press play; hot-cue the
+// follower; stop and restart the master under a playing follower. Each one is a fresh start, and
+// before syncAlign.ts the phase at that moment was whatever it happened to be, left to the ~8 s
+// phase-lock to pull in. Real engine, click tracks rendered from their own (slightly wavering)
+// grids, phase measured from the AUDIO onsets. `align: false` unhooks the start alignment so the
+// before/after comes from the same build.
+(globalThis as unknown as { fxlabSyncStart: (scenario: string, align: boolean) => Promise<Record<string, unknown>> }).fxlabSyncStart = async (scenario, align) => {
+  const { AudioEngine } = await import("../../src/htl/audio/AudioEngine");
+  const eng = new AudioEngine();
+  await eng.ensureWorklets();
+  eng.resume();
+  await new Promise((r) => setTimeout(r, 300));
+  const sr = eng.ctx.sampleRate;
+  const mk = (bpm: number, wave: number, phase0: number) => {
+    const secs = 120;
+    const b = eng.ctx.createBuffer(2, Math.round(sr * secs), sr);
+    const spb = 60 / bpm;
+    const beats: number[] = [];
+    let t = phase0;
+    for (let k = 0; t < secs; k++) {
+      beats.push(t);
+      t += spb * (1 + wave * Math.sin((2 * Math.PI * k) / 32));
+    }
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (const at0 of beats) {
+        const at = Math.round(at0 * sr);
+        for (let i = 0; i < 400 && at + i < d.length; i++) d[at + i] = Math.exp(-i / 60) * Math.sin((2 * Math.PI * 1200 * i) / sr);
+      }
+    }
+    return { buf: b, grid: { bpm, firstBeat: beats[0], interval: spb, beats: Float32Array.from(beats) }, onsets: beats };
+  };
+  const A = mk(128, 0.01, 0.13);
+  const B = mk(124, 0.013, 0.41);
+  const phaseAt = (onsets: number[], pos: number) => {
+    let lo = 0, hi = onsets.length - 1, k = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (onsets[m] <= pos) { k = m; lo = m + 1; } else hi = m - 1;
+    }
+    if (k < 0 || k + 1 >= onsets.length) return null;
+    return (pos - onsets[k]) / (onsets[k + 1] - onsets[k]);
+  };
+  const audioErr = () => {
+    const pa = phaseAt(A.onsets, eng.deckA.position());
+    const pb = phaseAt(B.onsets, eng.deckB.position());
+    if (pa == null || pb == null) return null;
+    const x = pa - pb;
+    return x - Math.round(x);
+  };
+  eng.deckA.setBuffer(A.buf, A.grid as never);
+  eng.deckB.setBuffer(B.buf, B.grid as never);
+  if (!align) {
+    eng.deckA.startAlign = undefined;
+    eng.deckB.startAlign = undefined;
+  }
+  eng.setCrossfade(0);
+  const wait = (s: number) => new Promise((r) => setTimeout(r, s * 1000));
+  const marks: Record<string, number | null> = {};
+  const sample = async (label: string, at: number[]) => {
+    let prev = 0;
+    for (const t of at) {
+      await wait(t - prev);
+      prev = t;
+      const e = audioErr();
+      marks[`${label}+${t}s`] = e == null ? null : +Math.abs(e).toFixed(3);
+    }
+  };
+  if (scenario === "engage-paused") {
+    // the next track parked at a cue, SYNC pressed, play pressed 2.53 s later
+    eng.deckA.seek(20);
+    eng.deckA.play();
+    eng.deckB.seek(30);
+    eng.toggleSync("B");
+    await wait(2.53); // 5.4 beats at 128: a start ~0.4 beat out unless something aligns it
+    eng.deckB.play();
+    await sample("play", [0.3, 2, 6]);
+  } else if (scenario === "cue-jump") {
+    eng.deckA.seek(20);
+    eng.deckB.seek(30);
+    eng.deckA.play();
+    eng.deckB.play();
+    eng.toggleSync("B");
+    await wait(3);
+    eng.deckB.seek(eng.deckB.position() + 7.45); // a hot cue 15.4 beats away: ~0.4 beat out of phase
+    await sample("jump", [0.3, 2, 6]);
+  } else if (scenario === "master-stops" || scenario === "master-loads") {
+    // The follower (B) is playing out; the master (A) stops, or takes the next track while stopped.
+    // The LIVE deck must not move: same sounding rate, no jump in position, and it should now lead.
+    eng.deckA.seek(20);
+    eng.deckB.seek(30);
+    eng.deckA.play();
+    eng.deckB.play();
+    eng.toggleSync("B");
+    await wait(4); // let the phase-lock build a trim on B
+    const rate0 = eng.deckB.effectiveRate;
+    eng.deckA.pause();
+    if (scenario === "master-loads") {
+      const C = mk(140, 0.01, 0.2);
+      eng.deckA.setBuffer(C.buf, C.grid as never);
+      eng.reassertSync("A");
+    }
+    const t0 = performance.now();
+    const p0 = eng.deckB.position();
+    await wait(0.6);
+    const dt = (performance.now() - t0) / 1000;
+    const travelled = eng.deckB.position() - p0;
+    marks["roleB"] = eng.syncRole("B") === "master" ? 1 : 0;
+    marks["rateChangePct"] = +(Math.abs(eng.deckB.effectiveRate / rate0 - 1) * 100).toFixed(3);
+    marks["jumpMs"] = +(Math.abs(travelled - dt * rate0) * 1000).toFixed(1);
+  } else if (scenario === "master-restart") {
+    eng.deckA.seek(20);
+    eng.deckB.seek(30);
+    eng.deckA.play();
+    eng.deckB.play();
+    eng.toggleSync("B");
+    await wait(3);
+    eng.deckA.pause();
+    await wait(1.53);
+    eng.deckA.play();
+    await sample("restart", [0.3, 2, 6]);
+  }
+  eng.deckA.pause();
+  eng.deckB.pause();
+  await eng.ctx.close();
+  return { scenario, align, ...marks };
+};
+
 // ★ PUTTING A NUMBER ON A JUDGEMENT THAT WAS WRITTEN DOWN AS A JUDGEMENT (thread 7a98957f).
 // DelayFx and ReverbFx tap `duckScale` with an AnalyserNode so the UI can show the real duck depth.
 // That tap is on the SIDECHAIN side, and BaseFxDevice's bypass gate only cuts edges out of `wet` —

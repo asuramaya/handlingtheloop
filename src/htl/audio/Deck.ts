@@ -368,6 +368,9 @@ export class Deck {
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
   syncRole: SyncRole = "off";
   onTempoChange?: () => void; // AudioEngine hook, fired at the end of setTempo
+  /** AudioEngine hook: where this deck should really START (play, or a jump while playing) so a
+   *  SYNC pair starts in phase. Returns the position unchanged when not synced. See syncAlign.ts. */
+  startAlign?: (pos: number) => number;
   onRateChange?: () => void; // Sampler hook — region voices ride the deck tempo; fired at the end of setTempo
   keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
   onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
@@ -1637,6 +1640,8 @@ export class Deck {
     // it. Scrub/needle-drop already do this, but tapping Play first does not — so a
     // fresh load + Play (no prior scrub) rendered silence. Resume on the Play gesture.
     if (this.ctx.state === "suspended") void this.ctx.resume();
+    // A synced deck starts in phase with the other (nearest in-phase point, ≤ half a beat away).
+    if (this.startAlign) this.startOffset = Math.max(0, Math.min(this._duration, this.startAlign(this.startOffset)));
     this.spawnSource(this.startOffset);
     this._playing = true;
   }
@@ -1666,8 +1671,11 @@ export class Deck {
   seek(seconds: number) {
     this.jog.cancelJog();
     this.clearBend();
-    const target = Math.max(0, Math.min(this.duration, seconds));
+    let target = Math.max(0, Math.min(this.duration, seconds));
     if (this._playing) {
+      // A jump while playing lands in phase with a synced partner (paused, the exact spot is kept:
+      // a cue point must stay where it was set, and play() aligns when it starts).
+      if (this.startAlign) target = Math.max(0, Math.min(this.duration, this.startAlign(target)));
       // Declicked gapless re-seat. The old stopSource()+spawnSource() pair coalesced in
       // the worklet before any audio rendered, so the 5 ms fade never happened → a hard
       // click at the discontinuity on every cue/loop jump (worse on rapid fire). One

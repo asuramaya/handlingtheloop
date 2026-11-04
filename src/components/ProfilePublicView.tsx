@@ -1,3 +1,4 @@
+import { displayArtist } from "../util/format";
 import { type ReactNode, useState } from "react";
 import { PeopleList } from "./social/PeopleList";
 
@@ -160,7 +161,7 @@ export function ProfilePublicView({
                       belt-and-braces for an older server or a partial payload, and it says what is
                       true — that we do not know — rather than showing the id. */}
                   <span className="profile-top-title">{t.title || "Unknown track"}</span>
-                  {t.artist && <span className="profile-top-artist">{t.artist}</span>}
+                  {t.artist && <span className="profile-top-artist">{displayArtist(t.artist)}</span>}
                 </span>
                 <span className="profile-top-plays">{t.plays}×</span>
               </li>

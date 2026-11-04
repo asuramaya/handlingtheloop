@@ -639,8 +639,21 @@
   padding: 0;
   border: 0;
 }
+/* A loaded row reads in its deck's colour (--row-deck, set inline by TrackTable); the old fixed
+   green is only the fallback for a row loaded somewhere the table has no colour for. */
 .track-table tbody tr.loaded {
-  color: #6ee7a8;
+  color: var(--row-deck, #6ee7a8);
+}
+/* The cache-dot slot ahead of each title: a fixed width, so every title in the column starts at
+   the same x whether its row has zero, one or two dots. */
+.tt-marks {
+  display: inline-flex;
+  align-items: center;
+  width: 22px;
+  vertical-align: middle;
+}
+.tt-marks .cache-pips {
+  margin-right: 0;
 }
 .track-table td {
   padding: var(--tt-row-pad, 7px) 10px; /* row height scales with the −/＋ stepper */
@@ -799,6 +812,17 @@ th.col-thumb {
   .track-table .col-title {
     width: 58%;
   }
+  .track-table td.col-title .tt-deck-inline {
+    display: inline-grid;
+  }
+  /* Time keeps a fixed slot that fits "12:34" (it was 12% of the row: 16px of text, "4…"). With
+     table-layout: fixed the % columns share what is left. */
+  .track-table .col-time {
+    width: 3.6em;
+    padding-left: 4px;
+    padding-right: 8px;
+    text-overflow: clip;
+  }
   .track-table .col-artist {
     width: 30%;
   }
@@ -896,3 +920,19 @@ th.col-thumb {
   font-weight: 700;
 }
 
+
+/* The A/B deck badge sits in the # cell (TrackTable): no trailing margin, tighter side padding,
+   and clip rather than ellipsis so a badge a hair wider than the digits never prints "..". */
+td.col-num {
+  padding-left: 6px;
+  padding-right: 4px;
+  text-overflow: clip;
+}
+.col-num .tt-deck {
+  margin-right: 0;
+}
+
+/* Narrow-view copy of the deck badge (TrackTable): hidden while the # column carries it. */
+.track-table .tt-deck-inline {
+  display: none;
+}

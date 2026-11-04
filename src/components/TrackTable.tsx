@@ -1,7 +1,7 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
-import { fmtTime } from "../util/format";
+import { displayArtist, fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
 import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
@@ -580,10 +580,13 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {view.slice(vStart, vEnd).map((t, k) => {
               const i = vStart + k; // true index into `view` (selection/menus/reorder use it)
               const rowKey = trackKey(t); // identity for selection/menus; NOT for deck/cache state
+              const onDeck = deckLoaded?.A === t.videoId ? "A" : deckLoaded?.B === t.videoId ? "B" : null;
               return (
               <tr
                 ref={k === 0 ? firstRowRef : undefined}
                 key={`${rowKey}:${i}`}
+                // A loaded row reads in ITS DECK's colour (it was a fixed green whatever the deck was).
+                style={onDeck && deckColors?.[onDeck] ? ({ ["--row-deck" as string]: deckColors[onDeck] } as CSSProperties) : undefined}
                 className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(rowKey) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
                 draggable
                 onClick={(e) => {
@@ -691,22 +694,36 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   if (Number.isInteger(from) && from !== i) onReorder(from, i);
                 }}
               >
-                <td className="col-num">{i + 1}</td>
+                {/* ★ THE DECK BADGE TAKES THE ROW NUMBER'S PLACE. It used to sit inside the title cell
+                    ahead of the cache dots, so a loaded row's title started ~2em right of every other
+                    row's and the Title column read as ragged. The # is the least useful thing on a
+                    loaded row; "on deck A" is the most. */}
+                <td className="col-num">
+                  {onDeck ? (
+                    <span className="tt-deck" style={{ background: deckColors?.[onDeck] }} title={`Loaded on Deck ${onDeck}`}>
+                      {onDeck}
+                    </span>
+                  ) : (
+                    i + 1
+                  )}
+                </td>
                 <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
                 <td className="col-title" title={t.title}>
-                  {(() => {
-                    const d = deckLoaded?.A === t.videoId ? "A" : deckLoaded?.B === t.videoId ? "B" : null;
-                    return d ? (
-                      <span className="tt-deck" style={{ background: deckColors?.[d] }} title={`Loaded on Deck ${d}`}>
-                        {d}
-                      </span>
-                    ) : null;
-                  })()}
-                  <CachePips videoId={t.videoId} />
+                  {/* Fixed-width slot, so a title starts in the same place with or without dots. */}
+                  {/* The # column (and the deck badge in it) is dropped in the narrow view, so the
+                      badge is repeated here, shown only there (library.css, the 440px container). */}
+                  {onDeck && (
+                    <span className="tt-deck tt-deck-inline" style={{ background: deckColors?.[onDeck] }} aria-hidden="true">
+                      {onDeck}
+                    </span>
+                  )}
+                  <span className="tt-marks">
+                    <CachePips videoId={t.videoId} />
+                  </span>
                   {t.title}
                 </td>
                 <td className="col-artist" title={t.artist}>
-                  {t.artist}
+                  {displayArtist(t.artist)}
                 </td>
                 <td className="col-bpm">{t.bpm != null ? t.bpm.toFixed(1) : "—"}</td>
                 <td className="col-key">{t.key || "—"}</td>

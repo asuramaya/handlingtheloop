@@ -28,3 +28,16 @@ export const fmtPct = (v: number): string => `${Math.round(v * 100)}`;
 
 /** Seconds → "12.34s" at ≥1s, else milliseconds: 0.375 → "375". */
 export const fmtMs = (s: number): string => (s >= 1 ? `${s.toFixed(2)}s` : `${Math.round(s * 1000)}`);
+
+/**
+ * An artist name as it should be READ. YouTube's "artist" is a channel name, and its auto-generated
+ * music channels are all "<Artist> - Topic": a suffix that is noise to a person, and that cost the
+ * Library's Artist column its width ("Britney Spears - To…" while Title had room to spare).
+ * Display only: the stored value is untouched (automix's artistKey does its own normalising), and
+ * a name that is nothing BUT "Topic" is left alone rather than blanked.
+ */
+export function displayArtist(artist: string | null | undefined): string {
+  const s = (artist ?? "").trim();
+  const stripped = s.replace(/\s*-\s*Topic$/i, "").trim();
+  return stripped || s;
+}

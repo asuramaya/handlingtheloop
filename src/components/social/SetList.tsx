@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { SetCard } from "@htl/account";
-import { fmtTime } from "../../util/format";
+import { displayArtist, fmtTime } from "../../util/format";
 
 // A published-set list — the browse card shared by Discover (showHost: many DJs) and a public
 // /@handle profile (the host's own history). Tapping the card EXPANDS its captured tracklist
@@ -49,7 +49,7 @@ export function SetList({ sets, onPlay, showHost }: { sets: SetCard[]; onPlay?: 
                       <span className="set-track-at">{fmtTime(Math.round(t.at / 1000))}</span>
                       <span className="set-track-name">
                         {t.title || t.videoId}
-                        {t.artist && <span className="set-track-artist"> · {t.artist}</span>}
+                        {t.artist && <span className="set-track-artist"> · {displayArtist(t.artist)}</span>}
                       </span>
                     </li>
                   ))

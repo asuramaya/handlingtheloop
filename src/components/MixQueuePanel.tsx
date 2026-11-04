@@ -1,3 +1,4 @@
+import { displayArtist } from "../util/format";
 import { useMemo, useState, type DragEvent } from "react";
 import type { Library } from "@htl";
 import { trackKey } from "@htl/library";
@@ -63,7 +64,7 @@ function TrackRow({ t }: { t: TrackMeta }) {
       <div className="mixq-track-text">
         <span className="mixq-title">{t.title || t.videoId}</span>
         <span className="mixq-artist">
-          {t.artist}
+          {displayArtist(t.artist)}
           {t.key ? ` · ${t.key}` : ""}
           {t.bpm ? ` · ${Math.round(t.bpm)}` : ""}
         </span>

@@ -683,7 +683,22 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
             <>
-            <aside className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}>
+            <aside
+              className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}
+              // ★ ON A NARROW LIBRARY, PICKING A SOURCE CLOSES THE SIDEBAR. Open beside the table on a
+              // phone it left the tracks ~160px wide, titles cut to "I Wan…" and the toolbar and Time
+              // column off the right edge, and nothing closed it again but the caret. Same rule as
+              // the Settings menu: below the width where both fit, a pick is a navigation. Measured
+              // on the library itself, so a narrow desktop dock behaves the same as a phone.
+              // BUBBLE phase, not capture: closing in capture unmounted the button before its own
+              // onClick ran (React flushes the discrete update between the two), so the pick was lost.
+              onClick={(e) => {
+                const item = (e.target as HTMLElement).closest(".lib-nav");
+                if (!item || (e.target as HTMLElement).closest("button.lib-add, .lib-section-toggle")) return;
+                const lib = e.currentTarget.closest(".library") as HTMLElement | null;
+                if (lib && lib.clientWidth < 640) setNavOpen(false);
+              }}
+            >
         {auto && (
           <button
             className={`lib-nav lib-queue-nav ${auto.queueOpen ? "active" : ""}`}
@@ -933,7 +948,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onQueueNext={queueNext}
             onRemove={library.removeTrack}
             removeTitle="Remove from collection"
-            emptyHint="Your collection is empty. Tap “Search YouTube” to find tracks and add them with +."
+            emptyHint="Your collection is empty. Open Search to find tracks, then add them with +."
             loadedIds={loadedIds}
             deckLoaded={deckLoaded}
             deckColors={deckColors}

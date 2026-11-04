@@ -123,7 +123,7 @@ class Scratch extends AudioWorkletProcessor {
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
         this.onset = 0; // samples of first-motion window left (see the move handler)
-        this.micro = false; this.restPos = d.pos; this.quiet = 1e9; // see the arrival stop
+        this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the arrival stop
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -187,17 +187,43 @@ class Scratch extends AudioWorkletProcessor {
         // A GENUINE rest: no real movement reported for ~33 ms. Without this the stop below
         // re-armed itself: it leaves the head exactly at rest, so the next ordinary 60 Hz touch move
         // looked like a move from rest and the whole gesture became a string of stops.
-        if (fromRest && this.quiet > 1600) { this.micro = true; this.restPos = this.target; }
+        // ★ A SLOW, STEADY TURN IS NOT A STRING OF NUDGES. Operator, 2026-11-03: the paused outer
+        // ring is "kind of choppy instead of giving me micro adjustment". A slowly turned ring sends
+        // sparse, evenly spaced ticks (20-60 ms apart), and each one reached the head at rest, so
+        // each got the fast first-touch pacing: cover the tick in 13 ms, then park until the next.
+        // Measured (microjog.mjs ring search): parked 9-67% of the turn, speed spread 0.45-1.64×.
+        // A tick that arrives on the rhythm of the ones before it (within 2.5× the last gap, under
+        // 150 ms) is CONTINUING motion: pace it over that gap, so the head arrives as the next tick
+        // does and glides at the ring's own speed. A tick after real stillness keeps the fast onset.
+        // (> 20 ms: only SPARSE input. 60 Hz touch reaches "rest" between ordinary moves ~17 ms
+        // apart, and pacing those as a slow turn cost touch scratching its alignment — measured.)
+        const steady = fromRest && this.lastGap > 0 && this.quiet > 960 && this.quiet < 2.5 * this.lastGap && this.quiet < 7200;
+        if (fromRest && !steady && this.quiet > 1600) { this.micro = true; this.restPos = this.target; }
         else if (this.micro && (rel > MICRO_SPAN || rel < -MICRO_SPAN)) this.micro = false;
-        if (d.pos !== this.target) this.quiet = 0;
-        if (this.micro && !this.granular && d.pos === this.target && (this.pos - this.target) * this.curStep > 0) {
-          // The hand is holding still and the head already went past it: stop where it is rather
-          // than slide back. What is left is a fraction of a tick, and the next real move re-paces
-          // from wherever the head actually is.
-          this.target = this.pos; this.step = this.curStep = 0; this.since = 0;
-          return;
+        if (d.pos !== this.target) { this.lastGap = this.quiet < 1e8 ? this.quiet : 0; this.quiet = 0; }
+        if (!this.granular && d.pos === this.target) {
+          // ★ A SETTLE POST (grabTick re-posting the held position) NEVER HURRIES THE HEAD. It used
+          // to re-pace the remaining distance over the time since the last re-pace, so between two
+          // slow ticks the head was rushed onto the last one and parked: the other half of the
+          // choppiness. It carries no new position, so: if the head already went past the hand,
+          // stop where it is (no slide back, see ARRIVAL STOP); if it is still heading there at its
+          // own pace, just bank the time; only a head stopped short is re-paced, as before.
+          // Both are SCOPED, and measured to need it: applied to every gesture, the hold took board
+          // roughness 0.044 → 0.090 and the real FLX4 capture 0.173 → 0.250, and the banking alone
+          // still cost 60 Hz touch scratching (0.049 → 0.058, worse alignment). So the hold is for
+          // a micro jog and the banking for a steady slow turn; anything else runs the old pacing.
+          const ahead = (this.pos - this.target) * this.curStep;
+          if (this.micro && ahead > 0) { this.target = this.pos; this.step = this.curStep = 0; this.since = 0; return; }
+          if (this.steadyRun && (this.target - this.pos) * this.curStep > 0) { this.accDt += dtIn; this.since = 0; return; }
         }
-        if (fromRest) {
+        if (steady) {
+          this.interval = Math.max(MIN_INTERVAL, Math.min(7200, this.lastGap)); // lastGap = this tick's gap (set above)
+          this.accDt = 0;
+          this.onset = 0;
+          this.repace = true;
+          this.steadyRun = true;
+        } else if (fromRest) {
+          this.steadyRun = false;
           this.interval = MIN_INTERVAL;
           this.accDt = 0;
           this.onset = MIN_INTERVAL;

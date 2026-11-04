@@ -108,6 +108,60 @@ function nudge(ticks, durMs, dir = 1) {
   };
 }
 
+// RING SEARCH (paused): the outer ring turned slowly and steadily, `spacingMs` between ticks, for
+// 400 ms, then still. grabTick posts the held position at each ~60 Hz frame once no input has
+// arrived for STALE ms (JogEngine: 6 ms). Operator, 2026-11-03: the paused ring is "kind of choppy
+// instead of giving me micro adjustment".
+//   parkedPct  share of the turning phase the head sat still (stop-go = choppy)
+//   speedCv    spread of the head's speed while turning (std / true ring speed; 0 = perfectly even)
+//   overrunMs  past the final position after the ring stops
+const STALE = Number(args.includes("--stale") ? args[args.indexOf("--stale") + 1] : 6);
+function ring(spacingMs) {
+  const node = makeWorklet();
+  const post = (m) => node.port.onmessage({ data: m });
+  const start = 10 * SR;
+  const sched = [{ t: 0, m: { type: "start", pos: start } }];
+  const t0 = 50, turn = 400;
+  const ticks = [];
+  for (let t = t0; t <= t0 + turn; t += spacingMs) ticks.push(Math.round(t));
+  ticks.forEach((t, k) => sched.push({ t, m: { type: "move", pos: start + (k + 1) * TICK } }));
+  const end = start + ticks.length * TICK;
+  for (let f = 1000 / 60; f < t0 + turn + 250; f += 1000 / 60) {
+    let k = 0;
+    while (k < ticks.length && ticks[k] <= f) k++;
+    const since = k === 0 ? f : f - ticks[k - 1];
+    if (since > STALE) sched.push({ t: f, m: { type: "move", pos: start + k * TICK } });
+  }
+  sched.sort((a, b) => a.t - b.t);
+  const out = [new Float32Array(Q), new Float32Array(Q)];
+  const msPerQ = (Q / SR) * 1000;
+  let mi = 0, lastMove = -1, prev = start, maxPast = 0;
+  const sp = [];
+  for (let t = 0; t < t0 + turn + 250; t += msPerQ) {
+    while (mi < sched.length && sched[mi].t <= t) {
+      const m = { ...sched[mi].m };
+      if (m.type === "move") { m.dtMs = lastMove >= 0 ? sched[mi].t - lastMove : 0; lastMove = sched[mi].t; }
+      post(m); mi++;
+    }
+    node.process([], [out], {});
+    const v = (node.pos - prev) / Q; prev = node.pos;
+    if (t > t0 + 60 && t < t0 + turn) sp.push(v);
+    maxPast = Math.max(maxPast, node.pos - end);
+  }
+  const want = TICK / ((spacingMs / 1000) * SR); // the ring's true speed, × realtime
+  const mean = sp.reduce((a, b) => a + b, 0) / sp.length;
+  const sd = Math.sqrt(sp.reduce((a, b) => a + (b - mean) ** 2, 0) / sp.length);
+  return {
+    ring: `${spacingMs}ms/tick (${want.toFixed(3)}x)`,
+    parkedPct: +((sp.filter((v) => Math.abs(v) < want * 0.1).length / sp.length) * 100).toFixed(1),
+    speedCv: +(sd / want).toFixed(2),
+    meanVsTrue: +(mean / want).toFixed(2),
+    overrunMs: +((Math.max(0, maxPast) / SR) * 1000).toFixed(1),
+  };
+}
+console.log("ring search, stale", STALE, "ms");
+console.table([3, 6, 10, 20, 35, 60].map(ring));
+
 const rows = [];
 for (const [ticks, ms] of [[1, 1], [2, 4], [4, 10], [4, 30], [8, 20], [8, 60], [16, 40]]) rows.push(nudge(ticks, ms));
 console.log(JSON.stringify({ patches }));

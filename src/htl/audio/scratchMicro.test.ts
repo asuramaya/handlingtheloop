@@ -82,6 +82,27 @@ describe("micro jog: the read head stops where the hand stops", () => {
     });
   }
 
+  it("a slow, steady paused-ring turn glides instead of stop-go", () => {
+    // Operator, 2026-11-03: the paused outer ring is "kind of choppy". A tick every 35 ms (0.07×),
+    // with grabTick's settle posts between ticks (no input for > 6 ms → re-post at the frame).
+    // Before: the head parked 47% of the turn; each tick was covered in 13 ms and then waited.
+    const p0 = 5 * SR;
+    const sched: Msg[] = [{ t: 0, pos: p0, start: true }];
+    const ticks: number[] = [];
+    for (let t = 50; t <= 450; t += 35) ticks.push(t);
+    ticks.forEach((t, k) => sched.push({ t, pos: p0 + (k + 1) * TICK }));
+    for (let f = 16.7; f < 600; f += 16.7) {
+      let k = 0;
+      while (k < ticks.length && ticks[k] <= f) k++;
+      if ((k === 0 ? f : f - ticks[k - 1]) > 6) sched.push({ t: f, pos: p0 + k * TICK });
+    }
+    const trace = drive(sched, 600);
+    const turning = trace.filter((s) => s.t > 120 && s.t < 450);
+    let parked = 0;
+    for (let i = 1; i < turning.length; i++) if (Math.abs(turning[i].pos - turning[i - 1].pos) < 0.1 * (TICK / 35) * ((Q / SR) * 1000)) parked++;
+    expect(parked / turning.length).toBeLessThan(0.12);
+  });
+
   it("does not stall an ordinary 60 Hz drag (the stop is scoped to micro jogs)", () => {
     // touch-shaped: a still grab, then a steady 0.35x drag reported every 16.7 ms for 1 s
     const p0 = 5 * SR;

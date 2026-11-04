@@ -33,7 +33,12 @@ export interface BendParams {
 
 /** The deck's ring-bend tuning: gain (push per unit ring velocity, × the user's Ring bend
  *  strength), decay (ease-back seconds) and clamp (fraction of tempo). */
-export const RING_BEND = { gain: 6, decay: 0.18, max: 0.6 } as const;
+// ★ GAIN 6 → 3 (operator, 2026-11-03: the ring while playing is "a bit too aggressive"). In steady
+// state the bend's extra track travel is gain × decay × the ring's roll, so at 6 every tick (2.5 ms
+// of roll) pushed the track ~2.7 ms: a slow eighth-turn nudge moved it ~243 ms, half a beat at 128
+// bpm, which is a correction you overshoot. At 3 a tick is ~1.35 ms, an eighth turn ~120 ms and a
+// full turn ~1 s. Settings ▸ Turntable ▸ Ring bend (0.25–2×) still scales it either way.
+export const RING_BEND = { gain: 3, decay: 0.18, max: 0.6 } as const;
 
 /** The ring's inertia: how quickly a change in turning speed shows up in the velocity estimate.
  *  Long enough to absorb a 1 ms-clock tick burst, short enough to feel immediate. */

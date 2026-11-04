@@ -783,9 +783,19 @@ th.col-thumb {
 }
 /* Hardware browse cursor (FLX4 wheel) — a left accent bar + tint so the row the LOAD
    buttons will grab is unmistakable, distinct from click multi-selection. */
+/* ★ STRONGER (operator, 2026-11-03: library navigation from the board). A 7% white wash and a 3px
+   edge was readable at a desk and nearly invisible in a dark booth from a step back, and from the
+   board this row IS the interface: it is what LOAD will grab. Lime-tinted row, a 4px edge, an
+   outline, and the title at full brightness. */
 .track-table tbody tr.tt-cursor {
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 3px 0 0 0 var(--neon-lime);
+  background: color-mix(in srgb, var(--neon-lime) 16%, transparent);
+  box-shadow:
+    inset 4px 0 0 0 var(--neon-lime),
+    inset 0 0 0 1px color-mix(in srgb, var(--neon-lime) 55%, transparent);
+}
+.track-table tbody tr.tt-cursor .col-title {
+  color: #fff;
+  font-weight: 600;
 }
 .track-table tbody tr.tt-cursor.selected {
   background: rgba(0, 229, 255, 0.16);

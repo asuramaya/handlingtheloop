@@ -2973,6 +2973,12 @@ function AppBody() {
       if (boardLockedRef.current) return;
       const v = x < -1 ? -1 : x > 1 ? 1 : x;
       setCrossfade(v);
+      // ★ THE REF NOW, NOT AT THE NEXT RENDER. AUTO reads the fader back through crossfadeRef to tell
+      // its own moves from a hand on the fader. The ref used to catch up only when React re-rendered;
+      // the old 150 ms tick usually came after a render, but the 16 ms loop around a cut does not —
+      // it read the stale position, saw a 2.0 jump it had just made itself, and handed the
+      // transition to "manual" (seen in a real AUTO run: a spin-out that never settled).
+      crossfadeRef.current = v;
       engine.setCrossfade(v);
       // Not the smart fader's own move (AUTO, mostly): its next throw re-reads the decks.
       smartFader.noteExternalCrossfade();

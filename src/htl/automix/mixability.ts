@@ -202,6 +202,7 @@ export function transitionLabel(p: TransitionPlan): string {
   if (p.style === "cut") return "Cut";
   if (p.style === "spinOut") return "Spin";
   if (p.style === "tempoBridge") return "Bridge";
+  if (p.style === "doubleDrop") return "Double";
   if (p.style === "echoOut") return `Echo ${p.bars}`;
   if (p.style === "washOut") return `Wash ${p.bars}`;
   if (p.style === "gateChop") return "Gate";
@@ -246,6 +247,10 @@ export const UNLOCKED_STYLES: readonly TransitionStyle[] = ["tempoBridge", "echo
 function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
   if (caps.lock === false && !UNLOCKED_STYLES.includes(style)) return false;
   switch (style) {
+    case "doubleDrop":
+      // Planned ahead (doubleDrop.ts), never picked off a preference row: it needs its own cue
+      // points. Here only so a pair that stopped qualifying before the mix falls back.
+      return caps.lock !== false && caps.grid && caps.incomingBody;
     case "tempoBridge":
       // Only for a pair that is NOT beat-matchable as it stands but can be ridden there (a locked
       // pair just blends), and only on a grid: the whole move is bar-counted.

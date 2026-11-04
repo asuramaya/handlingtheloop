@@ -73,5 +73,8 @@ export function autoLine(st: AutoMixStatus, nextTitle: string | null): AutoLine 
       tone: "run",
     };
   }
+  // A live deck but no mix point yet: the tick right after a transition settles, before the next
+  // exit is chosen. Saying "once a track is playing" there read as if the music had stopped.
+  if (st.liveDeck) return { chip: null, headline: "AUTO is on", detail: "Planning the next mix…", tone: "run" };
   return { chip: null, headline: "AUTO is on", detail: "It starts mixing once a track is playing.", tone: "run" };
 }

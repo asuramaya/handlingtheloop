@@ -29,6 +29,8 @@ interface Setup {
   duration: number;
   bpm: number;
   hasStems: boolean;
+  phrases?: number[]; // section starts (s) and their labels — song structure, for planning
+  labels?: string[];
 }
 
 class FakeDeck {
@@ -363,6 +365,10 @@ class Rig {
     d.hasStems = s.hasStems;
     d.effectiveBpm = s.bpm;
     d.beatgrid = mkGrid(s.bpm, s.duration);
+    if (s.phrases) {
+      d.beatgrid.phrases = s.phrases;
+      d.beatgrid.phraseLabels = s.labels ?? [];
+    }
   }
 
   setup(videoId: string, s: Setup): void {
@@ -1745,5 +1751,73 @@ describe("AutoMixer machine — the tempo bridge (124 → 145 BPM: 17 % apart)",
     expect(r.engine.A.tempo).toBe(0);
     expect(r.engine.A.keylock).toBe(false);
     expect(r.engine.A.loopBeats).toBe(0);
+  });
+});
+
+describe("AutoMixer machine — the double drop", () => {
+  test("plans while armed, starts the build eight bars before A's last hook, lands B's drop ON it", async () => {
+    const r = new Rig();
+    const bar = 240 / 128;
+    // A: hook "C" last at 90 s (8 bars long); B: its body (first recurring label) at 30 s.
+    r.setup("t1", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75, 90, 105], labels: ["I", "V", "C", "V", "C", "V", "C", "O"] });
+    r.setup("t2", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75], labels: ["I", "J", "V", "C", "V", "C"] });
+    r.loadAndPlay("A", { ...mkTrack("t1"), key: "8A", energy: 0.8 });
+    r.queue.upcoming = [{ ...mkTrack("t2"), key: "9A", energy: 0.85 }];
+    r.queue.arc = "build";
+    r.setPos("A", 20);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 400 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.phase).toBe("mixing");
+    const st = r.mixer.getStatus();
+    expect(st.plan?.style).toBe("doubleDrop");
+    expect(st.plan?.bars).toBe(16);
+    expect(st.mixOutTime!).toBeCloseTo(90 - 8 * bar, 1); // the build starts eight bars before the hook
+    expect(r.engine.B.playing).toBe(true); // B's build runs under A from the top
+    expect(r.engine.syncRole("B")).toBe("slave"); // beat-matched: it is a lockable pair
+    // B was cued eight of its own bars before its drop, so after eight bars its drop is playing.
+    let bAtDrop: number | null = null;
+    for (let i = 0; i < 400 && r.phase === "mixing"; i++) {
+      await r.tick(100);
+      if (bAtDrop == null && r.engine.A.position() >= 90) bAtDrop = r.engine.B.position();
+    }
+    expect(bAtDrop!).toBeGreaterThanOrEqual(30 - 0.2);
+    expect(bAtDrop!).toBeLessThan(30 + 0.3); // B is AT its drop when A hits its hook
+    expect(r.live).toBe("B");
+  });
+
+  test("a pair that does not qualify (keys two steps apart) just mixes normally", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75, 90, 105], labels: ["I", "V", "C", "V", "C", "V", "C", "O"] });
+    r.setup("t2", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75], labels: ["I", "J", "V", "C", "V", "C"] });
+    r.loadAndPlay("A", { ...mkTrack("t1"), key: "8A", energy: 0.8 });
+    r.queue.upcoming = [{ ...mkTrack("t2"), key: "10A", energy: 0.85 }];
+    r.queue.arc = "build";
+    r.setPos("A", 20);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 400 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.mixer.getStatus().plan?.style).not.toBe("doubleDrop");
+  });
+});
+
+describe("AutoMixer machine — a bridge started with Mix now", () => {
+  test("the incoming is playing, and live, when the bridge settles", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 124, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 145, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.setPos("A", 30);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 20; i++) await r.tick(250);
+    r.mixer.mixNow();
+    for (let i = 0; i < 40 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.mixer.getStatus().plan?.style).toBe("tempoBridge");
+    for (let i = 0; i < 400 && r.phase === "mixing"; i++) await r.tick(250);
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.live).toBe("B");
+    expect(r.mixer.getStatus().waitReason).not.toBe("press-play");
   });
 });

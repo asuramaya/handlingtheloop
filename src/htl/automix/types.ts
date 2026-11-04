@@ -29,7 +29,8 @@ export type TransitionStyle =
   | "loopChop"
   | "dropSwap"
   | "spinOut"
-  | "tempoBridge";
+  | "tempoBridge"
+  | "doubleDrop";
 
 /** ★ THE OTHER HALF OF A TRANSITION.
  *

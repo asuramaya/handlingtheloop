@@ -67,6 +67,7 @@ import { event } from "../debug/trace";
 import { perfWork } from "../debug/perfCapture";
 import { crossfadeGains } from "../audio/crossfadeCurve";
 import { holdGpu } from "../stems/gpuQueue";
+import { DD, DD_BARS, doubleDropShape, planDoubleDrop } from "./doubleDrop";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
 // the same engine/deck controls the UI buttons drive, but the user can jog, scratch,
@@ -346,6 +347,11 @@ export class AutoMixer {
   private unlocked = false; // this transition's pair cannot be beat-matched (caps.lock false)
   private fineTimer: ReturnType<typeof setInterval> | null = null; // the 16 ms loop around a moment
   private bridge: { baseBeats: number; fromPct: number; toPct: number; keylock: boolean } | null = null;
+  // A double drop planned while armed (the incoming is already decoded on the idle deck): the
+  // videoId it was planned for, and the cue points — taken at preload only if still the next track.
+  private dd: { videoId: string; mixOut: number; mixIn: number } | null = null;
+  private ddChecked = "";
+  private ddDropped = false;
   private incPending = false; // unmatched pair: the incoming starts at the cut, not at mix start
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
   // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
@@ -500,6 +506,9 @@ export class AutoMixer {
     this.incPending = false;
     this.stopFine();
     this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -528,6 +537,9 @@ export class AutoMixer {
     this.mixOutTime = null;
     this.nextTrack = null;
     this.clearPreload();
+    this.dd = null; // a planned double drop belongs to THIS live track and THAT preload
+    this.ddChecked = "";
+    this.ddDropped = false;
   }
 
   // Forget the eagerly-preloaded track (the idle deck identity changed, or the queue/next
@@ -757,6 +769,8 @@ export class AutoMixer {
     event("automix.replan", { phase: this.phase, from: +prev.toFixed(1), to: +pos.toFixed(1), was: +this.mixOutTime.toFixed(1) });
     if (this.phase === "armed") {
       this.mixOutTime = null; // tickArmed re-picks it from here, this same tick
+      this.dd = null; // …and re-asks whether a double drop still fits from where we landed
+      this.ddChecked = "";
       return;
     }
     this.mixOutTime = this.computeMixOut(live, this.barsSeconds, pos + 0.5);
@@ -1041,6 +1055,7 @@ export class AutoMixer {
       this.barsSeconds = barsToSeconds(12, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
       this.mixOutTime = this.computeMixOut(live, this.barsSeconds, live.position() + CUE_LEAD_S);
     }
+    this.maybePlanDoubleDrop(live);
     if (this.forced) {
       this.phase = "preload"; // Mix now: no lead-in to wait for
       return;
@@ -1048,6 +1063,43 @@ export class AutoMixer {
     if (this.held) return; // Hold: keep the mix point on screen, never start toward it
     const lead = this.barsSeconds + 8;
     if (live.position() >= (this.mixOutTime ?? Infinity) - lead) this.phase = "preload";
+  }
+
+  // THE DOUBLE DROP IS DECIDED WHILE WE WAIT. It moves the mix point EARLIER (eight bars before the
+  // outgoing's last hook, not after it), so it cannot be a mix-time choice like the other gestures:
+  // by the time the normal preload fires, its start is already behind us. The incoming is decoded on
+  // the idle deck long before (ensurePreload), so its structure is known — plan once per track.
+  private maybePlanDoubleDrop(live: Deck): void {
+    if (!this.liveId || this.forced) return;
+    const idle = other(this.liveId);
+    const t = this.preloadedId === idle ? this.preloadedTrack : null;
+    if (!t?.videoId || this.ddChecked === t.videoId) return;
+    this.ddChecked = t.videoId;
+    this.dd = null;
+    const inc = this.deps.engine.deck(idle);
+    const liveT = this.deps.deckTrack(this.liveId);
+    const incT = this.deps.deckTrack(idle);
+    const liveBpm = live.beatgrid?.bpm ?? null;
+    const plan = planDoubleDrop(
+      { sections: this.sectionsOf(live), bpm: liveBpm, key: liveT?.key ?? live.key?.camelot ?? null, energy: liveT?.energy },
+      { sections: this.sectionsOf(inc), bpm: inc.beatgrid?.bpm ?? null, key: incT?.key ?? inc.key?.camelot ?? null, energy: incT?.energy },
+      {
+        lockable: tempoLockable(live.effectiveBpm ?? liveBpm, inc.beatgrid?.bpm),
+        notBefore: live.position() + CUE_LEAD_S + barsToSeconds(2, liveBpm ?? 0),
+        arc: this.deps.queue.arc,
+        lastStyle: this.lastStyle,
+        perf: this.perf(),
+      },
+    );
+    if (!plan || !live.beatgrid || !inc.beatgrid) return;
+    this.dd = {
+      videoId: t.videoId,
+      mixOut: nearestDownbeat(live.beatgrid, plan.mixOut, live.position() + CUE_LEAD_S),
+      mixIn: nearestDownbeat(inc.beatgrid, plan.mixIn),
+    };
+    this.mixOutTime = this.dd.mixOut; // the countdown now points at the build, not the old exit
+    this.barsSeconds = barsToSeconds(DD_BARS, liveBpm ?? 0);
+    event("automix.doubleDrop", { planned: Math.round(this.dd.mixOut), drop: Math.round(plan.drop), inc: Math.round(plan.incDrop) });
   }
 
   // Eagerly load the next queued track onto the idle deck while the current one plays, so
@@ -1161,6 +1213,24 @@ export class AutoMixer {
       // a shortened blend can leave later, which is usually the better exit.
       this.barsSeconds = barsToSeconds(this.plan.bars, bpm);
       const liveSections = this.sectionsOf(live);
+      const dd = !this.forced && this.dd && this.dd.videoId === next.videoId && this.dd.mixOut >= live.position() ? this.dd : null;
+      if (dd) {
+        // THE DOUBLE DROP: its own cue points, its own length — skip the blend fitting entirely.
+        this.plan = { ...this.plan, style: "doubleDrop", bars: DD_BARS, bassSwapBar: 0 };
+        this.barsSeconds = barsToSeconds(DD_BARS, bpm);
+        this.mixOutTime = dd.mixOut;
+        inc.seek(dd.mixIn);
+        this.plan = { ...this.plan, loopExtend: false };
+        inc.setEqLow(EQ_KILL);
+        const sign = this.liveId === "A" ? -1 : 1;
+        this.deps.applyCrossfade(sign);
+        this.lastXfade = sign;
+        this.cuedIdle = idle;
+        this.mixStarted = false;
+        this.quietGpuStart();
+        this.phase = "cueing";
+        return;
+      }
       if (this.forced) {
         // MIX NOW: the exit is HERE, not the structural one — recomputing it is what used to turn
         // the press into a 30 s countdown. The blend only shrinks if the track would run out first.
@@ -1392,6 +1462,14 @@ export class AutoMixer {
       reverb.setParam("size", 0.85);
       reverb.setParam("decay", 0.8);
       reverb.setParam("mix", 0);
+    } else if (style === "doubleDrop") {
+      const { delay } = this.borrowFx(liveId, ["delay"]);
+      if (delay) {
+        delay.setParam("sync", 1);
+        delay.setParam("div", 2);
+        delay.setParam("feedback", 0.55);
+        delay.setParam("mix", 0);
+      }
     } else if (style === "tempoBridge") {
       const { delay, reverb } = this.borrowFx(liveId, ["delay", "reverb"]);
       if (delay) {
@@ -1614,7 +1692,10 @@ export class AutoMixer {
     // driving it — a stem swap is now one option among several rather than an automatic upgrade.
     const caps = this.capabilities(this.liveId, idle);
     const shape = this.styleShape(idle);
-    const style = resolveStyle(this.plan, caps, this.lastStyle, { shape });
+    const style =
+      this.plan.style === "doubleDrop" && caps.lock && caps.grid
+        ? "doubleDrop"
+        : resolveStyle({ ...this.plan, style: this.plan.style === "doubleDrop" ? "blend" : this.plan.style }, caps, this.lastStyle, { shape });
     this.plan.style = style;
     // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
     this.plan.entry = caps.lock ? resolveEntry(style, caps, shape) : "open"; // a cut lands whole
@@ -1784,12 +1865,14 @@ export class AutoMixer {
     // The user grabbed the crossfader → they're finishing the mix; stand back.
     const cf = this.deps.getCrossfade();
     if (this.lastXfade != null && Math.abs(cf - this.lastXfade) > XFADE_GRAB) {
+      event("automix.handoff", { why: "fader", cf: +cf.toFixed(3), ours: +this.lastXfade.toFixed(3) });
       this.handoffToManual();
       return;
     }
     // The user stopped the incoming deck → hand off rather than fight. A hand on its platter (a
     // nudge, a quick scratch) is not a stop — see playingOrHeld.
     if (!this.incPending && !playingOrHeld(inc)) {
+      event("automix.handoff", { why: "incoming stopped" });
       this.handoffToManual();
       return;
     }
@@ -1819,7 +1902,9 @@ export class AutoMixer {
     const x =
       this.plan.style === "tempoBridge"
         ? bridgeShape(p * BRIDGE.bars, this.perf() !== "subtle").fader
-        : faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
+        : this.plan.style === "doubleDrop"
+          ? this.ddShape(live, p).fader
+          : faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
     const cfv = lerp(liveSign, -liveSign, x);
     this.deps.applyCrossfade(cfv);
     this.lastXfade = cfv;
@@ -1849,6 +1934,8 @@ export class AutoMixer {
       }
     } else if (this.plan.style === "tempoBridge") {
       this.tickBridge(live, inc, p);
+    } else if (this.plan.style === "doubleDrop") {
+      this.tickDoubleDrop(live, inc, p);
     } else if (this.plan.style === "dropSwap") {
       // THE DROP SWAP. Not a blend at all: the outgoing COLLAPSES — its bass is pulled and a
       // high-pass climbs until only a thin ghost of it is left — and then it is simply gone, with
@@ -1938,7 +2025,7 @@ export class AutoMixer {
       live.setFilter(lerp(0, 0.6, clamp((p - 0.5) / 0.5, 0, 1)));
     }
     // …and the INCOMING half, once, for every gesture — see applyEntry.
-    if (!this.useStems && this.plan.style !== "tempoBridge") this.applyEntry(inc, p, s);
+    if (!this.useStems && this.plan.style !== "tempoBridge" && this.plan.style !== "doubleDrop") this.applyEntry(inc, p, s);
 
     // Flourishes ride ON TOP of whatever gesture just ran, so they go last — a lift written before
     // the style's own setEqHigh would simply be overwritten.
@@ -1961,6 +2048,31 @@ export class AutoMixer {
       return;
     }
     this.updateFine(live);
+  }
+
+  // ── THE DOUBLE DROP (shape in doubleDrop.ts) ─────────────────────────────────────────────────
+  private ddShape(live: Deck, p: number) {
+    const b = p * DD_BARS;
+    const dropped = this.atBar(live, DD.build, p);
+    const breath = this.perf() !== "subtle" && !dropped && this.atBar(live, DD.breath, p);
+    return doubleDropShape(b, dropped, breath);
+  }
+
+  private tickDoubleDrop(live: Deck, inc: Deck, p: number): void {
+    const sh = this.ddShape(live, p);
+    inc.setFilter(sh.incFilter);
+    inc.setEqLow(sh.incLowDb);
+    inc.setEqHigh(sh.incHighDb);
+    live.setEqLow(sh.outLowDb);
+    live.setEqHigh(sh.outHighDb);
+    live.setFilter(sh.outFilter);
+    if (live.hasStems) live.setStemGain("vocals", sh.outVocal);
+    const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
+    dly?.setParam("mix", sh.echo);
+    if (!this.ddDropped && sh.outLowDb <= EQ_KILL && sh.incLowDb === 0) {
+      this.ddDropped = true;
+      event("automix.drop", { style: "doubleDrop", at: +(p * DD_BARS).toFixed(3) });
+    }
   }
 
   // ── THE TEMPO BRIDGE ─────────────────────────────────────────────────────────────────────────
@@ -2084,6 +2196,7 @@ export class AutoMixer {
   private moments(): number[] {
     if (!this.plan) return [];
     if (this.plan.style === "tempoBridge") return [...BRIDGE.roll, BRIDGE.breath, BRIDGE.drop];
+    if (this.plan.style === "doubleDrop") return [DD.breath, DD.build, DD_BARS];
     const out: number[] = [];
     const style = this.plan.style;
     if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
@@ -2178,6 +2291,9 @@ export class AutoMixer {
     this.incPending = false;
     this.stopFine();
     this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -2222,6 +2338,8 @@ export class AutoMixer {
     const out = this.deps.engine.deck(this.liveId);
     const inc = this.deps.engine.deck(idle);
     const sign = idle === "A" ? -1 : 1;
+    // What the room is left with: a settle onto a deck that is not playing is silence.
+    event("automix.settle", { style: this.plan?.style ?? null, onto: idle, playing: inc.playing, pos: +inc.position().toFixed(2) });
     this.deps.applyCrossfade(sign);
     this.lastXfade = sign;
     // The incoming deck becomes live — neutralise everything we touched on it.
@@ -2249,6 +2367,9 @@ export class AutoMixer {
     this.incPending = false;
     this.stopFine();
     this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();

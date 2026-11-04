@@ -16,6 +16,7 @@ import { useMemo, useRef, useState, type ReactNode } from "react";
 import { STRETCH_PRESETS, type Settings, type StretchEngine, type StretchQuality } from "@htl";
 import { InfoDot } from "./InfoDot";
 import { Slider } from "./Slider";
+import { RangeInput } from "./RangeInput";
 import { ToggleRow } from "./ControlsTab";
 import { peak, platterCurves, ringCurve, settleTime, SPAN_S, SYNC_JUMP_BEATS, SYNC_SPAN_S, syncCurve, type Curve } from "./platterCurves";
 
@@ -74,24 +75,21 @@ function Graph({ c, knob }: { c: Curve; knob: Knob }) {
 
 function Tile({ c, readout, knob, info, children }: { c: Curve; readout: ReactNode; knob: Knob; info: string; children?: ReactNode }) {
   return (
+    // ONE LAYOUT FOR EVERY TILE: title row, one readout line, the graph at a fixed height, the
+    // slider at the bottom. The readout used to share the title row and wrap to two lines on
+    // some tiles, so graphs started at different heights; tiles in a row now stretch to one
+    // height with their sliders aligned at the bottom.
     <div className="tt-tile">
       <div className="tt-tile-head">
         <span className="tt-tile-title">{c.title}</span>
         <InfoDot label={c.title} text={info} />
-        <span className="tt-tile-val">{readout}</span>
       </div>
+      <div className="tt-tile-val">{readout}</div>
       <Graph c={c} knob={knob} />
-      <input
-        type="range"
-        className="settings-slider tt-slider"
-        aria-label={knob.label}
-        min={knob.min}
-        max={knob.max}
-        step={knob.step}
-        value={knob.value}
-        onChange={(e) => knob.set(Number(e.target.value))}
-      />
-      {children}
+      <div className="tt-tile-foot">
+        <RangeInput className="tt-slider" label={knob.label} min={knob.min} max={knob.max} step={knob.step} value={knob.value} onChange={knob.set} />
+        {children}
+      </div>
     </div>
   );
 }
@@ -182,21 +180,14 @@ export function TurntableTab({ settings, set }: { settings: Settings; set: (patc
             <div className="tt-tile-head">
               <span className="tt-tile-title">Search</span>
               <InfoDot label="Search" text="SHIFT + jog sweeps through the track. This is how far one turn of the wheel travels." />
-              <span className="tt-tile-val">×{settings.jogSensitivity.toFixed(2)}</span>
             </div>
+            <div className="tt-tile-val">×{settings.jogSensitivity.toFixed(2)}</div>
             <div className="tt-big" aria-live="polite">
               1 turn ≈ <b>{(36 * settings.jogSensitivity).toFixed(0)} s</b> of track
             </div>
-            <input
-              type="range"
-              className="settings-slider tt-slider"
-              aria-label="Search speed"
-              min={0.25}
-              max={4}
-              step={0.05}
-              value={settings.jogSensitivity}
-              onChange={(e) => set({ jogSensitivity: Number(e.target.value) })}
-            />
+            <div className="tt-tile-foot">
+              <RangeInput className="tt-slider" label="Search speed" min={0.25} max={4} step={0.05} value={settings.jogSensitivity} onChange={(v) => set({ jogSensitivity: v })} />
+            </div>
           </div>
         </div>
       </div>

@@ -2696,3 +2696,120 @@
   grid-template-columns: 1fr;
   margin-bottom: 4px;
 }
+
+/* ---- THE settings slider (RangeInput): thin track, accent fill up to the thumb (--pct), a small
+   round thumb with a dark ring. One look for every slider in settings (2026-11-04). ---- */
+.settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-slider:focus-visible {
+  outline: none;
+}
+.settings-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--pct, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) var(--pct, 0%) 100%
+  );
+}
+.settings-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+.settings-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel, #0b0b11);
+  box-shadow: 0 0 0 1px var(--accent);
+  transition: transform 0.08s;
+}
+.settings-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel, #0b0b11);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.settings-slider:hover::-webkit-slider-thumb,
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ---- Turntable tiles, one layout (2026-11-04: "standardized and clean") ---- */
+.tt-tiles {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  align-items: stretch;
+}
+.tt-tile {
+  gap: 8px;
+  padding: 10px 12px 10px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+.tt-tile-head {
+  flex-wrap: nowrap;
+}
+/* The readout has its OWN line: one line, left-aligned, the same height in every tile. */
+.tt-tile-val {
+  margin-left: 0;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+  min-height: 15px;
+  gap: 0 12px;
+  text-align: left;
+}
+/* A legend swatch per trace (the solid / dashed line it names), replacing the "- -" text. */
+.tt-tile-val .trace-key::before,
+.tt-tile-val .trace-key.alt::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-top: 2px solid var(--accent);
+  letter-spacing: 0;
+}
+.tt-tile-val .trace-key.alt::before {
+  border-top: 2px dashed var(--text);
+}
+.tt-tile-val .trace-key.alt {
+  opacity: 0.85;
+}
+/* The slider sits right under the graph, and graphs start at the same height in every tile, so
+   sliders line up across a row; an extra row (Slip) goes below and the shorter tiles keep the
+   space at their bottom instead of between graph and slider. */
+.tt-tile-foot {
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tt-tile .tt-slider {
+  width: 100%;
+}
+.tt-big b {
+  font-size: 20px;
+}

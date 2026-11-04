@@ -1,5 +1,5 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
-import { foldTempoOctave, nearestBeat, tempoLockable } from "../analysis";
+import { foldTempoOctave, nearestBeat, nearestDownbeat, tempoLockable } from "../analysis";
 import type { TrackMeta } from "../library/types";
 import { pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
@@ -1995,7 +1995,8 @@ export class AutoMixer {
     if (!s) return notBefore;
     const t = chooseMixOut(s, barsSeconds, END_GUARD, notBefore);
     const grid = deck.beatgrid;
-    return grid ? nearestBeat(grid, t) : t;
+    // On a BAR LINE, not just a beat (and never behind the floor the caller set).
+    return grid ? nearestDownbeat(grid, t, notBefore) : t;
   }
 
   // WHERE TO COME IN. Anchored so the incoming track's first BODY section — the first one that

@@ -438,6 +438,20 @@ export function barAnchor(g: Beatgrid, t: number): { start: number; length: numb
   return { start: g.firstBeat + k * barLen, length: barLen };
 }
 
+/** The bar line (downbeat) nearest `t`; with `notBefore`, the nearest one at or after it. A
+ *  transition that starts on beat 3 is heard as late, however right the moment was: the AutoMixer
+ *  snaps its exits here instead of to any beat (2026-11-04). */
+export function nearestDownbeat(g: Beatgrid, t: number, notBefore = -Infinity): number {
+  const { start, length } = barAnchor(g, t);
+  let best = t - start <= start + length - t ? start : start + length;
+  // The bar's own downbeat or the next one may still sit before the floor — step bar by bar.
+  for (let i = 0; i < 4 && best < notBefore - 1e-3; i++) {
+    const nb = barAnchor(g, best + length * 0.5);
+    best = nb.start + nb.length;
+  }
+  return best;
+}
+
 /** Fractional position within the current bar, 0..1 (0 = on the downbeat). Lets
  *  sync align bars, not just beats — so the two tracks' "1"s land together. */
 export function barPhase(g: Beatgrid, t: number): number {

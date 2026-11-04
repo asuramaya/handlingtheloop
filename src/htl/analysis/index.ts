@@ -14,6 +14,7 @@ export {
   detectKey,
   foldTempoOctave,
   tempoLockable,
+  nearestDownbeat,
   BEATLOCK_MAX,
   BEATLOCK_ANY,
   setBeatlockMax,
